@@ -1,0 +1,897 @@
+/* 全部组件的共享样式：自 Vue 版 scoped 样式收拢而来（类名保持一致）。
+   所有颜色一律走 --ws-* token（来源 = antd 主题，见 theme/bridge.tsx）。 */
+
+:root {
+  /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/arithmetic-audit](../../../docs/docs/arithmetic-audit.md)#13——此前两处各写字面量 50px） */
+  --ws-titlebar-h: 50px;
+}
+
+/* 裸 <code> 一律走等宽双槽 token：UA 默认 monospace 不随用户字体设置变化
+   （composer 三弹窗技能名/命令名/提及名、任务中心 sched、providers 模型名、changes 路径等；
+   字体 token 体系见 theme/native.css 与 utils/fonts.ts） */
+code { font-family: var(--ws-font-mono); }
+
+/* ---------- AppShell ---------- */
+.toolbar {
+  /* position 必须声明：.titlebar-drag-zone 是 absolute inset:0；没有定位祖先时包含块
+     回退到初始包含块 = 整个视口，拖拽层会盖住下方中间区域（评审 R1 修复） */
+  position: relative;
+  display: flex; align-items: center; height: var(--ws-titlebar-h);
+  /* padding: 0 必须显式声明（评审 🔴1）：antd 6 Header 默认 padding: 0 50px；
+     漏写会把内容盒横向内缩、左段脱离窗口左缘、两段分隔线错位 */
+  padding: 0;
+  /* 两段式标题栏（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md)）：toolbar 自身零背景——背景与平台让位
+     全部下沉到 .tb-left-seg / .tb-main-seg，左段分隔线才能与左栏面板连续 */
+}
+/* 顶栏内容浮于拖拽层之上：空白处落到拖拽层拖动窗口，按钮保持可点 */
+.toolbar > * { position: relative; z-index: 1; }
+.titlebar-drag-zone { position: absolute; inset: 0; z-index: 0; }
+
+/* 左段（灰）：与左栏面板同色同宽（宽度由 TopBar 随 explorerOpen 内联，0.2s 过渡与 Sider 同步）；
+   其 1px 右分隔线延续 Sider 的 borderRight */
+.tb-left-seg {
+  flex: none; align-self: stretch; display: flex; align-items: center; gap: 4px;
+  padding-left: 12px; box-sizing: border-box; overflow: hidden;
+  background: var(--ws-bg-nav); border-right: 1px solid var(--ws-border);
+  transition: width 0.2s, background 0.2s, border-right-color 0.2s;
+}
+/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 折叠态：宽度内联置 0，本块只归零装饰并把背景融入
+   内容色（.tb-main-seg）——0.2s 折叠期间两段读作同一表面，不留残带 */
+.tb-left-seg.tb-left-closed {
+  padding-left: 0;
+  border-right-color: transparent;
+  background: var(--ws-bg-main);
+}
+/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 评审 🟡1：下方平台/原生规则特异性更高（0,2,1），单靠 .tb-left-closed 压不住——
+   缺了这些覆盖，macOS 78px 让位（与原生 12px padding）会在折叠后残留幽灵带 */
+html[data-os="macos"] .tb-left-seg.tb-left-closed { padding-left: 0; min-width: 0; }
+html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0; }
+/* 右段：标题簇 + 弹性中部 + 右簇；尾部为插件注入的 Windows 控制条让位
+   （让位变量由插件测量注入；全屏/未注入时为 0 → 回退 10px 基础 padding） */
+.tb-main-seg {
+  flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 8px;
+  /* 左 padding：标题与左段分隔线之间的呼吸空间（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整） */
+  padding-left: 12px;
+  padding-right: max(10px, var(--tauri-plugin-decoration-right-clearance, 0px));
+  box-sizing: border-box; background: var(--ws-bg-main); overflow: hidden; /* [docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整：右段与中右栏面板内容区同色（亮色 #f8f8f8） */
+  transition: padding 0.2s; /* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：左栏折叠时红绿灯让位在两段之间平滑迁移 */
+}
+.tb-logo { width: 24px; height: 24px; border-radius: 6px; flex: none; }
+/* Logo 开关入口（[docs/titlebar-logo-toggle](../../../docs/docs/titlebar-logo-toggle.md) 同位交换；自 [docs/macos-notify-use-default-dialog-fix](../../../docs/docs/macos-notify-use-default-dialog-fix.md) 起位于右段段首——左段是纯背景带）：
+   悬停时 Logo 淡出、折叠/展开箭头叠加淡入，带背景悬停反馈；TopBar 按 explorerOpen 切换图标 */
+.tb-logo-toggle {
+  position: relative; width: 24px; height: 24px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; border: none; background: transparent; border-radius: 6px;
+  cursor: pointer; color: var(--ws-text-1); font-size: 12px;
+}
+.tb-logo-toggle .tb-logo { transition: opacity 0.15s; }
+.tb-logo-toggle .tb-logo-swap {
+  position: absolute; inset: 0; margin: auto;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s;
+}
+.tb-logo-toggle:hover { background: var(--ws-hover); }
+.tb-logo-toggle:hover .tb-logo { opacity: 0; }
+.tb-logo-toggle:hover .tb-logo-swap { opacity: 1; }
+.tb-title {
+  flex: none; max-width: min(360px, 38vw); font-size: 14px; font-weight: 600;
+  color: var(--ws-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tb-title-empty { color: var(--ws-dim); font-weight: 500; }
+/* 胶囊（纯展示）：工作目录 / Git 分支 */
+.tb-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px;
+  padding: 0 10px; border-radius: 12px; background: var(--ws-bg-nav);
+  border: 1px solid var(--ws-border); font-size: 12px; color: var(--ws-text-1);
+  max-width: 220px; overflow: hidden; white-space: nowrap;
+}
+.tb-pill-icon { font-size: 12px; color: var(--ws-dim); flex: none; }
+.tb-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 中部弹性区：占满全高 + drag-region，窗口拖拽的主区域 */
+.tb-flex { flex: 1; align-self: stretch; }
+/* macOS 红绿灯 Overlay 展开时落在左段（灰）：左段内容右移让位
+   （78px 下限，clearance 可能首帧未送达）；折叠时段宽为 0，让位迁移到
+   右段段首（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)，见下方 .tb-main-cleared） */
+html[data-os="macos"] .tb-left-seg {
+  padding-left: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px));
+  min-width: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px));
+}
+/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：折叠后左段宽 0 容不下红绿灯——让位迁移至右段
+   段首（padding-left 与折叠同步经 0.2s 缓动），保证红绿灯不压 Logo/标题 */
+html[data-os="macos"] .tb-main-seg.tb-main-cleared { padding-left: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px)); }
+
+/* 原生回退：原生标题栏恢复，Overlay/控制条不存在，所有让位回退基础值（后写规则胜出）；
+   折叠 0 = 左段与 Sider 一起完全隐藏（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)，窄轨退役——不再有方形空带） */
+html[data-titlebar-mode="native"] .tb-left-seg { padding-left: 12px; min-width: 0; }
+html[data-titlebar-mode="native"] .tb-main-seg { padding-right: 10px; }
+html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 12px; }
+/* 通用弹性占位（ProvidersPanel/TaskCenterPanel/SettingsModal 内联布局使用；顶栏现用 .tb-flex） */
+.flex { flex: 1; }
+.dim { color: var(--ws-dim); }
+/* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口 */
+.notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 100; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
+/* ---------- ChatMessages ---------- */
+.chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 16px; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
+/* 聊天区滚动条主题化（[docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md)）：透明轨道贴合内容背景、thumb 用主题 token，取代刺眼的 WebView 默认滚动条配色 */
+.chat-messages { scrollbar-width: thin; scrollbar-color: var(--ws-border) transparent; }
+.chat-messages::-webkit-scrollbar { width: 8px; height: 8px; }
+.chat-messages::-webkit-scrollbar-track { background: transparent; }
+.chat-messages::-webkit-scrollbar-thumb { background: var(--ws-border); border-radius: 4px; }
+.chat-messages::-webkit-scrollbar-thumb:hover { background: var(--ws-dim); }
+/* 空态引导：居中卡片 + 两个入口（新建临时会话 / 新建项目） */
+.chat-empty-guide {
+  margin-top: 26vh; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  text-align: center;
+}
+.chat-empty-guide .guide-icon { font-size: 40px; color: var(--ws-dim); opacity: 0.7; }
+.chat-empty-guide .guide-title { font-size: 17px; font-weight: 600; color: var(--ws-text-1); }
+.chat-empty-guide .guide-desc { font-size: 12.5px; color: var(--ws-dim); margin-bottom: 10px; }
+.chat-empty-guide .guide-actions { display: flex; gap: 12px; }
+.msg { margin-bottom: 14px; min-width: 0; }
+.msg .role { font-size: 11px; color: var(--ws-dim); margin-bottom: 3px; display: flex; gap: 8px; align-items: baseline; }
+.msg .role .ts { font-size: 10.5px; color: var(--ws-dim); opacity: 0.75; letter-spacing: 0.02em; }
+.msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.user .role { text-align: right; justify-content: flex-end; }
+.user-bubble {
+  max-width: 78%; background: var(--ws-user-bubble); color: var(--ws-text-1);
+  padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
+}
+/* 用户消息附件缩略图（发送回显 + 重开会话恢复时同一样式） */
+.user-attachments { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+.user-attachments .attach-thumb {
+  max-width: 132px; max-height: 132px; border-radius: 8px; object-fit: cover;
+  border: 1px solid var(--ws-border); cursor: zoom-in;
+}
+/* 用户消息悬停操作行（复制/修改）：默认隐藏（visibility 防透明误点），悬停消息行时出现在气泡右下 */
+.user-msg-actions {
+  display: flex; gap: 2px; margin-top: 4px;
+  visibility: hidden; opacity: 0; transition: opacity 0.15s;
+}
+.msg.user:hover .user-msg-actions { visibility: visible; opacity: 1; }
+.assistant { max-width: 100%; overflow: hidden; }
+.assistant .md { max-width: 860px; min-width: 0; overflow-x: hidden; }
+/* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
+   inline code chip、表格等全部无样式；计划正文以纯文本渲染） */
+:is(.assistant .md, .plan-body.md) p { margin: 0.4em 0; }
+/* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
+:is(.assistant .md, .plan-body.md) .code-wrap { position: relative; }
+:is(.assistant .md, .plan-body.md) .code-wrap > pre { margin: 0.4em 0; }
+.code-copy {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  height: 22px; padding: 0 8px;
+  font-size: 11px; line-height: 20px; font-family: var(--ws-font-sans);
+  color: var(--ws-dim); background: var(--ws-panel);
+  border: 1px solid var(--ws-border); border-radius: 5px;
+  opacity: 0; visibility: hidden; transition: opacity 0.15s;
+  cursor: pointer; user-select: none;
+}
+/* 代码块悬停时显示按钮；复制成功/失败态保持可见 1.5s（类由 codecopy.ts 驱动） */
+:is(.assistant .md, .plan-body.md) .code-wrap:hover .code-copy,
+.code-copy:focus-visible,
+.code-copy-done { opacity: 1; visibility: visible; }
+.code-copy:hover { color: var(--ws-text-1); border-color: var(--ws-dim); }
+.code-copy-done { color: var(--ws-ok, #1f8f4d); }
+.code-copy-fail { color: var(--ws-err); }
+:is(.assistant .md, .plan-body.md) pre,
+.code-block {
+  border-radius: 8px; padding: 10px 12px; overflow-x: auto;
+  background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
+}
+:is(.assistant .md, .plan-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
+/* inline code chip：token 化（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；原硬编码 #efefef/#1f2328 在暗色下不可读 */
+:is(.assistant .md, .plan-body.md) :not(pre) > code { background: var(--ws-code-bg); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+:is(.assistant .md, .plan-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md) pre .hljs-quote { color: #6a737d; }
+:is(.assistant .md, .plan-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md) pre .hljs-selector-tag { color: #d73a49; }
+:is(.assistant .md, .plan-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md) pre .hljs-attr { color: #032f62; }
+:is(.assistant .md, .plan-body.md) pre .hljs-number, :is(.assistant .md, .plan-body.md) pre .hljs-literal { color: #005cc5; }
+:is(.assistant .md, .plan-body.md) pre .hljs-title, :is(.assistant .md, .plan-body.md) pre .hljs-name { color: #6f42c1; }
+:is(.assistant .md, .plan-body.md) pre .hljs-built_in { color: #e36209; }
+:is(.assistant .md, .plan-body.md) table { border-collapse: collapse; }
+:is(.assistant .md, .plan-body.md) th, :is(.assistant .md, .plan-body.md) td { border: 1px solid var(--ws-border); padding: 4px 8px; }
+/* 思考块：antd Collapse ghost 面板（默认收起）；样式微调仍走 token */
+.thinking-block.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
+  padding: 2px 0; font-size: 12px; color: var(--ws-dim);
+  /* 2.8 修复：antd header 默认 flex align-center 且不限宽，nowrap 内容会撑爆容器 → 强制收窄 */
+  display: flex !important; align-items: center; min-width: 0; max-width: 100%; overflow: hidden;
+}
+.thinking-block .ant-collapse-header-text { flex: 1; min-width: 0; overflow: hidden; display: flex; }
+.thinking-block .thinking-body {
+  font-size: 12px; color: var(--ws-dim); white-space: pre-wrap; word-break: break-word;
+  border-left: 2px solid var(--ws-border); padding: 2px 8px;
+  max-height: 240px; overflow-y: auto;
+  /* 隐藏内层滚动条：展开时「live tailing」自动跟随最新内容（上滚回看；回到底部恢复 tailing） */
+  scrollbar-width: none;
+}
+.thinking-block .thinking-body::-webkit-scrollbar { display: none; }
+/* 思考头部：单行——标题 + 计时，随后走马灯通栏占满余宽（[docs/thinking-marquee-rewrite](../../../docs/docs/thinking-marquee-rewrite.md)）。
+   通栏展示最新一行思考：先从左缘进入，溢出后自右向左爬行
+   （最新内容钉在右缘，tail-follow），流中出现新行才翻转上滚。 */
+.thinking-block .thinking-label { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; overflow: hidden; }
+.thinking-block .thinking-title { flex: none; white-space: nowrap; }
+.thinking-block .thinking-marquee {
+  --marquee-slot: 16px;
+  position: relative; flex: 1 1 0; min-width: 0; height: var(--marquee-slot); overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent);
+}
+.thinking-block .thinking-roll { position: relative; display: block; height: 100%; }
+.thinking-block .thinking-roll.rolling { animation: thinking-roll-up 0.3s ease; }
+.thinking-block .thinking-roll-line {
+  position: absolute; left: 0; top: 0; display: inline-block; white-space: nowrap;
+  color: var(--ws-dim); font-size: 11px; line-height: var(--marquee-slot);
+  transition: transform 0.25s linear; will-change: transform;
+}
+.thinking-block .thinking-roll.rolling .thinking-roll-line.in { top: var(--marquee-slot); }
+@keyframes thinking-roll-up {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(-1 * var(--marquee-slot))); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-block .thinking-roll.rolling { animation: none; }
+  .thinking-block .thinking-roll-line { transition: none; }
+}
+.cursor { color: var(--ws-accent); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+/* 追问建议区（antd 6 filled 胶囊 + 语义标签头） */
+.chips { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 4px; }
+.chips-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); }
+.chips-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips-row .ant-btn .ant-btn-icon { color: var(--ws-dim); transition: color 0.2s; }
+.chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
+
+/* ---------- Composer ---------- */
+.composer-wrap { position: relative; }
+.menu { display: flex; flex-direction: column; gap: 2px; min-width: 260px; }
+/* 技能详情弹层（composer / 菜单点击项弹出）：正文区限高滚动，markdown 走 .md 渲染 */
+.skill-detail .skill-body {
+  max-height: 50vh; overflow: auto; margin: 8px 0 0;
+  border: 1px solid var(--ws-border); border-radius: 8px; padding: 8px 12px;
+}
+.skill-detail .skill-origin { font-size: 12px; color: var(--ws-dim); }
+/* 键盘导航高亮（↑↓ 移动，Enter/Tab 选中；与悬停同步） */
+.menu .menu-item.active { background: var(--ws-hover); }
+.composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 16px 6px; }
+/* 卡片式输入（[docs/composer-toolbar-batch-report](../../../docs/docs/composer-toolbar-batch-report.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
+.composer .composer-card {
+  position: relative; /* BorderBeam 层的定位上下文（[docs/antd6-upgrade-and-composer-border-beam](../../../docs/docs/antd6-upgrade-and-composer-border-beam.md)） */
+  flex: 1; min-width: 0;
+  border: 1px solid var(--ws-border); border-radius: 14px;
+  background: var(--ws-panel);
+  padding: 6px 10px 4px;
+}
+/* 输入框自身无边框（含 focus/hover 态）：浏览器 UA 的 focus outline 不受 antd borderless 管辖，
+   必须显式压制；聚焦反馈由流光边框承担（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)：原 :focus-within 强调色边框取消，
+   流光仅在输入框聚焦或任务进行中时出现；BorderBeam 恒挂载、经 className 显隐） */
+/* 空闲流光的隐藏不用 display:none 而是 opacity：blur 在 mousedown 时触发，mousedown->click 窗口内的
+   display 级 DOM 变化会让 WebKit（WKWebView）取消待处理的 click——侧栏会话行的首次点击曾被吞掉
+   （需要点两次）。opacity+pointer-events 让 DOM 在 blur 前后保持稳定；
+   ::before 暂停动画实现空闲零绘制（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 时机语义不变）。 */
+.composer .composer-card .ant-border-beam.composer-beam-idle { opacity: 0; pointer-events: none; }
+.composer .composer-card .ant-border-beam.composer-beam-idle::before { animation-play-state: paused; }
+.composer .composer-input,
+.composer .composer-input:focus,
+.composer .composer-input:hover { border: none; box-shadow: none; outline: none; font-size: 14px; }
+.composer .composer-input textarea { padding: 4px 6px; }
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 6px 2px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--ws-border); border-radius: 8px; padding: 2px 6px;
+  font-size: 12px; background: var(--ws-code-bg);
+}
+.attach-chip img,
+.attach-chip .ant-image img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+.attach-chip .ant-image { display: inline-flex; line-height: 0; cursor: zoom-in; }
+.attach-chip .ant-image img { pointer-events: auto; }
+.attach-chip .attach-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); }
+.attach-chip .x { cursor: pointer; color: var(--ws-dim); font-size: 11px; }
+.attach-chip .x:hover { color: var(--ws-err); }
+.composer-toolbar { display: flex; align-items: center; padding: 2px 2px 2px 4px; }
+.composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; }
+.composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.composer-toolbar .ant-btn-text { color: var(--ws-text-2); padding-inline: 8px; }
+.composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+.composer-toolbar .tb-label {
+  /* 完整展示模型名（不限宽）；省略号只是窄窗口空间不足时的兜底，按钮 title 中有全名 */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin: 0 2px 0 6px; font-size: 13px;
+}
+/* 权限胶囊按档着色：确认=墨（accent，中性=默认档）/ 自动编辑=橙 / 完全访问=红（危险）；
+   [docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 墨化后语义 = 色彩强度映射风险等级（无色=默认、暖色=需注意、红=危险）；plan 档不着色。
+   选择器带 .ant-btn-text（特异性相同、后者胜出）以压过上方 hover 变色规则，悬停保持档位色 */
+.composer-toolbar .ant-btn-text.approval-confirm { color: var(--ws-accent) !important; }
+.composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
+.composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
+.composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
+/* 上下文用量小字（压缩图标与模型菜单之间） */
+.composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); white-space: nowrap; margin: 0 2px; }
+.composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
+/* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
+.menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }
+.menu-item-rich .desc { font-size: 11.5px; color: var(--ws-dim); }
+/* 权限档下拉条目：仅标题文字按档着色（与触发胶囊同色，[docs/composer-shift-tab-mode-cycle](../../../docs/docs/composer-shift-tab-mode-cycle.md) §5）。
+   档位类挂在内层 .menu-item-rich 上（rich() 传入）；规则瞄准标题 span（antd 的选中/悬停色作用在 li 上），
+   内层元素自身 color 的继承永远胜出——无需 !important。图标保持默认文字色 */
+.ant-dropdown .menu-item-rich.approval-confirm > span:not(.desc) { color: var(--ws-accent); }
+.ant-dropdown .menu-item-rich.approval-auto    > span:not(.desc) { color: var(--ws-warn); }
+.ant-dropdown .menu-item-rich.approval-full    > span:not(.desc) { color: var(--ws-err); }
+.vision-tag {
+  font-size: 10px; line-height: 16px; margin-left: 6px; padding: 0 5px;
+  border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);
+}
+
+/* ---------- CodeBlock / shared code ---------- */
+.code-block {
+  margin: 0;
+  font-family: var(--ws-font-mono); font-size: 12px;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  max-height: 320px; overflow-y: auto;
+}
+
+/* ---------- ToolCallCard ---------- */
+.tool-card {
+  border: 1px solid var(--ws-border); border-radius: 8px; margin: 6px 0;
+  background: var(--ws-panel); overflow: hidden; font-size: 12.5px;
+}
+.tool-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; }
+.tool-card .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-ok); flex: none; }
+.tool-card.st-running .dot { background: var(--ws-accent); animation: pulse 1.2s infinite; }
+.tool-card.st-error .dot { background: var(--ws-err); }
+/* ask 未作答类错误的中性展示：灰点替代红点，错误行同步降色（错误码与提示文本仍可在展开体查看） */
+.tool-card.st-neutral .dot { background: var(--ws-dim); opacity: 0.55; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+.tool-card .verb { color: var(--ws-dim); white-space: nowrap; }
+.tool-card .tool-name { color: var(--ws-accent); white-space: nowrap; }
+.tool-card .summary { color: var(--ws-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.tool-card .dur { color: var(--ws-dim); font-size: 11px; }
+.tool-card .chev { color: var(--ws-dim); }
+.tool-card .tail {
+  margin: 0; padding: 8px 10px; background: var(--ws-code-bg);
+  font-family: var(--ws-font-mono); font-size: 12px;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  max-height: 320px; overflow-y: auto;
+}
+.tool-card .block { padding: 4px 0; border-top: 1px dashed var(--ws-border); }
+.tool-card .file-line { padding: 6px 10px 2px; color: var(--ws-text-2); font-weight: 600; }
+.tool-card .kv { display: flex; gap: 8px; align-items: center; padding: 6px 10px; flex-wrap: wrap; }
+.tool-card .cmd-line { padding-top: 10px; }
+.tool-card .cmd-line code {
+  font-family: var(--ws-font-mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.tool-card .img { max-width: 320px; max-height: 240px; margin: 6px 10px; border-radius: 6px; }
+.tool-card .diff-line {
+  display: flex; padding: 0 10px; font-family: var(--ws-font-mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.diff-line.add { background: var(--ws-diff-add-bg); color: var(--ws-diff-add-text); }
+.diff-line.del { background: var(--ws-diff-del-bg); color: var(--ws-diff-del-text); }
+.diff-mark { width: 14px; flex: none; opacity: 0.7; }
+.tool-card .err { padding: 6px 10px; color: var(--ws-err); }
+.tool-card .err-neutral { color: var(--ws-dim); opacity: 0.85; }
+.tool-card .warn { padding: 2px 10px 6px; color: var(--ws-warn); }
+.tool-card .widget { background: #fff; }
+
+/* ---------- AskPanel（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md) 卡片式 + 编号选项 + 键盘导航；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 降噪对齐：
+            描边中性标签 + 轻量分页器 + ghost 补充输入 + 胶囊按钮 + 题干层级） ---------- */
+.ask-wrap { margin: 0 16px 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
+.ask-card {
+  border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-panel);
+  padding: 12px 14px; outline: none;
+}
+.ask-card:focus-visible { border-color: var(--ws-accent); }
+/* ask 区按钮统一胶囊形（zcode 式全圆角；局部生效，不动全局 borderRadius token） */
+.ask-card .ant-btn { border-radius: 999px; }
+.ask-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+/* 标签：中性描边 pill（覆盖 antd Tag 默认背景/边框，故带 .ask-card 前缀提特异性）；
+   审批变体用橙色描边保留语义 */
+.ask-card .ask-tag {
+  margin-inline-end: 0 !important;
+  background: transparent; border: 1px solid var(--ws-border); border-radius: 999px;
+  color: var(--ws-text-2); font-size: 11px; line-height: 17px; padding: 0 8px;
+}
+.ask-card .ask-tag.warn { border-color: var(--ws-warn); color: var(--ws-warn); }
+.ask-pager { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; }
+.ask-pager .pager-label { font-size: 11.5px; color: var(--ws-dim); min-width: 32px; text-align: center; }
+/* 轻量分页器：裸图标小灰箭头（zcode 式）；禁用降透明度并跳过 hover */
+.ask-pager .pager-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px; font-size: 11px;
+  color: var(--ws-dim); cursor: pointer; user-select: none; transition: color 0.15s;
+}
+.ask-pager .pager-btn:hover { color: var(--ws-text-1); }
+.ask-pager .pager-btn.off { opacity: 0.35; cursor: default; pointer-events: none; }
+.ask-status { color: var(--ws-dim); font-size: 12px; margin-bottom: 8px; }
+.ask-detail {
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 8px;
+  background: var(--ws-code-bg); font-family: var(--ws-font-mono);
+  font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  max-height: 160px; overflow: auto;
+}
+.ask-options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.ask-opt {
+  display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
+  cursor: pointer; font-size: 13px; min-width: 0;
+}
+.ask-opt:hover { background: var(--ws-hover); }
+.ask-opt.kb { background: var(--ws-hover); }
+.ask-opt.picked { background: rgba(127, 127, 127, 0.16); }
+.ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
+.ask-opt .label { font-weight: 500; flex: none; }
+.ask-opt .desc { color: var(--ws-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---------- [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：选项前导指示物——多选=复选框 / 单选=单选框；视觉直接声明交互语义。
+   纯视觉零事件（整行可点）；picked = 墨色 accent 填充 + 反色对勾线 / 居中墨点，亮暗自适应 ---------- */
+.ask-opt .opt-box {
+  flex: none; width: 14px; height: 14px; align-self: center; position: relative;
+  pointer-events: none; border: 1.5px solid var(--ws-border); background: var(--ws-panel);
+  transition: border-color 0.15s, background 0.15s;
+}
+.ask-opt .opt-box.check { border-radius: 4px; }
+.ask-opt .opt-box.radio { border-radius: 50%; }
+.ask-opt.picked .opt-box { border-color: var(--ws-accent); }
+.ask-opt .opt-box.check.checked { background: var(--ws-accent); border-color: var(--ws-accent); }
+.ask-opt .opt-box.check.checked::after {
+  content: ""; position: absolute; left: 3.5px; top: 0.5px; width: 4px; height: 7.5px;
+  border: solid var(--ws-panel); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
+}
+.ask-opt .opt-box.radio.checked { border-color: var(--ws-accent); }
+.ask-opt .opt-box.radio.checked::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--ws-accent);
+}
+/* 推荐标记：✓ 后缀退役（与对勾视觉混淆）→ 小描边 pill（与 .ask-tag 同语言） */
+.ask-opt .rec-pill {
+  flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px;
+  color: var(--ws-dim); border: 1px solid var(--ws-border);
+}
+/* 题干 = 卡片视觉入口：大一档字号 + medium 字重（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)；原 13px/400 与正文无层级） */
+.ask-card .q-text { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--ws-text-1); line-height: 1.55; }
+/* ghost 补充输入：常态只有一行占位（zcode「type your answer…」感）；聚焦时浮现强调色底线 */
+.ask-card .ask-note {
+  padding: 4px 8px; font-size: 13px;
+  border-bottom: 1px solid transparent; border-radius: 0;
+  transition: border-color 0.15s;
+}
+.ask-card .ask-note:focus { border-bottom-color: var(--ws-accent); }
+/* [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：键盘导航末位高亮——补充输入在 kb 位显示底线（与 focus 同视觉，无需真聚焦） */
+.ask-card .ask-note.kb { border-bottom-color: var(--ws-accent); }
+.ask-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ask-foot .hint { color: var(--ws-dim); font-size: 11px; flex: 1; min-width: 0; }
+.ask-foot .hint .switch-hint { color: var(--ws-warn); margin-right: 8px; }
+.ask-foot .foot-btns { display: inline-flex; gap: 8px; }
+/* 计划卡（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：完整方案 markdown + 复制 + 查看完整方案；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 虚线改实线（降噪） */
+.plan-card {
+  border-bottom: 1px solid var(--ws-border); margin: -2px -14px 10px; padding: 10px 14px 12px;
+}
+.plan-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.plan-title { font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.plan-body {
+  max-height: 220px; overflow-y: auto; font-size: 13px; line-height: 1.7; color: var(--ws-text-2);
+}
+.plan-foot { display: flex; justify-content: center; margin-top: 8px; }
+
+/* ---------- 运行队列（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：运行中提交的任务入队顺序执行 ---------- */
+.queue-panel { margin: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
+.queue-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px;
+  background: var(--ws-panel); border: 1px solid var(--ws-border); min-width: 0;
+}
+.queue-grip { flex: none; color: var(--ws-dim); cursor: grab; display: inline-flex; }
+.queue-item.dragging { opacity: 0.5; }
+.queue-item.drop-target { border-color: var(--ws-accent); box-shadow: inset 0 0 0 1px var(--ws-accent); }
+.queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.queue-attach { flex: none; font-size: 11.5px; color: var(--ws-dim); }
+.queue-ops { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.queue-paused { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px; }
+.queue-paused-hint { color: var(--ws-dim); font-size: 11.5px; }
+/* 设置页命令白名单（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)） */
+.cmd-allowlist { display: flex; flex-direction: column; gap: 4px; }
+.cmd-allowlist-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cmd-allowlist-cmd {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--ws-font-mono); font-size: 11.5px;
+  background: var(--ws-code-bg); border-radius: 5px; padding: 2px 6px;
+}
+
+/* ---------- 上下文压缩按钮（原 ContextInfoBar 区块并入 Composer 工具条） ---------- */
+
+/* ---------- SubagentItemCard（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：单行可点击卡片；点击打开过程抽屉） ---------- */
+.sub-card {
+  margin: 6px 0; display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 860px;
+  padding: 6px 10px; border-radius: 10px; cursor: pointer; user-select: none;
+  background: var(--ws-panel); border: 1px solid var(--ws-border);
+  transition: border-color 0.15s, background 0.15s;
+}
+.sub-card:hover { border-color: var(--ws-accent); }
+.sub-card .sub-card-robot { flex: none; color: var(--ws-text-2); font-size: 13px; }
+.sub-card .sub-card-label { flex: none; font-size: 12.5px; font-weight: 600; color: var(--ws-text-1); }
+.sub-card .sub-card-role {
+  flex: none; font-size: 12px; color: var(--ws-text-1); background: var(--ws-code-bg);
+  padding: 0 6px; border-radius: 8px; line-height: 18px;
+}
+.sub-card .sub-card-desc {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--ws-text-2);
+}
+.sub-card .sub-card-meta {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--ws-dim); font-family: var(--ws-font-mono);
+}
+.sub-card.st-error .sub-card-meta { color: var(--ws-err); }
+/* 停止按钮（仅运行中渲染；中性色，hover 提亮——非危险语义，不用红色） */
+.sub-card .sub-card-stop {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px; font-size: 12px;
+  color: var(--ws-text-2); cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.sub-card .sub-card-stop:hover { color: var(--ws-text-1); background: var(--ws-code-bg); }
+/* 内部运行摘录 / 最终报告（遗留样式保留：sub:step 摘录仍存在于卡片数据中） */
+.sub-detail {
+  margin-top: 6px; padding: 4px 8px; border-left: 2px solid var(--ws-border);
+  font-size: 11.5px; color: var(--ws-dim); white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow-y: auto;
+}
+
+/* ---------- 子代理过程抽屉（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：右侧滑出、常挂载、关闭不销毁） ---------- */
+/* antd 6.6 DOM 契约（subagent.drawer.test.tsx 探明）：
+   .ant-drawer-content-wrapper（absolute，宽度来自 `size`）> .ant-drawer-section.sub-drawer >
+   .ant-drawer-header + .ant-drawer-body >（我们的 .sub-drawer-body）。不再有 .ant-drawer-content。
+   滚动链由项目侧全权接管、绝不依赖 antd 内部布局：antd v6 把组件样式包进 `@layer antd`，
+   无 layer 的 app.css 在级联中永远胜出（与顺序/特异性无关）——因此每个几何关键层都在此显式钉死：
+   wrapper = 由下方 .sub-drawer-root 规则以视口为界（不靠 antd 的 layered placement 规则），
+   section = 定高 flex 列（不滚动），header 恒不收缩，
+   .ant-drawer-body = flex:1/min-height:0/display:flex + overflow:hidden（透明尺寸层；overflow:hidden
+   维持「单一滚动容器」不变式——朴素的 display:block + flex:1 会让内层 flex:1/mh0 对着无界父级求解，
+   抽屉随内容长高、什么都不滚，即 [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 的 .rb-tabs 同类缺陷，
+   迟至 e766796 还复发过），我们的 .sub-drawer-body = 唯一滚动容器（flex:1 + min-height:0 +
+   overflow-y:auto）。SubagentDrawer.tsx 另在运行时把滚动容器钳制到视口减头部，
+   作为不依赖链条的兜底（[docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md)）。 */
+.sub-drawer-root > .ant-drawer-content-wrapper { top: 0; bottom: 0; }
+.sub-drawer.ant-drawer-section {
+  display: flex; flex-direction: column;
+  height: 100%; overflow: hidden;
+  background: var(--ws-bg-main);
+}
+.sub-drawer .ant-drawer-header {
+  padding: 10px 16px 10px 10px; border-bottom: 1px solid var(--ws-border); background: var(--ws-panel);
+  flex: none;
+}
+.sub-drawer .ant-drawer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.sub-drawer-head { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; }
+.sub-drawer-close { flex: none; color: var(--ws-text-2); }
+.sub-drawer-robot { flex: none; font-size: 15px; color: var(--ws-text-1); }
+.sub-drawer-title {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden;
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1); white-space: nowrap;
+}
+.sub-drawer-title .sub-drawer-role {
+  flex: none; font-size: 12px; font-weight: 500; background: var(--ws-code-bg);
+  padding: 0 6px; border-radius: 8px; line-height: 18px;
+}
+.sub-drawer-title .sub-drawer-desc {
+  font-weight: 400; font-size: 12px; color: var(--ws-text-2);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.sub-drawer-status { flex: none; margin-inline-end: 0; font-size: 11px; }
+.sub-drawer-status.st-running { color: var(--ws-warn); }
+.sub-drawer-status.st-error { color: var(--ws-err); }
+.sub-drawer-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+/* [docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md) 第二轮，实机复现：有界 flex 列滚动容器会把子项压到「装得下」而不是溢出——
+   流式块（全局 `.assistant { overflow: hidden }`）自动最小尺寸为零，
+   flex-shrink 把整条过程时间线压扁进剩余空间（滚动容器报告 scrollHeight ==
+   clientHeight：无从滚动、滚轮失效、过程不可见）。子项保持自然高度；溢出只属于本容器。 */
+.sub-drawer-body > * { flex-shrink: 0; }
+.sub-drawer-body .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+.sub-drawer-body .user-bubble { max-width: 92%; }
+/* 指派任务折叠（[docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md) §6）：标签行即开关（chevron 旋转），折叠态显示
+   单行省略预览；任务是静态上下文，默认折叠、切换子代理时重置。 */
+.sub-drawer-task-toggle { cursor: pointer; user-select: none; align-items: center; gap: 5px; }
+.sub-drawer-task-toggle:hover { color: var(--ws-text-2); }
+.sub-drawer-task-toggle .anticon { font-size: 10px; transition: transform 0.2s; }
+.sub-drawer-task-toggle.open .anticon { transform: rotate(90deg); }
+.sub-drawer-task-preview {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--ws-text-2); cursor: pointer;
+}
+.sub-drawer-note { font-size: 11.5px; margin-top: 8px; }
+
+/* Composer 子代理运行指示器（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)） */
+.composer-toolbar .ant-btn-text.subs-indicator { color: var(--ws-accent); }
+.subs-menu-item { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; }
+.subs-menu-item .anticon { color: var(--ws-text-2); }
+.subs-menu-role { font-weight: 600; }
+.subs-menu-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-dim); font-size: 12px; }
+.subs-menu-st.st-running { color: var(--ws-warn); }
+.subs-menu-st.st-done { color: var(--ws-dim); }
+.subs-menu-st.st-error { color: var(--ws-err); }
+
+/* ---------- 左侧导航：项目/任务区 ---------- */
+/* 侧栏骨架（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md)）：导航占满面板（工作区文件面板已随 [docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除；顶部折叠按钮行
+   亦随 [docs/titlebar-logo-toggle](../../../docs/docs/titlebar-logo-toggle.md) 移除，开关入口收口到标题栏 Logo）。[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：折叠宽 0 = 完全隐藏，
+   内容恒挂载、由 Sider 外壳裁切；[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) 的 48px 窄轨退役——
+   Sider 外壳仍须保留，因为 antd has-sider 只认真实 Sider 子组件（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) 缺陷修复） */
+.sider-body { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.sider-nav { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 8px; }
+.nav-section-title { font-size: 11px; color: var(--ws-dim); padding: 2px 4px 6px 8px; }
+/* 项目区头行：大标题 + 折叠 caret + 右侧管理/新建图标（按截图定稿） */
+.nav-header { display: flex; align-items: center; padding: 0 4px 6px 8px; }
+.nav-header-title {
+  flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: 13.5px; font-weight: 600; color: var(--ws-text-1); cursor: pointer; user-select: none;
+}
+.nav-header-title .caret { font-size: 10px; color: var(--ws-dim); transition: transform 0.15s; }
+.nav-header-title .caret.collapsed { transform: rotate(-90deg); }
+.nav-header-actions { display: flex; gap: 2px; }
+.manage-row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px dashed var(--ws-border); }
+.manage-row .manage-info { flex: 1; min-width: 0; }
+.manage-row .manage-info b { font-size: 13px; }
+.proj-form { display: flex; flex-direction: column; gap: 14px; }
+.proj-field { display: flex; flex-direction: column; gap: 6px; }
+.proj-field .proj-label { font-size: 12.5px; color: var(--ws-text-2); }
+.proj-field .proj-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.nav-empty { font-size: 12px; color: var(--ws-dim); padding: 2px 10px 6px; }
+.project-group { margin-bottom: 6px; }
+.project-row {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+}
+.project-row .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-nav-row {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
+  font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
+}
+.session-nav-row:hover { background: var(--ws-hover); }
+.session-nav-row.active { background: var(--ws-hover); color: var(--ws-text-1); }
+/* 运行指示定槽：恒渲染的占位保证每行标题对齐 */
+.session-nav-row .session-run-slot {
+  flex: none; width: 12px; height: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--ws-accent);
+}
+/* 未读点：会话结束且用户不在时接管运行槽位（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；进入会话即清除 */
+.session-nav-row .session-unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-accent); }
+/* 可收缩的 flex 项：Tag/时间恒定；空间不足时标题先截断，行内容绝不溢出（缺陷修复） */
+.session-nav-row .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-nav-row .session-time { margin-left: auto; flex: none; font-size: 11px; color: var(--ws-dim); }
+/* 按钮叠加在时间槽上（不影响布局）；用 opacity/visibility 取代 display 切换以保持行高恒定 */
+.session-nav-row .row-actions {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; flex: none; margin-left: 4px;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.12s;
+  background: var(--ws-hover); /* 遮住底下透出的时间文本 */
+}
+.session-nav-row:hover .row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
+.session-nav-row:hover .session-time { opacity: 0; }
+.project-row {
+  position: relative; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+}
+.project-row .row-action {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  margin-left: auto; opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.12s; background: var(--ws-hover);
+}
+.project-row:hover .row-action { opacity: 1; visibility: visible; pointer-events: auto; }
+.show-more { font-size: 12px; color: var(--ws-dim); padding: 4px 8px 4px 24px; cursor: pointer; }
+.show-more:hover { color: var(--ws-accent); }
+.task-nav-row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px;
+}
+.task-nav-row:hover { background: var(--ws-hover); }
+.task-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-dim); flex: none; }
+.task-dot.ok { background: var(--ws-ok); }
+.task-dot.err { background: var(--ws-err); }
+.task-nav-row .task-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 左下角固定状态区：左侧 git 身份条，右侧任务/统计/设置 ---------- */
+.sider-footer {
+  flex: none; display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px; border-top: 1px solid var(--ws-border); min-width: 0;
+}
+.sider-footer .git-id { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+.sider-footer .git-id-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sider-footer .git-id-name {
+  font-size: 12px; color: var(--ws-text-1); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sider-footer .git-id-email {
+  font-size: 10.5px; color: var(--ws-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sider-footer .git-avatar { font-size: 12px; }
+.sider-footer-ops { display: flex; align-items: center; flex: none; gap: 0; }
+.sider-footer-ops .ant-btn-text { color: var(--ws-text-2); }
+.sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+/* 折叠窄轨的底部回退（.sider-rail-foot）已随 [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 窄轨退役一并移除 */
+
+/* ---------- 右侧栏「变更」页签（GitDiffModal 面板化） ---------- */
+.rb-changes { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.rb-changes-tools {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex: none;
+}
+.rb-changes-tools .flex { flex: 1; }
+.rb-changes .gitdiff { flex: 1; min-height: 0; overflow-y: auto; }
+/* 窄右栏内的 diff 代码块：字号与 padding 略降（原弹框 860px → 右栏 468px、现 328px） */
+.rb-changes .code-block { font-size: 11px; padding: 8px 10px; }
+
+/* ---------- 左侧文件树（已随 [docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除工作区文件面板） ---------- */
+
+/* ---------- GitDiffModal ---------- */
+.gitdiff .file { margin-bottom: 14px; }
+.gitdiff .file-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.gitdiff .stats { color: var(--ws-dim); font-size: 11px; }
+
+/* ---------- SessionDrawer ---------- */
+.session-row { display: flex; align-items: center; gap: 8px; }
+.session-row .info { flex: 1; cursor: pointer; min-width: 0; }
+.session-row .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-row .sub { font-size: 11.5px; color: var(--ws-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- TaskCenterPanel ---------- */
+.new-task { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.new-task .grow { flex: 1; min-width: 160px; }
+.task { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.task .row1 { display: flex; align-items: center; gap: 8px; }
+.task .sched { font-size: 11px; color: var(--ws-accent); }
+.task .row2 { font-size: 12.5px; margin-top: 4px; color: var(--ws-text-2); }
+
+/* ---------- TokenStatsModal ---------- */
+.chart { display: flex; align-items: flex-end; gap: 4px; height: 170px; padding: 8px 4px; overflow-x: auto; }
+.bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
+.bar-col .bar { width: 16px; background: var(--ws-accent); border-radius: 3px 3px 0 0; opacity: 0.85; }
+.bar-col .lbl { font-size: 9px; color: var(--ws-dim); transform: rotate(-45deg); white-space: nowrap; }
+.stats-summary { margin-top: 10px; font-size: 12px; }
+
+/* ---------- SettingsModal ---------- */
+.settings-body { display: flex; gap: 16px; }
+.mcp-pane { display: flex; flex-direction: column; gap: 10px; }
+.mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: 12px; }
+.mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.mcp-entry-head { display: flex; align-items: center; gap: 10px; }
+.mcp-entry-row { display: flex; flex-direction: column; gap: 3px; } /* label 在上（[docs/settings-forms-vertical](../../../docs/docs/settings-forms-vertical.md)） */
+.mcp-entry-row .mcp-label { flex: none; font-size: 12px; color: var(--ws-dim); }
+.mcp-entry-row .ant-input { flex: 1; }
+.validation-grid { display: grid; grid-template-columns: repeat(3, auto); gap: 10px 24px; }
+.validation-item { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.validation-item .validation-label { white-space: nowrap; }
+.hint { color: var(--ws-dim); font-size: 12px; }
+/* 外观页签字体预览（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）：两行分别以 sans/mono 槽渲染同一段文本 */
+.font-preview { display: flex; flex-direction: column; gap: 4px; }
+.font-preview-row {
+  padding: 6px 10px; border: 1px dashed var(--ws-border); border-radius: 8px;
+  color: var(--ws-text-2); font-size: 13px;
+}
+.skill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--ws-border); }
+.skill-row .skill-info { flex: 1; min-width: 0; }
+.skill-row .skill-info .small { font-size: 11px; }
+.skill-row .skill-origin { flex: none; font-size: 10.5px; color: var(--ws-dim); }
+.skill-row .skill-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+/* 技能页签工具行：hint 提示 + 重新加载按钮 */
+.skills-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.skills-toolbar .hint { flex: 1; min-width: 0; }
+
+/* ---------- 关于弹框（AboutModal） ---------- */
+.about-body { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 8px 0 4px; }
+.about-logo { width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
+.about-name { font-size: 16px; font-weight: 600; color: var(--ws-text-1); }
+.about-version { font-size: 12.5px; color: var(--ws-dim); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.about-slogan { font-size: 12.5px; color: var(--ws-text-2); margin: 8px 0 4px; max-width: 240px; }
+.about-actions { display: flex; gap: 8px; margin-top: 10px; }
+.about-error { margin-top: 10px; font-size: 11.5px; color: var(--ws-err); word-break: break-all; }
+
+/* ---------- 常驻右侧栏 ---------- */
+.right-bar {
+  width: 328px; flex: none; height: 100%; overflow-x: hidden; overflow-y: hidden; /* 默认 468px 的 70%（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整）；x 裁切：展开动画期间的超宽内容不得触发横向滚动条；y 不整列滚动（缺陷修复：滚动下沉到各页签内部容器） */
+  border-left: 1px solid var(--ws-border); background: var(--ws-bg-main); /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：右栏与中栏同色 */
+  padding: 12px 14px; font-size: 12px; display: flex; flex-direction: column; gap: 14px;
+  transition: all 0.2s; /* 折叠宽度过渡（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) §8）：与 antd Sider motionDurationMid 同节奏 */
+}
+/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 折叠态：面板保持挂载、裁切式收零（width/padding/border 全部经 0.2s 缓动；[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md)
+   的隐藏即卸载行为废止）。内层经 .rb-tabs 保持 300px 下限，动画期间内容绝不重排——
+   收缩的外壳只是裁掉它；visibility 在动画结束后才翻转，折叠中途无闪烁。 */
+.right-bar.right-bar-closed {
+  width: 0; min-width: 0; padding-left: 0; padding-right: 0;
+  border-left-color: transparent; visibility: hidden;
+}
+.rb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.rb-cell { min-width: 0; }
+.rb-label { font-size: 11px; color: var(--ws-dim); margin-bottom: 4px; } /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：去 letter-spacing + 提到 11px，中文标签不再显松散 */
+/* 行级取值统一两档（[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 排版 + [docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) §6）：标签 11px dim、取值行 12px text-2；加粗分支行已移除（rb-value 退役） */
+.rb-dim { color: var(--ws-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-mono { font-family: var(--ws-font-mono); }
+.rb-section { border-top: 1px dashed var(--ws-border); padding-top: 10px; }
+.rb-path {
+  /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：路径改走 sans 槽——mono 字族无中文字形，含中文目录的路径曾逐字回退成乱排混排；字号与正文统一 12px */
+  font-size: 12px; color: var(--ws-text-2);
+  word-break: break-all; margin-bottom: 4px;
+}
+/* 项目目录标签行：标题 + 文件管理器图标按钮（右侧栏信息页签） */
+.rb-label-row { display: flex; align-items: center; justify-content: space-between; }
+.rb-label-row .rb-label { margin-bottom: 4px; }
+.rb-open-dir-btn { color: var(--ws-dim); }
+.rb-open-dir-btn:hover { color: var(--ws-text-2); }
+.rb-dir { color: var(--ws-text-2); padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-line { padding: 1px 0; color: var(--ws-text-2); font-size: 12px; }
+/* 2.6：右栏计划 todos */
+.rb-todo { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; color: var(--ws-text-2); font-size: 12px; line-height: 1.5; }
+.rb-todo-dot { flex: none; width: 14px; text-align: center; color: var(--ws-dim); }
+.rb-todo-dot.in_progress { color: var(--ws-accent); }
+.rb-todo-dot.completed { color: var(--ws-ok); }
+.rb-todo-done { color: var(--ws-dim); text-decoration: line-through; }
+/* 右栏「技能」段：只读展示，来源短标签右对齐、限宽省略，悬浮显示 description + 完整路径 */
+.rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 12px; color: var(--ws-text-2); }
+/* 可点击技能行（点击弹详情）：负 margin 补偿 padding，悬停反馈与菜单高亮同 token */
+.rb-skill-line.rb-skill-clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; transition: background 0.15s; }
+.rb-skill-line.rb-skill-clickable:hover { background: var(--ws-hover); }
+.rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-skill-origin { margin-left: auto; padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 10.5px; color: var(--ws-dim); }
+/* [docs/session-logging-report](../../../docs/docs/session-logging-report.md)：右栏运行日志 */
+.rb-log-head { cursor: pointer; user-select: none; }
+.rb-log-tools { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+.rb-log {
+  flex: 1; min-height: 0; margin: 6px 0 2px; overflow: auto; padding: 6px 8px;
+  font-family: var(--ws-font-mono); font-size: 10.5px; line-height: 1.5;
+  color: var(--ws-text-2); background: var(--ws-code-bg, rgba(127, 127, 127, 0.08));
+  border-radius: 6px; white-space: pre-wrap; word-break: break-all;
+}
+.rb-log .warn { color: #d46b08; }
+.rb-log .err { color: #cf1322; }
+.rb-log-error { color: #cf1322; white-space: normal; }
+/* [docs/session-artifacts-and-files-tab](../../../docs/docs/session-artifacts-and-files-tab.md)：右栏 Tabs 四页签（信息/日志/文件/变更，[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 调序）；高度链一直贯通到面板，
+   让日志/文件列表占满右栏剩余高度（信息页内容溢出时由 body-holder 滚动）。
+   缺陷修复（antd6）：自 @rc-component/tabs 起内容 DOM 为 body-holder > body > content（面板）；
+   旧名 content-holder/content（容器）/tabpane 已不存在——高度链必须瞄准新名，否则 .rb-log
+   无高度约束、永不滚动，溢出被 .right-bar 的 overflow:hidden 裁掉 */
+/* 根高度约束不可移除（10f11fc 回归教训，[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)）：缺了它 Tabs 根会被内容撑高（列 flex
+   min-height:auto 拒绝收缩），body-holder 的 overflow-y:auto 永不触发，整条链没有滚动条 */
+.rb-tabs { flex: 1; min-height: 0; min-width: 300px; /* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：面板裁切折叠期间的下限——外壳收缩时内容绝不重排 */ }
+.rb-tabs > .ant-tabs-nav { margin-bottom: 10px; flex: none; }
+.rb-tabs > .ant-tabs-nav .ant-tabs-tab { padding: 5px 2px; font-size: 12px; }
+.rb-tabs > .ant-tabs-nav .ant-tabs-extra-content { margin-right: 8px; }
+.rb-tabs > .ant-tabs-body-holder { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; /* 横向必裁：技能行负 margin 全宽高亮（.rb-skill-clickable）与长路径都不得触发横向滚动条——四页签均为纵向内容，横向滚动无合法场景（日志 pre 自带 overflow:auto） */ }
+.rb-tabs > .ant-tabs-body-holder > .ant-tabs-body { height: 100%; }
+.rb-tabs > .ant-tabs-body-holder .ant-tabs-content { height: 100%; }
+.rb-log-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+/* [docs/session-artifacts-and-files-tab](../../../docs/docs/session-artifacts-and-files-tab.md)：文件页签（会话产物列表），同样占满剩余高度 */
+.rb-files { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.rb-files-tools { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; flex: none; }
+.rb-files-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.rb-file {
+  display: flex; align-items: center; gap: 6px; padding: 4px 2px; border-radius: 5px;
+  color: var(--ws-text-2); font-size: 12px; cursor: pointer; min-width: 0;
+}
+.rb-file:hover { background: rgba(127, 127, 127, 0.12); }
+.rb-file-icon { flex: none; display: inline-flex; }
+.rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
+.rb-file-gone { opacity: 0.45; cursor: default; }
+
+/* ---------- mermaid / katex（B4） ---------- */
+.assistant .md .ws-diagram {
+  overflow-x: auto; background: var(--ws-code-bg); border-radius: 8px;
+  padding: 10px; margin: 0.5em 0; text-align: center;
+}
+.assistant .md .ws-diagram svg { max-width: 100%; height: auto; }
+/* 流式期间的 mermaid 占位：推迟到消息定稿再渲染，半透明 + 提示（防流式期间滚动风暴） */
+.assistant .md[data-streaming] .ws-diagram { opacity: 0.6; }
+.assistant .md[data-streaming] .ws-diagram::after {
+  content: "⏳ 图表将在回复定稿后渲染";
+  display: block; margin-top: 4px; text-align: left;
+  font-size: 11px; color: var(--ws-dim);
+}
+.assistant .md .ws-diagram-error {
+  white-space: pre-wrap; text-align: left; font-family: var(--ws-font-mono);
+  font-size: 12px; color: #e5484d;
+}
+.assistant .md .ws-math-raw {
+  font-family: var(--ws-font-mono); font-size: 12.5px;
+  white-space: pre-wrap; color: var(--ws-text-2);
+}
+.assistant .md .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }

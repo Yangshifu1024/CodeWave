@@ -1,0 +1,16 @@
+# Dependabot（docs/oss-prep-batch）：GitHub 开源后启用依赖自动升级。
+# pnpm workspace：根目录 pnpm-lock.yaml 管全部（root + ui），npm ecosystem 指向 / 即可覆盖。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

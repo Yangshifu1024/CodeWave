@@ -1,0 +1,105 @@
+# CodeWave CI（docs/p0-plan §2.3；2026-08-30 随 ui/ 迁移修正路径；docs/oss-prep-batch 增加并发取消与路径过滤）
+# macOS 为主开发平台（出产物）；Linux 冒烟；Windows 验证 git2/libgit2 构建链（G8）。
+# tauri CLI 从仓库根运行（root package.json + pnpm workspace，见 docs/p0-implementation-report 布局说明）。
+# 注：MCP 真实 server 测试（mcp::tests::real_*）依赖 node，CI 的 setup-node 已满足。
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  pull_request:
+
+# docs/oss-prep-batch：同分支新提交取消在途旧跑
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+          - os: ubuntu-24.04
+          - os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install system deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+
+      - name: Install deps (pnpm workspace：root + ui 一次装齐)
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests
+        run: pnpm --dir ui test
+
+      - name: Frontend build
+        run: pnpm --dir ui build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --workspace
+
+      - name: Tauri build (macOS 出产物)
+        run: pnpm tauri build
+        if: runner.os == 'macOS'
+
+      - name: Tauri build (compile check)
+        run: pnpm tauri build --no-bundle
+        if: runner.os != 'macOS'
+
+  # docs/long-file-split-and-edition-2024 防回潮：非测试源文件行数检查。>800 行打 warning 标注（软上限，当前存量豁免：
+  # safety/fence/check.rs、core/agent/drive.rs，拆分收敛于后续批次）；>1500 行硬上限直接失败。
+  line-limit:
+    name: source line limit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check non-test source file line counts
+        run: |
+          warn_at=800 fail_at=1500 rc=0
+          while IFS= read -r f; do
+            n=$(wc -l < "$f")
+            if [ "$n" -gt "$fail_at" ]; then
+              echo "::error file=$f::$n lines exceed the hard cap ($fail_at) — split the file (docs/long-file-split-and-edition-2024)."
+              rc=1
+            elif [ "$n" -gt "$warn_at" ]; then
+              echo "::warning file=$f::$n lines exceed the ${warn_at}-line guideline (docs/long-file-split-and-edition-2024)."
+            fi
+          done < <(git ls-files '*.rs' '*.ts' '*.tsx' \
+            | grep -vE '(^|/)(target|node_modules|dist|gen)/' \
+            | grep -vE '(tests?\.rs$|tests_integration\.rs$|fuzz\.rs$|e2e_glm\.rs$|\.test\.tsx?$|\.test\.ts$)')
+          exit $rc

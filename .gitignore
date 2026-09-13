@@ -1,0 +1,30 @@
+# --- node / frontend ---
+node_modules/
+frontend/dist/
+*.local
+
+# --- rust / tauri ---
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# --- misc ---
+.DS_Store
+.task/
+*.log
+.env
+
+# legacy（旧 Wails 迁移方案残留，已废弃）
+bin/
+third_party/
+build/
+.zcode
+scripts
+!scripts/
+# mcp real 测试夹具（mcp::tests::real_* 依赖，src-tauri/src/mcp/mod.rs 按相对路径引用）
+!scripts/mcp-test-server.mjs
+ui/dist/
+src-tauri/stats/
+.codewave/
+# 改名前旧托管目录名（存量本地目录手动改名前的过渡忽略）
+.wavestudio/
+stats/

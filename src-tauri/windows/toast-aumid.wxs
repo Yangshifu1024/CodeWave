@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CodeWave MSI 附加片段（tauri.conf.json → bundle.windows.wix.fragmentPaths + componentRefs）。
+     Windows 通知 AUMID 注册（[docs/windows-toast-aumid](../docs/windows-toast-aumid.md)）：
+     MSI 安装时写 HKCU AppUserModelId 键（DisplayName + IconUri），卸载时随组件移除——
+     与 NSIS 钩子（installer-hooks.nsh）语义一致。IconUri 必须是真实图片文件
+     （icons/128x128.png 经 bundle.resources 落盘至 INSTALLDIR\icons\），写 exe 会渲染为空。
+     注意：identifier / DisplayName 必须与 tauri.conf.json（identifier / productName）保持一致。 -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <Component Id="ToastAumidRegistryComponent" Guid="10EFBBEB-5B8A-4EDA-A9DB-F50EBE7A9A76" Directory="INSTALLDIR">
+      <RegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\xyz.yangshifu.codewave">
+        <RegistryValue Name="DisplayName" Type="string" Value="CodeWave" KeyPath="yes" />
+        <RegistryValue Name="IconUri" Type="string" Value="[INSTALLDIR]icons\128x128.png" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+</Wix>

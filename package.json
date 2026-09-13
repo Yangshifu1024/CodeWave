@@ -1,0 +1,17 @@
+{
+  "name": "codewave-root",
+  "private": true,
+  "version": "0.2.0",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --dir ui dev",
+    "build": "pnpm --dir ui build",
+    "test": "pnpm --dir ui test",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@tauri-apps/cli": "^2.11.0",
+    "zod": "^4.5.2"
+  }
+}

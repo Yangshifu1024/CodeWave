@@ -1,0 +1,80 @@
+name: 缺陷报告
+description: 应用崩溃、行为与预期不符或功能失效。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈缺陷。请尽量填写以下内容，便于复现与定位。
+
+  - type: input
+    id: summary
+    attributes:
+      label: 一句话概述
+      placeholder: 例如「计划档批准后权限胶囊未切换到自动编辑」
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 新建临时会话 / 打开项目 X
+        2. 在 Composer 输入 Y
+        3. 点击 Z
+        4. 观察到异常行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 构建版本号或 commit 短哈希
+      placeholder: "v0.1.0 (commit abc1234)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 右侧栏「日志」页签可查看，或直接取 ~/.codewave/logs/ 下的文件；会话级黑匣子日志对定位最有效
+      placeholder: 粘贴关键日志片段（注意先脱敏 API key 等敏感信息）
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 截图、AI 对话片段（脱敏）、初次出现的时间点等
+    validations:
+      required: false

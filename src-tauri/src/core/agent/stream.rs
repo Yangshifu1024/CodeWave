@@ -1,0 +1,293 @@
+use crate::core::types::{Content, Message, Role, SessionId};
+use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, StreamRequest};
+use crate::tools::compact::compact_for_model;
+use crate::util::throttle::ThrottledStream;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use super::drive::{DriveParams, NormalizedCall};
+use super::runtime::{AgentCore, EventSink, Frame, SessionRuntime, STREAM_THROTTLE_MS};
+
+/// 会话日志 verbose 全文（请求/响应）的单会话上限（字符数；防止超大响应撑爆日志）
+pub(super) const VERBOSE_BODY_CAP: usize = 64 * 1024;
+/// 会话日志错误摘要上限（字符数）
+pub(super) const ERROR_CAP: usize = 500;
+
+/// 组装一次 LLM 流式请求：解析生效模型（会话覆盖 → 全局 active）、思考力度、
+/// 六层 system prompt（含计划瞬态快照注入）与统一排序的工具集（内置 + MCP）。
+pub(super) async fn build_stream_request(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    params: &DriveParams,
+) -> Result<(crate::core::config::ModelConfig, StreamRequest), String> {
+    let cfg = core.cfg.read().unwrap().clone();
+    let prefs = rt.prefs();
+    // 会话模型覆盖优先；覆盖悬空（模型已删）回落全局 active（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+    let model = match crate::core::prefs::effective_model(&cfg, &prefs) {
+        Some(m) => m,
+        None => {
+            tracing::warn!(
+                "会话 {} 配置的模型 {} 已不存在，回落全局 active 模型",
+                rt.id,
+                prefs.model_id.as_deref().unwrap_or("")
+            );
+            cfg.active_model().ok_or("未配置模型")?
+        }
+    };
+    // 思考力度：会话覆盖 → 模型配置默认（未知字符串视为未设置）
+    let reasoning_effort = prefs.reasoning_effort.or_else(|| {
+        model
+            .reasoning_effort
+            .as_deref()
+            .and_then(crate::core::prefs::EffortLevel::parse)
+    });
+    // shell 描述跟随配置 selection（与 command 工具执行 shell 同一事实源）
+    let shell = crate::tools::command::shell_description(cfg.shell.selection.as_deref());
+    let extra = rt.extra_roots.lock().unwrap().clone();
+    // 第 2/3 层：技能与记忆索引（字节稳定）
+    let skills = core.skills.list(
+        &rt.workspace,
+        &rt.data_dir,
+        &cfg.disabled_skills,
+        rt.project_dir.as_deref(),
+    );
+    let skills_listing = crate::skills::prompt_listing(&skills);
+    let memories = crate::memory::scan(&rt.data_dir, rt.project_dir.as_deref());
+    let memory_listing = crate::memory::prompt_listing(&memories);
+    // 项目段：项目名 + 项目目录 + temps 暂存区（数据目录在 <project>/.codewave，单目录语义）
+    let project_section = rt.project_id.as_ref().map(|pid| {
+        let project = crate::core::projects::find(&core.data_dir, pid);
+        let name = project
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pid.clone());
+        let temps = project
+            .as_ref()
+            .map(|p| crate::core::projects::project_data_dir(&core.data_dir, p).join("temps"))
+            .unwrap_or_else(|| crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("temps"))
+            .to_string_lossy()
+            .into_owned();
+        format!(
+            "\n<project>\n- Project: {name}\n- Project directory: {}\n- Scratch dir & command working directory: {temps}\n  Throwaway files go here; commands start here.\n</project>\n",
+            rt.workspace.to_string_lossy()
+        )
+    });
+    let mut system = crate::core::prompt::assemble(
+        &rt.workspace,
+        &cfg,
+        &extra,
+        shell.as_str(),
+        &skills_listing,
+        &memory_listing,
+        project_section.as_deref(),
+        rt.project_dir.as_deref(),
+    );
+    if !params.system_extra.is_empty() {
+        system.push('\n');
+        system.push_str(&params.system_extra);
+    }
+    let mut messages = rt.history.lock().unwrap().clone();
+    // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
+    // 落在其之前最后一条非瞬态消息上，保前缀缓存）
+    if !rt.injected_plan_snapshot_for_run.load(Ordering::SeqCst) {
+        let todos = rt.todos.lock().unwrap().clone();
+        if !todos.is_empty() {
+            messages.push(Message::user_text(format!(
+                "<current-plan-transient>\n{}\n</current-plan-transient>",
+                crate::tools::plan::render_todos(&todos)
+            )));
+            rt.injected_plan_snapshot_for_run
+                .store(true, Ordering::SeqCst);
+        }
+    }
+    // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
+    let mut tools: Vec<crate::provider::ToolDef> = core
+        .tools
+        .tool_defs()
+        .into_iter()
+        .filter(|d| !params.exclude_tools.contains(&d.name))
+        .collect();
+    if !params.exclude_mcp {
+        let mcp_tools = core.mcp.all_tools().await;
+        for mt in mcp_tools {
+            tools.push(crate::provider::ToolDef {
+                name: crate::mcp::server_function_name(&mt.server, &mt.name),
+                description: mt.description,
+                schema_json: mt.schema_json,
+            });
+        }
+    }
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok((
+        model.clone(),
+        StreamRequest {
+            model,
+            system,
+            messages,
+            tools,
+            cache_key: Some(rt.id.clone()),
+            reasoning_effort,
+        },
+    ))
+}
+
+/// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。
+pub(super) async fn collect_deltas(
+    mut rx: mpsc::Receiver<crate::provider::StreamDelta>,
+    stream: Arc<ThrottledStream>,
+) -> Assembled {
+    let mut asm = Assembled::default();
+    while let Some(d) = rx.recv().await {
+        // 每帧刷新流活跃度（含不经 stream 缓冲的 ToolCall 增量）——停滞看门狗的观测点
+        stream.touch();
+        match d {
+            crate::provider::StreamDelta::Text { text } => {
+                asm.push_text(&text);
+                stream.push_text(&text);
+            }
+            crate::provider::StreamDelta::Reasoning { text } => {
+                asm.push_thinking(&text);
+                stream.push_reasoning(&text);
+            }
+            crate::provider::StreamDelta::ToolCallBegin { index, id, name } => {
+                asm.tool_calls.push(AssembledToolCall {
+                    index,
+                    id,
+                    name,
+                    args_raw: String::new(),
+                });
+                // 块记录：捕获工具调用的真实穿插位置（值 = tool_calls 下标）
+                asm.blocks.push(AsmBlock::Tool(asm.tool_calls.len() - 1));
+            }
+            crate::provider::StreamDelta::ToolCallArgsDelta { index, fragment } => {
+                if let Some(c) = asm.tool_calls.iter_mut().find(|c| c.index == index) {
+                    c.args_raw.push_str(&fragment);
+                }
+            }
+            crate::provider::StreamDelta::ToolCallEnd { .. } => {}
+        }
+    }
+    asm
+}
+
+/// 组装 assistant 消息 + 归一化调用；参数无法修复的调用直接拒绝，合成错误结果。
+/// text/thinking/tool_use 全部按真实到达顺序（AsmBlock 顺序）产出内容——
+/// 此前 tool_use 被统一挪到末尾，重开会话后工具卡穿插位置丢失（已修复，与流式 UI 对齐）。
+pub(super) fn build_assistant_message(asm: &Assembled) -> (Message, Vec<NormalizedCall>, Vec<Content>) {
+    // 先归一化全部调用（保持顺序），再把 ToolUse 块插回真实位置
+    let mut calls: Vec<NormalizedCall> = Vec::new();
+    let mut synth = Vec::new();
+    let mut ord_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new(); // asm 工具序号 → calls 下标
+    for (ord, c) in asm.tool_calls.iter().enumerate() {
+        match crate::core::sessions::repair::parse_or_salvage(&c.args_raw) {
+            Some(v) => {
+                let args = if v.is_object() {
+                    v
+                } else {
+                    serde_json::json!({ "value": v })
+                };
+                ord_of.insert(ord, calls.len());
+                calls.push(NormalizedCall {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    args,
+                    index: c.index,
+                });
+            }
+            None => {
+                let msg = format!(
+                    "工具 {c_name} 的参数 JSON 无法解析（长度 {len}），调用被拒绝",
+                    c_name = c.name,
+                    len = c.args_raw.len()
+                );
+                tracing::warn!("{msg}");
+                synth.push(Content::ToolResult {
+                    tool_use_id: c.id.clone(),
+                    content: msg,
+                    is_error: true,
+                });
+            }
+        }
+    }
+    let mut content = Vec::new();
+    for b in &asm.blocks {
+        match b {
+            AsmBlock::Text(t) if !t.is_empty() => content.push(Content::Text { text: t.clone() }),
+            AsmBlock::Thinking(t) if !t.is_empty() => {
+                content.push(Content::Thinking { text: t.clone() })
+            }
+            AsmBlock::Tool(ord) => {
+                if let Some(&ci) = ord_of.get(ord) {
+                    let c = &calls[ci];
+                    content.push(Content::ToolUse {
+                        id: c.id.clone(),
+                        name: c.name.clone(),
+                        args: c.args.clone(),
+                    });
+                }
+            }
+            _ => {} // 空 text/thinking 块不进历史
+        }
+    }
+    (
+        Message {
+            role: Role::Assistant,
+            content,
+            created_at: None,
+        },
+        calls,
+        synth,
+    )
+}
+
+/// 模型侧双通道压缩包装（供批次执行层调用）。
+pub fn model_side_result(
+    kind: crate::tools::ToolKind,
+    name: &str,
+    outcome: &crate::tools::ToolOutcome,
+) -> String {
+    compact_for_model(kind, name, outcome)
+}
+
+/// 将一个节流批次按段顺序拆成多条单通道帧依次下发：帧到达序 = 显示顺序。
+pub(super) fn flush_segments(
+    sink: &Arc<dyn EventSink>,
+    session: &SessionId,
+    buf: &crate::util::throttle::StreamBuffer,
+) {
+    for seg in &buf.segments {
+        let frame = match seg {
+            crate::util::throttle::Segment::Text(t) => Frame::DeltaText {
+                generation: buf.generation,
+                text: t.clone(),
+            },
+            crate::util::throttle::Segment::Reasoning(t) => Frame::DeltaThinking {
+                generation: buf.generation,
+                text: t.clone(),
+            },
+        };
+        sink.channel_frame(session, &frame);
+    }
+}
+
+/// 64ms 流式刷新 ticker（run 期间全程存活）。
+pub async fn stream_flush_loop(
+    sink: Arc<dyn EventSink>,
+    rt: Arc<SessionRuntime>,
+    stop: CancellationToken,
+) {
+    let interval = Duration::from_millis(STREAM_THROTTLE_MS);
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {
+                if let Some(buf) = rt.stream.try_take(interval) {
+                    flush_segments(&sink, &rt.id, &buf);
+                }
+            }
+        }
+    }
+}
+

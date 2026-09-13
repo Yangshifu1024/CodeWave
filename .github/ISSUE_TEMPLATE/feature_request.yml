@@ -1,0 +1,59 @@
+name: 功能建议
+description: 提出新功能或改进建议。
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        新功能请使用本模板；缺陷请改用「缺陷报告」模板。
+
+  - type: input
+    id: title
+    attributes:
+      label: 一句话标题
+      placeholder: 例如「会话导出为 Markdown」
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题或动机
+      description: 解决什么使用痛点？ applicable 时请关联既有批次文档（docs/NN-xxx.md）
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案
+      description: 描述期望的用户可见行为；如能指出涉及的模块（chat/composer/侧栏/子代理等）更好
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 考虑过的其他做法及不选的原因
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 建议优先级
+      options:
+        - Must（核心流程受阻）
+        - Should（高价值，可排期）
+        - Could（锦上添花）
+        - Won't（明确超出定位，拒绝）
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+    validations:
+      required: false

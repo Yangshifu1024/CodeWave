@@ -1,0 +1,96 @@
+[package]
+name = "codewave"
+version = "0.2.0"
+description = "CodeWave - local-first desktop AI coding agent"
+license = "MIT"
+repository = "https://github.com/Yangshifu1024/CodeWave"
+authors = ["Yangzhenbiao"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "codewave_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# desktop framework
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+# Custom title bar (docs/23): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay
+tauri-plugin-decoration = "3"
+
+# async / serialization
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_ignored = "0.1"
+serde_yaml = "0.9"
+
+# http / llm
+reqwest = { version = "0.13", features = ["json", "socks", "stream", "gzip", "brotli"] }
+
+# tools & safety
+git2 = { version = "0.20", default-features = false }
+tree-sitter = "0.26"
+tree-sitter-bash = "0.25"
+tree-sitter-powershell = "0.26"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+similar = "2"
+
+# storage & misc
+flate2 = "1"
+tempfile = "3"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+sha2 = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+# Enabled in P1 (docs/03: introduced in P0 without being called); keyring 3.x with per-platform features
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+dom_smoothie = "0.18.0"
+tokio-cron-scheduler = "0.15.1"
+rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
+cron = "0.17.0"
+
+[dev-dependencies]
+tempfile = "3"
+# docs/43: tokio::test(start_paused) virtual clock (test-util feature enabled for test builds only)
+tokio = { version = "1", features = ["test-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# System notification click-to-reveal (notification batch): tauri-plugin-notification's desktop side does not
+# expose click callbacks (actions are mobile-only), so the backend drives native notifications per platform —
+# both crates are the same underlying desktop libraries that plugin uses, already present in Cargo.lock as
+# transitive deps, zero new packages
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+# AUMID 注册表只读检测（Windows 通知缺陷修复，安装时由 NSIS 钩子写入键值——见
+# windows/installer-hooks.nsh）：键存在 = 通知用自家 identifier（图标/标题归属与
+# 点击激活都归本应用）；不存在（dev/便携）回退 POWERSHELL_APP_ID 只保显示
+winreg = "0.56"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mac-notification-sys = "0.6"
+
+[profile.dev.package."*"]
+opt-level = 1
