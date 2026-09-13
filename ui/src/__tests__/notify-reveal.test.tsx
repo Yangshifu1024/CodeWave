@@ -116,7 +116,7 @@ afterEach(() => {
   cleanup();
   // zustand stores are module-level singletons (pitfalls list): reset between tests (same panel-toggle checklist as smoke)
   useUi.setState({ notifications: [], settingsOpen: false, tasksOpen: false, statsOpen: false, rightBarOpen: true, rbTab: "info" });
-  useRun.setState({ tabs: {} });
+  useRun.setState({ tabs: {}, drafts: {} });
   useSessions.setState({ tabs: [], activeKey: null, sessions: [sessionFixture], explorerOpen: true });
   vi.restoreAllMocks();
 });

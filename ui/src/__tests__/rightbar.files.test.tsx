@@ -84,7 +84,7 @@ afterEach(() => {
   useUi.setState({ rightBarOpen: true });
   localStorage.removeItem("ws_right_bar_open");
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
 });
 

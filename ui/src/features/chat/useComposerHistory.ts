@@ -20,7 +20,7 @@ export function useComposerHistory(opts: {
   // 进入浏览态时的草稿快照（退出时还原）
   const draftRef = useRef<{ text: string; images: PendingImage[] } | null>(null);
 
-  // 会话/Tab 切换：退出历史浏览态；草稿暂不按 Tab 隔离——维持现状
+  // 会话/Tab 切换：退出历史浏览态（草稿本体已按 Tab 隔离存 run store 每 Tab 桶；此处只复位瞬态浏览指针与快照）
   useEffect(() => {
     setHistIdx(null);
     draftRef.current = null;

@@ -81,6 +81,7 @@
 - 2026-09-06 · [dropdown-selected-fill.md](./dropdown-selected-fill.md) — Dropdown 选中项高亮中性化：App.tsx alias token 覆盖，全应用下拉/Select 选中面统一
 - 2026-09-06 · [thinking-marquee-rewrite.md](./thinking-marquee-rewrite.md) — 思考跑马灯重写：全宽 band 展示最新行、换行上翻、溢出左爬（同行增长不翻页）
 - 2026-09-11 · [shell-path-echo-and-lightweight-gate.md](./shell-path-echo-and-lightweight-gate.md) — 设置 Shell 下拉旁回显可执行文件绝对路径（auto 同源取探测默认项；WSL 占位）+ lightweight 批准门移除 todos≤3 上限（G3 非空与 skipAnalysis 口令通道不变）
+- 2026-09-13 · [composer-per-tab-draft.md](./composer-per-tab-draft.md) — 缺陷修复批次：composer 草稿按 Tab 隔离（run store 顶层 `drafts` 平行分桶 + 显式 key 防异步窗口竞态，击键不再广播整桶重渲染）+ 带图消息「修改」回显图片（ws:composer-fill detail 带 images，与队列编辑同一还原链）+ 切 Tab 收起提及菜单残留
 
 ## 供应商与设置
 

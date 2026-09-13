@@ -159,7 +159,7 @@ afterEach(() => {
   localStorage.removeItem("ws_explorer_open");
   localStorage.removeItem("ws_right_bar_open");
   // Clear run state (incl. ask) between cases: since [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) an active ask covers the Composer; leftovers would hide the input from later cases
-  useRun.setState((s) => { s.tabs = {}; });
+  useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
 });
 
 describe("App 渲染冒烟", () => {
@@ -522,7 +522,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
   it("发送按钮三态：运行中无输入=停止，输入后=提交，清空复归停止", async () => {
     seedTab();
     useRun.setState((s) => {
-      s.tabs = {}; // clear leftovers so run state does not leak from other cases
+      s.tabs = {}; s.drafts = {}; // clear leftovers so run state does not leak from other cases
       s.tabs["s1"] = {
         items: [], running: true, streamGen: 0, ask: null, breakdown: null,
         todos: [], suggestions: [], subs: [], subStreams: {}, subDrawer: { open: false, subId: null }, gitEntries: null, writeTick: 0,

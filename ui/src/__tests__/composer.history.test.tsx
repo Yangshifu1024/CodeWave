@@ -123,7 +123,7 @@ afterEach(() => {
   useUi.setState({ settingsOpen: false, tasksOpen: false, statsOpen: false, rbTab: "info" });
   useSessions.setState({ tabs: [], activeKey: null, projects: [], sessions: [] });
   useSettings.setState({ config: null, loaded: false });
-  useRun.setState({ tabs: {} });
+  useRun.setState({ tabs: {}, drafts: {} });
   vi.clearAllMocks();
 });
 

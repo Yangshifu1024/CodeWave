@@ -42,7 +42,7 @@ function tab(id: string, title: string) {
 beforeEach(() => {
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [] });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
 });
 
