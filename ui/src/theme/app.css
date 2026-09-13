@@ -497,7 +497,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- SubagentItemCard（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：单行可点击卡片；点击打开过程抽屉） ---------- */
 .sub-card {
-  margin: 6px 0; display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 860px;
+  /* 宽度与 .tool-card 对齐（无 max-width，同随聊天栏撑满；[docs/subagent-interaction-drawer] 同源卡片视觉一致） */
+  margin: 6px 0; display: flex; align-items: center; gap: 6px; min-width: 0;
   padding: 6px 10px; border-radius: 10px; cursor: pointer; user-select: none;
   background: var(--ws-panel); border: 1px solid var(--ws-border);
   transition: border-color 0.15s, background 0.15s;
