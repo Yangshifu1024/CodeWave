@@ -20,7 +20,7 @@
     "i18next": "^25.0.0",
     "immer": "^11.1.18",
     "katex": "^0.18.4",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^15.0.1",
     "mermaid": "^11.17.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
