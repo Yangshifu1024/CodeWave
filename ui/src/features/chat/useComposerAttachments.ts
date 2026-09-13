@@ -1,14 +1,10 @@
 // Composer 图片附件（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：文件选择、粘贴与历史召回共用同一条
 // 校验链——仅图片类型、单张 5MB、最多 4 张、base64 总量 20MB 预算。
-import { useRef, useState } from "react";
+// 附件列表本体存 run store 每 Tab 桶（TabRunState.draft.images，按 Tab 隔离）；本 hook 只持校验链与入口，列表经 opts 注入。
+import { useRef } from "react";
+import type { PendingImage } from "../../stores/run.types";
 
-export interface PendingImage {
-  id: string;
-  name: string;
-  mime: string;
-  data: string; // base64（不含 data: 前缀）
-  dataUrl: string; // 缩略预览
-}
+export type { PendingImage };
 
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024; // 单张上限 5MB
 const IMAGE_MAX_COUNT = 4;
@@ -19,11 +15,10 @@ const IMAGE_MAX_TOTAL_BASE64 = 20 * 1024 * 1024; // base64 总量预算
 export function useComposerAttachments(opts: {
   t: (key: string, opts?: any) => string;
   message: { warning: (content: string) => void };
-  setText: React.Dispatch<React.SetStateAction<string>>;
+  images: PendingImage[];
+  setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
 }) {
-  const { t, message } = opts;
-  // 附件（图片）
-  const [images, setImages] = useState<PendingImage[]>([]);
+  const { t, message, images, setImages } = opts;
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 历史图片 → 待发附件（防御性兜底：按 4 张上限 / 20MB base64 预算截断；正常不会触达）

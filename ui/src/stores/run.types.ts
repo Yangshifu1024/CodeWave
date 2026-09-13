@@ -90,6 +90,23 @@ export interface SubStream {
   loaded: boolean;
 }
 
+/** Composer 待发图片附件（缩略预览 + base64 本体；类型/大小/数量校验链在 useComposerAttachments） */
+export interface PendingImage {
+  id: string;
+  name: string;
+  mime: string;
+  data: string; // base64（不含 data: 前缀）
+  dataUrl: string; // 缩略预览
+}
+
+/** Composer 草稿（文本 + 待发图片附件），按 Tab 平行分桶（key 同 tabs）；纯内存态：切会话各自保留，
+ *  关 Tab 随 dispose 丢弃，重启不恢复。不放进 TabRunState：击键高频换桶引用会把重渲染广播给
+ *  全部 useActiveRun 订阅者（ChatMessages 等），独立分片后只有 Composer 订阅者抖动。 */
+export interface ComposerDraft {
+  text: string;
+  images: PendingImage[];
+}
+
 /** 单个 Tab 的全部运行态（run store 的分桶单元，blank() 给出初值）。
  *  契约：帧 reducer（runFrames.ts）与事件 handler（runHandlers.ts）在此结构上就地变异（immer 草稿）。 */
 export interface TabRunState {

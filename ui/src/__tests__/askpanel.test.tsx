@@ -45,7 +45,7 @@ afterEach(() => {
   calls.length = 0;
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
 });
 
@@ -326,7 +326,7 @@ describe("AskPanel docs/ask-approval-shape-note-nav", () => {
     calls.length = 0;
     useSessions.setState({ tabs: [], activeKey: null, projects: [] });
     useRun.setState((s) => {
-      s.tabs = {};
+      s.tabs = {}; s.drafts = {};
     });
   });
 
@@ -483,7 +483,7 @@ describe("AskPanel 单选题（single）", () => {
     calls.length = 0;
     useSessions.setState({ tabs: [], activeKey: null, projects: [] });
     useRun.setState((s) => {
-      s.tabs = {};
+      s.tabs = {}; s.drafts = {};
     });
   });
 
@@ -607,7 +607,7 @@ describe("AskPanel 问句去重", () => {
     calls.length = 0;
     useSessions.setState({ tabs: [], activeKey: null, projects: [] });
     useRun.setState((s) => {
-      s.tabs = {};
+      s.tabs = {}; s.drafts = {};
     });
   });
 
@@ -679,7 +679,7 @@ describe("AskPanel 多题提交分页", () => {
     calls.length = 0;
     useSessions.setState({ tabs: [], activeKey: null, projects: [] });
     useRun.setState((s) => {
-      s.tabs = {};
+      s.tabs = {}; s.drafts = {};
     });
   });
 

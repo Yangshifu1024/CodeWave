@@ -59,12 +59,12 @@ function seedTab(session: string, subs: SubView[], streams: Record<string, SubSt
 }
 
 beforeEach(() => {
-  useRun.setState({ tabs: {} });
+  useRun.setState({ tabs: {}, drafts: {} });
 });
 
 afterEach(() => {
   cleanup();
-  useRun.setState({ tabs: {} });
+  useRun.setState({ tabs: {}, drafts: {} });
 });
 
 describe("SubagentItemCard（docs/subagent-interaction-drawer）", () => {
@@ -251,7 +251,7 @@ describe("Composer 子代理运行指示器（docs/subagent-interaction-drawer�
 describe("SubagentItemCard 停止按钮", () => {
   afterEach(() => {
     cleanup();
-    useRun.setState({ tabs: {} });
+    useRun.setState({ tabs: {}, drafts: {} });
   });
 
   it("运行中显示停止按钮：点击单独停止该子代理（stop_subagent），且不打开抽屉", () => {

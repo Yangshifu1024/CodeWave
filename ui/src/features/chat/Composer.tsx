@@ -8,7 +8,7 @@ import {
   SettingOutlined, StopOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { useActiveRun, useRun, useContextPct } from "../../stores/run";
+import { useActiveRun, useActiveDraft, useRun, useContextPct } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
@@ -31,7 +31,7 @@ const MODE_ORDER: ApprovalMode[] = ["confirm_each", "auto_edit", "plan", "full_a
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
  *  / 触发技能菜单、$ 触发子代理菜单、@ 触发提及菜单（↑↓ 导航、Enter/Tab 选中）；
  *  IME 组合期按键全部放行。ask 弹出时提问卡整体覆盖本组件与队列面板，回答后原样恢复
- * （草稿存组件 state 不丢）。触发符语义见 [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)。 */
+ * （草稿存 run store 每 Tab 桶，不丢）。触发符语义见 [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)。 */
 export default function Composer() {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -44,10 +44,15 @@ export default function Composer() {
   const prefs = tab?.prefs ?? { approval_mode: "auto_edit" as ApprovalMode, model_id: null, reasoning_effort: null };
   const updatePrefs = useSessions((s) => s.updatePrefs);
   // [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)：ask/审批弹出时提问卡覆盖整个输入区（zcode 式：ask 面板是唯一底部输入），
-  // Composer 本体与队列面板暂不渲染、回答后原样恢复；草稿文本存本组件 state，子树卸载不丢
+  // Composer 本体与队列面板暂不渲染、回答后原样恢复；草稿存 run store 每 Tab 桶，子树卸载不丢
   const askActive = !!active.ask;
 
-  const [text, setText] = useState("");
+  // 草稿按 Tab 隔离：文本与待发附件存 run store 平行分桶（drafts[key]，见 ComposerDraft 注释），切会话各自保留、
+  // 发送成功 clearDraft 清空；setText/setImages 与 useState 同形（支持 updater），直接注入下方子 hooks
+  const draft = useActiveDraft();
+  const text = draft.text;
+  const setText = useRun.getState().setDraftText;
+  const setDraftImages = useRun.getState().setDraftImages;
   // 流光显隐（[docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)）：输入框聚焦态——仅输入框聚焦或任务进行中时出现
   const [composerFocused, setComposerFocused] = useState(false);
   // 隐藏走 composer-beam-idle（app.css 中 display:none），动画停摆、零绘制
@@ -60,18 +65,17 @@ export default function Composer() {
   const composingRef = useRef(false);
   const taRef = useRef<any>(null);
 
-  useComposerEvents({ taRef, setText });
-
-  // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 历史召回 / 提及·技能·子代理菜单 / 全局事件
-  const attachments = useComposerAttachments({ t, message, setText });
+  // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
+  const attachments = useComposerAttachments({ t, message, images: draft.images, setImages: setDraftImages });
+  const { images, setImages, fileRef, recalledImages, addFiles, onPaste } = attachments;
+  useComposerEvents({ taRef, setText, setImages, recalledImages });
   const history = useComposerHistory({
     tabKey: tab?.key,
     setText,
-    setImages: attachments.setImages,
-    recalledImages: attachments.recalledImages,
+    setImages,
+    recalledImages,
   });
   const mentions = useComposerMentions({ setText, setActiveIndex });
-  const { images, setImages, fileRef, recalledImages, addFiles, onPaste } = attachments;
   const { histIdx, setHistIdx, draftRef, recallHistory, applyRecall, exitRecall } = history;
   const {
     mentionResults, skillResults, agentResults,
@@ -80,17 +84,29 @@ export default function Composer() {
     clearMentions, clearSkills, clearAgents,
   } = mentions;
 
-  // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）
+  // 会话切换：收起提及/技能/子代理菜单（候选是上一会话的查询结果，残留会把旧菜单顶进新会话）并复位高亮
+  const tabKey = tab?.key;
+  useEffect(() => {
+    clearMentions();
+    clearSkills();
+    clearAgents();
+    setActiveIndex(0);
+  }, [tabKey]);
+
+  // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
+  // 回填显式锁定点击所在 Tab：effect 提交前切 Tab 也不会把队列内容写进新会话、或因消费落空而二次回填
   const draftFromQueue = active.draftFromQueue;
   useEffect(() => {
     if (draftFromQueue == null) return;
-    setText(draftFromQueue.text);
+    const targetKey = tab?.key;
+    useRun.getState().setDraftText(draftFromQueue.text, targetKey);
     if (draftFromQueue.images?.length) {
-      setImages(
+      useRun.getState().setDraftImages(
         recalledImages(draftFromQueue.images.map((im) => ({ mediaType: im.mime, data: im.data }))),
+        targetKey,
       );
     }
-    useRun.getState().consumeDraftFromQueue();
+    useRun.getState().consumeDraftFromQueue(targetKey);
     const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
     el?.focus?.();
   }, [draftFromQueue]);
@@ -266,11 +282,12 @@ export default function Composer() {
       message.warning(t("composer.visionUnsupported"));
       return;
     }
-    // M-2：接受后才清空——运行中按 Enter 不再静默吞掉输入
+    // M-2：接受后才清空——运行中按 Enter 不再静默吞掉输入。
+    // 目标 Tab 在调用时捕获：startChat 异步窗口内切 Tab，清空的仍是发送方草稿而非新会话的
+    const targetKey = useSessions.getState().activeKey ?? undefined;
     const accepted = await useRun.getState().send(v, images.map(({ mime, data }) => ({ mime, data })));
     if (accepted) {
-      setText("");
-      setImages([]);
+      useRun.getState().clearDraft(targetKey); // 文本 + 附件一并清空（发送方 Tab 桶）
       setHistIdx(null); // 发送后序列自然追加新消息；复位指针
       draftRef.current = null;
     }

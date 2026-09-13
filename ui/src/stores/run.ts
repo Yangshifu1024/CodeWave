@@ -30,6 +30,8 @@ import {
 } from "./runHandlers";
 
 export type {
+  ComposerDraft,
+  PendingImage,
   QueueItem,
   SubStream,
   SubView,
@@ -38,11 +40,13 @@ export type {
   ToolView,
   UiItem,
 } from "./run.types";
-import type { SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
+import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
 
 /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 27 键事件面（唯一注册点）。 */
 export interface RunStore {
   tabs: Record<string, TabRunState>;
+  /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
+  drafts: Record<string, ComposerDraft>;
   st(sessionId: string | null): TabRunState;
   initTab(sessionId: string): void;
   dispose(sessionId: string): void;
@@ -63,7 +67,12 @@ export interface RunStore {
   reorderQueue(sessionId: string, fromId: string, toId: string): void;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：取出队列项文本回填输入框（编辑） */
   editQueueItem(sessionId: string, id: string): void;
-  consumeDraftFromQueue(): void;
+  consumeDraftFromQueue(sessionId?: string): void;
+  /** Composer 草稿读写（平行分桶；缺省写当前活跃 Tab，异步回填路径传显式 sessionId 防切 tab 竞态；与 useState 同形支持 updater） */
+  setDraftText(v: string | ((prev: string) => string), sessionId?: string): void;
+  setDraftImages(v: PendingImage[] | ((prev: PendingImage[]) => PendingImage[]), sessionId?: string): void;
+  /** 发送接受后清空对应 Tab 草稿（文本 + 附件一并）；缺省为当前活跃 Tab */
+  clearDraft(sessionId?: string): void;
   onToolResult(sessionId: string, p: ToolResultEvent, ok: boolean): void;
   restoreFromMessages(sessionId: string, msgs: Message[]): void;
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
@@ -76,6 +85,7 @@ export interface RunStore {
 export const useRun = create<RunStore>()(
   immer((set, get) => ({
     tabs: {},
+    drafts: {},
 
     // 仅供动作内部使用（返回可变引用生效前的快照；组件读取请用 useActiveRun）
     st(sessionId) {
@@ -96,9 +106,10 @@ export const useRun = create<RunStore>()(
     },
 
     dispose(sessionId) {
-      // Tab 关闭时删除状态桶（连同完整转录与 git 缓存），长时间运行也能约束内存
+      // Tab 关闭时删除状态桶（连同完整转录与 git 缓存），长时间运行也能约束内存；草稿平行桶一并丢弃
       set((s) => {
         delete s.tabs[sessionId];
+        delete s.drafts[sessionId];
       });
     },
 
@@ -273,11 +284,40 @@ export const useRun = create<RunStore>()(
       });
     },
 
-    consumeDraftFromQueue() {
+    consumeDraftFromQueue(sessionId) {
       set((s) => {
-        const key = useSessions.getState().activeKey ?? "";
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
         const t = s.tabs[key];
         if (t) t.draftFromQueue = null;
+      });
+    },
+
+    // Composer 草稿（平行分桶）：缺省落当前活跃 Tab（composer 仅在活跃会话渲染；ws:composer-fill/insert
+    // 事件也落在事件到达时的活跃会话，语义一致）；异步回填路径（发送清空、队列编辑）传显式 key 防切 tab 竞态。
+    // 桶缺失时防御创建（测试 standalone 挂载路径）
+    setDraftText(v, sessionId) {
+      set((s) => {
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [] });
+        d.text = typeof v === "function" ? v(d.text) : v;
+      });
+    },
+
+    setDraftImages(v, sessionId) {
+      set((s) => {
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [] });
+        d.images = (typeof v === "function" ? v(d.images as PendingImage[]) : v) as PendingImage[];
+      });
+    },
+
+    clearDraft(sessionId) {
+      set((s) => {
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const d = s.drafts[key];
+        if (!d) return;
+        d.text = "";
+        d.images = [];
       });
     },
 
@@ -476,6 +516,14 @@ export const useRun = create<RunStore>()(
 export function useActiveRun(): TabRunState {
   const activeKey = useSessions((s) => s.activeKey);
   return useRun((s) => s.tabs[activeKey ?? ""] ?? BLANK);
+}
+
+/** 活跃 Tab 的 Composer 草稿（无桶时回退共享空草稿）。平行分桶：击键不换 tabs[key] 身份，
+ *  订阅者只有 Composer 自身，不把重渲染广播给 ChatMessages 等整桶订阅者。 */
+const EMPTY_DRAFT: ComposerDraft = { text: "", images: [] };
+export function useActiveDraft(): ComposerDraft {
+  const activeKey = useSessions((s) => s.activeKey);
+  return useRun((s) => s.drafts[activeKey ?? ""] ?? EMPTY_DRAFT);
 }
 
 /** 活跃会话的上下文占用百分比（保留一位小数）。 */

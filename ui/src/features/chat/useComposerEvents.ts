@@ -2,15 +2,18 @@
 // ws:focus-composer（Cmd/Ctrl+L，由 AppShell 派发）、ws:composer-fill（用户消息「修改」，由 ChatMessages 派发）、
 // ws:composer-insert（技能详情「使用」，由右栏 SkillDetailModal 派发，[docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）；事件名勿改。
 import { useEffect } from "react";
+import type { PendingImage } from "../../stores/run.types";
 
 /** Composer 全局事件 hook：订阅 ws:focus-composer（聚焦输入框并移光标到末尾）、
- *  ws:composer-fill（外部文本覆盖草稿并聚焦）与 ws:composer-insert（外部文本追加草稿并聚焦，
+ *  ws:composer-fill（外部文本+附件覆盖草稿并聚焦）与 ws:composer-insert（外部文本追加草稿并聚焦，
  *  空格分隔防粘连），均为 window 级自定义事件，卸载时解绑。 */
 export function useComposerEvents(opts: {
   taRef: React.MutableRefObject<any>;
   setText: React.Dispatch<React.SetStateAction<string>>;
+  setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
+  recalledImages: (imgs: { mediaType: string; data: string }[]) => PendingImage[];
 }) {
-  const { taRef, setText } = opts;
+  const { taRef, setText, setImages, recalledImages } = opts;
 
   // Cmd/Ctrl+L（AppShell 快捷键）：聚焦输入框并把光标移到末尾（继续写草稿而非覆盖）
   useEffect(() => {
@@ -25,12 +28,15 @@ export function useComposerEvents(opts: {
     return () => window.removeEventListener("ws:focus-composer", onFocus);
   }, []);
 
-  // 用户消息「修改」回填（ChatMessages 经 ws:composer-fill 派发）：文本覆盖草稿并聚焦到末尾；不自动发送
+  // 用户消息「修改」回填（ChatMessages 经 ws:composer-fill 派发）：文本 + 附件覆盖草稿并聚焦到末尾；不自动发送
   useEffect(() => {
     const onFill = (e: Event) => {
-      const detail = (e as CustomEvent<{ text?: string }>).detail;
+      const detail = (e as CustomEvent<{ text?: string; images?: { mediaType: string; data: string }[] }>).detail;
       if (!detail?.text) return;
       setText(detail.text);
+      // 附件随文本一并覆盖（带图消息回显缩略图）——与队列「编辑」同一还原链；
+      // 有意分歧：无图时清空现有附件（「修改」= 覆盖语义），队列编辑无图时保留旧附件
+      setImages(recalledImages(detail.images ?? []));
       const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
       el?.focus?.();
       el?.setSelectionRange?.(detail.text.length, detail.text.length);

@@ -69,7 +69,7 @@ afterEach(() => {
   cleanup();
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [], unread: {} });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
   vi.mocked(invoke).mockClear();
 });

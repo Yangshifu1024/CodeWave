@@ -42,7 +42,7 @@ beforeEach(() => {
   calls.length = 0;
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
 });
 

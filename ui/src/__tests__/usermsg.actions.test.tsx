@@ -39,7 +39,7 @@ afterEach(() => {
   writeText.mockClear();
   useSessions.setState({ activeKey: null });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
 });
 
@@ -58,15 +58,26 @@ describe("用户消息悬停操作（复制/修改）", () => {
     expect(writeText).toHaveBeenCalledWith("复制我");
   });
 
-  it("修改：派发 ws:composer-fill 携带原文（Composer 侧监听回填）", () => {
-    seedItems([{ kind: "user", text: "回填我" }]);
+  it("修改：派发 ws:composer-fill 携带原文与附件（Composer 侧监听回填）", () => {
+    seedItems([{ kind: "user", text: "回填我", images: [{ mediaType: "image/png", data: "AAAA" }] }]);
     const received: unknown[] = [];
     const onFill = (e: Event) => received.push((e as CustomEvent).detail);
     window.addEventListener("ws:composer-fill", onFill);
     renderMsgs();
     fireEvent.click(document.querySelector('button[aria-label="修改"]')!);
     window.removeEventListener("ws:composer-fill", onFill);
-    expect(received).toEqual([{ text: "回填我" }]);
+    expect(received).toEqual([{ text: "回填我", images: [{ mediaType: "image/png", data: "AAAA" }] }]);
+  });
+
+  it("修改：纯文本消息派发 ws:composer-fill 的 images 为 undefined（Composer 侧覆盖清空现有附件）", () => {
+    seedItems([{ kind: "user", text: "纯文本" }]);
+    const received: unknown[] = [];
+    const onFill = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener("ws:composer-fill", onFill);
+    renderMsgs();
+    fireEvent.click(document.querySelector('button[aria-label="修改"]')!);
+    window.removeEventListener("ws:composer-fill", onFill);
+    expect(received).toEqual([{ text: "纯文本", images: undefined }]);
   });
 
   it("纯图片消息（无文本）不渲染操作按钮", () => {

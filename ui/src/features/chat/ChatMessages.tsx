@@ -57,10 +57,11 @@ const UserMessage = memo(function UserMessage({
       })
       .catch(() => {});
   };
-  // 「修改」：内容经 ws:composer-fill 回填 Composer（覆盖当前草稿，与队列「编辑」同语义）；Composer 自行聚焦，不直接发送
+  // 「修改」：内容经 ws:composer-fill 回填 Composer（覆盖当前草稿，与队列「编辑」同语义）；Composer 自行聚焦，不直接发送。
+  // 附件一并携带：带图消息点修改图片回显，无图消息覆盖清空现有附件
   const onEdit = () => {
     if (!text) return;
-    window.dispatchEvent(new CustomEvent("ws:composer-fill", { detail: { text } }));
+    window.dispatchEvent(new CustomEvent("ws:composer-fill", { detail: { text, images } }));
   };
   return (
     <div className="msg user">

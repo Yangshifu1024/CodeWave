@@ -51,7 +51,7 @@ afterEach(() => {
   cleanup();
   useSessions.setState({ tabs: [], activeKey: null, projects: [], explorerOpen: true });
   useRun.setState((s) => {
-    s.tabs = {};
+    s.tabs = {}; s.drafts = {};
   });
   useUi.setState({ rightBarOpen: true });
   localStorage.removeItem("ws_right_bar_open");
