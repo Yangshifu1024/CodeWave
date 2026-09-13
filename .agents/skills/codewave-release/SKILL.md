@@ -7,7 +7,7 @@ description: Cut a CodeWave release — run the full gate, bump the version ever
 
 A release is: bump the version everywhere → commit on `main` → push main → push a `v*` tag. The tag push is what triggers `.github/workflows/release.yml`: it creates a **draft** Release, then three platform jobs (macOS / Linux / Windows) build via tauri-action and upload installers to it. Nothing auto-publishes — after CI finishes, a human reviews the assets and clicks **Publish** on the draft.
 
-Pushing a new tag cancels an in-flight older release (workflow concurrency). Signing is optional end to end: without `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` the updater ships unsigned (updater is currently `active:false`), without `APPLE_*` secrets macOS artifacts are unsigned (first open needs right-click approval).
+Pushing a new tag cancels an in-flight older release (workflow concurrency). The updater signing key (`TAURI_SIGNING_PRIVATE_KEY`, no password) is configured as a repo secret and the public key lives in `tauri.conf.json` — every release uploads signed updater artifacts (`*.sig` + `latest.json`), so **publishing a release makes it the live update source** for all installed apps. macOS code-signing/notarization (`APPLE_*`) remains optional: without it macOS artifacts are unsigned (first open needs right-click approval).
 
 **This skill always stops before pushing.** The tag push ships the release and is effectively irreversible (artifacts are published, the version is consumed). Follow AGENTS.md: never push `main` or a tag without the user's explicit yes, even if every check is green.
 
@@ -57,7 +57,7 @@ This matches the release-commit convention; no body needed.
 Show the user, concretely:
 
 - The version and the commits going out since the previous tag (or since the fork point for the first release)
-- What release CI will build once the tag lands: a **draft** Release + Windows / macOS / Linux installers via tauri-action; updater files only carry a valid signature if the signing secrets are set (updater 目前 `active:false`); macOS unsigned unless `APPLE_*` secrets are configured
+- What release CI will build once the tag lands: a **draft** Release + Windows / macOS / Linux installers via tauri-action, plus signed updater artifacts (`*.sig` + `latest.json` — publishing the draft makes this version the live update source); macOS unsigned unless `APPLE_*` secrets are configured
 - That the draft must be **published manually** after CI finishes — CI never releases on its own
 - That pushing this tag cancels any in-flight older release
 

@@ -39,3 +39,20 @@
 - 非法入参（`abc` / 缺参）→ usage + exit 1；
 - 同版本 `pnpm bump 0.2.0` → 全部落点改写成功、锁文件刷新 no-op、`git status` 无差异；
 - 真实 bump 回环 `0.2.0 → 0.2.1 → 0.2.0` → 中间态恰好 5 文件修改、各落点版本值正确（含 Cargo.lock 的 `codewave` 版本段）、回摆后除本次批次新增文件外工作区干净。
+
+## 4 自动更新链路（2026-09-13 补齐，同日启用）
+
+参照链路审计（5 断点全修）：插件注册早已就位（`lib.rs` + `tauri-plugin-updater`），本批次补齐其余环节：
+
+| 环节 | 落点 |
+|---|---|
+| 签名密钥 | minisign 密钥对，私钥 + 空密码；私钥入 GitHub secrets `TAURI_SIGNING_PRIVATE_KEY`（密码 secret 留空即匹配），本地备份 `~/.tauri/codewave.key(.pub)`；公钥固化进 `tauri.conf.json` `plugins.updater.pubkey` |
+| 更新器配置 | `plugins.updater.active: true` + `endpoints: [https://github.com/Yangshifu1024/CodeWave/releases/latest/download/latest.json]` |
+| 更新产物 | `bundle.createUpdaterArtifacts: true`（构建产出安装包 + `.sig`；tauri-action 检测到签名 env 自动生成/合并 latest.json 上传到 release） |
+| 前端权限 | `capabilities/default.json` 增 `updater:default` |
+| 检查入口 | 「关于」弹框「检查更新」按钮（三平台）+ macOS 应用菜单项（既有） |
+| 安装流程 | `ui/src/utils/updateCheck.ts`：check → `downloadAndInstall()` → toast → `restart_app` IPC（`host/commands/system.rs`，`app.restart()`） |
+
+端到端验证路径：装 v0.3.0（无签名产物，仅作为旧实例）→ 发布 v0.3.1（首个带 latest.json 的 release）→ 0.3.0 检查更新 → 下载签名产物校验公钥 → 安装重启 → 关于页显示 0.3.1。本地模拟：`scripts/mock-updater-endpoint.mjs` 可在 8080 端口伪造更新源（需临时把 endpoints 指向 `http://127.0.0.1:8080/latest.json` 重打包，模拟产物版本号与实际二进制一致属预期）。
+
+注意：latest.json 由三平台 matrix job 各自上传合并——v0.3.1 发布后需核对 release 资产里 latest.json 是否含全部三平台条目（tauri-action 合并逻辑的已知关注点）。

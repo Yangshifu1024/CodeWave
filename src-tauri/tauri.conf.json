@@ -36,6 +36,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -56,10 +57,12 @@
   },
   "plugins": {
     "updater": {
-      "active": false,
+      "active": true,
       "dialog": false,
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1RDlFM0NFOEFDODIyRTQKUldUa0lzaUt6dVBaWlM3c1pTWEZ4VS9CTUlPOUpLUmp0YmhlNU1QbGtkcE5nMnZxWnVpaUFLWDIK",
+      "endpoints": [
+        "https://github.com/Yangshifu1024/CodeWave/releases/latest/download/latest.json"
+      ]
     }
   }
 }

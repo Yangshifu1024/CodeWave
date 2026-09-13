@@ -121,6 +121,9 @@ export const ipc = {
   openDataDir: () => invoke<void>("open_data_dir"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
 
+  // 应用重启（自动更新下载安装完成后调用；updater 替换产物后必须 relaunch 才运行新版本）
+  restartApp: () => invoke<void>("restart_app"),
+
   // 右侧栏信息页签：在系统文件管理器中打开任意目录（项目主目录 / 临时会话工作区）
   openDir: (path: string) => invoke<void>("open_dir", { path }),
 

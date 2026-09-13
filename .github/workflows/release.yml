@@ -3,8 +3,9 @@
 # 触发约定：从 main 打 v* tag（workflow 语法无法限定 tag 所在分支，靠操作纪律）。
 # draft 语义：tauri-action 只上传产物与更新器文件，绝不自动发布——人工核对资产/说明后点 Publish。
 # 2026-09-13：三个平台 job 收敛为 matrix；唯一构建流水线（test/lint 只做测试与检查，不 build）。
-# 签名 secrets 全部可选：未设置时 macOS 出未签名产物；updater（tauri-plugin-updater，当前
-# active:false，docs/custom-font-and-titlebar）启用前只需补 TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) 两个 secret。
+# 签名 secrets：TAURI_SIGNING_PRIVATE_KEY 已配置（无密码密钥，密码 secret 留空），updater
+# 产物（*.sig + latest.json）随 release 上传；macOS 公证 APPLE_* 仍可选，未设置时出未签名
+# .app/.dmg（docs/version-bump-and-release：自动更新链路说明）。
 name: release
 
 on:

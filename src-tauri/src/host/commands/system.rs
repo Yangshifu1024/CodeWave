@@ -8,6 +8,13 @@ pub fn ping() -> &'static str {
     "pong"
 }
 
+/// 应用重启（自动更新下载安装完成后由「检查更新」流程调用——updater 替换产物后
+/// 必须 relaunch 才运行新版本；「关于」对话框亦用）。restart 不返回，进程直接重启。
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
 // ---------- 自绘标题栏（tauri-plugin-decoration v3，[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)）----------
 
 /// 激活失败兜底：恢复原生装饰并 reveal 窗口。窗口以 visible:false 起动，

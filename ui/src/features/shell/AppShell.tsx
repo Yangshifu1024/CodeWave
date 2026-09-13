@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Avatar, Button, Layout, Tooltip } from "antd";
 import { BarChartOutlined, ClockCircleOutlined, InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { i18n } from "../../i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { useRun } from "../../stores/run";
@@ -11,6 +10,7 @@ import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { bindEvents } from "../../ipc/events";
 import { ipc } from "../../ipc/client";
+import { checkForUpdates } from "../../utils/updateCheck";
 import ChatMessages from "../chat/ChatMessages";
 import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
@@ -147,8 +147,8 @@ export default function AppShell() {
 
   // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项
   // （关于 / 设置 / 检查更新）经 menu:action 路由至此；三项均打开应用内界面
-  // （AboutModal / SettingsModal / 更新检查 toast）。检查更新是占位实现：
-  // updater 插件已注册但尚未配端点，失败降级为 toast。
+  // （AboutModal / SettingsModal / 更新检查 toast）。检查更新走共享流程
+  // utils/updateCheck（check → 下载安装 → 重启；Windows/Linux 从「关于」弹框触发）。
   useEffect(() => {
     let un: (() => void) | undefined;
     let disposed = false;
@@ -158,19 +158,7 @@ export default function AppShell() {
       } else if (e.payload?.action === "menu-settings") {
         useUi.getState().showSettings();
       } else if (e.payload?.action === "menu-check-updates") {
-        void (async () => {
-          try {
-            const { check } = await import("@tauri-apps/plugin-updater");
-            const update = await check({ timeout: 15_000 });
-            if (update) {
-              useUi.getState().notify("CodeWave", i18n.t("notice.updateAvailable", { version: update.version ?? "" }));
-            } else {
-              useUi.getState().toast(i18n.t("notice.upToDate"));
-            }
-          } catch {
-            useUi.getState().toast(i18n.t("notice.updateCheckFailed"));
-          }
-        })();
+        void checkForUpdates();
       }
     }).then((fn) => {
       if (disposed) fn();

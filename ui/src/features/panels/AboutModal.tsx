@@ -1,11 +1,13 @@
-// 关于弹框：应用身份、懒加载的版本号与快捷入口（数据目录 / 仓库）。
+// 关于弹框：应用身份、懒加载的版本号与快捷入口（数据目录 / 仓库 / 检查更新）。
 // ui.aboutOpen 为 true 时由 AppShell 渲染；入口按钮在左下角状态区。
+// 「检查更新」是 Windows/Linux 的唯一更新入口（macOS 另有应用菜单项，[docs/version-bump-and-release](../../../docs/version-bump-and-release.md)）。
 import { useEffect, useState } from "react";
 import { App, Button, Modal } from "antd";
 import { useTranslation } from "react-i18next";
-import { FolderOpenOutlined, GithubOutlined } from "@ant-design/icons";
+import { CloudDownloadOutlined, FolderOpenOutlined, GithubOutlined } from "@ant-design/icons";
 import { ipc } from "../../ipc/client";
 import { useUi } from "../../stores/ui";
+import { checkForUpdates } from "../../utils/updateCheck";
 import storeLogo from "../../assets/store-logo.png";
 
 // 仓库地址（收拢为单一常量，迁移只需改一行）
@@ -17,6 +19,18 @@ export default function AboutModal() {
   const { message } = App.useApp();
   const [version, setVersion] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // 检查更新进行中（按钮 loading；结果经 updateCheck 的 toast 反馈）
+  const [checking, setChecking] = useState(false);
+
+  async function runUpdateCheck() {
+    setActionError(null);
+    setChecking(true);
+    try {
+      await checkForUpdates();
+    } finally {
+      setChecking(false);
+    }
+  }
 
   // 版本号在首次挂载时懒加载，而非应用启动时；
   // 加载失败降级为占位符，不阻塞弹框。弹框关闭即卸载，
@@ -73,6 +87,14 @@ export default function AboutModal() {
           </Button>
           <Button size="small" icon={<GithubOutlined />} onClick={() => void openRepo()}>
             {t("about.repo")}
+          </Button>
+          <Button
+            size="small"
+            icon={<CloudDownloadOutlined />}
+            loading={checking}
+            onClick={() => void runUpdateCheck()}
+          >
+            {t("about.checkUpdates")}
           </Button>
         </div>
         {actionError && <div className="about-error">{actionError}</div>}
