@@ -1,4 +1,5 @@
 packages:
   - ui
-onlyBuiltDependencies:
-  - esbuild
+# pnpm 11+ 已废弃 onlyBuiltDependencies，改用 allowBuilds（name: true|false）
+allowBuilds:
+  esbuild: true
