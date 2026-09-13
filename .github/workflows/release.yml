@@ -50,16 +50,9 @@ jobs:
     timeout-minutes: 45
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # 可选：更新器签名（tauri-plugin-updater 启用后必填）
+      # 更新器签名：TAURI_SIGNING_PRIVATE_KEY 已配置（无密码密钥，密码 secret 留空即匹配）
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # 可选：macOS 签名/公证（仅 macOS 生效，未设置 → 出未签名 .app/.dmg，本机首次打开需右键放行）
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_PATH: AuthKey.p8
     steps:
       - uses: actions/checkout@v7
 
@@ -96,6 +89,28 @@ jobs:
         run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
 
       - run: pnpm install --frozen-lockfile
+
+      # macOS 签名/公证 secrets 全部可选：tauri bundler 会把「存在但为空」的 env 当作已配置，
+      # 空 APPLE_CERTIFICATE 在 keychain 导入处必崩（v0.3.0 macOS job 实测），因此仅在
+      # secret 非空时经 GITHUB_ENV 导出；全部未配置 → 出未签名 .app/.dmg（首次打开需右键放行）
+      - name: Export optional macOS signing envs
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> "$GITHUB_ENV"
+            fi
+          done
+          if [ -n "$APPLE_API_KEY" ]; then
+            echo "APPLE_API_KEY_PATH=AuthKey.p8" >> "$GITHUB_ENV"
+          fi
 
       - name: Tauri build + upload
         uses: tauri-apps/tauri-action@action-v1.0.0
