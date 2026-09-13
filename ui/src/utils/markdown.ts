@@ -3,6 +3,9 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import "highlight.js/styles/github.css";
 
+// markdown-it 15 起自带类型且默认导出为 callable 常量，实例类型须经 typeof 取
+type MarkdownItInstance = ReturnType<typeof MarkdownIt>;
+
 const MATH_LANGS = new Set(["math", "katex", "latex", "tex"]);
 
 /** 代码块包装：代码原文 URI 编码进 data-code（编码结果不含引号/尖括号，可安全作属性值）；
@@ -155,7 +158,7 @@ function mathBlock(state: any, start: number, end: number, silent: boolean): boo
   return true;
 }
 
-function useMath(md: MarkdownIt) {
+function useMath(md: MarkdownItInstance) {
   md.inline.ruler.after("escape", "math_inline", mathInline);
   md.block.ruler.before("fence", "math_block", mathBlock, { alt: ["paragraph", "blockquote"] });
   const esc = (s: string) => md.utils.escapeHtml(s);
