@@ -37,7 +37,9 @@ pub async fn connect_mcp(core: Core<'_>, session_id: String) -> Result<serde_jso
     let mut started = Vec::new();
     let mut failed = Vec::new();
     for (name, cfg) in configs {
-        match core.mcp.start(&name, cfg).await {
+        // streamable-http 连接走代理感知的共享 client（读锁 clone，std 锁不跨 await）
+        let http = core.client.read().unwrap().clone();
+        match core.mcp.start(&name, cfg, http).await {
             Ok(tools) => started.push(serde_json::json!({ "name": name, "tools": tools.len() })),
             Err(e) => failed.push(serde_json::json!({ "name": name, "error": e })),
         }

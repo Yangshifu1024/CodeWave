@@ -895,3 +895,19 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   white-space: pre-wrap; color: var(--ws-text-2);
 }
 .assistant .md .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
+
+/* ---------- 设置·网络：代理模式卡片（heroui radio-group 风格：整卡可点、选中描边） ---------- */
+.proxy-mode-list { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+.proxy-mode-card {
+  display: block; padding: 10px 12px; border: 1px solid var(--ws-border); border-radius: 8px;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.proxy-mode-card:hover { border-color: var(--ws-accent); }
+.proxy-mode-card.active { border-color: var(--ws-accent); background: var(--ws-panel); }
+.proxy-mode-head { display: flex; align-items: center; gap: 8px; }
+.proxy-mode-title { font-weight: 600; color: var(--ws-text-1); }
+.proxy-mode-desc { margin: 4px 0 0 24px; font-size: 12px; color: var(--ws-dim); }
+.proxy-mode-echo {
+  margin: 6px 0 0 24px; font-size: 12px; color: var(--ws-dim);
+  font-family: var(--ws-font-mono); word-break: break-all;
+}

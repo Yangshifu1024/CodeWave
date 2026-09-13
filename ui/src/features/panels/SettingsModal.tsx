@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Slider, Switch, Tabs, Typography,
+  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tabs, Typography,
 } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -14,6 +14,9 @@ import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 
 const { TextArea } = Input;
+
+/** 自定义代理地址前缀白名单（与后端 reqwest 支持一致；保存校验用） */
+const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
 
 // MCP 条目结构化视图（文件形态 {"mcpServers":{name:cfg}} 的前端呈现）
 interface McpEntry {
@@ -108,6 +111,8 @@ export default function SettingsModal() {
   const [mcpRaw, setMcpRaw] = useState("");
   // shell 探测：null = 探测失败（仅显示「自动」+ 失败提示），[] = 探测成功但无可用项
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
+  // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
+  const [sysProxy, setSysProxy] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     void (async () => {
@@ -125,6 +130,8 @@ export default function SettingsModal() {
       useUi.setState({ mcpStatus: st });
       // shell 探测失败不阻塞面板：仅回退「自动」选项 + 失败提示
       setShells(await ipc.listAvailableShells().catch(() => null));
+      // 系统代理探测回显：失败不阻塞（null = 未检测到提示）
+      setSysProxy(await ipc.resolveProxy().catch(() => null));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -175,6 +182,15 @@ export default function SettingsModal() {
 
   async function save() {
     if (!draft) return;
+    // 代理地址校验（网络页签）：仅自定义模式且非空时校验前缀白名单，非法跳转页签不落盘
+    if (draft.proxy?.mode === "manual") {
+      draft.proxy.url = draft.proxy.url.trim();
+      if (draft.proxy.url !== "" && !PROXY_URL_RE.test(draft.proxy.url)) {
+        message.error(t("settings.proxyUrlInvalid"));
+        setTab("network");
+        return;
+      }
+    }
     // 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：无效时逐项报错、跳转供应商页签、不落盘
     const problems: string[] = [];
     for (const p of draft.providers) {
@@ -207,6 +223,10 @@ export default function SettingsModal() {
       await useSettings.getState().save(draft);
       // 保存成功不关闭弹窗（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
       message.success(t("settings.saved"));
+      // 系统代理模式：保存即触发后端重探测（save_config 热重建 client），刷新回显
+      if ((draft.proxy?.mode ?? "system") === "system") {
+        void ipc.resolveProxy().then(setSysProxy).catch(() => null);
+      }
     } catch (e) {
       message.error(String(e));
     } finally {
@@ -245,6 +265,16 @@ export default function SettingsModal() {
 
   function removeMcpEntry(idx: number) {
     setMcpEntries((prev) => (prev ? prev.filter((_, i) => i !== idx) : prev));
+  }
+
+  // 代理模式视图态：proxy=null（从未配置）显示为「系统代理」——与 HTTP 栈默认行为一致（诚实呈现）
+  const proxyMode = draft?.proxy?.mode ?? "system";
+  const proxyUrl = draft?.proxy?.url ?? "";
+  const proxyUrlInvalid = proxyMode === "manual" && proxyUrl.trim() !== "" && !PROXY_URL_RE.test(proxyUrl.trim());
+
+  function patchProxyMode(mode: "none" | "system" | "manual") {
+    // 切模式保留已填地址：来回切换不丢草稿
+    patchDraft({ proxy: { mode, url: draft?.proxy?.url ?? "" } });
   }
 
   const items = [
@@ -474,6 +504,58 @@ export default function SettingsModal() {
               ))}
             </div>
           </Form.Item>
+        </Form>
+      ),
+    },
+    {
+      key: "network",
+      label: t("settings.network"),
+      children: draft && (
+        <Form layout="vertical">
+          <Form.Item label={t("settings.proxyMode")}>
+            {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
+            <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
+              <div className="proxy-mode-list">
+                {([
+                  ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
+                  ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
+                  ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
+                ] as const).map(([mode, title, desc]) => (
+                  <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
+                    <div className="proxy-mode-head">
+                      <Radio value={mode} />
+                      <span className="proxy-mode-title">{title}</span>
+                    </div>
+                    <div className="proxy-mode-desc">{desc}</div>
+                    {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
+                    {mode === "system" && sysProxy !== undefined && (
+                      <div className="proxy-mode-echo">
+                        {sysProxy
+                          ? t("settings.proxyDetected", { url: sysProxy })
+                          : t("settings.proxyNotDetected")}
+                      </div>
+                    )}
+                  </label>
+                ))}
+              </div>
+            </Radio.Group>
+          </Form.Item>
+          {proxyMode === "manual" && (
+            <Form.Item
+              label={t("settings.proxyUrl")}
+              extra={t("settings.proxyUrlHint")}
+              validateStatus={proxyUrlInvalid ? "error" : undefined}
+              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
+            >
+              <Input
+                size="small"
+                style={{ width: 360 }}
+                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                value={proxyUrl}
+                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+              />
+            </Form.Item>
+          )}
         </Form>
       ),
     },

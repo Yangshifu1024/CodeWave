@@ -10,7 +10,10 @@ import { useUi } from "../stores/ui";
 export async function checkForUpdates(): Promise<void> {
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check({ timeout: 15_000 });
+    // 更新请求跟随网络代理设置（[docs/network-proxy-settings](../../../docs/network-proxy-settings.md)）：
+    // 插件命令层 check 原生接受 proxy 且 download/install 复用同一 Update 上的代理；null（直连/无代理）时不传保持默认
+    const proxy = await ipc.resolveProxy().catch(() => null);
+    const update = await check({ timeout: 15_000, ...(proxy ? { proxy } : {}) });
     if (!update) {
       useUi.getState().toast(i18n.t("notice.upToDate"));
       return;

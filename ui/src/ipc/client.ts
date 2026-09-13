@@ -18,6 +18,8 @@ export const ipc = {
 
   getConfig: () => invoke<ConfigState>("get_config"),
   saveConfig: (config: ConfigState) => invoke<void>("save_config", { config }),
+  // 当前配置解析出的代理 URL（null = 直连）：检查更新传参与设置页系统代理回显共用
+  resolveProxy: () => invoke<string | null>("resolve_proxy"),
 
   // shell 探测（设置面板 Shell 下拉数据源）
   listAvailableShells: () => invoke<ShellInfo[]>("list_available_shells"),

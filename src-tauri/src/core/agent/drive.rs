@@ -616,7 +616,7 @@ async fn run_llm_turn(
         // 停滞时取消本次尝试（child token），按可重试 Server 错误走既有退避重试
         let attempt_token = run_token.child_token();
         let model_owned = model.clone();
-        let client = core.client.clone();
+        let client = core.client.read().unwrap().clone();
         let req_owned = req.clone();
         let token_for_task = attempt_token.clone();
         let fut = tokio::spawn(async move {

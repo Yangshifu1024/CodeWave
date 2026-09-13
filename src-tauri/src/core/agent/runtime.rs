@@ -282,8 +282,9 @@ pub struct AgentCore {
     pub tools: Arc<ToolRegistry>,
     /// 会话持久化存储
     pub store: Arc<SessionStore>,
-    /// HTTP 客户端（provider 层共用）
-    pub client: reqwest::Client,
+    /// HTTP 客户端（provider 层共用；RwLock 支持代理配置变更后由 save_config 热替换——
+    /// 读取方读锁 clone（reqwest::Client 内部 Arc，clone 廉价），std 锁不可跨 await）
+    pub client: std::sync::RwLock<reqwest::Client>,
     /// 全局数据目录 ~/.codewave
     pub data_dir: PathBuf,
     /// service 工具的后台进程表
@@ -317,7 +318,7 @@ impl AgentCore {
             sink,
             tools: Arc::new(ToolRegistry::default_tools()),
             store,
-            client,
+            client: std::sync::RwLock::new(client),
             data_dir: data_dir.clone(),
             services: crate::tools::service::ServiceTable::default(),
             skills: crate::skills::SkillIndex::new(),

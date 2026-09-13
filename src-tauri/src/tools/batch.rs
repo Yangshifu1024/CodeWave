@@ -371,6 +371,8 @@ async fn run_tool(
         let project_dir = rt.project_dir.clone();
         let extra_roots = rt.extra_roots.lock().unwrap().clone();
         let mcp = core.mcp.clone();
+        // streamable-http 重连路径复用代理感知 client（读锁 clone，std 锁不跨 await）
+        let http = core.client.read().unwrap().clone();
         let fname = call.name.clone();
         let out = match tokio::spawn(async move {
             mcp.call(
@@ -380,6 +382,7 @@ async fn run_tool(
                 &workspace,
                 project_dir.as_deref(),
                 &extra_roots,
+                http,
             )
             .await
         })
