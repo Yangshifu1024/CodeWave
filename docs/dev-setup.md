@@ -1,6 +1,6 @@
 # CodeWave 开发环境准备（macOS / Linux / Windows）
 
-> 对应 [docs/p0-plan](./p0-plan.md) G1/G8。CI 配置见 `.github/workflows/ci.yml`。
+> 对应 [docs/p0-plan](./p0-plan.md) G1/G8。CI 配置见 `.github/workflows/`（test / lint / release）。
 
 ## macOS（主开发平台，已在 Apple Silicon 上验证）
 

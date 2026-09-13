@@ -6,7 +6,8 @@ name: lint
 
 on:
   push:
-    branches: ["**"]
+    # push 只管 main 的合并后验证；PR 分支由 pull_request 触发，避免同一提交双跑
+    branches: [main]
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -21,7 +22,7 @@ jobs:
     name: Rust lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

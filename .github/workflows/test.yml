@@ -1,12 +1,15 @@
-# CodeWave CI（docs/p0-plan §2.3；2026-08-30 随 ui/ 迁移修正路径；docs/oss-prep-batch 增加并发取消与路径过滤）
-# macOS 为主开发平台（出产物）；Linux 冒烟；Windows 验证 git2/libgit2 构建链（G8）。
+# CodeWave Test（2026-09-13 由 ci.yml 收窄而来：只跑前后端测试，不做任何 build）
+# 触发语义：push main（合并后验证）/ pull_request（PR 检查）；push 其他分支不跑。
+# 构建产物归 release（tag v*）——前端 vite build / tsc 类型检查也随之移交 tag 时点。
+# 三平台跑 cargo test：Windows 验证 git2/libgit2 构建链（G8）；前端 vitest 三平台全量。
 # tauri CLI 从仓库根运行（root package.json + pnpm workspace，见 docs/p0-implementation-report 布局说明）。
-# 注：MCP 真实 server 测试（mcp::tests::real_*）依赖 node，CI 的 setup-node 已满足。
-name: ci
+# 注：MCP 真实 server 测试（mcp::tests::real_*）依赖 node，setup-node 已满足。
+name: test
 
 on:
   push:
-    branches: ["**"]
+    # push 只监听 main；PR 分支由 pull_request 触发，避免同一提交双跑
+    branches: [main]
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -18,7 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  test:
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +32,7 @@ jobs:
           - os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
@@ -65,17 +69,10 @@ jobs:
       - name: Frontend tests
         run: pnpm --dir ui test
 
+      # tsc 类型检查随 vite build 走；产物留在 runner 不上传，正式产物归 release（tag v*）
       - name: Frontend build
         run: pnpm --dir ui build
 
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --workspace
-
-      - name: Tauri build (macOS 出产物)
-        run: pnpm tauri build
-        if: runner.os == 'macOS'
-
-      - name: Tauri build (compile check)
-        run: pnpm tauri build --no-bundle
-        if: runner.os != 'macOS'
