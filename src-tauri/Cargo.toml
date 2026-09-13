@@ -40,7 +40,7 @@ serde_yaml = "0.9"
 reqwest = { version = "0.13", features = ["json", "socks", "stream", "gzip", "brotli"] }
 
 # tools & safety
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"

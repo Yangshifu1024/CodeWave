@@ -43,7 +43,7 @@ pub fn status(workspace: &Path) -> anyhow::Result<Option<StatusInfo>> {
     let branch = repo
         .head()
         .ok()
-        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .and_then(|h| h.shorthand().ok().map(|s| s.to_string()))
         .unwrap_or_else(|| "HEAD".into());
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true)
@@ -189,7 +189,7 @@ pub fn recent_log(workspace: &Path, n: usize) -> anyhow::Result<Vec<GitLogEntry>
         let commit = repo.find_commit(oid)?;
         out.push(GitLogEntry {
             short_id: oid.to_string()[..7].to_string(),
-            summary: commit.summary().unwrap_or("").to_string(),
+            summary: commit.summary().ok().flatten().unwrap_or("").to_string(),
             author: commit.author().name().unwrap_or("").to_string(),
             time: commit.time().seconds(),
             root: None,
