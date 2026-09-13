@@ -47,7 +47,7 @@ tree-sitter-powershell = "0.26"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
-similar = "2"
+similar = "3"
 
 # storage & misc
 flate2 = "1"
