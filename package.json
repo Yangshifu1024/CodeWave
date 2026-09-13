@@ -1,7 +1,7 @@
 {
   "name": "codewave-root",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "license": "MIT",
   "scripts": {
     "dev": "pnpm --dir ui dev",
