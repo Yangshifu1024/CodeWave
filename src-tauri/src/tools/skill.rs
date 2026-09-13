@@ -14,6 +14,20 @@ pub struct Args {
     args: Option<String>,
 }
 
+/// 条件式 ask 交互规范：随任意技能正文注入（[docs/skill-ask-norm](../../../docs/skill-ask-norm.md)）。
+/// 流程含「向用户提问并等待作答」轮次的技能据此用 ask 弹窗呈现提问；无提问轮次的技能自动休眠，行为零变化。
+/// 注意：文本不得提及 `caller-context`（既有测试以「无 args 时全文不含该字样」判定 caller-context 缺席）
+/// 与 `</skill-loaded>`（会提前终结注入块）；两者均有契约测试守护。
+const ASK_INTERACTION_NORM: &str = r#"<ask-interaction-norm>
+Applies only if this skill's procedure includes rounds where you ask the user questions and wait for answers; if it has no question rounds, ignore this block and proceed unchanged.
+When it applies, every question round MUST be presented through the `ask` tool (structured prompt) instead of a plain-text question list. Fall back to the skill's own text format only when `ask` is unavailable (e.g. subagent context).
+Mapping rules:
+- A recommended answer indicated by the skill body (e.g. a "➡️" line) becomes an option with `recommended: true`; recommended options stay visible and selectable, never hidden.
+- Mutually exclusive questions set `single: true`; genuine multi-select questions omit `single`.
+- Open-ended questions become `ask` questions without `options`.
+- Respect tool limits (max 5 questions, 6 options each): split a larger round into consecutive `ask` calls without dropping any question.
+</ask-interaction-norm>"#;
+
 /// skill 工具：加载技能的完整指令文本供模型遵循执行。
 /// 入参为 skill 名称 + 可选 args；Meta 分级（只读技能索引，不触工作区）。
 /// 返回正文包在 `<skill-loaded>` 块中，附带 origin 来源；未知或被禁用的技能返回
@@ -76,6 +90,9 @@ impl Tool for SkillTool {
         if let Some(a) = &args.args {
             body.push_str(&format!("\n\n<caller-context>{a}</caller-context>"));
         }
+        // 条件式 ask 交互规范（[docs/skill-ask-norm](../../../docs/skill-ask-norm.md)）：
+        // 置于 caller-context 之后、闭合标签之前；规范文本自身不得含闭合标签（有测试守护）。
+        body.push_str(&format!("\n\n{ASK_INTERACTION_NORM}"));
         body.push_str("\n</skill-loaded>");
         ToolOutcome::ok(json!({ "skill": s.meta.name, "origin": s.meta.origin, "content": body }))
     }
@@ -131,6 +148,7 @@ mod tests {
         assert!(content.contains("<skill-loaded name=\"demo\">"));
         assert!(content.contains("DEMO BODY LINE"));
         assert!(content.trim_end().ends_with("</skill-loaded>"));
+        // 耦合前提：ASK_INTERACTION_NORM 文本不得提及 caller-context，否则本断言失效
         assert!(!content.contains("caller-context"), "no args → no caller-context block");
     }
 
@@ -143,6 +161,42 @@ mod tests {
         assert!(out.ok, "{out:?}");
         let content = out.data["content"].as_str().unwrap();
         assert!(content.contains("<caller-context>extra ctx</caller-context>"));
+    }
+
+    #[tokio::test]
+    async fn ask_interaction_norm_is_appended_to_every_load() {
+        let (ctx, _ws, _dd) = setup();
+        let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
+        assert!(out.ok, "{out:?}");
+        let content = out.data["content"].as_str().unwrap();
+        assert!(content.contains("<ask-interaction-norm>"), "{content:?}");
+        assert!(content.contains("</ask-interaction-norm>"));
+        assert!(content.trim_end().ends_with("</skill-loaded>"));
+    }
+
+    #[tokio::test]
+    async fn norm_block_sits_between_caller_context_and_closing_tag() {
+        let (ctx, _ws, _dd) = setup();
+        let out = SkillTool
+            .run(&ctx, json!({"skill": "demo", "args": "extra ctx"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        let content = out.data["content"].as_str().unwrap();
+        let caller = content
+            .find("<caller-context>extra ctx</caller-context>")
+            .unwrap();
+        let norm = content.find("<ask-interaction-norm>").unwrap();
+        let close = content.find("</skill-loaded>").unwrap();
+        assert!(caller < norm && norm < close, "{content:?}");
+    }
+
+    /// 规范文本自身不得包含闭合标签，否则会提前终结 skill-loaded 块；
+    /// 顺带锁定标签形状（以 <ask-interaction-norm> 开、自身闭合）。
+    #[test]
+    fn norm_text_never_contains_skill_loaded_closing_tag() {
+        assert!(!ASK_INTERACTION_NORM.contains("</skill-loaded>"));
+        assert!(ASK_INTERACTION_NORM.starts_with("<ask-interaction-norm>\n"));
+        assert!(ASK_INTERACTION_NORM.trim_end().ends_with("</ask-interaction-norm>"));
     }
 
     #[tokio::test]
