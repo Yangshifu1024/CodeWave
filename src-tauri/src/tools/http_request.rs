@@ -104,11 +104,11 @@ impl Tool for HttpRequestTool {
         // 关闭自动重定向发起完整请求，逐跳在本函数内手动处理。
         let timeout =
             std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(60).clamp(1, 120));
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
-            .build()
-            .unwrap_or_default();
+        // 代理感知 client（读锁快照 config）；redirect none 保持逐跳校验语义，超时改挂在每个请求上
+        let client = crate::provider::proxy::build_client_with(
+            &ctx.core.cfg.read().unwrap().clone(),
+            reqwest::redirect::Policy::none(),
+        );
 
         let mut current = parsed;
         let method_ref = method.clone();
@@ -121,7 +121,9 @@ impl Tool for HttpRequestTool {
             }
             super::web_fetch::throttle_pub().wait(&host).await;
 
-            let mut req = client.request(method_ref.parse().unwrap(), current.clone());
+            let mut req = client
+                .request(method_ref.parse().unwrap(), current.clone())
+                .timeout(timeout);
             if let Some(h) = &args.headers {
                 for (k, v) in h {
                     req = req.header(k, v);

@@ -45,11 +45,26 @@ pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), Stri
     }
     // [docs/session-logging-report](../../../../docs/session-logging-report.md)：日志级别热切换（无条件调用更便宜且自愈漂移；RUST_LOG 覆盖时为 no-op）
     crate::core::logging::apply_config_level(&updated.log.level);
+    // 代理热生效：无条件重建共享 client（顺带完成 System 模式重探测；与日志级别同一「便宜且自愈」思路，
+    // [docs/network-proxy-settings](../../../../docs/network-proxy-settings.md)）。运行中请求持旧 client clone 不受影响
+    *core.client.write().unwrap() = crate::provider::proxy::build_client(&updated);
     *core.cfg.write().unwrap() = updated;
     // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：保存的 key 下次尝试即生效——残留的认证/瞬时冷却不得在用户修好配置后
     // 仍然 failover 到其他 key
     core.key_pool.reset_all();
     Ok(())
+}
+
+/// 当前配置解析出的代理 URL（None = 直连）：设置页「系统代理」回显与前端更新检查传参共用
+/// （tauri-plugin-updater 的 check 命令原生接受 proxy，[docs/network-proxy-settings](../../../../docs/network-proxy-settings.md)）。
+/// proxy = null（从未配置）时返回系统探测结果——null 的实际出网行为就是跟随系统，回显与更新传参同口径。
+#[tauri::command]
+pub async fn resolve_proxy(core: Core<'_>) -> Result<Option<String>, String> {
+    let cfg = core.cfg.read().unwrap().clone();
+    match cfg.proxy.as_ref() {
+        None => Ok(crate::provider::proxy::system_proxy_url()),
+        Some(_) => Ok(crate::provider::proxy::resolve_proxy(&cfg)),
+    }
 }
 
 /// 列出本机可用 shell（PATH + 常见安装位置探测），供设置面板选择。

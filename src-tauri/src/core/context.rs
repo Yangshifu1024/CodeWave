@@ -218,8 +218,10 @@ pub async fn compact_history(
     let Some(key) = crate::host::keyring::pick_resolved_key(&model) else {
         return Err("上下文压缩跳过：模型 key 在钥匙串中解析为空".into());
     };
+    // 读锁 clone（std 锁不能跨 await）；save_config 热替换后此处取到新代理的 client
+    let client = core.client.read().unwrap().clone();
     let fut =
-        crate::provider::stream_model(&core.client, &model, Some(key), req, tx, cancel.clone());
+        crate::provider::stream_model(&client, &model, Some(key), req, tx, cancel.clone());
     // H2 修复：压缩响应可取消（cancel = 放弃本次压缩）；超时可配置（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）
     let usage = tokio::select! {
         _ = cancel.cancelled() => return Err("压缩已取消".into()),

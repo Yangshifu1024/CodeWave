@@ -6,7 +6,9 @@
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
-use rmcp::transport::streamable_http_client::StreamableHttpClientWorker;
+use rmcp::transport::streamable_http_client::{
+    StreamableHttpClientTransportConfig, StreamableHttpClientWorker,
+};
 use rmcp::transport::{ConfigureCommandExt, WorkerTransport};
 use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
@@ -151,8 +153,15 @@ type McpReady = (
 );
 
 impl McpManager {
-    /// Start (or restart) a server: connect → initialize → list_tools.
-    pub async fn start(&self, name: &str, cfg: McpServerConfig) -> Result<Vec<McpTool>, String> {
+    /// Start (or restart) a server: connect → initialize → list_tools。
+    /// `http` = 代理感知的共享 client（host 层从 core.client 读锁 clone 传入），
+    /// streamable-http 连接与应用请求走同一代理配置。
+    pub async fn start(
+        &self,
+        name: &str,
+        cfg: McpServerConfig,
+        http: reqwest::Client,
+    ) -> Result<Vec<McpTool>, String> {
         self.set_state(name, cfg.clone(), McpState::Starting, None)
             .await;
         let connect = async {
@@ -179,8 +188,11 @@ impl McpManager {
                     if url.is_empty() {
                         return Err("streamable_http transport 需要 url".into());
                     }
-                    let worker =
-                        StreamableHttpClientWorker::<reqwest::Client>::new_simple(url.clone());
+                    // 注入代理感知 client（替代 new_simple 的默认 client，后者不带代理）
+                    let worker = StreamableHttpClientWorker::new(
+                        http,
+                        StreamableHttpClientTransportConfig::with_uri(url),
+                    );
                     let transport = WorkerTransport::spawn(worker);
                     ().serve(transport)
                         .await
@@ -303,6 +315,7 @@ impl McpManager {
     }
 
     /// 按 `mcp__server__tool` 函数名调用；会话失效时自动重连一次。
+    /// `http` = 代理感知 client（与 start 同源），供重连路径复用。
     pub async fn call(
         self: &Arc<Self>,
         function: &str,
@@ -311,12 +324,15 @@ impl McpManager {
         workspace: &std::path::Path,
         project_dir: Option<&std::path::Path>,
         extra_roots: &[String],
+        http: reqwest::Client,
     ) -> Result<String, String> {
         let Some((server, tool)) = parse_function(function) else {
             return Err(format!(
                 "非法 MCP 函数名：{function}（应为 mcp__<server>__<tool>）"
             ));
         };
+        // 重连只在 attempt 0 发生一次：Option::take 满足循环体内的 move 检查
+        let mut http = Some(http);
         for attempt in 0..2 {
             match self.call_once(&server, &tool, &args).await {
                 Ok(text) => return Ok(text),
@@ -342,7 +358,7 @@ impl McpManager {
                     };
                     if let Some(cfg) = cfg {
                         tracing::info!("MCP {server} 会话失效，重连…");
-                        let _ = self.start(&server, cfg).await;
+                        let _ = self.start(&server, cfg, http.take().unwrap_or_default()).await;
                         continue;
                     }
                     return Err(e);
@@ -523,7 +539,7 @@ mod tests {
             url: None,
         };
         let tools = mgr
-            .start("wavetest", cfg)
+            .start("wavetest", cfg, reqwest::Client::new())
             .await
             .expect("真实 stdio server 连接失败");
         let echo = tools
@@ -550,6 +566,7 @@ mod tests {
                 _ws.path(),
                 None,
                 &[],
+                reqwest::Client::new(),
             )
             .await
             .expect("真实 echo 调用失败");
@@ -598,7 +615,7 @@ mod tests {
             url: Some(format!("http://127.0.0.1:{port}/mcp")),
         };
         let tools = mgr
-            .start("wavetest-http", cfg)
+            .start("wavetest-http", cfg, reqwest::Client::new())
             .await
             .expect("真实 streamable-http server 连接失败");
         assert!(tools.iter().any(|t| t.name == "add"), "应列出 add 工具");
@@ -611,6 +628,7 @@ mod tests {
                 _ws.path(),
                 None,
                 &[],
+                reqwest::Client::new(),
             )
             .await
             .expect("真实 add 调用失败");

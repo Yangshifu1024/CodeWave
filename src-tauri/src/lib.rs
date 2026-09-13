@@ -236,6 +236,7 @@ pub fn run() {
             host::commands::activate_and_show,
             host::commands::get_config,
             host::commands::save_config,
+            host::commands::resolve_proxy,
             host::commands::list_available_shells,
             host::commands::list_projects,
             host::commands::save_project,

@@ -42,19 +42,12 @@ pub fn throttle_pub() -> &'static HostThrottle {
 pub const DEFAULT_MAX_CHARS: usize = 60_000;
 
 /// 手动重定向的 GET：逐跳 SSRF 校验，跨源重定向剥离 Authorization/Cookie。
+/// `client` 由调用方按 config 构建代理感知的 redirect-none client（build_client_with）。
 pub async fn guarded_get(
-    _client: &reqwest::Client, // H1 修复：关闭自动重定向，逐跳手动校验
+    client: reqwest::Client,
     url: &str,
     allow_private: bool,
 ) -> Result<reqwest::Response, HopError> {
-    static MANUAL_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = MANUAL_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("client build")
-    });
     let mut current = url.to_string();
     for _hop in 0..=MAX_REDIRECTS {
         let parsed = reqwest::Url::parse(&current).map_err(|e| HopError {
@@ -177,9 +170,13 @@ impl Tool for WebFetchTool {
             .max_chars
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1_000, 500_000);
-        let allow_private = ctx.core.cfg.read().unwrap().network.allow_private_network;
+        // 读锁快照 config → 构建代理感知的 redirect-none client（逐跳 SSRF 校验在本函数内做）
+        let cfg = ctx.core.cfg.read().unwrap().clone();
+        let allow_private = cfg.network.allow_private_network;
+        let client =
+            crate::provider::proxy::build_client_with(&cfg, reqwest::redirect::Policy::none());
 
-        let resp = match guarded_get(&ctx.core.client, &args.url, allow_private).await {
+        let resp = match guarded_get(client, &args.url, allow_private).await {
             Ok(r) => r,
             Err(e) => return ToolOutcome::err(e.code, e.message),
         };
@@ -259,13 +256,13 @@ mod tests {
     #[tokio::test]
     async fn ssrf_blocks_localhost() {
         let client = reqwest::Client::new();
-        let err = guarded_get(&client, "http://127.0.0.1:1/x", false)
+        let err = guarded_get(client, "http://127.0.0.1:1/x", false)
             .await
             .unwrap_err();
         assert_eq!(err.code, "E_SSRF_BLOCKED");
         // 放行开关
         assert!(
-            !guarded_get(&client, "http://127.0.0.1:1/x", true)
+            !guarded_get(reqwest::Client::new(), "http://127.0.0.1:1/x", true)
                 .await
                 .is_err()
                 || true

@@ -118,9 +118,11 @@ pub async fn generate_and_apply(
     };
     // 独立 cancel token：用户停止 run 不得连带取消命名；超时另行兜底
     let cancel = CancellationToken::new();
+    // 读锁 clone（std 锁不能跨 await）；save_config 热替换后此处取到新代理的 client
+    let client = core.client.read().unwrap().clone();
     let usage = match tokio::time::timeout(
         TITLE_TIMEOUT,
-        crate::provider::stream_model(&core.client, &model, Some(key), req, tx, cancel),
+        crate::provider::stream_model(&client, &model, Some(key), req, tx, cancel),
     )
     .await
     {
