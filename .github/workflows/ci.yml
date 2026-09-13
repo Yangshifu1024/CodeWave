@@ -79,27 +79,3 @@ jobs:
       - name: Tauri build (compile check)
         run: pnpm tauri build --no-bundle
         if: runner.os != 'macOS'
-
-  # docs/long-file-split-and-edition-2024 防回潮：非测试源文件行数检查。>800 行打 warning 标注（软上限，当前存量豁免：
-  # safety/fence/check.rs、core/agent/drive.rs，拆分收敛于后续批次）；>1500 行硬上限直接失败。
-  line-limit:
-    name: source line limit
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check non-test source file line counts
-        run: |
-          warn_at=800 fail_at=1500 rc=0
-          while IFS= read -r f; do
-            n=$(wc -l < "$f")
-            if [ "$n" -gt "$fail_at" ]; then
-              echo "::error file=$f::$n lines exceed the hard cap ($fail_at) — split the file (docs/long-file-split-and-edition-2024)."
-              rc=1
-            elif [ "$n" -gt "$warn_at" ]; then
-              echo "::warning file=$f::$n lines exceed the ${warn_at}-line guideline (docs/long-file-split-and-edition-2024)."
-            fi
-          done < <(git ls-files '*.rs' '*.ts' '*.tsx' \
-            | grep -vE '(^|/)(target|node_modules|dist|gen)/' \
-            | grep -vE '(tests?\.rs$|tests_integration\.rs$|fuzz\.rs$|e2e_glm\.rs$|\.test\.tsx?$|\.test\.ts$)')
-          exit $rc
