@@ -26,12 +26,39 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.id }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          # 生成 release notes 需要完整 tag/历史（默认 1 层浅克隆拿不到区间提交）
+          fetch-depth: 0
+      # GitHub 自动 release notes 只列「合并的 PR」；本项目以直接推送 main 为主，
+      # 不走 PR 的提交会被整段漏掉（v0.3.1 实测正文只剩一行链接）。改为自建正文：
+      # 逐条列出上一 tag 到本 tag 的全部提交。
+      - name: Build release notes
+        id: notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prev=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
+          {
+            echo "## What's Changed"
+            if [ -n "$prev" ]; then
+              git log --no-decorate --format='- %s (%h)' "${prev}..${tag}"
+              echo
+              echo "**Full Changelog**: https://github.com/Yangshifu1024/CodeWave/compare/${prev}...${tag}"
+            else
+              git log --no-decorate --format='- %s (%h)' "${tag}"
+            fi
+          } > body.md
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            cat body.md
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Create draft release
         id: create
         uses: softprops/action-gh-release@v3
         with:
           draft: true
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
 
   build:
     name: Build (${{ matrix.label }})
