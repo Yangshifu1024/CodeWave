@@ -29,11 +29,13 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 > Tauri CLI 走 pnpm（本机无 cargo-tauri），且必须在仓库根执行。
 
 | 用途 | 命令 | 说明 |
+|---|---|---|
 | 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（Windows 实测 541 passed，个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准） |
 | 前端测试 | `pnpm --dir ui test` | 基线全绿（Windows 实测 308 passed / 43 文件，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
+| 版本升级 | `pnpm bump <x.y.z>` | 统一改 4 处版本号 + 刷新两个锁文件；完整发版流程（门禁 → commit → 确认后推 tag）见 `.agents/skills/codewave-release/SKILL.md` 与 [docs/version-bump-and-release](./docs/version-bump-and-release.md) |
 
 - 改后端 → `cargo test`；改前端 → `pnpm --dir ui test` + `build`；两边都动 → 两者都要过才算完成
 - **单实例互斥**：`tauri dev` 与打包版同 bundle id 不能同时跑；GUI 验证前先确认没有 dev 实例在运行

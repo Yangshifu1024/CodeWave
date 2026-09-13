@@ -120,3 +120,4 @@
 - 2026-09-06 · [auth-error-guidance.md](./auth-error-guidance.md) — 认证失败引导批次：可读供应商错误文案 + run:error 附结构化 kind + 错误卡直达供应商设置 + key 冷却随保存清零
 - 2026-09-07 · [subagent-ghost-session-fix.md](./subagent-ghost-session-fix.md) — 缺陷修复：子代理/任务运行 checkpoint 泄漏进主会话索引（项目下 untitled 幽灵会话）——runtime 加 is_main_session 身份字段 + checkpoint 早退 + 启动时存量清理
 - 2026-09-13 · [codewave-rename-and-oss-prep.md](./codewave-rename-and-oss-prep.md) — 品牌改名 CodeWave 批次（数据目录 `.codewave` 常量收拢 / bundle id+keyring 换新 / `CODEWAVE.md` 指令兼容）+ 开源前审查与修复（license 元数据 / CoC / SECURITY / README 重写 / 残留清理，🔴 0 · 🟡 4 全修）
+- 2026-09-13 · [version-bump-and-release.md](./version-bump-and-release.md) — 版本升级与发版流程（参照 PlanWave 移植）：`pnpm bump <x.y.z>` 统一改 4 处版本号 + 刷新两锁文件（守卫修正：按正则命中判失败，同版本 no-op 合法）+ `/codewave-release` 发版技能（门禁 → bump → commit → 确认后推 tag 触发 draft Release 三平台构建）
