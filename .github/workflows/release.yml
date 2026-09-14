@@ -4,8 +4,9 @@
 # draft 语义：tauri-action 只上传产物与更新器文件，绝不自动发布——人工核对资产/说明后点 Publish。
 # 2026-09-13：三个平台 job 收敛为 matrix；唯一构建流水线（test/lint 只做测试与检查，不 build）。
 # 签名 secrets：TAURI_SIGNING_PRIVATE_KEY 已配置（无密码密钥，密码 secret 留空），updater
-# 产物（*.sig + latest.json）随 release 上传；macOS 公证 APPLE_* 仍可选，未设置时出未签名
-# .app/.dmg（docs/version-bump-and-release：自动更新链路说明）。
+# 产物（*.sig + latest.json）随 release 上传；macOS 公证 APPLE_*（6 个）已配置（2026-09-14 起）：
+# bundler 签名并公证 .app，dmg 由后续「Notarize and staple dmg」步骤补公证；全部 APPLE_* 未
+# 设置时仍出未签名 .app/.dmg（docs/version-bump-and-release：自动更新链路说明）。
 name: release
 
 on:
@@ -156,3 +157,25 @@ jobs:
         uses: tauri-apps/tauri-action@action-v1.0.0
         with:
           releaseId: ${{ needs.prepare-release.outputs.release_id }}
+
+      # bundler 只公证并 staple .app，对 dmg 仅 codesign 签名 → Gatekeeper 判
+      # rejected / Unnotarized Developer ID（v0.3.4 实测，docs/macos-signing-and-notarization）。
+      # 此处下载 dmg 补公证 + staple 后 --clobber 回传；未配置公证凭据时跳过
+      - name: Notarize and staple dmg
+        if: runner.os == 'macOS'
+        run: |
+          if [ -z "$APPLE_API_KEY" ]; then
+            echo "未配置公证凭据，跳过 dmg 补公证"
+            exit 0
+          fi
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          gh release download "${GITHUB_REF_NAME}" --pattern '*.dmg' --clobber
+          dmg=$(ls *.dmg | head -1)
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          gh release upload "${GITHUB_REF_NAME}" "$dmg" --clobber

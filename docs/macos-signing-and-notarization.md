@@ -213,7 +213,9 @@ pnpm tauri build
 
 **与自动更新（updater）的关系**：minisign 更新链路（`TAURI_SIGNING_PRIVATE_KEY`）与 Apple 签名互相独立，互不影响。存量未签名旧版用户经应用内更新升到签名版无额外迁移——updater 校验的是 minisign 签名，不检查 Apple 签名。
 
-**证书续期**：Developer ID Application 证书有效期数年（到期日以钥匙串访问中证书详情为准）。续期 = 重新执行阶段二 + 更新 `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING_IDENTITY` 三个 secret；公证凭据不受影响。
+**dmg 不会被 tauri-bundler 公证（v0.3.4 实测）**：bundler 的流程是「公证并 staple `.app` → 打 dmg → 仅 codesign 签名 dmg」，dmg 本身不带公证票据，`spctl -a -t install` 会判 `rejected / Unnotarized Developer ID`（打开 dmg 时可能触发 Gatekeeper 提示；app 因自带 staple 不受影响）。根治：release.yml 已加「Notarize and staple dmg」步骤（CI 内下载 dmg → `notarytool submit --wait` → `stapler staple` → 校验 → `--clobber` 回传 draft；未配置公证凭据时自动跳过）。本机手动命令仍可作应急路径：`xcrun notarytool submit <dmg> --key ~/.appstoreconnect/private_keys/AuthKey_XXXX.p8 --key-id <KeyID> --issuer <IssuerID> --wait` → `xcrun stapler staple <dmg>` → `gh release upload v<X.Y.Z> <dmg> --clobber`。
+
+**证书续期**：Developer ID Application 证书有效期数年（到期日以钥匙串访问中证书详情为准）。现用证书（`Frank Yang (ZE5SZ85EZQ)`，指纹 `218B3C5A…7AFB`）**2027-02-01 到期**，建议提前一两周续期。续期 = 重新执行阶段二 + 更新 `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING_IDENTITY` 三个 secret；公证凭据不受影响。
 
 **自定义 entitlements**：现阶段不需要——bundler 默认 entitlements 已覆盖 WKWebView 的 JIT 需求；将来确有需要时在 `tauri.conf.json` 的 `bundle.macOS.entitlements` 配置。
 
