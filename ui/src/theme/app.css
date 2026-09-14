@@ -109,8 +109,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 通用弹性占位（ProvidersPanel/TaskCenterPanel/SettingsModal 内联布局使用；顶栏现用 .tb-flex） */
 .flex { flex: 1; }
 .dim { color: var(--ws-dim); }
-/* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口 */
-.notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 100; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
+/* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口；z-index 须高于 antd Modal(1000)/message(1010)，否则弹框打开期间 toast 被遮罩盖住 */
+.notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 3000; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
 /* ---------- ChatMessages ---------- */
 .chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 16px; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
 /* 聊天区滚动条主题化（[docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md)）：透明轨道贴合内容背景、thumb 用主题 token，取代刺眼的 WebView 默认滚动条配色 */
