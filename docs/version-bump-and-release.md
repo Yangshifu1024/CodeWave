@@ -31,7 +31,7 @@
 2. **门禁**（任一失败即停）：工作区干净 → 在 `main` 且 `git pull --ff-only` → `cargo test`（src-tauri，0 warning 基线）→ `pnpm --dir ui test` → `pnpm --dir ui build`。fmt/clippy 目前是 lint.yml 的 continue-on-error 软门槛，不阻塞发版。
 3. **bump**：`pnpm bump <version>`；`git status --porcelain` 应恰好 5 个修改文件（Windows + autocrlf 下 no-op 可能出现 Cargo.lock 幻影条目，`git diff` 为空即忽略）。
 4. **commit**：`chore(release): vX.Y.Z`。
-5. **停下汇总并等确认**：版本与出仓提交清单；release CI 将构建什么（draft Release + 三平台安装包；updater 签名 secret 未配置时不带签名，updater 当前 `active:false`；macOS 未配置 `APPLE_*` 时出未签名产物）；新 tag 会取消在途 release（concurrency）。**推送前必须得到用户明确同意**（AGENTS.md git 约定）。
+5. **停下汇总并等确认**：版本与出仓提交清单；release CI 将构建什么（draft Release + 三平台安装包；updater 签名 secret 未配置时不带签名；macOS 未配置 `APPLE_*` 时出未签名产物，配置方法见 [docs/macos-signing-and-notarization](./macos-signing-and-notarization.md)）；新 tag 会取消在途 release（concurrency）。**推送前必须得到用户明确同意**（AGENTS.md git 约定）。
 6. **推送**：`git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z`；可 `gh run watch` 盯流水线，结束后提醒人工 Publish draft。
 
 ## 3 验证
