@@ -1,5 +1,6 @@
 //! Anthropic Messages 协议适配器（手写薄层，[docs/technical-design](../../../docs/technical-design.md) §4.2.2）。
-//! 显式声明 prompt cache 断点：system 块 + 最后一条消息的末尾 content block。
+//! 显式声明 prompt cache 断点（最多 4 个，当前用 3）：tools 段末尾 + system 稳定主块 +
+//! 最后一条消息的末尾 content block；另有历史代际断点（cache_gen_index）复用消息末块标注。
 
 use super::dto::*;
 use super::sse::{SseEvent, SseParser};
@@ -15,8 +16,18 @@ use tokio_util::sync::CancellationToken;
 /// 构造 Anthropic Messages 请求体：消息转换 + prompt cache 断点标注 + 相邻同角色合并 + tools/thinking 段。
 pub fn build_body(req: &StreamRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
-    for m in &req.messages {
+    for (i, m) in req.messages.iter().enumerate() {
+        let before = messages.len();
         convert_message(m, &mut messages);
+        // 历史代际断点：标注该内部消息产出的最后一条 wire 消息的末块。
+        // 内部消息可能产出 0 条 wire 消息（如仅 thinking 被滤空）——此时静默跳过，防止错标到更早位置
+        if req.cache_gen_index == Some(i) && messages.len() > before {
+            if let Some(blocks) = messages.last_mut().and_then(|m| m["content"].as_array_mut()) {
+                if let Some(last_block) = blocks.last_mut() {
+                    last_block["cache_control"] = json!({ "type": "ephemeral" });
+                }
+            }
+        }
     }
     // cache 断点：最后一条「非瞬态」消息的末尾 content block
     //（瞬态尾消息——如 <current-plan-transient>——排在断点之后，保证前缀字节稳定可命中缓存）
@@ -34,15 +45,26 @@ pub fn build_body(req: &StreamRequest) -> Value {
     // plan 快照注入与连续 tool_result 回合都会产生相邻 user 消息）
     merge_adjacent(&mut messages);
 
+    // system 拆双块：稳定主块带断点（切档等 system_extra 变化只失效可变段之后的前缀，
+    // tools + 主块的缓存条目照常命中）；可变段不打断点。extra 为空时保持单块形态
+    let mut system_blocks = vec![json!({
+        "type": "text",
+        "text": req.system_core,
+        "cache_control": { "type": "ephemeral" }
+    })];
+    if !req.system_extra.is_empty() {
+        system_blocks.push(json!({ "type": "text", "text": format!("\n{}", req.system_extra) }));
+    }
+
     let mut body = json!({
         "model": req.model.model,
         "max_tokens": req.model.max_tokens,
         "stream": true,
-        "system": [{ "type": "text", "text": req.system, "cache_control": { "type": "ephemeral" } }],
+        "system": system_blocks,
         "messages": messages,
     });
     if !req.tools.is_empty() {
-        let tools: Vec<Value> = req
+        let mut tools: Vec<Value> = req
             .tools
             .iter()
             .map(|t| {
@@ -53,6 +75,11 @@ pub fn build_body(req: &StreamRequest) -> Value {
                 })
             })
             .collect();
+        // tools 断点：tools 段位于请求前缀最前且字节稳定（按名排序），独立缓存条目保证
+        // 稳定主块跨 run 变更（如项目指令文件编辑）时 tools 段仍命中
+        if let Some(last_tool) = tools.last_mut() {
+            last_tool["cache_control"] = json!({ "type": "ephemeral" });
+        }
         body["tools"] = Value::Array(tools);
     }
     // 请求级 reasoning effort → extended thinking（budget 按 max_tokens 比例取值，夹取到 [1024, max_tokens-1]）。
@@ -465,7 +492,9 @@ mod tests {
     fn consecutive_same_role_merged() {
         let req = StreamRequest {
             model: ModelConfig::default(),
-            system: "s".into(),
+            system_core: "s".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![
                 Message::user_text("a"),
                 Message::user_text("b"), // 注入/快照产生的相邻 user
@@ -501,7 +530,9 @@ mod tests {
                 max_tokens: 4096,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![
                 Message::user_text("q"),
                 Message::tool_results(vec![Content::ToolResult {
@@ -521,6 +552,12 @@ mod tests {
         let body = build_body(&req);
         assert_eq!(body["max_tokens"], 4096);
         assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        // tools 断点：末位工具带 cache_control（tools 段独立缓存条目，主块跨 run 变更时仍命中）
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.last().unwrap()["cache_control"]["type"], "ephemeral");
+        assert_eq!(tools[0]["input_schema"]["type"], "object");
+        // extra 为空 → system 保持单块（稳定主块）
+        assert_eq!(body["system"].as_array().unwrap().len(), 1);
         // 最后一条消息（tool_result 折叠进 user）的末尾 block 打断点
         let blocks = body["messages"].as_array().unwrap();
         let last = blocks.last().unwrap();
@@ -529,7 +566,65 @@ mod tests {
             last["content"].as_array().unwrap().last().unwrap()["cache_control"]["type"],
             "ephemeral"
         );
-        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+    }
+
+    /// [docs/prompt-caching-hardening]：system 双块与历史代际断点——extra 非空时 system 拆两块
+    /// 且只有稳定主块带断点；cache_gen_index 指向的内部消息末块标代际断点，与末条消息断点互不覆盖。
+    #[test]
+    fn system_extra_block_and_gen_breakpoint() {
+        let req = StreamRequest {
+            model: ModelConfig {
+                model: "claude-x".into(),
+                max_tokens: 4096,
+                ..Default::default()
+            },
+            system_core: "CORE".into(),
+            system_extra: "PLAN-EXTRA".into(),
+            cache_gen_index: Some(0),
+            messages: vec![
+                Message::user_text("old-0"),
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text { text: "mid-1".into() }],
+                    created_at: None,
+                },
+                Message::user_text("recent-2"),
+            ],
+            tools: vec![],
+            cache_key: None,
+            reasoning_effort: None,
+        };
+        let body = build_body(&req);
+        let system = body["system"].as_array().unwrap();
+        assert_eq!(system.len(), 2, "extra 非空 → system 双块");
+        assert_eq!(system[0]["text"], "CORE");
+        assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(system[1]["text"], "\nPLAN-EXTRA");
+        assert!(
+            system[1].get("cache_control").is_none(),
+            "可变段不打断点：切档只失效其后前缀"
+        );
+
+        let blocks = body["messages"].as_array().unwrap();
+        // 消息 0（old-0）末块 = 代际断点
+        assert_eq!(
+            blocks[0]["content"].as_array().unwrap().last().unwrap()["cache_control"]["type"],
+            "ephemeral"
+        );
+        // 中间消息（mid-1）不带断点
+        assert!(blocks[1]["content"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .get("cache_control")
+            .is_none());
+        // 消息 2（recent-2，最后一条非瞬态）末块 = 末条断点
+        let last = blocks.last().unwrap();
+        assert_eq!(
+            last["content"].as_array().unwrap().last().unwrap()["cache_control"]["type"],
+            "ephemeral"
+        );
     }
 
     /// 协议语义钉死：Role::Tool 消息中的非 ToolResult 块（如 Text）在请求体中不出现——
@@ -542,7 +637,9 @@ mod tests {
                 max_tokens: 4096,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![Message {
                 role: Role::Tool,
                 content: vec![
@@ -581,7 +678,9 @@ mod tests {
                 max_tokens: 4096,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![Message::tool_results(vec![Content::ToolResult {
                 tool_use_id: "t1".into(),
                 content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。".into(),
@@ -620,7 +719,9 @@ mod tests {
                 max_tokens: 4096,
                 ..Default::default()
             },
-            system: "s".into(),
+            system_core: "s".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![Message::user_text("q")],
             tools: vec![],
             cache_key: None,

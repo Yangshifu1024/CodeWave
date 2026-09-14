@@ -203,7 +203,7 @@ export default {
     instruction: "Instruction (runs in isolated context)", create: "Create", created: "Created",
     delete: "Delete", empty: "No scheduled tasks (process-local, cleared on restart)",
   },
-  stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources: {{list}}" },
+  stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", cacheHit: "Cache hit {{read}} tokens ({{rate}}) · cache write {{write}} tokens", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources (output tokens): {{list}}" },
   skills: {
     detailUse: "Use", detailClose: "Close", detailWhen: "When to use", detailOrigin: "Source", detailLoading: "Loading body…",
   },

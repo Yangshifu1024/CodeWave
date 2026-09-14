@@ -24,7 +24,7 @@ pub fn build_body(req: &StreamRequest) -> Value {
     let mut body = json!({
         "model": req.model.model,
         "stream": true,
-        "instructions": req.system,
+        "instructions": req.system_full(),
         "input": input,
         "max_output_tokens": req.model.max_tokens,
         // L13：不在 OpenAI 侧存储会话数据
@@ -373,7 +373,9 @@ mod tests {
                 max_tokens: 512,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             cache_key: Some("sess-1".into()),
             reasoning_effort: None,
             messages: vec![
@@ -418,7 +420,9 @@ mod tests {
                 max_tokens: 512,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             cache_key: None,
             reasoning_effort: Some(crate::core::prefs::EffortLevel::Max),
             messages: vec![Message::user_text("q")],
@@ -441,7 +445,9 @@ mod tests {
                 max_tokens: 512,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             cache_key: None,
             reasoning_effort: None,
             messages: vec![Message {
@@ -480,7 +486,9 @@ mod tests {
                 max_tokens: 512,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             cache_key: None,
             reasoning_effort: None,
             messages: vec![Message::tool_results(vec![Content::ToolResult {

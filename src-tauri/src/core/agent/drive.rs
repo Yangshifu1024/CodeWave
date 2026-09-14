@@ -311,6 +311,10 @@ pub async fn drive_agent(
     Option<Vec<String>>,
 ) {
     let sink = core.sink.clone();
+    // 每 run 重置：system 冻结与历史代际断点锚点只在单个 run 内有效
+    //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
+    *rt.system_frozen.lock().unwrap() = None;
+    *rt.cache_gen_anchor.lock().unwrap() = None;
     // 父令牌存在（子代理）时派生 child_token：父取消 → 子取消；子仍可被单独停止（stop_subagent）
     let run_token = match params.parent_cancel.take() {
         Some(parent) => parent.child_token(),

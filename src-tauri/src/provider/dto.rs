@@ -25,19 +25,34 @@ pub const MAX_TOKENS_NOTICE: &str = "\n[注意：回复因 max_tokens 被截断]
 pub struct StreamRequest {
     /// 目标模型配置（含 api_format、base_url、max_tokens、keys）
     pub model: ModelConfig,
-    /// system prompt 全文
-    pub system: String,
+    /// system prompt 稳定主块（六层组装产物；run 内字节冻结，跨 run 才可能变化）
+    pub system_core: String,
+    /// system prompt 可变尾段（plan-mode 等模式注入；允许 run 内切换）。
+    /// Anthropic 侧单独成块且不打断点：切档只失效可变段之后的前缀，稳定主块缓存照常命中
+    pub system_extra: String,
     /// 对话历史（含 tool_use / tool_result）
     pub messages: Vec<Message>,
     /// 本请求可用的工具定义列表
     pub tools: Vec<ToolDef>,
     /// Responses 协议的会话级 cache 路由 key（cache-first 用）
     pub cache_key: Option<String>,
+    /// Anthropic 历史代际断点的消息下标（次新代前缀缓存条目；None = 历史不足不启用）
+    pub cache_gen_index: Option<usize>,
     /// 请求级 reasoning effort（会话级覆盖 → 模型配置，None = 不发送；协议差异由各适配器处理）
     pub reasoning_effort: Option<crate::core::prefs::EffortLevel>,
 }
 
 impl StreamRequest {
+    /// system 全文拼接（core + "\n" + extra；与拆分前的单字符串组装字节一致）。
+    /// openai_chat / openai_responses 单字符串协议使用；anthropic 用双块承载。
+    pub fn system_full(&self) -> String {
+        if self.system_extra.is_empty() {
+            self.system_core.clone()
+        } else {
+            format!("{}\n{}", self.system_core, self.system_extra)
+        }
+    }
+
     /// 供会话日志使用的脱敏序列化（[docs/session-logging-report](../../../docs/session-logging-report.md)）：所有 key 替换为 `***`，保证明文 key 不落盘
     /// （AGENTS.md 约束「API key 不落明文」；日志可导出排障、无保留期清理）。
     pub fn redacted_json(&self) -> String {
@@ -45,10 +60,12 @@ impl StreamRequest {
         model.keys = model.keys.iter().map(|_| "***".to_string()).collect();
         let clone = StreamRequest {
             model,
-            system: self.system.clone(),
+            system_core: self.system_core.clone(),
+            system_extra: self.system_extra.clone(),
             messages: self.messages.clone(),
             tools: self.tools.clone(),
             cache_key: self.cache_key.clone(),
+            cache_gen_index: self.cache_gen_index,
             reasoning_effort: self.reasoning_effort,
         };
         serde_json::to_string(&clone).unwrap_or_else(|_| "<serialize-failed>".into())
@@ -366,10 +383,12 @@ mod tests {
         };
         let req = StreamRequest {
             model,
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
             messages: vec![crate::core::types::Message::user_text("hi")],
             tools: vec![],
             cache_key: None,
+            cache_gen_index: None,
             reasoning_effort: None,
         };
         let body = req.redacted_json();
@@ -379,9 +398,30 @@ mod tests {
         );
         assert!(body.contains("\"***\""), "脱敏标记缺失：{body}");
         assert!(
-            body.contains("\"system\":\"sys\""),
+            body.contains("\"system_core\":\"sys\""),
             "其余字段应原样保留：{body}"
         );
+    }
+
+    /// system_full 拼接字节：extra 为空时等于 core（与拆分前单字符串一致），非空时以单个换行衔接。
+    #[test]
+    fn system_full_joins_core_and_extra() {
+        let base = StreamRequest {
+            model: crate::core::config::ModelConfig::default(),
+            system_core: "CORE".into(),
+            system_extra: String::new(),
+            messages: vec![],
+            tools: vec![],
+            cache_key: None,
+            cache_gen_index: None,
+            reasoning_effort: None,
+        };
+        assert_eq!(base.system_full(), "CORE");
+        let with_extra = StreamRequest {
+            system_extra: "EXTRA".into(),
+            ..base
+        };
+        assert_eq!(with_extra.system_full(), "CORE\nEXTRA");
     }
 
     #[test]

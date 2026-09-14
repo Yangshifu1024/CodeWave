@@ -195,7 +195,9 @@ pub async fn compact_history(
 
     let req = crate::provider::StreamRequest {
         model: model.clone(),
-        system: SUMMARY_SYSTEM.into(),
+        system_core: SUMMARY_SYSTEM.into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text(transcript)],
         tools: vec![],
         cache_key: None,

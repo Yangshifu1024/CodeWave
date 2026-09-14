@@ -203,7 +203,7 @@ export default {
     instruction: "任务指令（Agent 将在独立上下文执行）", create: "创建", created: "已创建",
     delete: "删除", empty: "暂无计划任务（进程本地，重启后清空）",
   },
-  stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源：{{list}}" },
+  stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}" },
   skills: {
     detailUse: "使用", detailClose: "关闭", detailWhen: "触发时机", detailOrigin: "来源", detailLoading: "加载正文中…",
   },
