@@ -128,6 +128,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY; do
             value="${!name}"
@@ -135,8 +136,20 @@ jobs:
               echo "$name=$value" >> "$GITHUB_ENV"
             fi
           done
+          # tauri-action 不负责写 .p8 文件（源码无此逻辑），必须在此落盘；
+          # APPLE_API_KEY_PATH 必须绝对路径：bundler 在临时目录调用 notarytool，
+          # 相对路径报 The file couldn't be opened（GitWave v0.3.0 实测，docs/macos-signing-and-notarization）
           if [ -n "$APPLE_API_KEY" ]; then
-            echo "APPLE_API_KEY_PATH=AuthKey.p8" >> "$GITHUB_ENV"
+            printf '%s\n' "$APPLE_API_KEY_P8" > AuthKey.p8
+            grep -q '^-----BEGIN PRIVATE KEY-----$' AuthKey.p8 || {
+              echo "::error::APPLE_API_KEY_P8 缺少 BEGIN 私钥行，内容损坏；用 gh secret set APPLE_API_KEY_P8 < AuthKey_XXX.p8 重设"
+              exit 1
+            }
+            grep -q '^-----END PRIVATE KEY-----$' AuthKey.p8 || {
+              echo "::error::APPLE_API_KEY_P8 缺少 END 私钥行，内容损坏；用 gh secret set APPLE_API_KEY_P8 < AuthKey_XXX.p8 重设"
+              exit 1
+            }
+            echo "APPLE_API_KEY_PATH=${{ github.workspace }}/AuthKey.p8" >> "$GITHUB_ENV"
           fi
 
       - name: Tauri build + upload
