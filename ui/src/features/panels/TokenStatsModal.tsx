@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Empty, Modal } from "antd";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import type { DailyStats } from "../../ipc/types";
+import type { DailyStats, ModelAgg } from "../../ipc/types";
+import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 
 /** token 数缩写：M/k 分级缩写，便于柱状图标签与摘要展示。 */
@@ -12,33 +13,107 @@ function fmt(n: number): string {
   return String(n);
 }
 
-/** 任务/统计弹窗：近 30 天 token 消耗柱状图 + 汇总（总量/run 数/最常用模型）+ 按来源拆分。 */
+/**
+ * 计费语义（[docs/prompt-caching-hardening]）：anthropic_messages 的 usage.input 不含缓存部分
+ * （真输入 = input + cache_read + cache_write）；openai_chat / openai_responses 的 input 已包含
+ * cached_tokens（cache_read 是 input 的子集）。两套口径下「总量 / 命中率」公式不同，必须按模型协议区分。
+ */
+type Sem = "anthropic" | "openai";
+
+function semOf(apiFormat: string | undefined): Sem {
+  return apiFormat === "anthropic_messages" ? "anthropic" : "openai";
+}
+
+/** 计费 token 总量：anthropic 四维相加；openai 的 input 已含缓存命中，只加 output。 */
+function trueTotal(a: ModelAgg, sem: Sem): number {
+  return sem === "anthropic"
+    ? a.input + a.output + a.cache_read + a.cache_write
+    : a.input + a.output;
+}
+
+/** 缓存命中率分母：anthropic = input + cache_read + cache_write；openai = input。 */
+function hitDenominator(a: ModelAgg, sem: Sem): number {
+  return sem === "anthropic" ? a.input + a.cache_read + a.cache_write : a.input;
+}
+
+/** 任务/统计弹窗：近 30 天 token 消耗柱状图 + 汇总（总量/run 数/最常用模型/缓存命中率）+ 按来源拆分。 */
 export default function TokenStatsModal() {
   const { t } = useTranslation();
   const [days, setDays] = useState<DailyStats[]>([]);
+  const config = useSettings((s) => s.config);
 
   useEffect(() => {
     void ipc.getTokenStats(30).then(setDays).catch(() => setDays([]));
   }, []);
 
+  // model_id → 计费语义（provider 级 api_format；历史已删模型查不到，其量不参与命中率计算）
+  const sems = useMemo(() => {
+    const map: Record<string, Sem> = {};
+    for (const p of config?.providers ?? []) {
+      const sem = semOf(p.api_format);
+      for (const m of p.models) map[m.id] = sem;
+    }
+    return map;
+  }, [config]);
+
+  // 30 天按模型聚合：命中率分母口径随协议不同，只能按模型算再汇总
+  const perModel = useMemo(() => {
+    const agg: Record<string, ModelAgg> = {};
+    for (const d of days) {
+      for (const [m, v] of Object.entries(d.by_model ?? {})) {
+        const cur = (agg[m] ??= { input: 0, output: 0, cache_read: 0, cache_write: 0, runs: 0 });
+        cur.input += v.input;
+        cur.output += v.output;
+        cur.cache_read += v.cache_read;
+        cur.cache_write += v.cache_write;
+        cur.runs += v.runs;
+      }
+    }
+    return agg;
+  }, [days]);
+
+  const dayTotal = (d: DailyStats): number =>
+    Object.entries(d.by_model ?? {}).reduce(
+      (sum, [m, v]) => sum + trueTotal(v, sems[m] ?? "openai"),
+      0,
+    );
+
   const topModel = (() => {
     if (!days.length) return null;
     const agg: Record<string, number> = {};
-    for (const d of days) {
-      for (const [m, v] of Object.entries(d.by_model ?? {})) {
-        agg[m] = (agg[m] ?? 0) + v.input + v.output + v.cache_read;
-      }
+    for (const [m, v] of Object.entries(perModel)) {
+      agg[m] = trueTotal(v, sems[m] ?? "openai");
     }
     const top = Object.entries(agg).sort((a, b) => b[1] - a[1])[0];
     return top ? `${top[0].slice(0, 8)}… (${fmt(top[1])})` : null;
   })();
 
-  // L10：按来源拆分（仅当存在子代理/定时任务用量时显示，避免全是主会话的噪音）
+  // 缓存命中（按可识别协议的模型汇总；未知协议模型只跳过比率，不影响其他模型的比率正确性）
+  const hit = (() => {
+    let num = 0;
+    let den = 0;
+    let write = 0;
+    let known = false;
+    for (const [m, v] of Object.entries(perModel)) {
+      const sem = sems[m];
+      if (!sem) continue;
+      known = true;
+      num += v.cache_read;
+      write += v.cache_write;
+      den += hitDenominator(v, sem);
+    }
+    if (!known || den === 0) return null;
+    return { rate: num / den, read: num, write };
+  })();
+
+  // L10：按来源拆分（仅当存在子代理/定时任务用量时显示，避免全是主会话的噪音）。
+  // 口径用 output：输出 token 语义跨协议一致；input 的缓存口径随协议不同，而 kind 聚合
+  // 已丢失 model 维度，无法精确归一口径（total 口径同理，统一走 by_model 聚合）
   const byKind = (() => {
     const agg: Record<string, number> = {};
     for (const d of days) {
       for (const [k, v] of Object.entries(d.by_kind ?? {})) {
-        agg[k] = (agg[k] ?? 0) + v.input + v.output + v.cache_read;
+        agg[k] = (agg[k] ?? 0) + v.output;
       }
     }
     if ((agg.sub ?? 0) + (agg.task ?? 0) === 0) return null;
@@ -56,9 +131,8 @@ export default function TokenStatsModal() {
   })();
 
   function barHeight(d: DailyStats): string {
-    const max = Math.max(...days.map((x) => x.total.input + x.total.output + x.total.cache_read), 1);
-    const v = d.total.input + d.total.output + d.total.cache_read;
-    return `${Math.max(2, (v / max) * 120)}px`;
+    const max = Math.max(...days.map(dayTotal), 1);
+    return `${Math.max(2, (dayTotal(d) / max) * 120)}px`;
   }
 
   return (
@@ -75,7 +149,7 @@ export default function TokenStatsModal() {
             <div
               className="bar-col"
               key={d.date}
-              title={`${d.date}: ${fmt(d.total.input + d.total.output + d.total.cache_read)} tokens, ${d.total.runs} runs`}
+              title={`${d.date}: ${fmt(dayTotal(d))} tokens, ${d.total.runs} runs`}
             >
               <div className="bar" style={{ height: barHeight(d) }} />
               <span className="lbl">{d.date.slice(5)}</span>
@@ -88,9 +162,18 @@ export default function TokenStatsModal() {
       {days.length > 0 && (
         <div className="stats-summary dim">
           {t("stats.total")}：
-          {fmt(days.reduce((a, d) => a + d.total.input + d.total.output + d.total.cache_read, 0))} tokens ·
+          {fmt(days.reduce((a, d) => a + dayTotal(d), 0))} tokens ·
           {" "}{days.reduce((a, d) => a + d.total.runs, 0)} runs
           {topModel && ` · ${t("stats.topModel")}：${topModel}`}
+        </div>
+      )}
+      {days.length > 0 && hit && (
+        <div className="stats-summary dim">
+          {t("stats.cacheHit", {
+            rate: `${(hit.rate * 100).toFixed(1)}%`,
+            read: fmt(hit.read),
+            write: fmt(hit.write),
+          })}
         </div>
       )}
       {days.length > 0 && byKind && (

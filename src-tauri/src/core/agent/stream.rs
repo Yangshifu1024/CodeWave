@@ -43,51 +43,62 @@ pub(super) async fn build_stream_request(
             .as_deref()
             .and_then(crate::core::prefs::EffortLevel::parse)
     });
-    // shell 描述跟随配置 selection（与 command 工具执行 shell 同一事实源）
-    let shell = crate::tools::command::shell_description(cfg.shell.selection.as_deref());
-    let extra = rt.extra_roots.lock().unwrap().clone();
-    // 第 2/3 层：技能与记忆索引（字节稳定）
-    let skills = core.skills.list(
-        &rt.workspace,
-        &rt.data_dir,
-        &cfg.disabled_skills,
-        rt.project_dir.as_deref(),
-    );
-    let skills_listing = crate::skills::prompt_listing(&skills);
-    let memories = crate::memory::scan(&rt.data_dir, rt.project_dir.as_deref());
-    let memory_listing = crate::memory::prompt_listing(&memories);
-    // 项目段：项目名 + 项目目录 + temps 暂存区（数据目录在 <project>/.codewave，单目录语义）
-    let project_section = rt.project_id.as_ref().map(|pid| {
-        let project = crate::core::projects::find(&core.data_dir, pid);
-        let name = project
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| pid.clone());
-        let temps = project
-            .as_ref()
-            .map(|p| crate::core::projects::project_data_dir(&core.data_dir, p).join("temps"))
-            .unwrap_or_else(|| crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("temps"))
-            .to_string_lossy()
-            .into_owned();
-        format!(
-            "\n<project>\n- Project: {name}\n- Project directory: {}\n- Scratch dir & command working directory: {temps}\n  Throwaway files go here; commands start here.\n</project>\n",
-            rt.workspace.to_string_lossy()
-        )
-    });
-    let mut system = crate::core::prompt::assemble(
-        &rt.workspace,
-        &cfg,
-        &extra,
-        shell.as_str(),
-        &skills_listing,
-        &memory_listing,
-        project_section.as_deref(),
-        rt.project_dir.as_deref(),
-    );
-    if !params.system_extra.is_empty() {
-        system.push('\n');
-        system.push_str(&params.system_extra);
-    }
+    // system prompt 稳定主块 run 内字节冻结：首步组装后存入 rt，后续步直接复用。
+    // 防 run 中途文件变更（agent 自编辑 AGENTS.md 等）打穿 provider 前缀缓存，
+    // 同时省每步 10+ 文件重读；变更在下一条用户消息（新 run，drive_agent 清空冻结）生效。
+    // 注意先把 clone 落到局部变量再 match：scrutinee 里的临时 MutexGuard 会活到 match 结束，
+    // None 分支内再锁同一把锁会自锁死锁
+    let cached = rt.system_frozen.lock().unwrap().clone();
+    let system_core = match cached {
+        Some(core) => core,
+        None => {
+            // shell 描述跟随配置 selection（与 command 工具执行 shell 同一事实源）
+            let shell = crate::tools::command::shell_description(cfg.shell.selection.as_deref());
+            let extra = rt.extra_roots.lock().unwrap().clone();
+            // 第 2/3 层：技能与记忆索引（字节稳定）
+            let skills = core.skills.list(
+                &rt.workspace,
+                &rt.data_dir,
+                &cfg.disabled_skills,
+                rt.project_dir.as_deref(),
+            );
+            let skills_listing = crate::skills::prompt_listing(&skills);
+            let memories = crate::memory::scan(&rt.data_dir, rt.project_dir.as_deref());
+            let memory_listing = crate::memory::prompt_listing(&memories);
+            // 项目段：项目名 + 项目目录 + temps 暂存区（数据目录在 <project>/.codewave，单目录语义）
+            let project_section = rt.project_id.as_ref().map(|pid| {
+                let project = crate::core::projects::find(&core.data_dir, pid);
+                let name = project
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| pid.clone());
+                let temps = project
+                    .as_ref()
+                    .map(|p| crate::core::projects::project_data_dir(&core.data_dir, p).join("temps"))
+                    .unwrap_or_else(|| {
+                        crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("temps")
+                    })
+                    .to_string_lossy()
+                    .into_owned();
+                format!(
+                    "\n<project>\n- Project: {name}\n- Project directory: {}\n- Scratch dir & command working directory: {temps}\n  Throwaway files go here; commands start here.\n</project>\n",
+                    rt.workspace.to_string_lossy()
+                )
+            });
+            let core = crate::core::prompt::assemble(
+                &rt.workspace,
+                &cfg,
+                &extra,
+                shell.as_str(),
+                &skills_listing,
+                &memory_listing,
+                project_section.as_deref(),
+                rt.project_dir.as_deref(),
+            );
+            *rt.system_frozen.lock().unwrap() = Some(core.clone());
+            core
+        }
+    };
     let mut messages = rt.history.lock().unwrap().clone();
     // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
     // 落在其之前最后一条非瞬态消息上，保前缀缓存）
@@ -120,17 +131,59 @@ pub(super) async fn build_stream_request(
         }
     }
     tools.sort_by(|a, b| a.name.cmp(&b.name));
+    // 历史代际断点锚点（滞回前移；历史不足 16 条不启用，压缩后 n 骤减自动重置）
+    let cache_gen_index = {
+        let n = messages.len();
+        let mut anchor = rt.cache_gen_anchor.lock().unwrap();
+        let next = gen_anchor_next(*anchor, n);
+        *anchor = next;
+        next
+    };
     Ok((
         model.clone(),
         StreamRequest {
             model,
-            system,
+            system_core,
+            system_extra: params.system_extra.clone(),
             messages,
             tools,
             cache_key: Some(rt.id.clone()),
+            cache_gen_index,
             reasoning_effort,
         },
     ))
+}
+
+/// 历史代际断点锚点滞回：目标位取「距末尾 8 条」与「75% 处」较小者；现锚点仍在有效界内
+/// 且目标漂移未超其 1/4 时保持不动（锚点稳定期间该前缀缓存条目被每步请求命中刷新，
+/// 5min TTL 不会过期），漂移超阈值才前移到目标位（该段触发一次 1.25x 重写）。
+fn gen_anchor_next(cur: Option<usize>, n: usize) -> Option<usize> {
+    if n < 16 {
+        return None;
+    }
+    let target = (n - 8).min(n * 3 / 4).max(1);
+    match cur {
+        Some(c) if c >= 1 && c <= n - 2 && target < c + c / 4 + 1 => Some(c),
+        _ => Some(target),
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::gen_anchor_next;
+
+    /// n < 16 不启用代际断点（含压缩后历史骤减的场景）。
+    #[test]
+    fn gen_anchor_disabled_when_history_short() {
+        assert_eq!(gen_anchor_next(None, 0), None);
+        assert_eq!(gen_anchor_next(Some(12), 15), None);
+    }
+
+    /// 旧锚点越界（压缩后残留大值）时直接落到新目标位，而非保持非法旧值。
+    #[test]
+    fn gen_anchor_resets_when_out_of_range() {
+        assert_eq!(gen_anchor_next(Some(50), 20), Some(12));
+    }
 }
 
 /// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。

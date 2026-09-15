@@ -87,7 +87,9 @@ pub async fn generate_and_apply(
     let clipped: String = user_text.chars().take(INPUT_MAX_CHARS).collect();
     let req = crate::provider::StreamRequest {
         model: model.clone(),
-        system: crate::agents::TITLE_BODY.into(),
+        system_core: crate::agents::TITLE_BODY.into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![crate::core::types::Message::user_text(format!(
             "{clipped}\n\n---\n请为以上用户消息发起的会话生成标题。"
         ))],

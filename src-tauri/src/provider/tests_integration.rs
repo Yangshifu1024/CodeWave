@@ -70,7 +70,9 @@ async fn openai_stream_and_usage() {
     let model = test_model(port);
     let req = StreamRequest {
         model: model.clone(),
-        system: "sys".into(),
+        system_core: "sys".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text("hi")],
         tools: vec![],
         cache_key: None,
@@ -116,7 +118,9 @@ async fn midstream_disconnect_maps_to_network() {
     let model = test_model(port);
     let req = StreamRequest {
         model: model.clone(),
-        system: "s".into(),
+        system_core: "s".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text("hi")],
         tools: vec![],
         cache_key: None,
@@ -153,7 +157,9 @@ async fn http_429_maps_to_rate_limited() {
     let model = test_model(port);
     let req = StreamRequest {
         model: model.clone(),
-        system: "s".into(),
+        system_core: "s".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text("hi")],
         tools: vec![],
         cache_key: None,
@@ -181,7 +187,9 @@ async fn http_401_maps_to_auth() {
     let model = test_model(port);
     let req = StreamRequest {
         model: model.clone(),
-        system: "s".into(),
+        system_core: "s".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text("hi")],
         tools: vec![],
         cache_key: None,
@@ -247,7 +255,9 @@ async fn anthropic_sse_line_split_across_segments() {
     };
     let req = StreamRequest {
         model: model.clone(),
-        system: "s".into(),
+        system_core: "s".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
         messages: vec![Message::user_text("hi")],
         tools: vec![],
         cache_key: None,

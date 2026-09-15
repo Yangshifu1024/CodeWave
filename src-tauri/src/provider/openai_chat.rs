@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 /// 构造 Chat Completions 请求体：system 置顶 + 消息转换 + tools / reasoning_effort 段；
 /// 推理系列模型自动把 max_tokens 换成 max_completion_tokens。
 pub fn build_body(req: &StreamRequest) -> Value {
-    let mut messages = vec![json!({ "role": "system", "content": req.system })];
+    let mut messages = vec![json!({ "role": "system", "content": req.system_full() })];
     for m in &req.messages {
         convert_message(m, &mut messages);
     }
@@ -447,7 +447,9 @@ mod tests {
                 max_tokens: 999,
                 ..Default::default()
             },
-            system: "sys".into(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
             messages: vec![
                 Message::user_text("hello"),
                 Message::tool_results(vec![Content::ToolResult {

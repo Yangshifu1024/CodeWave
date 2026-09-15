@@ -66,7 +66,7 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
         let params = DriveParams::default();
         let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
         let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
-        assert_eq!(r1.system, r2.system, "system 必须字节稳定");
+        assert_eq!(r1.system_core, r2.system_core, "system 必须字节稳定");
         let t1: Vec<&str> = r1.tools.iter().map(|d| d.name.as_str()).collect();
         let t2: Vec<&str> = r2.tools.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(t1, t2);
@@ -78,6 +78,94 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
         let mut sorted = t1.clone();
         sorted.sort();
         assert_eq!(t1, sorted, "工具列表必须按名排序");
+    }
+
+    #[tokio::test]
+    async fn system_prompt_frozen_within_run() {
+        // [docs/prompt-caching-hardening]：run 内 system 稳定主块冻结——文件变更不穿透当前 run
+        //（保 provider 前缀缓存），新 run（drive_agent 起点清空冻结）才重新组装纳入新内容
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        std::fs::write(ws.path().join("AGENTS.md"), "rule-v1").unwrap();
+        let core = test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "freeze-test",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let params = DriveParams::default();
+        let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert!(r1.system_core.contains("rule-v1"));
+        // run 中途改文件：冻结生效，system 主块字节不变
+        std::fs::write(ws.path().join("AGENTS.md"), "rule-v2").unwrap();
+        let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert_eq!(
+            r1.system_core, r2.system_core,
+            "run 内冻结：文件变更不穿透"
+        );
+        // 新 run：清空冻结（drive_agent 同款操作）→ 重新组装
+        *rt.system_frozen.lock().unwrap() = None;
+        let (_, r3) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert!(r3.system_core.contains("rule-v2"), "新 run 重新组装");
+    }
+
+    #[tokio::test]
+    async fn cache_gen_anchor_hysteresis() {
+        // [docs/prompt-caching-hardening]：代际断点锚点滞回——漂移未超 1/4 保持不动（命中刷新
+        // TTL），超阈值才前移（触发一次段重写）；历史不足 16 条不启用
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "gen-anchor-test",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let params = DriveParams::default();
+        {
+            let mut h = rt.history.lock().unwrap();
+            for i in 0..20 {
+                h.push(Message::user_text(format!("m{i}")));
+            }
+        }
+        let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert_eq!(r1.cache_gen_index, Some(12), "n=20 → 目标位 min(n-8, 3n/4)=12");
+        {
+            let mut h = rt.history.lock().unwrap();
+            for i in 20..23 {
+                h.push(Message::user_text(format!("m{i}")));
+            }
+        }
+        let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert_eq!(
+            r2.cache_gen_index,
+            Some(12),
+            "目标 15 vs 锚点 12+3：漂移未超 1/4 → 保持"
+        );
+        {
+            let mut h = rt.history.lock().unwrap();
+            for i in 23..27 {
+                h.push(Message::user_text(format!("m{i}")));
+            }
+        }
+        let (_, r3) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert_eq!(r3.cache_gen_index, Some(19), "漂移超阈值 → 前移到目标位");
     }
 
     #[tokio::test]
@@ -320,7 +408,7 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
         }
         assert!(names.contains(&"read"), "只读工具保留");
         // system prompt 携带 plan-mode 说明
-        assert!(req.system.contains("plan-mode"));
+        assert!(req.system_full().contains("plan-mode"));
         // 对照：AutoEdit 保留写工具
         rt.set_prefs(prefs_of(crate::core::prefs::ApprovalMode::AutoEdit, None));
         let params = main_drive_params(&rt.prefs());
