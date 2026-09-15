@@ -16,6 +16,10 @@ import { useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import { upgradeDiagrams } from "../../utils/diagrams";
 import type { UiItem } from "../../stores/run";
+// 滚动锚点（会话保存与恢复优化 · 批1）：锚点读写与现场态落盘的调用链见本文件「滚动锚点」一节。
+import { captureAnchor, collectNodes, isAtBottom, itemSig, restoreAnchor } from "../../utils/scrollAnchor";
+import type { ScrollAnchor } from "../../utils/scrollAnchor";
+import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/uiState";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
 
@@ -34,16 +38,25 @@ function lastItem_kind(items: UiItem[]): string {
   return items.length ? items[items.length - 1].kind : "";
 }
 
+/** 消息行锚点标注：scrollAnchor.ts 的 collectNodes 按 data-sig / data-idx 收集可锚定节点。
+ *  仅作定位参考（不加样式、不改结构语义）；传字面量属性而非对象，避免 memo 因对象身份失效。 */
+interface AnchorAttrs {
+  anchorSig: string;
+  anchorIdx: number;
+}
+
 /** 用户消息：文本气泡 + 图片缩略（可预览）；悬停操作提供复制与「修改」（经 ws:composer-fill 回填 Composer，不自动发送）。 */
 const UserMessage = memo(function UserMessage({
   text,
   createdAt,
   images,
+  anchorSig,
+  anchorIdx,
 }: {
   text: string;
   createdAt?: string;
   images?: { mediaType: string; data: string }[];
-}) {
+} & AnchorAttrs) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   // 复制进剪贴板：成功后短暂切换为 ✓ 反馈
@@ -64,7 +77,7 @@ const UserMessage = memo(function UserMessage({
     window.dispatchEvent(new CustomEvent("ws:composer-fill", { detail: { text, images } }));
   };
   return (
-    <div className="msg user">
+    <div className="msg user" data-sig={anchorSig} data-idx={anchorIdx}>
       <div className="role">
         <span className="ts">{ts(createdAt)}</span>
         <span>{t("chat.you")}</span>
@@ -108,13 +121,15 @@ const AssistantMessage = memo(function AssistantMessage({
   item,
   streaming,
   onUserToggle,
+  anchorSig,
+  anchorIdx,
 }: {
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
   onUserToggle?: () => void;
-}) {
+} & AnchorAttrs) {
   return (
-    <div className="msg assistant">
+    <div className="msg assistant" data-sig={anchorSig} data-idx={anchorIdx}>
       <div className="role">
         <span>CodeWave</span>
         <span className="ts">{ts(item.createdAt)}</span>
@@ -140,6 +155,16 @@ export default function ChatMessages() {
   const stickBottom = useRef(true);
   const progScroll = useRef(0); // 程序化滚动的豁免窗口：窗口内自家触发的滚动事件不参与贴底判定
   const progTarget = useRef(Infinity); // 最近一次程序化跳底的 scrollTop 目标（目标比对豁免，docs/thinking-scroll-fix §2.3）
+  // ---------- 滚动锚点：记录 → 落盘 → 还原 ----------
+  // 记录：onScroll → recordAnchor → uiState.scheduleAnchor（200ms 节流）→ captureAnchor(容器) → setScrollAnchor → 落盘防抖
+  // 还原：activeKey 变化 → getScrollAnchor(会话) → restoreAnchor(容器, 锚点)（无锚/贴底 ⇒ scrollTop = scrollHeight；
+  //       有消息锚但 sig 已不存在 ⇒ 返回 false 并降级贴底）；懒加载首帧 items 为空 ⇒ 不落位，
+  //       等 items 0→N 由下面的「二次校正」effect 在下一帧重定位。
+  // pendingAnchor = 待还原的消息锚（bottom 无需还原）；anchorSid = 锚点归属会话（切 Tab 中途异步回包据此作废）；
+  // anchorHit = 本轮激活是否命中过（命中过就不做降级）
+  const pendingAnchor = useRef<ScrollAnchor | null>(null);
+  const anchorSid = useRef<string | null>(null);
+  const anchorHit = useRef(false);
 
   const scrollToBottom = (smooth = false) => {
     const el = scroller.current;
@@ -151,6 +176,33 @@ export default function ChatMessages() {
     setAtBottom(true);
   };
 
+  /** 程序化滚动登记豁免窗口：自家产生的 scroll 事件不参与「用户接管」判定（否则还原动作会
+   *  把自己当成用户滚动，把待还原的锚点当场取消）。沿用 scrollToBottom 的目标值比对机制：
+   *  scroll 事件在下一帧才派发，所以我可以在赋值之后读回实际 scrollTop 作为目标值。 */
+  const markProgScroll = (el: HTMLElement) => {
+    progScroll.current = Date.now() + 150;
+    progTarget.current = el.scrollTop;
+  };
+
+  /** 按真实几何同步「贴底/跟随」态：阈值沿用 scrollAnchor.isAtBottom（BOTTOM_EPS=40，与 onScroll 的 <40 同源，
+   *  不另发明一套判定） */
+  const syncFollowState = (el: HTMLElement) => {
+    const at = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
+    stickBottom.current = at;
+    setAtBottom(at);
+  };
+
+  /** 滚动 → 记录锚点：节流交给 uiState.scheduleAnchor（同一窗口内只读一次布局，滚动这种高频回调不反复量 DOM）。
+   *  reader 里再校一次会话：防抖窗口内切了 Tab 时容器里已是新会话的消息，读到的几何绝不能写给旧会话 ——
+   *  此时按「贴底」记录（与旧版切 Tab 一律回底部一致，不会把旧会话锚到别人的位置上）。 */
+  const recordAnchor = (key: string | null) => {
+    if (!key) return; // 无活跃会话（空态）不记：没有归属的锚点无处可还原
+    scheduleAnchor(key, () => {
+      const el = scroller.current;
+      if (!el || useSessions.getState().activeKey !== key) return { kind: "bottom" };
+      return captureAnchor(el);
+    });
+  };
   // 展开/收起思考块或工具卡 = 阅读意图：立即暂停自动跟随，
   // 否则流式期间 stickBottom 恒为 true 会持续把视图拽到底部、把展开内容顶出视口。
   // 恢复跟随只有两条路：手动滚回底部（onScroll nearBottom）或「回到底部」按钮。
@@ -175,14 +227,75 @@ export default function ChatMessages() {
     }
   }, [lastLen, lastKind]);
 
-  // 切 Tab 重置跟随态：ChatMessages 是单实例随 activeKey 换数据不重挂，
-  // stickBottom/atBottom 跨 Tab 残留会让新会话假显「回到底部」且不跟随（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.4，评审建议）。
-  // 声明在跟随 effect 之前，保证同一次 commit 内先跑重置。
+  // 切 Tab / 首次激活：按 ui-state 的滚动锚点还原 —— 取代原先的「无条件贴底硬重置」。
+  // ChatMessages 是单实例随 activeKey 换数据不重挂，贴底/跟随态必须在本轮 commit 里重定（否则跨 Tab 残留），
+  // 同时恢复到上次离开时的阅读位置（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.4）。
+  // 声明在跟随 effect 之前，保证同一次 commit 内先落位，跟随 effect 才不会把视口拽回底部。
   useEffect(() => {
-    stickBottom.current = true;
     progScroll.current = 0;
-    setAtBottom(true);
+    progTarget.current = Infinity;
+    anchorSid.current = activeKey;
+    anchorHit.current = false;
+    pendingAnchor.current = null;
+    const el = scroller.current;
+    const anchor = activeKey ? getScrollAnchor(activeKey) : null;
+    // 无锚点（新会话 / 从未滚动过）或上次本就贴底 ⇒ 保持贴底：与旧逻辑行为一致，不做无谓的中间位还原
+    if (!anchor || anchor.kind === "bottom") {
+      stickBottom.current = true;
+      setAtBottom(true);
+      if (el) restoreAnchor(el, anchor); // bottom / null ⇒ scrollTop = scrollHeight
+      return;
+    }
+    // 有消息锚：先落位，并停掉自动跟随 —— 否则流式新增消息的下滚会把刚还原的位置顶掉。
+    pendingAnchor.current = anchor;
+    stickBottom.current = false;
+    if (!el) return;
+    // 骨架 Tab（懒加载首帧 items 还是空的）：此刻 collectNodes 读不到节点，restoreAnchor 会按「找不到」
+    // 降级贴底 —— 先跳底部再跳回锚点是白闪一下。干脆不落位：交给下面的「二次校正」等消息渲染出来一次落位。
+    if (collectNodes(el).length === 0) return;
+    anchorHit.current = restoreAnchor(el, anchor);
+    markProgScroll(el);
+    if (anchorHit.current) syncFollowState(el); // 落在底部附近就当贴底跟随，否则显示「回到底部」
   }, [activeKey]);
+
+  // 二次校正（懒加载）：Tab 刚加载完的首帧布局未稳定（items 从空变为有内容），锚点还原会偏 ——
+  // 依赖 lastLen（items.length）：内容就绪时重跑，并在接下来的帧里重定位到命中为止。
+  // 幂等与有界：命中或取消（切 Tab / 用户接管）即停；每轮最多 3 帧，既不会逐帧重设 scrollTop（抖动），
+  // 也不会因自身触发的重渲染而自激成死循环。
+  useEffect(() => {
+    const anchor = pendingAnchor.current;
+    const el = scroller.current;
+    if (!anchor || !el) return;
+    if (collectNodes(el).length === 0) return; // 消息节点尚未渲染：等 items.length 变化的下一轮
+    let tries = 0;
+    let raf = requestAnimationFrame(function settle() {
+      if (pendingAnchor.current !== anchor) return; // 已取消（切 Tab / 用户接管滚动）
+      if (useSessions.getState().activeKey !== anchorSid.current) return; // 已切走：不把位置写到别的会话
+      const hit = restoreAnchor(el, anchor);
+      markProgScroll(el);
+      if (hit) {
+        anchorHit.current = true;
+        pendingAnchor.current = null;
+        syncFollowState(el);
+        return;
+      }
+      // 未命中：多为 markdown/代码块/图片尚未撑高导致布局漂移 —— 再补一帧；上限 2 次即停
+      if (++tries <= 2) {
+        raf = requestAnimationFrame(settle);
+        return;
+      }
+      pendingAnchor.current = null;
+      // 本轮激活从未命中过（锚点消息已被压缩/裁掉）⇒ 按 scrollAnchor 的约定降级贴底；
+      // 命中过则保留用户当前所见位置，不再把它拉到底部 —— 二次校正绝不能成为新的抖动源。
+      if (!anchorHit.current) {
+        stickBottom.current = true;
+        setAtBottom(true);
+        // 这条锚点再也命不中（消息被裁/被删）：就地改写成「贴底」，免得每次激活都空跑一轮无效校正
+        if (activeKey) setScrollAnchor(activeKey, { kind: "bottom" });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeKey, lastLen]);
 
   // 内容增长 / 定稿（streaming 翻转）时：贴底则跟随滚动；同时升级 katex/mermaid 占位符
   // （流式期间 diagrams 跳过 mermaid；收尾时 streamCount 变化重跑本 effect 补渲染）
@@ -222,11 +335,13 @@ export default function ChatMessages() {
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    // 滚动即记锚点（自家程序化滚动也记：跟随贴底期间记下的就是「贴底」，切回来照旧贴底）
+    recordAnchor(activeKey);
     if (Date.now() < progScroll.current) {
       if (Math.abs(el.scrollTop - progTarget.current) < 40) return; // 自家事件，豁免
       progScroll.current = 0; // 被外部打断 -> 交出控制权，按用户滚动处理
     }
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const nearBottom = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
     stickBottom.current = nearBottom;
     setAtBottom(nearBottom);
   };
@@ -250,21 +365,44 @@ export default function ChatMessages() {
   }
 
   const renderItem = (item: UiItem, i: number) => {
+    // 锚点指纹：scrollAnchor.collectNodes 按 data-sig（主）+ data-idx（精确提示）收集可锚定节点；
+    // sig 是字符串，memo 组件按值比较不受影响（不传对象，避免身份每次变化击穿 memo）。
+    const anchorSig = itemSig(item);
     if (item.kind === "user") {
-      return <UserMessage key={i} text={item.text} createdAt={item.createdAt} images={item.images} />;
+      return (
+        <UserMessage
+          key={i}
+          text={item.text}
+          createdAt={item.createdAt}
+          images={item.images}
+          anchorSig={anchorSig}
+          anchorIdx={i}
+        />
+      );
     }
     if (item.kind === "assistant") {
-      return <AssistantMessage key={i} item={item} streaming={item.streaming} onUserToggle={suspendFollow} />;
+      return (
+        <AssistantMessage
+          key={i}
+          item={item}
+          streaming={item.streaming}
+          onUserToggle={suspendFollow}
+          anchorSig={anchorSig}
+          anchorIdx={i}
+        />
+      );
     }
     if (item.kind === "sub") {
       return <SubagentItemCard key={item.subId} subId={item.subId} />;
     }
     if (item.kind === "notice") {
       return (
-        <div key={i} className="notice-line dim" style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
+        <div key={i} className="notice-line dim" data-sig={anchorSig} data-idx={i} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
       );
     }
     if (item.kind === "error") {
+      // 错误行不打锚点标：antd Alert 的 props 类型不透传 data-*（AlertProps 无 HTMLAttributes 兜底），
+      // collectNodes 会自然跳过它并把锚点落到上一条已标注消息上 —— 位置仍然正确。
       // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：鉴权/计费失败指向 provider 设置而非死胡同报错；
       // 修复回路 = 指引 + 一次点击，绝不自动弹模态框
       const hintKey =

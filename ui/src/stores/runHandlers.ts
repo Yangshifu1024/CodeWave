@@ -1,4 +1,4 @@
-// 后端事件 handler 工厂 —— 27 键事件面（契约测试锚点；键名不可增删）。
+// 后端事件 handler 工厂 —— 28 键事件面（契约测试锚点；键名不可增删）。
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
@@ -361,9 +361,14 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
   };
 }
 
-/** 其他（2 键）：MCP 连接状态 upsert；service 工具卡尾迹/退出反映 */
+/** 其他（3 键）：MCP 连接状态 upsert；service 工具卡尾迹/退出反映；退出拦截请求 */
 export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
   return {
+    // 退出拦截（会话保存与恢复优化 · 批1）：后端在 ExitRequested 下不可退，
+    // 下发在跑的会话列表问询处置方式；这里只落到 ui store，弹窗由 AppShell 唯一渲染
+    "app:exit_requested": (p) => {
+      useUi.setState({ exitRequest: { running: Array.isArray(p?.running) ? p.running : [] } });
+    },
     "mcp:status": (p) => {
       // 按 name upsert，绝不累积重复项
       useUi.setState((s) => {

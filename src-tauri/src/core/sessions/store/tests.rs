@@ -12,6 +12,8 @@ use super::*;
             message_count: 0,
             project_id: None,
             roots: vec!["/ws".into()],
+            running: false,
+            interrupted: None,
         }
     }
 
@@ -148,6 +150,8 @@ use super::*;
                     message_count: 0,
                     project_id: None,
                     roots: vec!["/ws".into()],
+                    running: false,
+                    interrupted: None,
                 })
                 .unwrap();
         }
@@ -281,6 +285,107 @@ use super::*;
             .append_artifact("bad", "/ws/a.md", ArtifactOp::Create)
             .unwrap();
         assert_eq!(store.load_artifacts("bad").len(), 1);
+    }
+
+    /// 批1：`running` 标记落盘后不被检查点（upsert_meta）抹掉；新会话首次 upsert 会带上内存里的 running。
+    #[test]
+    fn mark_running_survives_checkpoint_and_covers_unindexed_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+
+        // 尚未入索引的新会话：先记内存集合（返回 false = 索引无此条目）
+        assert!(!store.mark_running("new-1", true).unwrap());
+        // 首次检查点：新条目必须带上 running=true（否则首次 run 崩溃后无从标记）
+        store
+            .save_history("new-1", "t", ".", None, None, &["/ws".into()], &[Message::user_text("x")])
+            .unwrap();
+        assert!(store.get("new-1").unwrap().running);
+        assert_eq!(store.running_ids(), vec!["new-1".to_string()]);
+
+        // 再次检查点不得抹掉标记
+        store
+            .save_history("new-1", "t", ".", None, None, &["/ws".into()], &[Message::user_text("y")])
+            .unwrap();
+        assert!(store.get("new-1").unwrap().running);
+
+        // 收尾清除
+        assert!(store.mark_running("new-1", false).unwrap());
+        assert!(!store.get("new-1").unwrap().running);
+        assert!(store.running_ids().is_empty());
+        // 重复清除幂等
+        assert!(store.mark_running("new-1", false).unwrap());
+        assert!(!store.get("new-1").unwrap().running);
+    }
+
+    /// 批1：中断标记写入 / 清除 / 幂等；检查点不抹掉既有标记。
+    #[test]
+    fn interrupted_mark_write_clear_and_checkpoint_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.upsert_meta(meta("s1")).unwrap();
+        let at = now();
+        assert!(store.mark_interrupted("s1", "crash", &at).unwrap());
+        let m = store.get("s1").unwrap();
+        assert_eq!(
+            m.interrupted.as_ref().map(|i| (i.kind.as_str(), i.at.as_str())),
+            Some(("crash", at.as_str()))
+        );
+        // 检查点保留标记（否则重启后中断痕迹会消失）
+        store
+            .save_history("s1", "t", ".", None, None, &["/ws".into()], &[Message::user_text("x")])
+            .unwrap();
+        assert_eq!(store.get("s1").unwrap().interrupted.unwrap().kind, "crash");
+        // 前端已读/续跑后清除
+        assert!(store.clear_interrupted("s1").unwrap());
+        assert!(store.get("s1").unwrap().interrupted.is_none());
+        assert!(store.clear_interrupted("s1").unwrap());
+        // 缺席会话：不凭空造条目
+        assert!(!store.mark_interrupted("ghost", "quit", &at).unwrap());
+        assert!(!store.clear_interrupted("ghost").unwrap());
+        assert!(store.get("ghost").is_none());
+    }
+
+    /// 批1：批量中断标记（崩溃/退出收尾）一次完成置标记 + 清 running，缺席会话跳过。
+    #[test]
+    fn batch_interrupt_marks_and_clears_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.upsert_meta(meta("a")).unwrap();
+        store.upsert_meta(meta("b")).unwrap();
+        store.mark_running("a", true).unwrap();
+        store.mark_running("b", true).unwrap();
+        let n = store.mark_interrupted_batch(
+            &["a".to_string(), "b".to_string(), "ghost".to_string()],
+            "quit",
+            &now(),
+        );
+        assert_eq!(n, 2);
+        for id in ["a", "b"] {
+            let m = store.get(id).unwrap();
+            assert!(!m.running);
+            assert_eq!(m.interrupted.unwrap().kind, "quit");
+        }
+        assert!(store.running_ids().is_empty());
+        // 空列表直接返回 0（不产生索引写）
+        assert_eq!(store.mark_interrupted_batch(&[], "quit", &now()), 0);
+    }
+
+    /// 批1：旧 index.json 无反序列化失败（serde default 向前兼容：running 回 false、interrupted 回 None）。
+    #[test]
+    fn legacy_index_without_mark_fields_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        std::fs::write(
+            dir.path().join("sessions/index.json"),
+            br#"{"version":1,"sessions":[{"id":"old-1","title":"t","workspace":".","created_at":"2026-01-01T00:00:00+00:00","updated_at":"2026-01-01T00:00:00+00:00"}]}"#,
+        )
+        .unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let m = store.get("old-1").expect("旧索引必须仍可读");
+        assert!(!m.running);
+        assert!(m.interrupted.is_none());
+        // 不含标记字段的旧文件不会被误判为损坏
+        assert!(!dir.path().join("sessions/index.json.corrupt").exists());
     }
 
     fn now() -> String {

@@ -182,9 +182,20 @@ pub async fn start_chat(
     let rt = core
         .session(&session_id)
         .ok_or_else(|| "会话不存在，请先创建会话".to_string())?;
-    channels.map.insert(session_id, on_event);
-    core.start_chat(rt, text, images.unwrap_or_default())
-        .map_err(err)
+    channels.map.insert(session_id.clone(), on_event);
+    let run_id = core
+        .start_chat(rt.clone(), text, images.unwrap_or_default())
+        .map_err(err)?;
+    // 批1：run 起点落 running 标记（崩溃恢复据此判定上次未正常收尾的会话）。
+    // run 可能在落盘前就已收尾（极快的失败/取消）：按内存标志补一次清除，避免留下永久 running。
+    if let Err(e) = core.store.mark_running(&session_id, true) {
+        tracing::warn!("会话 {session_id} running 标记落盘失败：{e}");
+    } else if !rt.running.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Err(e) = core.store.mark_running(&session_id, false) {
+            tracing::warn!("会话 {session_id} running 标记回补失败：{e}");
+        }
+    }
+    Ok(run_id)
 }
 
 /// 会话级运行偏好（权限档/模型/推理力度；全量替换，前端为准）。
@@ -231,6 +242,13 @@ pub async fn session_running(core: Core<'_>, session_id: String) -> Result<bool,
         .session(&session_id)
         .map(|rt| rt.running.load(std::sync::atomic::Ordering::SeqCst))
         .unwrap_or(false))
+}
+
+/// 清除会话中断标记（批1）：前端「已读 / 续跑」后调用，幂等；会话不存在时静默成功。
+#[tauri::command]
+pub async fn clear_session_interrupt(core: Core<'_>, session_id: String) -> Result<(), String> {
+    core.store.clear_interrupted(&session_id).map_err(err)?;
+    Ok(())
 }
 
 /// 运行中注入用户消息（不打断当前回合，下一轮生效）。

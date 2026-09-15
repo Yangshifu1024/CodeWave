@@ -162,6 +162,10 @@ export interface SessionMeta {
   project_id: string | null;
   /** 创建时固化的全部可读写根目录快照（含主目录） */
   roots: string[];
+  /** 后端视角是否有任务正在运行（退出拦截与列表运行 spinner 的真值源） */
+  running: boolean;
+  /** 上次运行被中断的标记（崩溃 = crash / 正常退出前中止 = quit；null = 无中断）；清除走 clear_session_interrupt */
+  interrupted: { kind: "crash" | "quit"; at: string } | null;
 }
 
 /** 具名项目：名称 + 项目主目录（单目录语义）；

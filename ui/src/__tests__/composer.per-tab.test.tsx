@@ -1,6 +1,6 @@
 // Composer 草稿按 Tab 隔离（drafts 平行分桶，key 同 tabs）：切会话各自保留、发送只清发送方 Tab、
-// 关 Tab 草稿随 dispose 丢弃、切 Tab 收起提及菜单、编辑回填（队列编辑/消息修改）只落目标 Tab、
-// ask 覆盖恢复草稿、队列出队不触碰草稿。
+// 关 Tab 有未发送内容时先进二次确认（丢弃 = 随 dispose 丢弃 / 保留 = 进驻留表待重开回填）、切 Tab 收起提及菜单、
+// 编辑回填（队列编辑/消息修改）只落目标 Tab、ask 覆盖恢复草稿、队列出队不触碰草稿。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -32,6 +32,8 @@ import { useSessions } from "../stores/sessions";
 import { useRun, type PendingImage } from "../stores/run";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
+// 关 Tab 二次确认的两条分支真值在 uiState 驻留表：keep 分支断言必须走真实回填路径，不另造桩
+import { applyRetainedContent, reset as resetUiState } from "../utils/uiState";
 
 const MODEL_BASE = {
   id: "m1", model: "test-model", max_tokens: 32768, context_window: 128000,
@@ -118,10 +120,11 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   // zustand module-level singletons: clear leftovers (panel toggles + tabs/config + run tabs & drafts)
-  useUi.setState({ settingsOpen: false, tasksOpen: false, statsOpen: false, rbTab: "info" });
+  useUi.setState({ settingsOpen: false, tasksOpen: false, statsOpen: false, rbTab: "info", closeTabRequest: null });
   useSessions.setState({ tabs: [], activeKey: null, projects: [], sessions: [] });
   useSettings.setState({ config: null, loaded: false });
   useRun.setState({ tabs: {}, drafts: {} });
+  resetUiState(); // 清驻留表与落盘防抖计时器（关 Tab keep 分支会写模块级内存态）
   vi.clearAllMocks();
 });
 
@@ -168,7 +171,7 @@ describe("Composer 草稿按 Tab 隔离", () => {
     expect(useRun.getState().drafts["s2"]!.text).toBe("草稿 B"); // s2 原样
   });
 
-  it("D4 关 Tab 草稿随 dispose 丢弃：closeTab 删平行桶，重开会话草稿为空", () => {
+  it("D4 关 Tab 有未发送内容 → 先进确认态且 Tab 仍在；选「丢弃」草稿随 dispose 丢弃，重开为空", () => {
     seedTwoTabs();
     act(() => {
       useRun.getState().setDraftText("将被丢弃");
@@ -176,12 +179,68 @@ describe("Composer 草稿按 Tab 隔离", () => {
     act(() => {
       useSessions.getState().closeTab("s1");
     });
+    // 批1 新语义：草稿未发出时不直接关，置确认请求交 AppShell 弹窗；Tab 与草稿都原样留着等用户选
+    expect(useUi.getState().closeTabRequest).toBe("s1");
+    expect(useSessions.getState().tabs.map((t) => t.key)).toContain("s1");
+    expect(useRun.getState().drafts["s1"]!.text).toBe("将被丢弃");
+
+    act(() => {
+      useSessions.getState().resolveCloseTab("s1", "discard");
+    });
+    expect(useUi.getState().closeTabRequest).toBeNull(); // 确认请求随应答收尾
+    expect(useSessions.getState().tabs.map((t) => t.key)).not.toContain("s1");
     expect(useRun.getState().tabs["s1"]).toBeUndefined();
     expect(useRun.getState().drafts["s1"]).toBeUndefined();
     act(() => {
       useRun.getState().initTab("s1"); // 模拟重开会话（草稿桶惰性创建）
     });
-    expect(useRun.getState().drafts["s1"]).toBeUndefined(); // 回退共享空草稿，composer 为空
+    expect(useRun.getState().drafts["s1"]).toBeUndefined(); // 丢弃不留驻留内容：回退共享空草稿，composer 为空
+  });
+
+  it("D4b 关 Tab 选「保留」：Tab 关闭、内存桶已删，重开该会话草稿原样回填", () => {
+    seedTwoTabs();
+    act(() => {
+      useRun.getState().setDraftText("保留我");
+    });
+    act(() => {
+      useSessions.getState().closeTab("s1");
+    });
+    act(() => {
+      useSessions.getState().resolveCloseTab("s1", "keep");
+    });
+    expect(useSessions.getState().tabs.map((t) => t.key)).not.toContain("s1");
+    expect(useRun.getState().drafts["s1"]).toBeUndefined(); // dispose 已删平行桶，内容只在驻留表里
+
+    // 重开会话的真实回填路径（sessions.openSession 在拉消息前先调它）
+    act(() => {
+      applyRetainedContent("s1");
+    });
+    expect(useRun.getState().drafts["s1"]!.text).toBe("保留我");
+    expect(useRun.getState().tabs["s1"]).toBeTruthy();
+  });
+
+  it("D4c 无未发送内容时 closeTab 直接关闭（老路径不回归）", () => {
+    seedTwoTabs();
+    act(() => {
+      useSessions.getState().closeTab("s2");
+    });
+    expect(useUi.getState().closeTabRequest).toBeNull();
+    expect(useSessions.getState().tabs.map((t) => t.key)).toEqual(["s1"]);
+    expect(useRun.getState().tabs["s2"]).toBeUndefined();
+  });
+
+  it("D4d 只有前端队列（无草稿）也算未发送内容 → 同样进确认态", () => {
+    seedTwoTabs();
+    act(() => {
+      useRun.setState((s) => {
+        s.tabs["s2"]!.queue = [{ id: "q1", text: "排队中" }];
+      });
+    });
+    act(() => {
+      useSessions.getState().closeTab("s2");
+    });
+    expect(useUi.getState().closeTabRequest).toBe("s2");
+    expect(useSessions.getState().tabs.map((t) => t.key)).toEqual(["s1", "s2"]);
   });
 
   it("D5 切 Tab 收起提及菜单：@ 候选不残留进新会话", async () => {
