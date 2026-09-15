@@ -78,6 +78,80 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
         let mut sorted = t1.clone();
         sorted.sort();
         assert_eq!(t1, sorted, "工具列表必须按名排序");
+        // 消息数组同样必须逐字节稳定：本轮新增的出网副本 repair 是唯一可能每步改写消息
+        // 数组的逻辑（repair 幂等 ⇒ 副本 = f(history) 确定），否则每步都打穿前缀缓存
+        assert_eq!(
+            serde_json::to_string(&r1.messages).unwrap(),
+            serde_json::to_string(&r2.messages).unwrap(),
+            "messages 必须逐字节稳定（prompt cache 前缀）"
+        );
+    }
+
+    /// 缺陷修复回归：脏历史（悬空 tool_use + 空 assistant + 孤儿 tool_result）下，
+    /// 出网副本的修复必须幂等——连续两次构建的 messages 逐字节相等。
+    #[tokio::test]
+    async fn dirty_history_messages_stay_byte_stable() {
+        let roots = test_roots();
+        let core = test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "cache-dirty",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        {
+            let mut h = rt.history.lock().unwrap();
+            h.push(Message::user_text("q"));
+            // 悬空 tool_use：无对应结果
+            h.push(Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "read".into(),
+                    args: serde_json::json!({ "files": [] }),
+                }],
+                created_at: None,
+            });
+            h.push(Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            });
+            // 孤儿 tool_result：无对应 tool_use
+            h.push(Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "ghost".into(),
+                content: "o".into(),
+                is_error: false,
+            }]));
+        }
+        let params = DriveParams::default();
+        let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
+        let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
+        assert_eq!(
+            serde_json::to_string(&r1.messages).unwrap(),
+            serde_json::to_string(&r2.messages).unwrap(),
+            "脏历史修复必须幂等（否则每步打穿前缀缓存）"
+        );
+        assert!(
+            r1.messages
+                .iter()
+                .all(|m| !(m.role == Role::Assistant && m.content.is_empty())),
+            "出网副本不得含空 assistant 消息"
+        );
+        // 悬空 tool_use 在副本上被补 [interrupted] 结果
+        let answered: Vec<&str> = r1
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(answered.contains(&"t1"));
+        assert!(!answered.contains(&"ghost"));
     }
 
     #[tokio::test]
@@ -597,6 +671,56 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
         }
+    }
+
+    /// 缺陷修复（会话 d9941c4b 的 400 根因之一）：BadRequest 后 sanitize/repair 只改写
+    /// `rt.history`，若请求体不重建，重试发出的 body 与首次相同 → 必然复现同一个 400。
+    /// 本用例锚定「重建后 req.messages 取自当前（已修复的）历史，且已不含空 assistant」。
+    #[tokio::test]
+    async fn refresh_request_messages_rewrites_body_from_repaired_history() {
+        let roots = test_roots();
+        let core = test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "fix-refresh",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        // 历史进入待重试状态：一条脏结构（空 assistant 消息）
+        rt.history.lock().unwrap().push(Message::user_text("q"));
+        rt.history.lock().unwrap().push(Message {
+            role: Role::Assistant,
+            content: Vec::new(),
+            created_at: None,
+        });
+        let mut req = crate::provider::dto::StreamRequest {
+            model: crate::core::config::ModelConfig::default(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            messages: vec![Message::user_text("stale")], // 构建时快照
+            tools: vec![],
+            cache_key: None,
+            cache_gen_index: None,
+            reasoning_effort: None,
+            session_id: None,
+        };
+        super::stream::refresh_request_messages(&rt, &mut req);
+        // 不再是构建时那份陈旧快照（仅含 "stale"）
+        assert!(
+            !matches!(&req.messages[0].content[0], Content::Text { text } if text == "stale"),
+            "请求体必须重建，不能沿用构建时的快照"
+        );
+        // 取自当前历史：脏结构（空 assistant）已被 repair 剔除
+        assert_eq!(req.messages.len(), 1, "空 assistant 消息应在重建时被清理");
+        assert!(matches!(&req.messages[0].content[0], Content::Text { text } if text == "q"));
+        assert!(
+            req.messages
+                .iter()
+                .all(|m| !(m.role == Role::Assistant && m.content.is_empty())),
+            "重建后的请求体不得含空 assistant 消息"
+        );
     }
 
     /// checkpoint 不把子代理 runtime 写进主索引/主历史：过程历史由 save_sub_history
