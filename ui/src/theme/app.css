@@ -242,7 +242,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
-.menu { display: flex; flex-direction: column; gap: 2px; min-width: 260px; }
+/* 菜单宽度上限（[docs/slash-skills-and-dollar-agents]）：Composer 以 ResizeObserver 实测输入卡片宽度
+   注入 maxWidth；此处的 calc 兜底保证首帧/测量失败时不撑出视口。left 对齐卡片左边缘（.composer 有 16px 外边距） */
+.menu { display: flex; flex-direction: column; gap: 2px; min-width: 260px; margin-left: 16px; max-width: calc(100vw - 40px); }
 /* 技能详情弹层（composer / 菜单点击项弹出）：正文区限高滚动，markdown 走 .md 渲染 */
 .skill-detail .skill-body {
   max-height: 50vh; overflow: auto; margin: 8px 0 0;
@@ -251,6 +253,15 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .skill-detail .skill-origin { font-size: 12px; color: var(--ws-dim); }
 /* 键盘导航高亮（↑↓ 移动，Enter/Tab 选中；与悬停同步） */
 .menu .menu-item.active { background: var(--ws-hover); }
+/* 条目长文本换行（技能/提及/子代理菜单共用）：antd Button 默认 nowrap + 固定行高，
+   长 description 会把弹层撑宽——这里改为高度自适应、文本左对齐，描述占满剩余宽度并可任意断行 */
+.menu .menu-item {
+  height: auto; min-height: 24px; padding: 2px 6px;
+  white-space: normal; text-align: left;
+}
+.menu .menu-item code { flex: none; }
+.menu .menu-item .dim { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 18px; }
+.menu .menu-item > span { min-width: 0; }
 .composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 16px 6px; }
 /* 卡片式输入（[docs/composer-toolbar-batch-report](../../../docs/docs/composer-toolbar-batch-report.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
 .composer .composer-card {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { App, BorderBeam, Button, Dropdown, Image, Input, Popover } from "antd";
 import type { MenuProps } from "antd";
 import {
@@ -64,6 +64,9 @@ export default function Composer() {
   // 单看 nativeEvent.isComposing 不够——经 composition 事件自行维护真值。
   const composingRef = useRef(false);
   const taRef = useRef<any>(null);
+  // / @ $ 菜单的宽度上限来源：输入卡片实测宽度（长 description 不再撑出视口，见下方 menuStyle）
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [menuWidth, setMenuWidth] = useState(0);
 
   // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
   const attachments = useComposerAttachments({ t, message, images: draft.images, setImages: setDraftImages });
@@ -302,7 +305,20 @@ export default function Composer() {
   const hasDraft = !!text.trim();
   const stopActive = active.running && !hasDraft;
 
-  const menuStyle = { maxHeight: 320, overflowY: "auto" } as const;
+  // 菜单宽度上限 = 输入卡片实测宽度（技能 description 过长时不再撑破视口，与聊天框宽度一致）；
+  // ResizeObserver 覆盖窗口缩放、侧栏宽度变化等一切来源（不依赖 window resize）；
+  // ask 态卡片卸载、恢复后依赖变化重测
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const sync = () => setMenuWidth(el.getBoundingClientRect().width);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [askActive]);
+
+  const menuStyle = { maxHeight: 320, overflowY: "auto", maxWidth: menuWidth || undefined } as const;
 
   // ---------- 下拉菜单 ----------
 
@@ -542,7 +558,7 @@ export default function Composer() {
           color="var(--ws-accent)"
           className={beamActive ? undefined : "composer-beam-idle"}
         >
-          <div className="composer-card">
+          <div className="composer-card" ref={cardRef}>
           {images.length > 0 && (
             <div className="composer-attachments">
               {/* 缩略图点击打开大图预览（多图可切换），与会话内已发送图片同一交互；
