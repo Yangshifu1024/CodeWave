@@ -431,27 +431,41 @@ describe("App 渲染冒烟", () => {
   });
 
   it("Composer：/ 触发技能菜单（命令入口已移除），占位符渲染", async () => {
-    // Composer is hidden with no session → seed an active session (store is a module-level singleton; avoid clicking the guide to prevent leftovers)
-    useSessions.setState({
-      tabs: [{
-        key: "s-seed", sessionId: "s-seed", workspace: "/tmp/ws", title: "种子会话",
-        projectId: null, createdAt: "2026-08-30T00:00:00Z",
-        prefs: { approval_mode: "auto_edit", model_id: null, reasoning_effort: null },
-      }],
-      activeKey: "s-seed",
+    // happy-dom 布局尺寸恒为 0 → 给 .composer-card 显式宽度，用于断言菜单宽度上限跟随输入卡片
+    const origRect = Element.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const r = origRect.call(this);
+      return this instanceof HTMLElement && this.classList.contains("composer-card")
+        ? ({ ...r, width: 640, right: 640 } as unknown as DOMRect)
+        : r;
     });
-    await mountApp();
-    // Note: rc-textarea renders hidden mirror nodes; locate the visible input by placeholder
-    const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
-    expect(textarea).toBeTruthy();
-    fireEvent.change(textarea, { target: { value: "/" } });
-    // 菜单只列技能（list_skills mock）：/demo 在列，且旧命令项不再出现
-    await waitFor(() => expect(document.body.textContent ?? "").toContain("/demo"));
-    const text = document.body.textContent ?? "";
-    expect(text).not.toContain("压缩上下文");
-    expect(text).not.toContain("Git 状态");
-  });
-});
+    try {
+      // Composer is hidden with no session → seed an active session (store is a module-level singleton; avoid clicking the guide to prevent leftovers)
+      useSessions.setState({
+        tabs: [{
+          key: "s-seed", sessionId: "s-seed", workspace: "/tmp/ws", title: "种子会话",
+          projectId: null, createdAt: "2026-08-30T00:00:00Z",
+          prefs: { approval_mode: "auto_edit", model_id: null, reasoning_effort: null },
+        }],
+        activeKey: "s-seed",
+      });
+      await mountApp();
+      // Note: rc-textarea renders hidden mirror nodes; locate the visible input by placeholder
+      const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
+      expect(textarea).toBeTruthy();
+      fireEvent.change(textarea, { target: { value: "/" } });
+      // 菜单只列技能（list_skills mock）：/demo 在列，且旧命令项不再出现
+      await waitFor(() => expect(document.body.textContent ?? "").toContain("/demo"));
+      // 菜单宽度上限 = 输入卡片实测宽度（长 description 不再撑出视口）
+      const menu = document.querySelector(".menu") as HTMLElement | null;
+      expect(menu?.style.maxWidth).toBe("640px");
+      const text = document.body.textContent ?? "";
+      expect(text).not.toContain("压缩上下文");
+      expect(text).not.toContain("Git 状态");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });});
 
 describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
   const DEFAULT_PREFS: import("../ipc/types").SessionPrefs = {
