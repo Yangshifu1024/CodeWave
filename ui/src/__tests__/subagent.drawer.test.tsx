@@ -185,6 +185,7 @@ describe("Composer 子代理运行指示器（docs/subagent-interaction-drawer�
             id: "m1", model: "test-model", max_tokens: 32768, context_window: 128000,
             reasoning_effort: null, vision: true, video: false,
           }],
+          headers: [],
         }],
         active_model_id: "m1",
         proxy: null,

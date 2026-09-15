@@ -333,6 +333,7 @@ pub async fn stream(
 ) -> Result<RunUsage, ProviderError> {
     let key = key.filter(|k| !k.is_empty()).unwrap_or_default();
     let url = format!("{}/v1/messages", model.base_url.trim_end_matches('/'));
+    let session_id = req.session_id.clone();
     let body = build_body(&req);
 
     let mut req = client
@@ -342,6 +343,8 @@ pub async fn stream(
     if !key.is_empty() {
         req = req.header("x-api-key", &key);
     }
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    req = crate::provider::headers::apply_request_headers(req, &model.headers, session_id.as_deref());
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Err(ProviderError::Cancelled),
         r = req.json(&body).send() => r.map_err(|e| ProviderError::Network(e.to_string()))?,
@@ -507,6 +510,7 @@ mod tests {
             tools: vec![],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = build_body(&req);
         let msgs = body["messages"].as_array().unwrap();
@@ -548,6 +552,7 @@ mod tests {
             }],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = build_body(&req);
         assert_eq!(body["max_tokens"], 4096);
@@ -593,6 +598,7 @@ mod tests {
             tools: vec![],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = build_body(&req);
         let system = body["system"].as_array().unwrap();
@@ -657,6 +663,7 @@ mod tests {
             tools: vec![],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = build_body(&req);
         assert!(
@@ -689,6 +696,7 @@ mod tests {
             tools: vec![],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = build_body(&req);
         assert!(
@@ -726,6 +734,7 @@ mod tests {
             tools: vec![],
             cache_key: None,
             reasoning_effort: Some(crate::core::prefs::EffortLevel::Max),
+            session_id: None,
         };
         let body = build_body(&req);
         assert_eq!(body["thinking"]["type"], "enabled");

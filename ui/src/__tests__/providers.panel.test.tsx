@@ -5,7 +5,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { useState } from "react";
 import AntApp from "antd/es/app";
 import "../i18n"; // Component mounted standalone must init i18next explicitly (no global entry outside App.tsx)
-import ProvidersPanel from "../features/panels/ProvidersPanel";
+import ProvidersPanel, { validateProvider } from "../features/panels/ProvidersPanel";
 import type { ConfigState, ProviderConfig } from "../ipc/types";
 
 function makeConfig(providers: ProviderConfig[], active_model_id: string | null): ConfigState {
@@ -153,6 +153,7 @@ describe("ProvidersPanel 供应商管理", () => {
       models: [
         { id: "m1", model: "model-a", max_tokens: 8192, context_window: 128000, reasoning_effort: null, vision: false, video: false },
       ],
+      headers: [],
     };
     render(<Harness initial={makeConfig([provider], "m1")} />);
     fireEvent.click(buttonByText("编辑供应商"));
@@ -208,6 +209,7 @@ describe("ProvidersPanel 供应商管理", () => {
         { id: "m1", model: "model-a", max_tokens: 32768, context_window: 128000, reasoning_effort: null, vision: false, video: false },
         { id: "m2", model: "model-b", max_tokens: 32768, context_window: 128000, reasoning_effort: null, vision: false, video: false },
       ],
+      headers: [],
     };
     render(<Harness initial={makeConfig([provider], "m2")} />);
     fireEvent.click(buttonByText("编辑供应商"));
@@ -229,6 +231,7 @@ describe("ProvidersPanel 供应商管理", () => {
       models: [
         { id: "m1", model: "model-a", max_tokens: 32768, context_window: 128000, reasoning_effort: null, vision: false, video: false },
       ],
+      headers: [],
     };
     render(<Harness initial={makeConfig([provider], "m1")} />);
     // Delete button on the list row (danger button, no text)
@@ -236,5 +239,67 @@ describe("ProvidersPanel 供应商管理", () => {
     await confirmPopconfirm(del);
     expect(latest!.providers).toHaveLength(0);
     expect(latest!.active_model_id).toBeNull();
+  });
+
+  it("自定义请求头（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：编辑既有头、添加行入 draft、保留名实时红字拦截", async () => {
+    const provider: ProviderConfig = {
+      id: "p1", name: "P1", api_format: "openai_chat",
+      base_url: "https://a.example/v1", keys: ["sk-x"],
+      models: [
+        { id: "m1", model: "model-a", max_tokens: 32768, context_window: 128000, reasoning_effort: null, vision: false, video: false },
+      ],
+      headers: [{ name: "x-opencode-session", value: "${session_id}" }],
+    };
+    render(<Harness initial={makeConfig([provider], "m1")} />);
+    fireEvent.click(buttonByText("编辑供应商"));
+    await new Promise((r) => setTimeout(r, 60));
+    // 既有头回显
+    expect((screen.getByDisplayValue("x-opencode-session") as HTMLInputElement).value).toBe("x-opencode-session");
+    expect((screen.getByDisplayValue("${session_id}") as HTMLInputElement).value).toBe("${session_id}");
+    // 添加一行并填入保留名 → 实时红字
+    fireEvent.click(buttonByText("添加请求头"));
+    await new Promise((r) => setTimeout(r, 60));
+    const blankName = screen.getAllByPlaceholderText("x-opencode-session").at(-1) as HTMLInputElement;
+    fireEvent.change(blankName, { target: { value: "Authorization" } });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.body.textContent ?? "").toContain("保留名");
+    // 改为合法名 → 校验通过、随 draft 持久（antd 错误节点离场动画在 happy-dom 不回收，故以校验结果为准）
+    fireEvent.change(blankName, { target: { value: "x-custom" } });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(validateProvider(latest!.providers[0]).some((i) => i.field === "headers")).toBe(false);
+    expect(latest!.providers[0].headers.map((h) => h.name)).toEqual(["x-opencode-session", "x-custom"]);
+  });
+});
+
+describe("validateProvider 自定义请求头校验（docs/provider-custom-headers）", () => {
+  function makeProvider(headers: { name: string; value: string }[]): ProviderConfig {
+    return {
+      id: "p1", name: "P1", api_format: "openai_chat",
+      base_url: "https://a.example/v1", keys: ["sk-x"],
+      models: [
+        { id: "m1", model: "model-a", max_tokens: 32768, context_window: 128000, reasoning_effort: null, vision: false, video: false },
+      ],
+      headers,
+    };
+  }
+
+  it("头值含非 ASCII（如中文）→ 标记 headers 问题（与后端 HeaderValue::from_str 对齐）", () => {
+    const issues = validateProvider(makeProvider([{ name: "x-custom", value: "值" }]));
+    expect(issues.some((i) => i.field === "headers")).toBe(true);
+  });
+
+  it("头值含 CRLF → 标记 headers 问题", () => {
+    const issues = validateProvider(makeProvider([{ name: "x-custom", value: "a\r\nb" }]));
+    expect(issues.some((i) => i.field === "headers")).toBe(true);
+  });
+
+  it("整行全空的占位行 → 不标记 headers 问题", () => {
+    const issues = validateProvider(makeProvider([{ name: "", value: "" }]));
+    expect(issues.some((i) => i.field === "headers")).toBe(false);
+  });
+
+  it("既有合法行（含 ${session_id} 模板）→ 不标记 headers 问题", () => {
+    const issues = validateProvider(makeProvider([{ name: "x-opencode-session", value: "${session_id}" }]));
+    expect(issues.some((i) => i.field === "headers")).toBe(false);
   });
 });

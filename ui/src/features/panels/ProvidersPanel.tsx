@@ -8,7 +8,7 @@ import {
   LockOutlined, PlusOutlined, VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import type { ApiFormat, ConfigState, ProviderConfig, ProviderModel } from "../../ipc/types";
+import type { ApiFormat, ConfigState, HeaderPair, ProviderConfig, ProviderModel } from "../../ipc/types";
 
 const API_FORMAT_OPTIONS: { label: string; value: ApiFormat }[] = [
   { label: "OpenAI Chat（兼容 Ollama/DeepSeek/one-api 等）", value: "openai_chat" },
@@ -35,6 +35,7 @@ function blankProvider(): ProviderConfig {
     base_url: "",
     keys: [],
     models: [],
+    headers: [],
   };
 }
 
@@ -57,9 +58,31 @@ function firstModelId(providers: ProviderConfig[]): string | null {
 
 /** 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：返回结构化问题项；措辞由调用方 i18n 化。
  *  API 格式是带默认值的 Select，结构上恒满足必填（仅保留 required 标记与位置上移）。 */
-export type ProviderFieldIssue = { field: "name" | "base_url" | "keys" | "models"; kind: "required" | "url" };
+export type ProviderFieldIssue = { field: "name" | "base_url" | "keys" | "models" | "headers"; kind: "required" | "url" | "header" };
 
-/** 校验单个供应商配置：名称/Base URL 必填 + URL 格式 + key 非空（掩码行算已配置）+ 模型列表非空。 */
+/** 自定义请求头保留名（小写，与后端 `RESERVED_REQUEST_HEADERS` 一致，[docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)）：不允许被覆盖。 */
+const RESERVED_HEADER_NAMES = new Set(["content-type", "authorization", "x-api-key", "anthropic-version", "host", "content-length"]);
+/** RFC 7230 token 允许集（与后端 `is_http_token` 对齐）。 */
+const HTTP_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** 校验自定义请求头：头名非空/合法 token/非保留名/无重名，头值无换行且仅可见 ASCII（与后端 `validate_request_headers` 一致，避免请求期被静默丢弃）。 */
+function validateHeaders(headers: HeaderPair[]): boolean {
+  const seen = new Set<string>();
+  for (const h of headers) {
+    const name = h.name.trim();
+    // 整行全空（刚点「添加」未填）视为待填占位，跳过；半填行按非法处理
+    if (!name && !h.value.trim()) continue;
+    if (!name || !HTTP_TOKEN_RE.test(name)) return false;
+    const lower = name.toLowerCase();
+    if (RESERVED_HEADER_NAMES.has(lower) || seen.has(lower)) return false;
+    if (/[\r\n]/.test(h.value)) return false;
+    if (!/^[\x20-\x7E]*$/.test(h.value)) return false;
+    seen.add(lower);
+  }
+  return true;
+}
+
+/** 校验单个供应商配置：名称/Base URL 必填 + URL 格式 + key 非空（掩码行算已配置）+ 模型列表非空 + 自定义请求头合法。 */
 export function validateProvider(p: ProviderConfig): ProviderFieldIssue[] {
   const issues: ProviderFieldIssue[] = [];
   if (!p.name.trim()) issues.push({ field: "name", kind: "required" });
@@ -69,6 +92,7 @@ export function validateProvider(p: ProviderConfig): ProviderFieldIssue[] {
   // 掩码行（*** 开头）视为已配置（[docs/provider-form-rules-tightened](../../../../docs/provider-form-rules-tightened.md)：API Key 必填）
   if (!p.keys.some((k) => k.trim() !== "")) issues.push({ field: "keys", kind: "required" });
   if (p.models.length === 0) issues.push({ field: "models", kind: "required" });
+  if (!validateHeaders(p.headers ?? [])) issues.push({ field: "headers", kind: "header" });
   return issues;
 }
 
@@ -239,11 +263,18 @@ function ModelListSection(props: {
 function ProviderFields(props: {
   value: ProviderConfig;
   onPatch: (patch: Partial<ProviderConfig>) => void;
-  errors?: { name?: string; base_url?: string; keys?: string; models?: string };
+  errors?: { name?: string; base_url?: string; keys?: string; models?: string; headers?: string };
   children: React.ReactNode;
 }) {
   const { value, onPatch, errors, children } = props;
   const { t } = useTranslation();
+  const headers = value.headers ?? [];
+  function patchHeader(index: number, patch: Partial<HeaderPair>) {
+    onPatch({ headers: headers.map((h, i) => (i === index ? { ...h, ...patch } : h)) });
+  }
+  function removeHeader(index: number) {
+    onPatch({ headers: headers.filter((_, i) => i !== index) });
+  }
   return (
     <>
       <Form layout="vertical">
@@ -304,6 +335,40 @@ function ProviderFields(props: {
             onChange={(e) => onPatch({ keys: e.target.value.split("\n").map((s) => s.trim()) })}
           />
         </Form.Item>
+        <Form.Item
+          label={t("settings.customHeaders")}
+          tooltip={t("settings.customHeadersHint")}
+          validateStatus={errors?.headers ? "error" : undefined}
+          help={errors?.headers}
+          style={{ marginBottom: 0, marginTop: 12 }}
+        >
+          <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+            {headers.map((h, i) => (
+              <Space.Compact key={i} style={{ width: "100%" }}>
+                <Input
+                  style={{ width: "45%" }}
+                  value={h.name}
+                  placeholder="x-opencode-session"
+                  onChange={(e) => patchHeader(i, { name: e.target.value })}
+                />
+                <Input
+                  value={h.value}
+                  placeholder="${session_id}"
+                  onChange={(e) => patchHeader(i, { value: e.target.value })}
+                />
+                <Button icon={<DeleteOutlined />} onClick={() => removeHeader(i)} />
+              </Space.Compact>
+            ))}
+            <Button
+              size="small"
+              variant="dashed"
+              icon={<PlusOutlined />}
+              onClick={() => onPatch({ headers: [...headers, { name: "", value: "" }] })}
+            >
+              {t("settings.addHeader")}
+            </Button>
+          </Space>
+        </Form.Item>
       </Form>
       <Divider style={{ margin: "16px 0 8px" }}>{t("settings.modelList")}</Divider>
       {errors?.models && (
@@ -341,19 +406,25 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
 
   const editing = view.kind === "edit" ? draft.providers.find((p) => p.id === view.providerId) : null;
 
-  /** 新增表单字段错误文本（touched / 尝试提交后显示；模型列表无输入，仅由提交尝试触发） */
-  function addFieldError(field: "name" | "base_url" | "keys" | "models"): string | undefined {
+  /** 新增表单字段错误文本（touched / 尝试提交后显示；模型列表与请求头无单列 touched，仅由提交尝试触发） */
+  function addFieldError(field: "name" | "base_url" | "keys" | "models" | "headers"): string | undefined {
     const issue = validateProvider(addForm).find((e) => e.field === field);
-    const fieldTouched = field === "models" ? false : touched[field];
+    const fieldTouched = field === "models" || field === "headers" ? false : touched[field];
     if (!issue || (!fieldTouched && !submitTried)) return undefined;
-    return issue.kind === "required" ? t("settings.vRequired") : t("settings.vBaseUrl");
+    return headerOrFieldMessage(issue.kind);
   }
 
   /** 编辑表单字段错误文本（实时显示：进入时值本就有效，只有破坏后才见红字） */
-  function editFieldError(field: "name" | "base_url" | "keys" | "models"): string | undefined {
+  function editFieldError(field: "name" | "base_url" | "keys" | "models" | "headers"): string | undefined {
     const issue = editing ? validateProvider(editing).find((e) => e.field === field) : undefined;
     if (!issue) return undefined;
-    return issue.kind === "required" ? t("settings.vRequired") : t("settings.vBaseUrl");
+    return headerOrFieldMessage(issue.kind);
+  }
+
+  function headerOrFieldMessage(kind: ProviderFieldIssue["kind"]): string {
+    if (kind === "required") return t("settings.vRequired");
+    if (kind === "header") return t("settings.vHeaders");
+    return t("settings.vBaseUrl");
   }
 
   function patchProvider(id: string, patch: Partial<ProviderConfig>) {
@@ -415,6 +486,9 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
       name: addForm.name.trim(),
       base_url: addForm.base_url.trim(),
       keys: addForm.keys.map((s) => s.trim()).filter((s) => s !== ""),
+      headers: addForm.headers
+        .filter((h) => h.name.trim() !== "" || h.value.trim() !== "")
+        .map((h) => ({ name: h.name.trim(), value: h.value.trim() })),
     };
     const providers = [...draft.providers, provider];
     patchDraft({ providers, active_model_id: draft.active_model_id ?? provider.models[0]?.id ?? null });
@@ -445,6 +519,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
             base_url: addFieldError("base_url"),
             keys: addFieldError("keys"),
             models: addFieldError("models"),
+            headers: addFieldError("headers"),
           }}
           onPatch={(patch) => {
             setAddForm((prev) => ({ ...prev, ...patch }));
@@ -497,6 +572,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
             base_url: editFieldError("base_url"),
             keys: editFieldError("keys"),
             models: editFieldError("models"),
+            headers: editFieldError("headers"),
           }}
           onPatch={(patch) => patchProvider(editing.id, patch)}
         >

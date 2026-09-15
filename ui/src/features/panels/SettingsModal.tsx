@@ -199,8 +199,9 @@ export default function SettingsModal() {
           issue.field === "name" ? t("settings.providerName")
           : issue.field === "base_url" ? t("settings.baseUrl")
           : issue.field === "keys" ? "API Key"
+          : issue.field === "headers" ? t("settings.customHeaders")
           : t("settings.modelList");
-        const errText = issue.kind === "required" ? t("settings.vRequired") : t("settings.vBaseUrl");
+        const errText = issue.kind === "required" ? t("settings.vRequired") : issue.kind === "header" ? t("settings.vHeaders") : t("settings.vBaseUrl");
         problems.push(t("settings.vProblem", { name: p.name.trim() || p.id, field: fieldLabel, err: errText }));
       }
     }
@@ -217,6 +218,10 @@ export default function SettingsModal() {
     // 编辑期间保留空行（否则回车补一个 key 会被打断）；仅在保存时过滤空行（掩码/占位行保留，后端负责解掩码）
     draft.providers.forEach((p) => {
       p.keys = p.keys.map((s) => s.trim()).filter((s) => s !== "");
+      // 自定义请求头：trim 头名，丢弃整行全空的行（[docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)）
+      p.headers = (p.headers ?? [])
+        .map((h) => ({ name: h.name.trim(), value: h.value.trim() }))
+        .filter((h) => h.name !== "");
     });
     setSaving(true);
     try {

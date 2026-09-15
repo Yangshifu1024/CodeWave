@@ -40,6 +40,8 @@ pub struct StreamRequest {
     pub cache_gen_index: Option<usize>,
     /// 请求级 reasoning effort（会话级覆盖 → 模型配置，None = 不发送；协议差异由各适配器处理）
     pub reasoning_effort: Option<crate::core::prefs::EffortLevel>,
+    /// 会话 uuid（用于自定义请求头值中 `${session_id}` 占位符替换；[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）
+    pub session_id: Option<String>,
 }
 
 impl StreamRequest {
@@ -58,6 +60,10 @@ impl StreamRequest {
     pub fn redacted_json(&self) -> String {
         let mut model = self.model.clone();
         model.keys = model.keys.iter().map(|_| "***".to_string()).collect();
+        // 自定义请求头值可能含 token（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：与 key 同等脱敏，仅保留头名
+        for h in &mut model.headers {
+            h.value = "***".to_string();
+        }
         let clone = StreamRequest {
             model,
             system_core: self.system_core.clone(),
@@ -67,6 +73,7 @@ impl StreamRequest {
             cache_key: self.cache_key.clone(),
             cache_gen_index: self.cache_gen_index,
             reasoning_effort: self.reasoning_effort,
+            session_id: self.session_id.clone(),
         };
         serde_json::to_string(&clone).unwrap_or_else(|_| "<serialize-failed>".into())
     }
@@ -379,6 +386,10 @@ mod tests {
     fn redacted_json_masks_keys() {
         let model = crate::core::config::ModelConfig {
             keys: vec!["sk-plaintext-SECRET-1".into(), "sk-plaintext-SECRET-2".into()],
+            headers: vec![crate::core::config::HeaderPair {
+                name: "x-auth-token".into(),
+                value: "header-SECRET-3".into(),
+            }],
             ..Default::default()
         };
         let req = StreamRequest {
@@ -390,13 +401,22 @@ mod tests {
             cache_key: None,
             cache_gen_index: None,
             reasoning_effort: None,
+            session_id: None,
         };
         let body = req.redacted_json();
         assert!(
             !body.contains("sk-plaintext"),
             "明文 key 泄漏进日志：{body}"
         );
+        assert!(
+            !body.contains("header-SECRET-3"),
+            "自定义请求头值泄漏进日志：{body}"
+        );
         assert!(body.contains("\"***\""), "脱敏标记缺失：{body}");
+        assert!(
+            body.contains("\"name\":\"x-auth-token\""),
+            "头名应保留：{body}"
+        );
         assert!(
             body.contains("\"system_core\":\"sys\""),
             "其余字段应原样保留：{body}"
@@ -415,6 +435,7 @@ mod tests {
             cache_key: None,
             cache_gen_index: None,
             reasoning_effort: None,
+            session_id: None,
         };
         assert_eq!(base.system_full(), "CORE");
         let with_extra = StreamRequest {

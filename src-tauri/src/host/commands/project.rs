@@ -30,6 +30,11 @@ pub async fn get_config(core: Core<'_>) -> Result<ConfigState, String> {
 #[tauri::command]
 pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), String> {
     let mut updated = config;
+    // [docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)：落盘前校验自定义请求头（头名合法/非保留/不重复、值无换行）
+    for p in &updated.providers {
+        crate::core::config::validate_request_headers(&p.headers)
+            .map_err(|e| format!("供应商「{}」：{e}", p.name))?;
+    }
     {
         let current = core.cfg.read().unwrap().clone();
         updated.unmask_from(&current);

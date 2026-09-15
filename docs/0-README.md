@@ -90,6 +90,7 @@
 - 2026-09-03 · [provider-form-rules-tightened.md](./provider-form-rules-tightened.md) — 供应商表单规则收紧：API 格式必填 + API Key 必填 + 模型列表非空
 - 2026-09-04 · [max-tokens-truncation-fix.md](./max-tokens-truncation-fix.md) — max_tokens 截断缺陷修复：provider 三协议截断尾注 + 新模型默认 32768 + MAX_TOKENS_NOTICE 公共常量
 - 2026-09-13 · [network-proxy-settings.md](./network-proxy-settings.md) — 设置「网络」页签：代理模式三选一卡片（无代理/系统代理/自定义代理，支持 http(s)/socks5）+ Windows 注册表探测补齐 + 应用请求与更新请求全链路走代理 + save_config 热重建 client 即时生效（proxy=null 保持 reqwest 默认，存量零变化）
+- 2026-09-15 · [provider-custom-headers.md](./provider-custom-headers.md) — 供应商级自定义请求头：per-provider headers（明文存 config）+ 默认 `User-Agent: CodeWave/<版本>`（可覆盖）+ `${session_id}` 占位符 + 保留名保护/日志脱敏/前后端校验；落地 OpenCode Go 对 UA 与 `x-opencode-session` 的要求
 
 ## ask / 审批交互
 

@@ -68,10 +68,7 @@ pub async fn guarded_get(
 
         let resp = client
             .get(&current)
-            .header(
-                "User-Agent",
-                concat!("CodeWave/", env!("CARGO_PKG_VERSION"), " (+local-first desktop agent)"),
-            )
+            .header("User-Agent", crate::util::USER_AGENT)
             .send()
             .await
             .map_err(|e| HopError {
