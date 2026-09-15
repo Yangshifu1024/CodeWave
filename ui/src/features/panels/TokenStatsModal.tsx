@@ -56,6 +56,16 @@ export default function TokenStatsModal() {
     return map;
   }, [config]);
 
+  // model_id → 显示名（ProviderModel.model 即界面各处展示的模型名；
+  // by_model 的 key 是内部 model_id，直接展示会露出无意义 id）
+  const names = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of config?.providers ?? []) {
+      for (const m of p.models) map[m.id] = m.model;
+    }
+    return map;
+  }, [config]);
+
   // 30 天按模型聚合：命中率分母口径随协议不同，只能按模型算再汇总
   const perModel = useMemo(() => {
     const agg: Record<string, ModelAgg> = {};
@@ -85,7 +95,10 @@ export default function TokenStatsModal() {
       agg[m] = trueTotal(v, sems[m] ?? "openai");
     }
     const top = Object.entries(agg).sort((a, b) => b[1] - a[1])[0];
-    return top ? `${top[0].slice(0, 8)}… (${fmt(top[1])})` : null;
+    if (!top) return null;
+    // 已删/未知模型无显示名，回退截断 id 保证可辨认
+    const name = names[top[0]] ?? `${top[0].slice(0, 8)}…`;
+    return `${name} (${fmt(top[1])})`;
   })();
 
   // 缓存命中（按可识别协议的模型汇总；未知协议模型只跳过比率，不影响其他模型的比率正确性）
