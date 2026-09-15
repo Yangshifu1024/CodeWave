@@ -96,6 +96,7 @@ pub async fn generate_and_apply(
         tools: vec![],
         cache_key: None,
         reasoning_effort: None,
+        session_id: Some(rt.id.clone()),
     };
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);

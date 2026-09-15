@@ -271,6 +271,7 @@ pub async fn stream(
 ) -> Result<RunUsage, ProviderError> {
     let key = key.filter(|k| !k.is_empty());
     let url = format!("{}/chat/completions", model.base_url.trim_end_matches('/'));
+    let session_id = req.session_id.clone();
     let body = build_body(&req);
 
     let mut request = client
@@ -280,6 +281,8 @@ pub async fn stream(
     if let Some(k) = &key {
         request = request.header("Authorization", format!("Bearer {k}"));
     }
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    request = crate::provider::headers::apply_request_headers(request, &model.headers, session_id.as_deref());
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Err(ProviderError::Cancelled),
         r = request.send() => r.map_err(|e| ProviderError::Network(e.to_string()))?,
@@ -465,6 +468,7 @@ mod tests {
             }],
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
         }
     }
 

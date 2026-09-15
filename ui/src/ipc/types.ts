@@ -48,6 +48,14 @@ export interface ProviderConfig {
   base_url: string;
   keys: string[];
   models: ProviderModel[];
+  /** 供应商级自定义请求头（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：值支持 ${session_id} 占位符；明文存储 */
+  headers: HeaderPair[];
+}
+
+/** 自定义请求头条目（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)） */
+export interface HeaderPair {
+  name: string;
+  value: string;
 }
 
 /** 菜单/守卫消费的摊平模型视图（provider + model 摊平，见 utils/models.ts） */

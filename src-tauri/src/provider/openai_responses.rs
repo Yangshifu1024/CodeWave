@@ -254,6 +254,7 @@ pub async fn stream(
 ) -> Result<RunUsage, ProviderError> {
     let key = key.filter(|k| !k.is_empty());
     let url = format!("{}/responses", model.base_url.trim_end_matches('/'));
+    let session_id = req.session_id.clone();
     let body = build_body(&req);
 
     let mut request = client
@@ -263,6 +264,8 @@ pub async fn stream(
     if let Some(k) = &key {
         request = request.header("Authorization", format!("Bearer {k}"));
     }
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    request = crate::provider::headers::apply_request_headers(request, &model.headers, session_id.as_deref());
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Err(ProviderError::Cancelled),
         r = request.send() => r.map_err(|e| ProviderError::Network(e.to_string()))?,
@@ -378,6 +381,7 @@ mod tests {
             cache_gen_index: None,
             cache_key: Some("sess-1".into()),
             reasoning_effort: None,
+            session_id: None,
             messages: vec![
                 Message::user_text("q"),
                 Message {
@@ -425,6 +429,7 @@ mod tests {
             cache_gen_index: None,
             cache_key: None,
             reasoning_effort: Some(crate::core::prefs::EffortLevel::Max),
+            session_id: None,
             messages: vec![Message::user_text("q")],
             tools: vec![],
         };
@@ -450,6 +455,7 @@ mod tests {
             cache_gen_index: None,
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
             messages: vec![Message {
                 role: Role::Tool,
                 content: vec![
@@ -491,6 +497,7 @@ mod tests {
             cache_gen_index: None,
             cache_key: None,
             reasoning_effort: None,
+            session_id: None,
             messages: vec![Message::tool_results(vec![Content::ToolResult {
                 tool_use_id: "t1".into(),
                 content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。".into(),

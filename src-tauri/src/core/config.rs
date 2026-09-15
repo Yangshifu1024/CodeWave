@@ -86,6 +86,9 @@ pub struct ModelConfig {
     /// 回读 key 的 keyring 账户（= 供应商账户）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keyring_accounts: Vec<String>,
+    /// 供应商级自定义请求头（摊平自 ProviderConfig；值可含 `${session_id}` 占位符）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HeaderPair>,
 }
 
 impl Default for ModelConfig {
@@ -105,6 +108,7 @@ impl Default for ModelConfig {
             vision: None,
             provider_id: String::new(),
             keyring_accounts: Vec::new(),
+            headers: Vec::new(),
         }
     }
 }
@@ -145,6 +149,18 @@ impl Default for ProviderModel {
     }
 }
 
+/// 供应商级自定义请求头条目（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：随该供应商所有
+/// LLM 请求发送。`value` 支持 `${session_id}` 占位符（请求时替换为会话 uuid）；
+/// 明文存储于 config.json（勿放长期密钥，日志与会话 verbose 记录均脱敏）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct HeaderPair {
+    /// HTTP 头名（如 `x-opencode-session`）
+    pub name: String,
+    /// HTTP 头值（如 `${session_id}` / `CodeWave/1.0`）
+    pub value: String,
+}
+
 /// 模型供应商（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：端点 + 协议 + key 池 + 自有模型列表；一切来自
 /// 用户输入（无内置目录）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +178,8 @@ pub struct ProviderConfig {
     pub keys: Vec<String>,
     /// 自有模型列表（嵌套结构，schema v2）
     pub models: Vec<ProviderModel>,
+    /// 自定义请求头（随该供应商所有请求发送）
+    pub headers: Vec<HeaderPair>,
 }
 
 impl Default for ProviderConfig {
@@ -173,8 +191,71 @@ impl Default for ProviderConfig {
             base_url: String::new(),
             keys: Vec::new(),
             models: Vec::new(),
+            headers: Vec::new(),
         }
     }
+}
+
+/// 不允许被自定义请求头覆盖的保留名（小写；[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：
+/// 协议必需或影响传输安全。`user-agent` 不在此列——自定义 UA 允许覆盖默认值。
+pub const RESERVED_REQUEST_HEADERS: &[&str] = &[
+    "content-type",
+    "authorization",
+    "x-api-key",
+    "anthropic-version",
+    "host",
+    "content-length",
+];
+
+/// 校验供应商自定义请求头（IPC 落盘前 + provider 应用时的共享判据）：
+/// 头名非空、合法 HTTP token、非保留名、无重名；头值不含 CR/LF（防头部注入）且仅含可见 ASCII
+/// （`0x20..=0x7E`）——`reqwest::header::HeaderValue::from_str` 拒绝非 ASCII，非可见值会在应用时被静默丢弃。
+pub fn validate_request_headers(headers: &[HeaderPair]) -> Result<(), String> {
+    let mut seen: Vec<String> = Vec::new();
+    for h in headers {
+        // 整行全空（前端「添加」后未填）视为待填占位，跳过；半填行按非法处理
+        if h.name.trim().is_empty() && h.value.trim().is_empty() {
+            continue;
+        }
+        let name = h.name.trim();
+        if name.is_empty() {
+            return Err("自定义请求头名称不能为空".into());
+        }
+        if !is_http_token(name) {
+            return Err(format!("自定义请求头名称非法：{name}"));
+        }
+        let lower = name.to_ascii_lowercase();
+        if RESERVED_REQUEST_HEADERS.contains(&lower.as_str()) {
+            return Err(format!("自定义请求头 `{name}` 为保留名，不允许覆盖"));
+        }
+        if seen.contains(&lower) {
+            return Err(format!("自定义请求头 `{name}` 重复"));
+        }
+        if h.value.contains(['\r', '\n']) {
+            return Err(format!("自定义请求头 `{name}` 的值含非法换行"));
+        }
+        // 非可见 ASCII 会被 reqwest 静默丢弃，前端可通过但上线即失效，故落盘前拦截
+        if !h.value.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+            return Err(format!(
+                "自定义请求头 `{name}` 的值含非法字符（仅支持可见 ASCII）"
+            ));
+        }
+        seen.push(lower);
+    }
+    Ok(())
+}
+
+/// RFC 7230 token 判定（tchar 允许集）。
+fn is_http_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
+                        | b'_' | b'`' | b'|' | b'~'
+                )
+        })
 }
 
 /// 代理模式：不使用 / 跟随系统 / 手动指定。
@@ -442,6 +523,7 @@ impl ConfigState {
             vision: Some(m.vision),
             provider_id: p.id.clone(),
             keyring_accounts,
+            headers: p.headers.clone(),
         }
     }
 
@@ -689,6 +771,10 @@ mod tests {
                 vision: true,
                 video: false,
             }],
+            headers: vec![HeaderPair {
+                name: "x-opencode-session".into(),
+                value: "${session_id}".into(),
+            }],
         });
         let m = cfg.find_model("m1").unwrap();
         assert_eq!(m.model, "model-x");
@@ -697,7 +783,103 @@ mod tests {
         assert_eq!(m.provider_id, "p1");
         assert_eq!(m.keyring_accounts, vec!["p1".to_string()]);
         assert_eq!(m.reasoning_effort.as_deref(), Some("high"));
+        // 自定义请求头随 provider 摊平到运行时视图（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）
+        assert_eq!(m.headers.len(), 1);
+        assert_eq!(m.headers[0].name, "x-opencode-session");
+        assert_eq!(m.headers[0].value, "${session_id}");
         assert!(cfg.find_model("nope").is_none());
         assert!(cfg.active_model().is_none());
+    }
+
+    /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：旧 config.json 无 `headers` 字段时透明取空（serde default 前向兼容）。
+    #[test]
+    fn provider_headers_default_when_absent() {
+        let json = r#"{
+            "providers": [{
+                "id": "p1",
+                "name": "P1",
+                "api_format": "openai_chat",
+                "base_url": "https://a.example/v1",
+                "keys": ["k"],
+                "models": [{"id": "m1", "model": "m"}]
+            }]
+        }"#;
+        let cfg: ConfigState = serde_json::from_str(json).unwrap();
+        assert!(cfg.providers[0].headers.is_empty());
+        assert!(cfg.find_model("m1").unwrap().headers.is_empty());
+    }
+
+    /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：自定义头校验规则（空名/非法名/保留名/重名/换行/值仅可见 ASCII）。
+    #[test]
+    fn validate_request_headers_rules() {
+        let ok = vec![HeaderPair {
+            name: "x-opencode-session".into(),
+            value: "${session_id}".into(),
+        }];
+        assert!(validate_request_headers(&ok).is_ok());
+
+        let empty = vec![HeaderPair {
+            name: "  ".into(),
+            value: "v".into(),
+        }];
+        assert!(validate_request_headers(&empty).is_err());
+
+        // 整行全空视为待填占位，跳过
+        let blank = vec![HeaderPair {
+            name: "".into(),
+            value: "".into(),
+        }];
+        assert!(validate_request_headers(&blank).is_ok());
+
+        let bad = vec![HeaderPair {
+            name: "bad name".into(),
+            value: "v".into(),
+        }];
+        assert!(validate_request_headers(&bad).is_err());
+
+        let reserved = vec![HeaderPair {
+            name: "Authorization".into(),
+            value: "Bearer x".into(),
+        }];
+        assert!(validate_request_headers(&reserved).is_err());
+
+        let dup = vec![
+            HeaderPair {
+                name: "X-A".into(),
+                value: "1".into(),
+            },
+            HeaderPair {
+                name: "x-a".into(),
+                value: "2".into(),
+            },
+        ];
+        assert!(validate_request_headers(&dup).is_err());
+
+        let crlf = vec![HeaderPair {
+            name: "x-a".into(),
+            value: "a\r\nb".into(),
+        }];
+        assert!(validate_request_headers(&crlf).is_err());
+
+        // 非 ASCII（CJK）值：前端可通过，但 reqwest HeaderValue 解析失败会静默丢弃 → 必须拦截
+        let cjk = vec![HeaderPair {
+            name: "x-a".into(),
+            value: "中文值".into(),
+        }];
+        assert!(validate_request_headers(&cjk).is_err());
+
+        // 控制字符（TAB）值非法
+        let tab = vec![HeaderPair {
+            name: "x-a".into(),
+            value: "a\tb".into(),
+        }];
+        assert!(validate_request_headers(&tab).is_err());
+
+        // 普通可见 ASCII 值合法
+        let ascii = vec![HeaderPair {
+            name: "x-a".into(),
+            value: "Bearer abc-123/._~".into(),
+        }];
+        assert!(validate_request_headers(&ascii).is_ok());
     }
 }

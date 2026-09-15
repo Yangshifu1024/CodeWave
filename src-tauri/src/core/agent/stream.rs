@@ -150,6 +150,7 @@ pub(super) async fn build_stream_request(
             cache_key: Some(rt.id.clone()),
             cache_gen_index,
             reasoning_effort,
+            session_id: Some(rt.id.clone()),
         },
     ))
 }

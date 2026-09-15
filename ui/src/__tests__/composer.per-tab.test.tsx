@@ -59,6 +59,7 @@ function seedTwoTabs() {
           id: "p1", name: "Test Provider", api_format: "openai_chat" as const,
           base_url: "https://api.example.com/v1", keys: ["***abcd"],
           models: [{ ...MODEL_BASE }],
+          headers: [],
         },
       ],
       active_model_id: "m1",
