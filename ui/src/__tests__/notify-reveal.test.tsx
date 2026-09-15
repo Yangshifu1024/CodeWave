@@ -31,7 +31,7 @@ const fixtureConfig = {
 const sessionFixture: SessionMeta = {
   id: "s1", title: "通知回跳会话", workspace: "/tmp/ws", model_id: "m1",
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", message_count: 0,
-  project_id: null, roots: [],
+  project_id: null, roots: [], running: false, interrupted: null,
 };
 
 const fixtureMessages = [

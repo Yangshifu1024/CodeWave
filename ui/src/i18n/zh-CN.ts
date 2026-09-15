@@ -252,5 +252,27 @@ export default {
     unreadReply: "有未读回复", waitingConfirm: "等待确认", deleteSessionConfirm: "删除该会话？",
     editProjectTip: "编辑目录/重命名",
     copySessionId: "复制会话 ID", copiedSessionId: "已复制会话 ID",
+    interruptedCrash: "上次运行时被中断（异常退出）",
+    interruptedQuit: "上次运行时被中断（正常退出前中止）",
+    clearInterrupt: "清除中断标记",
+    interruptCleared: "已清除中断标记",
+    clearInterruptFailed: "清除中断标记失败：{{error}}",
+  },
+  // 退出拦截（会话保存与恢复优化 · 批1）：仍有 run 在跑时弹三选项；无 run 在跑时只有 2 秒窗口，直接 flush 放行
+exitApp: {
+    title: "仍有任务在运行",
+    desc: "以下 {{n}} 个会话仍在运行：",
+    wait: "等完成",
+    abort: "中断并保存后退出",
+    cancel: "取消",
+    waitHint: "将在这些会话完成后自动退出（再次退出可改选其他方式）",
+  },
+  // 关 Tab 二次确认（有草稿或未发队列时）：「保留草稿」的内容进 ui-state，重开该会话时回填
+closeTab: {
+    title: "该会话有未发送内容",
+    desc: "草稿或排队消息尚未发出。",
+    discard: "丢弃并关闭",
+    keep: "关闭但保留草稿",
+    cancel: "取消",
   },
 };

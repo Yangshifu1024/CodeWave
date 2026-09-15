@@ -42,8 +42,7 @@ export type {
 } from "./run.types";
 import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
 
-/** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 27 键事件面（唯一注册点）。 */
-export interface RunStore {
+/** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 28 键事件面（唯一注册点）。 */export interface RunStore {
   tabs: Record<string, TabRunState>;
   /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
   drafts: Record<string, ComposerDraft>;

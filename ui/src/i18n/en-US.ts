@@ -252,5 +252,27 @@ export default {
     unreadReply: "Unread reply", waitingConfirm: "Awaiting confirmation", deleteSessionConfirm: "Delete this session?",
     editProjectTip: "Edit directory / rename",
     copySessionId: "Copy session ID", copiedSessionId: "Session ID copied",
+    interruptedCrash: "Interrupted while running (crashed)",
+    interruptedQuit: "Interrupted while running (aborted before exit)",
+    clearInterrupt: "Clear interrupt mark",
+    interruptCleared: "Interrupt mark cleared",
+    clearInterruptFailed: "Failed to clear interrupt mark: {{error}}",
+  },
+  // Exit interception (session restore batch 1): three options when runs are active; otherwise only a 2s window → flush and exit
+exitApp: {
+    title: "Tasks are still running",
+    desc: "{{n}} session(s) are still running:",
+    wait: "Wait until done",
+    abort: "Interrupt, save and quit",
+    cancel: "Cancel",
+    waitHint: "The app will quit once these sessions finish (trigger exit again to change the choice)",
+  },
+  // Close-tab confirmation (draft or unsent queue present): "keep draft" content goes into ui-state and is restored on reopen
+closeTab: {
+    title: "This session has unsent content",
+    desc: "Draft or queued messages have not been sent yet.",
+    discard: "Discard and close",
+    keep: "Close but keep draft",
+    cancel: "Cancel",
   },
 };

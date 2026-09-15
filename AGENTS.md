@@ -65,7 +65,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 ## 契约锚点（改前必读）
 
-- **事件面 27 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名
+- **事件面 28 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（最近一次新增：`app:exit_requested`，退出拦截）
 - **SessionMeta `project_id + roots` 快照**是 @ 提及 / git 聚合的唯一数据源，勿绕过回查注册表（左栏文件树已随 [docs/workspace-explorer-removal-and-chat-scrollbar](./docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除）
 - `create_session(project_id?, workspace?)` 双形态；`delete_project` 级联删除（先取消运行中会话）
 - **anthropic SSE 流内绝不调 `parser.finish()`**（由分片撕裂集成测试守护）

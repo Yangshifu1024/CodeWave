@@ -30,6 +30,44 @@ fn core_cfg(app: &tauri::AppHandle) -> crate::core::config::ConfigState {
         .unwrap_or_default()
 }
 
+/// 窗口几何恢复（批1，需求共识 16）：读 ui-state 的 `window` 节点（由前端写入，后端不写回）。
+/// 尺寸过小抬到下限、不超工作区；位置不在任何显示器工作区内（更换显示器/拔线）或未记录
+/// → 回落主显示器居中（E5）。显示器信息与 ui-state 同为逻辑像素（各自按自身 scale 换算）。
+fn apply_saved_window_geometry(win: &tauri::WebviewWindow, data_dir: &std::path::Path) {
+    let Some(state) = core::ui_state::load(data_dir) else {
+        return;
+    };
+    let Some(desired) = core::ui_state::window_geometry(&state) else {
+        return;
+    };
+    let to_area = |m: &tauri::Monitor| {
+        let area = m.work_area();
+        let scale = if m.scale_factor() > 0.0 { m.scale_factor() } else { 1.0 };
+        core::ui_state::WorkArea {
+            x: area.position.x as f64 / scale,
+            y: area.position.y as f64 / scale,
+            width: area.size.width as f64 / scale,
+            height: area.size.height as f64 / scale,
+        }
+    };
+    let areas: Vec<core::ui_state::WorkArea> = win
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(to_area)
+        .collect();
+    let primary = win.primary_monitor().ok().flatten().map(|m| to_area(&m));
+    let placed = core::ui_state::resolve_window_geometry(desired, &areas, primary);
+    if let Err(e) = win.set_size(tauri::LogicalSize::new(placed.width, placed.height)) {
+        tracing::warn!("窗口尺寸恢复失败：{e}");
+    }
+    if let (Some(x), Some(y)) = (placed.x, placed.y) {
+        if let Err(e) = win.set_position(tauri::LogicalPosition::new(x, y)) {
+            tracing::warn!("窗口位置恢复失败：{e}");
+        }
+    }
+}
+
 /// 应用入口：初始化日志/插件/状态/命令/托盘/菜单，进入 Tauri 事件循环。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,7 +92,6 @@ pub fn run() {
         .manage(channels.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
-            let sink = Arc::new(TauriSink::new(handle, channels.clone()));
             let mut cfg = ConfigState::load();
             // keyring 迁移（[docs/p1-plan](../../docs/p1-plan.md) §7.2）：明文 key 迁入系统钥匙串；失败保留明文
             let (changed, warn) = host::keyring::migrate(&mut cfg);
@@ -72,7 +109,19 @@ pub fn run() {
             let store = Arc::new(SessionStore::new(data_dir.clone()));
             // 存量修复：checkpoint 曾把 sub_*/task_* 运行写进主索引（untitled 幽灵会话）——启动时清扫
             store.purge_non_session_entries();
-            let core = Arc::new(AgentCore::new(cfg, sink, store, client, data_dir));
+            // 崩溃恢复（批1）：先按上次退出遗留的运行标记，把仍在 running 的会话标为中断，再建本次标记
+            // （顺序不可颠倒：先建 marker 会把本次启动误判为崩溃）
+            core::sessions::interrupt::recover_after_crash(&store, &data_dir);
+            if let Err(e) = core::sessions::interrupt::create_marker(&data_dir) {
+                tracing::warn!("运行标记写入失败（本次崩溃检测退化）：{e}");
+            }
+            // 事件汇：TauriSink 外包一层中断观察——run 收尾（成功/失败/取消）把索引 running 落回 false
+            let tauri_sink: Arc<dyn core::agent::EventSink> =
+                Arc::new(TauriSink::new(handle, channels.clone()));
+            let sink: Arc<dyn core::agent::EventSink> = Arc::new(
+                core::sessions::interrupt::InterruptWatchSink::new(tauri_sink, store.clone()),
+            );
+            let core = Arc::new(AgentCore::new(cfg, sink, store, client, data_dir.clone()));
             // supervisor 在 tauri async runtime 上启动（setup 同步上下文不能直接 tokio::spawn）
             // shell 探测预热（探测含子进程 spawn，后台执行不阻塞启动；PROBED 缓存后零开销）：
             // setup 同步上下文不能直接 tokio::spawn，走 tauri::async_runtime（踩坑清单）
@@ -84,6 +133,8 @@ pub fn run() {
                 crate::core::scheduler::start_supervisor(sup_core).await;
             });
             app.manage(core);
+            // 退出拦截状态机（批1）：ExitRequested 处理器与 resolve_exit_request 命令共享
+            app.manage(host::commands::ExitGuard::default());
 
             // 托盘（P2-I）：显示主窗口 / 新建会话（聚焦）/ 退出
             use tauri::menu::{Menu, MenuItem};
@@ -126,6 +177,8 @@ pub fn run() {
 
             // 关闭到托盘（设置 ui.close_to_tray，默认开——托盘常驻）
             let win = app.get_webview_window("main").unwrap();
+            // 窗口几何恢复：必须在前端 activate_and_show（reveal）之前完成，避免可见后跳变
+            apply_saved_window_geometry(&win, &data_dir);
             let app_handle = app.handle().clone();
             // 自绘标题栏显示窗口看门狗（[docs/custom-font-and-titlebar](../../docs/custom-font-and-titlebar.md) 评审 Y1）：窗口以 visible:false 起动，依赖
             // activate_and_show 在前端挂载后显示；若前端 JS 启动失败（dev 编译报错等）
@@ -291,8 +344,20 @@ pub fn run() {
             host::commands::open_data_dir,
             host::commands::open_dir,
             host::commands::open_url,
+            host::commands::get_ui_state,
+            host::commands::set_ui_state,
+            host::commands::list_running_sessions,
+            host::commands::resolve_exit_request,
+            host::commands::clear_session_interrupt,
             host::notify::notify_system,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 退出拦截（批1）：托盘「退出」与 macOS Cmd+Q 都经 ExitRequested（窗口关闭是「隐藏到托盘」，
+            // 不经此处）；app.exit(0) 会再次触发本事件，由 ExitGuard 的 confirmed 标志放行（重入保护）
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                host::commands::handle_exit_requested(app_handle, api);
+            }
+        });
 }

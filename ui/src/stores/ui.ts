@@ -1,5 +1,11 @@
 // UI 偏好：语言、主题、面板开关、通知堆栈（强调色锁定中性墨色，无自定义强调色）
 import { create } from "zustand";
+// 树展开/折叠态的落盘链路（uiState → ipc.setUiState）。本文件与 utils/uiState 互为引用（那边要读 useUi），
+// 但双方都只在函数体内取用对方的绑定，模块顶层互不触达，ESM 活绑定足以支撑这个环。
+import {
+  setTreeCollapsed as persistTreeCollapsed,
+  setTreeExpanded as persistTreeExpanded,
+} from "../utils/uiState";
 
 /** 界面语言 */
 type Lang = "zh-CN" | "en-US";
@@ -24,8 +30,27 @@ interface UiState {
   settingsOpen: boolean;
   /** 设置弹窗当前页签（通用/外观/供应商/安全/mcp/技能）：提升进 store 以便外部调用方（认证错误引导等）指定页签打开（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)） */
   settingsTab: string;
+  /** 退出拦截请求（后端 app:exit_requested 下发运行中会话列表）：AppShell 消费后弹三选项或直接放行；null = 无待处理退出请求。
+   *  放在 ui store 是因为事件 handler 与弹窗分处两层（runHandlers 注册、AppShell 渲染），store 是二者唯一交点 */
+  exitRequest: { running: string[] } | null;
+  /** 关 Tab 请求（有草稿/未发队列时由 sessions.requestCloseTab 置位）：待确认的 Tab key，null = 无。
+   *  同样放 store：Cmd+W / 顶栏 / 左栏等关闭入口分散在多处，弹窗只在 AppShell 渲染一处 */
+  closeTabRequest: string | null;
+  /** 设置/清除关 Tab 请求（null = 关闭弹窗） */
+  setCloseTabRequest(key: string | null): void;
   tasksOpen: boolean;
   statsOpen: boolean;
+  /** 左栏会话树「显示更多」的展开集合（key = 分组 key，如 `proj:<项目 id>`）。
+   *  放 store 而不是组件 useState / 模块内存：hydrate（异步读盘）晚于 ProjectNav 首渲染，
+   *  组件挂载时读到的永远是空值；store 的 setState 能把后到货的快照推给已挂载的订阅者
+   *  （会话保存与恢复优化 · 批1） */
+  treeExpand: Record<string, boolean>;
+  /** 左栏「项目」区是否折叠（同样是随快照恢复的左栏态） */
+  treeCollapsed: boolean;
+  /** 展开/折叠某项目分组的「显示更多」（next 省略 = 按当前值取反） */
+  setTreeGroupExpanded(key: string, next?: boolean): void;
+  /** 折叠/展开左栏「项目」区 */
+  setTreeCollapsed(collapsed: boolean): void;
   /** 关于弹框（[docs/oss-prep-batch](../../../docs/oss-prep-batch.md) 批次）：从左下角状态区打开 */
   aboutOpen: boolean;
   /** 右栏开合持久态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
@@ -59,8 +84,24 @@ export const useUi = create<UiState>((set, get) => ({
   theme: readStoredTheme(),
   settingsOpen: false,
   settingsTab: "general",
+  exitRequest: null,
+  closeTabRequest: null,
+  setCloseTabRequest(key) {
+    set({ closeTabRequest: key });
+  },
   tasksOpen: false,
   statsOpen: false,
+  treeExpand: {},
+  treeCollapsed: false,
+  // 单一写入口：状态写进 store + 触发防抖落盘都在 uiState 的 setTreeExpanded/setTreeCollapsed 里（这里不再自己 set，
+  // 免得多一次 setState 通知与重渲染）
+  setTreeGroupExpanded(key, next) {
+    const cur = get().treeExpand;
+    persistTreeExpanded({ ...cur, [key]: next ?? !cur[key] });
+  },
+  setTreeCollapsed(collapsed) {
+    persistTreeCollapsed(collapsed);
+  },
   aboutOpen: false,
   rightBarOpen: localStorage.getItem("ws_right_bar_open") !== "0",
   setRightBarOpen(open) {

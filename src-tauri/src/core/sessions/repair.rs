@@ -185,6 +185,13 @@ pub fn repair(msgs: &mut Vec<Message>) {
         }
     }
     *msgs = patched;
+    // 空 assistant 消息清理（缺陷修复）：sanitize 丢弃「args 无法打捞」的 tool_use 后，
+    // 若该 assistant 消息别无内容，content 就变成空数组。这种消息上 wire 会被 Chat
+    // Completions 判为非法（content 为 null 且无 tool_calls → 400 Invalid assistant
+    // message），且会随之后每次请求反复复现。只丢「assistant 且 content 全空」这一类：
+    // 绝不丢 Tool 消息（误丢 ToolResult 会造出新的悬空 tool_use），也不丢任何含内容块
+    // 的消息（即使其中某个块参数坏掉——那是丢块、不是丢整条消息，由上面两步负责）。
+    msgs.retain(|m| m.role != Role::Assistant || !m.content.is_empty());
 }
 
 /// trim：预算内从头按用户轮边界裁剪，保留最后 `keep_last` 轮。
@@ -349,6 +356,62 @@ mod tests {
             }
         }
         assert!(msgs.len() < 24);
+    }
+
+    // 缺陷修复（会话 d9941c4b 的 400 Invalid assistant message）：空 assistant 消息必须被
+    // 清理，而「内容被清空的 Tool 消息」必须保留——两者混淆会误删 ToolResult，
+    // 反而造出新的悬空 tool_use。
+    #[test]
+    fn repair_drops_empty_assistant_but_keeps_empty_tool_message() {
+        let mut msgs = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            },
+            Message::tool_results(vec![tool_result("ghost")]), // 孤儿结果 → 内容被清空、消息保留
+            Message::user_text("again"),
+        ];
+        repair(&mut msgs);
+        assert_eq!(msgs.len(), 3, "空 assistant 消息应被丢弃");
+        assert!(msgs.iter().all(|m| m.role != Role::Assistant));
+        assert_eq!(msgs[1].role, Role::Tool);
+        assert!(msgs[1].content.is_empty(), "空 Tool 消息不得被误删");
+    }
+
+    // 同上：sanitize 丢弃不可打捞的 tool_use 之后不得留下空 assistant 消息；
+    // 保存 → 加载往返后同样不存在空 assistant 消息（重启自愈）。
+    #[test]
+    fn unparseable_args_leaves_no_empty_assistant() {
+        let mut msgs = vec![Message {
+            role: Role::Assistant,
+            content: vec![Content::ToolUse {
+                id: "t".into(),
+                name: "edit".into(),
+                // 字符串中部截断：parse_or_salvage 判定内容不可信 → 该 tool_use 被丢弃
+                args: serde_json::Value::String(r#"{"files": ["unclosed"#.into()),
+            }],
+            created_at: None,
+        }];
+        sanitize(&mut msgs);
+        repair(&mut msgs);
+        assert!(msgs.is_empty(), "唯一的块被丢弃后该 assistant 消息整体不应留存");
+
+        let loaded = prepare_on_load(prepare_for_save(vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            },
+        ]));
+        assert!(
+            loaded
+                .iter()
+                .all(|m| !(m.role == Role::Assistant && m.content.is_empty())),
+            "往返后不得存在空 assistant 消息"
+        );
     }
 
     // 用例 6（8MB 上限在 sessions/store 测试）；sanitize 变体：保存保图、provider 修复剥图：

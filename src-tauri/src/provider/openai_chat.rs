@@ -109,6 +109,12 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
                     _ => None,
                 })
                 .collect();
+            // 空 assistant 消息不上 wire（缺陷修复）：Chat Completions 不接受 content 为
+            // null 且无 tool_calls 的 assistant 消息（400 Invalid assistant message）。
+            // 历史侧已在 repair（丢空消息）与出网副本两层拦截，这里是最后一道 wire 门。
+            if text.is_empty() && tool_uses.is_empty() {
+                return;
+            }
             let mut v = json!({ "role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text) } });
             if !tool_uses.is_empty() {
                 v["tool_calls"] = Value::Array(tool_uses);
@@ -469,6 +475,75 @@ mod tests {
             cache_key: None,
             reasoning_effort: None,
             session_id: None,
+        }
+    }
+
+    // 缺陷修复：content 为 null 且无 tool_calls 的 assistant 消息不得上 wire（上游 400）
+    #[test]
+    fn skips_assistant_without_text_or_tool_calls() {
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            },
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(
+            msgs.iter().all(|m| !(m["role"] == "assistant"
+                && m["content"].is_null()
+                && m.get("tool_calls").is_none())),
+            "空 assistant 消息不应出现在请求体里"
+        );
+        // 合法消息不受影响
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1]["role"], "user");
+    }
+
+    // 不变量：每个带上 wire 的 tool_call 都必须有对应的 role=tool 应答消息
+    #[test]
+    fn tool_calls_are_answered_on_wire() {
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Text { text: "ok".into() },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "data".into(),
+                is_error: false,
+            }]),
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        let mut calls: Vec<String> = Vec::new();
+        let mut answers: Vec<String> = Vec::new();
+        for m in msgs {
+            if let Some(tcs) = m.get("tool_calls").and_then(|v| v.as_array()) {
+                for tc in tcs {
+                    calls.push(tc["id"].as_str().unwrap().to_string());
+                }
+            }
+            if m["role"] == "tool" {
+                answers.push(m["tool_call_id"].as_str().unwrap().to_string());
+            }
+        }
+        assert_eq!(calls, vec!["t1".to_string()]);
+        for c in &calls {
+            assert!(answers.contains(c), "tool_call {c} 未获应答");
         }
     }
 

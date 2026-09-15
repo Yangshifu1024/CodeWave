@@ -12,6 +12,7 @@ mod session;
 mod skills;
 mod stats;
 mod system;
+mod ui_state;
 mod util;
 mod workspace;
 
@@ -25,4 +26,5 @@ pub use session::*;
 pub use skills::*;
 pub use stats::*;
 pub use system::*;
+pub use ui_state::*;
 pub use workspace::*;

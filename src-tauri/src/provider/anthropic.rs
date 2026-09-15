@@ -491,6 +491,34 @@ mod tests {
         assert!(matches!(&d[0], StreamDelta::Text { text } if text.contains("截断")));
     }
 
+    // 缺陷修复守护：空 assistant 消息不得上 wire（Anthropic 侧天然跳过空 blocks，
+    // 此用例防止未来重构无声破坏——会话 d9941c4b 的 400 就是这类空消息造成的）。
+    #[test]
+    fn empty_assistant_never_emits_wire_message() {
+        let req = StreamRequest {
+            model: ModelConfig::default(),
+            system_core: "s".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
+            messages: vec![
+                Message::user_text("q"),
+                Message {
+                    role: Role::Assistant,
+                    content: Vec::new(),
+                    created_at: None,
+                },
+            ],
+            tools: vec![],
+            cache_key: None,
+            reasoning_effort: None,
+            session_id: None,
+        };
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1, "空 assistant 消息不应产出 wire 消息");
+        assert_eq!(msgs[0]["role"], "user");
+    }
+
     #[test]
     fn consecutive_same_role_merged() {
         let req = StreamRequest {
