@@ -286,4 +286,8 @@ export interface SubagentEvent {
   name?: string | null;
   /** 完整任务文本（截断至 2000 字符，过程抽屉首块展示，[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)） */
   task?: string;
+  /** 收尾时的真实已启动步数（sub:done；轮询采样可能滞后，以它刷新最终展示） */
+  steps_used?: number;
+  /** 收尾原因（sub:done）：report = 按约定带 <report> 标记正常汇报；budget = 步数预算耗尽；no_report = 未按约定汇报即结束（疑似提前退出） */
+  ended?: "report" | "budget" | "no_report";
 }

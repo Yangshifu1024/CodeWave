@@ -1,10 +1,16 @@
-import { CheckOutlined, CloseOutlined, LoadingOutlined, RobotOutlined, StopOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, ExclamationCircleOutlined, LoadingOutlined, RobotOutlined, StopOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useActiveRun, useRun } from "../../stores/run";
+import type { SubView } from "../../stores/run.types";
 
 /** token 数缩写：千位以上显示为一位小数的 k 值（如 12.3k），其余原样。 */
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** 提前结束判定：已收尾且收尾原因不是约定汇报（旧数据无 ended 字段 → 视为正常收尾，保持绿勾向后兼容） */
+function isEarlyEnded(sub: SubView): boolean {
+  return sub.status === "done" && (sub.ended === "budget" || sub.ended === "no_report");
 }
 
 // 单个子代理卡片：从 timeline 锚点渲染（与工具卡同机制，在调用点穿插）。
@@ -34,9 +40,16 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
       {sub.description && <span className="sub-card-desc">· {sub.description}</span>}
       <span className="sub-card-meta">
         {sub.status === "running" && <LoadingOutlined spin />}
-        {sub.status === "done" && <CheckOutlined />}
+        {sub.status === "done" && !isEarlyEnded(sub) && <CheckOutlined />}
+        {sub.status === "done" && isEarlyEnded(sub) && (
+          // 提前退出警示：橙色（需注意），颜色取主题桥的 antd colorWarning，不硬编码色值
+          <ExclamationCircleOutlined style={{ color: "var(--ws-warn)" }} />
+        )}
         {sub.status === "error" && <CloseOutlined />}
         {sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok
+        {sub.status === "done" && isEarlyEnded(sub) && (
+          <span>· {sub.ended === "budget" ? t("subagent.endedBudget") : t("subagent.endedEarly")}</span>
+        )}
       </span>
       {/* 停止按钮（仅运行中）：stopPropagation 防止误开抽屉；点击 = 单独停止该子代理 */}
       {sub.status === "running" && (

@@ -47,6 +47,11 @@ pub struct DriveParams {
     pub emit_events: bool,
     /// 预算耗尽前强制汇报一轮
     pub force_report: bool,
+    /// 无工具调用的回合即视为本 run 完成（主会话语义）。
+    /// `false` = 子代理 / 任务运行：纯文本回合不再无条件收尾——须带 `<report>` 标记，
+    /// 否则注入提示后续跑（上限 `MAX_TEXT_TURNS`），绝不把过程旁白当成最终汇报
+    ///（[docs/subagent-text-turn-premature-exit]）。
+    pub finish_on_text: bool,
     /// 主会话 run：每步按当前偏好重算计划限制（ask 批准切档后立即生效）
     pub main_session: bool,
     /// 父 run 取消令牌（子代理派发时传入）：提供时本 run 的取消令牌由其 child_token 派生，
@@ -64,6 +69,7 @@ impl Default for DriveParams {
             budget_notice: false,
             emit_events: true,
             force_report: false,
+            finish_on_text: true,
             main_session: false,
             parent_cancel: None,
         }
@@ -297,6 +303,70 @@ pub(super) fn budget_notice_step(max_steps: usize) -> usize {
     max_steps - max_steps / 5
 }
 
+/// 最终汇报标记：非主会话 run（子代理 / 任务运行）的纯文本回合只有在带此标记时才
+/// 视为按约定收尾（[docs/subagent-text-turn-premature-exit]）。
+pub(super) const REPORT_TAG: &str = "<report>";
+/// `REPORT_TAG` 的闭合标记。
+pub(super) const REPORT_TAG_END: &str = "</report>";
+/// 非主会话 run 允许的连续「无工具调用回合」上限：超出即以显式错误终止本 run，
+/// 绝不静默当作成功收尾（宁可显式失败让主代理重派，也不交付一句过程旁白）。
+/// 注：仅思考（thinking-only）回合 `joined` 为空、同样计一次——「只在思考」视为无进展
+/// 是保守取舍（上限 3 连，代价可控）。
+pub(super) const MAX_TEXT_TURNS: u32 = 3;
+
+/// 无工具调用回合的处置（`text_turn_action` 的返回值）。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum TextTurnAction {
+    /// 视为本 run 的自然收尾（主会话语义；或已带最终汇报标记）
+    Finish,
+    /// 注入提示后继续下一步（消耗步数预算）
+    Continue,
+    /// 连续无工具调用达上限：以显式错误终止，绝不伪装成功
+    StopWithLimit,
+}
+
+/// 无工具调用回合（含「唯一调用被拒」的空文本回合）如何处置——纯函数便于矩阵单测。
+///
+/// 判定顺序：
+/// 1. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变；
+/// 2. 文本含 `<report>` 标记 → `Finish`：显式最终汇报；
+/// 3. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
+/// 4. 其余 → `Continue`。
+pub(super) fn text_turn_action(
+    text: &str,
+    finish_on_text: bool,
+    text_turns: u32,
+) -> TextTurnAction {
+    if finish_on_text {
+        return TextTurnAction::Finish;
+    }
+    if text.contains(REPORT_TAG) {
+        return TextTurnAction::Finish;
+    }
+    if text_turns >= MAX_TEXT_TURNS {
+        return TextTurnAction::StopWithLimit;
+    }
+    TextTurnAction::Continue
+}
+
+/// 剥离 `<report>…</report>` 包裹，返回（正文，是否带标记）。
+///
+/// 语义（有意约定，非缺陷）：无标记 → 原样（仅 trim）；标记未闭合 → 其后全部视为正文；
+/// 多个标记 → 只取第一个；**闭合标记之后的文本丢弃**（标记即汇报边界）；
+/// 只有闭合标记（模型写坏的常见形态）→ 视为不带标记。
+/// 标记只用于收尾判定，不进入汇报正文（tool_result / 任务日志 / 卡片展示）。
+pub(crate) fn split_report(raw: &str) -> (String, bool) {
+    let Some(start) = raw.find(REPORT_TAG) else {
+        return (raw.trim().to_string(), false);
+    };
+    let body_start = start + REPORT_TAG.len();
+    let body = match raw[body_start..].find(REPORT_TAG_END) {
+        Some(i) => &raw[body_start..body_start + i],
+        None => &raw[body_start..],
+    };
+    (body.trim().to_string(), true)
+}
+
 /// 参数化的 agent 驱动主循环：主会话 / 子代理 / 任务运行共用（[docs/p2-plan](../../../../docs/p2-plan.md) §2.2）。
 /// 返回（最终文本或错误，usage 合计，suggest 跟进项）。本函数绝不发
 /// run:done——run_chat 在复位 running 后发唯一一次（[docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md) 队列回归）。
@@ -355,6 +425,10 @@ pub async fn drive_agent(
     // 运行监督（[docs/subagent-file-isolation]）：重复失败/重复调用先纠偏、不收敛则终止；
     // 另有空转看门狗（feed_batch）检测零进展只读循环
     let mut supervision = SupervisionState::default();
+    // 连续「无工具调用回合」计数（仅非主会话 run 消费；有工具调用或压缩成功时复位）：
+    // 用于 <continue-notice> 续跑与 MAX_TEXT_TURNS 显式失败门
+    //（[docs/subagent-text-turn-premature-exit]）
+    let mut text_turns: u32 = 0;
 
     'steps: for step in 0..params.max_steps {
         // 真实步数上报（sub:step 进度采样消费；取代 history.len() 失真口径）
@@ -392,7 +466,11 @@ pub async fn drive_agent(
             &params,
             &run_token,
             &mut compact_fail_streak,
-            &mut || supervision.reset_idle(),
+            // 压缩成功即清空空转计数与无工具调用计数（历史细节被丢弃，模型需要重读/重建上下文）
+            &mut || {
+                supervision.reset_idle();
+                text_turns = 0;
+            },
         )
         .await;
 
@@ -481,14 +559,76 @@ pub async fn drive_agent(
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);
         let joined = assembled.joined_text();
         if !joined.is_empty() {
-            final_text = joined;
+            // clone：下方 text_turn_action 仍需读本回合文本（final_text 只保留最后一段非空文本）
+            final_text = joined.clone();
         }
-        rt.history.lock().unwrap().push(assistant_msg.stamped());
+        // 空 assistant 消息守卫（[docs/subagent-text-turn-premature-exit]）：content 全被滤空
+        //（空文本块 + 参数不可解析被拒的调用）的消息一旦进历史，此后每次请求都会带上它
+        // 并被判非法（400 Invalid assistant message），故不入历史；被拒情况改由下方
+        // user 角色提示反馈给模型。
+        if !assistant_msg.content.is_empty() {
+            rt.history.lock().unwrap().push(assistant_msg.stamped());
+        }
 
         let last_step = params.force_report && step + 1 == params.max_steps;
         if calls.is_empty() {
-            break 'steps;
+            // 被拒调用（参数 JSON 不可修复）不产生 tool_use 块——孤立 tool_result 对 API 非法，
+            // 故以 user 角色提示反馈（与 <budget-notice> 同机制：user 消息永远合法，
+            // wire 层合并相邻 user 消息）。此前这里直接 break：拒绝反馈既不进历史也不发事件，
+            // 模型与用户都不知道调用被拒，run 却报成功。
+            if !synth_results.is_empty() {
+                session_log::warn(
+                    rt,
+                    &format!(
+                        "step {step} {} 个工具调用参数不可解析被拒绝，已反馈给模型",
+                        synth_results.len()
+                    ),
+                );
+                rt.history.lock().unwrap().push(Message::user_text(format!(
+                    "<tool-args-rejected>你上一回合有 {} 个工具调用因参数 JSON 无法解析而被拒绝、未执行。\
+                     请修正参数后重新发起该调用；不要就此结束任务。</tool-args-rejected>",
+                    synth_results.len()
+                )).stamped());
+            }
+            match text_turn_action(&joined, params.finish_on_text, text_turns) {
+                TextTurnAction::Finish => break 'steps,
+                TextTurnAction::Continue => {
+                    text_turns += 1;
+                    session_log::warn(
+                        rt,
+                        &format!(
+                            "step {step} 无工具调用回合（第 {text_turns}/{MAX_TEXT_TURNS} 次），注入续跑提示后继续"
+                        ),
+                    );
+                    rt.history.lock().unwrap().push(Message::user_text(
+                        "<continue-notice>你在上一回合只输出了文字、没有发起工具调用。若任务尚未完成，\
+                         立即继续调用工具推进；全部完成时以 <report>…</report> 包裹输出最终汇报。</continue-notice>",
+                    ).stamped());
+                    // continue 跳过循环尾的 checkpoint 与空转看门狗：前者对非主会话直接
+                    // return（本分支只可能在非主会话 run 命中，finish_on_text=false），
+                    // 后者只按「有工具调用的批次」喂入——均为有意为之，勿挪到主会话语义。
+                    continue 'steps;
+                }
+                TextTurnAction::StopWithLimit => {
+                    let msg = format!(
+                        "连续 {} 步未发起工具调用（模型只输出文字、任务无进展），本 run 终止；\
+                         已产生的历史保留，请基于现状收尾。",
+                        text_turns + 1
+                    );
+                    session_log::warn(rt, &msg);
+                    tracing::warn!("session {} {msg}", rt.id);
+                    // 终止引导（与监督终止同模式）：下一 run 先用 ask 问用户如何处置
+                    rt.history.lock().unwrap().push(Message::user_text(
+                        "<text-turn-limit>连续多步只输出文字、未发起任何工具调用，本 run 已终止。\
+                         若用户重新发起运行，先用 ask 工具确认：继续（说明已准备的新推进方式）或就此收尾。</text-turn-limit>",
+                    ).stamped());
+                    outcome = Err(ProviderError::Protocol(msg));
+                    break 'steps;
+                }
+            }
         }
+        // 有工具调用的回合：无工具调用计数复位（续跑需重新计数）
+        text_turns = 0;
         // 空转看门狗：每步一次摘要喂入（进展信号 = 非只读工具 / 首次读新文件）。
         // 只读判定按工具名集合（core 不依赖 tools 类型）；read 路径归一化后去重。
         // 在 calls 被 move 进批次执行前构造摘要。
@@ -963,12 +1103,13 @@ pub async fn run_task_agent(
         exclude_mcp: true,
         exclude_tools: vec!["ask".into(), "subagent".into(), "scheduled_task".into(), "suggest".into(), "wait".into()],
         system_extra: format!(
-            "\n<task-run>你正在执行计划任务「{}」。完成后用简短汇报结束，不要向用户提问。指令：{}</task-run>",
+            "\n<task-run>你正在执行计划任务「{}」。完成后用简短汇报结束，不要向用户提问；最终汇报必须用 <report>…</report> 包裹（未包裹的文字不会被当作任务结果）。指令：{}</task-run>",
             task.name, task.instruction
         ),
         budget_notice: true,
         emit_events: false,
         force_report: true,
+        finish_on_text: false,
         main_session: false,
         parent_cancel: None,
     };
@@ -979,7 +1120,11 @@ pub async fn run_task_agent(
         .push(Message::user_text(task.instruction.clone()).stamped());
     let run_id = format!("task_{}", task.id);
     let (result, usage, _) = drive_agent(&core, &rt, params, &run_id).await;
-    (result.map_err(|e| e.to_string()), usage)
+    // 任务结果剥离 <report> 包裹（标记只用于收尾判定，不进入任务日志与通知）
+    (
+        result.map(|r| split_report(&r).0).map_err(|e| e.to_string()),
+        usage,
+    )
 }
 
 /// 按尝试次数取退避间隔并休眠（attempt 从 1 起，与 retry 层约定一致）。

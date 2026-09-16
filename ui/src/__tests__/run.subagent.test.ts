@@ -117,6 +117,28 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect(tabOf(session).subStreams.sub_1.timeline).toHaveLength(2);
   });
 
+  it("sub:done 携带 steps_used/ended：刷新最终步数并标记收尾原因；无新字段的旧 payload 仍照常收尾", () => {
+    const h = handlers();
+    h["sub:spawn"]({ session, sub_id: "sub_early", role: "frontend-dev", description: "d", max_steps: 80 });
+    // 轮询采样值（22）在收尾时会滞后于真实已启动步数（37）
+    h["sub:step"]({ session, sub_id: "sub_early", step: 22 });
+    expect(tabOf(session).subs[0].step).toBe(22);
+
+    h["sub:done"]({ session, sub_id: "sub_early", steps_used: 37, ended: "no_report" });
+    const sub = tabOf(session).subs[0];
+    expect(sub.step).toBe(37);
+    expect(sub.ended).toBe("no_report");
+    expect(sub.status).toBe("done");
+    expect(tabOf(session).subStreams.sub_early.status).toBe("done");
+
+    // 旧会话 / 旧后端：payload 不带新字段 → 收尾照常，ended 保持缺省（前端按正常收尾展示）
+    h["sub:spawn"]({ session, sub_id: "sub_legacy", role: "explore", description: "d", max_steps: 10 });
+    h["sub:done"]({ session, sub_id: "sub_legacy" });
+    const legacy = tabOf(session).subs.find((x) => x.subId === "sub_legacy")!;
+    expect(legacy.status).toBe("done");
+    expect(legacy.ended).toBeUndefined();
+  });
+
   it("子代理流内 tool_progress 落锚点，tool:result（session=sub_id）路由回填工具卡", () => {
     const h = handlers();
     h["sub:spawn"]({ session, sub_id: "sub_1", role: "backend-dev", description: "d", max_steps: 10 });

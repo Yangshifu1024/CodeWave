@@ -197,6 +197,8 @@ export default {
     noProcess: "未记录过程详情，仅显示任务与最终汇报",
     runningCount: "{{n}} 个子智能体运行中",
     stop: "停止该子代理",
+    endedEarly: "提前结束",
+    endedBudget: "预算耗尽",
   },
   diff: { title: "工作区变更（vs HEAD）", empty: "无变更" },
   git: { notConfigured: "未配置" },
