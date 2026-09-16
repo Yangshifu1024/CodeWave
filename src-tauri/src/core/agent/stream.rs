@@ -23,6 +23,14 @@ pub(super) const ERROR_CAP: usize = 500;
 /// 同一份快照，就会复现同一个错误（会话 d9941c4b 实测：相隔 2.45s 的两条逐字节相同的
 /// 400）。这里统一保证「无论历史为何，出网副本必满足 wire 不变量」。不改写
 /// `rt.history`（但会置位每 run 一次的瞬态注入标志）。
+///
+/// 粘性剥思考分支（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 会话级标记 `reasoning_rejected` 置位（该端点不认 `reasoning_content`，见 drive.rs 的
+/// 400 分类）时，副本先行剥掉全部 Thinking 块。这与 `repair::sanitize` 兜底是两层保险：
+/// sanitize 是**一次性**历史修复（400 后改写 `rt.history`），而粘性标记保的是「此后每次
+/// 请求都不再回传」——否则每步新产的思考会重新带上线，每步各撞一次 400，而 BadRequest
+/// 按约定不重试，run 直接失败。粘性剥思考只作用于这份副本：`rt.history` 与落盘数据不动，
+/// 思考仍留在转录里，用户切回正常模型后仍可回传（`sanitize` 兜底则改写 `rt.history`，不落盘）。
 pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
     let mut messages = rt.history.lock().unwrap().clone();
     // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
@@ -38,7 +46,31 @@ pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
                 .store(true, Ordering::SeqCst);
         }
     }
+    // 会话级粘性剥思考：该端点已明确拒收 reasoning_content，每次回传都会 400——
+    // 只改这份出网副本，转录（rt.history）里的思考数据原样保留。
+    if rt.reasoning_rejected.load(Ordering::SeqCst) {
+        let dropped = drop_thinking_blocks(&mut messages);
+        tracing::debug!(
+            "会话 {} 出网副本剥除思考块 {dropped} 个（上游拒收 reasoning_content）",
+            rt.id
+        );
+    }
     repair_before_send(messages)
+}
+
+/// 出网副本剥思考（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 仅当会话级标记 `reasoning_rejected` 置位时调用——该上游不认 `reasoning_content` 字段，
+/// 每次回传都会 400。只丢 Thinking 块，Text / ToolUse / ToolResult / Image 一律不动。
+/// 返回被丢弃的思考块数。
+pub(super) fn drop_thinking_blocks(messages: &mut Vec<Message>) -> usize {
+    let mut dropped = 0;
+    for m in messages.iter_mut() {
+        let before = m.content.len();
+        // retain 保持剩余块的相对顺序
+        m.content.retain(|c| !matches!(c, Content::Thinking { .. }));
+        dropped += before - m.content.len();
+    }
+    dropped
 }
 
 /// 出网副本的修复步骤（纯函数，便于单测）：复用会话修复管线的 `repair`——
@@ -265,6 +297,127 @@ mod anchor_tests {
         assert!(!answered.contains(&"ghost"), "孤儿 tool_result 应被清掉");
     }
 
+    // 缺陷修复：出网副本不得丢弃 `Content::Thinking`——它是 run 内回传 reasoning_content
+    // 的唯一载体（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)），
+    // 丢了修复就失效（上游判 400）。反例参照：`repair::sanitize` 会丢思考（400 降级阀），
+    // 出网副本路径不走它。
+    #[test]
+    fn repair_before_send_keeps_thinking_blocks() {
+        use crate::core::types::{Content, Message, Role};
+        let history = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "先看文件".into(),
+                    },
+                    Content::Text {
+                        text: "答案".into(),
+                    },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: serde_json::json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "r".into(),
+                is_error: false,
+            }]),
+        ];
+
+        // 反例参照：同一条历史走 provider 降级阀 sanitize（重试前修复路径）会剥掉思考
+        let mut degraded = history.clone();
+        crate::core::sessions::repair::sanitize(&mut degraded);
+        assert!(
+            !degraded
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "参照：sanitize 必须丢思考（降级阀），出网副本路径不得走它"
+        );
+
+        // 出网副本路径：思考块原样留存
+        let out = super::repair_before_send(history);
+        let thinking: Vec<&str> = out
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::Thinking { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            thinking,
+            vec!["先看文件"],
+            "出网副本丢失 Thinking 块 → reasoning_content 回传失效"
+        );
+        // 思考所在消息的其余块与到达顺序不受修复影响
+        let assistant = out
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("assistant 消息仍在");
+        assert_eq!(assistant.content.len(), 3, "修复不得增删内容块");
+        assert!(matches!(&assistant.content[1], Content::Text { text } if text == "答案"));
+        assert!(matches!(&assistant.content[2], Content::ToolUse { id, .. } if id == "t1"));
+    }
+
+    // 修复幂等：连续两次出网修复结果完全相同（首轮补的 [interrupted] 结果不得在第二轮
+    // 再补一次，否则重试路径上的副本会持续膨胀）。
+    #[test]
+    fn repair_before_send_is_idempotent() {
+        use crate::core::types::{Content, Message, Role};
+        let dirty = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "想".into(),
+                    },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: serde_json::json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "ghost".into(),
+                content: "orphan".into(),
+                is_error: false,
+            }]),
+        ];
+        let once = super::repair_before_send(dirty);
+        let twice = super::repair_before_send(once.clone());
+        assert_eq!(once, twice, "修复必须幂等：二次修复不得改变副本");
+        // 幂等的可观测含义：补出来的 [interrupted] 结果只出现一次，思考仍在
+        let interrupted = once
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|c| {
+                matches!(c, Content::ToolResult { content, .. } if content.starts_with("[interrupted]"))
+            })
+            .count();
+        assert_eq!(interrupted, 1, "悬空 tool_use 只能补一次 [interrupted] 结果");
+        assert!(
+            once.iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "幂等路径同样不得丢思考"
+        );
+    }
+
     /// n < 16 不启用代际断点（含压缩后历史骤减的场景）。
     #[test]
     fn gen_anchor_disabled_when_history_short() {
@@ -276,6 +429,110 @@ mod anchor_tests {
     #[test]
     fn gen_anchor_resets_when_out_of_range() {
         assert_eq!(gen_anchor_next(Some(50), 20), Some(12));
+    }
+
+    // 粘性剥思考（上游拒收 reasoning_content 字段）：只丢 Thinking，其余块逐字不变且保序
+    #[test]
+    fn drop_thinking_blocks_keeps_everything_else() {
+        use crate::core::types::{Content, Message, Role};
+        let mut messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "先看文件".into(),
+                    },
+                    Content::Text {
+                        text: "答案".into(),
+                    },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: serde_json::json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "r".into(),
+                is_error: false,
+            }]),
+            Message {
+                role: Role::User,
+                content: vec![Content::Image {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                }],
+                created_at: None,
+            },
+        ];
+        // 期望结果：仅 assistant 的 Thinking 块消失，其余部分逐字节相同
+        let mut expected = messages.clone();
+        expected[1].content.remove(0);
+        assert_eq!(super::drop_thinking_blocks(&mut messages), 1, "应报告剥除 1 个思考块");
+        assert_eq!(messages, expected, "除 Thinking 外任何块或顺序变动都是回归");
+        assert!(
+            !messages
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "出网副本不得残留 Thinking 块"
+        );
+        // 无思考时报告 0（幂等、不破坏其他块）
+        let mut clean = expected.clone();
+        assert_eq!(super::drop_thinking_blocks(&mut clean), 0);
+        assert_eq!(clean, expected);
+    }
+
+    // 集成：粘性标记置位后的 messages_for_request 出网副本不含思考，且 rt.history 不被改写
+    #[test]
+    fn messages_for_request_drops_thinking_when_reasoning_rejected() {
+        use crate::core::agent::runtime::SessionRuntime;
+        use crate::core::types::{Content, Message, Role};
+        use std::sync::atomic::Ordering;
+        let rt = SessionRuntime::new(
+            "s-sticky".into(),
+            std::env::temp_dir(),
+            std::env::temp_dir(),
+        );
+        let history = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "想".into(),
+                    },
+                    Content::Text {
+                        text: "答案".into(),
+                    },
+                ],
+                created_at: None,
+            },
+        ];
+        *rt.history.lock().unwrap() = history.clone();
+
+        // 标记未置位：出网副本仍带思考（今日行为不变）
+        let kept = super::messages_for_request(&rt);
+        assert!(
+            kept.iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "标记未置位时不得剥思考（要求回传的端点靠它拿数据）"
+        );
+
+        // 标记置位：副本不含思考，转录原样不动
+        rt.reasoning_rejected.store(true, Ordering::SeqCst);
+        let out = super::messages_for_request(&rt);
+        assert!(
+            !out.iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "粘性标记置位后出网副本必须无思考块"
+        );
+        assert_eq!(rt.history.lock().unwrap().as_slice(), history.as_slice(), "绝不得改写 rt.history");
     }
 }
 

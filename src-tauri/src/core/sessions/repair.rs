@@ -1,5 +1,5 @@
 //! 防御性历史修复管线（[docs/p0-plan](../../../../docs/p0-plan.md) §8.2）：
-//! sanitize（去 system、修截断 args、折叠重复；图片剥离按变体拆分）
+//! sanitize（去 system、修截断 args、折叠重复；图片剥离与思考保留按变体拆分）
 //! → trim（预算内按轮边界裁剪）→
 //! repair（tool_use/tool_result 配对不变量）。全部纯函数。
 
@@ -8,6 +8,9 @@ use crate::util::token_est::est_tokens_message;
 
 /// 保存前处理，返回警告列表。图片 payload 保留——重开会话后消息附件仍可显示
 /// （token 估算按每图 1600，与会话未关闭时同语义；存储侧有 gzip + 8MB 上限兜底）。
+/// 思考块同样保留（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// OpenAI 兼容的 thinking 上游要求多轮历史 assistant 消息回传 `reasoning_content`，
+/// 落盘时剥离思考会让重启后的会话无数据可回传，多轮必然 400。
 pub fn prepare_for_save(mut msgs: Vec<Message>) -> Vec<Message> {
     let w = sanitize_for_save(&mut msgs);
     if !w.is_empty() {
@@ -23,20 +26,37 @@ pub fn prepare_on_load(mut msgs: Vec<Message>) -> Vec<Message> {
     msgs
 }
 
-/// sanitize（provider 修复变体）：在保存变体之上，把图片 payload 换成占位文本——
-/// BadRequest 重试兜底依赖剥图减负。会话保存请用 [`sanitize_for_save`]。
+/// sanitize（provider 修复变体，兼 400 降级兜底）：剥图（占位文本）+ **丢思考**。
+/// 这是刻意的降级阀——上游若拒收回传的 `reasoning_content`（不认该字段，而不是要求它），
+/// 首请求 400 后由本变体剥掉思考与图片再重试即成功。语义必须与保存变体分叉，勿“顺手统一”。
+/// 会话保存请用 [`sanitize_for_save`]；8MB 上限回退请用 [`sanitize_keep_thinking`]。
 pub fn sanitize(msgs: &mut Vec<Message>) -> Vec<String> {
-    sanitize_inner(msgs, true)
+    sanitize_inner(msgs, true, true)
 }
 
-/// sanitize（会话保存变体）：去 system、去 thinking、修截断工具参数、折叠重复
-/// tool_use；图片 payload 保留。
+/// sanitize（会话保存变体）：去 system、**保思考**、修截断工具参数、折叠重复
+/// tool_use；图片 payload 保留（重开后附件仍显示）。
+/// 保留思考的理由见 [docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)：
+/// OpenAI 兼容的 thinking 上游要求多轮历史回传 `reasoning_content`，落盘中剥离即永久丢失；
+/// Anthropic 侧因 thinking 签名约束仍在出站丢弃思考，与本文件无关。
 pub fn sanitize_for_save(msgs: &mut Vec<Message>) -> Vec<String> {
-    sanitize_inner(msgs, false)
+    sanitize_inner(msgs, false, false)
 }
 
-/// sanitize 共同主体：`strip_images` 区分保存变体（保图）与 provider 修复变体（剥图）。
-fn sanitize_inner(msgs: &mut Vec<Message>, strip_images: bool) -> Vec<String> {
+/// sanitize（存储 8MB 超限回退变体，由 `sessions/store.rs` 调用）：剥图（占位文本，
+/// 为压进上限减负）+ **保思考**。回退只为把转录压进上限，而思考恰是回传
+/// `reasoning_content` 所必需的数据——既然剥图已足够减负，就不该顺手把思考丢掉。
+pub fn sanitize_keep_thinking(msgs: &mut Vec<Message>) -> Vec<String> {
+    sanitize_inner(msgs, true, false)
+}
+
+/// sanitize 共同主体：`strip_images` 区分保存变体（保图）与修复变体（剥图），
+/// `strip_thinking` 区分降级兜底（丢思考）与落盘/回退（保思考，且原地保序）。
+fn sanitize_inner(
+    msgs: &mut Vec<Message>,
+    strip_images: bool,
+    strip_thinking: bool,
+) -> Vec<String> {
     let mut warnings = Vec::new();
     msgs.retain(|m| m.role != Role::System);
     for m in msgs.iter_mut() {
@@ -50,7 +70,7 @@ fn sanitize_inner(msgs: &mut Vec<Message>, strip_images: bool) -> Vec<String> {
                         text: format!("[image {media_type} omitted]"),
                     })
                 }
-                Content::Thinking { .. } => None,
+                Content::Thinking { .. } if strip_thinking => None,
                 other => Some(other.clone()),
             })
             .collect();
@@ -239,6 +259,42 @@ mod tests {
         }
     }
 
+    /// 含 system + 纯文本 + 图片载荷的基础历史（各 sanitize 变体测试共用）。
+    fn base() -> Vec<Message> {
+        vec![
+            Message {
+                role: Role::System,
+                content: vec![Content::Text { text: "sys".into() }],
+                created_at: None,
+            },
+            Message::user_text("q"),
+            Message {
+                role: Role::User,
+                content: vec![Content::Image {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                }],
+                created_at: None,
+            },
+        ]
+    }
+
+    /// 一条带思考块的 assistant 消息（思考在前、正文在后，模拟真实流式落块顺序）。
+    fn thinking_msg() -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Thinking {
+                    text: "先看文件".into(),
+                },
+                Content::Text {
+                    text: "答案".into(),
+                },
+            ],
+            created_at: None,
+        }
+    }
+
     // 用例 1：悬空 tool_use → 补 interrupted 结果
     #[test]
     fn dangling_tool_use_gets_interrupted_result() {
@@ -417,25 +473,6 @@ mod tests {
     // 用例 6（8MB 上限在 sessions/store 测试）；sanitize 变体：保存保图、provider 修复剥图：
     #[test]
     fn sanitize_image_handling_split_by_variant() {
-        let base = || {
-            vec![
-                Message {
-                    role: Role::System,
-                    content: vec![Content::Text { text: "sys".into() }],
-                    created_at: None,
-                },
-                Message::user_text("q"),
-                Message {
-                    role: Role::User,
-                    content: vec![Content::Image {
-                        media_type: "image/png".into(),
-                        data: "AAAA".into(),
-                    }],
-                    created_at: None,
-                },
-            ]
-        };
-
         // 会话保存变体：system 被去、图片 payload 保留（重开后附件仍显示）
         let mut msgs = base();
         sanitize_for_save(&mut msgs);
@@ -449,5 +486,77 @@ mod tests {
         sanitize(&mut msgs);
         assert_eq!(msgs.len(), 2);
         assert!(matches!(&msgs[1].content[0], Content::Text { text } if text.contains("omitted")));
+    }
+
+    // 思考块的落盘 / 兜底分叉（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+    // OpenAI 兼容的 thinking 上游要求历史 assistant 消息回传 `reasoning_content`，
+    // 落盘剥离思考 = 重启后无数据可回传，多轮必然 400，因此保存与 8MB 回退变体必须保思考。
+
+    // 保思考：思考块原地保序留存（回传数据源）
+    #[test]
+    fn sanitize_for_save_keeps_thinking() {
+        let mut msgs = vec![Message::user_text("q"), thinking_msg()];
+        let warnings = sanitize_for_save(&mut msgs);
+        assert!(warnings.is_empty(), "保图保思考不该产生警告：{warnings:?}");
+        assert_eq!(msgs[1].content.len(), 2, "思考块与正文原样留存，不新增块");
+        assert!(
+            matches!(&msgs[1].content[0], Content::Thinking { text } if text == "先看文件"),
+            "思考块必须原地保序"
+        );
+        assert!(matches!(&msgs[1].content[1], Content::Text { text } if text == "答案"));
+    }
+
+    // 丢思考：今天的行为（上游拒收回传时的降级阀），铉死不回归
+    #[test]
+    fn sanitize_drops_thinking_as_degrade_valve() {
+        let mut msgs = vec![Message::user_text("q"), thinking_msg()];
+        sanitize(&mut msgs);
+        assert!(
+            !msgs
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. })),
+            "provider 修复变体必须丢思考（400 降级阀）"
+        );
+        // 其余块不受影响
+        assert!(matches!(&msgs[1].content[0], Content::Text { text } if text == "答案"));
+    }
+
+    // 8MB 回退变体：剥图（占位文本）但保思考
+    #[test]
+    fn sanitize_keep_thinking_strips_images_but_keeps_thinking() {
+        let mut msgs = base();
+        msgs.push(thinking_msg());
+        let warnings = sanitize_keep_thinking(&mut msgs);
+        assert_eq!(warnings, vec!["图片 payload 已剥离".to_string()]);
+        assert_eq!(msgs.len(), 3, "system 被去（4 → 3）后追加的 assistant 仍在");
+        assert!(
+            matches!(&msgs[1].content[0], Content::Text { text } if text.contains("omitted")),
+            "图片 payload 必须换成占位文本"
+        );
+        assert!(
+            matches!(&msgs[2].content[0], Content::Thinking { text } if text == "先看文件"),
+            "回退路径同样保思考"
+        );
+    }
+
+    // 内存内 sanitize 管线往返后思考仍在（重启会话仍能回传 reasoning_content）——
+    // 注意本用例只跑 prepare_for_save/prepare_on_load 两个纯函数，不经磁盘/serde/gzip
+    #[test]
+    fn thinking_survives_sanitize_pipeline_roundtrip() {
+        let loaded = prepare_on_load(prepare_for_save(vec![
+            Message::user_text("q"),
+            thinking_msg(),
+            Message::user_text("再问"),
+        ]));
+        let kept: Vec<String> = loaded
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::Thinking { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kept, vec!["先看文件".to_string()], "往返后思考块丢失");
     }
 }

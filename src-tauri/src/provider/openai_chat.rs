@@ -112,12 +112,31 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
             // 空 assistant 消息不上 wire（缺陷修复）：Chat Completions 不接受 content 为
             // null 且无 tool_calls 的 assistant 消息（400 Invalid assistant message）。
             // 历史侧已在 repair（丢空消息）与出网副本两层拦截，这里是最后一道 wire 门。
+            // 判定只看 text / tool_uses：仅含思考块的消息同样整条丢弃，不能因为「有 thinking」而放行。
             if text.is_empty() && tool_uses.is_empty() {
                 return;
             }
+            // reasoning_content 回传（缺陷修复，[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)）：
+            // OpenAI 兼容的 thinking 上游（如经中转的 DeepSeek 系模型）要求多轮对话中历史
+            // assistant 消息把该轮产生的思维链原样带回，缺失会 400（The reasoning_content in
+            // the thinking mode must be passed back to the API）。按内容块到达顺序收集非空
+            // 思考块，以 "\n\n" 拼接。
+            let reasoning = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    Content::Thinking { text } if !text.is_empty() => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
             let mut v = json!({ "role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text) } });
             if !tool_uses.is_empty() {
                 v["tool_calls"] = Value::Array(tool_uses);
+            }
+            // 没收集到思考块时不写该键（不发空串 / null）：纯文本与工具调用消息的 wire 字节保持不变
+            if !reasoning.is_empty() {
+                v["reasoning_content"] = json!(reasoning);
             }
             out.push(v);
         }
@@ -711,5 +730,143 @@ mod tests {
         );
         assert!(acc.finished);
         assert_eq!(acc.tool_ids.get(&0), Some(&("c1".into(), "read".into())));
+    }
+
+    // 缺陷修复（[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)）：
+    // 历史 assistant 消息里的思考块必须以 reasoning_content 原样回传，否则 OpenAI 兼容的
+    // thinking 上游返回 400；同一消息的 content / tool_calls 输出保持原样。
+    #[test]
+    fn assistant_thinking_becomes_reasoning_content() {
+        // 思考文本与工具调用 id 刻意取不同值：若装配层把工具 id 误当思考（或反之），
+        // 本用例必须失败。同值（旧版两处都用 "t1"）会让该缺陷逃逸。
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking { text: "reason-t1".into() },
+                    Content::Text { text: "hi".into() },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "data".into(),
+                is_error: false,
+            }]),
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        let assistant = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
+        assert_eq!(assistant["reasoning_content"], "reason-t1");
+        assert_eq!(assistant["content"], "hi");
+        assert_eq!(assistant["tool_calls"][0]["id"], "t1");
+    }
+
+    #[test]
+    fn assistant_reasoning_content_joins_thinking_blocks_in_order() {
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "first".into(),
+                    },
+                    Content::Text {
+                        text: "answer".into(),
+                    },
+                    Content::Thinking {
+                        text: "second".into(),
+                    },
+                ],
+                created_at: None,
+            },
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        let assistant = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
+        assert_eq!(assistant["reasoning_content"], "first\n\nsecond");
+        assert_eq!(assistant["content"], "answer");
+    }
+
+    /// 防漂移：无思考块（或仅空思考块）的 assistant 消息不得出现 reasoning_content 键。
+    #[test]
+    fn assistant_without_thinking_has_no_reasoning_content_key() {
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text { text: "hi".into() }],
+                created_at: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Thinking { text: String::new() }],
+                created_at: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Text { text: "ok".into() },
+                    Content::ToolUse {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        args: json!({ "files": [] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "data".into(),
+                is_error: false,
+            }]),
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        let mut saw = 0;
+        for m in msgs {
+            if m["role"] == "assistant" {
+                saw += 1;
+                assert!(
+                    m.get("reasoning_content").is_none(),
+                    "无思考块的 assistant 消息不得带 reasoning_content：{m}"
+                );
+            }
+        }
+        assert_eq!(saw, 2, "纯文本 / 含工具调用的 assistant 消息都应在 wire 上");
+    }
+
+    /// 守卫语义钉死：仅含思考块的 assistant 消息整条不上 wire（thinking 不足以放行）。
+    #[test]
+    fn assistant_with_only_thinking_stays_off_wire() {
+        let mut req = test_request();
+        req.messages = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Thinking {
+                    text: "only-thought".into(),
+                }],
+                created_at: None,
+            },
+        ];
+        let body = build_body(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs.iter().all(|m| m["role"] != "assistant"));
+        assert!(
+            !body.to_string().contains("only-thought"),
+            "仅含思考块的消息不上 wire：{body}"
+        );
     }
 }

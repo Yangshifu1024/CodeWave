@@ -102,4 +102,38 @@ mod tests {
         };
         assert_eq!(est_tokens_message(&image), 8 + 1600);
     }
+
+    // 思考块计入预算：reasoning_content 回传依赖历史里保留的 Thinking 块
+    // ([docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md))，
+    // 若预算不计入它，压缩/裁剪会低估真实占用而超窗；这里钉死 Thinking 分支非零贡献。
+    #[test]
+    fn message_estimates_include_thinking() {
+        use crate::core::types::{Content, Message};
+        let thinking = Message {
+            role: crate::core::types::Role::Assistant,
+            content: vec![Content::Thinking {
+                text: "abcdefgh".into(),
+            }],
+            created_at: None,
+        };
+        assert_eq!(
+            est_tokens_message(&thinking),
+            8 + est_tokens_text("abcdefgh")
+        );
+        assert_eq!(est_tokens_message(&thinking), 10);
+        assert!(
+            est_tokens_message(&thinking) > 8,
+            "思考文本必须计入预算（贡献不得为 0）"
+        );
+
+        // 等价长度对照：Text 与 Thinking 同被计入，估计值一致
+        let mut text_only = thinking.clone();
+        text_only.content = vec![Content::Text {
+            text: "abcdefgh".into(),
+        }];
+        assert_eq!(
+            est_tokens_message(&text_only),
+            est_tokens_message(&thinking)
+        );
+    }
 }

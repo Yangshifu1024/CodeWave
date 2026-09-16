@@ -122,6 +122,12 @@ pub struct SessionRuntime {
     pub paths_cache: Mutex<Option<(std::time::Instant, Vec<String>)>>,
     /// 本 run 是否已注入计划瞬态快照（每 run 复位）
     pub injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool,
+    /// 上游拒收回传 `reasoning_content`（not accepted / unrecognized field）的会话级粘性标记：
+    /// 命中一次后本会话出网副本不再回传思考（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）。
+    /// 与 `sanitize`（一次性历史修复）不同，这是「该端点不认该字段」的学习结果，跨 step / 跨 run 保持；
+    /// 收到 `Demanded` 分类时由 `drive::update_reasoning_sticky` 复位（自愈阀，防误判 / 切端点后永久剥思考）。
+    /// 子代理 runtime 由 `new_sub` 继承父会话当前值（同一进程内同一 provider 的端点特性一致）。
+    pub reasoning_rejected: AtomicBool,
     /// 本 run 是否已发过「计划无进行中条目」软提醒（原子 CAS 每 run 至多一次；run_chat 起点复位）
     pub plan_hint_emitted: std::sync::atomic::AtomicBool,
     /// 会话已删除（评审 H5）：置位后迟到的 run 收尾不得再检查点/写日志复活幽灵会话
@@ -189,6 +195,7 @@ impl SessionRuntime {
             breakdown_cache: Mutex::new(None),
             paths_cache: Mutex::new(None),
             injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool::new(false),
+            reasoning_rejected: AtomicBool::new(false),
             plan_hint_emitted: std::sync::atomic::AtomicBool::new(false),
             zombie: AtomicBool::new(false),
             prefs: Mutex::new(crate::core::prefs::SessionPrefs::default()),
@@ -218,6 +225,8 @@ impl SessionRuntime {
     }
 
     /// 任务运行专用隔离 runtime（无注入队列语义；is_task_runtime 置位后跳过产物登记）。
+    /// 无父 runtime 可继承（签名不含 parent，且可来自 scheduler 的任意项目）——`reasoning_rejected`
+    /// 从 false 起步，首个 400 自行分类置位。
     pub fn new_task(
         id: String,
         data_dir: PathBuf,
@@ -238,6 +247,12 @@ impl SessionRuntime {
             r.project_id = parent.project_id.clone();
             r.roots = parent.roots.clone();
             r.project_dir = parent.project_dir.clone();
+            // 继承父会话的粘性剥思考标记（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+            // 同一进程内同一 provider 的端点特性一致，子代理不必在首个请求上再撞一次 400。
+            // 继承的是「当前值」：父此后由 400 分类自愈（`Demanded` 复位）时已存在的子 runtime 不跟随
+            // ——下一条 400 会让子自己重新分类（对称自愈，无需父子间反向回写）。
+            r.reasoning_rejected =
+                AtomicBool::new(parent.reasoning_rejected.load(Ordering::SeqCst));
             // [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：子代理写登记归属主会话（父本身也是子代理时取其归属，
             // 防嵌套链条断裂）
             r.root_session_id = Some(
