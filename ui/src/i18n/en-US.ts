@@ -197,6 +197,8 @@ export default {
     noProcess: "Process details not recorded; showing task and final report only",
     runningCount: "{{n}} subagent(s) running",
     stop: "Stop this subagent",
+    endedEarly: "Ended early",
+    endedBudget: "Budget exhausted",
   },
   diff: { title: "Workspace changes (vs HEAD)", empty: "No changes" },
   git: { notConfigured: "Not configured" },

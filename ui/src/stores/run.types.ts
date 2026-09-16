@@ -72,6 +72,10 @@ export interface SubView {
   tokens: number;
   lastTools: string[];
   status: "running" | "done" | "error";
+  /** 收尾时的真实已启动步数（sub:done 刷新，纠正轮询采样滞后） */
+  stepsUsed?: number;
+  /** 收尾原因（sub:done）：report = 正常汇报收尾；budget = 预算耗尽；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示 */
+  ended?: "report" | "budget" | "no_report";
   /** 运行摘录（sub:step 采样） */
   detail?: string;
   /** 最终报告（sub:report，收尾前下发） */

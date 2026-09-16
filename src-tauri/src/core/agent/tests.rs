@@ -39,6 +39,121 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
         }
     }
 
+    /// 无工具调用回合的处置矩阵（[docs/subagent-text-turn-premature-exit](../../../../docs/subagent-text-turn-premature-exit.md)）：
+    /// 主会话语义不变；子代理/任务须带 `<report>` 标记收尾，否则有界续跑，超限显式失败
+    ///（绝不静默把过程旁白当成功收尾）。
+    #[test]
+    fn text_turn_action_matrix() {
+        use super::drive::{text_turn_action, TextTurnAction, MAX_TEXT_TURNS};
+        // ① 主会话：纯文本回合即完成（行为不变）
+        assert_eq!(text_turn_action("答完了", true, 0), TextTurnAction::Finish);
+        assert_eq!(text_turn_action("", true, 9), TextTurnAction::Finish);
+        // ② 非主会话 + <report> 标记 → 完成（不计数）
+        assert_eq!(
+            text_turn_action("<report>完成 A，未完成 B</report>", false, 0),
+            TextTurnAction::Finish
+        );
+        assert_eq!(
+            text_turn_action("回报如下 <report>x</report>", false, MAX_TEXT_TURNS),
+            TextTurnAction::Finish
+        );
+        // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
+        assert_eq!(
+            text_turn_action("接下来我来改 AppShell", false, 0),
+            TextTurnAction::Continue
+        );
+        assert_eq!(
+            text_turn_action("", false, MAX_TEXT_TURNS - 1),
+            TextTurnAction::Continue
+        );
+        // ④ 触上限 → 显式失败（不伪装成功）
+        assert_eq!(
+            text_turn_action("仍然只是旁白", false, MAX_TEXT_TURNS),
+            TextTurnAction::StopWithLimit
+        );
+        assert_eq!(
+            text_turn_action("", false, MAX_TEXT_TURNS + 5),
+            TextTurnAction::StopWithLimit
+        );
+    }
+
+    /// `<report>` 标记剥离：标记只用于收尾判定，不进入汇报正文。
+    #[test]
+    fn split_report_strips_tag() {
+        use super::drive::split_report;
+        assert_eq!(split_report("普通汇报"), ("普通汇报".to_string(), false));
+        assert_eq!(
+            split_report("<report>完成 A，未完成 B</report>"),
+            ("完成 A，未完成 B".to_string(), true)
+        );
+        // 标记之外的话术不属于汇报正文
+        assert_eq!(
+            split_report("我这就收尾\n<report>结论</report>"),
+            ("结论".to_string(), true)
+        );
+        // 未闭合标记：其后全部视为正文
+        assert_eq!(
+            split_report("<report>未闭合"),
+            ("未闭合".to_string(), true)
+        );
+        // 多个标记：只取第一个（标记即汇报边界）
+        assert_eq!(
+            split_report("<report>第一段</report> <report>第二段</report>"),
+            ("第一段".to_string(), true)
+        );
+        // 闭合标记之后的尾随正文丢弃
+        assert_eq!(
+            split_report("<report>A</report> 附注"),
+            ("A".to_string(), true)
+        );
+        // 只有闭合标记（模型写坏的常见形态）→ 视为不带标记
+        assert_eq!(
+            split_report("结论</report>"),
+            ("结论</report>".to_string(), false)
+        );
+    }
+
+    /// 连续无工具调用触上限：显式失败（绝不静默当成功）+ 终止引导消息进历史。
+    /// 文档 §4 承诺的端到端用例（修复前：第 1 个纯文本回合就以旁白为最终汇报成功退出）。
+    #[tokio::test]
+    async fn consecutive_text_turns_stop_at_limit() {
+        let body = sse_body(&[
+            r#"{"choices":[{"delta":{"content":"仍然只是旁白"}}]}"#,
+            SSE_STOP,
+        ]);
+        // 4 连纯文本：MAX_TEXT_TURNS(3) 次续跑后第 4 步终止
+        let (port, hits) = spawn_scripted_sse(vec![
+            body.clone(),
+            body.clone(),
+            body.clone(),
+            body,
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "sub-text-limit");
+        let params = DriveParams {
+            max_steps: 8,
+            finish_on_text: false,
+            emit_events: false,
+            ..DriveParams::default()
+        };
+        let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_text_limit").await;
+        assert!(
+            result.is_err(),
+            "连续无工具调用应以显式错误终止，而非成功收尾：{:?}",
+            result.ok()
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            4,
+            "3 次续跑提示后第 4 步终止（不是无限续跑，也不是第 1 步就收尾）"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            texts.iter().any(|t| t.contains("<text-turn-limit>")),
+            "应注入终止引导（下一 run 先用 ask 确认），实际历史：{texts:?}"
+        );
+    }
+
     #[tokio::test]
     async fn stream_request_bytes_stable_across_calls() {
         // [docs/p1-plan](../../../../docs/p1-plan.md) §8 质量门：同一会话连续请求必须前缀字节相等（缓存优先）
@@ -809,4 +924,204 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
                 .exists()
         );
         assert!(rt.is_main_session);
+    }
+
+    // ---- 端到端：无工具调用回合的收尾判定（[docs/subagent-text-turn-premature-exit](../../../../docs/subagent-text-turn-premature-exit.md)）----
+
+    /// 脚本化 SSE mock：按连接顺序逐个应答，并统计连接数（多回合端到端断言用）。
+    /// 脚本用尽后重复最后一条，避免断言失败时后续连接悬挂。
+    async fn spawn_scripted_sse(script: Vec<Vec<u8>>) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            let mut idx = 0usize;
+            while let Ok((mut sock, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 8192];
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+                if let Some(resp) = script.get(idx).or_else(|| script.last()) {
+                    let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, resp).await;
+                    let _ = tokio::io::AsyncWriteExt::flush(&mut sock).await;
+                }
+                idx += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        });
+        (port, hits)
+    }
+
+    /// openai_chat 协议 SSE 响应体（与 provider/tests_integration.rs 的 sse() 同构）。
+    fn sse_body(chunks: &[&str]) -> Vec<u8> {
+        let mut body = String::new();
+        for c in chunks {
+            body.push_str(&format!("data: {c}\n\n"));
+        }
+        body.push_str("data: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    const SSE_STOP: &str = r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
+
+    /// 指向脚本化 mock 的 core + runtime（两个 tempdir 由调用方绑定保活）。
+    #[allow(clippy::type_complexity)]
+    fn scripted_core(
+        port: u16,
+        name: &str,
+    ) -> (
+        Arc<AgentCore>,
+        Arc<SessionRuntime>,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = test_support::make_core(&roots);
+        {
+            let mut cfg = core.cfg.write().unwrap();
+            cfg.providers[0].base_url = format!("http://127.0.0.1:{port}/v1");
+            cfg.providers[0].keys = vec!["test-key".into()];
+        }
+        let rt = core.get_or_create_session(
+            name,
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        (core, rt, ws, dd)
+    }
+
+    fn history_texts(rt: &Arc<SessionRuntime>) -> Vec<String> {
+        rt.history
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 非主会话（子代理 / 任务运行）的纯文本回合不再结束 run：注入续跑提示继续，
+    /// 直到带 `<report>` 标记才收尾。修复前第 1 个纯文本回合即以旁白为最终汇报成功退出。
+    #[tokio::test]
+    async fn subagent_text_only_turn_does_not_end_run() {
+        let (port, hits) = spawn_scripted_sse(vec![
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"我先看看文件"}}]}"#,
+                SSE_STOP,
+            ]),
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"<report>完成 A，未完成 B</report>"}}]}"#,
+                SSE_STOP,
+            ]),
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "sub-text-turn");
+        let params = DriveParams {
+            max_steps: 6,
+            finish_on_text: false,
+            // 跳过上下文压缩分支（子代理同样是 emit_events: false）
+            emit_events: false,
+            ..DriveParams::default()
+        };
+        let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_text_turn").await;
+        assert!(result.is_ok(), "应正常收尾：{:?}", result.err());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "第 1 个纯文本回合不应结束 run（修复前连接数会是 1——旁白被当成最终汇报）"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            texts.iter().any(|t| t.contains("<continue-notice>")),
+            "应注入续跑提示，实际历史：{texts:?}"
+        );
+        assert!(result.unwrap().contains("<report>"));
+    }
+
+    /// 主会话对照：纯文本回合仍是「回答完毕」——行为逐字节不变（连接数 1）。
+    #[tokio::test]
+    async fn main_session_text_only_turn_ends_run() {
+        let (port, hits) = spawn_scripted_sse(vec![sse_body(&[
+            r#"{"choices":[{"delta":{"content":"答完了"}}]}"#,
+            SSE_STOP,
+        ])])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "main-text-turn");
+        let params = DriveParams {
+            max_steps: 6,
+            emit_events: false,
+            // finish_on_text 取默认 true = 主会话语义
+            ..DriveParams::default()
+        };
+        let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_main_text").await;
+        assert!(result.is_ok());
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "主会话纯文本回合应即结束");
+        assert_eq!(result.unwrap(), "答完了");
+        assert!(
+            !history_texts(&rt)
+                .iter()
+                .any(|t| t.contains("<continue-notice>")),
+            "主会话不应收到续跑提示"
+        );
+    }
+
+    /// 被拒调用（参数 JSON 不可修复）：不再静默把该回合当成功收尾——
+    /// 以 user 角色提示反馈给模型并继续；空 assistant 消息不入历史。
+    #[tokio::test]
+    async fn rejected_call_turn_injects_hint_and_continues() {
+        let (port, hits) = spawn_scripted_sse(vec![
+            sse_body(&[
+                // 在字符串中部截断 → parse_or_salvage 返回 None → 调用被拒
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":"{\"files\": [{\"path\": \"unfinished"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"<report>改动未执行，原因见上</report>"}}]}"#,
+                SSE_STOP,
+            ]),
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "sub-rejected-call");
+        let params = DriveParams {
+            max_steps: 6,
+            finish_on_text: false,
+            emit_events: false,
+            ..DriveParams::default()
+        };
+        let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_rejected").await;
+        assert!(result.is_ok(), "应正常收尾：{:?}", result.err());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "被拒调用回合应继续而非立即收尾"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            texts.iter().any(|t| t.contains("<tool-args-rejected>")),
+            "应把被拒情况反馈给模型，实际历史：{texts:?}"
+        );
+        // 空 assistant 消息不入历史（否则后续请求会带上非法消息被判 400）
+        let empty_assistant = rt
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.content.is_empty());
+        assert!(!empty_assistant, "空 assistant 消息不应进入历史");
     }

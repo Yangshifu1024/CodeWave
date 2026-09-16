@@ -342,7 +342,12 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         const t = s.tabs[p.session];
         if (!t) return;
         const sub = t.subs.find((x) => x.subId === p.sub_id);
-        if (sub) sub.status = "done";
+        if (sub) {
+          sub.status = "done";
+          // 收尾刷新：轮询采样可能滞后于真实步数，以事件携带的最终值纠正
+          if (typeof p.steps_used === "number") sub.step = p.steps_used;
+          if (p.ended) sub.ended = p.ended;
+        }
         const st = t.subStreams[p.sub_id];
         if (st) st.status = "done";
       });

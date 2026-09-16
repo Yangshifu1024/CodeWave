@@ -116,7 +116,7 @@ fn build_system_extra(
 ) -> String {
     let display_role = def.map(|d| d.name).unwrap_or(role);
     let mut s = format!(
-        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论）；写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。</subagent-discipline>",
+        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论），且最终汇报必须用 <report>…</report> 包裹——过程旁白（如「接下来我来改 X」）不会被当作汇报；只输出文字而不发起工具调用的回合会被视为未完成并提示你继续（[docs/subagent-text-turn-premature-exit]）。写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。</subagent-discipline>",
         display_role, max_steps
     );
     if let Some(d) = def {
@@ -278,6 +278,9 @@ impl Tool for SubagentTool {
             budget_notice: true,
             emit_events: false,
             force_report: true,
+            // 子代理：纯文本回合不等于完成（防止过程旁白被当成最终汇报提前退出，
+            // [docs/subagent-text-turn-premature-exit]）
+            finish_on_text: false,
             main_session: false,
             parent_cancel: None,
         };
@@ -369,13 +372,28 @@ impl Tool for SubagentTool {
         }
         let outcome = match result {
             Ok(report) => {
+                // <report> 标记只用于收尾判定（drive 层 text_turn_action），不进入汇报正文
+                //（[docs/subagent-text-turn-premature-exit]）
+                let (clean_report, tagged) = crate::core::agent::split_report(&report);
+                // 收尾原因：带标记 = 按约定汇报；步数用尽 = 预算耗尽；否则 = 未按约定汇报即结束
+                //（前端据此显示橙色警示而非绿色钩，不再让提前退出伪装成成功）
+                 let steps_used = sub_rt.step_count.load(std::sync::atomic::Ordering::SeqCst);
+                 // step_count 是「已启动步数」（每步开头写 step+1，见驱动循环顶）：
+                 // 真正跑完预算时 steps_used == max_steps，故用 >= 而非 >=
+                 let ended = if tagged {
+                     "report"
+                 } else if steps_used >= max_steps {
+                     "budget"
+                 } else {
+                     "no_report"
+                 };
                 crate::core::session_log::info(
                     &ctx.rt,
                     &format!(
-                        "子代理 [{sub_id}] 返回（input {}/output {} tokens）：{}",
+                        "子代理 [{sub_id}] 返回（input {}/output {} tokens，步数 {steps_used}/{max_steps}，收尾 {ended}）：{}",
                         usage.input,
                         usage.output,
-                        crate::core::session_log::trunc(&report, 400)
+                        crate::core::session_log::trunc(&clean_report, 400)
                     ),
                 );
                 // G2（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）+ arch 批准闸（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：pm/tester 分析子代理成功返回 → 置分析产物标记。
@@ -390,7 +408,7 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:report",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "report": report }),
+                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "report": clean_report.clone() }),
                 );
                 // sub:usage 先于 sub:done（前端卡先展示 token 数再完成）
                 ctx.core.sink.emit(
@@ -403,12 +421,14 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:done",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage }),
+                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
+                            "steps_used": steps_used, "ended": ended }),
                 );
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
                     // 供会话恢复关联过程历史文件（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
-                    json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps, "report": report }),
+                    json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps,
+                            "steps_used": steps_used, "ended": ended, "report": clean_report }),
                 )
             }
             Err(crate::provider::dto::ProviderError::Cancelled) => {
@@ -570,6 +590,8 @@ mod tests {
         assert!(s.contains("<agent-definition name=\"backend-dev\">"));
         assert!(s.contains("资深后端开发工程师"));
         assert!(s.contains("步数预算 60 步"));
+        // <report> 包裹要求（防过程旁白被当作最终汇报）
+        assert!(s.contains("<report>"));
         // 纪律块必须在最前（稳定前缀语义）
         let disc = s.find("<subagent-discipline>").unwrap();
         let body = s.find("<agent-definition name=\"backend-dev\">").unwrap();

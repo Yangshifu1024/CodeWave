@@ -24,3 +24,6 @@ pub use drive::{
 pub use runtime::{AgentCore, EventSink, Frame, SessionRuntime};
 pub use supervise::CallSig;
 pub(crate) use guards::{CompactingGuard, lock_ok};
+/// `<report>` 标记剥离（子代理 / 任务运行收尾消费）
+///（[docs/subagent-text-turn-premature-exit]）。
+pub(crate) use drive::split_report;
