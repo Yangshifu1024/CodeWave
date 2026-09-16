@@ -314,6 +314,16 @@ pub(super) const REPORT_TAG_END: &str = "</report>";
 /// 是保守取舍（上限 3 连，代价可控）。
 pub(super) const MAX_TEXT_TURNS: u32 = 3;
 
+/// 被拒调用（参数 JSON 不可修复）的反馈文案。两处消费：① 空 content 回合（唯一调用被拒、
+/// 文本也被滤空）；② 正文非空但全部调用被拒的回合。抽为单函数防止两处文案漂移——
+/// 合并集成修复前，①处直接盲重试，模型看不到拒绝原因（本提示一度为不可达死代码）。
+fn tool_args_rejected_notice(n: usize) -> String {
+    format!(
+        "<tool-args-rejected>你上一回合有 {n} 个工具调用因参数 JSON 无法解析而被拒绝、未执行。\
+         请修正参数后重新发起该调用；不要就此结束任务。</tool-args-rejected>"
+    )
+}
+
 /// 无工具调用回合的处置（`text_turn_action` 的返回值）。
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum TextTurnAction {
@@ -557,21 +567,50 @@ pub async fn drive_agent(
 
         // ⑨ 组装 assistant 消息
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);
+        let joined = assembled.joined_text();
+        if !joined.is_empty() {
+            // clone：下方 text_turn_action 仍需读本回合文本（final_text 只保留最后一段非空文本）
+            final_text = joined.clone();
+        }
         // 空消息守卫（缺陷修复）：content 全被滤空（空 text/thinking 块、args 不可解析被
         // 拒的调用）的 assistant 消息一旦进历史，此后每次请求都会带上它并被判非法
-        //（content 为 null 且无 tool_calls → 400 Invalid assistant message）。故不入历史，
-        // 按既有「空响应」语义重试一次，重试预算耗尽则终止本步。
+        //（content 为 null 且无 tool_calls → 400 Invalid assistant message）。故不入历史。
         if assistant_msg.content.is_empty() {
+            // 分支一：调用被拒（参数 JSON 不可修复）——必须让模型知道发生了什么。
+            // 盲重试（原语义）会让它重复同一个坏参数：拒绝原因对它不可见；且被拒调用
+            // 没有 tool_use 块，孤立 tool_result 对 API 非法，故以 user 角色提示反馈
+            //（[docs/subagent-text-turn-premature-exit]）。
             if !synth_results.is_empty() {
-                // 模型侧看不到参数不可解析的拒绝反馈（不为未发生的调用伪造 args）；日志留痕
                 session_log::warn(
                     rt,
                     &format!(
-                        "step {step} {} 个工具调用参数不可解析被拒绝，组装出的 assistant 消息为空",
+                        "step {step} {} 个工具调用参数不可解析被拒绝，已反馈给模型",
                         synth_results.len()
                     ),
                 );
+                rt.history.lock().unwrap().push(
+                    Message::user_text(tool_args_rejected_notice(synth_results.len())).stamped(),
+                );
+                // 与纯文本回合共用上限：连续无进展不无限续跑，超限显式失败
+                if text_turns >= MAX_TEXT_TURNS {
+                    let msg = format!(
+                        "连续 {} 步未发起任何有效工具调用（调用参数反复不可解析），本 run 终止；\
+                         已产生的历史保留，请基于现状收尾。",
+                        text_turns + 1
+                    );
+                    session_log::warn(rt, &msg);
+                    rt.history.lock().unwrap().push(Message::user_text(
+                        "<text-turn-limit>连续多步的工具调用均因参数 JSON 不可解析被拒绝，本 run 已终止。\
+                         若用户重新发起运行，先用 ask 工具确认：继续（换一种方式推进）或就此收尾。</text-turn-limit>",
+                    ).stamped());
+                    outcome = Err(ProviderError::Protocol(msg));
+                    break 'steps;
+                }
+                text_turns += 1;
+                continue 'steps;
             }
+            // 分支二：真正的空响应（无被拒调用）——按既有「空响应」语义重试一次，
+            // 重试预算耗尽则终止本步。
             if retry::should_retry(&ProviderError::Server("空响应".into()), attempt) {
                 attempt += 1;
                 rt.stream.reset();
@@ -594,25 +633,14 @@ pub async fn drive_agent(
             ));
             break 'steps;
         }
-        let joined = assembled.joined_text();
-        if !joined.is_empty() {
-            // clone：下方 text_turn_action 仍需读本回合文本（final_text 只保留最后一段非空文本）
-            final_text = joined.clone();
-        }
-        // 空 assistant 消息守卫（[docs/subagent-text-turn-premature-exit]）：content 全被滤空
-        //（空文本块 + 参数不可解析被拒的调用）的消息一旦进历史，此后每次请求都会带上它
-        // 并被判非法（400 Invalid assistant message），故不入历史；被拒情况改由下方
-        // user 角色提示反馈给模型。
-        if !assistant_msg.content.is_empty() {
-            rt.history.lock().unwrap().push(assistant_msg.stamped());
-        }
+        // 内容非空（空内容已在上方分支返回）——入历史
+        rt.history.lock().unwrap().push(assistant_msg.stamped());
 
         let last_step = params.force_report && step + 1 == params.max_steps;
         if calls.is_empty() {
-            // 被拒调用（参数 JSON 不可修复）不产生 tool_use 块——孤立 tool_result 对 API 非法，
-            // 故以 user 角色提示反馈（与 <budget-notice> 同机制：user 消息永远合法，
-            // wire 层合并相邻 user 消息）。此前这里直接 break：拒绝反馈既不进历史也不发事件，
-            // 模型与用户都不知道调用被拒，run 却报成功。
+            // 正文非空但调用全被拒（参数 JSON 不可修复）：被拒调用不产生 tool_use 块——
+            // 孤立 tool_result 对 API 非法，故同样以 user 角色提示反馈（与 <budget-notice>
+            // 同机制：user 消息永远合法，wire 层合并相邻 user 消息）。
             if !synth_results.is_empty() {
                 session_log::warn(
                     rt,
@@ -621,11 +649,9 @@ pub async fn drive_agent(
                         synth_results.len()
                     ),
                 );
-                rt.history.lock().unwrap().push(Message::user_text(format!(
-                    "<tool-args-rejected>你上一回合有 {} 个工具调用因参数 JSON 无法解析而被拒绝、未执行。\
-                     请修正参数后重新发起该调用；不要就此结束任务。</tool-args-rejected>",
-                    synth_results.len()
-                )).stamped());
+                rt.history.lock().unwrap().push(
+                    Message::user_text(tool_args_rejected_notice(synth_results.len())).stamped(),
+                );
             }
             match text_turn_action(&joined, params.finish_on_text, text_turns) {
                 TextTurnAction::Finish => break 'steps,
