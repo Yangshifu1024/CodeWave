@@ -368,6 +368,34 @@ mod tests {
         assert_eq!(acc.usage.output, 7);
     }
 
+    // 缺陷修复守护：空 assistant 消息不得上 wire（Responses 侧逐块 push、空则零输出），
+    // 也不得产出 function_call。
+    #[test]
+    fn empty_assistant_never_emits_wire_item() {
+        let req = StreamRequest {
+            model: ModelConfig::default(),
+            system_core: "s".into(),
+            system_extra: String::new(),
+            cache_gen_index: None,
+            cache_key: None,
+            reasoning_effort: None,
+            session_id: None,
+            messages: vec![
+                Message::user_text("q"),
+                Message {
+                    role: Role::Assistant,
+                    content: Vec::new(),
+                    created_at: None,
+                },
+            ],
+            tools: vec![],
+        };
+        let body = build_body(&req);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1, "空 assistant 消息不应产出 input item");
+        assert!(input.iter().all(|it| it["type"] != "function_call"));
+    }
+
     #[test]
     fn body_shape_and_cache_key() {
         let req = StreamRequest {

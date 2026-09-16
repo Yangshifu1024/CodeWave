@@ -82,6 +82,8 @@
 - 2026-09-06 · [thinking-marquee-rewrite.md](./thinking-marquee-rewrite.md) — 思考跑马灯重写：全宽 band 展示最新行、换行上翻、溢出左爬（同行增长不翻页）
 - 2026-09-11 · [shell-path-echo-and-lightweight-gate.md](./shell-path-echo-and-lightweight-gate.md) — 设置 Shell 下拉旁回显可执行文件绝对路径（auto 同源取探测默认项；WSL 占位）+ lightweight 批准门移除 todos≤3 上限（G3 非空与 skipAnalysis 口令通道不变）
 - 2026-09-13 · [composer-per-tab-draft.md](./composer-per-tab-draft.md) — 缺陷修复批次：composer 草稿按 Tab 隔离（run store 顶层 `drafts` 平行分桶 + 显式 key 防异步窗口竞态，击键不再广播整桶重渲染）+ 带图消息「修改」回显图片（ws:composer-fill detail 带 images，与队列编辑同一还原链）+ 切 Tab 收起提及菜单残留
+- 2026-09-16 · [session-restore-batch1.md](./session-restore-batch1.md) — 会话保存与恢复优化 · 批1「回到现场」：后端 `ui-state.json`（schema v1 + 原子写 + 损坏备份）+ 中断标记与退出拦截（`running.marker` / `app:exit_requested`，事件面 27 → 28 键）+ 前端启动 hydrate（Tab/树态/未读/草稿/面板态）与滚动锚点（sig + 偏移，替掉切 Tab 贴底硬重置）+ 关 Tab 二次确认
+- 2026-09-16 · [empty-assistant-and-request-rebuild-fix.md](./empty-assistant-and-request-rebuild-fix.md) — 缺陷修复：空 assistant 消息上 wire（400 Invalid assistant message）与「修复后重试」不重建请求体（sanitize 结果从未发出，同文 400 相隔 2.45s）——三层纵深防御（历史层清理 / 出网副本 repair / wire 层拦截）+ 出网消息数组幂等性守护
 
 ## 供应商与设置
 

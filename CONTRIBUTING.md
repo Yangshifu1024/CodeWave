@@ -36,8 +36,7 @@ pnpm --dir ui build
 ## 文档纪律
 
 - 每个功能 / 修复批次落一份报告：`docs/<topic>.md`（英文主题 slug，平铺不编号），并在 [docs/0-README.md](./docs/0-README.md) 登记日期与条目
-- 触及契约锚点（事件面 27 键、SessionMeta 快照、CI 系统依赖清单等）时同步更新对应文档
-
+- 触及契约锚点（事件面 28 键、SessionMeta 快照、CI 系统依赖清单等）时同步更新对应文档
 ## 提交 PR
 
 使用仓库内置模板 [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)（GitHub 新建 PR 时自动填入），核心字段：概要、关联文档、类型、变更内容、验证清单、风险与迁移说明。

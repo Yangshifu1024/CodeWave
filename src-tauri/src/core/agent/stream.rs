@@ -15,6 +15,65 @@ pub(super) const VERBOSE_BODY_CAP: usize = 64 * 1024;
 /// 会话日志错误摘要上限（字符数）
 pub(super) const ERROR_CAP: usize = 500;
 
+/// 出网消息副本（缺陷修复）：当前历史 clone + 新用户轮次首个请求的计划瞬态快照，
+/// **末尾再跑一次 repair** 作为出网兜底。
+///
+/// 为什么兜底要放在出网侧：历史里的脏结构（空 assistant 消息、悬空 tool_use、孤儿
+/// tool_result）一旦上 wire 就会被 provider 判为非法并 400；而 400 后的重试若发的还是
+/// 同一份快照，就会复现同一个错误（会话 d9941c4b 实测：相隔 2.45s 的两条逐字节相同的
+/// 400）。这里统一保证「无论历史为何，出网副本必满足 wire 不变量」。不改写
+/// `rt.history`（但会置位每 run 一次的瞬态注入标志）。
+pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
+    let mut messages = rt.history.lock().unwrap().clone();
+    // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
+    // 落在其之前最后一条非瞬态消息上，保前缀缓存）
+    if !rt.injected_plan_snapshot_for_run.load(Ordering::SeqCst) {
+        let todos = rt.todos.lock().unwrap().clone();
+        if !todos.is_empty() {
+            messages.push(Message::user_text(format!(
+                "<current-plan-transient>\n{}\n</current-plan-transient>",
+                crate::tools::plan::render_todos(&todos)
+            )));
+            rt.injected_plan_snapshot_for_run
+                .store(true, Ordering::SeqCst);
+        }
+    }
+    repair_before_send(messages)
+}
+
+/// 出网副本的修复步骤（纯函数，便于单测）：复用会话修复管线的 `repair`——
+/// 补悬空 tool_use 的 [interrupted] 结果、清孤儿 tool_result、丢空 assistant 消息。
+pub(super) fn repair_before_send(mut messages: Vec<Message>) -> Vec<Message> {
+    crate::core::sessions::repair::repair(&mut messages);
+    messages
+}
+
+/// 重试前用当前历史重建请求体消息（缺陷修复）：BadRequest 分支的 sanitize/repair 只改写
+/// `rt.history`，而请求体是构建时的一次性快照——不重建则重试必然复现同一个错误。
+///
+/// 两处显式取舍：
+/// - **保留**本 run 首轮已注入的计划瞬态快照：`messages_for_request` 只在注入标志未置位时
+///   注入，重试时该标志已置位，故这里把原 body 尾部的瞬态消息补回，使重试 body 是首次的
+///   延拓（否则模型在重试那一轮会莫名失去计划视图）。
+/// - 不重算 `cache_gen_index`：修复会缩短历史，该锚点可能落到别的消息上或失效，最坏结果是
+///   本次重试少一个代际缓存断点（一次性 1.25x 前缀重写），不影响正确性。
+pub(super) fn refresh_request_messages(rt: &Arc<SessionRuntime>, req: &mut StreamRequest) {
+    let transient = req.messages.last().filter(|m| is_plan_transient(m)).cloned();
+    req.messages = messages_for_request(rt);
+    if let Some(t) = transient {
+        if !req.messages.last().map(is_plan_transient).unwrap_or(false) {
+            req.messages.push(t);
+        }
+    }
+}
+
+/// 是否为 `build_stream_request` 注入的尾部计划瞬态快照消息。
+fn is_plan_transient(m: &Message) -> bool {
+    m.first_text()
+        .map(|t| t.starts_with("<current-plan-transient>"))
+        .unwrap_or(false)
+}
+
 /// 组装一次 LLM 流式请求：解析生效模型（会话覆盖 → 全局 active）、思考力度、
 /// 六层 system prompt（含计划瞬态快照注入）与统一排序的工具集（内置 + MCP）。
 pub(super) async fn build_stream_request(
@@ -99,20 +158,7 @@ pub(super) async fn build_stream_request(
             core
         }
     };
-    let mut messages = rt.history.lock().unwrap().clone();
-    // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
-    // 落在其之前最后一条非瞬态消息上，保前缀缓存）
-    if !rt.injected_plan_snapshot_for_run.load(Ordering::SeqCst) {
-        let todos = rt.todos.lock().unwrap().clone();
-        if !todos.is_empty() {
-            messages.push(Message::user_text(format!(
-                "<current-plan-transient>\n{}\n</current-plan-transient>",
-                crate::tools::plan::render_todos(&todos)
-            )));
-            rt.injected_plan_snapshot_for_run
-                .store(true, Ordering::SeqCst);
-        }
-    }
+    let messages = messages_for_request(rt);
     // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
     let mut tools: Vec<crate::provider::ToolDef> = core
         .tools
@@ -172,6 +218,52 @@ fn gen_anchor_next(cur: Option<usize>, n: usize) -> Option<usize> {
 #[cfg(test)]
 mod anchor_tests {
     use super::gen_anchor_next;
+
+    // 缺陷修复：出网副本必须自我修复脏历史——空 assistant 消息被丢弃、悬空 tool_use 被补
+    // [interrupted] 结果、孤儿 tool_result 被清掉，保证「历史不合法 ⇒ 请求体不合法」
+    // 这条链路被切断（会话 d9941c4b 的 400 根因之一）。
+    #[test]
+    fn repair_before_send_sanitizes_dirty_history() {
+        use crate::core::types::{Content, Message, Role};
+        let dirty = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "read".into(),
+                    args: serde_json::json!({ "files": [] }),
+                }],
+                created_at: None,
+            },
+            Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "ghost".into(),
+                content: "orphan".into(),
+                is_error: false,
+            }]),
+        ];
+        let out = super::repair_before_send(dirty);
+        assert!(
+            out.iter()
+                .all(|m| !(m.role == Role::Assistant && m.content.is_empty())),
+            "出网副本不得含空 assistant 消息"
+        );
+        let answered: Vec<&str> = out
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(answered.contains(&"t1"), "悬空 tool_use 应被补 [interrupted] 结果");
+        assert!(!answered.contains(&"ghost"), "孤儿 tool_result 应被清掉");
+    }
 
     /// n < 16 不启用代际断点（含压缩后历史骤减的场景）。
     #[test]

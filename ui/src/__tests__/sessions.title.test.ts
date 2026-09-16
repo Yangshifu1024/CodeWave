@@ -24,6 +24,8 @@ function meta(id: string, title: string): SessionMeta {
     message_count: 0,
     project_id: null,
     roots: ["/tmp/ws"],
+    running: false,
+    interrupted: null,
   };
 }
 

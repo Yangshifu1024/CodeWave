@@ -2,8 +2,7 @@
 // 旧实现硬编码 13 个 event 名，与 handler 清单脱节，导致 11 类事件静默失联）
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-/** 事件 handler 表：键 = 后端事件名（27 键事件面，键名受契约测试守护不可增删），值 = 对应 payload 处理函数 */
-export interface Handlers {
+/** 事件 handler 表：键 = 后端事件名（28 键事件面，键名受契约测试守护不可增删），值 = 对应 payload 处理函数 */export interface Handlers {
   [event: string]: (payload: any) => void;
 }
 

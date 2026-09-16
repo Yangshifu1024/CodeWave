@@ -15,7 +15,7 @@ use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
 use super::runtime::{AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS, SessionRuntime, STREAM_THROTTLE_MS};
 use super::supervise::{BatchDigest, CallSig, SupervisionState, Verdict};
 use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
-use super::stream::{build_assistant_message, build_stream_request, collect_deltas, flush_segments, stream_flush_loop};
+use super::stream::{build_assistant_message, build_stream_request, collect_deltas, flush_segments, refresh_request_messages, stream_flush_loop};
 
 /// 归一化后的工具调用（参数已修复为合法 JSON object；供批次执行层消费）。
 #[derive(Debug, Clone)]
@@ -410,7 +410,7 @@ pub async fn drive_agent(
         }
 
         // ⑦ 流式请求 + 轮内重试
-        let (model, req) = match build_stream_request(core, rt, &params).await {
+        let (model, mut req) = match build_stream_request(core, rt, &params).await {
             Ok(v) => v,
             Err(e) => {
                 outcome = Err(ProviderError::Protocol(e));
@@ -449,7 +449,7 @@ pub async fn drive_agent(
             &sink,
             &params,
             &model,
-            &req,
+            &mut req,
             &run_token,
             run_id,
             step,
@@ -479,6 +479,43 @@ pub async fn drive_agent(
 
         // ⑨ 组装 assistant 消息
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);
+        // 空消息守卫（缺陷修复）：content 全被滤空（空 text/thinking 块、args 不可解析被
+        // 拒的调用）的 assistant 消息一旦进历史，此后每次请求都会带上它并被判非法
+        //（content 为 null 且无 tool_calls → 400 Invalid assistant message）。故不入历史，
+        // 按既有「空响应」语义重试一次，重试预算耗尽则终止本步。
+        if assistant_msg.content.is_empty() {
+            if !synth_results.is_empty() {
+                // 模型侧看不到参数不可解析的拒绝反馈（不为未发生的调用伪造 args）；日志留痕
+                session_log::warn(
+                    rt,
+                    &format!(
+                        "step {step} {} 个工具调用参数不可解析被拒绝，组装出的 assistant 消息为空",
+                        synth_results.len()
+                    ),
+                );
+            }
+            if retry::should_retry(&ProviderError::Server("空响应".into()), attempt) {
+                attempt += 1;
+                rt.stream.reset();
+                session_log::warn(
+                    rt,
+                    &format!("step {step} 组装出的 assistant 消息为空，第 {attempt} 次重试"),
+                );
+                tracing::warn!(
+                    "session {} step {step} 组装出的 assistant 消息为空，重试 #{attempt}",
+                    rt.id
+                );
+                if params.emit_events {
+                    emit_retry(&sink, &rt, run_id, attempt);
+                }
+                sleep_backoff(attempt).await;
+                continue 'steps;
+            }
+            outcome = Err(ProviderError::Protocol(
+                "模型返回空响应且重试预算已耗尽".into(),
+            ));
+            break 'steps;
+        }
         let joined = assembled.joined_text();
         if !joined.is_empty() {
             final_text = joined;
@@ -592,7 +629,7 @@ async fn run_llm_turn(
     sink: &Arc<dyn EventSink>,
     params: &DriveParams,
     model: &crate::core::config::ModelConfig,
-    req: &crate::provider::dto::StreamRequest,
+    req: &mut crate::provider::dto::StreamRequest,
     run_token: &CancellationToken,
     run_id: &str,
     step: usize,
@@ -748,6 +785,10 @@ async fn run_llm_turn(
                     repair::sanitize(&mut h);
                     repair::repair(&mut h);
                     drop(h);
+                    // 缺陷修复：历史修好了，但请求体还是构建时那份快照——必须重建，否则
+                    // 重试发出的 body 与首次逐字节相同，必然复现同一个 400（会话 d9941c4b
+                    // 实测：相隔 2.45s 的两条同文 400，修复从未真正生效）。
+                    refresh_request_messages(rt, req);
                     rt.stream.reset();
                     session_log::warn(
                         rt,

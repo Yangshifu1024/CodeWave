@@ -25,6 +25,8 @@ function meta(partial: Partial<SessionMeta> & { id: string; title: string }): Se
     message_count: 0,
     project_id: null,
     roots: ["/tmp/ws"],
+    running: false,
+    interrupted: null,
     ...partial,
   };
 }

@@ -38,6 +38,22 @@ pub struct SessionMeta {
     /// 创建时快照的全部可读写根（含主目录；跨根解析 / @提及 / 文件树的唯一数据源）
     #[serde(default)]
     pub roots: Vec<String>,
+    /// 是否有 run 在本进程内运行中（批1）：run 开始置位、收尾清除；进程非正常退出遗留的 true
+    /// 会在下次启动时转成 `interrupted { kind: "crash" }`。serde default 向前兼容（旧索引无此字段）
+    #[serde(default)]
+    pub running: bool,
+    /// 上次非正常收尾的中断标记（None = 无）；前端「已读/续跑」后经 clear_session_interrupt 清除
+    #[serde(default)]
+    pub interrupted: Option<InterruptInfo>,
+}
+
+/// 中断标记（批1，需求共识 20/23）：进程被强杀或用户中断退出时留下的痕迹，供前端展示与续跑提示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterruptInfo {
+    /// 中断类型：`crash`（崩溃/强杀）| `quit`（退出时中断）
+    pub kind: String,
+    /// 中断时刻（RFC3339）
+    pub at: String,
 }
 
 /// 会话索引文件（sessions/index.json）的整体形态。
@@ -94,6 +110,10 @@ pub struct SessionStore {
     index_lock: std::sync::Mutex<()>,
     /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：产物边车读-改-写互斥（并发工具写不得丢条目）
     artifacts_lock: std::sync::Mutex<()>,
+    /// 进程内「运行中」会话 id 集合：索引 `running` 字段的唯一事实源。
+    /// 新建会话首次 run 尚未检查点时索引里没有条目，标记先记在这里，待其首次 upsert 时带上
+    ///（否则该 run 崩溃后将无从标记）。进程消亡即消失，恢复由 running.marker 机制接管。
+    running: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl SessionStore {
@@ -103,6 +123,7 @@ impl SessionStore {
             root: data_root,
             index_lock: std::sync::Mutex::new(()),
             artifacts_lock: std::sync::Mutex::new(()),
+            running: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -157,18 +178,26 @@ impl SessionStore {
     }
 
     /// 插入或更新一条会话元数据（持锁）。
+    ///
+    /// 批1：`running` / `interrupted` 是会话的易失标记，由 `mark_running` / `mark_interrupted` 专管——
+    /// 检查点只刷新内容与元数据，不得把标记抹掉：既有条目沿用索引现值，新条目按内存 running 集合
+    /// 初始化（传入值不参与裁决）。
     pub fn upsert_meta(&self, meta: SessionMeta) -> anyhow::Result<()> {
+        // 先取内存集合再进索引锁路径（锁序恒为 index → running 以外的方向，避免与 mark_* 互死锁）
+        let is_running = self.running.lock().unwrap().contains(&meta.id);
         self.mutate_index(|idx| {
             // M7 修复：保留原 created_at（此前每次检查点都会重置创建时间）
-            let created_at = idx
-                .sessions
-                .iter()
-                .find(|s| s.id == meta.id)
+            let existing = idx.sessions.iter().find(|s| s.id == meta.id);
+            let created_at = existing
                 .map(|s| s.created_at.clone())
                 .unwrap_or_else(|| meta.created_at.clone());
+            let running = existing.map(|s| s.running).unwrap_or(is_running);
+            let interrupted = existing.and_then(|s| s.interrupted.clone());
             idx.sessions.retain(|s| s.id != meta.id);
             let mut meta = meta.clone();
             meta.created_at = created_at;
+            meta.running = running;
+            meta.interrupted = interrupted;
             idx.sessions.push(meta);
         })
     }
@@ -182,6 +211,103 @@ impl SessionStore {
             }
             None => false,
         })
+    }
+
+    // ---------- 运行 / 中断标记（会话保存与恢复优化 · 批1，需求共识 20/23） ----------
+
+    /// run 开始（`true`）/ 收尾（`false`）时落盘 `running` 标志。
+    /// 索引中尚无该会话（新建会话首次 run 尚未检查点）时只记内存集合，待其首次 upsert 时带上。
+    /// 返回索引中是否已有该条目（调用方据此判断标记是否已落盘）。
+    pub fn mark_running(&self, id: &str, running: bool) -> anyhow::Result<bool> {
+        {
+            let mut set = self.running.lock().unwrap();
+            if running {
+                set.insert(id.to_string());
+            } else {
+                set.remove(id);
+            }
+        }
+        let mut found = false;
+        self.mutate_index(|idx| {
+            if let Some(m) = idx.sessions.iter_mut().find(|m| m.id == id) {
+                m.running = running;
+                found = true;
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// 写中断标记（`kind` = crash / quit，`at` 为 RFC3339；不动 `running`）。
+    /// 返回索引中是否命中该会话。
+    pub fn mark_interrupted(&self, id: &str, kind: &str, at: &str) -> anyhow::Result<bool> {
+        let mut found = false;
+        self.mutate_index(|idx| {
+            if let Some(m) = idx.sessions.iter_mut().find(|m| m.id == id) {
+                m.interrupted = Some(InterruptInfo {
+                    kind: kind.to_string(),
+                    at: at.to_string(),
+                });
+                found = true;
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// 清中断标记（前端「已读/续跑」后调用；幂等）。返回索引中是否命中该会话。
+    pub fn clear_interrupted(&self, id: &str) -> anyhow::Result<bool> {
+        let mut found = false;
+        self.mutate_index(|idx| {
+            if let Some(m) = idx.sessions.iter_mut().find(|m| m.id == id) {
+                m.interrupted = None;
+                found = true;
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// 批量中断收尾（崩溃恢复 / 退出中断）：一次索引写把给定会话标 `interrupted` 并清 `running`，
+    /// 缺席会话（子代理/任务运行、已删除）跳过；返回命中条数。
+    /// 收尾路径无法再向上抛错，写失败按 E9 告警并返回 0（不假装成功）。
+    pub fn mark_interrupted_batch(&self, ids: &[String], kind: &str, at: &str) -> usize {
+        if ids.is_empty() {
+            return 0;
+        }
+        {
+            let mut set = self.running.lock().unwrap();
+            for id in ids {
+                set.remove(id);
+            }
+        }
+        let mut n = 0usize;
+        let result = self.mutate_index(|idx| {
+            for m in idx.sessions.iter_mut() {
+                if ids.iter().any(|id| id == &m.id) {
+                    m.interrupted = Some(InterruptInfo {
+                        kind: kind.to_string(),
+                        at: at.to_string(),
+                    });
+                    m.running = false;
+                    n += 1;
+                }
+            }
+        });
+        match result {
+            Ok(()) => n,
+            Err(e) => {
+                tracing::warn!("中断标记落盘失败（{kind}）：{e}");
+                0
+            }
+        }
+    }
+
+    /// 索引中标记为 `running` 的会话 id（崩溃恢复用；进程内实时集合见 host 的 list_running_sessions）。
+    pub fn running_ids(&self) -> Vec<String> {
+        self.load_index()
+            .sessions
+            .into_iter()
+            .filter(|m| m.running)
+            .map(|m| m.id)
+            .collect()
     }
 
     /// 列出全部会话元数据（按 updated_at 倒序）。
@@ -302,6 +428,10 @@ impl SessionStore {
             message_count: prepared.len(),
             project_id: project_id.map(|s| s.to_string()),
             roots: roots.to_vec(),
+            // running / interrupted 由 mark_running / mark_interrupted 专管，
+            // upsert_meta 以索引现值（新条目取内存 running 集合）为准，此处仅占位
+            running: false,
+            interrupted: None,
         })?;
         Ok(prepared.len())
     }

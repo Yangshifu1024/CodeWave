@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Avatar, Button, Layout, Tooltip } from "antd";
-import { BarChartOutlined, ClockCircleOutlined, InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { Avatar, Button, Layout, Modal, Tooltip } from "antd";
+import { BarChartOutlined, ClockCircleOutlined, InfoCircleOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -11,6 +11,12 @@ import { useUi } from "../../stores/ui";
 import { bindEvents } from "../../ipc/events";
 import { ipc } from "../../ipc/client";
 import { checkForUpdates } from "../../utils/updateCheck";
+import {
+  applyUiStateToStores,
+  initUiStatePersistence,
+  loadUiState,
+  respondExitRequest,
+} from "../../utils/uiState";
 import ChatMessages from "../chat/ChatMessages";
 import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
@@ -97,6 +103,135 @@ function SiderFooter() {
   );
 }
 
+/** 顶部中断提示条（会话保存与恢复优化 · 批1）：活跃会话上次运行被中断（崩溃 / 正常退出前中止）时出现，
+ *  带的「清除标记」入口就地更新列表项——左栏会话行已有同类徽标（ProjectNav），此处是「顶部」补充：
+ *  用户不必先定位到左栏那一行才知道「上次发生了什么」。 */
+function InterruptBanner() {
+  const { t } = useTranslation();
+  const activeKey = useSessions((s) => s.activeKey);
+  const meta = useSessions((s) => s.sessions.find((m) => m.id === s.activeKey) ?? null);
+  const [busy, setBusy] = useState(false);
+  const interrupted = meta?.interrupted ?? null;
+  if (!activeKey || !interrupted) return null;
+  const reason = interrupted.kind === "crash" ? t("nav.interruptedCrash") : t("nav.interruptedQuit");
+  const clear = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await ipc.clearSessionInterrupt(activeKey);
+      // 就地更新列表项（左栏徽标同步消失）；不为一次点击重拉整份会话列表
+      useSessions.setState((s) => ({
+        sessions: s.sessions.map((m) => (m.id === activeKey ? { ...m, interrupted: null } : m)),
+      }));
+      useUi.getState().toast(t("nav.interruptCleared"));
+    } catch (e) {
+      // 失败保留标记、不静默（与后端 E9 约定一致：写失败必须可见）
+      useUi.getState().toast(t("nav.clearInterruptFailed", { error: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="interrupt-banner" data-kind={interrupted.kind}>
+      <WarningOutlined style={{ color: "var(--ws-warn)", flex: "none" }} />
+      <span className="interrupt-banner-text">{reason}</span>
+      <Button size="small" type="text" loading={busy} onClick={() => void clear()}>
+        {t("nav.clearInterrupt")}
+      </Button>
+    </div>
+  );
+}
+
+/** 关 Tab 二次确认（会话保存与恢复优化 · 批1）：有草稿/未发队列时 store 不再直接关 Tab，
+ *  而是置 `closeTabRequest`；Cmd+W / 顶栏 / 左栏三个入口共用这一处弹窗。 */
+function CloseTabConfirm() {
+  const { t } = useTranslation();
+  const request = useUi((s) => s.closeTabRequest);
+  const exists = useSessions((s) => (request ? s.tabs.some((x) => x.key === request) : false));
+  // 防御：目标 Tab 已不存在（会话被删除、项目级联删除等）→ 直接清状态，不弹幽灵框
+  useEffect(() => {
+    if (request && !exists) useUi.getState().setCloseTabRequest(null);
+  }, [request, exists]);
+  const answer = (choice: "discard" | "keep" | null) => {
+    if (!request) return;
+    if (choice) useSessions.getState().resolveCloseTab(request, choice);
+    else useUi.getState().setCloseTabRequest(null);
+  };
+  return (
+    <Modal
+      open={!!request && exists}
+      title={t("closeTab.title")}
+      closable={false}
+      // antd 6 废弃 maskClosable，等价写法是 mask.closable；与 ExitConfirm 同口径：
+      // 两个弹窗都不得被遮罩 / Esc 绕过（Esc 关闭不丢数据，但口径必须自洽）
+      mask={{ closable: false }}
+      keyboard={false}
+      onCancel={() => answer(null)}
+      footer={[
+        <Button key="cancel" onClick={() => answer(null)}>
+          {t("closeTab.cancel")}
+        </Button>,
+        <Button key="keep" onClick={() => answer("keep")}>
+          {t("closeTab.keep")}
+        </Button>,
+        <Button key="discard" danger onClick={() => answer("discard")}>
+          {t("closeTab.discard")}
+        </Button>,
+      ]}
+    >
+      <div>{t("closeTab.desc")}</div>
+    </Modal>
+  );
+}
+
+/** 退出拦截（会话保存与恢复优化 · 批1）：后端在 ExitRequested 下不可退、下发在跑会话后等应答；
+ *  三个选项都必须走 `respondExitRequest`（先 flushNow 再回后端），直接调 ipc 会丢现场态。
+ *  不得用 Esc / 遮罩绕过：一旦弹窗被意外关掉而后端仍在等，应用会卡在「退不出去」。 */
+function ExitConfirm() {
+  const { t } = useTranslation();
+  const request = useUi((s) => s.exitRequest);
+  const answer = (action: "wait" | "abort" | "cancel") => {
+    void respondExitRequest(action).finally(() => {
+      // 应答完成（或通道已关而失败）后再清 store：respondExitRequest 只回后端、不动 store，
+      // 不清会留幽灵弹窗；过早清又让重试/改选无处可点
+      useUi.setState({ exitRequest: null });
+    });
+  };
+  return (
+    <Modal
+      open={!!request}
+      title={t("exitApp.title")}
+      closable={false}
+      // antd 6 废弃了 maskClosable，等价写法是 mask.closable；两个弹窗都不得被遮罩/Esc 绕过
+      mask={{ closable: false }}
+      keyboard={false}
+      footer={[
+        <Button key="cancel" onClick={() => answer("cancel")}>
+          {t("exitApp.cancel")}
+        </Button>,
+        <Button key="abort" danger onClick={() => answer("abort")}>
+          {t("exitApp.abort")}
+        </Button>,
+        <Button key="wait" type="primary" onClick={() => answer("wait")}>
+          {t("exitApp.wait")}
+        </Button>,
+      ]}
+    >
+      <div>{t("exitApp.desc", { n: request?.running.length ?? 0 })}</div>
+      <ul style={{ margin: "8px 0", paddingLeft: 20 }}>
+        {(request?.running ?? []).map((id) => (
+          <li key={id}>
+            <code>{id}</code>
+          </li>
+        ))}
+      </ul>
+      <div className="dim" style={{ fontSize: 12 }}>
+        {t("exitApp.waitHint")}
+      </div>
+    </Modal>
+  );
+}
+
 /** 应用外壳：三栏布局（左栏导航 / 中间聊天+Composer / 右栏）+ 自绘标题栏 + 全局弹窗与通知堆栈；
  *  负责挂载初始化（配置/会话加载 + 事件绑定）、系统通知回跳、macOS 菜单动作、
  *  右键菜单抑制与全局快捷键（Esc 停止 / Cmd+W 关 Tab / Cmd+L 聚焦输入 / Cmd+←→ 切 Tab）。 */
@@ -108,20 +243,47 @@ export default function AppShell() {
   const explorerOpen = useSessions((s) => s.explorerOpen);
   const activeWorkspace = useActiveWorkspace();
 
-  // 挂载初始化：配置/会话/项目加载 + 事件绑定（M-5：unlisten 必须在卸载时清理，防 HMR 后重复注册）
+  // 挂载初始化：配置/会话/项目加载 + ui-state 现场态恢复 + 事件绑定
+  // （M-5：unlisten 必须在卸载时清理，防 HMR 后重复注册）
   useEffect(() => {
     let unlistens: (() => void)[] = [];
     let cancelled = false;
     void (async () => {
-      await useSettings.getState().load();
-      await useSessions.getState().refresh();
-      await useSessions.getState().loadProjects();
+      // 事件绑定必须先于挂载链上任何 await（🔴2）：后端 `app:exit_requested` 是**单次下发**、不重放
+      // （host/commands/ui_state.rs 的 handle_exit_requested 只在 ExitRequested 那一刻 emit），
+      // 而下面几步（load 配置 / refresh 会话与项目 / 读 ui-state 落 store）每一步都是 await，
+      // 期间到达的退出请求在订阅到位前会永久丢失；叠加后端「有 run 在跑就等前端决定」，
+      // 表现为应用退不出去。绑定提到最前，等于把这个失联窗口从「挂载 → hydrate 完成」
+      // 压缩到「挂载 → 首个 listen 注册完成」。
       const fns = await bindEvents(useRun.getState().bindGlobalHandlers());
       if (cancelled) {
+        // 绑定期间已被卸载：立即解绑并退出，不再继续后续初始化
         for (const fn of fns) fn();
-      } else {
-        unlistens = fns;
+        return;
       }
+      unlistens = fns;
+      await useSettings.getState().load();
+      // 顺序要点：restoreTabs 要用 listSessions / listProjects 的结果校验引用（已删的会话 /
+      // 已删项目下的会话一律静默剔除），所以两份列表必须先到位——否则恢复会被全量剔除、
+      // 表现为「重启后 Tab 全没了」（本批最容易踩的坑）
+      await Promise.all([
+        useSessions.getState().refresh(),
+        useSessions.getState().loadProjects(),
+      ]);
+      // ui-state 现场态：读盘 → 落到各 store（Tab 骨架/树态/未读/草稿/面板态）→ 急切加载活跃 Tab
+      // 读盘失败或结构损坏一律降级为「无快照启动」，不阻断启动（loadUiState 内部已兜底，
+      // 这里只防意外；后端也已在读取时把损坏文件备份为 .corrupt/.v<N>.bak）
+      let restoredKey: string | null = null;
+      try {
+        await loadUiState();
+        restoredKey = applyUiStateToStores().activeKey;
+      } catch (e) {
+        console.warn("ui-state 恢复失败，按无快照启动", e);
+      }
+      // 落盘订阅独立于恢复成败：即便恢复失败，本次会话的现场态也要能落盘
+      initUiStatePersistence();
+      // 只急切加载活跃 Tab；其余保持骨架（loaded=false），首次激活时由 sessions.activate 惰性加载
+      if (restoredKey) useSessions.getState().activate(restoredKey);
     })();
     return () => {
       cancelled = true;
@@ -249,6 +411,7 @@ export default function AppShell() {
         </Sider>
         <Content style={{ height: "100%", display: "flex", background: "var(--ws-bg-main)" }}>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            <InterruptBanner />
             <ChatMessages />
             {/* 无活跃会话时隐藏（不占布局）；空态引导接管中栏 */}
             {activeKey && <Composer />}
@@ -261,6 +424,9 @@ export default function AppShell() {
       {aboutOpen && <AboutModal />}
       {tasksOpen && <TaskCenterPanel />}
       {statsOpen && <TokenStatsModal />}
+      {/* 退出拦截 / 关 Tab 二次确认：两者都挂在 store 请求位上，只在 AppShell 渲染这一处 */}
+      <ExitConfirm />
+      <CloseTabConfirm />
       {/* docs/subagent-interaction-drawer：子代理过程抽屉（每 Tab 态；关闭不销毁，经 Portal 渲入 body） */}
       <SubagentDrawer />
 

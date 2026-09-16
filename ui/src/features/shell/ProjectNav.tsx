@@ -11,6 +11,7 @@ import {
   HolderOutlined,
   LoadingOutlined,
   PlusOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { i18n } from "../../i18n";
@@ -62,7 +63,11 @@ export default function ProjectNav() {
   const sessionList = useSessions((s) => s.sessions);
   const projects = useSessions((s) => s.projects);
   const tasksOpen = useUi((s) => s.tasksOpen);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // 左栏展开/项目区折叠态住在 useUi store，不用组件 useState：hydrate（AppShell 里异步读盘后回填）晚于本组件首渲染，
+  // 只在挂载时读一次模块内存值永远拿不到恢复值；订阅 store 才能被 hydrate 的那一刻 setState 唤起重渲染
+  // （会话保存与恢复优化 · 批1）。组件内不留第二份副本，避免双事实源
+  const expanded = useUi((s) => s.treeExpand);
+  const collapsed = useUi((s) => s.treeCollapsed);
   const [tasks, setTasks] = useState<{ id: string; name: string; last_status: string | null }[]>([]);
   // 新建/编辑项目弹窗
   const [editing, setEditing] = useState<ProjectEntry | null>(null);
@@ -74,8 +79,7 @@ export default function ProjectNav() {
   const [renameTarget, setRenameTarget] = useState<SessionMeta | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
-  // 项目区折叠 + 管理弹窗
-  const [collapsed, setCollapsed] = useState(false);
+  // 管理弹窗
   const [manageOpen, setManageOpen] = useState(false);
 
   // 空态「新建项目」引导：ChatMessages 经 ui store 标志触发弹窗（用后即重置）
@@ -103,6 +107,10 @@ export default function ProjectNav() {
           message_count: 0,
           project_id: t.projectId,
           roots: [t.workspace],
+          // 批1 新增字段：Tab 内运行态另有来源（useRun.tabs），会话行徽标只认列表 meta；
+          // 未落检查点的新会话必然没有中断标记
+          running: false,
+          interrupted: null,
         });
       }
     }
@@ -265,7 +273,7 @@ export default function ProjectNav() {
           {g.sessions.length > PREVIEW_COUNT && (
             <div
               className="show-more"
-              onClick={() => setExpanded((prev) => ({ ...prev, [g.key]: !showAll }))}
+              onClick={() => useUi.getState().setTreeGroupExpanded(g.key, !showAll)}
             >
               {showAll ? t("nav.showLess") : t("nav.showMore")}
             </div>
@@ -301,7 +309,7 @@ export default function ProjectNav() {
       ))}
 
       <div className="nav-header" style={{ marginTop: 14 }}>
-        <span className="nav-header-title" onClick={() => setCollapsed(!collapsed)}>
+        <span className="nav-header-title" onClick={() => useUi.getState().setTreeCollapsed(!collapsed)}>
           {t("nav.projects")}
           <CaretDownOutlined className={`caret${collapsed ? " collapsed" : ""}`} />
         </span>
@@ -413,7 +421,7 @@ export default function ProjectNav() {
   );
 }
 
-/** 单行会话条目：运行中 spinner / 未读点 / 等待确认徽标三态槽位 + 行内时间 + 悬停行内操作（重命名/删除）。 */
+/** 单行会话条目：运行中 spinner / 未读点 / 等待确认徽标三态槽位 + 中断标记 + 行内时间 + 悬停行内操作（重命名/删除）。 */
 function SessionRow({
   meta,
   active,
@@ -442,6 +450,20 @@ function SessionRow({
       .catch(() => {});
   };
 
+  // 清除中断标记（会话保存与恢复优化 · 批1）：后端落盘清掉后本地就地撤徽标——
+  // 该字段不是任何聚合的输入，没必要为一次点击再拉一遍会话列表（省一次往返与闪烁）
+  const clearInterrupt = async () => {
+    try {
+      await ipc.clearSessionInterrupt(meta.id);
+      useSessions.setState((s) => ({
+        sessions: s.sessions.map((m) => (m.id === meta.id ? { ...m, interrupted: null } : m)),
+      }));
+      message.success(t("nav.interruptCleared"));
+    } catch (e) {
+      message.error(t("nav.clearInterruptFailed", { error: String(e) }));
+    }
+  };
+
   return (
     <Dropdown
       trigger={["contextMenu"]}
@@ -457,6 +479,23 @@ function SessionRow({
       <span className="session-run-slot">
         {running ? <LoadingOutlined spin /> : unread ? <span className="session-unread-dot" title={t("nav.unreadReply")} /> : null}
       </span>
+      {/* 上次运行被中断（崩溃 / 退出前中止）：橙 = 需注意档（无彩色 = 默认、红 = 危险）。
+          放行首而非时间槽旁：.row-actions 是覆盖在时间槽上的绝对定位悬停层（还带不透明底色），
+          徽标放那里会被裁掉一半、点击也会落到重命名按钮上。徽标本身即清除入口，title 写明语义 + 动作 */}
+      {meta.interrupted && (
+        <Button
+          className="session-interrupt"
+          type="text"
+          size="small"
+          title={`${t(meta.interrupted.kind === "crash" ? "nav.interruptedCrash" : "nav.interruptedQuit")} · ${t("nav.clearInterrupt")}`}
+          icon={<WarningOutlined />}
+          style={{ color: "var(--ws-warn)", flex: "none" }}
+          onClick={(e) => {
+            e.stopPropagation(); // 点徽标只清标记，不切会话
+            void clearInterrupt();
+          }}
+        />
+      )}
       <span className="session-title" title={meta.title}>{meta.title || "(untitled)"}</span>
       {askPending && (
         <Tag color="success" style={{ marginLeft: 6, flex: "none", fontSize: 10, lineHeight: "16px" }}>

@@ -132,4 +132,17 @@ export const ipc = {
   // 系统通知点击回跳（tauri-plugin-notification 桌面端无点击回调，后端按平台原生直驱；失败回退插件路径）
   notifySystem: (sessionId: string, title: string, body: string) =>
     invoke<"native" | "unsupported">("notify_system", { sessionId, title, body }),
+
+  // ---------- 会话保存与恢复（会话保存与恢复优化 · 批1）----------
+  // ui-state.json：会话现场态（Tab 集合/顺序/活跃 Tab/滚动锚点/草稿/队列/树展开/未读/面板态/窗口几何）。
+  // 结构归前端所有（后端只校验 schema === 1 与体积上限），因此这里用 unknown 透传，类型与校验在 utils/uiState.ts。
+  getUiState: () => invoke<unknown | null>("get_ui_state"),
+  setUiState: (state: unknown) => invoke<void>("set_ui_state", { state }),
+  // 退出拦截：后端询问时下发运行中会话列表（app:exit_requested 事件），前端弹窗后回 resolve_exit_request
+  listRunningSessions: () => invoke<string[]>("list_running_sessions"),
+  resolveExitRequest: (action: "exit" | "cancel" | "abort" | "wait") =>
+    invoke<void>("resolve_exit_request", { action }),
+  // 崩溃/退出中断标记清除（左栏会话行的中断徽标）：调用后由调用方刷新会话列表
+  clearSessionInterrupt: (sessionId: string) =>
+    invoke<void>("clear_session_interrupt", { sessionId }),
 };
