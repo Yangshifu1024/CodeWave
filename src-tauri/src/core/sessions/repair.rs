@@ -133,6 +133,38 @@ pub fn parse_or_salvage(s: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&repaired).ok()
 }
 
+/// 不可解析参数的诊断摘要（仅供日志，**不参与任何解析决策**、行为零变化）：长度 +
+/// 首尾各 200 字符（换行/回车转义）+ serde 解析错误原文。
+///
+/// 为什么需要（[docs/rejected-call-silent-finish]）：被拒调用的 args 既不进历史也不上 wire，
+/// 会话日志此前只有「工具名 + 长度」，事后无法回答「这段 JSON 为什么不可解析」——
+/// 8531 字符的 `ask` 参数即因此成为永久悬案（模型侧与用户侧都拿不到方案全文）。
+pub fn diagnose_unparsable(s: &str) -> String {
+    const EDGE: usize = 200;
+    let total = s.chars().count();
+    let esc = |t: String| t.replace('\n', "\\n").replace('\r', "\\r");
+    let head: String = s.chars().take(EDGE).collect();
+    // 与 head 不重叠时才给 tail（短参数下 head 已覆盖全文，避免重复输出）
+    let tail: String = if total > EDGE * 2 {
+        s.chars().skip(total - EDGE).collect()
+    } else {
+        String::new()
+    };
+    let err = match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(_) => "可解析（未走到拒绝分支）".to_string(),
+        Err(e) => e.to_string(),
+    };
+    if tail.is_empty() {
+        format!("len={total} err={err} head=\"{}\"", esc(head))
+    } else {
+        format!(
+            "len={total} err={err} head=\"{}\" tail=\"{}\"",
+            esc(head),
+            esc(tail)
+        )
+    }
+}
+
 /// repair：剥离孤儿 tool_result；为悬空 tool_use 补 [interrupted] 结果。
 pub fn repair(msgs: &mut Vec<Message>) {
     // 收集全部 tool_use id

@@ -324,6 +324,32 @@ fn tool_args_rejected_notice(n: usize) -> String {
     )
 }
 
+/// 被拒调用（参数 JSON 不可修复）的诊断行：工具名 + 参数长度 + 首尾摘要 + serde 错误原文。
+///
+/// 为什么需要（[docs/rejected-call-silent-finish]）：被拒调用的 args 既不进历史也不上 wire，
+/// 会话日志此前只有「工具名 + 长度」，事后无法回答「这段 JSON 为什么不可解析」——
+/// 8531 字符的 `ask` 参数即因此成为永久悬案（模型侧与用户侧都拿不到方案全文）。
+fn log_rejected_calls(
+    rt: &SessionRuntime,
+    step: usize,
+    assembled: &crate::provider::dto::Assembled,
+) {
+    for c in &assembled.tool_calls {
+        // 可打捞的调用不在此列（只有 parse_or_salvage 判定不可修复的才是「被拒」）
+        if repair::parse_or_salvage(&c.args_raw).is_some() {
+            continue;
+        }
+        session_log::warn(
+            rt,
+            &format!(
+                "step {step} 被拒调用 {name}：{diag}",
+                name = c.name,
+                diag = repair::diagnose_unparsable(&c.args_raw)
+            ),
+        );
+    }
+}
+
 /// 无工具调用回合的处置（`text_turn_action` 的返回值）。
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum TextTurnAction {
@@ -337,16 +363,31 @@ pub(super) enum TextTurnAction {
 
 /// 无工具调用回合（含「唯一调用被拒」的空文本回合）如何处置——纯函数便于矩阵单测。
 ///
-/// 判定顺序：
-/// 1. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变；
-/// 2. 文本含 `<report>` 标记 → `Finish`：显式最终汇报；
-/// 3. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
-/// 4. 其余 → `Continue`。
+/// 判定顺序（`rejected` 先于主会话语义，是有意为之，见下）：
+/// 1. `rejected`（本回合有调用因参数 JSON 不可解析被拒）→ 未达上限则 `Continue`：
+///    拒绝提示已注入历史，必须让模型看到后修正重发；上限仍由 `MAX_TEXT_TURNS` 兜底，
+///    不无限续跑。**必须先于 `finish_on_text` 判定**：主会话「正文非空 + 全部调用被拒」
+///    此前直接 `Finish`，run 静默成功、提示永不被模型看到、方案从未产出
+///    （[docs/rejected-call-silent-finish]：会话 5100ea0c 的 8531 字符 `ask`）。
+/// 2. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变
+///    （无被拒调用的回合逐字节不变）；
+/// 3. 文本含 `<report>` 标记 → `Finish`：显式最终汇报；
+/// 4. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
+/// 5. 其余 → `Continue`。
 pub(super) fn text_turn_action(
     text: &str,
     finish_on_text: bool,
+    rejected: bool,
     text_turns: u32,
 ) -> TextTurnAction {
+    // ① 被拒调用：提示已注入，绝不能就此收尾（主会话亦然）；上限仍生效
+    if rejected {
+        return if text_turns >= MAX_TEXT_TURNS {
+            TextTurnAction::StopWithLimit
+        } else {
+            TextTurnAction::Continue
+        };
+    }
     if finish_on_text {
         return TextTurnAction::Finish;
     }
@@ -588,6 +629,7 @@ pub async fn drive_agent(
                         synth_results.len()
                     ),
                 );
+                log_rejected_calls(rt, step, &assembled);
                 rt.history.lock().unwrap().push(
                     Message::user_text(tool_args_rejected_notice(synth_results.len())).stamped(),
                 );
@@ -652,11 +694,27 @@ pub async fn drive_agent(
                 rt.history.lock().unwrap().push(
                     Message::user_text(tool_args_rejected_notice(synth_results.len())).stamped(),
                 );
+                log_rejected_calls(rt, step, &assembled);
             }
-            match text_turn_action(&joined, params.finish_on_text, text_turns) {
+            // 被拒调用（参数 JSON 不可修复）：提示已注入历史，绝不能就此收尾——此前这里的
+            // `text_turn_action(…, finish_on_text = true)` 直接 Finish，run 报成功而拒绝提示
+            // 永不被模型看到（[docs/rejected-call-silent-finish]）。
+            let rejected = !synth_results.is_empty();
+            match text_turn_action(&joined, params.finish_on_text, rejected, text_turns) {
                 TextTurnAction::Finish => break 'steps,
                 TextTurnAction::Continue => {
                     text_turns += 1;
+                    if rejected {
+                        // 被拒回合：<tool-args-rejected> 已注入，不再叠加 <continue-notice>——
+                        // 后者「你只输出了文字、没有发起工具调用」对被拒场景不实且与之矛盾。
+                        session_log::warn(
+                            rt,
+                            &format!(
+                                "step {step} 被拒调用回合（第 {text_turns}/{MAX_TEXT_TURNS} 次），已注入拒绝提示后继续"
+                            ),
+                        );
+                        continue 'steps;
+                    }
                     session_log::warn(
                         rt,
                         &format!(
@@ -673,17 +731,27 @@ pub async fn drive_agent(
                     continue 'steps;
                 }
                 TextTurnAction::StopWithLimit => {
-                    let msg = format!(
-                        "连续 {} 步未发起工具调用（模型只输出文字、任务无进展），本 run 终止；\
-                         已产生的历史保留，请基于现状收尾。",
-                        text_turns + 1
-                    );
+                    // 文案按成因分流：同一句「只输出文字」用在被拒场景会把排查方向带偏
+                    //（[docs/rejected-call-silent-finish] 的 8531 字符 ask 即属被拒成因）。
+                    let msg = if rejected {
+                        format!(
+                            "连续 {} 步未发起任何有效工具调用（调用参数反复不可解析），本 run 终止；\
+                             已产生的历史保留，请基于现状收尾。",
+                            text_turns + 1
+                        )
+                    } else {
+                        format!(
+                            "连续 {} 步未发起工具调用（模型只输出文字、任务无进展），本 run 终止；\
+                             已产生的历史保留，请基于现状收尾。",
+                            text_turns + 1
+                        )
+                    };
                     session_log::warn(rt, &msg);
                     tracing::warn!("session {} {msg}", rt.id);
                     // 终止引导（与监督终止同模式）：下一 run 先用 ask 问用户如何处置
                     rt.history.lock().unwrap().push(Message::user_text(
-                        "<text-turn-limit>连续多步只输出文字、未发起任何工具调用，本 run 已终止。\
-                         若用户重新发起运行，先用 ask 工具确认：继续（说明已准备的新推进方式）或就此收尾。</text-turn-limit>",
+                        "<text-turn-limit>连续多步未能发起有效工具调用（只输出文字，或调用参数反复不可解析），\
+                         本 run 已终止。若用户重新发起运行，先用 ask 工具确认：继续（说明已准备的新推进方式）或就此收尾。</text-turn-limit>",
                     ).stamped());
                     outcome = Err(ProviderError::Protocol(msg));
                     break 'steps;
@@ -696,6 +764,14 @@ pub async fn drive_agent(
         // 只读判定按工具名集合（core 不依赖 tools 类型）；read 路径归一化后去重。
         // 在 calls 被 move 进批次执行前构造摘要。
         let idle_digest = batch_digest(&calls);
+
+        // 混合批次（部分调用被拒 + 部分被执行）取证：被拒调用没有 tool_use 块，它那条合成
+        // ToolResult 会在出网前被 repair 当孤儿结果删除（[docs/empty-assistant-and-request-rebuild-fix]
+        // §7 已登记）——模型看不到拒绝原因，会话日志是唯一留痕点，而此前该路径连日志都没有
+        //（code-review 2026-09-16 🟡：三个被拒分支中只有另两处调了 log_rejected_calls）。
+        if !synth_results.is_empty() {
+            log_rejected_calls(rt, step, &assembled);
+        }
 
         // ⑨ 执行工具批次 → 追加结果 → 下一步
         let (batch_suggest, batch_done, call_sigs) = run_tool_batch(

@@ -70,3 +70,4 @@
 
 - H3 的确切来源未闭环：需开 verbose 抓 wire 请求全文复现，并排查「被围栏/审批拦截的调用是否遗漏 tool 应答」
 - H4 的模型侧反馈缺失（模型可能原样重发同一个坏调用直到预算耗尽）——可考虑后续把拒绝原因作为下一条 user 消息注入，而非伪造 ToolResult
+- **H4 部分闭环（2026-09-16 更新）**：①「唯一调用被拒的回合」已由 `<tool-args-rejected>` user 提示闭环（[subagent-text-turn-premature-exit](./subagent-text-turn-premature-exit.md)）；②「正文非空 + 全部调用被拒」的**主会话**静默成功（run 报成功而提示永不被模型看到）已由 [rejected-call-silent-finish](./rejected-call-silent-finish.md) 修复（`text_turn_action` 新增 `rejected` 维度）。**仍未闭环**：混合批次（部分调用被拒 + 部分成功）的合成 `ToolResult` 仍会被出网前 `repair` 当孤儿结果删除 ⇒ 模型看不到拒绝原因（该路径本次已补会话日志取证）。

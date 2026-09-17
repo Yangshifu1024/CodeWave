@@ -46,33 +46,55 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
     fn text_turn_action_matrix() {
         use super::drive::{text_turn_action, TextTurnAction, MAX_TEXT_TURNS};
         // ① 主会话：纯文本回合即完成（行为不变）
-        assert_eq!(text_turn_action("答完了", true, 0), TextTurnAction::Finish);
-        assert_eq!(text_turn_action("", true, 9), TextTurnAction::Finish);
-        // ② 非主会话 + <report> 标记 → 完成（不计数）
         assert_eq!(
-            text_turn_action("<report>完成 A，未完成 B</report>", false, 0),
+            text_turn_action("答完了", true, false, 0),
             TextTurnAction::Finish
         );
         assert_eq!(
-            text_turn_action("回报如下 <report>x</report>", false, MAX_TEXT_TURNS),
+            text_turn_action("", true, false, 9),
+            TextTurnAction::Finish
+        );
+        // ①’ 主会话 + 被拒调用 → 继续（**本缺陷的锚点**：[docs/rejected-call-silent-finish]）
+        assert_eq!(
+            text_turn_action("下面是完整方案", true, true, 0),
+            TextTurnAction::Continue
+        );
+        // ①’’ 被拒也受 MAX_TEXT_TURNS 硬上限约束（不无限续跑）
+        assert_eq!(
+            text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS),
+            TextTurnAction::StopWithLimit
+        );
+        // ①’’’ 被拒优先于 <report>：子代理「已写汇报但同回合有调用被拒」再多走一步
+        //（有意取舍：被拒调用尚未被模型知晓；已登记为遗留）
+        assert_eq!(
+            text_turn_action("<report>完成</report>", false, true, 0),
+            TextTurnAction::Continue
+        );
+        // ② 非主会话 + <report> 标记 → 完成（不计数）
+        assert_eq!(
+            text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0),
+            TextTurnAction::Finish
+        );
+        assert_eq!(
+            text_turn_action("回报如下 <report>x</report>", false, false, MAX_TEXT_TURNS),
             TextTurnAction::Finish
         );
         // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
         assert_eq!(
-            text_turn_action("接下来我来改 AppShell", false, 0),
+            text_turn_action("接下来我来改 AppShell", false, false, 0),
             TextTurnAction::Continue
         );
         assert_eq!(
-            text_turn_action("", false, MAX_TEXT_TURNS - 1),
+            text_turn_action("", false, false, MAX_TEXT_TURNS - 1),
             TextTurnAction::Continue
         );
         // ④ 触上限 → 显式失败（不伪装成功）
         assert_eq!(
-            text_turn_action("仍然只是旁白", false, MAX_TEXT_TURNS),
+            text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS),
             TextTurnAction::StopWithLimit
         );
         assert_eq!(
-            text_turn_action("", false, MAX_TEXT_TURNS + 5),
+            text_turn_action("", false, false, MAX_TEXT_TURNS + 5),
             TextTurnAction::StopWithLimit
         );
     }
@@ -1124,4 +1146,153 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
             .iter()
             .any(|m| m.role == Role::Assistant && m.content.is_empty());
         assert!(!empty_assistant, "空 assistant 消息不应进入历史");
+    }
+
+    /// 缺陷回归锚点（[docs/rejected-call-silent-finish]）：主会话「正文非空 + 全部调用被拒」的
+    /// 回合必须继续一步，不得静默收尾。会话 5100ea0c 实测：模型输出「方案已登记为 todos。
+    /// 下面是完整方案（含分支名 …）」，同回合那个 8531 字符的 `ask` 参数不可解析被拒 → run
+    /// 报成功结束，方案卡从未产出（用户视角＝「卡死、没有继续输出方案」）。
+    /// 同时守护：主会话不得注入 <continue-notice>（被拒场景已由 <tool-args-rejected> 反馈）。
+    #[tokio::test]
+    async fn main_session_text_with_rejected_call_does_not_silently_finish() {
+        let (port, hits) = spawn_scripted_sse(vec![
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"方案已登记为 todos。下面是完整方案。"}}]}"#,
+                // 字符串中部截断 → parse_or_salvage 返回 None → 调用被拒（与 5100ea0c 同形态）
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"ask","arguments":"{\"questions\": [{\"id\": \"approve\", \"question\": \"是否继续"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"已重发 ask"}}]}"#,
+                SSE_STOP,
+            ]),
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "main-rejected-call");
+        let params = DriveParams {
+            max_steps: 6,
+            emit_events: false,
+            // finish_on_text 取默认 true = 主会话语义（缺陷正在此处：被拒回合不得走 Finish）
+            ..DriveParams::default()
+        };
+        let (result, _, _) =
+            super::drive::drive_agent(&core, &rt, params, "run_main_rejected").await;
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "被拒调用回合不得静默收尾（修复前连接数为 1，run 却报成功）"
+        );
+        assert_eq!(
+            result.unwrap(),
+            "已重发 ask",
+            "final_text 不应停留在被拒回合的正文"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            texts.iter().any(|t| t.contains("<tool-args-rejected>")),
+            "应把被拒情况反馈给模型，实际历史：{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("<continue-notice>")),
+            "主会话不应注入续跑提示，实际历史：{texts:?}"
+        );
+    }
+
+    /// 同上的错位变体：回合只有 thinking（`content` 非空但 `joined_text()` 为空）+ 调用被拒。
+    /// 修复前同样走主会话 `Finish`，且 `final_text` 保留空串/上一回合文本当最终答复。
+    #[tokio::test]
+    async fn main_session_thinking_only_rejected_call_turn_continues() {
+        let (port, hits) = spawn_scripted_sse(vec![
+            sse_body(&[
+                r#"{"choices":[{"delta":{"reasoning_content":"我在想怎么把方案放进去"}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"ask","arguments":"{\"questions\": [{\"id\": \"approve\", \"question\": \"是否继续"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse_body(&[
+                r#"{"choices":[{"delta":{"content":"已重发 ask"}}]}"#,
+                SSE_STOP,
+            ]),
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "main-thinking-rejected");
+        let params = DriveParams {
+            max_steps: 6,
+            emit_events: false,
+            ..DriveParams::default()
+        };
+        let (result, _, _) =
+            super::drive::drive_agent(&core, &rt, params, "run_main_thinking_rejected").await;
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "仅思考的被拒回合同样不得静默收尾");
+        assert_eq!(result.unwrap(), "已重发 ask");
+    }
+
+    /// 被拒调用与纯文本回合共用 MAX_TEXT_TURNS 上限（非主会话）：连续被拒不无限续跑。
+    #[tokio::test]
+    async fn sub_rejected_call_shares_text_turn_budget() {
+        let body = sse_body(&[
+            r#"{"choices":[{"delta":{"content":"我重发一次"}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"edit","arguments":"{\"files\": [{\"path\": \"unfinished"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]);
+        let (port, hits) = spawn_scripted_sse(vec![
+            body.clone(),
+            body.clone(),
+            body.clone(),
+            body,
+        ])
+        .await;
+        let (core, rt, _ws, _dd) = scripted_core(port, "sub-rejected-budget");
+        let params = DriveParams {
+            max_steps: 8,
+            finish_on_text: false,
+            emit_events: false,
+            ..DriveParams::default()
+        };
+        let (result, _, _) =
+            super::drive::drive_agent(&core, &rt, params, "run_rejected_budget").await;
+        assert!(
+            result.is_err(),
+            "连续被拒应以显式错误终止，而非成功收尾：{:?}",
+            result.ok()
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            4,
+            "MAX_TEXT_TURNS(3) 次续跑后第 4 步终止"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            texts.iter().any(|t| t.contains("<text-turn-limit>")),
+            "应注入终止引导，实际历史：{texts:?}"
+        );
+        // 被拒回合只注入 <tool-args-rejected>，不得叠加 <continue-notice>（后者文案
+        //「你只输出了文字、没有发起工具调用」对被拒场景不实且与之矛盾）
+        assert!(
+            !texts.iter().any(|t| t.contains("<continue-notice>")),
+            "被拒回合不应注入续跑提示，实际历史：{texts:?}"
+        );
+    }
+
+    /// 被拒调用的诊断摘要（取证增强）：长度 + 首尾 + serde 错误原文，且不改变解析决策。
+    #[test]
+    fn diagnose_unparsable_reports_length_and_edges() {
+        use crate::core::sessions::repair::{diagnose_unparsable, parse_or_salvage};
+        // 字符串中部截断（不可打捞）——诊断须给出长度与错误原文
+        let raw = "{\"files\": [{\"path\": \"unfinished";
+        assert!(parse_or_salvage(raw).is_none());
+        let diag = diagnose_unparsable(raw);
+        assert!(diag.contains(&format!("len={}", raw.chars().count())));
+        assert!(diag.contains("head="), "应给出首部摘要：{diag}");
+        assert!(diag.contains("err="), "应给出 serde 错误原文：{diag}");
+        // 长参数：首尾都给（短参数只给 head，避免重复）
+        let long = format!("{}{}", "a".repeat(500), "{\"unclosed\": \"x");
+        let diag_long = diagnose_unparsable(&long);
+        assert!(diag_long.contains("tail="), "长参数应给出尾部摘要：{diag_long}");
+        // 换行转义（多行参数在日志里必须单行可读）
+        let multiline = "{\n \"a\": \"b";
+        let diag_nl = diagnose_unparsable(multiline);
+        assert!(
+            diag_nl.contains("\\n") && !diag_nl.contains('\n'),
+            "真换行须转义为单行文本：{diag_nl}"
+        );
     }
