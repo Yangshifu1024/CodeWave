@@ -1378,18 +1378,26 @@ fn batch_digest(calls: &[NormalizedCall]) -> BatchDigest {
         if !readonly {
             d.has_non_readonly = true;
         }
-        if c.name == "read" {
-            if c.args["path"].as_str().is_some() {
-                d.read_paths.push(normalize_read_path(&c.args));
-            }
-        } else if c.name == "batch_read" {
+        if c.name == "read" || c.name == "batch_read" {
+            // `read` 与兼容别名 `batch_read` 共用**同一 wire 契约**：`{"files":[{"path","startLine","endLine"}]}`
+            //——`tools/read.rs` 的 `Args.files` 即 schema 的 `required: ["files"]`，而
+            //`tools/batch_read.rs` 直接复用 `ReadTool.schema()`（两者入参逐字相同）。
+            //
+            // 历史缺陷（本批修复，[docs/subagent-idle-watchdog-misfire]）：此两分支曾按工具名把入参键
+            // **写反**——`read` 分支取顶层 `args["path"]`（对真实契约恒为 `None`）而 `batch_read` 分支
+            // 取 `files` 数组。于是 `read_paths` 对真实 read 调用**恒空**，`feed_batch` 的进展信号 2
+            //（首次读新文件）从未生效：只读 run 每步只读都被计为空转，第 14 步被
+            //`IdlePolicy::Stop` 硬终止（真实事故：explore 子代理被杀）。
             if let Some(files) = c.args["files"].as_array() {
                 for f in files {
                     if f["path"].as_str().is_some() {
-                        d.read_paths
-                            .push(normalize_read_path(&serde_json::json!({"path": f["path"]})));
+                        d.read_paths.push(normalize_read_path(f));
                     }
                 }
+            } else if c.args["path"].as_str().is_some() {
+                // 防御性兼容：顶层单 `path` 旧形态（历史会话留下的调用）仍算进展，
+                // 归一化语义与 files 分支完全一致（同一函数）。
+                d.read_paths.push(normalize_read_path(&c.args));
             }
         }
     }
@@ -1449,7 +1457,20 @@ fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_reasoning_400, stalled, update_reasoning_sticky, Reasoning400};
+    use super::{
+        batch_digest, classify_reasoning_400, stalled, update_reasoning_sticky, NormalizedCall,
+        Reasoning400,
+    };
+
+    /// 构造归一化工具调用（`batch_digest` 单测用）。
+    fn call(name: &str, args: serde_json::Value) -> NormalizedCall {
+        NormalizedCall {
+            id: format!("c-{name}"),
+            name: name.into(),
+            args,
+            index: 0,
+        }
+    }
 
     #[test]
     fn stalled_boundary_and_clock_skew() {
@@ -1608,6 +1629,81 @@ mod tests {
             history.as_slice(),
             "全程不得改写 rt.history"
         );
+    }
+
+    // ---- 空转看门狗的批次摘要（[docs/subagent-idle-watchdog-misfire]）----
+
+    /// `read` 的 wire 契约是 `{"files":[{"path":…}]}`（tools/read.rs 的 `Args::files` 即 schema
+    /// 的 `required: ["files"]`）——批次摘要必须从中收集路径。
+    /// 修复前该分支按顶层 `path` 取值（对 read 恒为 `None`）→ read_paths 恒空 →
+    ///「首次读新文件即进展」信号从未生效（只读 run 第 14 步被空转看门狗硬终止的根因）。
+    #[test]
+    fn batch_digest_counts_read_files() {
+        let d = batch_digest(&[call(
+            "read",
+            serde_json::json!({"files": [{"path": "a.ts"}, {"path": "b.ts"}]}),
+        )]);
+        assert_eq!(
+            d.read_paths,
+            vec!["a.ts".to_string(), "b.ts".to_string()],
+            "read 必须按 files 数组收集路径（修复前恒空）"
+        );
+        assert!(!d.has_non_readonly, "read 是只读工具");
+    }
+
+    /// 兼容别名 `batch_read` 与 `read` 共用同一 wire 契约（tools/batch_read.rs 直接复用 read 的
+    /// schema）——两个工具名必须走同一解析分支，钉住一致性防再次写反。
+    #[test]
+    fn batch_digest_counts_batch_read_alias() {
+        let d = batch_digest(&[call(
+            "batch_read",
+            serde_json::json!({"files": [{"path": "a.ts"}, {"path": "b.ts"}]}),
+        )]);
+        assert_eq!(
+            d.read_paths,
+            vec!["a.ts".to_string(), "b.ts".to_string()],
+            "batch_read 与 read 必须收集到同一组路径"
+        );
+        assert!(!d.has_non_readonly, "batch_read 是只读工具");
+    }
+
+    /// 防御性兼容：顶层单 `path` 形态（旧形态/非常规调用）仍应被收集，
+    /// 且归一化语义不变（trim + 去 `./` 前缀 + 反斜杠转正斜杠，顺序与
+    /// `normalize_read_path` 逐字一致——先 trim_start_matches 再转分隔符）。
+    #[test]
+    fn batch_digest_path_fallback() {
+        let d = batch_digest(&[call(
+            "read",
+            serde_json::json!({"path": "  ./src\\a.ts  "}),
+        )]);
+        assert_eq!(d.read_paths, vec!["src/a.ts".to_string()]);
+    }
+
+    /// 非 read 的只读调用（如 grep）不产生路径：其无进展信号必须留给空转计数器，
+    /// 且不得被误判为「有副作用」的进展。
+    #[test]
+    fn batch_digest_grep_only_yields_no_paths() {
+        let d = batch_digest(&[call(
+            "grep",
+            serde_json::json!({"pattern": "fn main"}),
+        )]);
+        assert!(d.read_paths.is_empty(), "grep 不产生 read 路径");
+        assert!(!d.has_non_readonly, "grep 是只读工具");
+    }
+
+    /// 非只读工具（写/命令等）置 `has_non_readonly`——空转看门狗的首要进展信号。
+    #[test]
+    fn batch_digest_non_readonly_flag() {
+        let edit = batch_digest(&[call(
+            "edit",
+            serde_json::json!({"files": [{"path": "a.ts"}]}),
+        )]);
+        assert!(edit.has_non_readonly, "edit 是写工具");
+        assert!(edit.read_paths.is_empty(), "edit 不得计入 read 路径");
+
+        let command = batch_digest(&[call("command", serde_json::json!({"command": "ls"}))]);
+        assert!(command.has_non_readonly, "command 走进展信号 1");
+        assert!(command.read_paths.is_empty());
     }
 }
 

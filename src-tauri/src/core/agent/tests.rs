@@ -1296,3 +1296,74 @@ use super::stream::{build_assistant_message, build_stream_request, flush_segment
             "真换行须转义为单行文本：{diag_nl}"
         );
     }
+
+    // ---- 端到端：只读 run 读新文件不得被判空转（[docs/subagent-idle-watchdog-misfire]）----
+
+    /// openai_chat 协议的 `read` 工具调用 SSE 响应：args 用真实契约形态
+    /// `{"files":[{"path":…}]}`（tools/read.rs 的 `Args`）。
+    fn read_call_body(id: &str, path: &str) -> Vec<u8> {
+        let args = serde_json::json!({"files": [{"path": path}]}).to_string();
+        let delta = serde_json::json!({
+            "choices": [{"delta": {"tool_calls": [{"index": 0, "id": id,
+                "function": {"name": "read", "arguments": args}}]}}]
+        })
+        .to_string();
+        let finish =
+            serde_json::json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+                .to_string();
+        sse_body(&[delta.as_str(), finish.as_str()])
+    }
+
+    /// 空转看门狗误杀回归：只读 run 连续多步各读一个**不同的新文件**是实质进展，
+    /// 不得被判空转终止（真实事故：explore 子代理在第 14 步被硬终止）。
+    ///
+    /// 修复前 `batch_digest` 把 `read` / `batch_read` 两个分支的入参键写反（read 取顶层
+    /// `path`，对真实契约恒为 `None`）→ `read_paths` 恒空 → 进展信号 2（首次读新文件）
+    /// 从未生效 → 第 8 步纠偏、第 14 步被 `IdlePolicy::Stop` 硬终止。本用例修前红、修后绿。
+    ///
+    /// 两个陷阱（有意规避，勿改）：路径必须真实存在（读取失败会走「失败重复检测」层，
+    /// 污染空转结论）；每步必须读不同文件（重复读同一文件不构成进展）。
+    #[tokio::test]
+    async fn read_only_run_over_new_files_is_not_idle() {
+        const FILES: usize = 16;
+        let mut script: Vec<Vec<u8>> = (0..FILES)
+            .map(|i| read_call_body(&format!("c{i}"), &format!("f{i:02}.txt")))
+            .collect();
+        script.push(sse_body(&[
+            r#"{"choices":[{"delta":{"content":"<report>已读完 16 个文件</report>"}}]}"#,
+            SSE_STOP,
+        ]));
+        let (port, hits) = spawn_scripted_sse(script).await;
+        let (core, rt, ws, _dd) = scripted_core(port, "idle-read-new-files");
+        for i in 0..FILES {
+            std::fs::write(ws.path().join(format!("f{i:02}.txt")), "line1\nline2\n").unwrap();
+        }
+        let params = DriveParams {
+            max_steps: FILES + 4,
+            finish_on_text: false,
+            emit_events: false,
+            // idle_policy 取默认 Stop（8 步纠偏 / 14 步终止）——只读 run 同样受此阈值约束
+            ..DriveParams::default()
+        };
+        let (result, _, _) =
+            super::drive::drive_agent(&core, &rt, params, "run_idle_new_files").await;
+        assert!(
+            result.is_ok(),
+            "读新文件属进展，不得被空转看门狗终止：{:?}",
+            result.err()
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            FILES + 1,
+            "应跑满 {FILES} 步读取 + 1 步汇报（修前第 14 步即被终止）"
+        );
+        let texts = history_texts(&rt);
+        assert!(
+            !texts.iter().any(|t| t.contains("supervision-escalated")),
+            "不得注入空转终止引导，实际历史：{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("supervision-notice")),
+            "读新文件不应触发任何空转纠偏，实际历史：{texts:?}"
+        );
+    }
