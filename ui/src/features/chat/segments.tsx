@@ -22,6 +22,16 @@ export function renderCached(text: string): string {
   return html;
 }
 
+/** 剥离子代理汇报协议标记（`<report>` / `</report>`）：子代理与主代理之间用该标记
+ *  包裹最终汇报，主聊天需要它、子代理过程流抽屉里则应只展示正文。
+ *  刻意放在「渲染时」而非「delta 到达时」：增量流会把标记切成 `<repo` + `rt>` 两片，
+ *  任一时刻单独剥离都会漏网；而渲染时 text 段已完成合并，标记必然完整。
+ *  另注：绝不在主聊天默认开启——主聊天正文里引用该标记是合法内容，全局剥离会丢内容。 */
+export function stripReportMarkers(text: string): string {
+  // trim：标记通常独自占一整行，剥掉后会留下前后空行
+  return text.replace(/<\/?report>/g, "").trim();
+}
+
 // 思考标题右侧占满余下头部空间的通栏走马灯（[docs/thinking-marquee-rewrite](../../../../docs/thinking-marquee-rewrite.md)）：显示思考文本的最新一行。
 // 一行先锚定在左缘；溢出通栏后自右向左爬行、最新内容钉在右缘（tail-follow）；只有流真正
 // 换到新的一行（来了 "\n"）才翻转上滚——原行内增长绝不重触发滚动。
@@ -178,11 +188,15 @@ export function TimelineSegsView({
   toolsMap,
   streaming,
   onUserToggle,
+  stripReport = false,
 }: {
   timeline: TimelineSeg[];
   toolsMap: Record<string, ToolView>;
   streaming?: boolean;
   onUserToggle?: () => void;
+  /** 是否剥离 `<report>` 协议标记（仅子代理过程流抽屉开启，见 stripReportMarkers）。
+   *  默认 false：主聊天正文引用该标记是合法内容，不可全局剥离。 */
+  stripReport?: boolean;
 }) {
   // 流式光标跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，光标落在空尾）
   let tailIdx = -1;
@@ -202,13 +216,28 @@ export function TimelineSegsView({
         }
         if (seg.kind === "tool") {
           const tool = toolsMap[seg.callKey];
+          // subagent 调用已有对应的 sub 段卡片，它自己的通用工具卡不再渲染（否则同一调用出现两张卡）。
+          // 为什么在渲染层过滤而不是 store 层：「tool:result 事件（带真名）与 tool_progress 帧
+          // （可能仍是占位名 "?"）到达顺序无保证，store 层无法可靠判定；渲染层过滤对两种顺序
+          // 都成立，且与恢复路径「不留工具卡段」的语义一致。
+          // 仅在工具名明确等于 "subagent" 时跳过；"?"（占位未回填）照常渲染，避免误伤真正运行中的工具。
+          // 段本身仍保留在 timeline 里（光标定位等既有逻辑依赖它），只是不渲染卡片。
+          // 例外：**失败的调用必须照常渲染**——E_ARGS / E_SUBAGENT_BUSY 在 sub:spawn 之前就返回了
+          // （tools/subagent.rs 的校验与并发抢槽早于 spawn），此时 timeline 里根本没有 sub 段，
+          // 再过滤掉工具卡就会让这次调用在聊天里零痕迹（连错误码都看不到）。
+          // 反过来说，spawn 之后的失败（用户停止 / 内部异常）已有 sub 段承载，会多出一张错误卡，
+          // 但那是修复前就存在的情况，不是回归；此处不引入按 callKey 关联 sub_id 的精确匹配（事件侧
+          // 无该关联字段，属于契约变更，另开）。
+          if (tool?.tool === "subagent" && tool.status !== "error") return null;
           return tool ? <ToolCallCard key={seg.callKey} tool={tool} onToggle={onUserToggle} /> : null;
         }
         if (seg.kind === "sub") {
           return <SubagentItemCard key={seg.subId} subId={seg.subId} />;
         }
+        // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由
+        const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
         // 流式条目绕过缓存（文本每帧增长，避免前缀污染缓存）
-        const html = streaming && i === tailIdx ? renderMarkdown(seg.text) : renderCached(seg.text);
+        const html = streaming && i === tailIdx ? renderMarkdown(text) : renderCached(text);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
         return <div key={i} className="md" data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}

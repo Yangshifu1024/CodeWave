@@ -242,6 +242,10 @@ export default function SubagentDrawer() {
               toolsMap={stream.toolsMap}
               streaming={stream.status === "running"}
               onUserToggle={suspendFollow}
+              // 过程流是模型原始输出的直通，后端只在事件通道剥离过 <report>，
+              // 落盘/实时两条路径的正文都还带着标记 —— 在此渲染时剥离。
+              // 归档分支（sub.report）保持不动：它本来就是后端剥离过的干净文本。
+              stripReport
             />
             {stream.status === "running" && <span className="cursor">▍</span>}
           </div>
