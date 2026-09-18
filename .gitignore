@@ -28,3 +28,10 @@ src-tauri/stats/
 # 改名前旧托管目录名（存量本地目录手动改名前的过渡忽略）
 .wavestudio/
 stats/
+
+# cargo bin 目标目录：上面的 legacy `bin/`（旧 Wails 残留）会把 `src-tauri/src/bin/` 一并忽略，
+# 新增的 bin 目标（如测试用假 LSP server `codewave-fake-lsp`）会静默不入库，
+# CI 报 `can't find bin ... at path src-tauri/src/bin/...`。
+# 注意：git 取**最后匹配**的规则，故放行必须写在 `bin/` 之后（写前面会被覆盖）。
+!src-tauri/src/bin/
+!src-tauri/src/bin/**
