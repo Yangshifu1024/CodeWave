@@ -3,6 +3,10 @@
 # 触发约定：从 main 打 v* tag（workflow 语法无法限定 tag 所在分支，靠操作纪律）。
 # draft 语义：tauri-action 只上传产物与更新器文件，绝不自动发布——人工核对资产/说明后点 Publish。
 # 2026-09-13：三个平台 job 收敛为 matrix；唯一构建流水线（test/lint 只做测试与检查，不 build）。
+# 2026-09-18：新增 finalize-updater-json 收尾作业（在 build 之后）——tauri-action（action-v1.0.0）写
+# latest.json 时把每个平台的 url 写成 REST 资产 API 端点（api.github.com/repos/.../releases/assets/<id>，
+# 匿名配额 60 次/小时/出口 IP），配额耗尽后应用内「检查更新」下载阶段报 403 Forbidden；该作业把清单里的
+# url 统一改写为 CDN 下载端点（github.com/.../releases/download/<tag>/<name>），脚本见 scripts/fix-updater-json.mjs。
 # 签名 secrets：TAURI_SIGNING_PRIVATE_KEY 已配置（无密码密钥，密码 secret 留空），updater
 # 产物（*.sig + latest.json）随 release 上传；macOS 公证 APPLE_*（6 个）已配置（2026-09-14 起）：
 # bundler 签名并公证 .app，dmg 由后续「Notarize and staple dmg」步骤补公证；全部 APPLE_* 未
@@ -179,3 +183,67 @@ jobs:
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
           gh release upload "${GITHUB_REF_NAME}" "$dmg" --clobber
+
+  # latest.json 后处理（同步修复「检查更新」下载阶段 403 Forbidden）：tauri-action（action-v1.0.0）
+  # 写清单时每个平台的 url 用的是 REST 资产 API 端点，匿名配额只有 60 次/小时/出口 IP，耗尽即 403
+  # （v0.3.8 实测响应头 x-ratelimit-remaining: 0）。CDN 端点 github.com/<owner>/<repo>/releases/
+  # download/<tag>/<assetName> 由 CDN 承载、不计 API 配额，因此发布收尾时统一改写。
+  #
+  # 为什么必须是独立 job：三个平台各自在 tauri-action 内 delete + upload latest.json 做清单合并，
+  # 任一平台还没跑完就改写，会被后续上传整体覆盖——所以必须 needs: [prepare-release, build]
+  # （prepare-release 产出 release_id / 初始清单，build 保证三平台 build 全部结束），等它们都完成再收尾
+  # （也因此自然排在 macOS「Notarize and staple dmg」之后；那步只 --clobber 回传 *.dmg，与 latest.json 不冲突）。
+  finalize-updater-json:
+    name: Finalize updater manifest
+    needs: [prepare-release, build]
+    # 只在构建成功时收尾：构建失败时清单本身不完整，不做任何改动（不要用 always()）
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    # draft release 仅对具备 push 资格的凭证可见：job 级权限若被收窄成 read，gh 会报 release not found
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # 从 draft release 取回三平台合并后的清单（--clobber 覆盖工作区同名文件）
+      - name: Download latest.json from draft release
+        run: gh release download "$GITHUB_REF_NAME" --pattern latest.json --clobber
+
+      # 脚本自己经 gh api 取资产名（按 id 映射，同 id 的多个平台条目改写结果一致），
+      # 内部先完整校验再落盘：id 查不到 / asset name 为空 / 改写后仍有 api 残留都会直接失败
+      - name: Rewrite updater urls to CDN
+        run: node scripts/fix-updater-json.mjs --tag "$GITHUB_REF_NAME" --in latest.json --out latest.json
+
+      # 发布断言（写回线上之前的拦截门）：清单不得残留 api 资产端点，且所有 url 都是 github.com CDN 形态。
+      # 断言读的就是上一步刚写出的本地 latest.json，所以排在 upload 之前——断言不过，坏清单不会进 draft release；
+      # 失败时 release 仍是 draft，人工核对后才能点 Publish。
+      # 注：JS 里不用模板字符串（${...} 写在单引号脚本里会触发 shellcheck SC2016）
+      - name: Assert updater urls
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("latest.json", "utf8"));
+            const entries = Object.entries(manifest.platforms || {});
+            if (entries.length === 0) {
+              console.error("latest.json 的 platforms 为空");
+              process.exit(1);
+            }
+            for (const [key, entry] of entries) {
+              const url = (entry && entry.url) || "";
+              if (url.includes("api.github.com")) {
+                console.error("平台 " + key + " 仍指向 api.github.com 资产端点：" + url);
+                process.exit(1);
+              }
+              if (!url.startsWith("https://github.com/")) {
+                console.error("平台 " + key + " 的 url 非 https://github.com/ 前缀：" + url);
+                process.exit(1);
+              }
+            }
+            console.log("[assert] " + entries.length + " 个平台 url 均为 CDN 下载形态");
+          '
+
+      # 断言通过后才回传，覆盖 draft release 上的旧清单
+      - name: Upload latest.json back to draft release
+        run: gh release upload "$GITHUB_REF_NAME" latest.json --clobber

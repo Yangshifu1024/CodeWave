@@ -141,6 +141,8 @@ export default {
     updateDownloading: "发现新版本 v{{version}}，正在下载…",
     updateRestarting: "更新下载完成，即将重启安装…",
     updateFailed: "更新下载或安装失败：{{error}}",
+    updateFailedRateLimited:
+      "更新下载失败：GitHub 匿名 API 配额已耗尽（403）。请稍后重试，或到 Release 页面手动下载安装包；切换代理无法解决此问题。",
     upToDate: "已是最新版本",
     updateCheckFailed: "检查更新失败",
     authErrorHint: "认证失败，请检查对应供应商的 API Key 配置后重试。",

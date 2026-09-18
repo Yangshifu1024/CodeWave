@@ -49,6 +49,7 @@
 | 签名密钥 | minisign 密钥对，私钥 + 空密码；私钥入 GitHub secrets `TAURI_SIGNING_PRIVATE_KEY`（密码 secret 留空即匹配），本地备份 `~/.tauri/codewave.key(.pub)`；公钥固化进 `tauri.conf.json` `plugins.updater.pubkey` |
 | 更新器配置 | `plugins.updater.active: true` + `endpoints: [https://github.com/Yangshifu1024/CodeWave/releases/latest/download/latest.json]` |
 | 更新产物 | `bundle.createUpdaterArtifacts: true`（构建产出安装包 + `.sig`；tauri-action 检测到签名 env 自动生成/合并 latest.json 上传到 release） |
+| 清单下载地址 | 发布收尾由 `finalize-updater-json` 作业（`release.yml`，`needs: [prepare-release, build]`）调 `scripts/fix-updater-json.mjs` 改写（[docs/updater-download-403](./updater-download-403.md)：tauri-action 默认产出 `api.github.com/.../releases/assets/<id>`，匿名配额 60 次/小时/出口 IP，耗尽即 403） |
 | 前端权限 | `capabilities/default.json` 增 `updater:default` |
 | 检查入口 | 「关于」弹框「检查更新」按钮（三平台）+ macOS 应用菜单项（既有） |
 | 安装流程 | `ui/src/utils/updateCheck.ts`：check → `downloadAndInstall()` → toast → `restart_app` IPC（`host/commands/system.rs`，`app.restart()`） |
@@ -56,3 +57,11 @@
 端到端验证路径：装 v0.3.0（无签名产物，仅作为旧实例）→ 发布 v0.3.1（首个带 latest.json 的 release）→ 0.3.0 检查更新 → 下载签名产物校验公钥 → 安装重启 → 关于页显示 0.3.1。本地模拟：`scripts/mock-updater-endpoint.mjs` 可在 8080 端口伪造更新源（需临时把 endpoints 指向 `http://127.0.0.1:8080/latest.json` 重打包，模拟产物版本号与实际二进制一致属预期）。
 
 注意：latest.json 由三平台 matrix job 各自上传合并——v0.3.1 发布后需核对 release 资产里 latest.json 是否含全部三平台条目（tauri-action 合并逻辑的已知关注点）。
+
+**发布后核对清单（2026-09-18 补）**——`finalize-updater-json` 作业已内置断言，人工复核时再看这三项：
+
+1. 清单里 **不存在** `api.github.com`，所有 `url` 以 `https://github.com/` 开头（走 CDN，不消耗 API 配额）；
+2. 三平台主键（`darwin-aarch64` / `linux-x86_64` / `windows-x86_64`）齐全且 `signature` 非空；
+3. 逐条 `curl -I` 改写后的 url 返回 200/302。
+
+`finalize-updater-json` 的断言排在回传线上**之前**，断言不过就不会覆盖 draft 上的旧清单（脚本自身校验不通过时也不落盘）。**核对时注意 CDN 缓存**：改写后短时间内 `releases/latest/download/latest.json` 可能仍返回旧内容，**tag 固定路径同样走缓存**（实测同 `etag`、同 `age`），请读 release 资产或等待缓存 TTL。已发布版本的存量修补命令与处置办法见 [docs/updater-download-403](./updater-download-403.md) 第 4.2 节——**属线上写操作，须用户明确授权**。
