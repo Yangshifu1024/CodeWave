@@ -8,13 +8,16 @@ import { App } from "antd";
 import { i18n } from "../i18n";
 import UpdateModal from "../features/panels/UpdateModal";
 import { useUpdater } from "../stores/updater";
-import { checkForUpdates } from "../utils/updateCheck";
 
 const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(async (): Promise<void> => {}),
   restartApp: vi.fn(async (): Promise<void> => {}),
   check: vi.fn(async (): Promise<unknown> => null),
   downloadAndInstall: vi.fn(async (): Promise<void> => {}),
+  // Linux 降级分支依赖这两个：显式 mock 才能脱离环境（真 ipc 在测试环境会抛，被 .catch 吞成 null/false）
+  resolveProxy: vi.fn(async (): Promise<string | null> => null),
+  isAppimage: vi.fn(async (): Promise<boolean> => true),
+  appVersion: vi.fn(async (): Promise<string> => "1.0.0"),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
@@ -22,9 +25,24 @@ vi.mock("../ipc/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../ipc/client")>();
   return {
     ...actual,
-    ipc: { ...actual.ipc, openUrl: mocks.openUrl, restartApp: mocks.restartApp },
+    ipc: {
+      ...actual.ipc,
+      openUrl: mocks.openUrl,
+      restartApp: mocks.restartApp,
+      resolveProxy: mocks.resolveProxy,
+      isAppimage: mocks.isAppimage,
+      appVersion: mocks.appVersion,
+    },
   };
 });
+
+// happy-dom 的 navigator.userAgent 随宿主平台变（macOS 本地不报、Linux runner 上报），
+// 而 isLinux() 依赖它。测试必须自己固定 UA，否则「available 还是 manual-download」会在不同机器上翻车。
+const MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+const LINUX_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+function setUserAgent(ua: string) {
+  Object.defineProperty(window.navigator, "userAgent", { value: ua, configurable: true });
+}
 
 /** 把 store 摆到某个相位（弹窗只消费这些字段） */
 function seed(over: Partial<ReturnType<typeof useUpdater.getState>> = {}) {
@@ -68,6 +86,8 @@ beforeEach(() => {
   mocks.restartApp.mockClear();
   mocks.check.mockClear();
   mocks.downloadAndInstall.mockClear();
+  mocks.isAppimage.mockImplementation(async () => true);
+  setUserAgent(MAC_UA);
   seed();
 });
 
@@ -111,7 +131,15 @@ describe("UpdateModal · available", () => {
   });
 
   it("「下载并安装」真正进入下载相位，完成后转为待重启（按钮 → 流程函数已接通）", async () => {
-    // 先让流程拿到一个 Update 实例（pendingUpdate），再点按钮——否则 startUpdate 会因无实例直接返回
+    // 流程的 pendingUpdate / installInFlight 是模块级槽位，跨用例会残留——本用例全程用
+    // resetModules 后的干净模块实例（组件也要重新 import，否则它闭包里的还是旧模块）。
+    vi.resetModules();
+    const [{ default: FreshModal }, { useUpdater: freshStore }, flow] = await Promise.all([
+      import("../features/panels/UpdateModal"),
+      import("../stores/updater"),
+      import("../utils/updateCheck"),
+    ]);
+
     let releaseDownload: () => void = () => {};
     mocks.downloadAndInstall.mockImplementationOnce(
       () =>
@@ -126,24 +154,73 @@ describe("UpdateModal · available", () => {
       downloadAndInstall: mocks.downloadAndInstall,
       close: vi.fn(async () => {}),
     });
-    await checkForUpdates();
-    expect(useUpdater.getState().phase).toBe("available");
+    await flow.checkForUpdates();
+    expect(freshStore.getState().phase).toBe("available");
 
-    renderModal();
+    render(
+      <App>
+        <FreshModal />
+      </App>,
+    );
     fireEvent.click(button(i18n.t("updater.actions.downloadInstall")));
 
     // 下载中：相位转到 downloading（按钮已接到 startUpdate）
     await vi.waitFor(() => {
       expect(mocks.downloadAndInstall).toHaveBeenCalledTimes(1);
     });
-    expect(useUpdater.getState().phase).toBe("downloading");
+    expect(freshStore.getState().phase).toBe("downloading");
 
     // 下载完成：转 ready 且弹窗强制保持打开（重启入口不被吞）
     releaseDownload();
     await vi.waitFor(() => {
-      expect(useUpdater.getState().phase).toBe("ready");
+      expect(freshStore.getState().phase).toBe("ready");
     });
-    expect(useUpdater.getState().modalOpen).toBe(true);
+    expect(freshStore.getState().modalOpen).toBe(true);
+  });
+});
+
+describe("UpdateModal · Linux 降级分支（deb/rpm 不能自替换）", () => {
+  it("UA 为 Linux 且非 AppImage 时，检查到更新直接进 manual-download", async () => {
+    vi.resetModules();
+    setUserAgent(LINUX_UA);
+    mocks.isAppimage.mockImplementation(async () => false);
+    mocks.check.mockResolvedValueOnce({
+      currentVersion: "1.0.0",
+      version: "9.9.9",
+      body: "## 新特性",
+      downloadAndInstall: mocks.downloadAndInstall,
+      close: vi.fn(async () => {}),
+    });
+    const { useUpdater: freshStore, checkForUpdates: freshCheck } = {
+      useUpdater: (await import("../stores/updater")).useUpdater,
+      checkForUpdates: (await import("../utils/updateCheck")).checkForUpdates,
+    };
+
+    await freshCheck();
+
+    expect(mocks.isAppimage).toHaveBeenCalled();
+    expect(freshStore.getState().phase).toBe("manual-download");
+  });
+
+  it("AppImage 上仍走 available（可自替换）", async () => {
+    vi.resetModules();
+    setUserAgent(LINUX_UA);
+    mocks.isAppimage.mockImplementation(async () => true);
+    mocks.check.mockResolvedValueOnce({
+      currentVersion: "1.0.0",
+      version: "9.9.9",
+      body: null,
+      downloadAndInstall: mocks.downloadAndInstall,
+      close: vi.fn(async () => {}),
+    });
+    const { useUpdater: freshStore, checkForUpdates: freshCheck } = {
+      useUpdater: (await import("../stores/updater")).useUpdater,
+      checkForUpdates: (await import("../utils/updateCheck")).checkForUpdates,
+    };
+
+    await freshCheck();
+
+    expect(freshStore.getState().phase).toBe("available");
   });
 });
 
@@ -221,17 +298,27 @@ describe("UpdateModal · error", () => {
   });
 
   it("「重试」在无待装实例时重新检查（按钮 → 流程函数已接通）", async () => {
-    seed({ phase: "error", newVersion: null, error: "检查失败" });
+    // 同样用干净模块实例：确保 pendingUpdate 为空，走「重新检查」那条分支
+    vi.resetModules();
     mocks.check.mockResolvedValueOnce(null);
+    const [{ default: FreshModal }, { useUpdater: freshStore }] = await Promise.all([
+      import("../features/panels/UpdateModal"),
+      import("../stores/updater"),
+    ]);
+    freshStore.setState({ phase: "error", modalOpen: true, newVersion: null, error: "检查失败" });
 
-    renderModal();
+    render(
+      <App>
+        <FreshModal />
+      </App>,
+    );
     fireEvent.click(button(i18n.t("updater.actions.tryAgain")));
 
     await vi.waitFor(() => {
       expect(mocks.check).toHaveBeenCalledTimes(1);
     });
     // 重新检查且无更新 → 相位回到 up-to-date（弹窗不再有动作按钮）
-    expect(useUpdater.getState().phase).toBe("up-to-date");
+    expect(freshStore.getState().phase).toBe("up-to-date");
   });
 });
 
