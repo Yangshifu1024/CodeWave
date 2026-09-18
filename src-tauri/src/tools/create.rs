@@ -90,6 +90,19 @@ impl Tool for CreateTool {
                 return ToolOutcome::err("E_IO", format!("创建目录失败：{e}"));
             }
         }
+        // 写前基线（[docs/lsp-post-write-diagnostics](../../../docs/lsp-post-write-diagnostics.md)）：必须在写入**之前**取——
+        // 此刻盘上仍是旧内容（新文件 = 读不到 → 基线视为空集），与写后诊断成对才算得出「本次新增」；
+        // 未覆盖类型 / 临时会话 / 开关关闭 / server 未就绪时返回 None（本轮不回喂任何诊断）
+        let vcfg = ctx.core.cfg.read().unwrap().validation.clone();
+        let prev_content = std::fs::read(&resolved)
+            .ok()
+            .map(|b| crate::tools::read::read_text_content(&b));
+        let target = super::validation::WriteTarget::new(
+            resolved.clone(),
+            args.path.clone(),
+            prev_content,
+        );
+        let baseline = super::validation::baseline(ctx, &target, &vcfg).await;
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
                 // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：产物登记（子代理归属主会话；路径规范化，
@@ -112,10 +125,11 @@ impl Tool for CreateTool {
                         tracing::warn!("产物登记失败（create {}）：{e}", args.path);
                     }
                 }
-                // 写后校验
-                let vcfg = ctx.core.cfg.read().unwrap().validation.clone();
-                let report = super::validation::validate_file(&resolved, &vcfg).await;
-                let summary = super::validation::summarize(&[(args.path.clone(), report)]);
+                // 写后语义校验：与写前基线配对（LSP 差集），文案经 warnings 透出；
+                // 不影响写入结果本身（跳过必须如实带原因，绝不渲染成「通过」）
+                let checked = super::validation::check(ctx, &target, baseline.as_ref(), &vcfg).await;
+                let summary =
+                    super::validation::summarize(std::slice::from_ref(&checked), &vcfg);
                 let mut out =
                     ToolOutcome::ok(json!({ "path": args.path, "bytes": args.content.len() }));
                 if !summary.is_empty() {
@@ -282,5 +296,38 @@ mod tests {
         let (ctx, _ws, _dd) = setup("t4");
         let out = CreateTool.run(&ctx, json!({"path": 123})).await;
         assert_eq!(out.error.unwrap().code, "E_ARGS");
+    }
+
+    /// 写后语义校验的接线（[docs/lsp-post-write-diagnostics](../../../docs/lsp-post-write-diagnostics.md)）：
+    /// 三条早退路径（临时会话 / 未覆盖类型 / JSON 内置）必须各自给出如实文案——
+    /// 不静默、也绝不把「没跑」渲染成「通过」。
+    #[tokio::test]
+    async fn run_reports_semantic_check_outcome_honestly() {
+        let (ctx, _ws, _dd) = setup("t5");
+        // 临时会话（无项目）→ 不做语义校验（不拉起 server）
+        let out = CreateTool
+            .run(&ctx, json!({"path": "src/main.rs", "content": "fn main() {}\n"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.warnings, vec!["（临时会话不做语义校验）".to_string()]);
+        // 未覆盖类型 → 明说该类型不做语义校验（带扩展名）
+        let out = CreateTool
+            .run(&ctx, json!({"path": "ui/App.vue", "content": "<template/>"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.warnings, vec!["（该文件类型不做语义校验：vue）".to_string()]);
+        // JSON 走内置解析：坏 JSON 回喂错误（文案里没有「通过」）
+        let out = CreateTool
+            .run(&ctx, json!({"path": "cfg/bad.json", "content": "{broken"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert!(out.warnings[0].contains("JSON 解析失败"), "{:?}", out.warnings);
+        assert!(!out.warnings[0].contains("校验通过"), "{:?}", out.warnings);
+        // 好 JSON → 通过（内置路径同样给出结论）
+        let out = CreateTool
+            .run(&ctx, json!({"path": "cfg/good.json", "content": "{\"a\":1}"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.warnings, vec!["（写入后语义校验通过：JSON）".to_string()]);
     }
 }

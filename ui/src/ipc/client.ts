@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, LspLanguage, LspServerStatus, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -156,4 +156,16 @@ export const ipc = {
   // 崩溃/退出中断标记清除（左栏会话行的中断徽标）：调用后由调用方刷新会话列表
   clearSessionInterrupt: (sessionId: string) =>
     invoke<void>("clear_session_interrupt", { sessionId }),
+
+  // ---------- LSP 语义校验（[docs/lsp-diagnostics]）----------
+  // 六语言 server 探测状态（设置页徽标 + 引导卡判定）；失败由调用方静默降级为不显示徽标
+  lspStatus: () => invoke<LspServerStatus[]>("lsp_status"),
+  /** 一键安装（TS/JS、Python 走 npx；Go 走 go install）：成功返回结果文案，失败走 reject */
+  lspInstall: (language: LspLanguage) => invoke<string>("lsp_install", { language }),
+  /** 启用某语言语义校验（java 走此路径：后端打开开关并落盘） */
+  lspEnable: (language: LspLanguage) => invoke<void>("lsp_enable", { language }),
+  /** 强制重探测（清 PATH / 探测缓存后重查），返回最新状态 */
+  lspRedetect: () => invoke<LspServerStatus[]>("lsp_redetect"),
+  /** 重启某语言的 server（拾取命令覆盖 / 清诊断缓存） */
+  lspRestart: (language: LspLanguage) => invoke<void>("lsp_restart", { language }),
 };

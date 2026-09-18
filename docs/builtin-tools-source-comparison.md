@@ -618,7 +618,7 @@ edit 容错的一种成熟路线是**多级模糊替换器链**：精确匹配 �
 
 **配套生态价值**：LSP 作为工具层的**横切服务**价值更大——read 预热（读取时后台通知 LSP 解析，后续 edit 诊断更及时）、edit/write 写后全项目诊断（本文件 + 受波及文件限量，防诊断风暴）。
 
-**评估**：本项目无 LSP 体系（validation.rs 是外部工具链语法检查的轻量替代）；引入 LSP（rust-analyzer/tsserver 常驻）是大工程，当前 validation 方案是合理取舍，可在 P2 评估 tsserver 单点接入（§15 P3-1）。
+**评估**：**已落地**（原结论「引入 LSP（rust-analyzer/tsserver 常驻）是大工程，当前 validation 方案是合理取舍」作废）——写后校验已从单文件外部命令升级为项目级常驻 LSP 语义诊断（六语言 + 写前基线差集 + 三态文案，**未运行绝不出「通过」**），实施报告见 [lsp-post-write-diagnostics](./lsp-post-write-diagnostics.md)。本节保留作决策沿革存档；§15 P3-1 已完成，read 预热 / LSP 查询工具仍是后续可选项（客户端层已做成通用通道，只差封装）。
 
 ### 13.5 `execute` / code-mode（MCP 沙箱编排）
 
@@ -768,7 +768,7 @@ read 的 deprecated 别名（历史会话兼容）：name/description 声明弃�
 
 | 编号 | 领域 | 建议 | 依据 | 要点 |
 |---|---|---|---|---|
-| P3-1 | LSP | 评估 tsserver/rust-analyzer 单点接入（预热 + 诊断回流，替代/增强 validation） | §13.4 | LSP 作为横切服务（read 预热/write 诊断/工具查询）价值大但成本高（常驻进程管理），当前 validation 轻量方案是合理取舍 |
+| P3-1 | LSP | **已完成**：写后语义诊断已落地（六语言常驻 server + 写前基线差集 + 三态文案），报告见 [lsp-post-write-diagnostics](./lsp-post-write-diagnostics.md) | §13.4 | 原「成本高 → 故意后置」结论已推翻（误报结构性 + 每写必付冷启动 + 失败静默）；read 预热 / 语义查询工具仍为后续可选项 |
 | P3-2 | MCP 编排 | 评估沙箱脚本编排（循环/条件调用 MCP 工具） | §13.5 | Rust 侧需 deno_core/rquickjs 选型；仅 MCP 密集场景收益明显 |
 | P3-3 | 搜索 | 可配置 websearch provider（用户自带 Exa/Tavily key，复用 http_request 基建） | §13.2 | BYOK 定位自然延伸，非急需 |
 | P3-4 | apply_patch | 若接入 gpt-5 系模型再评估补丁格式通道 | §13.1 | 当前多文件 edit 已覆盖需求 |

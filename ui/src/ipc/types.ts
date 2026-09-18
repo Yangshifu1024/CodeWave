@@ -89,8 +89,20 @@ export const DEFAULT_PREFS: SessionPrefs = { approval_mode: "plan", model_id: nu
 
 /** 审批门设置（fence 判定后的交互策略） */
 export interface ApprovalSettings { enabled: boolean; confirm_outside_create: boolean; confirm_git_push: boolean; /** docs/ask-ink-accent-and-composer-cover：无应答 5 分钟后自动确认推荐选项；false = 永不超时（无限等待） */ auto_confirm: boolean; command_allowlist: string[] }
-/** 保存后自动验证的语言开关 */
-export interface ValidationSettings { python: boolean; rust: boolean; typescript: boolean; go: boolean; json: boolean }
+/** 保存后自动验证的语言开关（[docs/lsp-diagnostics]：语义校验按语言分流；json 走内置解析，不属 LSP 六语言） */
+export interface ValidationSettings {
+  python: boolean;
+  rust: boolean;
+  typescript: boolean;
+  go: boolean;
+  json: boolean;
+  /** Dart/Flutter 语义校验（可选 = 后端 serde default 向前兼容；缺省按后端默认 true 显示） */
+  dart?: boolean;
+  /** Java 语义校验（默认关闭：jdtls 需 JDK 21+ 与依赖树索引，首次启用需用户确认） */
+  java?: boolean;
+  /** LSP 服务配置（命令覆盖 / JDK / 额外 SDK 根 / 预算）；缺省 = DEFAULT_LSP_SETTINGS */
+  lsp?: LspSettings;
+}
     /** shell 探测结果（list_available_shells 返回；kind 为 posix|powershell|cmd|wsl；auto = 即自动探测默认项） */
     export interface ShellInfo { id: string; name: string; path: string | null; kind: string; limited: boolean; auto: boolean }
 /** shell 选择配置（null = 自动：执行时由后端自动探测） */
@@ -333,4 +345,93 @@ export interface QuotaSnapshot {
   /** 凭证来源（env:NAME / opencode.jsonc / opencode.json / auth.json）——悬浮排障用 */
   credential_source: string | null;
   fetched_at: string;
+}
+
+// ---------- LSP 语义校验（六语言 server 探测 / 安装引导 / 状态回显） ----------
+// 与后端 src-tauri/src/lsp/mod.rs 的 Lang / ServerStatus / InstallHint 一一对应。
+
+/** 受支持语言（JSON 走内置解析不在此列）；稳定 id 与后端 `Lang::id()`、配置字段名、事件 payload 同源 */
+export type LspLanguage = "typescript" | "rust" | "python" | "go" | "java" | "dart";
+
+/** 设置页行序（后端 `Lang::all()` 同序） */
+export const LSP_LANGUAGES: LspLanguage[] = ["typescript", "rust", "python", "go", "java", "dart"];
+
+/** 安装引导形态三景：installable = 可一键安装（TS/JS、Python 走 npx；Go 走 go install）；
+ *  manual = 需手动安装（Java：jdtls 无跨平台官方装法）；confirm_enable = 默认关闭需先确认（Java）。 */
+export type LspInstallKind = "installable" | "manual" | "confirm_enable";
+
+/** 安装引导信息（command 仅 installable 有值；docs_url 在 manual 必填） */
+export interface LspInstallHint {
+  kind: LspInstallKind;
+  command: string | null;
+  docs_url: string | null;
+  /** 前置条件（如「需 JDK 21+」） */
+  prerequisite: string | null;
+}
+
+/** 单语言 server 状态（`lsp_status` / `lsp_redetect` 返回；设置页状态徽标数据源） */
+export interface LspServerStatus {
+  language: LspLanguage;
+  /** 该语言开关（config.validation.<language>）是否打开 */
+  enabled: boolean;
+  /** 是否找到可用 server */
+  found: boolean;
+  /** 来源：config（命令覆盖）| project | path | fresh_path | extra_root | npx | heuristic | ""（未找到） */
+  source: "config" | "project" | "path" | "fresh_path" | "extra_root" | "npx" | "heuristic" | "";
+  /** 解析出的启动命令（展示用，含参数） */
+  command: string;
+  version: string | null;
+  /** 人类可读补充（未找到原因 / JDK 缺失等，与后端回喂文案同源） */
+  detail: string;
+  /** 未启用或未找到时才有值 */
+  install: LspInstallHint | null;
+}
+
+/** 六语言 server 命令覆盖（留空 = 自动探测）；映射形态让按语言动态读写保持类型安全 */
+export type LspCommands = Record<LspLanguage, string>;
+
+/** 语言服务器诊断的全局预算与发现配置（与后端 core/config.rs 的 LspSettings 一一对应；新字段必须 serde default 向前兼容） */
+export interface LspSettings {
+  commands: LspCommands;
+  /** jdtls 使用的 JDK 21+ 路径（留空 = 自动探测；不读 JAVA_HOME，它常指向旧版本） */
+  java_home: string;
+  /** 额外 SDK 根目录（如 D:\\Sdk；探测 <root>/<lang>/bin） */
+  extra_roots: string[];
+  /** 写后同步等待诊断的毫秒预算 */
+  sync_window_ms: number;
+  /** 单次回喂的诊断条数上限 */
+  max_diagnostics: number;
+  /** 单次回喂的诊断文本字符上限 */
+  max_chars: number;
+  /** 项目级 server 闲置回收时长（毫秒） */
+  idle_ttl_ms: number;
+  /** 单项目并发 server 上限 */
+  max_servers: number;
+  /** 超过该体积的文件跳过语义校验 */
+  max_file_bytes: number;
+  /** 同一诊断指纹在同一文件最多回喂次数 */
+  dedupe_limit: number;
+}
+
+/** 后端 `LspSettings::default()` 同形镜像：旧配置缺 lsp 段时的回显与写回基准（数值必须与后端一致） */
+export const DEFAULT_LSP_SETTINGS: LspSettings = {
+  commands: { typescript: "", rust: "", python: "", go: "", java: "", dart: "" },
+  java_home: "",
+  extra_roots: [],
+  sync_window_ms: 1500,
+  max_diagnostics: 20,
+  max_chars: 4000,
+  idle_ttl_ms: 600000,
+  max_servers: 8,
+  max_file_bytes: 1048576,
+  dedupe_limit: 2,
+};
+
+/** 命令覆盖读写助手：按语言取/置 `commands.<lang>`（避免各处手写索引与展开）。 */
+export function lspCommandOf(s: LspSettings, lang: LspLanguage): string {
+  return s.commands?.[lang] ?? "";
+}
+
+export function withLspCommand(s: LspSettings, lang: LspLanguage, value: string): LspSettings {
+  return { ...s, commands: { ...s.commands, [lang]: value } };
 }
