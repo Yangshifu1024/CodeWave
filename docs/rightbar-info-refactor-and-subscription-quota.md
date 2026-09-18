@@ -53,7 +53,7 @@
 
 | 层 | 结果 |
 |---|---|
-| `cargo test`（src-tauri） | **669 passed / 0 failed / 3 ignored**（新增 30 例：凭证链命中顺序、jsonc、opencode 路径候选、`${ENV}` 模板、7 家解析（MiniMax 双语义 + 单靠 weekly 重置字段的端点 + GLM unit 映射与 Zai 错误体 + Kimi 三级重置来源与「无 limit 行跳过」+ DeepSeek 币种过滤）、Files 选择三分支、编辑器探测顺序与去重、`.cmd` 垫片命令行引号规则、未知 editor id、窗口下限、`open_url` 命令形状） |
+| `cargo test`（src-tauri） | **670 passed / 0 failed / 3 ignored**（新增 32 例：凭证链命中顺序、jsonc、opencode 路径候选、`${ENV}` 模板、7 家解析（MiniMax 双语义 + 单靠 weekly 重置字段的端点 + GLM unit 映射与 Zai 错误体 + Kimi 三级重置来源与「无 limit 行跳过」+ DeepSeek 币种过滤）、Files 选择三分支、编辑器探测顺序与去重、固定安装路径（含绝对路径）与跨平台用例、`.cmd` 垫片命令行引号规则、未知 editor id、窗口下限、`open_url` 命令形状）。本机默认并行下偶发既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network`（单跑即过，与本批无关；CI 三平台均绿） |
 | `pnpm --dir ui test` | **465 passed / 57 文件**（新增：i18n 键对称、数据目录行与会话段不存在、折叠默认展开与持久化、折叠标题类名与箭头位置、编辑器下拉四态、额度多提供商（摘要/展开/数值行/风险类与进度条填充元素/更新时间位置/无凭证/失败/可见性门控）+ 展示纯函数、栏宽纯函数、分隔条交互（拖动/键盘/双击/失焦清理/夹取期禁用）、`--rb-width` 真接线、偏好读盘容错） |
 | `pnpm --dir ui build` | type check + vite build 通过 |
 | 真实接口探针（授权） | `cargo test --lib -- --ignored live_probe` 用本机 OpenCode Go 凭证实调成功：`rolling 100% / weekly 31% / monthly 66%`，凭证来源 `auth.json`，字段语义与解析一致 |
@@ -90,6 +90,15 @@
 | 🔴2（复审追加） | 进度条颜色覆盖写成 `.ant-progress-bg`，而 antd 6 行进度条的填充类名是 `.ant-progress-track` → 覆盖是死规则，且移除 `strokeColor` 后回退为 antd 默认 `colorInfo`（蓝），既丢风险色又破强调色约束 | 改用 `.ant-progress-track`，并补默认态（中性墨色）+ 风险态三条规则；新增断言钉住「包裹类 + `.ant-progress-track` 真实存在」 |
 
 **交付后补充（用户确认的计划外小修）**：`host/commands/system.rs` 的 `open_url` 原本在 Windows 走 `cmd /C start` 但**未设 `CREATE_NO_WINDOW`** → 点「关于」里的仓库链接会闪一下控制台窗口。已抽出 `windows_open_command()` 统一带标志（常量从 `core::openers::CREATE_NO_WINDOW` 收敛复用，不再各写一份魔术数字），并加「`cmd /C start "" <url>` 形状」钉子（空标题占位丢了就打不开链接；标志本身无法从 std 读出，靠共享常量 + 同一路径保证）。
+
+**CI 轮修复（PR #38）**：首轮 CI 上 `Test (macos-14)` / `Test (ubuntu-24.04)` 红、`windows-2022` 绿。定位到**一条真缺陷**加**一条写死平台假设的测试**：
+
+| 问题 | 修复 |
+|---|---|
+| `expand_template` 只认 `{HOME}` / `{LOCALAPPDATA}` / `{PROGRAMFILES}` / `{PROGRAMFILES_X86}` / `{APPLICATIONS}` 模板，不以占位符开头的条目直接返回 None——而 Linux 表里 VS Code 的固定位置就是绝对路径 `/snap/bin/code`，该候选**永远不会进入探测**（snap 安装的编辑器识别不出来） | 不以 `{` 开头的条目按字面路径受理（缺失基目录仍返回 None 的语义不变）；新增 `expand_template_accepts_absolute_paths` 钉住 |
+| `detect_editors_uses_fixed_install_paths_when_path_is_empty` 按 Windows 的 `%LOCALAPPDATA%/Programs/Microsoft VS Code/Code.exe` 断言（注入 local_app_data + 真实文件系统），macOS/Linux 上必然 0 命中 | 改为从**本平台**候选表里取第一条带固定路径的条目、展开其首条模板，全部基目录换成 `/probe/...` 探针路径并用注入谓词命中——不碰系统目录、无需 cfg 分支，三平台同一条用例都成立 |
+
+修完 CI 三平台（macos-14 / ubuntu-24.04 / windows-2022）与 `Rust lint` 全部转绿。
 
 ## 8. 提交建议
 
