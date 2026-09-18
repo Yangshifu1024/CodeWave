@@ -871,28 +871,46 @@ pub(crate) fn normalize_path_key(path: &Path) -> String {
 /// - `file://localhost/d%3A/Work/x.ts`（带 authority，丢弃 `localhost`）；
 /// - `file:/d%3A/Work/x.ts`（单斜杠，部分 server 这么发）。
 ///
-/// 实现：先吃掉 `file:` 后**任意个** `/`，再丢 `localhost` authority（大小写不敏感）。
-/// UNC 形态（`file://server/share/x`）不受影响：吃完斜杠后剩下的 `server/...` 会在
-/// [`strip_localhost`] 里因不叫 localhost 而原样保留。
+/// 实现：先丢 `file:`，再按 `//[authority]/path` 语义处理 —— **authority 可以丢，路径自身的前导 `/` 必须保留**
+/// （POSIX 的根斜杠就靠它；剥掉会让 Unix 上诊断键与文件键对不上，症状又是「写了错代码却收到通过」，
+/// 而 Windows 的 `/d%3A/…` 由 [`normalize_path_text`] 按盘符规则去斜杠，不受影响）。
+/// UNC 形态（`file://server/share/x`）保留 host，与原行为一致。
 fn strip_file_scheme(raw: &str) -> &str {
     match raw.get(..5) {
         Some(head) if head.eq_ignore_ascii_case("file:") => {}
         _ => return raw,
     }
-    let rest = raw[5..].trim_start_matches('/');
-    strip_localhost(rest).unwrap_or(rest)
+    let after = &raw[5..];
+    if let Some(rest) = after.strip_prefix("//") {
+        // `//[authority]/path`：authority 到下一个 `/` 为止（可能为空，即 `///path`）；
+        // path **连同它的前导 `/`** 一起切出来 —— 那个斜杠是 POSIX 根，丢了就又会
+        // 「写了错代码却收到通过」（Unix 上诊断键与文件键对不上）。
+        let (authority, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        if authority.is_empty() || authority.eq_ignore_ascii_case("localhost") {
+            if path.is_empty() {
+                return path;
+            }
+            return collapse_leading_slashes(path);
+        }
+        // `file://host`（无路径）或真实 UNC authority（`file://server/share/x`）：保留 host
+        return rest;
+    }
+    // `file:/path`（单斜杠）或 `file:path`：`/` 属于路径本身，原样返回
+    after
 }
 
-/// 丢掉 `file://localhost/…` 的 authority（大小写不敏感）。
-///
-/// 只认第一段是 `localhost` 且后面紧跟 `/`（或到此为止）的情形；`server/share/x` 这类
-/// 真实 UNC authority 原样返回（`None`）。
-fn strip_localhost(rest: &str) -> Option<&str> {
-    let (head, tail) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i + 1..]),
-        None => (rest, ""),
-    };
-    head.eq_ignore_ascii_case("localhost").then_some(tail)
+/// 把路径开头的连续 `/` 收敛成一个（`file:////tmp/x` 这类病态写法也要落到同一键）。
+fn collapse_leading_slashes(path: &str) -> &str {
+    let trimmed = path.trim_start_matches('/');
+    let extra = path.len() - trimmed.len();
+    if extra > 1 {
+        &path[extra - 1..]
+    } else {
+        path
+    }
 }
 
 /// 文本归一：分隔符统一为 `/` → 去盘符前的多余斜杠 → 去尾斜杠（盘根 `d:/` → `d:`）。
@@ -1049,6 +1067,23 @@ mod tests {
         } else {
             a.eq_ignore_ascii_case(b)
         }
+    }
+
+    #[test]
+    fn posix_root_slash_survives_scheme_stripping() {
+        // `file:///tmp/x` 里的 `/` 是 POSIX 根，绝不能被剥（剥掉 → Unix 上诊断键对不上 → 假通过）
+        assert_eq!(strip_file_scheme("file:///tmp/x"), "/tmp/x");
+        assert_eq!(strip_file_scheme("file:/tmp/x"), "/tmp/x");
+        assert_eq!(strip_file_scheme("file://localhost/tmp/x"), "/tmp/x");
+        // 病态多斜杠收敛成单个根斜杠（不能与上面落成两个不同的键）
+        assert_eq!(strip_file_scheme("file:////tmp/x"), "/tmp/x");
+        // Windows 盘符形态：保留前导 `/`，由 normalize_path_text 按盘符规则去
+        assert_eq!(strip_file_scheme("file:///d%3A/Work/x.ts"), "/d%3A/Work/x.ts");
+        assert_eq!(strip_file_scheme("FILE:///D%3A/x.ts"), "/D%3A/x.ts");
+        // 真实 UNC authority 保留 host（与原行为一致）
+        assert_eq!(strip_file_scheme("file://server/share/x"), "server/share/x");
+        // 非 file scheme 原样返回
+        assert_eq!(strip_file_scheme("untitled:Untitled-1"), "untitled:Untitled-1");
     }
 
     #[test]
@@ -1254,8 +1289,10 @@ mod tests {
             strip_file_scheme("file://server/share/dir/a.ts"),
             "server/share/dir/a.ts"
         );
-        // authority 叫 localhost → 丢弃
-        assert_eq!(strip_file_scheme("file://localhost/a/b"), "a/b");
+        // authority 叫 localhost → 只丢 authority，**路径前导斜杠必须保留**：
+        // `file://localhost/a/b` 的路径是绝对路径 `/a/b`，剥掉斜杠会变成相对路径，
+        // 在 Unix 上与真实文件键对不上 → 诊断静默消失（即「写了错代码却收到通过」）。
+        assert_eq!(strip_file_scheme("file://localhost/a/b"), "/a/b");
         // 非 file scheme 一律不动
         assert_eq!(
             strip_file_scheme("https://example.com/a.ts"),
