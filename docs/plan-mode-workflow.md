@@ -104,10 +104,25 @@ P0 分类为缺陷 → P1' tester 分析（复现步骤/根因/影响面/修复�
 ### 7.1 G5：plan 档只读硬拒（safety/fence.rs）
 
 - `check_command_depth` 包一层出口转换：`plan_readonly` 下**一切 Confirm → Block（E_PLAN_READONLY）**，
-  错误文本含改道指引（纳入方案待批准后执行 / 换白名单内替代命令）。
+  错误文本含改道指引（纳入方案待批准后执行 / 换白名单内替代命令），并**点名被拦命令**
+  （`command_excerpt`：折叠换行 + 截断 120 字符 + `…`；起因：只有泛化文案时卡片标题会把命令截在半个 token 上，
+  日志里也看不出是哪条命令被拦）。
 - 覆盖：白名单外命令、灾难/高危命令、白名单命令带写重定向（InsideWrite 旁路口子一并堵死）。
 - 语义变化：原「白名单外弹确认，用户误点即执行」→「直接拦截，逃生通道 = 批准切档或用户手动切档」。
 - 白名单维持不变（原计划的 pnpm/cargo 等泛化词会放行 `pnpm install`/`cargo build` 本身，已否决）。
+- **`gh` 例外：命令名入白名单 + 子命令级二次判定**（`gh_plan_readonly_allowed`）。
+  只读形态：`pr view|list|checks|diff|status`、`run view|list`、`release view|list`、`issue/repo/workflow`
+  的 `view|list`、`secret/variable/label/cache list`、`auth status`、`config get`、`gist list`、
+   `ruleset list|view`、单词 `status`/`search`，以及 `gh api`（只信显式的 `-X get|head`；
+   `-X/--method` 写方法（含 `-XPOST`/`--method=DELETE`/引号包裹写法，比对前先归一化）与
+   `-f/--field/-F/--raw-field/--input` 请求体参数均判写——gh 有参数且未显式 `-X` 时默认改 POST）。
+   其余（`pr merge`、`release create|edit|upload`、`secret set`、`workflow run`、`api -X POST` 等）落回拦截。
+   理由：L1-L3 只覆盖文件写/重定向/已知高危命令，**不认识远端写**——一旦整命令放行，plan 档就能合 PR、发版、改 secret。
+   保守口径：认不出的形态（裸 `gh`、`gh --version`）一律不放行。
+- 分隔符集新增**换行**：`split_unquoted_separators` 把 `\n`/`\r` 当命令分隔符，
+  避免 `gh pr view 38\ngh pr merge 38` 被当成一段而绕过子命令门（审查发现的回归）；
+  代价是 `\` 续行会被切段而多拦（保守方向）。已知缺口：命令替换/反引号内的 gh 写（`echo $(gh pr merge 38)`）
+  不在 L0 覆盖内（既有结构，`echo $(npm i)` 同理），根治需把门下沉到 AST 节点——已在测试里钉住现状。
 
 ### 7.2 G2：批准生效点校验（tools/ask.rs + tools/subagent.rs + core/agent.rs）
 

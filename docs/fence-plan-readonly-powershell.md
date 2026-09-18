@@ -8,7 +8,7 @@
 Get-ChildItem -Path '<项目目录>\ui' | Select-Object Name, Length | Format-Table -AutoSize
 ```
 
-被安全围栏拦截为 `E_PLAN_READONLY`（计划模式只读拦截），提示「计划模式仅放行只读命令白名单（ls/cd/head/grep/git log 等）」。该命令语义等价于 `ls`（列目录 + 元信息），属白名单应放行的只读形态；Windows 环境（无 Git Bash 时 command 工具回退 PowerShell，`tools/command.rs`）下计划模式几乎无法用原生方式列目录/读文件。
+被安全围栏拦截为 `E_PLAN_READONLY`（计划模式只读拦截），提示「命令不在只读白名单内（ls/cd/head/grep/git log/gh pr view 等只读命令）」（2026-09-19 起因错误文案统一点名被拦命令，见 [docs/plan-mode-workflow](./plan-mode-workflow.md) §7.1）。该命令语义等价于 `ls`（列目录 + 元信息），属白名单应放行的只读形态；Windows 环境（无 Git Bash 时 command 工具回退 PowerShell，`tools/command.rs`）下计划模式几乎无法用原生方式列目录/读文件。
 
 ## 根因
 

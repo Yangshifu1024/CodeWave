@@ -575,6 +575,150 @@
         }
     }
 
+    // ===== plan 档 gh 子命令白名单（远端写不在 L1-L3 覆盖范围，[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）=====
+
+    #[test]
+    fn plan_readonly_gh_readonly_forms_pass() {
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        for cmd in [
+            "gh pr view 38",
+            "gh pr checks 38",
+            "gh pr list --state open",
+            "gh run view --log",
+            "gh release view v0.3.10",
+            "gh api repos/Yangshifu1024/CodeWave/pulls",
+            "gh api -X GET repos/o/r/pulls",
+            "gh api -X \"GET\" repos/o/r/pulls",
+            "gh status",
+            "gh search repos codewave",
+        ] {
+            assert_eq!(run_policy(cmd, &ws, &roots, p), Verdict::Allow, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn plan_readonly_gh_remote_writes_blocked_and_named() {
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        for cmd in [
+            "gh pr merge 38",
+            "gh release edit v0.3.10 --draft=false",
+            "gh secret set FOO --body bar",
+            "gh api -X POST repos/o/r/dispatches",
+            "gh api repos/o/r/dispatches -X POST",
+            "gh api -XPOST repos/o/r/dispatches",
+            "gh api repos/o/r/x -X \"POST\"",
+            "gh api repos/o/r/x -X='POST'",
+            "gh api repos/o/r/x --method \"DELETE\"",
+            "gh api --method=DELETE repos/o/r/git/refs/heads/x",
+            "gh api repos/o/r/issues -f title=x",
+            "gh api repos/o/r/issues --field=state=open",
+            "gh api repos/o/r/issues --input body.json",
+            "gh workflow run release.yml",
+            "gh --version",
+        ] {
+            match run_policy(cmd, &ws, &roots, p) {
+                Verdict::Block { code, message } => {
+                    assert_eq!(code, "E_PLAN_READONLY", "{cmd}");
+                    // 错误信息必须点名被拦命令（用户诉求：不必去卡片正文里找是跑了什么）
+                    assert!(message.contains(cmd), "错误信息未点名命令：{message}");
+                }
+                v => panic!("{cmd} 期望 Block，实际 {v:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn plan_readonly_gh_in_pipeline_still_gated() {
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        assert_eq!(run_policy("gh pr list | head -3", &ws, &roots, p), Verdict::Allow);
+        // 显式 GET 仍然放行（写出 -X GET 也合法）
+        assert_eq!(
+            run_policy("gh api -X GET repos/o/r/pulls", &ws, &roots, p),
+            Verdict::Allow
+        );
+        // 管道里任一段是 gh 远端写 → 整条拦截
+        assert!(matches!(
+            run_policy("gh pr view 38 | head -3 && gh pr merge 38", &ws, &roots, p),
+            Verdict::Block { .. }
+        ));
+    }
+
+    #[test]
+    fn plan_readonly_gh_newline_separated_write_blocked() {
+        // 换行是 shell 的命令分隔符：不切分就会把 `gh pr view …\ngh pr merge …` 当成一段，
+        // 子命令门只看段首 `pr view` 而放行（code-reviewer 实测的回归，已修 split_unquoted_separators）
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        match run_policy("gh pr view 38\ngh pr merge 38", &ws, &roots, p) {
+            Verdict::Block { code, message } => {
+                assert_eq!(code, "E_PLAN_READONLY");
+                assert!(message.contains("gh pr merge 38"), "{message}");
+            }
+            v => panic!("期望 Block，实际 {v:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_readonly_gh_readonly_tables_have_no_write_entries() {
+        // 表本身是唯一防线：加错一项就等于放行一次远端写（防后续维护时误加 pr merge 之类）
+        const WRITE_SUBCOMMANDS: &[&str] = &[
+            "merge", "create", "edit", "delete", "close", "reopen", "upload", "set", "run",
+            "cancel", "rerun", "comment", "review", "push", "login", "logout", "install",
+            "remove", "upgrade",
+            // 审查补全：这些动词也带写/远端变更语义，漏一个就可能在后续维护时被误加进只读表
+            "fork", "clone", "archive", "unarchive", "transfer", "rename", "sync", "ready",
+            "lock", "unlock", "download", "disable", "enable", "checkout", "publish", "watch",
+            "pin", "unpin", "resolve", "reopen",
+        ];
+        for (group, sub) in PLAN_READONLY_GH_PAIRS {
+            assert!(
+                !WRITE_SUBCOMMANDS.contains(sub),
+                "只读表混入写子命令：{group} {sub}"
+            );
+        }
+        for word in PLAN_READONLY_GH_WORDS {
+            assert!(!WRITE_SUBCOMMANDS.contains(word), "只读表混入写子命令：{word}");
+        }
+    }
+
+    #[test]
+    fn plan_readonly_gh_inside_command_substitution_is_a_known_gap() {
+        // 既有结构缺口（**非本批引入**）：L0 只看每段首词，`echo $(…)` 里嵌套的 gh 写不进本门
+        // （`echo $(npm i)` 同理）。根治需把 gh 门下沉到 AST 的每个 command 节点。
+        // 此用例钉住现状：将来把门下沉后它会变红，提醒同步文档「已知边界」。
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        assert_eq!(
+            run_policy("echo $(gh pr merge 38)", &ws, &roots, p),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn plan_readonly_block_message_excerpts_long_command() {
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        let long = format!("npm install {}", "x".repeat(400));
+        match run_policy(&long, &ws, &roots, p) {
+            Verdict::Block { message, .. } => {
+                assert!(message.contains("被拦命令：npm install xxx"), "{message}");
+                assert!(message.contains('…'), "超长命令应带截断省略号：{message}");
+                assert!(!message.contains(&"x".repeat(121)), "摘要不得超 120 字符");
+            }
+            v => panic!("期望 Block，实际 {v:?}"),
+        }
+        // 多行命令折叠为单行（错误信息进入日志/卡片后不炸行）
+        match run_policy("rm -rf a\nrm -rf b", &ws, &roots, p) {
+            Verdict::Block { message, .. } => {
+                assert!(message.contains("被拦命令：rm -rf a rm -rf b"), "{message}");
+            }
+            v => panic!("期望 Block，实际 {v:?}"),
+        }
+    }
+
     // ===== PowerShell 只读白名单（[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)：Windows 回退 shell）=====
 
     #[test]

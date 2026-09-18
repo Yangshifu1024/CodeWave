@@ -177,6 +177,10 @@ const PLAN_READONLY_CMDS: &[&str] = &[
     "grep", "rg", "find", "ag",
     // 基本 git 只读（push --force 等写语义经 L3 升级）
     "git", "diff", "show", "log", "blame",
+    // gh：命令名入列后**仍须过子命令白名单**（gh_plan_readonly_allowed）——
+    // 远端写（pr merge / release edit --draft=false / api -X POST / secret set）不在 L1-L3 覆盖范围，
+    // 整命令放行等于让 plan 档能合 PR、发版、改 secret（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）
+    "gh",
     // 文本处理（管道内只读；出现重定向时由 L2 拦截）
     "echo", "sort", "uniq", "cut", "tr", "column", "jq", "sed", "awk",
     // 系统/进程信息
@@ -278,12 +282,168 @@ fn split_unquoted_separators(cmd: &str) -> Vec<String> {
                     cur.clear();
                 }
             }
+            // 换行也是命令分隔符（shell 语义）：不切分的话 `gh pr view 38\ngh pr merge 38`
+            // 会被当成一段，gh 子命令门只看段首 `pr view` 而放行（审查：本批引入的安全侧回归）。
+            // 副作用：`\` 续行会被切成两段，第二段首词常常不在白名单 → plan 档过度拦截（保守方向，已记入已知边界）。
+            '\n' | '\r' => {
+                segs.push(cur.clone());
+                cur.clear();
+            }
             _ => cur.push(c),
         }
         i += 1;
     }
     segs.push(cur);
     segs
+}
+
+/// plan 档 `gh` 只读形态：二级子命令组（如 `pr view`）。
+/// 为什么 gh 需要子命令粒度：L1-L3 安全网只覆盖文件写/重定向/已知高危命令，
+/// **不认识** `gh pr merge` / `gh release edit --draft=false` / `gh api -X POST` / `gh secret set`
+/// 这类远端写。注意别拿 `git` 类比：`git` 是命令级白名单，L3 只在 `--force` 时才兜
+/// （`git push`（无 force）本就放行，是既有洞），所以远端写只能靠本表拦住。
+/// （`pub(super)`：仅供同模块树的 `tests` 做「表内不得混入写子命令」的自检）
+pub(super) const PLAN_READONLY_GH_PAIRS: &[(&str, &str)] = &[
+    ("pr", "view"),
+    ("pr", "list"),
+    ("pr", "checks"),
+    ("pr", "diff"),
+    ("pr", "status"),
+    ("run", "view"),
+    ("run", "list"),
+    ("release", "view"),
+    ("release", "list"),
+    ("issue", "view"),
+    ("issue", "list"),
+    ("issue", "status"),
+    ("repo", "view"),
+    ("repo", "list"),
+    ("workflow", "view"),
+    ("workflow", "list"),
+    ("secret", "list"),
+    ("variable", "list"),
+    ("label", "list"),
+    ("cache", "list"),
+    ("auth", "status"),
+    ("config", "get"),
+    ("alias", "list"),
+    ("extension", "list"),
+    ("gist", "list"),
+    ("ruleset", "list"),
+    ("ruleset", "view"),
+];
+
+/// plan 档 `gh` 只读形态：单词子命令（`gh status`、`gh search repos …`）。
+/// （`pub(super)`：同上，供 `tests` 做写子命令自检）
+pub(super) const PLAN_READONLY_GH_WORDS: &[&str] = &["status", "search"];
+
+/// `gh` 相关判定用的词归一化：去掉引号与转义（`-X "POST"` / `-X='POST'` / `-X\"POST\"`
+/// 在 shell 去引号后都是写），并剥掉命令替换外壳（`$(gh …)` / `` `gh …` `` / `${gh …}`），
+/// 最后统一小写。审查实测：不归一化就能用引号把写方法送进去，而 gh 子命令门是唯一防线。
+fn normalize_gh_token(raw: &str) -> String {
+    let mut s = raw.replace(['"', '\'', '\\'], "");
+    let mut unwrapped = false;
+    for prefix in ["$(", "${", "`"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.to_string();
+            unwrapped = true;
+        }
+    }
+    s = if unwrapped {
+        // 只在真的剥过命令替换外壳时才去尾缀，避免把普通路径（如 `issues(1)`）改形（审查 🟢）
+        s.trim_end_matches([')', '}']).to_string()
+    } else {
+        s
+    };
+    s.to_ascii_lowercase()
+}
+
+/// `gh api` 只读判定（入参已归一化，且不含开头的 `gh api`）。
+/// 口径：只信显式的只读方法（`get`/`head`）；`-f/--field/-F/--raw-field/--input` 一出现即判写
+/// （gh 有参数且未显式 `-X` 时默认改 POST）；方法值不可信（变量/未知写法/参数缺失）也判写。
+fn gh_api_is_readonly(args: &[String]) -> bool {
+    /// 唯一可信的只读方法
+    fn is_read_method(method: &str) -> bool {
+        matches!(method, "get" | "head")
+    }
+
+    let mut expect_method = false;
+    for word in args {
+        if expect_method {
+            expect_method = false;
+            if !is_read_method(word) {
+                return false;
+            }
+            continue;
+        }
+        if word == "-f"
+            || word == "--field"
+            || word == "--raw-field"
+            || word == "--input"
+            || word.starts_with("-f=")
+            || word.starts_with("--field=")
+            || word.starts_with("--raw-field=")
+            || word.starts_with("--input=")
+        {
+            return false;
+        }
+        if word == "-x" || word == "--method" {
+            expect_method = true;
+            continue;
+        }
+        if let Some(method) = word.strip_prefix("--method=") {
+            if !is_read_method(method) {
+                return false;
+            }
+            continue;
+        }
+        if let Some(rest) = word.strip_prefix("-x") {
+            // 紧凑写法：`-XPOST` / `-X=POST`
+            let rest = rest.trim_start_matches('=');
+            if !rest.is_empty() && !is_read_method(rest) {
+                return false;
+            }
+        }
+    }
+    // `-X` 后面没有取值（命令行到末尾）→ 不可信，判写
+    !expect_method
+}
+
+/// plan 档 `gh` 子命令白名单判定（调用方已确认该段首命令是 gh）。
+/// 保守口径：认不出的形态一律不放行（落回拦截）——宁可拦错，不放过远端写。
+fn gh_plan_readonly_allowed(seg: &str) -> bool {
+    let tokens: Vec<String> = seg.split_whitespace().map(normalize_gh_token).collect();
+    let Some((_, rest)) = tokens.split_first() else {
+        return false;
+    };
+    let Some(first) = rest.first() else {
+        return false; // 裸 `gh`
+    };
+    if first.is_empty() || first.starts_with('-') {
+        // `gh --version` 之类：不给子命令级判定，落回隐式拦截
+        return false;
+    }
+    if PLAN_READONLY_GH_WORDS.contains(&first.as_str()) {
+        return true;
+    }
+    if first == "api" {
+        return gh_api_is_readonly(&rest[1..]);
+    }
+    let second = rest.get(1).map(String::as_str).unwrap_or("");
+    PLAN_READONLY_GH_PAIRS
+        .iter()
+        .any(|(group, sub)| *group == first && *sub == second)
+}
+
+/// 被拦命令摘要：折叠换行与连续空白 → 截断 120 字符 → 超长补 `…`。
+/// 用途：错误信息里点名**是哪条命令**被拦（此前只有泛化文案，卡片标题还会把命令截在半个 token 上）。
+fn command_excerpt(cmd: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let flat = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX_CHARS {
+        return flat;
+    }
+    format!("{}…", flat.chars().take(MAX_CHARS).collect::<String>())
 }
 
 /// 判断整条命令是否全部由白名单命令构成（感知引号切分；每段首命令必须在列）。
@@ -299,7 +459,11 @@ fn plan_readonly_allowed(cmd: &str) -> bool {
                 .next()
                 .unwrap_or(first)
                 .to_ascii_lowercase();
-            PLAN_READONLY_CMDS.contains(&base.as_str())
+            if !PLAN_READONLY_CMDS.contains(&base.as_str()) {
+                return false;
+            }
+            // gh 额外过一道子命令白名单：远端写不在 L1-L3 覆盖范围内（见 gh_plan_readonly_allowed）
+            base != "gh" || gh_plan_readonly_allowed(seg)
         })
 }
 
@@ -350,7 +514,8 @@ fn check_command_depth(
             return Verdict::Block {
                 code: "E_PLAN_READONLY".into(),
                 message: format!(
-                    "计划模式只读拦截：{why}。请将该命令纳入方案，经用户批准后执行；或改用只读白名单内的替代命令",
+                    "计划模式只读拦截（被拦命令：{}）：{why}。请将该命令纳入方案，经用户批准后执行；或改用只读白名单内的替代命令",
+                    command_excerpt(cmd)
                 ),
             };
         }
@@ -377,7 +542,7 @@ fn check_command_inner(
             return Verdict::Confirm(ConfirmReason::HighRisk(why));
         }
         return Verdict::Confirm(ConfirmReason::HighRisk(
-            "计划模式仅放行只读命令白名单（ls/cd/head/grep/git log/zcat/Get-ChildItem 等只读命令），此命令已拦截",
+            "命令不在只读白名单内（ls/cd/head/grep/git log/gh pr view 等只读命令）",
         ));
     }
     // 解析链（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：bash 语法 → PowerShell 语法（Windows 回退 shell，[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)）
