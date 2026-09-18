@@ -132,7 +132,9 @@ gh release upload v0.3.8 latest.json --clobber
   GitHub 不提供 purge。刚发布或刚修补后短时间内可能仍读到旧清单，属预期。
   **特别注意：tag 固定路径（`releases/download/<tag>/latest.json`）并不绕开缓存**——实测它与 latest
   路径返回同一个 `etag`、相同的 `age`（同一份缓存对象），加随机 query 也不重置。要确认线上清单的真实内容，
-  请直接读 release 资产（`gh api repos/<owner>/<repo>/releases/tags/<tag>`）或等待缓存 TTL 过期。
+  请直接读 release 资产或等待缓存 TTL 过期。注意 `GET /releases/tags/<tag>` **不返回草稿 release**
+  （发版流程中的 release 在人工 Publish 前恒为草稿，v0.3.9 首次发版实测该端点 404）；读草稿用
+  `gh release view <tag> --json databaseId` 拿到 id 后走 `/releases/<id>/assets`，published 版本则无此限制。
 - **默认 Windows 键语义**：tauri-action 产出的 `windows-x86_64` 可能指向 MSI 而非 NSIS（v0.3.8 实测
   `windows-x86_64` 与 `windows-x86_64-msi` 同 id，`windows-x86_64-nsis` 才指向 `x64-setup.exe`）。
   改写脚本按 id 忠实映射、**目标文件不变**（只换传输通道），行为与修复前一致；键语义本身是独立议题。

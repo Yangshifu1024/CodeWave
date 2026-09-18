@@ -27,7 +27,7 @@ const SCRIPT_PATH = fileURLToPath(new URL("./fix-updater-json.mjs", import.meta.
 const apiUrl = (id, { owner = README_OWNER, repo = README_REPO } = {}) =>
   `https://api.github.com/repos/${owner}/${repo}/releases/assets/${id}`;
 
-// v0.3.8 真实资产清单（REST API 数字 id + 文件名；取自 gh api repos/.../releases/tags/v0.3.8）
+// v0.3.8 真实资产清单（REST API 数字 id + 文件名；取自 gh api repos/.../releases/assets）
 const README_ASSETS = [
   { id: 572428501, name: "CodeWave-0.3.8-1.x86_64.rpm" },
   { id: 572428541, name: "CodeWave-0.3.8-1.x86_64.rpm.sig" },

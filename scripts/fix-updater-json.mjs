@@ -216,27 +216,52 @@ function parseArgs(argv) {
 }
 
 /**
- * 经 gh api 取 release 资产列表（id + name）。
+ * 经 gh 取 release 资产列表（数字 id + name）。
  * 用 execFileSync 传数组参数，不做 shell 字符串拼接；gh 自行读 GITHUB_TOKEN/GH_TOKEN，全程不打印 token。
+ *
+ * **为什么不能直接用 `gh api repos/<o>/<r>/releases/tags/<tag>`**：GitHub 的 by-tag 端点
+ * **不返回草稿 release**（v0.3.9 首次发版实测：三平台构建全绿，本作业在此撞 404，即使调用方有 push 权限）；
+ * 而发版流程里的 release 恰好总是草稿（构建完等人工 Publish），所以该端点在这里永远不可用。
+ * 改为两步：`gh release view` 能解析草稿（与 `gh release download/upload` 同一套解析）→ 取 databaseId
+ * → `/releases/<id>/assets` 拿数字 id。
+ * 不能改用 `gh release view --json assets`：那个 id 是 GraphQL node id（`RA_...`），而清单里的 url 用的是
+ * 数字 id，对不上。
  */
 export function fetchAssetsFromGh({ owner, repo, tag }) {
+  let releaseId;
+  try {
+    releaseId = execFileSync(
+      "gh",
+      ["release", "view", tag, "--repo", `${owner}/${repo}`, "--json", "databaseId", "--jq", ".databaseId"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+    ).trim();
+  } catch (error) {
+    throw new Error(
+      `无法解析 ${owner}/${repo} 的 release ${tag}（gh release view 调用失败）：${error.message}\n` +
+        "（gh 未安装 / 未登录 / 网络不通时可先用 --assets-json <file> 从文件读取资产列表）",
+    );
+  }
+  if (!/^\d+$/.test(releaseId)) {
+    throw new Error(`${owner}/${repo} 的 release ${tag} 未返回合法的数字 id（得到：${releaseId}）`);
+  }
+
   let raw;
   try {
     raw = execFileSync(
       "gh",
-      ["api", `repos/${owner}/${repo}/releases/tags/${tag}`, "--jq", ".assets[] | {id, name}"],
+      ["api", `repos/${owner}/${repo}/releases/${releaseId}/assets`, "--paginate", "--jq", ".[] | {id, name}"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
     );
   } catch (error) {
     throw new Error(
-      `无法获取 ${owner}/${repo} 的 tag ${tag} 的资产列表（gh api 调用失败）：${error.message}\n` +
+      `无法获取 ${owner}/${repo} 的 release ${tag}（id ${releaseId}）的资产列表（gh api 调用失败）：${error.message}\n` +
         "（gh 未安装 / 未登录 / 网络不通时可先用 --assets-json <file> 从文件读取资产列表）",
     );
   }
   // gh --jq 逐行输出紧凑 JSON（NDJSON）
   const lines = raw.split("\n").map((line) => line.trim()).filter((line) => line !== "");
   if (lines.length === 0) {
-    throw new Error(`${owner}/${repo} 的 tag ${tag} 没有任何资产，无法改写清单`);
+    throw new Error(`${owner}/${repo} 的 release ${tag} 没有任何资产，无法改写清单`);
   }
   return lines.map((line, index) => {
     let parsed;
