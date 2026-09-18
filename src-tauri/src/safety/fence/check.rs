@@ -251,6 +251,30 @@ fn split_unquoted_separators(cmd: &str) -> Vec<String> {
     let mut quote: Option<char> = None;
     while i < bytes.len() {
         let c = bytes[i];
+        // 行继续归一：`\` + 换行在 shell 里被移除（引号外与双引号内都生效，单引号内是字面量）。
+        // 不先吃掉它，`grep foo \` + 换行 + `  file.rs` 会被下面的换行分隔切成两段，
+        // 第二段首词（如 `file.rs`）不在白名单 → plan 档多拦一条本应合法的只读命令。
+        // 注意 `\\`（转义的反斜杠）必须先整体吃掉：否则 `\\` + 换行会被误当续行，
+        // 把两条命令拼成一段而绕过后面的分段判定（写成原子处理即无此漏）。
+        if c == '\\' && quote != Some('\'') {
+            match (bytes.get(i + 1).copied(), bytes.get(i + 2).copied()) {
+                (Some('\\'), _) => {
+                    cur.push('\\');
+                    cur.push('\\');
+                    i += 2;
+                    continue;
+                }
+                (Some('\n'), _) => {
+                    i += 2;
+                    continue;
+                }
+                (Some('\r'), Some('\n')) => {
+                    i += 3;
+                    continue;
+                }
+                _ => {}
+            }
+        }
         if let Some(q) = quote {
             if c == q {
                 quote = None;
@@ -284,7 +308,7 @@ fn split_unquoted_separators(cmd: &str) -> Vec<String> {
             }
             // 换行也是命令分隔符（shell 语义）：不切分的话 `gh pr view 38\ngh pr merge 38`
             // 会被当成一段，gh 子命令门只看段首 `pr view` 而放行（审查：本批引入的安全侧回归）。
-            // 副作用：`\` 续行会被切成两段，第二段首词常常不在白名单 → plan 档过度拦截（保守方向，已记入已知边界）。
+            // 行继续（`\` + 换行）已在循环开头归一掉，不会再被这里切段。
             '\n' | '\r' => {
                 segs.push(cur.clone());
                 cur.clear();

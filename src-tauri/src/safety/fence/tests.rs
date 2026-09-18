@@ -662,6 +662,46 @@
     }
 
     #[test]
+    fn plan_readonly_line_continuation_is_joined_before_splitting() {
+        // shell 的行继续（`\` + 换行）必须先归一：否则一条合法只读命令会被切成两段，
+        // 第二段首词不在白名单 → 多拦（换行纳为分隔符时引入的过度拦截）
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        assert_eq!(
+            run_policy("grep -n foo \\\n  file.rs", &ws, &roots, p),
+            Verdict::Allow
+        );
+        assert_eq!(
+            run_policy("git log \\\n --oneline -3", &ws, &roots, p),
+            Verdict::Allow
+        );
+        // CRLF（从 Windows 终端/文件粘来的多行命令）
+        assert_eq!(
+            run_policy("ls -la \\\r\n  src", &ws, &roots, p),
+            Verdict::Allow
+        );
+        // 双引号内的行继续同样被移除（shell 语义），引号内换行也不会切段
+        assert_eq!(
+            run_policy("grep -n \"line1 \\\nline2\" file.rs", &ws, &roots, p),
+            Verdict::Allow
+        );
+        // 单引号内 `\` 与换行都是字面量：不构成续行，也不切段
+        assert_eq!(run_policy("echo 'a\\\nb'", &ws, &roots, p), Verdict::Allow);
+    }
+
+    #[test]
+    fn plan_readonly_escaped_backslash_keeps_newline_as_separator() {
+        // `\\`（转义的反斜杠）后面的换行仍是命令分隔符：不能把它当成续行而把两条命令拼成一段
+        // （否则 `gh pr view 1 \\` + 换行 + `gh pr merge 2` 就能绕过后面的子命令门）
+        let (ws, _o, roots) = fixture();
+        let p = plan_policy();
+        assert!(matches!(
+            run_policy("gh pr view 1 \\\\\ngh pr merge 2", &ws, &roots, p),
+            Verdict::Block { .. }
+        ));
+    }
+
+    #[test]
     fn plan_readonly_gh_readonly_tables_have_no_write_entries() {
         // 表本身是唯一防线：加错一项就等于放行一次远端写（防后续维护时误加 pr merge 之类）
         const WRITE_SUBCOMMANDS: &[&str] = &[

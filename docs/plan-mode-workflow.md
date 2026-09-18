@@ -119,9 +119,13 @@ P0 分类为缺陷 → P1' tester 分析（复现步骤/根因/影响面/修复�
    其余（`pr merge`、`release create|edit|upload`、`secret set`、`workflow run`、`api -X POST` 等）落回拦截。
    理由：L1-L3 只覆盖文件写/重定向/已知高危命令，**不认识远端写**——一旦整命令放行，plan 档就能合 PR、发版、改 secret。
    保守口径：认不出的形态（裸 `gh`、`gh --version`）一律不放行。
-- 分隔符集新增**换行**：`split_unquoted_separators` 把 `\n`/`\r` 当命令分隔符，
-  避免 `gh pr view 38\ngh pr merge 38` 被当成一段而绕过子命令门（审查发现的回归）；
-  代价是 `\` 续行会被切段而多拦（保守方向）。已知缺口：命令替换/反引号内的 gh 写（`echo $(gh pr merge 38)`）
+- 分隔符集新增**换行**，并在切分前**归一化行继续**：`split_unquoted_separators` 把 `\n`/`\r` 当命令分隔符，
+  防止 `gh pr view 38\ngh pr merge 38` 被当成一段而绕过子命令门（审查发现的回归）；
+  同一循环里先把 `\` + 换行（LF/CRLF）吃掉（引号感知：双引号内也移除、单引号内是字面量），
+  以免 `grep foo \` + 换行 + `  file.rs` 这类合法只读命令被切段而多拦。
+  `\\`（转义反斜杠）整体吞掉，保证其后的换行仍是分隔符（防拼接绕过）。
+  残留：PowerShell 反引号续行未归一（按字符无法区分 bash 反引号命令替换）。
+  已知缺口：命令替换/反引号内的 gh 写（`echo $(gh pr merge 38)`）
   不在 L0 覆盖内（既有结构，`echo $(npm i)` 同理），根治需把门下沉到 AST 节点——已在测试里钉住现状。
 
 ### 7.2 G2：批准生效点校验（tools/ask.rs + tools/subagent.rs + core/agent.rs）

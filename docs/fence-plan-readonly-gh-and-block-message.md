@@ -33,7 +33,8 @@
 
 - 只读形态放行（含 `gh api -X GET`）：`gh pr view 38`、`gh pr checks 38`、`gh pr list --state open`、`gh run view --log`、`gh release view v0.3.10`、`gh api repos/o/r/pulls`、`gh api -X GET repos/o/r/pulls`、`gh api -X "GET" …`、`gh status`、`gh search repos codewave`。
 - 远端写拦截且**错误信息点名命令**：`gh pr merge 38`、`gh release edit v0.3.10 --draft=false`、`gh secret set FOO --body bar`、`gh api -X POST …`（前置/后置/紧凑/引号四种写法）、`gh api --method "DELETE" …`、`gh api … -f title=x`、`gh workflow run release.yml`、`gh --version`。
-- 管道/换行混合：`gh pr list | head -3` 放行；`… && gh pr merge 38` 与 `gh pr view 38\ngh pr merge 38` 整条拦截。
+- 管道/换行混合：`gh pr list | head -3` 放行；`… && gh pr merge 38`、`gh pr view 38\ngh pr merge 38` 与 `gh pr view 1 \\` + 换行 + `gh pr merge 2`（转义反斜杠后的换行）均整条拦截。
+- 行继续：`grep -n foo \` + 换行 + `  file.rs`、CRLF 版本、双引号内续行均放行（归一化生效）。
 - 摘要：超长命令被截断到 ≤120 字符并带 `…`；多行命令折叠为单行。
 - 只读表自检：`PLAN_READONLY_GH_PAIRS`/`_WORDS` 不得出现写子命令（防后续维护误加 `pr merge` 之类）。
 - **钉住既有缺口**：`echo $(gh pr merge 38)` 当前仍放行（见 §5），将来把门下沉到 AST 后该用例会变红。
@@ -42,7 +43,7 @@
 
 - `gh api` 带 `-f` 的 GET 查询参数会被判写而拦截（保守方向的误伤，逃生 = 改 `-X GET` + URL 查询串，或把命令写进方案批准后跑）。
 - 引号/紧凑写法已在 `normalize_gh_token` 里归一，但**方法值来自变量**（`-X "$M"`）仍按写拦（静态不可判 → 保守）。
-- **`\` 续行会被新加的换行分隔切段**：第二段首词常常不在白名单 → plan 档可能多拦一些本来合法的多行命令（保守方向，可接受；逃生 = 写成一行）。
+- **行继续已归一**：切分前先把 `\` + 换行（LF/CRLF）吃掉——引号外与双引号内都算续行（shell 语义），单引号内是字面量；`\\`（转义反斜杠）整体吞掉，保证其后换行仍是命令分隔符。因此 `grep foo \` + 换行 + `  file.rs` 这类多行只读命令在 plan 档可正常放行（原「被切段而多拦」的取舍已消除）。残留：PowerShell 反引号续行未归一（按字符区分不了 bash 反引号命令替换）。
 - **命令替换/反引号内的 gh 写是既有缺口**（非本批引入，`echo $(npm i)` 同理）：`echo $(gh pr merge 38)` 当前仍放行。根治需要把「首词白名单 + gh 子命令门」从 L0 下沉到 AST 的每个 command 节点；本批只在测试里钉住现状 + 此处声明。
 - 同类既有洞（不在本批范围）：`git` 是命令级白名单，L3 只在 `--force` 时兜底，故 plan 档 `git push`（无 force）本就放行。
 - 认不出的 gh 子命令形态（含全局 flag 前置）一律拦截；宁可拦错不放过。
@@ -51,7 +52,7 @@
 
 ## 6. 验证
 
-- `cargo test --lib safety::fence` → 132 passed / 0 failed（含上述 7 例）。
-- 全量 `cargo test --lib` → 681 passed / 0 failed / 3 ignored（既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过，本次通过，与本批无关）。
+- `cargo test --lib safety::fence` → 134 passed / 0 failed（含上述 9 例）。
+- 全量 `cargo test --lib` → 682 passed / 1 failed / 3 ignored，唯一失败为既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network`（默认并行下偶发失败、单跑即过，与本批无关）。
 - 审查轮：code-reviewer 实测出两个 🔴（引号包裹写方法、换行分隔回归）与若干 🟡，已全部修复（🟡 中「命令替换缺口」「git push 既有洞」仅改文案与声明，不修代码）。
 - 手动（plan 档内）：`gh pr checks <n>` 应通过；`gh pr merge <n>` / `gh api … -X POST` 应被拦且错误信息含该命令。

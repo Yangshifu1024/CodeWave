@@ -106,7 +106,7 @@
 
 ## 安全与工具链
 
-- 2026-09-19 · [fence-plan-readonly-gh-and-block-message.md](./fence-plan-readonly-gh-and-block-message.md) — plan 档围栏两项：`E_PLAN_READONLY` 错误文案**点名被拦命令**（`command_excerpt`：折叠换行 + 截断 120 字符）+ `gh` 按**子命令白名单**放行（pr/run/release/issue/repo/workflow 的 view|list；`gh api` 仅隐式/显式 GET，出现 `-f/--field/--input` 即判写；pr merge / release edit / api -X POST / secret set 等远端写继续被拦；比对前先做引号/外壳归一化，换行纳为命令分隔符）
+- 2026-09-19 · [fence-plan-readonly-gh-and-block-message.md](./fence-plan-readonly-gh-and-block-message.md) — plan 档围栏两项：`E_PLAN_READONLY` 错误文案**点名被拦命令**（`command_excerpt`：折叠换行 + 截断 120 字符）+ `gh` 按**子命令白名单**放行（pr/run/release/issue/repo/workflow 的 view|list；`gh api` 仅隐式/显式 GET，出现 `-f/--field/--input` 即判写；pr merge / release edit / api -X POST / secret set 等远端写继续被拦；比对前先做引号/外壳归一化，换行纳为命令分隔符且行继续（`\`+换行）先归一化）
 - 2026-09-03 · [builtin-tools-source-comparison.md](./builtin-tools-source-comparison.md) — 内置工具设计说明（11 组工具的实现解析：入参/出参/实现逻辑 + 分级优化建议）
 - 2026-09-03 · [edit-tool-optimization-report.md](./edit-tool-optimization-report.md) — edit 工具优化批次：EOL 归一 + 两级低风险模糊替换 + 进程级文件写互斥 + ConfirmEach 审批 diff 预览
 - 2026-09-03 · [tool-card-multi-file-summary.md](./tool-card-multi-file-summary.md) — 工具卡头部批量文件名展示：read/edit 批量入参 summary 列全部 basename（修复入参截断后头部空白）
