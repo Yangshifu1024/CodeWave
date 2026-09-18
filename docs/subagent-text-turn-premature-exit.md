@@ -141,6 +141,8 @@ if calls.is_empty() {
 
 ## 7. 已知取舍与遗留
 
+- **🟢 主会话同源路径已修（2026-09-16）**：本文件修的是非主会话 run；主会话「正文非空 + 全部调用被拒」的同类静默成功（提示已注入历史却永不被模型看到、run 却报成功）随后由 [rejected-call-silent-finish](./rejected-call-silent-finish.md) 修复——`text_turn_action` 新增 `rejected` 维度并先于 `finish_on_text` 判定，超限显式失败。
+
 - **🟡 混合批次（部分调用被拒 + 部分成功）仍产出孤儿 `tool_result`**（既存问题，本次未加剧）：`run_tool_batch` 把合成结果与成功结果一同写入 tool_results 消息，而被拒调用没有对应 `tool_use` 块。本次仅在「整回合全被拒」这条路径绕开（改走 user 提示）；彻底修需在批次层过滤并拆分反馈，建议独立立项（三协议对「tool_result 无匹配 tool_use」的容忍度需真实端点取证）。
 - **🟡 模型在正文复述 `<report>` 指令**（如「我会用 `<report>` 包裹汇报」）会命中 `Finish` 而提前收尾（`text_turn_action` 按「包含」判定）。接受面：需模型明确写出该字面标记；如需更严可改为「标记须独占行 / 位于文本末尾」。
 - **🟡 计划任务的续跑成本**：`run_task_agent`（30 步预算）在模型不遵从新格式时最多消耗 3 次续跑；预算耗尽仍无标记时 `ended = "budget"`（任务本身仍算成功，仅卡片标识提示）。存量任务定义无需改动（`<task-run>` 提示为运行时拼装）。

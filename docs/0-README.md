@@ -117,6 +117,8 @@
 - 2026-09-11 · [posix-command-risk-matrix.md](./posix-command-risk-matrix.md) — fence 全集加固批次：R1 隐式写词表（gzip/bzip2/xz/zstd/lz4 家族 + stdout flag 豁免）+ L0 白名单扩容（压缩只读/文件查证/tar/unzip）+ sed -i/tar -x/unzip/cpio -i 判定 + WRITE_LAST 与下载写 flag 扩充 + 进程/持久化/远程/灾难扩充（fdisk/diskutil erase）+ POSIX.1-2017 全集 162 条风险矩阵
 - 2026-09-15 · [subagent-text-turn-premature-exit.md](./subagent-text-turn-premature-exit.md) — 缺陷修复：非主会话 run 把「无工具调用回合」（过程旁白 / 唯一调用参数不可解析被拒）当成最终汇报提前成功退出（`drive.rs` 空 calls 无条件 break）——`DriveParams.finish_on_text` + 纯函数 `text_turn_action`（`<report>` 标记收尾 / 有界续跑 MAX_TEXT_TURNS / 超限显式失败）+ 被拒调用以 user 提示反馈模型不再静默丢弃 + 空 assistant 消息不入历史；`sub:done` 增 `steps_used`/`ended`，子代理卡区分「提前结束/预算耗尽」与绿勾（含脚本化 SSE 端到端与反向验证）
 
+- 2026-09-16 · [rejected-call-silent-finish.md](./rejected-call-silent-finish.md) — 缺陷修复：主会话「正文非空 + 全部工具调用被拒」回合静默成功收尾（`text_turn_action` 新增 `rejected` 维度并先于 `finish_on_text` 判定，提示注入后必须让模型看到；超限显式失败；`diagnose_unparsable` + `log_rejected_calls` 补齐被拒 args 取证；含反向验证）
+
 ## 工程化与开源
 
 - 2026-08-30 · [dev-setup.md](./dev-setup.md) — 三平台开发环境准备
