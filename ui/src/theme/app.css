@@ -910,10 +910,14 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 .rb-editor-select { width: 132px; }
 .rb-editor-select .ant-select-selector { font-size: 11.5px; }
 
-/* ---------- 信息页签：技能/当前计划折叠（antd Collapse ghost，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */
+/* 折叠段标题与信息页其他标题（项目目录 / 订阅额度）同款：11px + dim 色 + 无多余内边距。
+   注意 antd 6 的标题文本类是 `.ant-collapse-title`（旧版 `-header-text` 已不存在，写成它等于死规则，
+   字号会回默认 14px）；标题文字与其他标题的左对齐由 RightBar 的 `expandIconPosition="end"` 保证。 */
 .rb-collapse { border-top: 1px dashed var(--ws-border); padding-top: 6px; }
 .rb-collapse .ant-collapse-header { padding: 2px 0 !important; align-items: center !important; }
-.rb-collapse .ant-collapse-header-text { font-size: 11px; color: var(--ws-dim); }
+.rb-collapse .ant-collapse-title { font-size: 11px; color: var(--ws-dim); font-weight: normal; line-height: 1.7; }
+/* 箭头是唯一的可折叠提示，保留但收到标签同尺寸（行末、dim） */
+.rb-collapse .ant-collapse-expand-icon { font-size: 10px; color: var(--ws-dim); }
 .rb-collapse .ant-collapse-content-box { padding: 2px 0 4px !important; }
 .rb-collapse .ant-collapse-item + .ant-collapse-item { margin-top: 8px; }
 

@@ -117,6 +117,19 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
     await screen.findByText("技能");
     expect(screen.queryByText("当前计划")).toBeNull();
   });
+
+  it("折叠标题与信息页其他标题同款：文本类是 antd 6 的 .ant-collapse-title，箭头在行末", async () => {
+    seed();
+    renderBar();
+    await screen.findByText("技能");
+    const collapse = document.querySelector(".rb-collapse")!;
+    // 样式表钉的是 .ant-collapse-title；antd 6 已废弃 -header-text（写成它 = 死规则，字号回默认 14px）
+    expect(collapse.querySelector(".ant-collapse-title")).toBeTruthy();
+    expect(collapse.querySelector(".ant-collapse-header-text")).toBeNull();
+    // 箭头在行末 → 标题文字与「项目目录 / 订阅额度」左对齐
+    expect(collapse.className).toContain("icon-placement-end");
+    expect(collapse.querySelector(".ant-collapse-expand-icon")).toBeTruthy();
+  });
 });
 
 describe("右栏偏好读盘容错", () => {

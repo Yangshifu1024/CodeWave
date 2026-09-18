@@ -117,10 +117,13 @@ function InfoPanel({ visible }: { visible: boolean }) {
       {/* 订阅额度段（顶替原「会话」段） */}
       <QuotaSection visible={visible} />
 
-      {/* 技能 / 当前计划：antd Collapse（ghost），默认全展开；折叠态写 localStorage（全局一份） */}
+      {/* 技能 / 当前计划：antd Collapse（ghost），默认全展开；折叠态写 localStorage（全局一份）。
+          expandIconPosition="end"：标题文字与「项目目录 / 订阅额度」左对齐，箭头落在行末；
+          标题字号/颜色由 app.css 的 .rb-collapse .ant-collapse-title 统一为 11px + dim。 */}
       <Collapse
         className="rb-collapse"
         ghost
+        expandIconPosition="end"
         activeKey={openSections}
         onChange={(keys) => {
           const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
