@@ -243,9 +243,14 @@ const EDITOR_SPECS: &[EditorSpec] = &[
     },
 ];
 
-/// 模板展开：仅识别全部受支持的基目录前缀，未知前缀/缺失基目录返回 None。
+/// 模板展开：**绝对路径原样返回**（Linux 的 `/snap/bin/code` 这类固定位置不是模板）；
+/// `{...}` 前缀按受支持的基目录展开，未知前缀/缺失基目录返回 None。
 /// 路径按 `/` 分段 join，避免 Windows 上分隔符混用。
 fn expand_template(template: &str, env: &EnvBases) -> Option<PathBuf> {
+    // 不带基目录占位符的条目一律当字面路径（否则非 Windows 平台的固定候选永远不会被探测）
+    if !template.starts_with('{') {
+        return Some(PathBuf::from(template));
+    }
     let (token, rest) = template.split_once('/')?;
     let base: &Path = match token {
         "{HOME}" => env.home.as_deref()?,

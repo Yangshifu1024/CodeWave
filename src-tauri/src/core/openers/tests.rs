@@ -120,19 +120,38 @@ fn detect_editors_keeps_table_order_and_default_is_first_hit() {
 
 #[test]
 fn detect_editors_uses_fixed_install_paths_when_path_is_empty() {
-    let local = tempfile::tempdir().unwrap();
-    let code_exe = local.path().join("Programs/Microsoft VS Code/Code.exe");
-    touch(&code_exe);
-
+    // 各平台候选表不同（Windows：%LOCALAPPDATA%/%PROGRAMFILES%；macOS：/Applications；
+    // Linux：绝对路径 /snap/bin/code），所以本用例**从本平台表里取**第一条带固定路径的条目，
+    // 把全部基目录换成不存在的探针路径 + 注入谓词命中——CI 上不碰 /snap、/Applications 等系统目录，
+    // 也不需要 cfg 分支（否则 Linux/macOS 上会按 Windows 的路径断言而必红）。
     let env = EnvBases {
-        local_app_data: Some(local.path().to_path_buf()),
-        ext: vec![".exe".to_string()],
+        path_dirs: Vec::new(),
+        home: Some(PathBuf::from("/probe/home")),
+        local_app_data: Some(PathBuf::from("/probe/localappdata")),
+        program_files: Some(PathBuf::from("/probe/programfiles")),
+        program_files_x86: Some(PathBuf::from("/probe/programfilesx86")),
+        applications: Some(PathBuf::from("/probe/applications")),
         ..Default::default()
     };
-    let found = detect_editors_with(&env, &|p| p.exists(), &empty_dir);
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].id, "vscode");
-    assert_eq!(PathBuf::from(&found[0].path), code_exe);
+    let spec = EDITOR_SPECS
+        .iter()
+        .find(|s| !s.fixed.is_empty())
+        .expect("每个平台的候选表都应至少有一条固定安装路径");
+    let target = expand_template(spec.fixed[0], &env).expect("首条固定安装模板应可展开");
+
+    let found = detect_editors_with(&env, &|p| p == target, &empty_dir);
+    assert_eq!(found.len(), 1, "PATH 为空时应恰好命中固定安装路径这一条");
+    assert_eq!(found[0].id, spec.id);
+    assert_eq!(PathBuf::from(&found[0].path), target);
+}
+
+#[test]
+fn expand_template_accepts_absolute_paths() {
+    // Linux 快照安装是绝对路径而非模板；若返回 None，该候选永远不会进入探测（真实缺陷）
+    assert_eq!(
+        expand_template("/snap/bin/code", &EnvBases::default()),
+        Some(PathBuf::from("/snap/bin/code"))
+    );
 }
 
 #[test]
