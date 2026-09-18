@@ -150,6 +150,22 @@ describe("右栏订阅额度段", () => {
     expect(normal.querySelector(".rb-quota-bar")!.className).toBe("rb-quota-bar");
   });
 
+  it("「X 分钟前更新」贴在刷新按钮左侧（同一标签行），不再沉到列表底部", async () => {
+    seed();
+    renderBar();
+    const row = (await screen.findByText("订阅额度")).closest(".rb-label-row")!;
+    const stamp = row.querySelector(".rb-quota-updated") as HTMLElement;
+    const refresh = row.querySelector("button") as HTMLElement;
+    expect(stamp.textContent).toMatch(/更新$/);
+    expect(refresh.getAttribute("aria-label")).toBe("刷新额度");
+    // 顺序：时间戳在刷新按钮之前
+    expect(
+      stamp.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // 列表底部不再重复渲染一份
+    expect(document.querySelectorAll(".rb-quota-updated")).toHaveLength(1);
+  });
+
   it("一家都没检测到凭证时显示配置指引（单行 + 悬浮）", async () => {
     mode = "empty";
     seed();

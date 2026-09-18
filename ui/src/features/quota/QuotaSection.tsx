@@ -202,16 +202,26 @@ export default function QuotaSection({ visible }: Props) {
     <div className="rb-section rb-quota">
       <div className="rb-label-row">
         <div className="rb-label">{t("rightbar.quota")}</div>
-        <Button
-          className="rb-open-dir-btn"
-          type="text"
-          size="small"
-          loading={loading}
-          icon={<ReloadOutlined />}
-          title={t("rightbar.quotaRefresh")}
-          aria-label={t("rightbar.quotaRefresh")}
-          onClick={() => void refresh()}
-        />
+        {/* 更新时间贴在刷新按钮左侧（同一标签行，不再沉到列表底部）。
+            `.rb-quota-updated` 的 font-size 仍取自样式表；其 margin-top 是按「底部独立行」设计的，
+            行内改用后必须内联归零（内联优先级高于样式表），否则文字会比按钮低 4px。 */}
+        <div className="rb-label-actions">
+          {updated && (
+            <span className="rb-dim rb-quota-updated" style={{ marginTop: 0 }}>
+              {t(updated.key, updated.params)}
+            </span>
+          )}
+          <Button
+            className="rb-open-dir-btn"
+            type="text"
+            size="small"
+            loading={loading}
+            icon={<ReloadOutlined />}
+            title={t("rightbar.quotaRefresh")}
+            aria-label={t("rightbar.quotaRefresh")}
+            onClick={() => void refresh()}
+          />
+        </div>
       </div>
 
       {loading && snapshots.length === 0 && <div className="rb-dim">{t("rightbar.quotaLoading")}</div>}
@@ -240,8 +250,6 @@ export default function QuotaSection({ visible }: Props) {
           onToggle={() => toggle(snapshot.provider_id)}
         />
       ))}
-
-      {updated && <div className="rb-dim rb-quota-updated">{t(updated.key, updated.params)}</div>}
     </div>
   );
 }
