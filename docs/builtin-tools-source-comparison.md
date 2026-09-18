@@ -393,7 +393,7 @@ edit 容错的一种成熟路线是**多级模糊替换器链**：精确匹配 �
 | 入参 | `task` / `role` / `maxSteps`（required，1–1000）/ `description?` / `cleanContext?`（默认 true） |
 | 角色来源 | 内置注册表（explore/dev/reviewer/code-reviewer/product-manager/tester/title），别名归一 `find()`；未知角色自由字符串 |
 | 嵌套限制 | 硬禁（纪律块注入「不得派生子代理」+ exclude_tools 排除 subagent） |
-| 权限 | 子代理 exclude_tools（ask/subagent/plan/skill/scheduled_task/suggest/wait）+ **父档位排除集合并**（Plan 档的写排除一并继承，堵「借子代理绕过计划模式」） |
+| 权限 | 子代理 exclude_tools 七件固定（ask/subagent/plan/skill/scheduled_task/suggest/wait）+ **父档位排除集合并**（Plan 档的写排除一并继承，堵「借子代理绕过计划模式」）+ **只读角色额外排除 edit/create/delete**（`AgentDef.readonly`：explore/reviewer/code-reviewer，共十件；`command` 保留） |
 | 上下文 | 默认干净；cleanContext=false 携带主会话近 6 条消息 |
 | 并发 | 全局 4（ACTIVE 原子计数，超出 `E_SUBAGENT_BUSY` 不排队） |
 | 进度 | 800ms 轮询 history 发 `sub:step`（步骤数 + 最后工具 + 220 字符摘录） |
@@ -417,7 +417,7 @@ edit 容错的一种成熟路线是**多级模糊替换器链**：精确匹配 �
 3. **并发闸**（`subagent.rs:129-138`）：`ACTIVE >= 4` → `E_SUBAGENT_BUSY`（不排队，直接让模型改道）；`GuardGuard` RAII 保证任何退出路径递减；
 4. 事件与日志：`sub:spawn` + session_log（spawn 记父会话，子代理轨迹落自己的日志文件）；
 5. **独立 runtime**（`subagent.rs:159-169`）：`SessionRuntime::new_sub`（继承 workspace/data_dir/extra_roots）；注册进 `core.subs`（支持 StopSubagent）；cleanContext=false 携带近 6 条消息；任务包装成 `<subagent-task role>` 用户消息；
-6. **DriveParams**（`subagent.rs:171-191`）：exclude_tools 七件（ask/subagent/plan/skill/scheduled_task/suggest/wait）+ `budget_notice`（低预算提醒）+ `force_report`（步数耗尽强制汇报）+ **父档位合并**：`main_drive_params(&prefs)` 的 exclude_tools/system_extra 并入——Plan 档下子代理同样无写工具；
+6. **DriveParams**（`subagent.rs:318-351`）：exclude_tools 七件固定（ask/subagent/plan/skill/scheduled_task/suggest/wait）+ `idle_policy`（只读角色 `NudgeOnly`：16 步纠偏、空转层不终止——失败重复层 3/5 与 6/10、`max_steps` 与强制汇报门仍照常生效，[subagent-idle-watchdog-misfire](./subagent-idle-watchdog-misfire.md)）+ `budget_notice`（低预算提醒）+ `force_report`（步数耗尽强制汇报）+ **父档位合并**：`main_drive_params(&prefs)` 的 exclude_tools/system_extra 并入——Plan 档下子代理同样无写工具；+ **只读角色额外排除 edit/create/delete**（`readonly_extra_excludes`，与父档位集合并存，共十件；`command` 保留）；
 7. **进度轮询**（`subagent.rs:199-209`）：800ms tick 读子 history：`summarize_sub_tail`（逆序找最后 ToolUse 名 + 最后 Text/Thinking 尾 220 字符）发 `sub:step`；`SubCleanupGuard`（Drop：abort 轮询 + 摘注册 + armed 时补发 sub:error——panic unwind 收口，防前端卡永久"运行中"）；
 8. `drive_agent` 全程驱动；usage >0 记 stats（kind=sub）；**分析角色标记**（`subagent.rs:253-258`）：product-manager/tester 成功返回 → `analysis_done` 置位（G2 批准门消费，见 §11.2）；
 9. 事件序：`sub:report`（汇报先入卡）→ `sub:usage` → `sub:done`（注释锚定前端展示顺序）；失败路径 session_log + `sub:error`。

@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
 use super::runtime::{AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS, SessionRuntime, STREAM_THROTTLE_MS};
-use super::supervise::{BatchDigest, CallSig, SupervisionState, Verdict};
+use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
 use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
 use super::stream::{build_assistant_message, build_stream_request, collect_deltas, flush_segments, refresh_request_messages, stream_flush_loop};
 
@@ -57,6 +57,10 @@ pub struct DriveParams {
     /// 父 run 取消令牌（子代理派发时传入）：提供时本 run 的取消令牌由其 child_token 派生，
     /// 主会话停止即级联中止子代理的 LLM 流与审批等待（[docs/subagent-file-isolation]）
     pub parent_cancel: Option<CancellationToken>,
+    /// 空转看门狗策略（[docs/subagent-idle-watchdog-misfire]）：默认 `Stop`（8 步纠偏 /
+    /// 14 步终止）；只读角色子代理由 `subagent` 工具置 `NudgeOnly`（空转层 16 步纠偏一次、
+    /// 不硬终止——失败重复层与步数/汇报门不受本字段影响，照常终止）。
+    pub idle_policy: IdlePolicy,
 }
 
 impl Default for DriveParams {
@@ -72,6 +76,7 @@ impl Default for DriveParams {
             finish_on_text: true,
             main_session: false,
             parent_cancel: None,
+            idle_policy: IdlePolicy::default(),
         }
     }
 }
@@ -265,6 +270,12 @@ pub async fn run_chat(
     }
 }
 
+/// 写类工具名（三件套）：plan 档排除（`apply_plan_mode`）与只读子代理的额外排除
+/// （`tools::subagent::apply_role_policy`）共用同一份名单——两处各自内联会导致
+/// 「新增写工具」时漏改一处。经 `core::agent` re-export 为 `crate::core::agent::WRITE_TOOLS`。
+/// 注意：`command` 刻意不在其列（只读调研需要 git status 等命令，由 fence 逐条把关）。
+pub const WRITE_TOOLS: &[&str] = &["edit", "create", "delete"];
+
 /// 主会话 DriveParams：按会话审批档位追加排除项与提示文本（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）。
 /// Plan 档收紧（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）：排除写工具 / 后台服务 / 任务运行 + MCP；
 /// shell 保留但受只读 fence 白名单约束（plan_readonly，白名单外一律确认）；
@@ -285,10 +296,13 @@ pub(super) fn apply_plan_mode(params: &mut DriveParams, prefs: &crate::core::pre
     if prefs.approval_mode != crate::core::prefs::ApprovalMode::Plan {
         return;
     }
+    // 写工具三件套走共享常量（值不变）；plan 档自有部分（后台服务 / 计划任务）就地保留
     params.exclude_tools.extend(
-        ["edit", "create", "delete", "service", "scheduled_task"]
+        WRITE_TOOLS
             .iter()
-            .map(|s| s.to_string()),
+            .copied()
+            .chain(["service", "scheduled_task"])
+            .map(String::from),
     );
     params.exclude_mcp = true;
     params.system_extra =
@@ -474,8 +488,10 @@ pub async fn drive_agent(
     // 阈值持续超限时每步不再各堵一个完整超时。
     let mut compact_fail_streak: u32 = 0;
     // 运行监督（[docs/subagent-file-isolation]）：重复失败/重复调用先纠偏、不收敛则终止；
-    // 另有空转看门狗（feed_batch）检测零进展只读循环
-    let mut supervision = SupervisionState::default();
+    // 另有空转看门狗（feed_batch）检测零进展只读循环——策略由 params.idle_policy 决定
+    //（[docs/subagent-idle-watchdog-misfire]：只读 run 的空转层只纠偏不终止；失败重复层
+    // 与步数/汇报门不受 policy 影响，照常终止）
+    let mut supervision = SupervisionState::with_idle_policy(params.idle_policy);
     // 连续「无工具调用回合」计数（仅非主会话 run 消费；有工具调用或压缩成功时复位）：
     // 用于 <continue-notice> 续跑与 MAX_TEXT_TURNS 显式失败门
     //（[docs/subagent-text-turn-premature-exit]）
@@ -1350,6 +1366,8 @@ pub async fn run_task_agent(
         finish_on_text: false,
         main_session: false,
         parent_cancel: None,
+        // 任务运行按默认 Stop（与引入 idle_policy 前逐字一致）
+        idle_policy: IdlePolicy::default(),
     };
     // 指令成为首条用户消息（隔离 runtime 无既有历史）
     rt.history

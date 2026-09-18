@@ -14,6 +14,11 @@ pub struct AgentDef {
     pub description: &'static str,
     /// 完整角色定义（以 <agent-definition> 注入，叠加在 <subagent-discipline> 之上生效）
     pub body: &'static str,
+    /// 只读角色（[docs/subagent-idle-watchdog-misfire]）：同一标记驱动两件事——
+    /// ① subagent 工具为其强制排除写工具（edit/create/delete），让「只读」从角色自律变强制；
+    /// ② 空转看门狗对它只纠偏、不硬终止（只读调研天然是「大段只读步骤 + 偶尔产出」）。
+    /// 选中标准：该角色正文已声明「不修改文件」。
+    pub readonly: bool,
 }
 
 /// title 子代理的完整角色定义：会话自动命名的人设。单一事实源——注册表与
@@ -42,6 +47,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "explore",
             description: "只读源码调研：定位模块/数据流/既有模式，产出可引用的调研纪要",
+            readonly: true,
             body: r##"## 角色
 你是资深源码调研专家（explore），擅长在陌生代码库中快速定位与需求相关的模块、数据流与既有模式。
 
@@ -69,6 +75,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "backend-dev",
             description: "按自包含任务包完成后端实现（API/数据层/并发/事务），语言无关，通过自测并汇报改动文件清单",
+            readonly: false,
             body: r##"## 角色
 你是资深后端开发工程师（backend-dev），语言与技术栈无关，精通 Rust/Go/Java/Python/Node.js 等主流服务端技术，按任务包在既有代码库中完成高质量实现。
 
@@ -92,6 +99,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "frontend-dev",
             description: "按自包含任务包完成前端实现（组件/状态管理/TS 类型），通过自测并汇报改动文件清单",
+            readonly: false,
             body: r##"## 角色
 你是资深前端开发工程师（frontend-dev），精通 React/Vue/Svelte 等现代框架与 TypeScript，按任务包在既有代码库中完成高质量实现。
 
@@ -115,6 +123,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "app-dev",
             description: "按自包含任务包完成 App 实现（移动 iOS/Android + 桌面 Electron/Tauri），通过自测并汇报改动文件清单",
+            readonly: false,
             body: r##"## 角色
 你是资深 App 开发工程师（app-dev），精通移动端（iOS/Android 原生与 Flutter/React Native 跨平台）与桌面端（Electron/Tauri）应用开发，按任务包在既有代码库中完成高质量实现。
 
@@ -138,6 +147,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "reviewer",
             description: "对照技术方案审查代码对齐度与质量，输出分级问题与对齐结论",
+            readonly: true,
             body: r##"## 角色
 你是资深方案对齐审查专家（reviewer），负责审查"实现代码是否与已批准的技术方案对齐"，并兼顾代码质量。
 
@@ -165,6 +175,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "product-manager",
             description: "需求分析：用户故事/验收标准/边界/非目标/开放问题",
+            readonly: false,
             body: r##"## 角色
 你是一名资深软件产品经理，擅长需求分析、产品规划与 PRD 撰写，能从用户价值、技术可行性与范围控制三个维度平衡决策。
 
@@ -193,6 +204,7 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "code-reviewer",
             description: "七维代码质量审查（正确性/安全/性能/可维护性/可读性/测试覆盖/最佳实践）",
+            readonly: true,
             body: r##"## 角色
 你是一名资深代码审查专家，精通多语言与工程最佳实践、设计模式、安全规范与性能优化。
 
@@ -222,11 +234,13 @@ pub fn builtin() -> &'static [AgentDef] {
         AgentDef {
             name: "title",
             description: "会话自动命名：根据首条用户消息生成 ≤20 字精炼标题（内部自动触发，不经 subagent 工具委派）",
+            readonly: false,
             body: TITLE_BODY,
         },
         AgentDef {
             name: "tester",
             description: "测试设计与实际执行：运行测试命令、汇总结果、输出测试报告",
+            readonly: false,
             body: r##"## 角色
 你是一名资深测试工程师，精通测试策略设计、用例设计与质量评估，并能实际执行测试。
 
@@ -375,5 +389,19 @@ mod tests {
         assert!(find("protester").is_none(), "子串不得误命中");
         assert!(find("arch").is_none(), "arch 是编排剧本（已内置为常驻提示）不是子代理角色");
         assert!(find("").is_none());
+    }
+
+    #[test]
+    fn readonly_roles_are_exactly_the_three_analysis_roles() {
+        // 只读角色集合是刻意选择的（[docs/subagent-idle-watchdog-misfire]）：三个角色正文
+        // 均已声明「不修改文件」；dev 三兄弟 / tester / product-manager / title 不得入选
+        //（tester 正文明确要跑测试命令，product-manager 正文无写权限表述）。
+        let mut got: Vec<&str> = builtin()
+            .iter()
+            .filter(|d| d.readonly)
+            .map(|d| d.name)
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, vec!["code-reviewer", "explore", "reviewer"]);
     }
 }

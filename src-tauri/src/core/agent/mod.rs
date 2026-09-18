@@ -18,11 +18,11 @@ pub mod test_support;
 mod tests;
 
 pub use drive::{
-    DriveParams, NormalizedCall, drive_agent, main_drive_params,
+    DriveParams, NormalizedCall, WRITE_TOOLS, drive_agent, main_drive_params,
     run_task_agent,
 };
 pub use runtime::{AgentCore, EventSink, Frame, SessionRuntime};
-pub use supervise::CallSig;
+pub use supervise::{CallSig, IdlePolicy};
 pub(crate) use guards::{CompactingGuard, lock_ok};
 /// `<report>` 标记剥离（子代理 / 任务运行收尾消费）
 ///（[docs/subagent-text-turn-premature-exit]）。

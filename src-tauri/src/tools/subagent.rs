@@ -115,9 +115,17 @@ fn build_system_extra(
     def: Option<&crate::agents::AgentDef>,
 ) -> String {
     let display_role = def.map(|d| d.name).unwrap_or(role);
+    // 只读角色（explore/reviewer/code-reviewer）补一句可执行约束：写工具已在工具层被排除
+    //（见 readonly_extra_excludes），这里让子代理知道自己写不了文件，把发现写进汇报，
+    // 免得它反复试探被拒而白烧步数（[docs/subagent-idle-watchdog-misfire]）。
+    let readonly_notice = if def.map_or(false, |d| d.readonly) {
+        "你是只读角色，没有写工具（edit/create/delete 不可用）：不要尝试写文件，把发现写进最终汇报。"
+    } else {
+        ""
+    };
     let mut s = format!(
-        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论），且最终汇报必须用 <report>…</report> 包裹——过程旁白（如「接下来我来改 X」）不会被当作汇报；只输出文字而不发起工具调用的回合会被视为未完成并提示你继续（[docs/subagent-text-turn-premature-exit]）。写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。</subagent-discipline>",
-        display_role, max_steps
+        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论），且最终汇报必须用 <report>…</report> 包裹——过程旁白（如「接下来我来改 X」）不会被当作汇报；只输出文字而不发起工具调用的回合会被视为未完成并提示你继续（[docs/subagent-text-turn-premature-exit]）。写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。{}</subagent-discipline>",
+        display_role, max_steps, readonly_notice
     );
     if let Some(d) = def {
         s.push_str(&format!(
@@ -126,6 +134,48 @@ fn build_system_extra(
         ));
     }
     s
+}
+
+/// 只读角色判定：注册表 `readonly` 标记的单一事实源（explore/reviewer/code-reviewer = true）。
+/// 与 `is_analysis_role` 同风格：走 `crate::agents::find`，别名与大小写归一同源——
+/// 谓词只此一份，避免「改一处漏一处」。
+fn is_readonly_role(role: &str) -> bool {
+    crate::agents::find(role).map_or(false, |d| d.readonly)
+}
+
+/// 空转看门狗策略（[docs/subagent-idle-watchdog-misfire]）：只读角色 → `NudgeOnly`
+///（空转层 16 步纠偏一次、不硬终止——只读调研天然是「大段只读步骤 + 偶尔产出」；
+/// 失败重复层与步数/汇报门不受影响，照常终止）；
+/// 其余（含未命中角色、空串、归一后未命中者）→ `Stop`（8 步纠偏 / 14 步终止，语义不变）。
+fn idle_policy_for(role: &str) -> crate::core::agent::IdlePolicy {
+    if is_readonly_role(role) {
+        crate::core::agent::IdlePolicy::NudgeOnly
+    } else {
+        crate::core::agent::IdlePolicy::Stop
+    }
+}
+
+/// 只读角色的额外工具排除集（写工具三件套 = 与 plan 档排除共用的
+/// `crate::core::agent::WRITE_TOOLS`）；非只读角色为空。
+/// 消费既有排除通路：暴露前过滤（stream.rs 按名过滤）+ 调用时硬拒（E_TOOL_BLOCKED）。
+fn readonly_extra_excludes(role: &str) -> Vec<&'static str> {
+    if is_readonly_role(role) {
+        crate::core::agent::WRITE_TOOLS.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+/// 子代理角色策略装配（[docs/subagent-idle-watchdog-misfire]）：一步到位置 `idle_policy`
+/// 并追加只读写工具排除——独立成函数以让调用点可被单测断言（后人重排参数构造时不致静默回归）。
+/// 对已有排除项去重，重复调用幂等（与父档位合并集同存一份，重复项本就无害）。
+fn apply_role_policy(params: &mut DriveParams, role: &str) {
+    params.idle_policy = idle_policy_for(role);
+    for t in readonly_extra_excludes(role) {
+        if !params.exclude_tools.iter().any(|e| e == t) {
+            params.exclude_tools.push(t.to_string());
+        }
+    }
 }
 
 /// G2/arch 批准闸的分析角色检查：按注册表规范名校验（别名 test→tester、pm→product-manager
@@ -267,6 +317,9 @@ impl Tool for SubagentTool {
 
         let mut params = DriveParams {
             max_steps,
+            // 空转策略与只读写工具排除由 apply_role_policy 按角色统一置位（见下方调用点；
+            // 该调用需晚于父档位集合并，以保持既有合并顺序）
+            idle_policy: crate::core::agent::IdlePolicy::default(),
             exclude_tools: vec![
                 "ask".into(),
                 "subagent".into(),
@@ -291,6 +344,11 @@ impl Tool for SubagentTool {
         // 父 Plan 档的写排除 / MCP 排除 / plan 档提示合并进子参数，堵住「借子代理绕过 plan 档」的洞。
         let parent = crate::core::agent::main_drive_params(&ctx.rt.prefs());
         params.exclude_tools.extend(parent.exclude_tools);
+        // 只读角色的策略装配（[docs/subagent-idle-watchdog-misfire]）：把「只读」从角色自律
+        // 变成可执行事实——idle_policy = NudgeOnly + 写工具三件套排除（暴露前过滤 + 调用时硬拒
+        // E_TOOL_BLOCKED）。command 刻意保留：只读调研仍需要 git status 等只读命令，由 fence
+        // 逐条把关。与父档位集合并存（重复项已由 apply_role_policy 去重）。
+        apply_role_policy(&mut params, &args.role);
         params.exclude_mcp = params.exclude_mcp || parent.exclude_mcp;
         if !parent.system_extra.is_empty() {
             params.system_extra.push_str(&parent.system_extra);
@@ -633,5 +691,175 @@ mod tests {
         assert!(!is_analysis_role("reviewer"));
         assert!(!is_analysis_role("protester"));
         assert!(!is_analysis_role(""));
+    }
+
+    #[test]
+    fn idle_policy_for_role_matrix() {
+        use crate::core::agent::IdlePolicy;
+        // 只读角色（含大小写 / 下划线 / 空格归一）→ 只纠偏不硬终止
+        for role in [
+            "explore",
+            "reviewer",
+            "code-reviewer",
+            "Explore",
+            " code reviewer ",
+            "CODE_REVIEWER",
+        ] {
+            assert_eq!(
+                idle_policy_for(role),
+                IdlePolicy::NudgeOnly,
+                "{role} 应走只读策略"
+            );
+        }
+        // 可写角色 / 内部 title / 未命中 / 空串：保持默认终止语义（不得放宽）
+        for role in [
+            "backend-dev",
+            "frontend-dev",
+            "app-dev",
+            "tester",
+            "product-manager",
+            "testing",
+            "title",
+            "unknown-role",
+            "",
+        ] {
+            assert_eq!(
+                idle_policy_for(role),
+                IdlePolicy::Stop,
+                "{role} 应保持默认策略"
+            );
+        }
+    }
+
+    #[test]
+    fn readonly_roles_exclude_write_tools_only() {
+        let readonly_roles = [
+            "explore",
+            "reviewer",
+            "code-reviewer",
+            "Explore",
+            " code reviewer ",
+        ];
+        for role in readonly_roles {
+            let ex = readonly_extra_excludes(role);
+            for tool in ["edit", "create", "delete"] {
+                assert!(ex.contains(&tool), "{role} 应排除写工具 {tool}");
+            }
+            // 只读调研必需的只读工具不得被排除（尤其 command：git status 等）
+            for tool in ["command", "read", "grep"] {
+                assert!(!ex.contains(&tool), "{role} 不应排除只读工具 {tool}");
+            }
+        }
+        // 非只读角色不得被额外排除（写能力与 command 均保留；权限仍受父档位集合约束）
+        for role in [
+            "backend-dev",
+            "frontend-dev",
+            "app-dev",
+            "tester",
+            "product-manager",
+            "title",
+            "unknown-role",
+            "",
+        ] {
+            assert!(
+                readonly_extra_excludes(role).is_empty(),
+                "{role} 不应有额外排除"
+            );
+        }
+    }
+
+    /// 策略装配纯函数直接断言调用点（🟡2）：只读角色一步到位置策略 + 追加写工具排除。
+    #[test]
+    fn apply_role_policy_marks_readonly_roles() {
+        use crate::core::agent::IdlePolicy;
+        for role in [
+            "explore",
+            "reviewer",
+            "code-reviewer",
+            "Explore",
+            " code reviewer ",
+            "CODE_REVIEWER",
+        ] {
+            let mut p = DriveParams::default();
+            apply_role_policy(&mut p, role);
+            assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly, "{role} 应置只读策略");
+            for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
+                assert!(
+                    p.exclude_tools.iter().any(|e| e == t),
+                    "{role} 应排除写工具 {t}：{:?}",
+                    p.exclude_tools
+                );
+            }
+            // 只读调研必需的只读工具不得被排除（尤其 command：git status 等）
+            for t in ["command", "read", "grep"] {
+                assert!(
+                    !p.exclude_tools.iter().any(|e| e == t),
+                    "{role} 不得排除只读工具 {t}：{:?}",
+                    p.exclude_tools
+                );
+            }
+        }
+    }
+
+    /// 可写 / 内部 / 未命中 / 空串角色：策略保持 `Stop` 且不追加任何排除项。
+    #[test]
+    fn apply_role_policy_leaves_writable_roles_untouched() {
+        use crate::core::agent::IdlePolicy;
+        for role in [
+            "backend-dev",
+            "frontend-dev",
+            "app-dev",
+            "tester",
+            "product-manager",
+            "title",
+            "unknown-role",
+            "",
+        ] {
+            let mut p = DriveParams::default();
+            apply_role_policy(&mut p, role);
+            assert_eq!(p.idle_policy, IdlePolicy::Stop, "{role} 应保持默认策略");
+            assert!(
+                p.exclude_tools.is_empty(),
+                "{role} 不应追加排除项：{:?}",
+                p.exclude_tools
+            );
+        }
+    }
+
+    /// 幂等：重复调用不产生重复项，也不覆盖父档位已合并的排除集。
+    #[test]
+    fn apply_role_policy_is_idempotent_over_parent_excludes() {
+        let mut p = DriveParams::default();
+        // 模拟父档位已合并集（其中 edit 与只读写排除重叠）
+        p.exclude_tools = vec!["ask".into(), "edit".into()];
+        apply_role_policy(&mut p, "explore");
+        let once = p.exclude_tools.clone();
+        apply_role_policy(&mut p, "explore");
+        assert_eq!(p.exclude_tools, once, "重复调用不得追加重复项");
+        assert_eq!(
+            once.iter().filter(|e| e.as_str() == "edit").count(),
+            1,
+            "已存在的写工具不得重复 push"
+        );
+        for t in ["ask", "edit", "create", "delete"] {
+            assert!(p.exclude_tools.iter().any(|e| e == t), "缺排除项 {t}");
+        }
+        assert_eq!(p.idle_policy, crate::core::agent::IdlePolicy::NudgeOnly);
+    }
+
+    #[test]
+    fn system_extra_marks_readonly_roles() {
+        for role in ["explore", "reviewer", "code-reviewer"] {
+            let s = build_system_extra(role, 40, crate::agents::find(role));
+            assert!(
+                s.contains("你是只读角色，没有写工具"),
+                "{role} 缺只读提示句"
+            );
+            assert!(s.contains("<subagent-discipline>"), "{role} 缺纪律块");
+        }
+        for role in ["backend-dev", "tester", "product-manager", "unknown-role"] {
+            let s = build_system_extra(role, 40, crate::agents::find(role));
+            assert!(!s.contains("你是只读角色"), "{role} 不应带只读提示句");
+        }
     }
 }
