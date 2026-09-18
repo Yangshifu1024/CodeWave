@@ -387,7 +387,11 @@ impl SessionStore {
 
     /// sanitize → trim → repair → gzip 落盘 + 索引更新。
     /// 图片 payload 保留在历史中（重开后附件仍显示）；超 8MB 上限时优雅降级
-    /// 为剥图后再存。
+    /// 为「剥图 + 保留思考」后再存（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+    /// 回退只为把转录压进上限，而思考块恰是 OpenAI 兼容 thinking 上游回传
+    /// `reasoning_content` 的唯一数据源——回退路径若顺手丢掉思考，该会话重启后每次
+    /// 多轮对话都必然 400 且不可自愈，因此回退只剥图片（`sanitize_keep_thinking`），
+    /// 绝不丢思考。剥图后仍超限才拒绝保存。
     #[allow(clippy::too_many_arguments)]
     pub fn save_history(
         &self,
@@ -402,15 +406,18 @@ impl SessionStore {
         let mut prepared = repair::prepare_for_save(msgs.to_vec());
         repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 2);
         let gz = gzip_history(&prepared)?;
-        // 大图片历史可能顶到上限：剥离图片 payload 后重试
-        // （附件退化为占位文本，但会话仍可保存）
+        // 大图片历史可能顶到上限：剥离图片 payload 但**保留思考块**后重试
+        // （附件退化为占位文本，会话仍可保存；思考是回传 reasoning_content 的数据源，
+        // 见函数文档注释）。
         let gz = if gz.len() > MAX_HISTORY_BYTES {
-            let stripped = repair::sanitize(&mut prepared);
+            let stripped_images = repair::sanitize_keep_thinking(&mut prepared);
             let gz2 = gzip_history(&prepared)?;
             if gz2.len() > MAX_HISTORY_BYTES {
                 anyhow::bail!("历史超过 8MB 上限，请新开会话");
             }
-            tracing::warn!("会话 {id} 历史含图片超上限，已剥离图片 payload 保存：{stripped:?}");
+            tracing::warn!(
+                "会话 {id} 历史含图片超上限，已剥离图片 payload（保留思考）保存：{stripped_images:?}"
+            );
             gz2
         } else {
             gz

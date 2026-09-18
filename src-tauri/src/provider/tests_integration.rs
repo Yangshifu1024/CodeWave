@@ -4,7 +4,7 @@
 use super::dto::*;
 use super::openai_chat;
 use crate::core::config::ModelConfig;
-use crate::core::types::Message;
+use crate::core::types::{Content, Message, Role};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -520,5 +520,111 @@ async fn custom_headers_sent_on_wire_responses() {
     let head = captured.lock().unwrap().to_lowercase();
     assert_custom_header_wire(&head, "sess-xyz", "authorization: bearer test-key");
     assert!(!head.contains("bearer evil"), "保留头被自定义值覆盖：{head}");
+}
+
+/// 缺陷守护（不联网，历史 → 请求体整条链路）：[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)
+/// 要求 OpenAI 兼容的 thinking 上游在多轮对话里回传历史 assistant 消息的 `reasoning_content`（缺失 400）。
+/// 本用例串起「内部历史 → `build_body` wire 体」：带思考块的 assistant 条目必须带该键且值等于思考文本，
+/// 同时 content / tool_calls 不受影响；无思考块的 assistant 条目不得多出该键。
+#[test]
+fn reasoning_content_passthrough_from_history_to_body() {
+    let req = StreamRequest {
+        model: test_model(1), // 端口仅占位：本用例只调 build_body，不发起任何网络请求
+        system_core: "sys".into(),
+        system_extra: String::new(),
+        cache_gen_index: None,
+        messages: vec![
+            Message {
+                role: Role::System,
+                content: vec![Content::Text {
+                    text: "inner-system".into(),
+                }],
+                created_at: None,
+            },
+            Message::user_text("读一下 a.txt"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "先读文件".into(),
+                    },
+                    Content::Text {
+                        text: "我来读一下".into(),
+                    },
+                    Content::ToolUse {
+                        id: "call_1".into(),
+                        name: "read".into(),
+                        args: serde_json::json!({ "files": ["a.txt"] }),
+                    },
+                ],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "call_1".into(),
+                content: "文件内容".into(),
+                is_error: false,
+            }]),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text {
+                    text: "读完了".into(),
+                }],
+                created_at: None,
+            },
+        ],
+        tools: vec![],
+        cache_key: None,
+        reasoning_effort: None,
+        session_id: None,
+    };
+
+    let body = openai_chat::build_body(&req);
+    let messages = body["messages"].as_array().expect("messages 为数组");
+    // 顶层 system 来自 system_core；内部 System 角色消息本身不上 wire
+    assert_eq!(messages[0]["role"].as_str(), Some("system"));
+    assert_eq!(messages[0]["content"].as_str(), Some("sys"));
+    assert_eq!(
+        messages.len(),
+        5,
+        "system + user + assistant(思考) + tool + assistant(文本)；内部 system 消息不入 wire"
+    );
+
+    let assistants: Vec<&serde_json::Value> = messages
+        .iter()
+        .filter(|m| m["role"].as_str() == Some("assistant"))
+        .collect();
+    assert_eq!(assistants.len(), 2, "两条 assistant 条目均应上 wire");
+
+    // 带思考块的条目：reasoning_content 原样回传，且 content / tool_calls 不受影响
+    let with_thinking = assistants[0];
+    assert_eq!(
+        with_thinking["reasoning_content"].as_str(),
+        Some("先读文件"),
+        "带思考块的历史 assistant 必须回传 reasoning_content：{with_thinking}"
+    );
+    assert_eq!(with_thinking["content"].as_str(), Some("我来读一下"));
+    assert_eq!(
+        with_thinking["tool_calls"][0]["id"].as_str(),
+        Some("call_1"),
+        "tool_calls 的 id 必须与内部工具 id 一致：{with_thinking}"
+    );
+    assert_eq!(
+        with_thinking["tool_calls"][0]["function"]["name"].as_str(),
+        Some("read")
+    );
+    // 配对完整：tool 结果消息回引同一 id
+    let tool_msg = messages
+        .iter()
+        .find(|m| m["role"].as_str() == Some("tool"))
+        .expect("tool 结果消息上 wire");
+    assert_eq!(tool_msg["tool_call_id"].as_str(), Some("call_1"));
+
+    // 无思考块的条目：不得凭空出现 reasoning_content 键（防漂移）
+    let plain = assistants[1];
+    assert_eq!(plain["content"].as_str(), Some("读完了"));
+    assert!(
+        plain.get("reasoning_content").is_none(),
+        "无思考块的 assistant 不得带 reasoning_content：{plain}"
+    );
 }
 

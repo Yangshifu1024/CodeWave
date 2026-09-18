@@ -784,9 +784,63 @@ pub async fn drive_agent(
     (result, run_usage, suggest_out)
 }
 
+/// 400 文案里与 reasoning_content 回传相关的两类语义（错误文案匹配是启发式，两个方向的误判后果不对称：
+/// `Rejected`→`Demanded` 方向误判只退化为今日行为——多一次 400 重试；反向误判会短暂把会话锁在
+/// 「剥思考」态（要求回传的端点每轮 400），由 [`update_reasoning_sticky`] 的 `Demanded` 复位自愈）。
+///
+/// 为什么需要区分（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 同为 400，「不认这个字段」与「必须回传这个字段」的修复方向恰好相反——前者要丢掉思考，
+/// 后者丢掉思考只会越修越坏（把思考抹了下次还是同一条 400）。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum Reasoning400 {
+    /// 上游**拒收**该字段（不认 / 不接受）→ 本会话后续不再回传思考
+    Rejected,
+    /// 上游**要求**回传该字段（缺了才 400）→ 绝不能把思考数据抹掉
+    Demanded,
+    /// 与该字段无关
+    Unrelated,
+}
+
+/// 按 400 文案分类（大小写不敏感、对 message 全文匹配）：
+/// 命中 `reasoning_content` / `thinking mode` 才算相关；其中带「必须回传」语义（`passed back`）
+/// 的是 `Demanded`，其余相关命中一律视为 `Rejected`。真实用例：
+/// ``The `reasoning_content` in the thinking mode must be passed back to the API.`` → `Demanded`。
+pub(super) fn classify_reasoning_400(msg: &str) -> Reasoning400 {
+    let lower = msg.to_lowercase();
+    let related = lower.contains("reasoning_content") || lower.contains("thinking mode");
+    if !related {
+        return Reasoning400::Unrelated;
+    }
+    // 「必须回传」语义：缺了它才 400，思考数据是解药而不是病根
+    if lower.contains("must be passed back") || lower.contains("passed back") {
+        Reasoning400::Demanded
+    } else {
+        Reasoning400::Rejected
+    }
+}
+
+/// 依 400 分类更新会话级粘性标记，返回是否发生变化（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）。
+/// `Rejected` → 置位（此后本会话出网副本不再回传思考）；`Demanded` → **复位**（自愈阀：标记可能是误判或来自切换前的端点，
+/// 继续剥思考只会让「要求回传」的端点每轮都 400）；`Unrelated` → 不变。
+/// 用 swap 一次完成「读取旧值 + 写入新值」，返回值即状态是否翻转（并发调用下不会重复报告）。
+pub(super) fn update_reasoning_sticky(rt: &SessionRuntime, verdict: Reasoning400) -> bool {
+    match verdict {
+        Reasoning400::Rejected => !rt.reasoning_rejected.swap(true, Ordering::SeqCst),
+        Reasoning400::Demanded => rt.reasoning_rejected.swap(false, Ordering::SeqCst),
+        Reasoning400::Unrelated => false,
+    }
+}
+
 /// 单轮 LLM 流式请求 + 轮内重试/退避（drive_agent 第 ⑦ 步），自原内联循环逐字拆出：
 /// 可变状态经引用穿引，行为不变——`*run_usage` 连内部重试一并累计，`*attempt`
 /// 成功即复位（M3），`*sanitized_once` 在 BadRequest 时做一次性历史 sanitize/repair（M2）。
+/// BadRequest 分支内还会把 400 文案经 [`classify_reasoning_400`] 分类，并交由
+/// [`update_reasoning_sticky`] 更新会话级粘性标记 `rt.reasoning_rejected`
+/// （[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// `Rejected` 置位（此后出网副本不再回传思考，由 `stream::messages_for_request` 消费）；
+/// `Demanded` **复位**（自愈阀：误判或切端点后不至于把思考永久剥掉）；`Unrelated` 不变。
+/// 历史修复：`Demanded` 用 [`repair::sanitize_keep_thinking`]（只剥图、保思考），
+/// 其余情况维持 `repair::sanitize`。
 /// Ok = 本轮组装结果；Err = 终止 run 的 outcome 错误（取消 / 不可重试 / 预算耗尽）。
 #[allow(clippy::too_many_arguments)]
 async fn run_llm_turn(
@@ -947,8 +1001,49 @@ async fn run_llm_turn(
                 let _ = collector.await;
                 if e.is_bad_request() && !*sanitized_once {
                     *sanitized_once = true;
+                    // 400 语义分类（每次请求都能自愈的关键，[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+                    // 「拒收 reasoning_content」的端点每次回传都会 400，故置会话级粘性标记让
+                    // 后续出网副本不再回传思考（本 run 后续 step 与新 run 均生效）；
+                    // 「要求回传」的端点绝不能置位（置位会让它彻底失效），修复也必须保思考。
+                    let verdict = match &e {
+                        ProviderError::BadRequest { message, .. } => classify_reasoning_400(message),
+                        _ => Reasoning400::Unrelated,
+                    };
+                    // 依分类更新粘性标记；`changed` = 状态是否翻转（日志只在真正翻转时才值得记）
+                    let changed = update_reasoning_sticky(rt, verdict);
+                    match &verdict {
+                        Reasoning400::Rejected => {
+                            session_log::warn(
+                                rt,
+                                &format!(
+                                    "step {step} 该上游拒收 reasoning_content，本会话后续请求不再回传思考：{}",
+                                    session_log::trunc(&e.to_string(), ERROR_CAP)
+                                ),
+                            );
+                        }
+                        // 只在真正复位（此前置位）时记录：说明先前的置位是误判或来自切换前的端点
+                        Reasoning400::Demanded if changed => {
+                            session_log::warn(
+                                rt,
+                                &format!(
+                                    "step {step} 该端点要求回传 reasoning_content，已恢复回传思考（复位本会话剥思考标记）：{}",
+                                    session_log::trunc(&e.to_string(), ERROR_CAP)
+                                ),
+                            );
+                        }
+                        _ => {}
+                    }
                     let mut h = rt.history.lock().unwrap();
-                    repair::sanitize(&mut h);
+                    // 「要求回传」场景必须保思考：把思考剥了只会把 400 修成常态。
+                    // 其余（Rejected / Unrelated）维持今日语义：剥图 + 丢思考的降级阀。
+                    match &verdict {
+                        Reasoning400::Demanded => {
+                            repair::sanitize_keep_thinking(&mut h);
+                        }
+                        _ => {
+                            repair::sanitize(&mut h);
+                        }
+                    }
                     repair::repair(&mut h);
                     drop(h);
                     // 缺陷修复：历史修好了，但请求体还是构建时那份快照——必须重建，否则
@@ -1278,7 +1373,7 @@ fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::stalled;
+    use super::{classify_reasoning_400, stalled, update_reasoning_sticky, Reasoning400};
 
     #[test]
     fn stalled_boundary_and_clock_skew() {
@@ -1286,6 +1381,157 @@ mod tests {
         assert!(!stalled(1499, 1000, 500));
         // 时钟回拨：saturating_sub 保护为 0 → 不停滞
         assert!(!stalled(0, 5000, 500));
+    }
+
+    // 真实用例：本产品用户遇到的原文——上游「要求」回传历史思考，缺了就 400。
+    // 这一例必须不被误判为 Rejected，否则粘性标记会把该端点的刚需字段永久抹掉。
+    #[test]
+    fn classify_reasoning_400_demanded_when_must_be_passed_back() {
+        assert_eq!(
+            classify_reasoning_400(
+                "The `reasoning_content` in the thinking mode must be passed back to the API. (HTTP 400)"
+            ),
+            Reasoning400::Demanded
+        );
+    }
+
+    // 拒收用例：上游不认该字段（OpenAI 兼容中转常见形态）→ 置粘性标记，后续不再回传思考
+    #[test]
+    fn classify_reasoning_400_rejected_when_field_unrecognized() {
+        assert_eq!(
+            classify_reasoning_400(
+                "Unrecognized request argument supplied: reasoning_content (HTTP 400)"
+            ),
+            Reasoning400::Rejected
+        );
+        assert_eq!(
+            classify_reasoning_400("reasoning_content is not accepted by this model"),
+            Reasoning400::Rejected
+        );
+    }
+
+    // 无关用例：与思考字段无关的 400 不得置粘性标记，修复走原降级阀
+    #[test]
+    fn classify_reasoning_400_unrelated_for_other_400s() {
+        assert_eq!(
+            classify_reasoning_400("Invalid assistant message: content or tool_calls must be set (HTTP 400)"),
+            Reasoning400::Unrelated
+        );
+        assert_eq!(classify_reasoning_400(""), Reasoning400::Unrelated);
+    }
+
+    // 大小写不敏感 + 无 HTTP 后缀变体（上游文案形态不受控）
+    #[test]
+    fn classify_reasoning_400_is_case_insensitive() {
+        assert_eq!(
+            classify_reasoning_400("REASONING_CONTENT IN THE THINKING MODE MUST BE PASSED BACK"),
+            Reasoning400::Demanded
+        );
+        assert_eq!(
+            classify_reasoning_400("Thinking Mode: reasoning_content invalid"),
+            Reasoning400::Rejected
+        );
+    }
+
+    // 粘性标记三分支：Rejected 置位、Demanded 复位（自愈阀）、Unrelated 不变；
+    // 返回值 = 状态是否翻转（调用方据此只在真正翻转时记日志）。
+    #[test]
+    fn update_reasoning_sticky_sets_resets_and_keeps() {
+        use crate::core::agent::runtime::SessionRuntime;
+        use std::sync::atomic::Ordering;
+        let rt = SessionRuntime::new(
+            "s-sticky-unit".into(),
+            std::env::temp_dir(),
+            std::env::temp_dir(),
+        );
+
+        // 未置位态：Unrelated 不变、也不报告变化
+        assert!(!rt.reasoning_rejected.load(Ordering::SeqCst));
+        assert!(!update_reasoning_sticky(&rt, Reasoning400::Unrelated));
+        assert!(!rt.reasoning_rejected.load(Ordering::SeqCst));
+
+        // Rejected → 置位且返回 true
+        assert!(update_reasoning_sticky(&rt, Reasoning400::Rejected));
+        assert!(rt.reasoning_rejected.load(Ordering::SeqCst));
+        // 已置位态：Unrelated 不变；Rejected 幂等（保持 true，第二次不再报告变化）
+        assert!(!update_reasoning_sticky(&rt, Reasoning400::Unrelated));
+        assert!(rt.reasoning_rejected.load(Ordering::SeqCst));
+        assert!(!update_reasoning_sticky(&rt, Reasoning400::Rejected));
+        assert!(rt.reasoning_rejected.load(Ordering::SeqCst));
+
+        // Demanded → 复位（先显式造出置位态，断言变为 false 且返回 true）
+        rt.reasoning_rejected.store(true, Ordering::SeqCst);
+        assert!(update_reasoning_sticky(&rt, Reasoning400::Demanded));
+        assert!(!rt.reasoning_rejected.load(Ordering::SeqCst));
+        // 已复位态：Demanded 幂等（不再报告变化）
+        assert!(!update_reasoning_sticky(&rt, Reasoning400::Demanded));
+        assert!(!rt.reasoning_rejected.load(Ordering::SeqCst));
+    }
+
+    // 回归叙事（复审遗留 🟡）：误判置位 → 锁死症状 → Demanded 复位 → 下一个请求重新带上思考。
+    // 「误判」直接用 store(true) 模拟（真实链路 = 要求回传的 400 文案变体不含 `passed back` 子串，
+    // 被判成 Rejected）；「自愈」走真实分类函数 + 真实出网副本构造。
+    #[test]
+    fn sticky_mark_self_heals_when_reasoning_is_demanded() {
+        use crate::core::agent::runtime::SessionRuntime;
+        use crate::core::agent::stream::messages_for_request;
+        use crate::core::types::{Content, Message, Role};
+        use std::sync::atomic::Ordering;
+        fn has_thinking(msgs: &[Message]) -> bool {
+            msgs.iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Thinking { .. }))
+        }
+        let rt = SessionRuntime::new(
+            "s-sticky-heal".into(),
+            std::env::temp_dir(),
+            std::env::temp_dir(),
+        );
+        let history = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Thinking {
+                        text: "想".into(),
+                    },
+                    Content::Text {
+                        text: "答案".into(),
+                    },
+                ],
+                created_at: None,
+            },
+        ];
+        *rt.history.lock().unwrap() = history.clone();
+
+        // 误判置位：此后每个请求的出网副本都被剥掉思考（锁死期间的症状）
+        rt.reasoning_rejected.store(true, Ordering::SeqCst);
+        assert!(
+            !has_thinking(&messages_for_request(&rt)),
+            "粘性置位后出网副本必须无思考（锁死症状：要求回传的端点每轮 400）"
+        );
+
+        // 自愈：该端点的 400 被判为 Demanded → 标记复位
+        let verdict = classify_reasoning_400(
+            "The `reasoning_content` in the thinking mode must be passed back to the API. (HTTP 400)",
+        );
+        assert_eq!(verdict, Reasoning400::Demanded);
+        assert!(update_reasoning_sticky(&rt, verdict), "复位必须报告状态变化");
+        assert!(
+            !rt.reasoning_rejected.load(Ordering::SeqCst),
+            "Demanded 必须复位粘性标记"
+        );
+
+        // 复位后的下一个请求重新带上思考；转录全程未被改写
+        assert!(
+            has_thinking(&messages_for_request(&rt)),
+            "复位后下一个请求必须重新回传思考（要求回传的端点靠它拿数据）"
+        );
+        assert_eq!(
+            rt.history.lock().unwrap().as_slice(),
+            history.as_slice(),
+            "全程不得改写 rt.history"
+        );
     }
 }
 

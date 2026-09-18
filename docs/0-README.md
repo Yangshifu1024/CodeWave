@@ -43,6 +43,7 @@
 - 2026-09-03 · [notification-click-reveal.md](./notification-click-reveal.md) — 系统通知点击回跳：后端按平台直驱 + 会话窗口 reveal + 失败回退链
 - 2026-09-04 · [macos-notify-use-default-dialog-fix.md](./macos-notify-use-default-dialog-fix.md) — 缺陷修复：macOS 首次通知弹「Choose Application」系统对话框（mac-notification-sys 内部 Once 消费 + 主动 set_application）
 - 2026-09-08 · [windows-toast-aumid.md](./windows-toast-aumid.md) — 缺陷修复：Windows 通知显示 PowerShell 图标/标题且点击不回跳（AUMID 借用 POWERSHELL_APP_ID 之故）——NSIS 钩子 + WiX 片段在安装时写 AppUserModelId 注册表键，运行时只读检测 + 回退链，依赖升级 tauri-winrt-notification 0.8.1
+- 2026-09-16 · [reasoning-content-passthrough.md](./reasoning-content-passthrough.md) — 缺陷修复：thinking 上游要求历史 assistant 回传 `reasoning_content`（缺失即 400，DeepSeek 系经中转）——出站映射按内容块顺序拼接思考块上 wire + 落盘保留思考（`sanitize_for_save`）/ 8MB 回退改「剥图留思考」（`sanitize_keep_thinking`）+ 400 文案分类（Rejected/Demanded/Unrelated）与会话级粘性标记（拒收型端点一次命中即停发、Demanded 复位自愈、子代理继承），空守卫与 anthropic/openai_responses 边界不变，前端零改动
 
 ## 编排与工作流
 

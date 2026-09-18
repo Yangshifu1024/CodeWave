@@ -48,6 +48,7 @@ product-manager 评审结论：不采纳「保留单 Delta 帧 + 前端启发式
 
 - **存储格式零迁移**：`Message.content` 本就支持混合序列；新版按真实顺序写块，旧记录（thinking 块至多一个且在首位）解析结果与旧版渲染等价。
 - **出站 sanitize 行为不变**：`repair::sanitize` 照旧丢弃 Thinking 块（anthropic 签名约束），回放路径无影响。**注意**：保存路径 `prepare_for_save` 同样经 sanitize，因此磁盘历史中实际不含 thinking 块；「历史恢复展示思考」仅对内存中的会话（本轮运行内重开 Tab）成立，跨重启恢复时思考块不出现（sanitize 已丢弃），属预期行为（审查 C3 修正：此前「已落盘的思考块可恢复展示」表述不成立）。
+  - ⚠️ **2026-09-16 更新（[docs/reasoning-content-passthrough](./reasoning-content-passthrough.md)）**：本条的「保存路径丢思考、跨重启不显示」已被后续缺陷修复推翻——`sanitize_for_save` 现**保留** Thinking 块（仅 `sanitize` 兜底变体丢弃，且升级为会话级粘性），思考随会话落盘，重启后既能在 UI 恢复展示，也能回传给要求 `reasoning_content` 的 OpenAI 兼容 thinking 上游。上段原文保留作历史记录。
 - **Frame 仅 IPC 内存传输**，不落盘、不涉及配置 serde 兼容。
 - 前后端帧协议同批次变更：旧后端 + 新前端（或反向）时 delta 帧被前端静默忽略（onmessage 只处理认识的 type），不崩溃、只是无增量，属可接受降级。
 
@@ -71,7 +72,7 @@ product-manager 评审结论：不采纳「保留单 Delta 帧 + 前端启发式
 
 1. **流式穿插**：发送一个会触发多步工具调用的任务 → 观察：每个「思考过程」折叠面板出现在其对应步骤的工具卡**之前**，正文段穿插其间；点击折叠面板可展开查看思考文本。
 2. **默认收起**：思考块默认只显示「思考过程」标题行，不展开。
-3. **历史恢复（限内存内）**：完成一轮后关闭 Tab → 从左侧导航重开会话 → 思考/工具卡/正文顺序与流式期间一致。注意：跨应用重启后思考块不再出现——保存路径经 sanitize 丢弃 thinking（anthropic 签名约束），属预期（见 §4）。
+3. **历史恢复**：完成一轮后关闭 Tab → 从左侧导航重开会话 → 思考/工具卡/正文顺序与流式期间一致。注意：跨应用重启后思考块**仍会出现**（2026-09-16 起保存路径不再丢弃 thinking，见 §4 更新与 [docs/reasoning-content-passthrough](./reasoning-content-passthrough.md)）。
 4. **自动滚动**：流式期间停在底部 → 内容增长持续吸底；向上翻阅时不被强行拉回。
 5. **取消与重试**：流式中点停止 → 「已取消」出现，无半截思考残留；（可选）模拟请求失败重试 → notice 提示后 timeline 从空重建。
 6. **多 Tab**：两个 Tab 各跑一个任务 → 各自 timeline 独立穿插，互不串扰。

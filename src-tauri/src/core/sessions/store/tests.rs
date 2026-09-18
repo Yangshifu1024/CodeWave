@@ -93,15 +93,7 @@ use super::*;
 
         // 超上限：16MB 不可压缩 base64（LCG 伪随机）gzip 后必超 8MB
         // → 降级剥图；保存不失败
-        const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut data = String::with_capacity(16 * 1024 * 1024);
-        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
-        for _ in 0..16 * 1024 * 1024 {
-            x = x
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            data.push(B64[((x >> 33) % 64) as usize] as char);
-        }
+        let data = incompressible_b64(16 * 1024 * 1024);
         let big = vec![
             Message::user_text("q"),
             Message {
@@ -120,6 +112,120 @@ use super::*;
         assert!(
             matches!(&loaded[1].content[0], Content::Text { text } if text.contains("omitted"))
         );
+    }
+
+    /// 不可压缩的 base64 载荷（LCG 伪随机）：字符取自 64 符号表，熵约 6 bit/char，
+    /// gzip 后 ≈0.75 byte/char——16MiB 字符即 ≈12MiB gz，稳定越过 8MB 上限。
+    fn incompressible_b64(len: usize) -> String {
+        const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut data = String::with_capacity(len);
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        for _ in 0..len {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            data.push(B64[((x >> 33) % 64) as usize] as char);
+        }
+        data
+    }
+
+    /// 一条带思考块的 assistant 消息（思考在前、正文在后，模拟真实流式落块顺序）。
+    fn thinking_assistant(text: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Thinking { text: text.into() },
+                Content::Text {
+                    text: "答案".into(),
+                },
+            ],
+            created_at: None,
+        }
+    }
+
+    /// [docs/reasoning-content-passthrough](../../../../../docs/reasoning-content-passthrough.md)：
+    /// 8MB 上限回退路径只剥图、**绝不丢思考**。丢思考会让该会话重启后无 `reasoning_content`
+    /// 可回传，OpenAI 兼容 thinking 上游多轮必然 400 且不可自愈；而剥图已足够减负。
+    /// 这是 store 层对 `repair::sanitize_keep_thinking` 的端到端守护（保存 → 读回）。
+    #[test]
+    fn save_history_over_cap_fallback_keeps_thinking() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let msgs = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::User,
+                content: vec![Content::Image {
+                    media_type: "image/png".into(),
+                    data: incompressible_b64(16 * 1024 * 1024),
+                }],
+                created_at: None,
+            },
+            thinking_assistant("必须留存的推理"),
+            Message::user_text("再问"),
+        ];
+        store
+            .save_history("s-over-cap", "t", ".", None, None, &["/ws".into()], &msgs)
+            .unwrap();
+
+        let loaded = store.load_history("s-over-cap").unwrap();
+        // 回退路径生效：图片 payload 变占位文本
+        assert!(
+            loaded
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Text { text } if text.contains("omitted"))),
+            "超上限历史必须剥图落盘"
+        );
+        // 思考必须留存（回退路径丢思考 = 重启后无法回传 reasoning_content）
+        let thinking: Vec<String> = loaded
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                Content::Thinking { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            thinking,
+            vec!["必须留存的推理".to_string()],
+            "8MB 回退路径丢了思考 → 重启后无法回传 reasoning_content，多轮必然 400"
+        );
+        // 正文仍在（不是把整条 assistant 消息丢掉）
+        assert!(
+            loaded
+                .iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Text { text } if text == "答案"))
+        );
+    }
+
+    /// [docs/reasoning-content-passthrough](../../../../../docs/reasoning-content-passthrough.md)：
+    /// 回退分支的兜底——剥图（`sanitize_keep_thinking`）后**仍**超 `MAX_HISTORY_BYTES`
+    /// 时必须拒绝保存并点名 8MB 上限，且不得留下半成品历史。该分支此前零覆盖；
+    /// 「落盘保思考」令压缩后体积变大，触发概率理论上上升，因此钉死其行为。
+    #[test]
+    fn save_history_still_over_cap_after_stripping_images_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        // 全程不含图片：回退分支的剥图无从减负，剥离前后体积相同（仍 >8MB）。
+        // 单条 user 消息 = 仅 1 个用户轮（≤ keep_last=2），`repair::trim` 在轮边界检查处
+        // 直接 early-return（repair.rs:228），这段巨量文本因此不会被裁掉。
+        let msgs = vec![Message::user_text(incompressible_b64(16 * 1024 * 1024))];
+        let id = "s-over-cap-text";
+        let err = store
+            .save_history(id, "t", ".", None, None, &["/ws".into()], &msgs)
+            .expect_err("剥图后仍超 8MB 必须拒绝保存");
+        assert!(
+            err.to_string().contains("8MB"),
+            "错误必须点名 8MB 上限，实际：{err}"
+        );
+        // 拒绝发生在落盘之前：不产生半成品历史文件，也不写入索引条目
+        assert!(
+            !dir.path().join("histories").join(format!("{id}.json.gz")).exists(),
+            "保存失败不得留下半成品历史文件"
+        );
+        assert!(store.get(id).is_none(), "保存失败不得写入索引条目");
     }
 
     /// M8：损坏索引先备份保全证据，绝不静默覆写。
