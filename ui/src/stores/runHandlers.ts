@@ -8,7 +8,7 @@ import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
-import { blank, closeOpenThinking, currentAssistantIm } from "./runFrames";
+import { blank, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
 import type { RunStore } from "./run";
 
 /** immer set：对 store 草稿原地变异 */
@@ -75,11 +75,10 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.running = false;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
-        const last = t.items[t.items.length - 1];
-        if (last?.kind === "assistant") {
-          last.streaming = false;
-          closeOpenThinking(last.timeline); // 冻结思考时长
-        }
+        // 兜底收尾：不能只翻末项的光标——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
+        // 漏网的 streaming 项就是聊天里那个永久残留光标（见 runFrames.currentAssistantIm 的不变量注释）。
+        // 这里扫全部 assistant 项统一收尾（streaming=false + 冻结思考时长）；本 handler 其余语义一概不动。
+        closeStreamingAssistantItems(t);
         if (p.suggestions) t.suggestions = p.suggestions;
       });
       void get().refreshGit(p.session);
@@ -100,11 +99,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         t.running = false;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
-        const last = t.items[t.items.length - 1];
-        if (last?.kind === "assistant") {
-          last.streaming = false;
-          closeOpenThinking(last.timeline); // 冻结思考时长（失败收尾）
-        }
+        // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
+        closeStreamingAssistantItems(t);
         // errorKind 携带后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）：auth/billing 有设置快捷入口
         t.items.push({ kind: "error", text: String(p?.error ?? i18n.t("notice.runFailed")), errorKind: p?.kind });
       });
@@ -114,11 +110,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.running = false;
-        const last = t.items[t.items.length - 1];
-        if (last?.kind === "assistant") {
-          last.streaming = false;
-          closeOpenThinking(last.timeline); // 冻结思考时长（取消同样定格）
-        }
+        // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
+        closeStreamingAssistantItems(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
       // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：「立即运行」打断后立即执行该项；普通取消 = 队列保持暂停
