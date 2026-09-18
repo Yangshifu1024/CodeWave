@@ -140,7 +140,7 @@ pub async fn open_dir(path: String) -> Result<(), String> {
 }
 
 /// open_dir 的校验：trim 后非空、路径存在且为目录（错误信息中文，直接面向用户提示）。
-fn validate_open_dir(path: &str) -> Result<&str, String> {
+pub(super) fn validate_open_dir(path: &str) -> Result<&str, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("路径为空".to_string());
@@ -155,6 +155,18 @@ fn validate_open_dir(path: &str) -> Result<&str, String> {
     Ok(trimmed)
 }
 
+/// Windows 打开外部链接的命令：`cmd /C start "" <url>`。
+/// 第三个参数是**空标题占位**（`start` 会把紧跟的第一个引号参数当窗口标题，缺了它 URL 不会被打开）；
+/// 同时统一带 `CREATE_NO_WINDOW`：cmd.exe 是控制台程序，不设该标志会闪一下黑框（与 core::openers 同处理）。
+#[cfg(target_os = "windows")]
+fn windows_open_command(url: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", "start", "", url]);
+    command.creation_flags(crate::core::openers::CREATE_NO_WINDOW);
+    command
+}
+
 /// 在默认浏览器打开外部 http(s) 链接（「关于」对话框的仓库链接）。
 /// 协议限定 http/https 且硬拒空白/控制字符；
 /// opener 插件非依赖项，因此沿用与 open_logs_dir 相同的原生进程
@@ -163,11 +175,7 @@ fn validate_open_dir(path: &str) -> Result<&str, String> {
 pub async fn open_url(url: String) -> Result<(), String> {
     let trimmed = validate_open_url(&url)?;
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", trimmed]);
-        c
-    };
+    let mut command = windows_open_command(trimmed);
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut c = std::process::Command::new("open");
@@ -241,6 +249,22 @@ mod about_commands_tests {
         let padded = format!("  {}  ", base.display());
         assert_eq!(validate_open_dir(&padded).unwrap(), base.to_str().unwrap());
         let _ = std::fs::remove_dir(&base);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_open_command_keeps_cmd_start_shape() {
+        // 形状钉子：缺了空标题占位，`start` 会把 URL 当窗口标题、根本不打开浏览器
+        let command = windows_open_command("https://example.com/a?b=c");
+        assert_eq!(command.get_program(), "cmd");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args, vec!["/C", "start", "", "https://example.com/a?b=c"]);
+        // 无控制台窗口标志本身不可从 std::process::Command 读出，
+        // 只能靠「共享 CREATE_NO_WINDOW 常量 + openers 侧同一条路径」保证（见 core::openers）。
+        assert_eq!(crate::core::openers::CREATE_NO_WINDOW, 0x0800_0000);
     }
 
     #[test]

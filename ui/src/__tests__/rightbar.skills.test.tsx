@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         meta: { name: "demo", description: "项目技能", whenToUse: "输入 /demo 时", origin: "/tmp/ws/.codewave/skills/demo/SKILL.md" },
         body: "# DEMO BODY",
       };
+    if (cmd === "list_editors" || cmd === "quota_snapshots") return [];
     return null;
   }),
 }));

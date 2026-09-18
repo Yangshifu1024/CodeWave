@@ -27,7 +27,18 @@ import TaskCenterPanel from "../panels/TaskCenterPanel";
 import TokenStatsModal from "../panels/TokenStatsModal";
 import RightBar from "./RightBar";
 import ProjectNav from "./ProjectNav";
-import TopBar, { SIDER_W_CLOSED, SIDER_W_OPEN } from "./TopBar";
+import ResizeHandle from "./ResizeHandle";
+import TopBar, { SIDER_W_CLOSED } from "./TopBar";
+import { useDisplayWidths } from "./useDisplayWidths";
+import {
+  dragLimit,
+  NAV_W_DEFAULT,
+  NAV_W_MAX,
+  NAV_W_MIN,
+  RB_W_DEFAULT,
+  RB_W_MAX,
+  RB_W_MIN,
+} from "../../utils/layout";
 import { useTitlebarActivation } from "./useTitlebar";
 
 const { Header, Sider, Content } = Layout;
@@ -244,6 +255,16 @@ export default function AppShell() {
   useStartupUpdateCheck();
   const activeKey = useSessions((s) => s.activeKey);
   const explorerOpen = useSessions((s) => s.explorerOpen);
+  // 可拖拽栏宽（[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+  // 显示宽度按当前窗口夹取（只夹显示、不改记忆值）；折叠态宽度仍为 0。
+  const { nav: navWidth, rightBar: rightBarWidth, windowWidth } = useDisplayWidths();
+  const rightBarOpen = useUi((s) => s.rightBarOpen);
+  const setNavWidth = useUi((s) => s.setNavWidth);
+  const setRightBarWidth = useUi((s) => s.setRightBarWidth);
+  // 记忆值（未夹取）与显示值分开拿：显示值 < 记忆值 说明当前窗口放不下，此时禁用拖动
+  // （拖动会把夹取后的显示宽写回记忆值，静默抹掉用户原来的宽度）
+  const storedNavWidth = useUi((s) => s.navWidth);
+  const storedRightBarWidth = useUi((s) => s.rightBarWidth);
   const activeWorkspace = useActiveWorkspace();
 
   // 挂载初始化：配置/会话/项目加载 + ui-state 现场态恢复 + 事件绑定
@@ -392,13 +413,13 @@ export default function AppShell() {
         <TopBar />
       </Header>
 
-      <Layout style={{ height: "calc(100% - var(--ws-titlebar-h))" }}>
+      <Layout style={{ height: "calc(100% - var(--ws-titlebar-h))", position: "relative" }}>
         {/* Sider 外壳两态恒保留：antd 以真实 Sider 子组件判定 has-sider 水平布局，
             换成普通 div 会让内层 Layout 翻成垂直排布、内容区被压成 0（docs/sidebar-toggle-buttons 缺陷修复）。
             docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
             -zero-width 修饰类裁切子内容，内容恒挂载、折叠动画平滑 */}
         <Sider
-          width={explorerOpen ? SIDER_W_OPEN : SIDER_W_CLOSED}
+          width={explorerOpen ? navWidth : SIDER_W_CLOSED}
           style={{
             background: "var(--ws-bg-nav)",
             borderRight: explorerOpen ? "1px solid var(--ws-border)" : "1px solid transparent",
@@ -421,6 +442,34 @@ export default function AppShell() {
           </div>
           <RightBar />
         </Content>
+
+        {/* 栏宽分隔条（绝对定位在栏边界；折叠态不渲染 = 拖动不抢折叠入口） */}
+        {explorerOpen && (
+          <ResizeHandle
+            side="nav"
+            width={navWidth}
+            min={NAV_W_MIN}
+            max={dragLimit("nav", rightBarOpen ? rightBarWidth : 0, windowWidth)}
+            offset={navWidth}
+            label={t("app.resizeLeft")}
+            disabled={navWidth < storedNavWidth}
+            onWidth={setNavWidth}
+            onReset={() => setNavWidth(NAV_W_DEFAULT)}
+          />
+        )}
+        {rightBarOpen && (
+          <ResizeHandle
+            side="right"
+            width={rightBarWidth}
+            min={RB_W_MIN}
+            max={dragLimit("right", explorerOpen ? navWidth : 0, windowWidth)}
+            offset={rightBarWidth}
+            label={t("app.resizeRight")}
+            disabled={rightBarWidth < storedRightBarWidth}
+            onWidth={setRightBarWidth}
+            onReset={() => setRightBarWidth(RB_W_DEFAULT)}
+          />
+        )}
       </Layout>
 
       {settingsOpen && <SettingsModal />}

@@ -30,8 +30,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（Windows 实测 541 passed，个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准） |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（Windows 实测 308 passed / 43 文件，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（Windows 实测 670 passed，个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过；以本地最新全绿为准） |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（Windows 实测 465 passed / 57 文件，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
@@ -47,7 +47,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 层 | 职责 | 约束 |
 |---|---|---|
-| `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、scheduler、sessions、stats | 不依赖 tauri |
+| `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、quota（订阅额度：凭证链 + 7 家适配器）、openers（文件管理器与编辑器探测/打开）、scheduler、sessions、stats | 不依赖 tauri |
 | `host/` | commands（全部 IPC 命令）、events（EventSink）、keyring | 除 `lib.rs` 外唯一允许 `use tauri::*`；命令只校验 + 转调 core |
 | `provider/` | LLM 供应商层：anthropic / openai_chat / openai_responses 三协议 + dto / keys / proxy / retry / sse | 协议差异不出本层 |
 | `tools/` | 工具实现（ToolKind 分 ReadOnly / FileWrite / Network / Interactive） | 纯函数化 |

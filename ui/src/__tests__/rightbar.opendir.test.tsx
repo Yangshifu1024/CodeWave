@@ -12,6 +12,7 @@ const invoked: { cmd: string; args: Record<string, unknown> }[] = [];
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     if (cmd === "list_skills") return [];
+    if (cmd === "list_editors" || cmd === "quota_snapshots") return [];
     invoked.push({ cmd, args: args ?? {} });
     return null;
   }),

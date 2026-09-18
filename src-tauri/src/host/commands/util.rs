@@ -12,19 +12,9 @@ pub(super) fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// 共享助手：在系统文件管理器中 reveal 目录（按平台分支，
-/// 不依赖 tauri-plugin-opener；与 open_logs_dir 同一模式）。
+/// 共享助手：在系统文件管理器中打开目录（平台分支在 core::openers：Windows 优先 Files 应用，
+/// 探测不到则 explorer；与 open_logs_dir / open_data_dir 同一路径）。
 pub(super) fn open_dir_in_file_manager(dir: &std::path::Path, err_label: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let program = "explorer";
-    #[cfg(target_os = "macos")]
-    let program = "open";
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let program = "xdg-open";
-    std::process::Command::new(program)
-        .arg(dir)
-        .spawn()
-        .map_err(|e| format!("{err_label}：{e}"))?;
-    Ok(())
+    crate::core::openers::open_dir(dir).map_err(|e| format!("{err_label}：{e}"))
 }
 
