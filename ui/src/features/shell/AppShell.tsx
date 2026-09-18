@@ -10,7 +10,7 @@ import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { bindEvents } from "../../ipc/events";
 import { ipc } from "../../ipc/client";
-import { checkForUpdates } from "../../utils/updateCheck";
+import { checkForUpdates, useStartupUpdateCheck } from "../../utils/updateCheck";
 import {
   applyUiStateToStores,
   initUiStatePersistence,
@@ -22,6 +22,7 @@ import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
 import SettingsModal from "../panels/SettingsModal";
 import AboutModal from "../panels/AboutModal";
+import UpdateModal from "../panels/UpdateModal";
 import TaskCenterPanel from "../panels/TaskCenterPanel";
 import TokenStatsModal from "../panels/TokenStatsModal";
 import RightBar from "./RightBar";
@@ -239,6 +240,8 @@ export default function AppShell() {
   const { t } = useTranslation();
   // 自绘标题栏激活（[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)）：挂载即触发；mode/平台标记写入 <html data-*> 供 CSS 分支
   useTitlebarActivation();
+  // 启动静默检查更新（延迟 3s，可用 ws_auto_update=false 关闭；有更新才弹窗）
+  useStartupUpdateCheck();
   const activeKey = useSessions((s) => s.activeKey);
   const explorerOpen = useSessions((s) => s.explorerOpen);
   const activeWorkspace = useActiveWorkspace();
@@ -309,8 +312,8 @@ export default function AppShell() {
 
   // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项
   // （关于 / 设置 / 检查更新）经 menu:action 路由至此；三项均打开应用内界面
-  // （AboutModal / SettingsModal / 更新检查 toast）。检查更新走共享流程
-  // utils/updateCheck（check → 下载安装 → 重启；Windows/Linux 从「关于」弹框触发）。
+  // （AboutModal / SettingsModal / 更新检查弹窗）。检查更新走共享流程
+  // utils/updateCheck（check → 弹窗展示发布说明 → 下载安装 → 重启；Windows/Linux 从「关于」弹框触发）。
   useEffect(() => {
     let un: (() => void) | undefined;
     let disposed = false;
@@ -422,6 +425,8 @@ export default function AppShell() {
 
       {settingsOpen && <SettingsModal />}
       {aboutOpen && <AboutModal />}
+      {/* 自动更新弹窗：常驻挂载（可见性取自 store 的 modalOpen），phase 驱动标题/正文/页脚 */}
+      <UpdateModal />
       {tasksOpen && <TaskCenterPanel />}
       {statsOpen && <TokenStatsModal />}
       {/* 退出拦截 / 关 Tab 二次确认：两者都挂在 store 请求位上，只在 AppShell 渲染这一处 */}
