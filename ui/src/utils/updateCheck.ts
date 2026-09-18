@@ -7,6 +7,10 @@ import { i18n } from "../i18n";
 import { ipc } from "../ipc/client";
 import { useUi } from "../stores/ui";
 
+// 配额耗尽识别：latest.json 若把下载地址指向 GitHub REST 资产 API 端点，匿名配额（60 次/小时/出口 IP）
+// 耗尽即回 403（偶发 429 / rate limit）。tauri 抛出的 Error 经 String() 后可能带前缀，故用宽松正则匹配。
+const RATE_LIMIT_RE = /\b(403|429)\b|rate limit/i;
+
 export async function checkForUpdates(): Promise<void> {
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
@@ -22,7 +26,14 @@ export async function checkForUpdates(): Promise<void> {
     try {
       await update.downloadAndInstall();
     } catch (e) {
-      useUi.getState().toast(i18n.t("notice.updateFailed", { error: String(e) }));
+      const text = String(e);
+      // 配额耗尽的正确出路是「稍后重试」或「到 Release 页面手动下载」（github.com 走 CDN 不消耗配额）；
+      // 403 是穿透代理拿回的 HTTP 状态码，换代理出口 IP 无效，故单独给可行动指引而非裸报错
+      if (RATE_LIMIT_RE.test(text)) {
+        useUi.getState().toast(i18n.t("notice.updateFailedRateLimited"));
+        return;
+      }
+      useUi.getState().toast(i18n.t("notice.updateFailed", { error: text }));
       return;
     }
     useUi.getState().toast(i18n.t("notice.updateRestarting"));

@@ -69,6 +69,12 @@ jobs:
       - name: Frontend tests
         run: pnpm --dir ui test
 
+      # scripts/ 下的 node:test 单测（fix-updater-json 等，仅 node 内置模块、零第三方依赖）。
+      # 用引号包住 glob 交给 node 自己展开：node --test 不认目录参数（会把目录当模块加载而失败），
+      # 而 pwsh 不会为原生命令展开通配符，所以不能写成让 shell 展开的形式。
+      - name: Scripts tests
+        run: node --test "scripts/**/*.test.mjs"
+
       # tsc 类型检查随 vite build 走；产物留在 runner 不上传，正式产物归 release（tag v*）
       - name: Frontend build
         run: pnpm --dir ui build

@@ -141,6 +141,8 @@ export default {
     updateDownloading: "New version v{{version}} found — downloading…",
     updateRestarting: "Update downloaded — restarting to install…",
     updateFailed: "Update download or install failed: {{error}}",
+    updateFailedRateLimited:
+      "Update download failed: the anonymous GitHub API quota is exhausted (403). Please try again later, or download the installer manually from the Release page; changing your proxy settings will not fix this.",
     upToDate: "You're on the latest version",
     updateCheckFailed: "Update check failed",
     authErrorHint: "Authentication failed. Check the API key of the corresponding provider and try again.",

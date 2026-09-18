@@ -34,10 +34,28 @@ export function blank(): TabRunState {
 }
 export const BLANK: TabRunState = blank();
 
-/** 取/建草稿上当前流式中的 assistant 项（创建时盖章：本地时间 ≈ 消息生成时间；重开后以持久化值为准） */
+/** 收尾所有仍处于 streaming 的 assistant 项（keep = 需要保留的当前流式项）：置 streaming=false 并冻结其思考时长。
+ *  兜底用途：任何漏网分支留下的 streaming 项都会渲染成永久光标，故运行收尾/新建流式项前统一扫一遍。 */
+export function closeStreamingAssistantItems(t: TabRunState, keep?: AssistantItem) {
+  for (const it of t.items) {
+    if (it.kind !== "assistant" || !it.streaming || it === keep) continue;
+    it.streaming = false;
+    closeOpenThinking(it.timeline);
+  }
+}
+
+/** 取/建草稿上当前流式中的 assistant 项（创建时盖章：本地时间 ≈ 消息生成时间；重开后以持久化值为准）
+ *
+ *  不变量：同一 Tab 内**至多一个** assistant 项处于 streaming（＝打字光标），且它恒为 items 末项。
+ *  破坏方式：run:inject / run:retry / sub:error 都会往 items 末尾 push 一条 notice，于是流式项不再是末项；
+ *  下一帧 delta 走到本函数时就「新建」出第二个流式项，旧项的 streaming 再无人清 → 聊天里两个光标同时闪烁，
+ *  且运行结束后收尾三兄弟只翻末项，旧光标永久残留。故「新建前先显式收尾遗留流式项」是本不变量的唯一守卫，
+ *  一处改动即覆盖上述三个触发点；新项仍 push 在末尾，保证新文本落在 notice 下方（时间顺序）且光标只在最底部。 */
 export function currentAssistantIm(t: TabRunState): AssistantItem {
   const last = t.items[t.items.length - 1];
   if (!last || last.kind !== "assistant" || !last.streaming) {
+    // 只收尾 assistant 项，notice / user / tool 一概不碰；历史脏数据里存在多个遗留流式项时一并收尾
+    closeStreamingAssistantItems(t);
     const item: AssistantItem = {
       kind: "assistant", timeline: [], toolsMap: {}, streaming: true,
       createdAt: new Date().toISOString(),
@@ -45,6 +63,8 @@ export function currentAssistantIm(t: TabRunState): AssistantItem {
     t.items.push(item);
     return item;
   }
+  // 末项已是流式项：其前方仍可能残留更早的流式项（历史脏数据），同样收尾以保证光标唯一
+  closeStreamingAssistantItems(t, last);
   return last;
 }
 
