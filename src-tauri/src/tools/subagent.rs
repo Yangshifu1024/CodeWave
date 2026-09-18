@@ -215,11 +215,14 @@ impl Tool for SubagentTool {
             .description
             .clone()
             .unwrap_or_else(|| args.role.clone());
+        // task 全量下发：抽屉「分配的任务」要能看到完整任务。此前在此 trunc 2000 字符，实时面板只能
+        // 显示「…(truncated)」，而落盘历史存的是全文——恢复会话后反而完整，实时与归档两路不一致。
+        // 下方日志行仍按 300 字符截断（那是日志文件，不是 UI 载荷）。
         ctx.core.sink.emit(
             &ctx.rt.id,
             "sub:spawn",
             json!({ "session": ctx.rt.id, "sub_id": sub_id, "role": args.role,
-                    "name": agent_def.map(|d| d.name), "task": crate::core::session_log::trunc(&args.task, 2000),
+                    "name": agent_def.map(|d| d.name), "task": args.task.clone(),
                     "description": description, "max_steps": max_steps }),
         );
         // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理绑定父会话通道——子代理流式帧经 TauriSink 包装为

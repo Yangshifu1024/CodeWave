@@ -33,9 +33,11 @@ export default function SubagentDrawer() {
   const progUntil = useRef(0); // 程序化滚动事件的豁免窗口（ms 时间戳）
   const progTarget = useRef(Infinity); // 最近一次程序化跳转的 scrollTop 目标（目标比对，docs/thinking-scroll-fix §2.3）
   const prevSubId = useRef<string | null>(null);
-  // 指派任务默认折叠为单行预览：任务是静态内容，过程流才是抽屉存在的意义（此前任务文本
-  // 曾把过程流淹没——[docs/subdrawer-scroll-hardening](../../../../docs/subdrawer-scroll-hardening.md)）。切换子代理时重置。
-  const [taskCollapsed, setTaskCollapsed] = useState(true);
+  // 指派任务默认展开：任务全文一眼可见（此前默认折叠 + 后端 2000 字符有损截断，展开也看不到全文）。
+  // 长任务会把过程流推向下方，需要时用标签行收起——折叠态保留单行 ellipsis 预览（hover 有完整 title）。
+  // [docs/subdrawer-scroll-hardening](../../../../docs/subdrawer-scroll-hardening.md) §6 的折叠能力保留，仅改默认态。
+  // 切换子代理时重置回展开。
+  const [taskCollapsed, setTaskCollapsed] = useState(false);
   const [, setTick] = useState(0);
   // 内容签名对齐 ChatMessages 的跟随依赖（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：每段贡献 1（tool/sub）或自身
   // 文本长度（text 与 thinking 一视同仁——thinking delta 合并进尾段而不增长 timeline，
@@ -99,7 +101,7 @@ export default function SubagentDrawer() {
       prevSubId.current = subId;
       stick.current = true;
       progUntil.current = 0;
-      setTaskCollapsed(true);
+      setTaskCollapsed(false);
     }
     clampToViewport(); // 内容挂载后再武装一次（打开那一次可能拿到 null ref）
     if (!stick.current) return;

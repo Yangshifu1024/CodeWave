@@ -28,7 +28,7 @@ spawn → sink.bind_sub_channel(parent, sub)
 |---|---|
 | `core/agent.rs` | `Frame` 加变体 `Sub { sub_id, frame: Box<Frame> }`（serde tag="sub"）；`EventSink` 加 `bind_sub_channel` 默认空实现（测试 sink 零改动） |
 | `host/events.rs` | `ChannelRegistry` 加 `subs: DashMap<sub, parent>`；`bind_sub_channel` 记录绑定；`channel_frame` 命中 sub 绑定时包装 `Frame::Sub` 借父 channel 下发（绑定常驻，父 run 结束前子代理必已收尾，无父通道重注册错投窗口） |
-| `tools/subagent.rs` | spawn 后调 `sink.bind_sub_channel`；`sub:spawn` payload 增加 `name`（注册表规范名）与 `task`（截断 2000 字，抽屉首块）；`ToolOutcome::ok` data 首位加 `sub_id`（compact head 截断后仍保留，恢复时关联过程文件）；drive 返回后（ok/err）+ `SubCleanupGuard` panic 路三处调 `store.save_sub_history` |
+| `tools/subagent.rs` | spawn 后调 `sink.bind_sub_channel`；`sub:spawn` payload 增加 `name`（注册表规范名）与 `task`（**全量**，抽屉首块；2026-09-18 前为 `trunc(2000)`，会使实时面板显示「…(truncated)」而落盘历史是全文，实时/归档不一致）；`ToolOutcome::ok` data 首位加 `sub_id`（compact head 截断后仍保留，恢复时关联过程文件）；drive 返回后（ok/err）+ `SubCleanupGuard` panic 路三处调 `store.save_sub_history` |
 | `core/sessions/mod.rs` | 新增 `save_sub_history`/`load_sub_history` → `histories/subs/<parent>/<sub>.json.gz`（复用 repair/trim/gzip 管线，**不 upsert 会话索引**，子代理不得出现在 list_sessions）；`remove`（delete_session）级联删除 `histories/subs/<parent>/` 整目录 |
 | `host/commands.rs` + `lib.rs` | 新命令 `load_subagent_history(session_id, sub_id) -> Vec<Message>`；文件缺失返回空（旧会话降级） |
 

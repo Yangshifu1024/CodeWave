@@ -124,7 +124,7 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
     expect(t.subStreams.sub_1.timeline).toHaveLength(1);
   });
 
-  it("分配的任务默认收起为单行预览，点击标签/预览可展开与收起（docs/subdrawer-scroll-hardening §6）", () => {
+  it("分配的任务默认展开显示全文，点击标签可收起为单行预览再展开（docs/subdrawer-scroll-hardening §6）", () => {
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
     render(
       <AntApp>
@@ -132,16 +132,18 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
       </AntApp>,
     );
     const toggle = document.querySelector(".sub-drawer-task-toggle") as HTMLElement;
-    expect(toggle.getAttribute("aria-expanded")).toBe("false"); // 默认收起
-    expect(document.querySelector(".sub-drawer-task-preview")).not.toBeNull();
-    expect(document.querySelector(".sub-drawer-task-preview")!.textContent).toContain("调研标题栏实现");
-    fireEvent.click(toggle); // 展开
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true"); // 默认展开：任务全量可见
     expect(document.querySelector(".sub-drawer-task-preview")).toBeNull();
     expect(document.querySelector(".sub-drawer-task .user-bubble")).not.toBeNull();
     fireEvent.click(toggle); // 收起
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelector(".sub-drawer-task-preview")).not.toBeNull();
-    // 点击预览气泡也可展开
+    expect(document.querySelector(".sub-drawer-task-preview")!.textContent).toContain("调研标题栏实现");
+    fireEvent.click(toggle); // 再展开
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".sub-drawer-task-preview")).toBeNull();
+    // 折叠态点击预览气泡也可展开
+    fireEvent.click(toggle);
     fireEvent.click(document.querySelector(".sub-drawer-task-preview")!);
     expect(document.querySelector(".sub-drawer-task-preview")).toBeNull();
   });
