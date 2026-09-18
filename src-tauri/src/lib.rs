@@ -286,6 +286,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             host::commands::ping,
             host::commands::restart_app,
+            host::commands::is_appimage,
             host::commands::activate_and_show,
             host::commands::get_config,
             host::commands::save_config,

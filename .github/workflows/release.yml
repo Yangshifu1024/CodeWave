@@ -30,6 +30,10 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       release_id: ${{ steps.create.outputs.id }}
+      # 同一个正文喂给两处：draft Release 的 body（人看的）+ tauri-action 的 releaseBody，
+      # 后者会被写进 latest.json 的 notes 字段，即应用内更新弹窗展示的「发布说明」。
+      # 不传 releaseBody 时 notes 恒为空字符串（v0.3.8/v0.3.9 实测），弹窗就无说明可显。
+      release_notes: ${{ steps.notes.outputs.body }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -161,6 +165,8 @@ jobs:
         uses: tauri-apps/tauri-action@action-v1.0.0
         with:
           releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          # 写入 latest.json 的 notes（应用内更新弹窗的「发布说明」）；不传则该字段为空
+          releaseBody: ${{ needs.prepare-release.outputs.release_notes }}
 
       # bundler 只公证并 staple .app，对 dmg 仅 codesign 签名 → Gatekeeper 判
       # rejected / Unnotarized Developer ID（v0.3.4 实测，docs/macos-signing-and-notarization）。

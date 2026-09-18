@@ -10,6 +10,7 @@ import { originLabel } from "../../utils/skills";
 import { useActiveId } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
+import { checkForUpdates, useAutoUpdateSetting } from "../../utils/updateCheck";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 
@@ -239,6 +240,11 @@ export default function SettingsModal() {
     }
   }
 
+  // 自动更新偏好（设置 → 通用 → 更新）：与 GitWave 同形，localStorage 落盘、默认开启
+  const [autoUpdate, setAutoUpdate] = useAutoUpdateSetting();
+  // 设置页的「检查更新」按钮 loading（结果经 UpdateModal / toast 反馈）
+  const [updateChecking, setUpdateChecking] = useState(false);
+
   async function saveMcp() {
     try {
       // 结构化模式：条目 -> JSON；兜底模式：原文本原样保存
@@ -414,6 +420,28 @@ export default function SettingsModal() {
               onChange={(v) => patchDraft({ log: { ...draft!.log, level: v } })}
               options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
             />
+          </Form.Item>
+          <Form.Item label={t("settings.updates")} tooltip={t("settings.updatesHint")}>
+            <div className="settings-update-row">
+              <Switch
+                size="small"
+                checked={autoUpdate}
+                onChange={setAutoUpdate}
+                aria-label={t("settings.autoUpdateCheckbox")}
+              />
+              <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
+              <Button
+                size="small"
+                loading={updateChecking}
+                onClick={() => {
+                  // 结果经 UpdateModal / toast 反馈（有更新与失败会弹窗），设置页不需要自己展示
+                  setUpdateChecking(true);
+                  void checkForUpdates().finally(() => setUpdateChecking(false));
+                }}
+              >
+                {t("settings.checkForUpdates")}
+              </Button>
+            </div>
           </Form.Item>
           <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
             <Switch

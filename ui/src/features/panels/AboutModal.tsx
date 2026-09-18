@@ -19,7 +19,7 @@ export default function AboutModal() {
   const { message } = App.useApp();
   const [version, setVersion] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  // 检查更新进行中（按钮 loading；结果经 updateCheck 的 toast 反馈）
+  // 检查更新进行中（按钮 loading）；结果经 UpdateModal / toast 反馈（有更新与失败会弹窗）
   const [checking, setChecking] = useState(false);
 
   async function runUpdateCheck() {

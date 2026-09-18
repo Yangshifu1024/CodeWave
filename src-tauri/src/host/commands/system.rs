@@ -75,6 +75,15 @@ pub fn app_version() -> String {
     }
 }
 
+/// 是否以 AppImage 形式运行（Linux）：仅 AppImage 安装能自替换二进制。
+/// deb / rpm 装在系统路径下、且无 `APPIMAGE` 环境变量，更新器无法就地替换，
+/// 前端据此把升级降级为「打开发布页手动下载」（与 GitWave 同一套判定）。
+/// 该环境变量只在 AppImage 包裹运行时由 AppRun 注入，其它平台恒为 false。
+#[tauri::command]
+pub fn is_appimage() -> bool {
+    std::env::var("APPIMAGE").is_ok_and(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod app_version_tests {
     use super::app_version;
