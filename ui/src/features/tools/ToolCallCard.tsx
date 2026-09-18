@@ -91,6 +91,13 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
       if (args.pattern) return `/${args.pattern}/`;
       if (args.files?.[0]?.path) return args.files[0].path;
       if (args.expression) return args.expression;
+      // plan（Meta 工具）的入参键是 todos，不在上面的白名单里 → 摘要恒为空字符串，收起态无从看出规模。
+      // 放在白名单最末，只有 plan 命中（其他工具入参无 todos），不会抢占 url/path/command/pattern 的既有摘要。
+      // 中文字面量是刻意的：i18n 目录不在本批次改动范围，且这是一个纯计数串，后续统一国际化时再收敛成 key。
+      if (Array.isArray(args.todos)) {
+        const running = args.todos.filter((x: any) => x?.status === "in_progress").length;
+        return running > 0 ? `${args.todos.length} 项 · ${running} 进行中` : `${args.todos.length} 项`;
+      }
     } catch {
       /* 忽略解析失败 */
     }
@@ -110,6 +117,28 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
     () => (expanded ? JSON.stringify(data, null, 1)?.slice(0, 4000) ?? "" : ""),
     [expanded, data],
   );
+
+  // 失败调用的出参恒为「空」：后端 ToolOutcome::err 把 data 置成 Value::Null（src-tauri/src/tools/tool.rs），
+  // 上面的 `?? {}` 归一之后只剩一个空对象——展开体于是只有 `{}`（例：plan 报 E_PLAN_INVALID
+  // 「同一时刻最多一个 in_progress 任务」时，用户看不到是哪两个 todo 冲突）。
+  // 此时入参是唯一能自证的证据，所以另算一份美化串，供出参为空时回退渲染。
+  const argsJson = useMemo(() => {
+    if (!expanded) return "";
+    const raw = tool.argsPreview;
+    if (!raw) return "";
+    // 入参过大时已被截断标记替换（raw 不是真实 JSON）：既有「参数过大」文案负责提示，这里既不解析也不渲染
+    if (raw.includes("_args_truncated")) return "";
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 1)?.slice(0, 4000) ?? "";
+    } catch {
+      return "";
+    }
+  }, [expanded, tool.argsPreview]);
+
+  // 空对象 / null / undefined / 空数组 / 空串都算「没有出参可看」（失败卡 + 无返回值的只读工具）
+  const noOutcomeData =
+    data == null || data === "" || (typeof data === "object" && Object.keys(data).length === 0);
+  const showArgsInstead = noOutcomeData && !!argsJson;
 
   const displayName = tool.tool.startsWith("mcp__") ? tool.tool : tool.tool;
   // ask 未作答类错误码中性化（docs/ask-ignore-not-answered-fix.md 的展示层配套）：
@@ -245,7 +274,11 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
               />
             </>
           ) : (
-            <CodeBlock code={prettyJson} language="json" />
+            <>
+              {/* 回退渲染入参时必须标一行说明，否则会被误认成出参（JSON 长得一样） */}
+              {showArgsInstead && <div className="kv dim">入参</div>}
+              <CodeBlock code={showArgsInstead ? argsJson : prettyJson} language="json" />
+            </>
           )}
 
           {tool.outcome?.error && (
