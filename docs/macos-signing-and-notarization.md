@@ -11,8 +11,8 @@
 | 项 | 现状 |
 |---|---|
 | 发布管道 | `.github/workflows/release.yml`：推 `v*` tag → draft Release → 三平台 tauri-action 构建 |
-| 签名入口 | 已预留 `Export optional macOS signing envs` 步骤（release.yml:123-140）：5 个 `APPLE_*` secret **非空才导出**，全部未配置 → 未签名产物（当前状态） |
-| 管道缺口 | **`AuthKey.p8` 无人写入**：workflow 只设了 `APPLE_API_KEY_PATH=AuthKey.p8`，但 tauri-action 不负责写该文件（源码已核对无此逻辑），公证时会因找不到 `.p8` 报 `MissingApiKey` / `The file couldn't be opened` → 阶段五一次性修补 |
+| 签名入口 | `Export optional macOS signing envs` 步骤（release.yml:130-）：**6 个 `APPLE_*` secret 非空才导出**；已于 **2026-09-14 配置齐全**（多出的 `APPLE_API_KEY_P8` = `AuthKey_*.p8` 文件内容），值在日志里始终显示为 `***`。把任一 secret 置空即回到「未签名产物」的降级语义（保留） |
+| 管道缺口（已修） | workflow 在 `APPLE_API_KEY` 非空时把 `APPLE_API_KEY_P8` 写入 `AuthKey.p8`（并校验 BEGIN/END 私钥行），`APPLE_API_KEY_PATH` 设为**绝对路径**。**v0.3.10 实跑日志佐证**：`Notarizing CodeWave.app` → `Accepted` → `Stapling app...`，随后「Notarize and staple dmg」步骤 `notarytool submit --wait` → `status: Accepted` → `gh release upload --clobber` 回传草稿 |
 | 配置改动 | `src-tauri/tauri.conf.json` 无需改动（签名/公证全程环境变量驱动） |
 
 Tauri bundler 读取的环境变量语义（核对自 [tauri-bundler sign.rs 源码](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/macos/sign.rs)）：
