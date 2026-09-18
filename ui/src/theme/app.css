@@ -800,7 +800,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- 常驻右侧栏 ---------- */
 .right-bar {
-  width: 328px; flex: none; height: 100%; overflow-x: hidden; overflow-y: hidden; /* 默认 468px 的 70%（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整）；x 裁切：展开动画期间的超宽内容不得触发横向滚动条；y 不整列滚动（缺陷修复：滚动下沉到各页签内部容器） */
+  width: var(--rb-width, 328px); flex: none; height: 100%; overflow-x: hidden; overflow-y: hidden; /* 宽度由用户拖拽决定（内联 CSS 变量，默认 328px；可拖拽栏宽 [docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）；x 裁切：展开动画期间的超宽内容不得触发横向滚动条；y 不整列滚动（缺陷修复：滚动下沉到各页签内部容器） */
   border-left: 1px solid var(--ws-border); background: var(--ws-bg-main); /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：右栏与中栏同色 */
   padding: 12px 14px; font-size: 12px; display: flex; flex-direction: column; gap: 14px;
   transition: all 0.2s; /* 折叠宽度过渡（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) §8）：与 antd Sider motionDurationMid 同节奏 */
@@ -884,6 +884,68 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
 .rb-file-gone { opacity: 0.45; cursor: default; }
+
+/* ---------- 栏宽分隔条（可拖拽栏宽，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */
+/* 绝对定位在栏边界上（父 Layout position:relative），命中区 6px 居中跨越边界；折叠态不渲染 */
+.rb-resize-handle {
+  position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px; z-index: 6;
+  cursor: col-resize; background: transparent; border: 0; padding: 0;
+}
+.rb-resize-handle.resize-right { margin-left: 0; margin-right: -3px; }
+/* 被窗口夹小（显示值 < 记忆值）时禁用拖动：写回去会抹掉用户原本的宽度，只保留双击复位 */
+.rb-resize-handle.is-disabled { cursor: not-allowed; }
+.rb-resize-handle.is-disabled:hover::after { opacity: 0; }
+.rb-resize-handle:hover::after,
+.rb-resize-handle:focus-visible::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px;
+  background: var(--ws-accent); opacity: 0.5;
+}
+.rb-resize-handle:focus-visible { outline: none; }
+/* 拖动期间关宽度过渡：栏跟手不拖影（0.2s 折叠/展开动画在松手后恢复；类由 ResizeHandle 挂到 <html>） */
+html.ws-resizing .right-bar,
+html.ws-resizing .ant-layout-sider { transition: none !important; }
+
+/* ---------- 信息页签：项目目录标签行动作区（文件管理器按钮 + 编辑器下拉） ---------- */
+.rb-label-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.rb-editor-select { width: 132px; }
+.rb-editor-select .ant-select-selector { font-size: 11.5px; }
+
+/* ---------- 信息页签：技能/当前计划折叠（antd Collapse ghost，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */
+.rb-collapse { border-top: 1px dashed var(--ws-border); padding-top: 6px; }
+.rb-collapse .ant-collapse-header { padding: 2px 0 !important; align-items: center !important; }
+.rb-collapse .ant-collapse-header-text { font-size: 11px; color: var(--ws-dim); }
+.rb-collapse .ant-collapse-content-box { padding: 2px 0 4px !important; }
+.rb-collapse .ant-collapse-item + .ant-collapse-item { margin-top: 8px; }
+
+/* ---------- 信息页签：订阅额度段（百分比行按剩余方向，色彩强度映射风险等级） ---------- */
+.rb-quota .rb-quota-provider + .rb-quota-provider { margin-top: 6px; }
+.rb-quota-summary {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 4px; margin: 0 -4px;
+  background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
+  color: var(--ws-text-2); font-size: 12px; font-family: inherit; transition: background 0.15s;
+}
+.rb-quota-summary:hover { background: var(--ws-hover); }
+.rb-quota-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
+.rb-quota-window { flex: none; font-size: 11px; color: var(--ws-dim); }
+.rb-quota-remaining { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.rb-quota-remaining.risk-warn { color: var(--ws-warn, #d46b08); }
+.rb-quota-remaining.risk-danger { color: var(--ws-err, #cf1322); }
+/* 进度条填充色：默认中性墨色（antd 默认走 colorInfo = 蓝，与项目强调色约束冲突），风险等级再覆盖为橙/红。
+   antd 6 的行进度条填充类名是 `.ant-progress-track`（旧版 `.ant-progress-bg` 已不存在，写成它等于死规则） */
+.rb-quota-bar .ant-progress-track { background: var(--ws-accent) !important; }
+.rb-quota-bar.risk-warn .ant-progress-track { background: var(--ws-warn, #d46b08) !important; }
+.rb-quota-bar.risk-danger .ant-progress-track { background: var(--ws-err, #cf1322) !important; }
+/* 未展开时也要能看出这家不对劲（否则只剩一个名字，错误被藏在展开内容里） */
+.rb-quota-flag { flex: none; font-size: 11px; color: var(--ws-err, #cf1322); }
+.rb-quota-value { flex: none; font-size: 11.5px; color: var(--ws-text-2); }
+.rb-quota-bar { flex: 1; min-width: 40px; }
+.rb-quota-bar .ant-progress { margin: 0; line-height: 1; }
+.rb-quota-entries { display: flex; flex-direction: column; gap: 3px; padding: 3px 0 3px 8px; }
+.rb-quota-entry { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ws-text-2); }
+.rb-quota-entry .rb-quota-bar { max-width: 96px; }
+.rb-quota-error { margin-top: 2px; color: var(--ws-err, #cf1322); font-size: 11.5px; white-space: normal; word-break: break-word; }
+.rb-quota-empty { margin-top: 2px; }
+.rb-quota-updated { margin-top: 4px; font-size: 11px; }
 
 /* ---------- mermaid / katex（B4） ---------- */
 .assistant .md .ws-diagram {

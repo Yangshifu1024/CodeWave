@@ -75,6 +75,7 @@
 - 2026-09-03 · [titlebar-content-batch.md](./titlebar-content-batch.md) — 顶栏标题栏内容批次：两段式背景 + 会话历史导航（后移除）+ 标题/工作目录/分支胶囊 + 用户消息悬停操作
 - 2026-09-03 · [focus-ring-fix.md](./focus-ring-fix.md) — 输入控件 focus 双重边框缺陷修复：token 全局 controlOutline transparent
 - 2026-09-04 · [rightbar-visual-batch.md](./rightbar-visual-batch.md) — 右栏视觉批次：侧栏分色 token + 页签调序 + 日志滚动根因修复
+- 2026-09-18 · [rightbar-info-refactor-and-subscription-quota.md](./rightbar-info-refactor-and-subscription-quota.md) — 右栏信息面板重构 + 订阅额度 + 可拖拽栏宽：数据目录行/会话段移除、Files 应用与编辑器下拉（VS Code/Cursor/Windsurf/Zed/Sublime/Notepad++/JetBrains）、技能与计划可折叠、`core/quota` 七家额度提供商（OpenCode Go/DeepSeek/MiniMax 国际+CN/Kimi/Zhipu/Z.ai，自动读本机 opencode 凭证）、手写栏宽分隔条（记忆 + 双击复位 + 窄窗只夹显示）、窗口最小宽 960→1024
 - 2026-09-04 · [titlebar-logo-toggle.md](./titlebar-logo-toggle.md) — 标题栏批次：会话历史导航移除 + 左栏开合入口收口到标题栏 Logo（悬停同位交换）
 - 2026-09-04 · [titlebar-logo-right-segment.md](./titlebar-logo-right-segment.md) — 标题栏 Logo 移至右段段首（同位交换交互保留；左段退化为纯背景带）
 - 2026-09-04 · [sidebar-collapse-animation-and-titlebar-blend.md](./sidebar-collapse-animation-and-titlebar-blend.md) — 侧栏折叠动画与标题栏融合批次：左栏折叠 0 宽完全隐藏 + 标题栏左段融合 + 右栏裁切折叠动画

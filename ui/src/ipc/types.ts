@@ -295,3 +295,42 @@ export interface SubagentEvent {
   /** 收尾原因（sub:done）：report = 按约定带 <report> 标记正常汇报；budget = 步数预算耗尽；no_report = 未按约定汇报即结束（疑似提前退出） */
   ended?: "report" | "budget" | "no_report";
 }
+
+// ---------- 订阅额度 / 打开器（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）----------
+
+/** 已检测到的编辑器（后端候选表顺序：VS Code → Cursor → Windsurf → Zed → Sublime Text → Notepad++ → JetBrains 组） */
+export interface EditorInfo {
+  id: string;
+  name: string;
+  /** 可执行文件路径（仅展示/排障用，前端不拼命令） */
+  path: string;
+}
+
+/**
+ * 一行额度事实：百分比行（`remaining_percent`）或数值行（`value_text`）二居其一。
+ * `label` 是厂商自带标签（Kimi/Zhipu 的 limits）；无 label 时前端按 `key` 做 i18n 映射。
+ */
+export interface QuotaEntry {
+  key: string;
+  label: string | null;
+  used_percent: number | null;
+  remaining_percent: number | null;
+  value_text: string | null;
+  /** 重置时间（RFC3339） */
+  resets_at: string | null;
+}
+
+/** 提供商快照状态：invalid = 凭证形态不可用（重试无用）；未配置凭证的提供商不会出现在列表里 */
+export type QuotaStatus = "ok" | "invalid" | "error";
+
+/** 一家提供商的额度快照 */
+export interface QuotaSnapshot {
+  provider_id: string;
+  display_name: string;
+  status: QuotaStatus;
+  entries: QuotaEntry[];
+  error: string | null;
+  /** 凭证来源（env:NAME / opencode.jsonc / opencode.json / auth.json）——悬浮排障用 */
+  credential_source: string | null;
+  fetched_at: string;
+}

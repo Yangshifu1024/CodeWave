@@ -18,7 +18,9 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// 文件名（位于数据根目录）。
 pub const FILE_NAME: &str = "ui-state.json";
 /// 窗口尺寸合理下限（逻辑像素；小于此值视为异常数据，抬到下限）。
-pub const MIN_WINDOW_WIDTH: f64 = 640.0;
+/// 与 `tauri.conf.json` 的 `minWidth` 保持一致：左栏 180 + 中栏 480 + 右栏 328 = 988，
+/// 取 1024 留余量（可拖拽栏宽需求，见 docs/rightbar-info-refactor-and-subscription-quota）。
+pub const MIN_WINDOW_WIDTH: f64 = 1024.0;
 /// 窗口高度合理下限（逻辑像素）。
 pub const MIN_WINDOW_HEIGHT: f64 = 480.0;
 

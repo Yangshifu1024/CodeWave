@@ -15,8 +15,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "read_session_log") {
       return new Promise((resolve) => pendingLogResolvers.push(resolve));
     }
-    // InfoPanel 新增技能段：list_skills 返回空列表（非 null，避免渲染崩溃）
-    if (cmd === "list_skills") return [];
+    // InfoPanel 段：list_skills / list_editors / quota_snapshots 一律给空数组（后端契约是数组，null 会误导组件）
+    if (cmd === "list_skills" || cmd === "list_editors" || cmd === "quota_snapshots") return [];
     return null;
   }),
 }));

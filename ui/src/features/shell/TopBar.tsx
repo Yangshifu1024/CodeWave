@@ -18,16 +18,20 @@ import {
 import { useTranslation } from "react-i18next";
 import storeLogo from "../../assets/store-logo.png";
 import { baseName } from "../../utils/path";
+import { NAV_W_DEFAULT } from "../../utils/layout";
 import { useRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
+import { useDisplayWidths } from "./useDisplayWidths";
 
 /**
- * 左段宽度 = 左侧栏 Sider 宽度（AppShell 消费同一常量，保证分隔线连续）。
- * 折叠 0 = 与 Sider 一起完全隐藏（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)，窄轨退役）：段收为零宽、背景
- * 融入内容色，红绿灯让位经 .tb-main-cleared 迁至右段段首（app.css）
+ * 左栏默认宽（未拖拽过时）与折叠宽。
+ * 左段宽度现在跟随用户拖出的宽度（与 AppShell 的 Sider 读同一份显示宽度，保证分隔线连续；
+ * [docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）；
+ * 折叠 0 = 与 Sider 一起完全隐藏（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)，窄轨退役）：
+ * 段收为零宽、背景融入内容色，红绿灯让位经 .tb-main-cleared 迁至右段段首（app.css）。
  */
-export const SIDER_W_OPEN = 280;
+export const SIDER_W_OPEN = NAV_W_DEFAULT;
 export const SIDER_W_CLOSED = 0;
 
 /** 自绘标题栏顶栏：左段纯背景带（与左栏同色同宽）+ 右段 Logo 开关/标题/胶囊/右栏开关；
@@ -37,6 +41,8 @@ export default function TopBar() {
   const tab = useActiveTab();
   const explorerOpen = useSessions((s) => s.explorerOpen);
   const rightBarOpen = useUi((s) => s.rightBarOpen);
+  // 左段宽度 = 左栏当前显示宽度（与 AppShell 的 Sider 同源，分隔线不断开）
+  const { nav: navWidth } = useDisplayWidths();
   const activeKey = useSessions((s) => s.activeKey);
   // gitEntries 上的窄选择器：流式 delta 更新不会改变该引用，避免顶栏逐帧重渲染
   const git = useRun((s) => s.tabs[activeKey ?? ""]?.gitEntries ?? null);
@@ -48,7 +54,7 @@ export default function TopBar() {
       <div
         className={explorerOpen ? "tb-left-seg" : "tb-left-seg tb-left-closed"}
         data-tauri-drag-region
-        style={{ width: explorerOpen ? `${SIDER_W_OPEN}px` : `${SIDER_W_CLOSED}px` }}
+        style={{ width: explorerOpen ? `${navWidth}px` : `${SIDER_W_CLOSED}px` }}
       />
 
       {/* 右段：Logo 开关（左栏入口，docs/titlebar-logo-right-segment）+ 标题簇 + flex 中部（拖动窗口）+ 右簇；尾部 padding 为 Windows 控制条让位 */}

@@ -1,5 +1,6 @@
 // UI 偏好：语言、主题、面板开关、通知堆栈（强调色锁定中性墨色，无自定义强调色）
 import { create } from "zustand";
+import { clampNavWidth, clampRightBarWidth, NAV_W_DEFAULT, RB_W_DEFAULT } from "../utils/layout";
 // 树展开/折叠态的落盘链路（uiState → ipc.setUiState）。本文件与 utils/uiState 互为引用（那边要读 useUi），
 // 但双方都只在函数体内取用对方的绑定，模块顶层互不触达，ESM 活绑定足以支撑这个环。
 import {
@@ -56,6 +57,12 @@ interface UiState {
   /** 右栏开合持久态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
   rightBarOpen: boolean;
   setRightBarOpen(open: boolean): void;
+  /** 左栏宽度（可拖拽，localStorage 全局记忆；显示时按窗口宽度夹取，见 utils/layout） */
+  navWidth: number;
+  setNavWidth(width: number): void;
+  /** 右栏宽度（同上） */
+  rightBarWidth: number;
+  setRightBarWidth(width: number): void;
   /** 右栏当前页签（变更/信息/日志/文件）：提升进 store 以便外部调用方（Composer 命令等）切换 */
   rbTab: string;
   setRbTab(tab: string): void;
@@ -107,6 +114,23 @@ export const useUi = create<UiState>((set, get) => ({
   setRightBarOpen(open) {
     localStorage.setItem("ws_right_bar_open", open ? "1" : "0");
     set({ rightBarOpen: open });
+  },
+  // 栏宽：读盘即收敛到合法区间（手改/旧数据/NaN 一律回默认），拖动只走 setNavWidth/RightBarWidth
+  navWidth: localStorage.getItem("ws_nav_width") === null
+    ? NAV_W_DEFAULT
+    : clampNavWidth(Number(localStorage.getItem("ws_nav_width"))),
+  setNavWidth(width) {
+    const normalized = clampNavWidth(width);
+    localStorage.setItem("ws_nav_width", String(normalized));
+    set({ navWidth: normalized });
+  },
+  rightBarWidth: localStorage.getItem("ws_rb_width") === null
+    ? RB_W_DEFAULT
+    : clampRightBarWidth(Number(localStorage.getItem("ws_rb_width"))),
+  setRightBarWidth(width) {
+    const normalized = clampRightBarWidth(width);
+    localStorage.setItem("ws_rb_width", String(normalized));
+    set({ rightBarWidth: normalized });
   },
   rbTab: "info",
   setRbTab(tab) {

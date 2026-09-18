@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, ConfigState, DailyStats, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -128,6 +128,14 @@ export const ipc = {
 
   // 右侧栏信息页签：在系统文件管理器中打开任意目录（项目主目录 / 临时会话工作区）
   openDir: (path: string) => invoke<void>("open_dir", { path }),
+
+  // 编辑器探测与打开（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）
+  listEditors: () => invoke<EditorInfo[]>("list_editors"),
+  openInEditor: (editorId: string, path: string) => invoke<void>("open_in_editor", { editorId, path }),
+
+  // 订阅额度：只返回检测到凭证的提供商；activeBaseUrl 命中的那家置顶
+  quotaSnapshots: (activeBaseUrl?: string | null) =>
+    invoke<QuotaSnapshot[]>("quota_snapshots", { activeBaseUrl: activeBaseUrl ?? null }),
 
   // 系统通知点击回跳（tauri-plugin-notification 桌面端无点击回调，后端按平台原生直驱；失败回退插件路径）
   notifySystem: (sessionId: string, title: string, body: string) =>
