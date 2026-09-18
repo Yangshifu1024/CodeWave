@@ -126,6 +126,9 @@ export const ipc = {
   // 应用重启（自动更新下载安装完成后调用；updater 替换产物后必须 relaunch 才运行新版本）
   restartApp: () => invoke<void>("restart_app"),
 
+  // 是否运行在 Linux AppImage 中（只有它能自替换二进制；deb/rpm 降级为手动下载）
+  isAppimage: () => invoke<boolean>("is_appimage"),
+
   // 右侧栏信息页签：在系统文件管理器中打开任意目录（项目主目录 / 临时会话工作区）
   openDir: (path: string) => invoke<void>("open_dir", { path }),
 
