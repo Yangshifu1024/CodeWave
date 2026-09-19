@@ -583,7 +583,7 @@ tauri.conf.json 要点：`identifier: "xyz.yangshifu.codewave"`、`productName: 
 
 ## P1（约 3–4 周）
 
-剩余工具（web_fetch/http_request/service/wait/suggest/plan/batch_read/calculate/render_html/skill）、写入后语法校验、多 Key 池、OpenAI Responses 协议、MCP 完整、Skills 完整、记忆、多 Tab 工作区、WorkspaceExplorer、GitDiffModal（git2）、model catalog（models.dev 快照脚本生成）、keyring 迁移、主题与 i18n 完整、审批策略细化为设置项矩阵。
+剩余工具（web_fetch/http_request/service/wait/suggest/plan/batch_read/calculate/render_html/skill）、写入后语义校验、多 Key 池、OpenAI Responses 协议、MCP 完整、Skills 完整、记忆、多 Tab 工作区、WorkspaceExplorer、GitDiffModal（git2）、model catalog（models.dev 快照脚本生成）、keyring 迁移、主题与 i18n 完整、审批策略细化为设置项矩阵。
 
 ## P2 —— 完全体（约 3 周）
 

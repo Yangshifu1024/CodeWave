@@ -97,7 +97,8 @@ export function LspGuideCard({ hint }: { hint: LspHint }) {
           {hint.kind === "manual" && hint.prerequisite && (
             <div>{t("lsp.prerequisite", { prerequisite: hint.prerequisite })}</div>
           )}
-          {hint.kind === "confirm_enable" && <div>{t("lsp.confirmCost")}</div>}
+          {/* 启用代价整句单处保留在 settings.lspJavaCost（批④ 同义键合并，见 docs/settings-terminology.md） */}
+          {hint.kind === "confirm_enable" && <div>{t("settings.lspJavaCost")}</div>}
           <Space size={8}>
             {hint.kind === "installable" && (
               <Button size="small" loading={busy} onClick={() => void install()}>

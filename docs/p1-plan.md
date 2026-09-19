@@ -86,7 +86,7 @@
 | go | 仅当位于 go module 内：`go vet <file>` | 30s |
 | json | serde_json 解析 | 1s |
 
-- 失败输出压缩为 ≤2KB 回填："文件已写入；语法校验失败：…请修复"；工具结果 warnings 标注 `validation=failed`。
+- 失败输出压缩为 ≤2KB 回填："文件已写入；语法校验失败：…请修复"（**历史文案**：当时实现回填给模型的原话；用户可见的现行定名是「写入后语义校验」，见 [settings-terminology](./settings-terminology.md) §1）；工具结果 warnings 标注 `validation=failed`。
 - Settings 每语言开关（P0 已预留 ValidationSettings）。
 
 ### 3.2 多 Key 池与故障转移（provider/keys.rs）

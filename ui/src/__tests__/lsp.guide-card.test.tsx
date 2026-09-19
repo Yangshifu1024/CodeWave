@@ -147,7 +147,8 @@ describe("LSP 引导卡（lsp:server_missing 三景）", () => {
     );
     emitServerMissing(JAVA_CONFIRM);
     await waitFor(() => expect(screen.getByText("Java 语义校验默认关闭")).toBeTruthy());
-    expect(screen.getByText(/启用后会启动 jdtls 并解析依赖树，可能耗时数分钟、占用 GB 级内存/)).toBeTruthy();
+    // 批④：启用代价整句单处保留在 settings.lspJavaCost（lsp.confirmCost 已删），卡片改引该键
+    expect(screen.getByText(/启用 Java 语义校验会启动 jdtls 并解析依赖树，可能耗时数分钟、占用 GB 级内存/)).toBeTruthy();
     fireEvent.click(buttonByText("启用"));
     await waitFor(async () => expect(await invokedWith("lsp_enable", { language: "java" })).toBe(true));
     await waitFor(() => expect(screen.queryByText("Java 语义校验默认关闭")).toBeNull());

@@ -913,17 +913,17 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .skills-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .skills-toolbar .hint { flex: 1; min-width: 0; }
 
-/* ---------- 设置页「关于」页（批② 从 AboutModal 迁入，[docs/settings-ia](../../../docs/settings-ia.md)） ---------- */
-/* 页形态左对齐：「关于」从 320px 弹框变成全屏页的一页，居中的卡片造型在此收成左对齐身份块 + 更新行 */
+/* ---------- 设置页「关于」页（批② 从 AboutModal 迁入，[docs/settings-ia](../../../docs/settings-ia.md)；批④ 版式对齐） ---------- */
+/* 页形态左对齐：「关于」从 320px 弹框变成全屏页的一页，居中卡片造型在此收成左对齐身份块。
+   批④：身份块只留 logo / 名称 / 一句简介，版本与四个入口各自成 Form.Item 行
+   （标签行 + extra 说明 + 行内控件），因此不再需要「居中 + 覆盖式反居中」两道兜底，
+   也不再需要只服务旧按钮排的 .about-actions。 */
 .about-pane { display: flex; flex-direction: column; gap: 6px; }
-.about-pane .about-body { align-items: flex-start; text-align: left; }
-.about-pane .about-slogan { text-align: left; }
-.about-body { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 8px 0 4px; }
+.about-body { display: flex; flex-direction: column; align-items: flex-start; text-align: left; padding: 8px 0 4px; }
 .about-logo { width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
 .about-name { font-size: 16px; font-weight: 600; color: var(--ws-text-1); }
 .about-version { font-size: 12.5px; color: var(--ws-dim); font-variant-numeric: tabular-nums; margin-top: 2px; }
 .about-slogan { font-size: 12.5px; color: var(--ws-text-2); margin: 8px 0 4px; max-width: 240px; }
-.about-actions { display: flex; gap: 8px; margin-top: 10px; }
 .about-error { margin-top: 10px; font-size: 11.5px; color: var(--ws-err); word-break: break-all; }
 
 /* 设置 → 关于 → 更新：开关 + 文案 + 手动检查按钮同一行 */

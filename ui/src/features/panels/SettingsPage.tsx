@@ -589,7 +589,7 @@ export default function SettingsPage() {
     try {
       await useSettings.getState().save(draft);
       // 保存成功不关闭页面（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
-      message.success(t("settings.saved"));
+      message.success(t("common.saved"));
       // 系统代理模式：保存即触发后端重探测（save_config 热重建 client），刷新回显
       if ((draft.proxy?.mode ?? "system") === "system") {
         void ipc.resolveProxy().then(setSysProxy).catch(() => null);
@@ -608,7 +608,7 @@ export default function SettingsPage() {
       // 结构化模式：条目 -> JSON；兜底模式：原文本原样保存
       const json = mcpEntries !== null ? serializeMcpEntries(mcpEntries) : mcpRaw;
       await ipc.saveMcpConfig(json);
-      message.success(t("settings.saved"));
+      message.success(t("common.saved"));
       // 保存后自动重连（单条维护闭环）
       if (sessionId) {
         await ipc.connectMcp(sessionId).catch(() => null);
@@ -859,7 +859,7 @@ export default function SettingsPage() {
                   size="small"
                   className="w-mid"
                   maxLength={40}
-                  placeholder={t("composer.effortDefault")}
+                  placeholder={t("settings.aiLanguagePlaceholder")}
                   value={draft.ui.ai_language ?? ""}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -986,7 +986,7 @@ export default function SettingsPage() {
                             })
                           }
                         >
-                          {t("sessions.delete")}
+                          {t("common.delete")}
                         </Button>
                       </div>
                     );
@@ -1153,7 +1153,7 @@ export default function SettingsPage() {
                       size="small"
                       type="text"
                       danger
-                      aria-label={t("sessions.delete")}
+                      aria-label={t("common.delete")}
                       icon={<DeleteOutlined />}
                       onClick={() => patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.filter((_, j) => j !== i) })}
                     />
@@ -1280,7 +1280,7 @@ export default function SettingsPage() {
                 {t("settings.reloadSkills")}
               </Button>
             </div>
-            {skills.length === 0 && <Empty description={t("sessions.empty")} style={{ marginTop: 24 }} />}
+            {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} style={{ marginTop: 24 }} />}
             {skills.map((s) => {
               const builtin = s.origin === "<builtin>";
               const label = originLabel(s.origin);
@@ -1289,7 +1289,7 @@ export default function SettingsPage() {
                   <div className="skill-info">
                     <b>{s.name}</b>
                     {builtin ? (
-                      <span className="skill-origin">{t("rightbar.skillBuiltin")}</span>
+                      <span className="skill-origin">{t("common.builtin")}</span>
                     ) : (
                       label && <span className="skill-origin" title={s.origin}>{label}</span>
                     )}
@@ -1628,10 +1628,10 @@ export default function SettingsPage() {
           {anyDirty && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
           <div className="settings-actions-buttons">
             <Tooltip title={t("settings.cancelHint")}>
-              <Button onClick={cancelAll}>{t("settings.cancel")}</Button>
+              <Button onClick={cancelAll}>{t("common.cancel")}</Button>
             </Tooltip>
             <Button type="primary" loading={saving} onClick={() => void save()}>
-              {t("settings.save")}
+              {t("common.save")}
             </Button>
           </div>
         </div>

@@ -101,7 +101,7 @@ export default function QueuePanel() {
             <Tooltip title={t("queue.edit")}>
               <Button size="small" type="text" icon={<EditOutlined />} onClick={() => useRun.getState().editQueueItem(activeKey, q.id)} />
             </Tooltip>
-            <Tooltip title={t("queue.delete")}>
+            <Tooltip title={t("common.delete")}>
               <Button size="small" type="text" icon={<DeleteOutlined />} onClick={() => useRun.getState().removeQueueItem(activeKey, q.id)} />
             </Tooltip>
           </span>

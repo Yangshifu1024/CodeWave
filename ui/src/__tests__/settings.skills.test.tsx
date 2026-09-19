@@ -138,6 +138,23 @@ describe("设置页工具与集成页：技能段", () => {
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已删除技能：demo"));
   });
 
+  it("技能为空时显示「暂无技能」空态（批④ 修的缺陷：此前显示「暂无会话」）", async () => {
+    const invoke = await invokeMock();
+    invoke.mockImplementation(async (cmd: string, args?: any) =>
+      cmd === "list_skills" ? [] : baseInvoke(cmd, args),
+    );
+    useSettings.setState({ config: makeConfig(), loaded: true });
+    useUi.setState({ settingsOpen: true, settingsTab: "tools" });
+    render(
+      <AntApp>
+        <SettingsPage />
+      </AntApp>,
+    );
+    // 空态文案是「暂无技能」（settings.skillsEmpty）；不得退回借用 sessions.empty 的「暂无会话」
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("暂无技能"));
+    expect(document.body.textContent ?? "").not.toContain("暂无会话");
+  });
+
   it("删除失败：报错提示且该行保留（不乐观移除）", async () => {
     const invoke = await invokeMock();
     invoke.mockImplementation(async (cmd: string, args?: any) => {

@@ -1,4 +1,14 @@
 export default {
+  // 跨页通用动作（批④ 术语统一：[docs/settings-terminology](../../../docs/settings-terminology.md)）。
+  // 只有「值与语境皆同」的词才并入本段（判定与选段规则见该文档）；带宾语 / 语境不同的动作
+  // （如 settings.deleteSkill「删除技能」、settings.mcpSave「保存并重连」）留在各自页面段。
+  common: {
+    save: "保存",
+    saved: "已保存",
+    cancel: "取消",
+    delete: "删除",
+    builtin: "内置",
+  },
   app: {
     title: "CodeWave",
     newSession: "新 Tab",
@@ -28,13 +38,8 @@ export default {
     tasks: "任务",
     stats: "统计",
   },
-  about: {
-    // title / checkUpdates 已随「关于」页化（[docs/settings-ia](../../../docs/settings-ia.md)）零引用删除：
-    // 页名用 settings.pageAbout、手动检查更新用 settings.checkForUpdates（避免同义键）
-    slogan: "本地优先的桌面 AI 编程 Agent",
-    appData: "数据目录",
-    repo: "代码仓库",
-  },
+  // `about` 段已随批④ 整体迁入 settings.about*（理由：注册表引用闭包只扫 settings.* 前缀，
+  // 迁入后这些键才受契约测试守护）——[docs/settings-terminology](../../../docs/settings-terminology.md)
   tools: {
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
     command: "命令", grep: "搜索", ask: "提问", web_fetch: "抓取网页", http_request: "HTTP 请求",
@@ -70,7 +75,9 @@ export default {
     pageTools: "工具与集成", pageAgent: "工作区与智能体", pageLogs: "日志", pageAbout: "关于",
     groupUiModel: "外观与模型", groupSafetyTools: "安全与能力", groupDiagnostics: "诊断与其他",
     providers: "供应商", mcp: "MCP", skills: "技能",
-    language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
+    language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言",
+    // 批④：占位符原先借用 composer.effortDefault（跨段借键），本批拆出独立键（值不变）
+    aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
     theme: "主题", themeHint: "选择界面亮暗外观；「跟随系统」时随系统亮暗实时切换", themeSystem: "跟随系统", themeLight: "亮色", themeDark: "暗色",
     uiFont: "界面字体", monoFont: "等宽字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车或失焦生效",
     fontReset: "恢复默认",
@@ -85,7 +92,7 @@ export default {
     proxyUrl: "代理地址", proxyUrlHint: "支持 http://、https://、socks5://、socks5h://，可含账号（user:pass@host:port）；保存后立即生效，无需重启",
     proxyUrlInvalid: "代理地址格式无效：仅支持 http://、https://、socks5://、socks5h:// 前缀",
     proxyDetected: "当前检测：{{url}}", proxyNotDetected: "未检测到系统代理，请求将直连",
-    validation: "写入后语法校验",
+    validation: "写入后语义校验",
     validationHint: "各语言命令行的 server 探测结果；命令覆盖留空 = 自动探测。未找到时可一键安装或按提示手动安装。",
     validationLangTypescript: "TypeScript / JS / Vue", validationLangRust: "Rust", validationLangPython: "Python",
     validationLangGo: "Go", validationLangJava: "Java", validationLangDart: "Dart / Flutter",
@@ -100,6 +107,8 @@ export default {
     lspExtraRoots: "额外 SDK 根目录", lspExtraRootsHint: "探测 <根目录>/<语言>/bin（如 D:\\Sdk），用于未进 PATH 的 SDK",
     lspAddRoot: "添加目录",
     lspJavaHome: "Java 所用 JDK 21+ 路径", lspJavaHomeHint: "留空 = 自动探测；不读 JAVA_HOME（它常指向旧版本）",
+    // Java 启用代价整句已与 lsp.confirmCost 合并：保留本键，LspGuideCard 改引本键
+    // （settings.* 段由注册表闭包守护，且本句自含「Java 语义校验」；映射表见 docs/settings-terminology.md）
     lspJavaCost: "启用 Java 语义校验会启动 jdtls 并解析依赖树，可能耗时数分钟、占用 GB 级内存。",
     lspRedetect: "重新探测", lspRedetected: "已重新探测", lspRedetectFailed: "重新探测失败",
     customPrompt: "自定义提示词（附加到系统提示词）",
@@ -115,12 +124,28 @@ export default {
     autoUpdateCheckbox: "启动时自动检查更新",
     updatesHint: "启动 3 秒后静默检查；发现新版本会弹出更新窗口（含发布说明与下载进度）。关闭后仅保留手动检查。",
     checkForUpdates: "检查更新",
+    // —— 关于页：只读身份与入口（批④ 登记进注册表，使批③ 搜索可命中） ——
+    aboutVersion: "版本",
+    aboutVersionHint: "当前运行的版本，由应用自身报告（含 commit 短 sha 时一并展示）",
+    aboutSlogan: "本地优先的桌面 AI 编程 Agent",
+    aboutAppData: "数据目录",
+    aboutAppDataHint: "配置 / 会话 / 技能等托管数据的全局目录（~/.codewave）",
+    aboutOpenAppData: "打开数据目录",
+    aboutLogsDir: "日志目录",
+    aboutLogsDirHint: "全局诊断日志所在目录；级别由「日志」页的「日志级别」控制",
+    aboutOpenLogsDir: "打开日志目录",
+    aboutRepo: "代码仓库",
+    aboutRepoHint: "源码与发布说明，在系统浏览器中打开",
+    aboutOpenRepo: "打开代码仓库",
+    aboutLicense: "开源许可证",
+    aboutLicenseHint: "MIT License，在系统浏览器中打开",
+    aboutViewLicense: "查看许可证",
     addModel: "添加模型", editModel: "编辑模型", apiFormat: "API 格式",
     baseUrl: "Base URL", apiKeys: "API Key（每行一个，支持多 key 轮换）", modelId: "模型 ID",
     maxTokens: "最大输出 Token", contextWindow: "上下文窗口", reasoning: "推理强度默认档（可选）",
     maxTokensHint: "模型单次回复（含思考过程）的输出上限，超出即被截断；偏小会过早截断长回复。",
     contextWindowHint: "仅用于自动压缩触发阈值与用量显示，不影响单次回复的输出长度。",
-    active: "当前", remove: "删除", save: "保存", saved: "已保存", cancel: "取消",
+    active: "当前",
     addProvider: "添加供应商", editProvider: "编辑供应商",
     addProviderHint: "配置一个完全自定义的 API 端点和初始模型。",
     providerName: "名称", providerNamePh: "如：智谱 GLM",
@@ -145,6 +170,8 @@ export default {
     mcpTransportStdio: "stdio（本地进程）", mcpTransportHttp: "streamable_http（远程）",
     skillsHint: "目录：项目 .codewave/skills/ > 用户 ~/.codewave/skills/、~/.agents/skills/ 与 ~/.claude/skills/ > 工作区 .agents/skills/、.claude/skills/ > 内置",
     reloadSkills: "重新加载", skillsReloaded: "已重新加载，共 {{n}} 个技能", skillsReloadFailed: "重新加载失败",
+    // 技能区空态（批④ 修缺陷：此前借用 sessions.empty → 技能列表为空时显示「暂无会话」）
+    skillsEmpty: "暂无技能",
     deleteSkill: "删除技能", deleteSkillConfirm: "删除技能「{{name}}」？将同时删除其文件，不可恢复", deleteSkillSuccess: "已删除技能：{{name}}", deleteSkillFailed: "删除失败",
     // 全屏设置页容器（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)）
     backToWorkspace: "返回工作区",
@@ -175,7 +202,7 @@ export default {
     prerequisite: "前置条件：{{prerequisite}}",
     docs: "官方安装说明",
     confirmTitle: "Java 语义校验默认关闭",
-    confirmCost: "启用后会启动 jdtls 并解析依赖树，可能耗时数分钟、占用 GB 级内存。",
+    // 启用代价整句改引 settings.lspJavaCost（同一句话只留一处，见 docs/settings-terminology.md）
     enable: "启用",
     enableDone: "已启用：{{server}}",
     enableFailed: "启用失败",
@@ -272,7 +299,7 @@ export default {
     recalledImage: "历史图片 {{n}}",
     submit: "提交",
   },
-  sessions: { empty: "暂无会话", load: "打开", delete: "删除", rename: "重命名", untitled: "会话" },
+  sessions: { load: "打开", rename: "重命名", untitled: "会话" },
   subagent: {
     label: "子智能体",
     close: "关闭",
@@ -294,7 +321,7 @@ export default {
   tasks: {
     title: "计划任务", name: "任务名", scheduleHint: "计划：cron:0 9 * * * / every:30m / once:ISO",
     instruction: "任务指令（Agent 将在独立上下文执行）", create: "创建", created: "已创建",
-    delete: "删除", empty: "暂无计划任务（进程本地，重启后清空）",
+    empty: "暂无计划任务（进程本地，重启后清空）",
   },
   stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}" },
   skills: {
@@ -306,7 +333,7 @@ export default {
     openInFileManager: "在文件管理器中打开", openDirFailed: "打开目录失败",
     openInEditor: "在编辑器中打开", openInEditorFailed: "打开编辑器失败",
     currentPlan: "当前计划",
-    skills: "技能", noSkills: "暂无可用技能", skillBuiltin: "内置",
+    skills: "技能", noSkills: "暂无可用技能",
     scopeSession: "会话", scopeGlobal: "全局", auto: "自动", manual: "手动",
     refresh: "刷新", openDir: "目录", noLogFiles: "暂无日志文件",
     logFileKb: "{{name}}（{{kb}}KB）", noActiveSession: "无活动会话", noLogs: "（暂无日志）",
@@ -327,7 +354,7 @@ export default {
   },
   queue: {
     dragToSort: "拖动排序", images: "{{n}} 张图片",
-    runNowTip: "打断当前任务并立即执行该条", runNow: "立即", edit: "编辑", delete: "删除",
+    runNowTip: "打断当前任务并立即执行该条", runNow: "立即", edit: "编辑",
     paused: "队列已暂停（上一任务被取消或失败）", resume: "继续执行",
   },
   files: {
@@ -338,7 +365,6 @@ export default {
   },
   nav: {
     justNow: "刚刚", minutes: "{{n}}分", hours: "{{n}}小时", days: "{{n}}天",
-    saved: "已保存", cancel: "取消", save: "保存",
     tempSessions: "临时会话", newTempSessionTip: "新建临时会话（免目录，直接开聊）",
     projects: "项目", newProject: "新建项目", editProject: "编辑项目", manageProjects: "管理项目",
     noProjects: "还没有项目", noProjectsEmpty: "暂无项目",
@@ -346,7 +372,7 @@ export default {
     projectName: "项目名称", projectNamePh: "例如：CodeWave",
     projectDir: "项目目录（项目数据将存于其下 .codewave/）", chooseDir: "选择目录",
     renameSession: "重命名会话", sessionNamePh: "会话名称", renameFailed: "重命名失败：{{error}}",
-    deleteProject: "删除项目", deleteProjectTitle: "删除项目「{{name}}」？", delete: "删除",
+    deleteProject: "删除项目", deleteProjectTitle: "删除项目「{{name}}」？",
     deleteProjectData: "· 将删除项目托管数据：temps / logs / memory / skills / mcp / lessons / 计划任务",
     deleteProjectSessions: "· 将连带删除该项目下 {{n}} 个会话（含历史转录），不可恢复",
     deleteProjectCodeSafe: "· 你的代码目录不受任何影响",

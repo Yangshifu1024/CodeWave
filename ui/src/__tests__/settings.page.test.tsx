@@ -817,15 +817,20 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
     expect(document.body.textContent ?? "").toContain("CodeWave");
   });
 
-  it("数据目录 / 代码仓库两个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
+  it("数据目录 / 日志目录 / 代码仓库 / 许可证四个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
     await mountWithSession();
     await openPage("关于");
 
-    fireEvent.click(buttonByText("数据目录"));
+    fireEvent.click(buttonByText("打开数据目录"));
     await waitFor(async () =>
       expect((await invokeMock()).mock.calls.some((c: any[]) => c[0] === "open_data_dir")).toBe(true),
     );
-    fireEvent.click(buttonByText("代码仓库"));
+    // 批④ 新增入口：日志目录复用 open_logs_dir（右栏「日志」Tab 的入口保留，场景不同）
+    fireEvent.click(buttonByText("打开日志目录"));
+    await waitFor(async () =>
+      expect((await invokeMock()).mock.calls.some((c: any[]) => c[0] === "open_logs_dir")).toBe(true),
+    );
+    fireEvent.click(buttonByText("打开代码仓库"));
     await new Promise((r) => setTimeout(r, 60));
     const invoke = await invokeMock();
     expect(
@@ -833,13 +838,24 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
         (c: any[]) => c[0] === "open_url" && JSON.stringify(c[1]) === JSON.stringify({ url: "https://github.com/Yangshifu1024/CodeWave" }),
       ),
     ).toBe(true);
+    // 批④ 新增入口：开源许可证走同一仓库默认分支（main）的 LICENSE
+    fireEvent.click(buttonByText("查看许可证"));
+    await waitFor(async () =>
+      expect(
+        (await invokeMock()).mock.calls.some(
+          (c: any[]) =>
+            c[0] === "open_url" &&
+            JSON.stringify(c[1]) === JSON.stringify({ url: "https://github.com/Yangshifu1024/CodeWave/blob/main/LICENSE" }),
+        ),
+      ).toBe(true),
+    );
 
-    // 失败路径：就地报错，设置页不关也不跳页
+    // 失败路径：就地报错，设置页不关也不跳页（四个入口共用同一条提示路径）
     invoke.mockImplementation(async (cmd: string, args?: any) => {
-      if (cmd === "open_data_dir") throw new Error("no file manager");
+      if (cmd === "open_data_dir" || cmd === "open_logs_dir") throw new Error("no file manager");
       return baseInvoke(cmd, args);
     });
-    fireEvent.click(buttonByText("数据目录"));
+    fireEvent.click(buttonByText("打开数据目录"));
     await waitFor(() => expect(document.querySelector(".about-error")?.textContent ?? "").toContain("no file manager"));
     expect(document.querySelector('[data-testid="settings-page"]')).toBeTruthy();
     expect(activeNavTabText()).toBe("关于");
@@ -1141,7 +1157,7 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     await openSettings();
     await search("日志");
 
-    expect(resultRows().length).toBe(2); // 日志级别 + 会话详细日志
+    expect(resultRows().length).toBe(3); // 日志级别 + 会话详细日志 + 关于页「日志目录」（批④ 新登记）
     // 两套列表互斥：搜索态不渲染 tablist（方向键因此不可能串味）
     expect(document.querySelector('[data-testid="settings-page"] .settings-nav-list')).toBeFalsy();
     expect(document.querySelector('[data-testid="settings-page"] [role="tablist"]')).toBeFalsy();
@@ -1188,6 +1204,26 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true));
     expect(document.activeElement).toBe(input);
     expect(useUi.getState().settingsTab).toBe("logs");
+  });
+
+  it("批④ 登记的关于页只读入口可被搜索命中（版本 / 数据目录 / 日志目录 / 代码仓库 / 许可证）", async () => {
+    await mountWithSession();
+    await openSettings();
+
+    // 登记前关于页只能命中 2 项（自动更新 / 检查更新）；登记后五个只读条目各自可搜到，
+    // 且命中后能切到关于页并给对应锚点打临时高亮（= 页内真有那一行）
+    for (const [query, label, id] of [
+      ["版本", "版本", "app.version"],
+      ["数据目录", "数据目录", "app.data_dir"],
+      ["日志目录", "日志目录", "app.logs_dir"],
+      ["代码仓库", "代码仓库", "app.repo"],
+      ["许可证", "开源许可证", "app.license"],
+    ] as const) {
+      await search(query);
+      fireEvent.click(resultRow(label));
+      await waitFor(() => expect(useUi.getState().settingsTab).toBe("about"));
+      await waitFor(() => expect(anchor(id)?.classList.contains("settings-item-hit")).toBe(true));
+    }
   });
 
   it("跨页命中：切到目标页并给目标项打临时高亮", async () => {

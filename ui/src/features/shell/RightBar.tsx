@@ -152,7 +152,7 @@ function InfoPanel({ visible }: { visible: boolean }) {
                     >
                       <span className="rb-skill-name">{s.name}</span>
                       {builtin ? (
-                        <span className="rb-skill-origin">{t("rightbar.skillBuiltin")}</span>
+                        <span className="rb-skill-origin">{t("common.builtin")}</span>
                       ) : (
                         label && <span className="rb-skill-origin" title={s.origin}>{label}</span>
                       )}
