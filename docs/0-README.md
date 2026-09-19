@@ -20,7 +20,7 @@
 - 2026-08-30 · [p1-plan.md](./p1-plan.md) — P1 阶段方案
 - 2026-08-30 · [p2-plan.md](./p2-plan.md) — P2 阶段方案
 - 2026-09-03 · [tools-optimization-and-gap-fill-plan.md](./tools-optimization-and-gap-fill-plan.md) — 内置工具优化与补齐实施方案（基于 builtin-tools-source-comparison 的分级建议：批次 A 现有工具优化 / 批次 B 审批 diff 预览与外部路径放行 / 批次 C 补齐 web_search、后台子代理、按模型裁剪）
-- 2026-09-06 · [command-output-ansi-sanitize-plan.md](./command-output-ansi-sanitize-plan.md) — command 输出链 ANSI 乱码与「正在运行？」锚点缺陷根因分析 + 修复方案（已批准待实施）：后端 sanitize 模块 + progressTail 落定清空 + 中性标题
+- 2026-09-06 · [command-output-ansi-sanitize-plan.md](./command-output-ansi-sanitize-plan.md) — command 输出链 ANSI 乱码与「正在运行？」锚点缺陷根因分析 + 修复方案（**已全部实施（2026-09-19）**：`tools/sanitize.rs` 剥 CSI/OSC/控制字符 + 跨块安全解码，`command::pump` 与 `service::RingLog` 接入；工具「开始」帧——每次调用执行前发空 chunk + 真工具名帧、命令首帧免 2KB 阈值，修「工具卡只在调用结束后才出现」并替代中性标题；前端 `progressTail` 落定清空）
 - 2026-09-12 · [plan-branch-proposal.md](./plan-branch-proposal.md) — 计划批准即定分支：S4/P3 拟定分支名（`<type>/<slug>`）+ 批准询问列明 + 批准 = 预授权创建/切换分支（agent 执行 `git switch -c`，零协议改动）；fence branch 写形态缺口独立立项
 
 ## 早期实施与评审
@@ -68,7 +68,7 @@
 - 2026-08-31 · [composer-shift-tab-mode-cycle.md](./composer-shift-tab-mode-cycle.md) — Composer Shift+Tab 循环切换权限模式 + 权限胶囊按档位着色
 - 2026-08-31 · [thinking-scroll-fix.md](./thinking-scroll-fix.md) — 缺陷修复：思考流式期间无法向上滚动（豁免窗口永续 + 几何重接管）
 - 2026-08-31 · [composer-paste-and-history-recall.md](./composer-paste-and-history-recall.md) — Composer 粘贴图片（clipboardData 双通道 + vision 软阻断）+ ↑↓ 历史消息召回
-- 2026-09-02 · [custom-font-and-titlebar.md](./custom-font-and-titlebar.md) — 自定义字体（sans/mono 双槽 CSS token）+ 自绘标题栏（tauri-plugin-decoration v3）
+- 2026-09-02 · [custom-font-and-titlebar.md](./custom-font-and-titlebar.md) — 自定义字体（sans/mono 双槽 CSS token）+ 自绘标题栏（tauri-plugin-decoration v3）（2026-09-19 修订：字体真源改为后端 `config.ui.font_sans/font_mono` + 新增 `set_font_prefs`，localStorage 降为首帧缓存；提交时机扩为回车/失焦/停手 600ms/卸载四处；修「界面字体从未写入存储」与「页级保存回写旧字体」两个缺陷——见该文档 §6）
 - 2026-09-03 · [sidebar-toggle-buttons.md](./sidebar-toggle-buttons.md) — 左右侧栏顶部展开/折叠按钮 + 侧栏开关入口收敛
 - 2026-09-03 · [settings-forms-vertical.md](./settings-forms-vertical.md) — 设置弹窗表单全量 vertical 化
 - 2026-09-03 · [workspace-explorer-removal-and-chat-scrollbar.md](./workspace-explorer-removal-and-chat-scrollbar.md) — 移除左栏工作区文件面板 + 聊天区滚动条主题化
@@ -94,6 +94,7 @@
 
 - 2026-09-19 · [settings-fullscreen-shell.md](./settings-fullscreen-shell.md) — 设置全屏容器化 · 批①（含审查返工）：`SettingsModal`（Modal 880px）→ `SettingsPage` 覆盖式全屏页（`.settings-shell` = 返回工作区 + 运行中指示 + 7 页 Tabs 导航｜`.settings-content` = 操作条 + 页体）；工作区只加 `.workspace-covered`（`visibility:hidden`，**禁用 `display:none`**——不得让 ResizeObserver 测到 0 尺寸而干扰运行中任务）；Esc 三层收口（settingsOpen 短路 + `.settings-shell` 白名单 + 页面捕获阶段 preventDefault），任何情况下不停运行；逐页脏标记（即时生效项不打点 + 空值三态归一，避免「删空自定义提示词仍常亮」）+ 三选拦截 `保存并离开/放弃改动/留在原地` 覆盖切页/返回/Esc/关窗四条路径（关窗复用 `app:exit_requested` 链）；`showSettings` 深链契约变更（无参不再重置到 general）；新增 `settings.page.test.tsx`（20 例）与跨文件选择器迁移（前端 67 文件 / 567 例全绿）
 - 2026-09-19 · [settings-search-and-advanced.md](./settings-search-and-advanced.md) — 设置页批③（含审查返工）：搜索 + 进阶折叠 + 3 档控件宽度——左导航顶部整行搜索框（`matchSettings` 纯函数：显示名 + `keywords` + 页名 + 组名、多词 AND、小写归一、页序/组序/原序稳定排序；搜索框 `role=combobox` + `aria-activedescendant` 挂输入框、结果列表 `role=listbox/option` + `tabIndex=-1` **替掉** tablist 故方向键不串味、↑↓ 只动结果、Enter 跳转后焦点仍在搜索框、Esc 先清空查询再回落既有白名单链）+ 命中定位与约 1.5s 临时高亮 `.settings-item-hit`（跨页两段式 effect、换项先摘旧高亮、`data-setting-id` 统一锚点、退化项 `active_model_id` 与 0 高度锚点 `approval.command_allowlist`）+ 进阶折叠（11 项、页级开关 + 行内过滤 `settings-advanced-hidden`、`ws_settings_show_advanced` 全局单一偏好默认收起、折叠不计脏点）+ 3 档宽度 `.w-narrow/.w-mid/.w-wide` 180/240/360 各带 `max-width:100%`、页体像素内联 width 全清零（实测 18 处 / 7 个数值 / 12 组控件逐项映射）；批① 初始焦点改按 `.settings-nav-back` 定位（防御性表述）；新增 37 例测试（前端 67 文件 / 627 例全绿）
+- 2026-09-19 · [lsp-detection-and-settings-ux.md](./lsp-detection-and-settings-ux.md) — 语言服务器探测补齐 + 设置页状态说清（含两条界面缺陷）：新增「语言约定安装目录」探测档（`go install` → `~/go/bin`、`rustup component add` → `~/.cargo/bin` **及 rustup 工具链 bin**（`$RUSTUP_HOME/toolchains/*/bin`，2026-09-19 补：Homebrew 装的 rustup 不建 shim 目录）、bun/pnpm 全局，`source = lang_bin`）+ `fresh_env_path` 改 `-lc` 与 `-lic` 双壳查询合并（哨兵提取 + 各 5s 超时，修掉 `~/.zshrc` 里的 PATH 看不见）；`ServerStatus` 追加 `sdk`（新文件 `lsp/sdk.rs`）、`InstallHint` 追加 `requires`，设置页把「语言服务器缺什么」与「语言工具链是否就绪」分成两块并给行内安装/下载/手动安装入口（npm 缺失时提前提示先装 Node.js）；同一批修掉 Switch 被网格拉伸、「代理地址」漂在自定义代理卡片外、`active_model_id` 作为进阶项在列表视图无落点（后端 817 + 103 lsp 例、前端 67 文件 / 648 例全绿）
 
 ## 供应商与设置
 
