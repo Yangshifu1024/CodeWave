@@ -62,7 +62,7 @@ beforeAll(() => {
 afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
-  useUi.setState({ settingsOpen: false, settingsTab: "general" });
+  useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
   useSettings.setState({ config: null, loaded: false });
   savedConfigs = [];
 });

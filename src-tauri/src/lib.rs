@@ -228,7 +228,7 @@ pub fn run() {
             //（只 build 不安装不会挂载任何东西——默认菜单仍在，
             // 这正是第一版只显示默认 About/Services/Hide/Quit 的原因）。
             // 三个条目全部为自定义项，经 menu:action 路由到 webview，
-            // 因此「关于」打开的是应用内 AboutModal（而非原生面板）。AboutMetadata 保留备用。
+            // 因此「关于」打开的是应用内设置页的「关于」分页（批② 起：原独立 AboutModal 已退役，见 docs/settings-ia.md），而非原生面板。AboutMetadata 保留备用。
             // Edit 预定义条目保住 webview 文本快捷键（macOS 上的复制/粘贴/全选）。
             // SubmenuBuilder.text() 无法附加快捷键（tauri 内部写死 None），快捷键条目改用 MenuItemBuilder。
             #[cfg(target_os = "macos")]

@@ -32,7 +32,7 @@ function seedWithItem(item: { kind: "error"; text: string; errorKind?: string })
 
 describe("error card auth/billing guidance (docs/auth-error-guidance)", () => {
   beforeEach(() => {
-    useUi.setState({ settingsOpen: false, settingsTab: "general" });
+    useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
   });
   afterEach(cleanup);
 

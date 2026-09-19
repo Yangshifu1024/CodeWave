@@ -27,14 +27,13 @@ export default {
     diff: "变更",
     tasks: "任务",
     stats: "统计",
-    about: "关于",
   },
   about: {
-    title: "关于 CodeWave",
+    // title / checkUpdates 已随「关于」页化（[docs/settings-ia](../../../docs/settings-ia.md)）零引用删除：
+    // 页名用 settings.pageAbout、手动检查更新用 settings.checkForUpdates（避免同义键）
     slogan: "本地优先的桌面 AI 编程 Agent",
     appData: "数据目录",
     repo: "代码仓库",
-    checkUpdates: "检查更新",
   },
   tools: {
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
@@ -63,8 +62,15 @@ export default {
     switchHint: "提交后将切换到自动编辑档",
   },
   settings: {
-    title: "设置", general: "通用", appearance: "外观", providers: "供应商", security: "安全", mcp: "MCP", skills: "技能",
-    language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言", accent: "强调色", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
+    title: "设置",
+    // 8 页重划（[docs/settings-ia](../../../docs/settings-ia.md)）：页名键 + 左导航三组标题。
+    // 旧页名键 general / appearance / security / network 与 settings.accent 已随重划零引用删除；
+    // providers / mcp / skills 仍在用（分别是供应商列表、MCP 服务器、技能三个设置项的显示名）。
+    pageAppearance: "界面", pageProviders: "模型与供应商", pageNetwork: "网络与连接", pageSecurity: "安全与审批",
+    pageTools: "工具与集成", pageAgent: "工作区与智能体", pageLogs: "日志", pageAbout: "关于",
+    groupUiModel: "外观与模型", groupSafetyTools: "安全与能力", groupDiagnostics: "诊断与其他",
+    providers: "供应商", mcp: "MCP", skills: "技能",
+    language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
     theme: "主题", themeHint: "选择界面亮暗外观；「跟随系统」时随系统亮暗实时切换", themeSystem: "跟随系统", themeLight: "亮色", themeDark: "暗色",
     uiFont: "界面字体", monoFont: "等宽字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车或失焦生效",
     fontReset: "恢复默认",
@@ -72,7 +78,7 @@ export default {
     autoConfirm: "5 分钟后自动确认推荐选项", autoConfirmHint: "勾选：审批 5 分钟无响应自动允许；不勾选：始终等待你的选择",
     cmdAllowlist: "命令白名单（始终允许的命令）", cmdAllowlistCwd: "生效目录",
     allowPrivate: "允许访问内网地址（本地模型/网关）",
-    network: "网络", proxyMode: "代理模式",
+    proxyMode: "代理模式",
     proxyNone: "无代理", proxyNoneDesc: "应用请求全部直连，不使用任何代理（更新检查暂仍跟随系统代理）",
     proxySystem: "系统代理", proxySystemDesc: "跟随操作系统的代理设置（保存时探测一次）",
     proxyManual: "自定义代理", proxyManualDesc: "使用自定义的 HTTP(S) 或 SOCKS5 代理，应用与更新请求均走此代理",

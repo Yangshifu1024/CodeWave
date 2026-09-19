@@ -27,14 +27,13 @@ export default {
     diff: "Changes",
     tasks: "Tasks",
     stats: "Stats",
-    about: "About",
   },
   about: {
-    title: "About CodeWave",
+    // title / checkUpdates retired with the About page ([docs/settings-ia](../../../docs/settings-ia.md), zero references):
+    // the page name is settings.pageAbout and the manual check uses settings.checkForUpdates (no duplicate keys)
     slogan: "Local-first desktop AI coding agent",
     appData: "Data folder",
     repo: "Repository",
-    checkUpdates: "Check for Updates",
   },
   tools: {
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
@@ -63,15 +62,23 @@ export default {
     switchHint: "Submitting will switch to auto-edit mode",
   },
   settings: {
-    title: "Settings", general: "General", appearance: "Appearance", providers: "Providers", security: "Security", mcp: "MCP", skills: "Skills",
-    language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language", accent: "Accent color", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
+    title: "Settings",
+    // 8-page re-division ([docs/settings-ia](../../../docs/settings-ia.md)): page-name keys + the three nav group titles.
+    // Retired page-name keys (general / appearance / security / network) and settings.accent are gone (zero references);
+    // providers / mcp / skills stay (they name the provider list, MCP servers and skills items).
+    pageAppearance: "Interface", pageProviders: "Models & Providers", pageNetwork: "Network & Connections",
+    pageSecurity: "Security & Approvals", pageTools: "Tools & Integrations", pageAgent: "Workspace & Agent",
+    pageLogs: "Logs", pageAbout: "About",
+    groupUiModel: "Appearance & Models", groupSafetyTools: "Security & Capabilities", groupDiagnostics: "Diagnostics & Other",
+    providers: "Providers", mcp: "MCP", skills: "Skills",
+    language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeHint: "Choose the light/dark appearance; “Follow system” tracks the OS in real time", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
     uiFont: "UI font", monoFont: "Monospace font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter/blur",
     fontReset: "Reset to default",
     approvalEnabled: "Dangerous command confirmation dialog", confirmOutside: "Confirm writes creating paths outside workspace",
     confirmPush: "Confirm before git push", autoConfirm: "Auto-confirm recommended option after 5 minutes", autoConfirmHint: "Checked: approvals auto-approve after 5 minutes without response; unchecked: wait for your choice indefinitely",
     allowPrivate: "Allow private network access (local models/gateways)",
-    network: "Network", proxyMode: "Proxy mode",
+    proxyMode: "Proxy mode",
     proxyNone: "No proxy", proxyNoneDesc: "All app requests connect directly; no proxy (update checks still follow the system proxy for now)",
     proxySystem: "System proxy", proxySystemDesc: "Follow the operating system proxy settings (probed once on save)",
     proxyManual: "Custom proxy", proxyManualDesc: "Use a custom HTTP(S) or SOCKS5 proxy for both app and update requests",

@@ -1,0 +1,127 @@
+# 设置页重整 · 8 页重划与设置项注册表
+
+> 状态：已实施（批②）。批① 把设置从弹窗改为常驻全屏页（[settings-fullscreen-shell](./settings-fullscreen-shell.md)）；
+> 本批把 7 页按「用户找东西的顺序」重划为 8 页 + 3 组导航，并把「哪一项住在哪一页」这件事
+> 从组件 JSX 里抽成可被测试断言的数据（设置项注册表）。术语统一留批④。
+
+## 1. 页集合与 3 组导航
+
+| 组 | 页（key） | 页名 | 内容 |
+|---|---|---|---|
+| 外观与模型 | `appearance` | 界面 | 主题、界面字体 / 等宽字体双槽 + 预览、界面语言 |
+| 外观与模型 | `providers` | 模型与供应商 | AI 回复语言、供应商列表 / 新增 / 编辑（含活跃模型） |
+| 外观与模型 | `network` | 网络与连接 | 代理模式与地址、允许访问内网地址 |
+| 安全与能力 | `security` | 安全与审批 | 危险命令确认、工作区外新建路径确认、git push 前确认、5 分钟自动确认、命令白名单 |
+| 安全与能力 | `tools` | 工具与集成 | 写入后语义校验（页内三组：校验 / 预算 / 发现）、MCP 服务器、技能 |
+| 安全与能力 | `agent` | 工作区与智能体 | Shell、自定义提示词、自动压缩阈值、压缩请求超时 |
+| 诊断与其他 | `logs` | 日志 | 日志级别、会话详细日志 |
+| 诊断与其他 | `about` | 关于 | logo / 版本 / slogan、数据目录、GitHub 仓库、自动更新开关、手动检查更新 |
+
+- 默认页 `appearance`；`ui.settingsTab` 的类型是 `PageKey`（不再是 `string`）。
+- 左导航自建（替掉 antd `Tabs`）：组标题（复用 `.nav-section-title` 度量：11px dim）+ 页行
+  （`.settings-nav-item[data-page]`，选中态仅换背景、脏圆点 `.settings-dirty-dot`），
+  键盘可达（行是 `<button role="tab">`，打开设置时焦点仍在返回工作区按钮上，批① 行为不变）。
+- 导航语义（批② 审查返工补全）：`role="tablist"` 的直接子节点除 tab 外只有标了 `role="presentation"` 的
+  组标题；每个页行 `aria-controls="settings-panel"`，页体 `id="settings-panel" role="tabpanel"` 且
+  `aria-labelledby` 指向当前页行；↑/↓（兼认 ←/→）在页行间**移动焦点**，Enter/Space 或点击才激活
+  （手动激活模式）——不动 `tabIndex`，Tab 键可达与批① 的「打开设置即聚焦返回按钮」都不变。
+- 非法 `settingsTab`（绕过 `setSettingsTab` 直写 store 的旧状态 / 深链）在渲染处经 `normalizePageKey`
+  收口：否则 `aria-selected` 与 active 类全 false、页体回退首页而导航一片无高亮。
+- 工作区让位语义（`.workspace-covered` 只藏可见性、不卸载、不 `display:none`）、Esc 链、三选拦截、
+  运行中指示全部保持批① 的实现，本批未动。
+
+## 2. 逐项归属表（新 → 旧）
+
+| 新页 | 项（config 字段路径 / 本地偏好） | 旧页 |
+|---|---|---|
+| 界面 | `ui.theme`、`ui.font_sans`、`ui.font_mono`（localStorage）、`ui.language` | 外观 + 通用·界面语言 |
+| 模型与供应商 | `ui.ai_language`、`providers`、`active_model_id` | 通用·AI 语言 + 供应商 |
+| 网络与连接 | `network.proxy`（= config.proxy）、`network.allow_private_network` | 网络 + 安全·内网访问 |
+| 安全与审批 | `approval.enabled / confirm_outside_create / confirm_git_push / auto_confirm / command_allowlist` | 安全（迁出内网访问与语法校验） |
+| 工具与集成 | `validation.<6 语言>`、`validation.json`、`validation.lsp.*`（命令 / 预算 / 发现）、`mcp.servers`（独立 mcp.json）、`disabled_skills` | 安全·LSP + MCP + 技能 |
+| 工作区与智能体 | `shell.selection`、`custom_prompt`、`compact_threshold`、`compact_timeout_seconds` | 通用（这 4 项） |
+| 日志 | `log.level`、`log.session_verbose` | 通用（这 2 项） |
+| 关于 | `ui.auto_update`（localStorage）、`app.check_updates`（动作） | AboutModal 全部内容 + 通用·自动更新开关 |
+
+设置项的行为语义（字段名 / 默认值 / 保存时机 / 校验规则）**一字未改**；关于页只是把弹框内容搬进页面。
+
+## 3. 注册表：`ui/src/features/panels/settingsRegistry.ts`
+
+纯数据模块（无 React、无 store 依赖），导出：
+
+- `PageKey` / `PAGE_ORDER` / `DEFAULT_PAGE` / `PAGE_LABEL_KEY` / `PAGE_GROUPS`；
+- `LEGACY_PAGE_ALIASES` + `normalizePageKey`（旧页 key 归一，未知 / 空 → 默认页）；
+- `SETTINGS_ITEMS: SettingItem[]`（`{ id, labelKey, page, group?, advanced?, keywords? }`，
+  `keywords` 是**直字符串**、不进 i18n，供批③ 搜索用；`advanced` 供批③ 折叠用，本批只登记不渲染）；
+- **`PAGE_FIELDS: Record<PageKey, SettingFieldPath[]>`**：每页拥有的配置字段路径（脏标记的数据源）；
+- `MCP_FIELD_ID`、`INSTANT_APPLY_FIELD_IDS`、`SHELL_SETTING_KEYS`（豁免清单）、
+  `PAGE_FIELD_EXCEPTIONS`（页字段里没有独立设置项的路径，目前仅 `validation.lsp.commands`）。
+
+### 新增一项设置的登记流程
+
+1. 在 `SETTINGS_ITEMS` 加一条（`id` = config 字段路径 / `ui.*` 本地偏好 / `app.*` 动作，全表唯一；
+   `labelKey` 指 i18n 项名键；`page` 归属页；`group` 仅在有分组的页上写）。
+2. 若它是**可保存的**配置项，把字段路径加进 `PAGE_FIELDS[page]`，并在 `SettingsPage.tsx` 的
+   `fieldSlice()` 里补缺省折叠（若该字段有 serde default / null 折默认对象语义）；
+   即时生效项（localStorage / 立即生效）加进 `INSTANT_APPLY_FIELD_IDS`。
+3. 双侧 i18n 加键（zh-CN + en-US，`i18n.keys.test.ts` 守护）。
+4. 跑 `pnpm --dir ui test`：`settings.registry.test.ts` 会拦住漏登记
+   （引用闭包（扫描 `features/panels/*.tsx`，单/双/反引号三种写法都认）/ 键存在性 / 页合法 / 分组完备 /
+   PAGE_FIELDS 覆盖 / 字段归属唯一 / **「项 ↔ 页字段」双向闭合** / 豁免清单不重叠）。
+   双向闭合的语义：① 每条设置项的 `id` 必须出现在 `PAGE_FIELDS[item.page]` 里（`app.*` 动作 / 只读信息项
+   除外——它们本就没有落盘字段）；② `PAGE_FIELDS` 里每条路径必须有同页的设置项，例外只能写进
+   `PAGE_FIELD_EXCEPTIONS`。删掉任一条字段登记都会立刻变红，不再是「删了也全绿」。
+
+### 豁免清单 `SHELL_SETTING_KEYS` 说明
+
+只收「不是可配置项」的 `settings.*` 键，逐条带注释，分五类：
+页壳与离开拦截（`title`/`save`/`cancel`/`leaveXxx` 等）；从属文案（hint / 占位 / 内联标签 / 选项文案，
+已注明其所属项）；供应商编辑器的表单字段与动作；保存校验文案（`vRequired` 等）；
+状态徽标与反馈提示（`lspFound`/`reloadSkills` 等）。豁免清单与注册表**不得重叠**（测试断言）。
+
+## 4. 脏标记：`PAGE_FIELDS` 驱动
+
+- `pageSlice(config, page)` 只取 `PAGE_FIELDS[page]` 的字段；两类字段刻意跳过：
+  `INSTANT_APPLY_FIELD_IDS`（改完立即生效，纳入会永远显示「未保存」）与 `MCP_FIELD_ID`
+  （MCP 不在 config 内，脏判定走 mcp.json 文本基线，结果并在 `tools` 页上）。
+- 归一语义保持不变：空值三态折叠（`null`/`undefined`/`""`/纯空白）、`validation.java` 缺省 false、
+  `validation.dart` 缺省 true、`validation.lsp.*` 缺省 = `DEFAULT_LSP_SETTINGS`、
+  `proxy: null` 折默认对象（`mode = system`）、数组内空条目与全空对象视作空值。
+- 由此：**「界面」与「关于」两页永不亮脏点**——它们只有即时生效项（主题 / 字体 / 界面语言 / 自动更新开关）
+  与只读身份信息，没有可保存的改动。这是有意为之，`settings.page.test.tsx` 有对应用例守护。
+
+## 5. 旧 → 新页 key 映射（深链兼容）
+
+| 旧 key | 新 key | 说明 |
+|---|---|---|
+| `general` | `appearance` | 旧「通用」按项拆散到 4 页；深链（外部调用方）只可能指「进来看看」，落首组第一页 |
+| `appearance` | `appearance` | — |
+| `providers` | `providers` | 认证错误卡「打开模型设置」仍落此页 |
+| `security` | `security` | — |
+| `network` | `network` | 代理地址校验失败跳页仍走此页 |
+| `mcp` | `tools` | 旧 MCP 页并入工具与集成 |
+| `skills` | `tools` | 旧技能页并入工具与集成 |
+| 未知 / 空 | `appearance` | `normalizePageKey` 回退默认页 |
+
+`showSettings(tab?)` 语义未变：带参跳页（先归一）、无参保持当前页不重置（批① 的有意变更）。
+macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
+
+## 6. 退役与清理
+
+- 删除 `ui/src/features/panels/AboutModal.tsx`、`ui.aboutOpen`、左下角状态区的「关于」入口
+  （`InfoCircleOutlined` 按钮）；关于页用例并入 `__tests__/settings.page.test.tsx`。
+- 删除零引用 CSS：`.validation-grid` / `.validation-item` / `.lsp-budget-item`、导航列内的
+  `.settings-nav .ant-tabs*` 规则。**`.lsp-budget-grid` 不在删除之列**（预算组两列网格仍在用）：
+  批② 一度把它退化成 `SettingsPage.tsx` 里的内联 `gridTemplateColumns`，审查返工已收回 `app.css` 用类名
+  （样式集中在 app.css / antd 接管的约定；`settings.page.test.tsx` 有对应用例守护）。
+- 删除零引用 i18n 键（删前全仓 grep 确认）：`settings.general`、`settings.appearance`、
+  `settings.security`、`settings.network`、`settings.accent`、`about.title`、`about.checkUpdates`、`app.about`。
+  保留 `settings.providers` / `settings.mcp` / `settings.skills`（分别是供应商列表、MCP 服务器、
+  技能三个设置项的显示名，**不做同义键收敛**——那是批④）。
+- 新增键：`settings.pageAppearance/pageProviders/pageNetwork/pageSecurity/pageTools/pageAgent/pageLogs/pageAbout`
+  与 `settings.groupUiModel/groupSafetyTools/groupDiagnostics`（中英双侧同步）。
+
+## 7. 术语表（占位 · 批④）
+
+批④ 再做同义键收敛与键重命名（如 `settings.updates` 与 `settings.autoUpdateCheckbox`、
+`settings.providers` 与页名 `settings.pageProviders` 的重叠语义）。本批只登记不改名。

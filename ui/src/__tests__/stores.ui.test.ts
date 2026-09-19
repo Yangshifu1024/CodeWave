@@ -1,6 +1,7 @@
 // UI store: panel toggles, right bar persistence, notification stack lifecycle ([docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useUi } from "../stores/ui";
+import { DEFAULT_PAGE } from "../features/panels/settingsRegistry";
 
 describe("stores/ui", () => {
   beforeEach(() => {
@@ -9,7 +10,7 @@ describe("stores/ui", () => {
     useUi.setState({
       language: "zh-CN",
       settingsOpen: false,
-      settingsTab: "general",
+      settingsTab: "appearance",
       tasksOpen: false,
       statsOpen: false,
       rightBarOpen: true,
@@ -51,9 +52,9 @@ describe("stores/ui", () => {
     expect(useUi.getState().rbTab).toBe("changes");
   });
 
-  it("showSettings：带页签跳到该页，无参保持当前页不重置（docs/settings-fullscreen-shell）", () => {
-    // 带参深链：错误卡「打开模型设置」→ providers、LSP 引导卡 → 所在页靠它落地（auth-error-guidance）
-    useUi.setState({ settingsTab: "general", settingsOpen: false });
+  it("showSettings：带页跳到该页，无参保持当前页不重置（docs/settings-fullscreen-shell）", () => {
+    // 带参深链：错误卡「打开模型设置」→ providers、macOS 菜单「关于」→ about 靠它落地（auth-error-guidance）
+    useUi.setState({ settingsTab: "appearance", settingsOpen: false });
     useUi.getState().showSettings("providers");
     expect(useUi.getState().settingsOpen).toBe(true);
     expect(useUi.getState().settingsTab).toBe("providers");
@@ -62,6 +63,30 @@ describe("stores/ui", () => {
     useUi.getState().showSettings();
     expect(useUi.getState().settingsOpen).toBe(true);
     expect(useUi.getState().settingsTab).toBe("providers");
+  });
+
+  it("旧页 key 经别名表归一（8 页重划：general→appearance、mcp/skills→tools），未知值回默认页", () => {
+    for (const [legacy, expected] of [
+      ["general", "appearance"],
+      ["appearance", "appearance"],
+      ["providers", "providers"],
+      ["security", "security"],
+      ["network", "network"],
+      ["mcp", "tools"],
+      ["skills", "tools"],
+    ] as const) {
+      useUi.getState().showSettings(legacy);
+      expect(useUi.getState().settingsTab, `${legacy} → ${expected}`).toBe(expected);
+    }
+    // 未知页 key / 非法值（手改 store、旧版本残留）一律回默认页，不回退成旧 key
+    useUi.getState().showSettings("nope");
+    expect(useUi.getState().settingsTab).toBe("appearance");
+    useUi.getState().setSettingsTab("still-nope");
+    expect(useUi.getState().settingsTab).toBe("appearance");
+    useUi.getState().setSettingsTab("logs");
+    expect(useUi.getState().settingsTab).toBe("logs");
+    // 默认页 = 注册表 DEFAULT_PAGE（新装/首次打开落在「界面」）
+    expect(DEFAULT_PAGE).toBe("appearance");
   });
 
   it("setLanguage persists choice", () => {

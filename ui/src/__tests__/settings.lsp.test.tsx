@@ -94,7 +94,7 @@ beforeAll(() => {
 afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
-  useUi.setState({ settingsOpen: false, settingsTab: "general" });
+  useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
   useSettings.setState({ config: null, loaded: false });
   savedConfigs = [];
   lspStatusFails = false;
@@ -134,9 +134,9 @@ async function clickSaveAndSettle() {
   await waitFor(() => {});
 }
 
-async function openSecurityTab(config: ConfigState = makeConfig()) {
+async function openToolsTab(config: ConfigState = makeConfig()) {
   useSettings.setState({ config, loaded: true });
-  useUi.setState({ settingsOpen: true, settingsTab: "security" });
+  useUi.setState({ settingsOpen: true, settingsTab: "tools" });
   render(
     <AntApp>
       <SettingsPage />
@@ -145,9 +145,9 @@ async function openSecurityTab(config: ConfigState = makeConfig()) {
   await waitFor(() => expect(document.querySelector('.validation-row[data-lang="typescript"]')).toBeTruthy());
 }
 
-describe("设置页安全页签：LSP 语义校验", () => {
+describe("设置页工具与集成页：LSP 语义校验", () => {
   it("六语言按后端行序渲染（typescript→dart），JSON 另起一行；java 默认关闭", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     const langs = Array.from(document.querySelectorAll(".validation-row")).map((el) => (el as HTMLElement).dataset.lang);
     expect(langs).toEqual(["typescript", "rust", "python", "go", "java", "dart", "json"]);
     expect(rowOf("java").textContent).toContain("Java");
@@ -159,7 +159,7 @@ describe("设置页安全页签：LSP 语义校验", () => {
   });
 
   it("开关写回 config.validation.<lang>（java 打开后落盘为 true）", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     fireEvent.click(screen.getByRole("switch", { name: "Java" }));
     fireEvent.click(screen.getByRole("switch", { name: "Dart / Flutter" }));
     await clickSaveAndSettle();
@@ -170,7 +170,7 @@ describe("设置页安全页签：LSP 语义校验", () => {
   });
 
   it("命令覆盖落盘到 config.validation.lsp.commands.<lang>（保存时 trim）", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     expect(cmdInput("rust").placeholder).toBe("留空 = 自动探测");
     fireEvent.change(cmdInput("rust"), { target: { value: "  rust-analyzer --stdio  " } });
     await clickSaveAndSettle();
@@ -179,7 +179,7 @@ describe("设置页安全页签：LSP 语义校验", () => {
   });
 
   it("状态徽标三态：已找到（带版本）/ 未找到（警示）/ 已关闭", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     await waitFor(() => expect(statusText("typescript")).toBe("已找到 v1.2.3"));
     expect(statusText("rust")).toBe("未找到");
     expect(rowOf("rust").querySelector(".validation-status")?.className).toContain("warn");
@@ -190,13 +190,13 @@ describe("设置页安全页签：LSP 语义校验", () => {
 
   it("lsp_status 失败时静默降级：面板照常渲染，徽标留空", async () => {
     lspStatusFails = true;
-    await openSecurityTab();
+    await openToolsTab();
     await waitFor(() => expect(statusText("rust")).toBe(""));
     expect(document.querySelectorAll(".validation-row").length).toBe(7);
   });
 
   it("「重新探测」调 lsp_redetect 并刷新徽标", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     await waitFor(() => expect(statusText("rust")).toBe("未找到"));
     redetectResult = [
       { language: "rust", enabled: true, found: true, source: "path", command: "rust-analyzer", version: "0.3.2000", detail: "", install: null },
@@ -207,7 +207,7 @@ describe("设置页安全页签：LSP 语义校验", () => {
   });
 
   it("预算与发现区落盘：sync_window_ms 改值、额外 SDK 根 trim 后保存（空行丢弃）", async () => {
-    await openSecurityTab();
+    await openToolsTab();
     // 预算区第一个 InputNumber = 写后等待诊断（毫秒）
     fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "3000" } });
     fireEvent.click(buttonByText("添加目录"));

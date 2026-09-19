@@ -1,10 +1,13 @@
-// 设置弹窗「外观」页签：主题三档（跟随系统/亮色/暗色，即选即生效）+ 自定义字体双槽
+// 设置页「界面」页（批② 8 页重划后的 appearance）：界面语言（即时生效）+ 主题三档
+// （跟随系统/亮色/暗色，即选即生效）+ 自定义字体双槽
 // （[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)，Enter/失焦提交）。
-// 两者均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮。
+// 三组偏好均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮；
+// 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-ia](../../../../docs/settings-ia.md)）。
 import { useState } from "react";
 import { Button, Form, Input, Select } from "antd";
 import { UndoOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import type { ConfigState } from "../../ipc/types";
 import { useUi, type ThemePref } from "../../stores/ui";
 import {
   DEFAULT_FONT_LEADS, previewFontFamily, readStoredFonts, sanitizeFontList, storeFonts,
@@ -13,8 +16,13 @@ import {
 
 const PREVIEW_SAMPLE = "Aa Bb 0123 — The quick brown fox · 中文字体预览 0O1lI";
 
-/** 外观页签容器：主题三档选择 + 字体双槽（本组件持有唯一 Form，FontSettings 只渲染表单项）。 */
-export function AppearanceSettings() {
+/** 界面页容器：主题三档 + 字体双槽（本组件持有唯一 Form，FontSettings 只渲染表单项）+ 界面语言。
+ *  界面语言需要页级 draft 与 patchDraft（由 SettingsPage 注入）——未注入时不渲染该项，
+ *  保持本组件可独立挂载（测试与后续复用）。 */
+export function AppearanceSettings({ draft, patchDraft }: {
+  draft?: ConfigState | null;
+  patchDraft?: (patch: Partial<ConfigState>) => void;
+}) {
   const { t } = useTranslation();
   const theme = useUi((s) => s.theme);
 
@@ -34,6 +42,26 @@ export function AppearanceSettings() {
         />
       </Form.Item>
       <FontSettings />
+      {draft && patchDraft && (
+        <Form.Item label={t("settings.language")}>
+          {/* 即时生效：改完立即写 useUi.setLanguage（并镜像进 draft.ui.language），
+              因此不进脏标记（也就不会亮脏点） */}
+          <Select
+            size="small"
+            style={{ width: 160 }}
+            value={draft.ui.language}
+            onChange={(v) => {
+              patchDraft({ ui: { ...draft.ui, language: v } });
+              useUi.getState().setLanguage(v as "zh-CN" | "en-US");
+            }}
+            options={[
+              { label: "中文", value: "zh-CN" },
+              { label: "English", value: "en-US" },
+            ]}
+          />
+          <span className="settings-instant">{t("settings.instantApply")}</span>
+        </Form.Item>
+      )}
     </Form>
   );
 }
