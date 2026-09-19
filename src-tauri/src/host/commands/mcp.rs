@@ -1,4 +1,4 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 
 /// 用户级 mcp.json 的路径（全局数据目录下）。
 fn mcp_config_path() -> std::path::PathBuf {
@@ -76,4 +76,3 @@ pub async fn mcp_status(core: Core<'_>) -> Result<Vec<serde_json::Value>, String
 }
 
 // ---------- 后台 service 停止（与前端 C2 配对）----------
-

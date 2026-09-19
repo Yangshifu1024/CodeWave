@@ -1,6 +1,6 @@
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// ask 工具入参。
 #[derive(Deserialize)]
@@ -330,7 +330,9 @@ impl Tool for AskTool {
             ctx.rt.set_prefs(p);
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
-                &format!("方案批准 → 权限档切换 Plan/ConfirmEach → AutoEdit，冻结 {titles_count} 条 todos 基线"),
+                &format!(
+                    "方案批准 → 权限档切换 Plan/ConfirmEach → AutoEdit，冻结 {titles_count} 条 todos 基线"
+                ),
             );
             ctx.core.sink.emit(
                 &ctx.rt.id,

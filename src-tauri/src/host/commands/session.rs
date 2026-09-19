@@ -1,10 +1,10 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 use crate::core::agent::Frame;
+use crate::core::types::Message;
 use crate::host::events::ChannelRegistry;
 use std::sync::Arc;
-use tauri::ipc::Channel;
 use tauri::State;
-use crate::core::types::Message;
+use tauri::ipc::Channel;
 
 /// 创建会话：项目会话（快照固化主目录）或临时会话（免目录）双形态入口。
 #[tauri::command]
@@ -112,7 +112,9 @@ pub async fn load_subagent_history(
     session_id: String,
     sub_id: String,
 ) -> Result<Vec<Message>, String> {
-    core.store.load_sub_history(&session_id, &sub_id).map_err(err)
+    core.store
+        .load_sub_history(&session_id, &sub_id)
+        .map_err(err)
 }
 
 /// 删除会话：运行中拒绝；先标 zombie 再移除（防迟到写入复活）。
@@ -140,30 +142,33 @@ pub async fn rename_session(
     session_id: String,
     title: String,
 ) -> Result<(), String> {
-    match core.session(&session_id) { Some(rt) => {
-        *rt.title.lock().unwrap() = title.clone();
-        let ws = rt.workspace.to_string_lossy().into_owned();
-        let history = rt.history.lock().unwrap().clone();
-        let model_id = {
-            let cfg = core.cfg.read().unwrap();
-            crate::core::prefs::effective_model(&cfg, &rt.prefs()).map(|m| m.id.clone())
-        };
-        core.store
-            .save_history(
-                &session_id,
-                &title,
-                &ws,
-                model_id.as_deref(),
-                rt.project_id.as_deref(),
-                &rt.roots,
-                &history,
-            )
-            .map_err(err)?;
-    } _ => {
-        core.store
-            .rename_in_index(&session_id, &title)
-            .map_err(err)?;
-    }}
+    match core.session(&session_id) {
+        Some(rt) => {
+            *rt.title.lock().unwrap() = title.clone();
+            let ws = rt.workspace.to_string_lossy().into_owned();
+            let history = rt.history.lock().unwrap().clone();
+            let model_id = {
+                let cfg = core.cfg.read().unwrap();
+                crate::core::prefs::effective_model(&cfg, &rt.prefs()).map(|m| m.id.clone())
+            };
+            core.store
+                .save_history(
+                    &session_id,
+                    &title,
+                    &ws,
+                    model_id.as_deref(),
+                    rt.project_id.as_deref(),
+                    &rt.roots,
+                    &history,
+                )
+                .map_err(err)?;
+        }
+        _ => {
+            core.store
+                .rename_in_index(&session_id, &title)
+                .map_err(err)?;
+        }
+    }
     Ok(())
 }
 
@@ -340,13 +345,13 @@ pub async fn stop_subagent(
 ) -> Result<(), String> {
     let rt = core.session(&session_id).ok_or("会话不存在")?;
     let _ = rt;
-    match core.subs.get(&sub_id) { Some(sub) => {
-        sub.cancel_active();
-        Ok(())
-    } _ => {
-        Err("子代理不存在或已结束".into())
-    }}
+    match core.subs.get(&sub_id) {
+        Some(sub) => {
+            sub.cancel_active();
+            Ok(())
+        }
+        _ => Err("子代理不存在或已结束".into()),
+    }
 }
 
 // ---------- Run 日志（[docs/session-logging-report](../../../../docs/session-logging-report.md)；校验与读取在 core/logging，host 只转调）----------
-

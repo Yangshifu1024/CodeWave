@@ -68,10 +68,7 @@ pub fn claim(owner: &str, paths: &[PathBuf]) -> Result<(), Vec<ClaimConflict>> {
     }
     for k in keys {
         t.by_path.insert(k.clone(), owner.to_string());
-        t.by_owner
-            .entry(owner.to_string())
-            .or_default()
-            .insert(k);
+        t.by_owner.entry(owner.to_string()).or_default().insert(k);
     }
     Ok(())
 }

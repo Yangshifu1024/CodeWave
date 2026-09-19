@@ -242,7 +242,7 @@ mod tests {
         let r = roots(&ws);
         assert!(resolve_read(&r, "in.txt").is_ok());
         assert!(resolve_write(&r, "sub/new.txt").is_ok());
-            // 写根之外已存在的文件（独立 tempdir，避免被 data_dir 遮蔽）
+        // 写根之外已存在的文件（独立 tempdir，避免被 data_dir 遮蔽）
         let out = tempfile::tempdir().unwrap();
         let outside = out.path().join("f.txt");
         std::fs::write(&outside, b"y").unwrap();

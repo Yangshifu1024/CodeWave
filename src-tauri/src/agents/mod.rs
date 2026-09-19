@@ -310,8 +310,15 @@ mod tests {
     fn delegable_excludes_title_and_matches_find() {
         let metas = delegable();
         // title 是内部角色（core/title.rs 专用），不得进入前端可委派清单
-        assert!(!metas.iter().any(|m| m.name == "title"), "title 不得出现在 delegable");
-        assert_eq!(metas.len(), builtin().len() - 1, "delegable 应恰好剔除 title 一个角色");
+        assert!(
+            !metas.iter().any(|m| m.name == "title"),
+            "title 不得出现在 delegable"
+        );
+        assert_eq!(
+            metas.len(),
+            builtin().len() - 1,
+            "delegable 应恰好剔除 title 一个角色"
+        );
         for m in metas {
             assert!(!m.description.is_empty(), "{} 缺 description", m.name);
             // 与 subagent 工具同一查找：delegable 里的名字必须都能命中注册表
@@ -363,13 +370,19 @@ mod tests {
                 d.body.contains("read 先于 edit/create"),
                 "{name} 缺先读后改锚点"
             );
-            assert!(d.body.contains("不做任何 git 操作"), "{name} 缺 git 约束锚点");
+            assert!(
+                d.body.contains("不做任何 git 操作"),
+                "{name} 缺 git 约束锚点"
+            );
             assert!(d.body.contains("改动文件清单"), "{name} 缺汇报契约锚点");
             assert!(
                 d.body.contains("严格限定在任务包声明的文件范围内"),
                 "{name} 缺范围约束锚点"
             );
-            assert!(d.body.contains("失败必须修复后再汇报"), "{name} 缺自测纪律锚点");
+            assert!(
+                d.body.contains("失败必须修复后再汇报"),
+                "{name} 缺自测纪律锚点"
+            );
         }
     }
 
@@ -387,7 +400,10 @@ mod tests {
             "dev 已拆分为 backend-dev/frontend-dev/app-dev，旧名不得回填（回退通用子代理）"
         );
         assert!(find("protester").is_none(), "子串不得误命中");
-        assert!(find("arch").is_none(), "arch 是编排剧本（已内置为常驻提示）不是子代理角色");
+        assert!(
+            find("arch").is_none(),
+            "arch 是编排剧本（已内置为常驻提示）不是子代理角色"
+        );
         assert!(find("").is_none());
     }
 

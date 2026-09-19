@@ -1,5 +1,5 @@
-//! 全局诊断日志（[docs/session-logging-report](../../../docs/session-logging-report.md)）：tracing 初始化（reload 层支持级别热切换）
-//! + 滚动日志保留期清理。
+//! 全局诊断日志（[docs/session-logging-report](../../../docs/session-logging-report.md)）：tracing 初始化
+//! （reload 层支持级别热切换）+ 滚动日志保留期清理。
 //! 与 core/session_log.rs 的分工：本模块记简短全局诊断；会话级细粒度轨迹在 session_log。
 
 use std::path::Path;
@@ -323,7 +323,9 @@ mod tests {
     #[test]
     fn global_log_name_whitelist() {
         assert!(valid_global_log_name(LOG_BASE_NAME));
-        assert!(valid_global_log_name(&format!("{LOG_BASE_NAME}.2026-09-01")));
+        assert!(valid_global_log_name(&format!(
+            "{LOG_BASE_NAME}.2026-09-01"
+        )));
         for bad in [
             "../config.json",
             "..\\x",

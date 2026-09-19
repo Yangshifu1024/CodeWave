@@ -761,7 +761,10 @@ async fn empty_first_publish_is_not_a_trusted_baseline() {
         if let Some(b) = m.baseline(&req, &cfg).await {
             break b;
         }
-        assert!(Instant::now() < deadline, "server 未在预算内启动（拿不到基线句柄）");
+        assert!(
+            Instant::now() < deadline,
+            "server 未在预算内启动（拿不到基线句柄）"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     assert!(
@@ -810,7 +813,10 @@ async fn warm_server_still_diffs_normally() {
 
     let req_a = request(&p, "old A\n", "new A\n");
     let base_a = reliable_baseline(&m, &req_a, &cfg, Duration::from_secs(20)).await;
-    assert!(base_a.reliable(), "非空基线本来就应可信（不能把正常路径也砍掉）");
+    assert!(
+        base_a.reliable(),
+        "非空基线本来就应可信（不能把正常路径也砍掉）"
+    );
 
     // 同一项目、同一语言根 → 复用同一个 server 实例（就绪证据是实例级的）
     let b = p.root.join("src/b.ts");

@@ -200,10 +200,9 @@ pub async fn check(
 /// `ran() == false` 的场合文案里绝不允许出现「校验通过」——跳过必须如实带原因。
 pub fn outcome_text(path: &str, outcome: &ValidationOutcome, max_chars: usize) -> String {
     match outcome {
-        ValidationOutcome::Passed { lang } => format!(
-            "（写入后语义校验通过：{}）",
-            lang.display_name()
-        ),
+        ValidationOutcome::Passed { lang } => {
+            format!("（写入后语义校验通过：{}）", lang.display_name())
+        }
         ValidationOutcome::Diagnosed {
             items,
             removed,
@@ -331,7 +330,12 @@ async fn emit_hint_if_needed(
             // 找不到引导信息（理论上不该发生）→ 最保守形态：只给官方地址
             crate::lsp::InstallKind::Manual,
             None,
-            Some(crate::lsp::server_spec::spec(lang).install.docs_url.to_string()),
+            Some(
+                crate::lsp::server_spec::spec(lang)
+                    .install
+                    .docs_url
+                    .to_string(),
+            ),
             None,
         ),
     };
@@ -381,7 +385,10 @@ fn spawn_async_supplement(
         let outcome = match mgr.validate_async(req, base, cfg.lsp.clone()).await {
             Some(o) => o,
             None => {
-                tracing::debug!(lang = lang.id(), "异步补条未取得可信结论（无基线/未就绪），不回喂");
+                tracing::debug!(
+                    lang = lang.id(),
+                    "异步补条未取得可信结论（无基线/未就绪），不回喂"
+                );
                 return;
             }
         };
@@ -454,9 +461,7 @@ mod tests {
             truncated: 0,
         };
         let t = outcome_text("ui/src/x.ts", &out, 4000);
-        assert!(
-            t.starts_with("（写入后语义校验发现 1 个错误，请用 edit 修复：\n")
-        );
+        assert!(t.starts_with("（写入后语义校验发现 1 个错误，请用 edit 修复：\n"));
         assert!(t.contains("ui/src/x.ts:3:5 TS2322"));
         assert!(t.ends_with('）'));
     }
@@ -599,7 +604,10 @@ mod tests {
     #[test]
     fn route_covers_json_lsp_and_unsupported() {
         assert!(matches!(route(Path::new("a.json")), Route::Json));
-        assert!(matches!(route(Path::new("a.ts")), Route::Lsp(Lang::TypeScript)));
+        assert!(matches!(
+            route(Path::new("a.ts")),
+            Route::Lsp(Lang::TypeScript)
+        ));
         assert!(matches!(route(Path::new("a.rs")), Route::Lsp(Lang::Rust)));
         assert!(matches!(route(Path::new("b.vue")), Route::Unsupported));
         assert!(matches!(route(Path::new("b.svelte")), Route::Unsupported));

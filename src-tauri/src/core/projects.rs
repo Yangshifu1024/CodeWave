@@ -148,7 +148,8 @@ pub fn load(data_dir: &Path) -> Vec<ProjectEntry> {
     // ② 自愈：索引整个丢失（如 directories.json 被删）时，经会话快照找回项目
     if load_index(data_dir).entries.is_empty() {
         for (id, dir_str) in discover_from_sessions(data_dir) {
-            if let Some(mut fresh) = read_project_json(&Path::new(&dir_str).join(MANAGED_DIR_NAME)) {
+            if let Some(mut fresh) = read_project_json(&Path::new(&dir_str).join(MANAGED_DIR_NAME))
+            {
                 fresh = fresh.normalize();
                 if fresh.id == id {
                     fresh.data_dir = Some(
@@ -231,7 +232,14 @@ pub fn save_project(data_dir: &Path, entry: &ProjectEntry) -> anyhow::Result<()>
         .to_string_lossy()
         .into_owned();
     let stale_legacy = entry.data_dir.as_deref() == Some(legacy_default.as_str());
-    if entry.data_dir.as_deref().map(str::trim).unwrap_or("").is_empty() || stale_legacy {
+    if entry
+        .data_dir
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+        || stale_legacy
+    {
         entry.data_dir = Some(
             Path::new(&entry.directory)
                 .join(MANAGED_DIR_NAME)
@@ -306,10 +314,7 @@ mod tests {
         let updated = entry(dd.path(), "p1", "CodeWave2");
         save_project(dd.path(), &updated).unwrap();
         assert_eq!(
-            load(dd.path())
-                .iter().find(|p| p.id == "p1")
-                .unwrap()
-                .name,
+            load(dd.path()).iter().find(|p| p.id == "p1").unwrap().name,
             "CodeWave2"
         );
     }
@@ -323,7 +328,7 @@ mod tests {
         std::fs::write(project_file(&bad), b"not json").unwrap();
         save_project(dd.path(), &entry(dd.path(), "good", "G")).unwrap();
         assert_eq!(load(dd.path()).len(), 1); // bad 被跳过
-                                              // 删除 = 整个目录（含子目录文件）消失
+        // 删除 = 整个目录（含子目录文件）消失
         std::fs::write(
             data_dir_by_id(dd.path(), "good").join("logs").join("s.log"),
             b"x",
@@ -411,5 +416,4 @@ mod tests {
         let found2 = find(dd.path(), "p-new").expect("会话快照自愈发现");
         assert_eq!(found2.directory, dir);
     }
-
 }

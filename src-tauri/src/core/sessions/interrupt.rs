@@ -249,7 +249,11 @@ mod tests {
         assert_eq!(events[3], "s1:run:cancelled");
 
         // 索引中不存在的会话（子代理/任务运行）：不得凭空造条目
-        sink.emit(&"sub_deadbeef".to_string(), "run:done", serde_json::json!({}));
+        sink.emit(
+            &"sub_deadbeef".to_string(),
+            "run:done",
+            serde_json::json!({}),
+        );
         assert!(st.get("sub_deadbeef").is_none());
     }
 }

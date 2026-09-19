@@ -5,7 +5,7 @@
 //! 两者的**计数语义相反**：国际响应里的 `current_*_usage_count` 实为「剩余」，
 //! 中国响应里是「已用」（与上游实现一致，勿按字段名直觉修改）。
 
-use super::super::{fetch_json, AuthStyle, QuotaEntry};
+use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use super::{number, text};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::Value;
@@ -65,12 +65,21 @@ pub(crate) async fn fetch(
     key: &str,
     client: &reqwest::Client,
 ) -> Result<Vec<QuotaEntry>, String> {
-    let body = fetch_json(client, endpoint.url(), key, AuthStyle::Bearer, endpoint.label()).await?;
+    let body = fetch_json(
+        client,
+        endpoint.url(),
+        key,
+        AuthStyle::Bearer,
+        endpoint.label(),
+    )
+    .await?;
     parse_usage(&body, endpoint, Utc::now())
 }
 
 fn model_name(model: &Value) -> String {
-    text(model, "model_name").unwrap_or_default().to_ascii_lowercase()
+    text(model, "model_name")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 /// 模型必须至少带一个重置提示，否则无法给出“多久后恢复”这一必要信息。
@@ -128,7 +137,12 @@ fn build_entries(model: &Value, endpoint: Endpoint, now: DateTime<Utc>) -> Vec<Q
             .filter(|ms| *ms > 0.0)
             .and_then(|ms| now.checked_add_signed(Duration::milliseconds(ms as i64)))
             .map(|d| d.to_rfc3339_opts(SecondsFormat::Secs, true));
-        entries.push(QuotaEntry::percent(key, None, 100.0 - remaining_percent, resets_at));
+        entries.push(QuotaEntry::percent(
+            key,
+            None,
+            100.0 - remaining_percent,
+            resets_at,
+        ));
     }
     entries
 }

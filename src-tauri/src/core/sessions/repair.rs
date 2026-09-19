@@ -427,7 +427,7 @@ mod tests {
             ))]));
         }
         trim(&mut msgs, 256 * 1024 / 4, 2); // ≈64k token 预算
-                                            // 剩余轮次在预算内，每轮配对完整
+        // 剩余轮次在预算内，每轮配对完整
         let use_ids: std::collections::HashSet<String> = msgs
             .iter()
             .flat_map(|m| m.content.iter())
@@ -484,7 +484,10 @@ mod tests {
         }];
         sanitize(&mut msgs);
         repair(&mut msgs);
-        assert!(msgs.is_empty(), "唯一的块被丢弃后该 assistant 消息整体不应留存");
+        assert!(
+            msgs.is_empty(),
+            "唯一的块被丢弃后该 assistant 消息整体不应留存"
+        );
 
         let loaded = prepare_on_load(prepare_for_save(vec![
             Message::user_text("q"),

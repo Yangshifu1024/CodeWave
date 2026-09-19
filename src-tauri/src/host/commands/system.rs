@@ -116,10 +116,7 @@ mod app_version_tests {
             }
             None => {} // 无 git 环境（如 cargo package）：允许纯版本号
         }
-        assert!(
-            !text.contains(" ()"),
-            "不允许空括号占位：{text}"
-        );
+        assert!(!text.contains(" ()"), "不允许空括号占位：{text}");
     }
 }
 
@@ -188,9 +185,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
         c.arg(trimmed);
         c
     };
-    command
-        .spawn()
-        .map_err(|e| format!("打开链接失败：{e}"))?;
+    command.spawn().map_err(|e| format!("打开链接失败：{e}"))?;
     Ok(())
 }
 
@@ -208,7 +203,6 @@ fn validate_open_url(url: &str) -> Result<&str, String> {
     Ok(trimmed)
 }
 
-
 #[cfg(test)]
 mod about_commands_tests {
     use super::*;
@@ -219,7 +213,10 @@ mod about_commands_tests {
             validate_open_url("https://github.com/Yangshifu1024/CodeWave").unwrap(),
             "https://github.com/Yangshifu1024/CodeWave"
         );
-        assert_eq!(validate_open_url("  http://example.com  ").unwrap(), "http://example.com");
+        assert_eq!(
+            validate_open_url("  http://example.com  ").unwrap(),
+            "http://example.com"
+        );
     }
 
     #[test]
@@ -238,7 +235,10 @@ mod about_commands_tests {
         assert!(validate_open_url("https://example.com/a\tb").is_err());
         assert!(validate_open_url("https://example.com/\u{0}").is_err());
         // 首尾空白在校验前已 trim → 容忍（复制粘贴友好）
-        assert_eq!(validate_open_url("https://example.com/\n").unwrap(), "https://example.com/");
+        assert_eq!(
+            validate_open_url("https://example.com/\n").unwrap(),
+            "https://example.com/"
+        );
     }
 
     #[test]

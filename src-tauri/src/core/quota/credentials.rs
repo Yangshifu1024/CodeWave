@@ -4,8 +4,8 @@
 //! 不复用别家（[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
 
 use super::opencode_paths::{
-    auth_candidates, auth_entry, config_candidates, parse_jsonc, provider_api_key,
-    read_text, resolve_env_template, AuthEntry, RuntimeEnv,
+    AuthEntry, RuntimeEnv, auth_candidates, auth_entry, config_candidates, parse_jsonc,
+    provider_api_key, read_text, resolve_env_template,
 };
 use std::path::Path;
 
@@ -100,7 +100,7 @@ pub fn resolve_with(spec: &CredentialSpec, resolver: &Resolver<'_>) -> Credentia
                 return Credential::Found {
                     key,
                     source: "auth.json".to_string(),
-                }
+                };
             }
         }
     }

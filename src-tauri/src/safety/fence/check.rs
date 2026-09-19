@@ -53,9 +53,19 @@ const WRITE_ALL: &[&str] = &["tee", "dd", "touch", "install", "mkdir", "md"];
 /// 的最后一个位置参数同样是写目标；多目标形态如 `ln a b c`（目录）只查最后一个，
 /// 属已知残留——宁可过拦的 WRITE_ALL 不适用，这些命令首个位置参数多为源/模式）。
 const WRITE_LAST: &[&str] = &[
-    "cp", "mv", "copy", "cpi", "mi", "copy-item", "move-item",
+    "cp",
+    "mv",
+    "copy",
+    "cpi",
+    "mi",
+    "copy-item",
+    "move-item",
     // [POSIX 命令全集加固批次]：写目标在末位（ln 目标、rsync 目标、chmod/chown/chgrp 的目标文件）
-    "ln", "rsync", "chmod", "chown", "chgrp",
+    "ln",
+    "rsync",
+    "chmod",
+    "chown",
+    "chgrp",
 ];
 /// PowerShell 参数式写盘 cmdlet（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：AST 化后可见，此前不可见，[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)）。
 /// 每个非 flag 参数都按写目标判定——带值的命名 flag（如
@@ -85,8 +95,20 @@ const DOWNLOAD_CMDS: &[&str] = &[
 /// 组合短 flag 中含 k（--keep）或 r 时不豁免：gzip -k 保留原文件、bzip2 -r 递归
 /// 原地处理，隐式写语义仍在（k 只是不删源、不改变写 x.gz 的事实）。
 const IMPLICIT_WRITE_CMDS: &[&str] = &[
-    "gzip", "gunzip", "compress", "uncompress", "pack", "unpack", "bzip2", "bunzip2", "xz",
-    "unxz", "zstd", "unzstd", "lz4", "unlz4",
+    "gzip",
+    "gunzip",
+    "compress",
+    "uncompress",
+    "pack",
+    "unpack",
+    "bzip2",
+    "bunzip2",
+    "xz",
+    "unxz",
+    "zstd",
+    "unzstd",
+    "lz4",
+    "unlz4",
 ];
 /// 执行管道输入或传参脚本的 shell/解释器命令名。
 const INTERP_CMDS: &[&str] = &["sh", "bash", "zsh", "dash", "iex", "invoke-expression"];
@@ -98,16 +120,11 @@ const INTERP_CMDS: &[&str] = &["sh", "bash", "zsh", "dash", "iex", "invoke-expre
 /// 按首命令词命中，参数位置的普通词（`grep format x`）不受影响。
 const CMD_DANGER_CMDS: &[&str] = &[
     // 盘与文件系统
-    "format", "diskpart", "cipher", "chkdsk", "compact", "label", "subst",
-    // 注册表
-    "reg", "regedit", "regsvr32",
-    // 服务 / 计划任务 / 进程
-    "sc", "schtasks", "taskkill", "tskill",
-    // WMI
-    "wmic",
-    // 权限 / 属性 / ACL
-    "takeown", "icacls", "cacls", "attrib",
-    // 引导 / 挂载 / 系统映像
+    "format", "diskpart", "cipher", "chkdsk", "compact", "label", "subst", // 注册表
+    "reg", "regedit", "regsvr32", // 服务 / 计划任务 / 进程
+    "sc", "schtasks", "taskkill", "tskill", // WMI
+    "wmic",   // 权限 / 属性 / ACL
+    "takeown", "icacls", "cacls", "attrib", // 引导 / 挂载 / 系统映像
     "mountvol", "bcdedit", "bcdboot", "bootcfg", "dism", "sfc",
     // 卷影 / 备份 / 事件日志 / 审计
     "vssadmin", "wbadmin", "wevtutil", "auditpol",
@@ -171,48 +188,141 @@ impl FencePolicy {
 /// 块内参数式写入是已知残留，与 awk system() 同类）。
 const PLAN_READONLY_CMDS: &[&str] = &[
     // 目录/文件查看
-    "ls", "pwd", "cat", "head", "tail", "wc", "stat", "du", "df", "tree", "which", "file",
+    "ls",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "stat",
+    "du",
+    "df",
+    "tree",
+    "which",
+    "file",
     // 目录切换（只读定位；与后续白名单命令配合使用，写语义由 AST 写目标扫描兜底）
     "cd", // 搜索
-    "grep", "rg", "find", "ag",
+    "grep",
+    "rg",
+    "find",
+    "ag",
     // 基本 git 只读（push --force 等写语义经 L3 升级）
-    "git", "diff", "show", "log", "blame",
+    "git",
+    "diff",
+    "show",
+    "log",
+    "blame",
     // gh：命令名入列后**仍须过子命令白名单**（gh_plan_readonly_allowed）——
     // 远端写（pr merge / release edit --draft=false / api -X POST / secret set）不在 L1-L3 覆盖范围，
     // 整命令放行等于让 plan 档能合 PR、发版、改 secret（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）
     "gh",
     // 文本处理（管道内只读；出现重定向时由 L2 拦截）
-    "echo", "sort", "uniq", "cut", "tr", "column", "jq", "sed", "awk",
+    "echo",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "column",
+    "jq",
+    "sed",
+    "awk",
     // 系统/进程信息
-    "ps", "uname", "whoami", "date", "printenv", "lsof",
+    "ps",
+    "uname",
+    "whoami",
+    "date",
+    "printenv",
+    "lsof",
     // ===== POSIX 命令全集加固批次：压缩只读（不解压落盘，只向 stdout 输出/查看） =====
     // 压缩文件上的 grep/cat 等价物；裸 zcat 形态（含 .Z/.gz/.xz/.zst）全家族：
     // zcat/zgrep/zfgrep/zegrep/zless/zmore/zcmp/zdiff（gzip 家族）·
     // bzcat/bzgrep（bzip2）· xzcat/xzgrep（xz）· zstdcat/zstdgrep（zstd）· lz4cat（lz4）。
     // 注意：gzip/gunzip 等隐式写本体不入白名单，由 IMPLICIT_WRITE_CMDS 单独判定。
-    "zcat", "zgrep", "zfgrep", "zegrep", "zless", "zmore", "zcmp", "zdiff", "bzcat", "bzgrep",
-    "xzcat", "xzgrep", "zstdcat", "zstdgrep", "lz4cat",
+    "zcat",
+    "zgrep",
+    "zfgrep",
+    "zegrep",
+    "zless",
+    "zmore",
+    "zcmp",
+    "zdiff",
+    "bzcat",
+    "bzgrep",
+    "xzcat",
+    "xzgrep",
+    "zstdcat",
+    "zstdgrep",
+    "lz4cat",
     // ===== POSIX 命令全集加固批次：文件查证（逐字节比对/十六进制转储/元信息读取） =====
     // cmp/diff3/sdiff：文件比对只读；nl/tac/rev：文本变换到 stdout；
     // od/xxd/hexdump/strings：内容转储；readlink/realpath/basename/dirname：路径演算；
     // md5sum/sha256sum/shasum/cksum：哈希校验。全部无写语义（结果走 stdout）。
-    "cmp", "diff3", "sdiff", "nl", "tac", "rev", "od", "xxd", "hexdump", "strings", "readlink",
-    "realpath", "basename", "dirname", "md5sum", "sha256sum", "shasum", "cksum",
+    "cmp",
+    "diff3",
+    "sdiff",
+    "nl",
+    "tac",
+    "rev",
+    "od",
+    "xxd",
+    "hexdump",
+    "strings",
+    "readlink",
+    "realpath",
+    "basename",
+    "dirname",
+    "md5sum",
+    "sha256sum",
+    "shasum",
+    "cksum",
     // ===== [S7 审查返工增补] 归档工具（白名单直通≠放行）：tar -t/unzip -l 只读形态
     // 经 AST 判定放行；tar -x/unzip 解包形态由 AST Confirm 后经 G5 转 E_PLAN_READONLY，
     // plan 档只读承诺不破。cpio 不入白名单（plan 档由 L0 拦，属预期）。
-    "tar", "unzip",
+    "tar",
+    "unzip",
     // ===== PowerShell 只读 cmdlet / 别名（[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)：Windows 回退 shell 的原生只读管道） =====
     // 目录/文件/系统信息：枚举/读取/定位/存在性/元数据——纯读
-    "get-childitem", "get-content", "get-item", "get-psdrive", "get-process", "get-service",
-    "get-command", "get-help", "get-member", "get-date", "get-location", "get-random",
-    "test-path", "resolve-path", "measure-object", "compare-object", "select-string",
+    "get-childitem",
+    "get-content",
+    "get-item",
+    "get-psdrive",
+    "get-process",
+    "get-service",
+    "get-command",
+    "get-help",
+    "get-member",
+    "get-date",
+    "get-location",
+    "get-random",
+    "test-path",
+    "resolve-path",
+    "measure-object",
+    "compare-object",
+    "select-string",
     // 对象管道工具（无副作用变换，与 POSIX sort/uniq/cut 同级）
-    "select-object", "format-table", "format-list", "format-wide", "out-string", "out-host",
-    "sort-object", "group-object", "where-object", "foreach-object",
+    "select-object",
+    "format-table",
+    "format-list",
+    "format-wide",
+    "out-string",
+    "out-host",
+    "sort-object",
+    "group-object",
+    "where-object",
+    "foreach-object",
     // 常用别名（select-string 连同其 sls 别名一并列入；POSIX 名
     // ls/cat/echo/sort/diff 在 PowerShell 中本就是别名，天然复用）
-    "gci", "gc", "gi", "sls", "ft", "fw", "select", "foreach", "where", "%", "?",
+    "gci",
+    "gc",
+    "gi",
+    "sls",
+    "ft",
+    "fw",
+    "select",
+    "foreach",
+    "where",
+    "%",
+    "?",
 ];
 
 /// [POSIX 命令全集加固批次] L3 新增高危命令表（进程控制/持久化/任意代码执行/远程宿主/
@@ -228,16 +338,25 @@ const PLAN_READONLY_CMDS: &[&str] = &[
 /// AST 镜像：eval_command_with 按名判定；词法路径：high_risk_match 逐词扫描。
 const HIGH_RISK_CMDS: &[&str] = &[
     // 进程控制：终止/信号任意进程，可杀掉用户会话或系统服务（pgrep 仅查询不入）
-    "kill", "killall", "pkill",
+    "kill",
+    "killall",
+    "pkill",
     // 持久化与计划任务：写入 cron/at 队列、操纵系统服务（可驻留重启后执行）
-    "crontab", "at", "systemctl", "service", "launchctl",
+    "crontab",
+    "at",
+    "systemctl",
+    "service",
+    "launchctl",
     // 任意代码执行：osascript 可执行 AppleScript/JXA，等价任意代码
     "osascript",
     // 远程宿主：ssh/scp/sftp 在远端执行命令或传输文件，本地 fence 无法判定远端语义
     //（不做内层递归提取：远端 shell 语法/环境不可静态枚举，直接按名确认）
-    "ssh", "scp", "sftp",
+    "ssh",
+    "scp",
+    "sftp",
     // macOS 配置写：defaults/plutil 读写用户偏好与 plist，可篡改应用/系统行为实现持久化
-    "defaults", "plutil",
+    "defaults",
+    "plutil",
 ];
 
 /// 感知引号的分隔符切分：单/双引号内的 | ; & 不作分隔；与重定向相邻的
@@ -930,8 +1049,10 @@ fn handle_command(node: tree_sitter::Node, ctx: &mut FenceCtx) {
     // H5 修复：sh -c 'rm …' → 递归检查内层命令（深度上限 2；内层保持现行「视为审批开启」语义）。
     // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：powershell/pwsh 加入家族——`powershell -Command '…'` 会被解析成普通 bash
     // 单词，没有这一步嵌套的 PS 脚本永远不会被重判。
-    if matches!(name.as_str(), "sh" | "bash" | "dash" | "zsh" | "powershell" | "pwsh")
-        && ctx.depth < 2
+    if matches!(
+        name.as_str(),
+        "sh" | "bash" | "dash" | "zsh" | "powershell" | "pwsh"
+    ) && ctx.depth < 2
     {
         if let Some(pos) = args
             .iter()
@@ -1056,7 +1177,10 @@ fn handle_command_ps(node: tree_sitter::Node, ctx: &mut FenceCtx) {
         node.children(&mut c)
             .filter(|ch| Some(*ch) != name_node)
             .flat_map(|ch| match ch.kind() {
-                "command_parameter" | "generic_token" | "variable" | "string_literal"
+                "command_parameter"
+                | "generic_token"
+                | "variable"
+                | "string_literal"
                 | "expandable_string_literal" => v_push_ps(ch.utf8_text(ctx.src).unwrap_or("")),
                 _ => Vec::new(),
             })
@@ -1207,7 +1331,10 @@ fn download_write_targets(args: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
-        if (a == "-o" || a == "--output" || a == "--output-document" || a.eq_ignore_ascii_case("-outfile"))
+        if (a == "-o"
+            || a == "--output"
+            || a == "--output-document"
+            || a.eq_ignore_ascii_case("-outfile"))
             && i + 1 < args.len()
         {
             out.push(args[i + 1].clone());
@@ -1461,7 +1588,10 @@ fn eval_command_with(
     // [POSIX 命令全集加固批次] 灾难扩充：分区表/磁盘标签编辑器（fdisk/disklabel/
     // parted/gparted）对磁盘做不可逆写，灾难级；词法镜像见 disaster_match。
     if matches!(name, "fdisk" | "disklabel" | "parted" | "gparted") {
-        ctx.escalate(disaster_verdict(ctx.policy, "分区表/磁盘编辑操作（不可逆）"));
+        ctx.escalate(disaster_verdict(
+            ctx.policy,
+            "分区表/磁盘编辑操作（不可逆）",
+        ));
         return;
     }
     // [POSIX 命令全集加固批次] diskutil 子命令感知：擦盘（eraseDisk/eraseVolume…）
@@ -1472,8 +1602,14 @@ fn eval_command_with(
             .first()
             .map(|a| a.to_ascii_lowercase().starts_with("erase"))
             .unwrap_or(false);
-        let apfs_delete = args.iter().position(|a| a.eq_ignore_ascii_case("apfs"))
-            .is_some_and(|p| args[p + 1..].iter().any(|a| a.to_ascii_lowercase().starts_with("delete")));
+        let apfs_delete = args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case("apfs"))
+            .is_some_and(|p| {
+                args[p + 1..]
+                    .iter()
+                    .any(|a| a.to_ascii_lowercase().starts_with("delete"))
+            });
         if erase || apfs_delete {
             ctx.escalate(disaster_verdict(
                 ctx.policy,
@@ -1502,7 +1638,9 @@ fn eval_command_with(
     }
     if name == "git"
         && args.first().map(|s| s.as_str()) == Some("push")
-        && args.iter().any(|a| a == "--force" || a == "-f" || a.starts_with("--force="))
+        && args
+            .iter()
+            .any(|a| a == "--force" || a == "-f" || a.starts_with("--force="))
     {
         ctx.escalate(high_risk_verdict(ctx.policy, "git push --force"));
         return;
@@ -1585,7 +1723,9 @@ fn high_risk_cmd_reason(name: &str) -> Option<&'static str> {
         name,
         "crontab" | "at" | "systemctl" | "service" | "launchctl"
     ) {
-        Some("持久化与计划任务（crontab/at/systemctl/service/launchctl）可在重启后驻留执行，需用户确认")
+        Some(
+            "持久化与计划任务（crontab/at/systemctl/service/launchctl）可在重启后驻留执行，需用户确认",
+        )
     } else if name == "osascript" {
         Some("osascript 可执行任意 AppleScript/JXA 代码（任意代码执行），需用户确认")
     } else if matches!(name, "ssh" | "scp" | "sftp") {
@@ -1667,10 +1807,7 @@ pub fn check_write_target(
         if let Some(link) = intermediate_symlink_escape(&lex, &roots_canon) {
             return Verdict::Block {
                 code: "E_PATH_OUTSIDE".into(),
-                message: format!(
-                    "写目标经符号链接逃逸出工作区：{}",
-                    link.display()
-                ),
+                message: format!("写目标经符号链接逃逸出工作区：{}", link.display()),
             };
         }
         // ConfirmEach/Plan：根内写同样需要确认（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 语义表）
@@ -1769,7 +1906,10 @@ fn fallback_scan(cmd: &str) -> Verdict {
             }
         }
     }
-    if CMD_DANGER_KEYWORDS.iter().any(|k| lower_all(cmd).contains(k)) {
+    if CMD_DANGER_KEYWORDS
+        .iter()
+        .any(|k| lower_all(cmd).contains(k))
+    {
         return Verdict::Confirm(ConfirmReason::HighRisk(
             "cmd 清空写短语（type nul / more +0 重定向）按高危确认",
         ));
@@ -2026,19 +2166,14 @@ fn disaster_match(cmd: &str) -> Option<&'static str> {
         return Some("分区表/磁盘编辑操作（不可逆）");
     }
     if let Some(p) = tokens.iter().position(|t| *t == "diskutil") {
-        if tokens
-            .get(p + 1)
-            .is_some_and(|t| t.starts_with("erase"))
-        {
+        if tokens.get(p + 1).is_some_and(|t| t.starts_with("erase")) {
             return Some("diskutil 擦除/删除卷操作（不可逆）");
         }
         // [POSIX 命令全集加固批次] `diskutil apfs deleteVolume/deleteContainer`（词法短语）：
         // 与 AST 子命令感知同口径（apfs 后随 delete*）——没有这里的灾难短语，
         // 下溢高危表的裸 diskutil 会以低位阶抢先命中，灾难级不可达。
         if tokens.get(p + 1).map(|t| *t == "apfs").unwrap_or(false)
-            && tokens
-                .get(p + 2)
-                .is_some_and(|t| t.starts_with("delete"))
+            && tokens.get(p + 2).is_some_and(|t| t.starts_with("delete"))
         {
             return Some("diskutil 擦除/删除卷操作（不可逆）");
         }
@@ -2089,7 +2224,8 @@ fn high_risk_match(cmd: &str) -> Option<&'static str> {
     if let Some(pos) = tokens.iter().position(|t| *t == "git") {
         if tokens.get(pos + 1).is_some_and(|t| *t == "reset") {
             return Some("git reset（可能丢弃工作区更改或移动分支）");
-        }    }
+        }
+    }
     // [POSIX 命令全集加固批次] L3 高危扩充（HIGH_RISK_CMDS）词法镜像（AST 镜像见
     // eval_command_with / high_risk_cmd_reason）：按**首命令词**命中（与
     // CMD_DANGER_CMDS「按首命令词」纪律一致）——参数位置的普通词不得误拦：
@@ -2139,5 +2275,3 @@ fn high_risk_match(cmd: &str) -> Option<&'static str> {
     }
     None
 }
-
-

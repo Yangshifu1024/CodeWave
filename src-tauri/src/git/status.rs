@@ -255,14 +255,16 @@ mod tests {
 
         let info = status(dir.path()).unwrap().unwrap();
         assert!(!info.branch.is_empty());
-        assert!(info
-            .entries
-            .iter()
-            .any(|e| e.path == "hello.txt" && e.worktree_modified));
-        assert!(info
-            .entries
-            .iter()
-            .any(|e| e.path == "new.txt" && e.worktree_new));
+        assert!(
+            info.entries
+                .iter()
+                .any(|e| e.path == "hello.txt" && e.worktree_modified)
+        );
+        assert!(
+            info.entries
+                .iter()
+                .any(|e| e.path == "new.txt" && e.worktree_new)
+        );
     }
 
     #[test]
@@ -299,9 +301,11 @@ mod tests {
                 .any(|f| f.path == "a.txt" && f.additions == 1 && f.deletions == 1),
             "{files:?}"
         );
-        assert!(files
-            .iter()
-            .any(|f| f.path == "b.txt" && f.status == "added"));
+        assert!(
+            files
+                .iter()
+                .any(|f| f.path == "b.txt" && f.status == "added")
+        );
         let a = files.iter().find(|f| f.path == "a.txt").unwrap();
         assert!(a.patch.contains("-line2"));
         assert!(a.patch.contains("+line2-changed"));

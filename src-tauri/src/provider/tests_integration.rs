@@ -386,7 +386,10 @@ async fn custom_headers_sent_on_wire() {
 
     let head = captured.lock().unwrap().to_lowercase();
     assert_custom_header_wire(&head, "sess-xyz", "authorization: bearer test-key");
-    assert!(!head.contains("bearer evil"), "保留头被自定义值覆盖：{head}");
+    assert!(
+        !head.contains("bearer evil"),
+        "保留头被自定义值覆盖：{head}"
+    );
 }
 
 /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：AnthropicMessages 协议同样应用自定义头，
@@ -461,9 +464,18 @@ async fn custom_headers_sent_on_wire_anthropic() {
         head.contains("anthropic-version: 2023-06-01"),
         "适配器 anthropic-version 被覆盖：{head}"
     );
-    assert!(!head.contains("9999-01-01"), "保留头 anthropic-version 被覆盖：{head}");
-    assert!(!head.contains("evil-key"), "保留头 x-api-key 被覆盖：{head}");
-    assert!(!head.contains("bearer evil"), "保留头 Authorization 被覆盖：{head}");
+    assert!(
+        !head.contains("9999-01-01"),
+        "保留头 anthropic-version 被覆盖：{head}"
+    );
+    assert!(
+        !head.contains("evil-key"),
+        "保留头 x-api-key 被覆盖：{head}"
+    );
+    assert!(
+        !head.contains("bearer evil"),
+        "保留头 Authorization 被覆盖：{head}"
+    );
 }
 
 /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：OpenAiResponses 协议同样应用自定义头，
@@ -519,7 +531,10 @@ async fn custom_headers_sent_on_wire_responses() {
 
     let head = captured.lock().unwrap().to_lowercase();
     assert_custom_header_wire(&head, "sess-xyz", "authorization: bearer test-key");
-    assert!(!head.contains("bearer evil"), "保留头被自定义值覆盖：{head}");
+    assert!(
+        !head.contains("bearer evil"),
+        "保留头被自定义值覆盖：{head}"
+    );
 }
 
 /// 缺陷守护（不联网，历史 → 请求体整条链路）：[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)
@@ -627,4 +642,3 @@ fn reasoning_content_passthrough_from_history_to_body() {
         "无思考块的 assistant 不得带 reasoning_content：{plain}"
     );
 }
-

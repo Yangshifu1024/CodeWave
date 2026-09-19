@@ -155,7 +155,6 @@ impl LspPool {
                 let detail = entry.detail.clone();
                 drop(entries);
                 self.spawn_start(
-                    lang,
                     key.clone(),
                     generation,
                     res.clone(),
@@ -211,7 +210,6 @@ impl LspPool {
         );
         drop(entries);
         self.spawn_start(
-            lang,
             key,
             generation,
             res.clone(),
@@ -223,9 +221,9 @@ impl LspPool {
     }
 
     /// 在后台推进「spawn + initialize」，完成后写回状态（调用方不等）。
+    /// 语言取 `key.lang`（key 本身就是「语言根 + 语言」），不再单独传参，免得两者不一致。
     fn spawn_start(
         &self,
-        lang: Lang,
         key: PoolKey,
         generation: u64,
         res: ServerResolution,
@@ -236,6 +234,7 @@ impl LspPool {
         let inner = self.inner.clone();
         let project_root = project_root.to_path_buf();
         tokio::spawn(async move {
+            let lang = key.lang;
             let spec = server_spec::spec(lang);
             let mut env = inner.env.lock().unwrap().clone();
             // Java 专有：把定位到的 JDK 21+ 以 JAVA_HOME 注入子进程（绝不读机器现有的 JAVA_HOME）

@@ -3,7 +3,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -116,7 +116,7 @@ impl Tool for GrepTool {
                     return ToolOutcome::err(
                         "E_ARGS",
                         format!("outputMode 无效：{m}（可选 content | files | count）"),
-                    )
+                    );
                 }
             },
         };
@@ -291,20 +291,15 @@ mod tests {
         std::fs::write(ws.path().join("target/ignored.rs"), "TODO in ignored\n").unwrap();
         std::fs::write(ws.path().join(".gitignore"), b"target/\n").unwrap();
 
-        let out = run_grep(
-            ws.path(),
-            "TODO",
-            None,
-            OutputMode::Content,
-            0,
-            100,
-        );
+        let out = run_grep(ws.path(), "TODO", None, OutputMode::Content, 0, 100);
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["total"], 2); // target/ 被 gitignore 排除
         let matches = out.data["matches"].as_array().unwrap();
-        assert!(matches
-            .iter()
-            .any(|m| m["path"].as_str().unwrap().ends_with("a.rs") && m["line"] == 2));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m["path"].as_str().unwrap().ends_with("a.rs") && m["line"] == 2)
+        );
     }
 
     #[test]
@@ -312,24 +307,10 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         std::fs::write(ws.path().join("a.rs"), "x\nx\nx\n").unwrap();
         std::fs::write(ws.path().join("a.txt"), "x\n").unwrap();
-        let out = run_grep(
-            ws.path(),
-            "x",
-            Some("*.rs"),
-            OutputMode::Content,
-            0,
-            2,
-        );
+        let out = run_grep(ws.path(), "x", Some("*.rs"), OutputMode::Content, 0, 2);
         assert_eq!(out.data["total"], 3);
         assert_eq!(out.data["shown"], 2);
-        let out2 = run_grep(
-            ws.path(),
-            "x",
-            Some("*.rs"),
-            OutputMode::Content,
-            2,
-            2,
-        );
+        let out2 = run_grep(ws.path(), "x", Some("*.rs"), OutputMode::Content, 2, 2);
         assert_eq!(out2.data["shown"], 1);
     }
 
@@ -338,37 +319,25 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         std::fs::write(ws.path().join("a.rs"), "hit\nhit\nhit\n").unwrap();
         std::fs::write(ws.path().join("b.rs"), "hit\n").unwrap();
-        let out = run_grep(
-            ws.path(),
-            "hit",
-            None,
-            OutputMode::Files,
-            0,
-            100,
-        );
+        let out = run_grep(ws.path(), "hit", None, OutputMode::Files, 0, 100);
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["total"], 4, "total 仍是匹配总数");
         assert_eq!(out.data["files_total"], 2);
         assert_eq!(out.data["shown"], 2);
-        assert!(out.data["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|v| v.is_string()));
+        assert!(
+            out.data["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v.is_string())
+        );
         assert!(
             out.data.get("file_counts").is_none(),
             "files 模式不应带 file_counts"
         );
 
         // 按文件分页
-        let out2 = run_grep(
-            ws.path(),
-            "hit",
-            None,
-            OutputMode::Files,
-            0,
-            1,
-        );
+        let out2 = run_grep(ws.path(), "hit", None, OutputMode::Files, 0, 1);
         assert_eq!(out2.data["shown"], 1);
         assert_eq!(out2.data["truncated"], true);
     }
@@ -378,14 +347,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         std::fs::write(ws.path().join("a.rs"), "hit\nhit\nhit\n").unwrap();
         std::fs::write(ws.path().join("b.rs"), "hit\n").unwrap();
-        let out = run_grep(
-            ws.path(),
-            "hit",
-            None,
-            OutputMode::Count,
-            0,
-            100,
-        );
+        let out = run_grep(ws.path(), "hit", None, OutputMode::Count, 0, 100);
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["total"], 4);
         assert_eq!(out.data["files_total"], 2);
@@ -408,14 +370,7 @@ mod tests {
     #[test]
     fn bad_regex_is_clean_error() {
         let ws = tempfile::tempdir().unwrap();
-        let out = run_grep(
-            ws.path(),
-            "(unclosed",
-            None,
-            OutputMode::Content,
-            0,
-            10,
-        );
+        let out = run_grep(ws.path(), "(unclosed", None, OutputMode::Content, 0, 10);
         assert_eq!(out.error.unwrap().code, "E_ARGS");
     }
 }

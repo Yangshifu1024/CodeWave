@@ -4,7 +4,7 @@
 use crate::core::agent::{AgentCore, EventSink, NormalizedCall, SessionRuntime};
 use crate::core::session_log;
 use crate::core::types::Content;
-use crate::tools::{collect_unknown_fields, ToolCtx, ToolKind, ToolOutcome};
+use crate::tools::{ToolCtx, ToolKind, ToolOutcome, collect_unknown_fields};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -25,6 +25,10 @@ pub struct BatchOutcome {
 /// 执行一个批次的全部工具调用：先做批次级策略判定（Interactive 独占、同批次同路径写冲突、
 /// 本 run 工具排除集硬门、plan 纪律硬门），再并发执行（文件写串行、其余并发上限 4），最后组装模型侧结果。
 /// 硬门在 spawn 前拒绝，绝不真实执行；每个调用独立 panic 兜底（E_TOOL_PANIC）。
+// 8 个参数分别来自运行上下文的不同来源（core / rt / 本批调用 / 排除集 / 主会话标记 /
+// 取消令牌 / run_id），都必要；收成结构体只是换壳，却要连带改本文件测试模块里 17 处调用点
+// 与 drive.rs 的 1 处调用点（测试代码本次范围禁改），收益不划算。
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_batch(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
@@ -242,9 +246,12 @@ pub async fn execute_batch(
     let mut plan_approved = false;
     let mut call_summary = Vec::with_capacity(calls.len());
     for (i, call) in calls.iter().enumerate() {
-        let (out, extra) = outcomes[i]
-            .clone()
-            .unwrap_or_else(|| (ToolOutcome::err("E_TOOL_PANIC", "工具执行异常终止"), Vec::new()));
+        let (out, extra) = outcomes[i].clone().unwrap_or_else(|| {
+            (
+                ToolOutcome::err("E_TOOL_PANIC", "工具执行异常终止"),
+                Vec::new(),
+            )
+        });
         if call.name == "suggest" && out.ok {
             if let Some(items) = out.data["suggestions"].as_array() {
                 suggest_items = Some(
@@ -289,10 +296,7 @@ pub async fn execute_batch(
 /// - todos 为空且是写工具 → E_PLAN_REQUIRED（实现类工作开始前必须先建计划）；
 /// - todos 非空且全部 Completed 且是写工具 → E_PLAN_STALE（计划已收尾，继续写入属计划外工作）；
 /// - 其余（存在 Pending/InProgress，或非写工具）→ 放行。
-fn plan_gate_verdict(
-    todos: &[crate::tools::plan::Todo],
-    is_write: bool,
-) -> Option<&'static str> {
+fn plan_gate_verdict(todos: &[crate::tools::plan::Todo], is_write: bool) -> Option<&'static str> {
     if !is_write {
         return None;
     }
@@ -538,7 +542,10 @@ async fn run_tool(
                     .scope_denials
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return (
-                    ToolOutcome::err("E_SCOPE_DENIED", "用户拒绝了计划外步骤的写入。请收窄到已批准的 todos 范围，或向用户说明理由后重试。"),
+                    ToolOutcome::err(
+                        "E_SCOPE_DENIED",
+                        "用户拒绝了计划外步骤的写入。请收窄到已批准的 todos 范围，或向用户说明理由后重试。",
+                    ),
                     Vec::new(),
                     0,
                 );
@@ -748,7 +755,8 @@ mod tests {
             .collect();
         assert_eq!(errs.len(), 2, "两个调用都应为取消错误: {errs:?}");
         assert!(
-            errs.iter().all(|e| e.contains("E_CANCELLED") || e.contains("E_PLAN_READONLY")),
+            errs.iter()
+                .all(|e| e.contains("E_CANCELLED") || e.contains("E_PLAN_READONLY")),
             "两个调用都应在取消时立即终止（either 合成取消结果或 fence/计划门拦截，绝不能是 30s sleep 走完的成功结果）: {errs:?}"
         );
         // 监督摘要同样覆盖全部调用（call_summary 与 results 同长）
@@ -818,10 +826,7 @@ mod tests {
             })
             .next()
             .expect("应有错误结果");
-        assert!(
-            err.contains("E_CANCELLED"),
-            "预取消应在闸层立即拦截：{err}"
-        );
+        assert!(err.contains("E_CANCELLED"), "预取消应在闸层立即拦截：{err}");
         // 文件未被修改
         assert_eq!(std::fs::read(ws.path().join("f.txt")).unwrap(), b"hello");
     }
@@ -1131,10 +1136,7 @@ mod tests {
         (ws, core, rt)
     }
 
-    fn plan_todo(
-        title: &str,
-        status: crate::tools::plan::TodoStatus,
-    ) -> crate::tools::plan::Todo {
+    fn plan_todo(title: &str, status: crate::tools::plan::TodoStatus) -> crate::tools::plan::Todo {
         crate::tools::plan::Todo {
             title: title.into(),
             status,
@@ -1344,7 +1346,8 @@ mod tests {
             .filter(|t| t.contains("计划提醒："))
             .count();
         assert_eq!(
-            hints, 1,
+            hints,
+            1,
             "模型侧应恰有一条计划提醒：{:?}",
             ok_toolresult_texts(&out)
         );
@@ -1355,7 +1358,10 @@ mod tests {
             "提醒不应再以独立 Text 块出现（wire 层会丢弃该通道）：{:?}",
             model_text_chunks(&out)
         );
-        assert!(rt.plan_hint_emitted.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            rt.plan_hint_emitted
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
 
         // f2：重复写 → 不再重复提醒（CAS 已消费）
         let out2 = execute_batch(
@@ -1402,9 +1408,10 @@ mod tests {
                 .any(|t| t.contains("计划提醒：")),
             "有进行中条目时不应提醒"
         );
-        assert!(!rt
-            .plan_hint_emitted
-            .load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            !rt.plan_hint_emitted
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 
     /// 🟡4a：同批两个不同文件写 + todos 空 → 并发批次共享同一入口快照，

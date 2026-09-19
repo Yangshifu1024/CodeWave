@@ -123,7 +123,9 @@ pub async fn guard_host(host: &str, port: u16, allow_private: bool) -> Result<()
         if is_private_ip(ip) {
             return Err(HopError {
                 code: "E_SSRF_BLOCKED",
-                message: format!("目标 {host}:{port} 是内网/保留地址，已被 SSRF 守卫拒绝（如需访问本地服务，在设置中开启 allow_private_network）"),
+                message: format!(
+                    "目标 {host}:{port} 是内网/保留地址，已被 SSRF 守卫拒绝（如需访问本地服务，在设置中开启 allow_private_network）"
+                ),
             });
         }
         return Ok(());
@@ -211,12 +213,18 @@ mod tests {
         // ULA fc00::/7（fc00..fdff）
         assert!(is_private_ip("fc00::".parse().unwrap()));
         assert!(is_private_ip("fdff::1".parse().unwrap()));
-        assert!(!is_private_ip("fe00::1".parse().unwrap()), "fe00 is outside fc00::/7");
+        assert!(
+            !is_private_ip("fe00::1".parse().unwrap()),
+            "fe00 is outside fc00::/7"
+        );
         assert!(!is_private_ip("fb00::1".parse().unwrap()));
         // link-local fe80::/10（掩码 0xffc0）：fe80..febf
         assert!(is_private_ip("fe80::".parse().unwrap()));
         assert!(is_private_ip("febf:ffff::1".parse().unwrap()));
-        assert!(!is_private_ip("fec0::1".parse().unwrap()), "fec0 (old site-local) is not treated as private");
+        assert!(
+            !is_private_ip("fec0::1".parse().unwrap()),
+            "fec0 (old site-local) is not treated as private"
+        );
         // 全局单播保持公网
         assert!(!is_private_ip("2001:db8::1".parse().unwrap()));
         assert!(!is_private_ip("2606:4700::1111".parse().unwrap()));
@@ -277,7 +285,10 @@ mod tests {
         let resp = client.get(format!("http://{addr}/b")).send().await.unwrap();
         let ok = match read_body_limited(resp, 1000).await {
             Ok(b) => b,
-            Err(e) => panic!("within-limit read must succeed, got {}: {}", e.code, e.message),
+            Err(e) => panic!(
+                "within-limit read must succeed, got {}: {}",
+                e.code, e.message
+            ),
         };
         assert_eq!(ok.len(), 300);
 

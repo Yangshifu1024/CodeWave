@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// http_request 工具入参。
 #[derive(Deserialize)]
@@ -314,9 +314,7 @@ mod tests {
     }
 
     fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack
-            .windows(needle.len())
-            .position(|w| w == needle)
+        haystack.windows(needle.len()).position(|w| w == needle)
     }
 
     fn response(status_line: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
@@ -398,7 +396,10 @@ mod tests {
         assert_eq!(out.error.unwrap().code, "E_ARGS");
         // 不允许的方法
         let out = tool
-            .run(&ctx, json!({"url": "http://example.com/", "method": "TRACE"}))
+            .run(
+                &ctx,
+                json!({"url": "http://example.com/", "method": "TRACE"}),
+            )
             .await;
         assert_eq!(out.error.unwrap().code, "E_ARGS");
         // 无法解析的 URL
@@ -412,9 +413,7 @@ mod tests {
         let core = core_with(false);
         let ctx = make_ctx(core);
         let tool = HttpRequestTool;
-        let out = tool
-            .run(&ctx, json!({"url": "http://127.0.0.1:9/x"}))
-            .await;
+        let out = tool.run(&ctx, json!({"url": "http://127.0.0.1:9/x"})).await;
         let err = out.error.unwrap();
         assert_eq!(err.code, "E_SSRF_BLOCKED");
         assert!(err.message.contains("SSRF"));
@@ -425,15 +424,17 @@ mod tests {
         let core = core_with(true);
         let ctx = make_ctx(core);
         let body = br#"{"ok":true,"n":1}"#;
-        let (addr, received, handle) = start_server(|_addr| vec![response(
-            "HTTP/1.1 200 OK",
-            &[
-                ("Content-Type", "application/json"),
-                ("Set-Cookie", "sid=secret; HttpOnly"),
-                ("WWW-Authenticate", "Basic realm=secret"),
-            ],
-            body,
-        )]);
+        let (addr, received, handle) = start_server(|_addr| {
+            vec![response(
+                "HTTP/1.1 200 OK",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Set-Cookie", "sid=secret; HttpOnly"),
+                    ("WWW-Authenticate", "Basic realm=secret"),
+                ],
+                body,
+            )]
+        });
         let tool = HttpRequestTool;
         let out = tool
             .run(
@@ -475,14 +476,16 @@ mod tests {
     async fn redirect_hop_followed_then_final_response() {
         let core = core_with(true);
         let ctx = make_ctx(core);
-        let (addr, received, handle) = start_server(|_addr| vec![
-            response(
-                "HTTP/1.1 302 Found",
-                &[("Location", "/final?x=1")],
-                b"",
-            ),
-            response("HTTP/1.1 200 OK", &[("Content-Type", "text/plain")], b"landed"),
-        ]);
+        let (addr, received, handle) = start_server(|_addr| {
+            vec![
+                response("HTTP/1.1 302 Found", &[("Location", "/final?x=1")], b""),
+                response(
+                    "HTTP/1.1 200 OK",
+                    &[("Content-Type", "text/plain")],
+                    b"landed",
+                ),
+            ]
+        });
         let tool = HttpRequestTool;
         let out = tool
             .run(&ctx, json!({"url": format!("http://{addr}/start")}))
@@ -492,7 +495,10 @@ mod tests {
         let reqs = received.lock().unwrap();
         assert_eq!(reqs.len(), 2, "redirect must be followed hop by hop");
         assert!(reqs[0].starts_with("GET /start"));
-        assert!(reqs[1].starts_with("GET /final?x=1"), "Location must be joined onto the base URL");
+        assert!(
+            reqs[1].starts_with("GET /final?x=1"),
+            "Location must be joined onto the base URL"
+        );
         assert_eq!(out.data["body"], "landed");
     }
 
@@ -520,12 +526,14 @@ mod tests {
     async fn redirect_to_invalid_location_maps_to_e_url() {
         let core = core_with(true);
         let ctx = make_ctx(core);
-        let (addr, _received, handle) = start_server(|_addr| vec![response(
-            "HTTP/1.1 302 Found",
-            // 未闭合的方括号在拼接时会被 URL 解析器拒绝
-            &[("Location", "http://[")],
-            b"",
-        )]);
+        let (addr, _received, handle) = start_server(|_addr| {
+            vec![response(
+                "HTTP/1.1 302 Found",
+                // 未闭合的方括号在拼接时会被 URL 解析器拒绝
+                &[("Location", "http://[")],
+                b"",
+            )]
+        });
         let tool = HttpRequestTool;
         let out = tool
             .run(&ctx, json!({"url": format!("http://{addr}/x")}))
@@ -542,24 +550,32 @@ mod tests {
         let tool = HttpRequestTool;
 
         // text/plain 体保持原始字符串
-        let (addr, _r, handle) = start_server(|_addr| vec![response(
-            "HTTP/1.1 200 OK",
-            &[("Content-Type", "text/plain; charset=utf-8")],
-            "plain 文本".as_bytes(),
-        )]);
-        let out = tool.run(&ctx, json!({"url": format!("http://{addr}/t")})).await;
+        let (addr, _r, handle) = start_server(|_addr| {
+            vec![response(
+                "HTTP/1.1 200 OK",
+                &[("Content-Type", "text/plain; charset=utf-8")],
+                "plain 文本".as_bytes(),
+            )]
+        });
+        let out = tool
+            .run(&ctx, json!({"url": format!("http://{addr}/t")}))
+            .await;
         handle.join().unwrap();
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["body"], "plain 文本");
         assert_eq!(out.data["binary"], json!(false));
 
         // 未知的二进制 content type → binary 标志 + size/mime，body 为 null
-        let (addr, _r, handle) = start_server(|_addr| vec![response(
-            "HTTP/1.1 200 OK",
-            &[("Content-Type", "application/octet-stream")],
-            &[0xFF, 0x00, 0x12],
-        )]);
-        let out = tool.run(&ctx, json!({"url": format!("http://{addr}/b")})).await;
+        let (addr, _r, handle) = start_server(|_addr| {
+            vec![response(
+                "HTTP/1.1 200 OK",
+                &[("Content-Type", "application/octet-stream")],
+                &[0xFF, 0x00, 0x12],
+            )]
+        });
+        let out = tool
+            .run(&ctx, json!({"url": format!("http://{addr}/b")}))
+            .await;
         handle.join().unwrap();
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["binary"], json!(true));
@@ -568,12 +584,17 @@ mod tests {
         assert_eq!(out.data["binary_mime"], "application/octet-stream");
 
         // 声明超大的 Content-Length（50MB 上限）→ 读取前即 E_TOO_LARGE
-        let (addr, _r, handle) = start_server(|_addr| vec![{
-            let mut out = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n".to_vec();
-            out.extend_from_slice(b"Content-Length: 60000000\r\nConnection: close\r\n\r\n");
-            out
-        }]);
-        let out = tool.run(&ctx, json!({"url": format!("http://{addr}/big")})).await;
+        let (addr, _r, handle) = start_server(|_addr| {
+            vec![{
+                let mut out =
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n".to_vec();
+                out.extend_from_slice(b"Content-Length: 60000000\r\nConnection: close\r\n\r\n");
+                out
+            }]
+        });
+        let out = tool
+            .run(&ctx, json!({"url": format!("http://{addr}/big")}))
+            .await;
         handle.join().unwrap();
         assert!(!out.ok);
         assert_eq!(out.error.unwrap().code, "E_TOO_LARGE");
@@ -583,15 +604,22 @@ mod tests {
     async fn non_json_error_status_is_reported_not_failed() {
         let core = core_with(true);
         let ctx = make_ctx(core);
-        let (addr, _r, handle) = start_server(|_addr| vec![response(
-            "HTTP/1.1 404 Not Found",
-            &[("Content-Type", "text/plain")],
-            b"missing",
-        )]);
+        let (addr, _r, handle) = start_server(|_addr| {
+            vec![response(
+                "HTTP/1.1 404 Not Found",
+                &[("Content-Type", "text/plain")],
+                b"missing",
+            )]
+        });
         let tool = HttpRequestTool;
-        let out = tool.run(&ctx, json!({"url": format!("http://{addr}/x")})).await;
+        let out = tool
+            .run(&ctx, json!({"url": format!("http://{addr}/x")}))
+            .await;
         handle.join().unwrap();
-        assert!(out.ok, "HTTP-level errors surface as status, not tool failure");
+        assert!(
+            out.ok,
+            "HTTP-level errors surface as status, not tool failure"
+        );
         assert_eq!(out.data["status"], 404);
         assert_eq!(out.data["status_text"], "Not Found");
         assert_eq!(out.data["body"], "missing");
@@ -607,7 +635,9 @@ mod tests {
         let addr = probe.local_addr().unwrap();
         drop(probe);
         let tool = HttpRequestTool;
-        let out = tool.run(&ctx, json!({"url": format!("http://{addr}/x")})).await;
+        let out = tool
+            .run(&ctx, json!({"url": format!("http://{addr}/x")}))
+            .await;
         assert_eq!(out.error.unwrap().code, "E_NETWORK");
     }
 
@@ -626,7 +656,10 @@ mod tests {
         let tool = HttpRequestTool;
         let started = std::time::Instant::now();
         let out = tool
-            .run(&ctx, json!({"url": format!("http://{addr}/slow"), "timeoutSeconds": 0}))
+            .run(
+                &ctx,
+                json!({"url": format!("http://{addr}/slow"), "timeoutSeconds": 0}),
+            )
             .await;
         let elapsed = started.elapsed();
         server.join().unwrap();

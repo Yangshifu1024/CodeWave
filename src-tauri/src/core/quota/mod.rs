@@ -173,7 +173,11 @@ impl ProviderKind {
             },
             Self::MiniMaxCn => CredentialSpec {
                 env_vars: &["MINIMAX_CHINA_CODING_PLAN_API_KEY"],
-                config_keys: &["minimax-china-coding-plan", "minimax-cn-coding-plan", "minimax-cn"],
+                config_keys: &[
+                    "minimax-china-coding-plan",
+                    "minimax-cn-coding-plan",
+                    "minimax-cn",
+                ],
                 auth_keys: &["minimax-china-coding-plan", "minimax-cn-coding-plan"],
             },
             Self::Kimi => CredentialSpec {
@@ -183,7 +187,12 @@ impl ProviderKind {
             },
             Self::Zhipu => CredentialSpec {
                 env_vars: &["ZHIPU_API_KEY", "ZHIPU_CODING_PLAN_API_KEY"],
-                config_keys: &["zhipu", "zhipu-coding-plan", "zhipuai-coding-plan", "glm-coding-plan"],
+                config_keys: &[
+                    "zhipu",
+                    "zhipu-coding-plan",
+                    "zhipuai-coding-plan",
+                    "glm-coding-plan",
+                ],
                 auth_keys: &["zhipu-coding-plan", "zhipuai-coding-plan"],
             },
             Self::Zai => CredentialSpec {
@@ -225,9 +234,11 @@ fn host_matches(host: &str, candidates: &[&str]) -> bool {
 
 /// 展示顺序：当前会话模型所属 provider 的 base_url 命中 → 置顶；其余按固定注册序。
 pub fn order_for(active_base_url: Option<&str>) -> Vec<ProviderKind> {
-    let matched = active_base_url
-        .and_then(host_of)
-        .and_then(|host| ALL.iter().copied().find(|k| host_matches(&host, k.base_url_hosts())));
+    let matched = active_base_url.and_then(host_of).and_then(|host| {
+        ALL.iter()
+            .copied()
+            .find(|k| host_matches(&host, k.base_url_hosts()))
+    });
     let mut ordered = Vec::with_capacity(ALL.len());
     if let Some(first) = matched {
         ordered.push(first);
@@ -266,7 +277,7 @@ async fn snapshot_one(client: &reqwest::Client, kind: ProviderKind) -> Option<Qu
                 error: Some(reason),
                 credential_source: Some("auth.json".to_string()),
                 fetched_at: now_rfc3339(),
-            })
+            });
         }
         Credential::Found { key, source } => (key, source),
     };
@@ -333,10 +344,7 @@ pub(crate) async fn fetch_json(
         .await
         .map_err(|e| format!("{label}：{}", sanitize(&e.to_string(), key)))?;
     if !status.is_success() {
-        return Err(format!(
-            "{label} {status}：{}",
-            sanitize(body.trim(), key)
-        ));
+        return Err(format!("{label} {status}：{}", sanitize(body.trim(), key)));
     }
     serde_json::from_str::<Value>(&body).map_err(|_| format!("{label}：响应不是合法 JSON"))
 }

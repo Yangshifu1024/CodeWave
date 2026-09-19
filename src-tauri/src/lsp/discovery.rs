@@ -288,7 +288,10 @@ pub fn executable_extensions() -> Vec<String> {
         .filter(|e| !e.is_empty())
         .collect();
     if out.is_empty() {
-        out = ["com", "exe", "bat", "cmd"].iter().map(|s| s.to_string()).collect();
+        out = ["com", "exe", "bat", "cmd"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
     }
     out
 }
@@ -888,7 +891,10 @@ mod tests {
             .to_string_lossy()
             .to_ascii_lowercase();
         if cfg!(windows) {
-            assert_eq!(name, "pawn.cmd", "Windows 必须选中可执行的 .cmd（原名只是脚本）");
+            assert_eq!(
+                name, "pawn.cmd",
+                "Windows 必须选中可执行的 .cmd（原名只是脚本）"
+            );
         } else {
             assert_eq!(name, "pawn", "Unix 不补扩展名，只认原名");
         }

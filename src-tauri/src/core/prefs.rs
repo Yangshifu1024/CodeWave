@@ -21,7 +21,6 @@ pub enum ApprovalMode {
     FullAccess,
 }
 
-
 impl ApprovalMode {
     /// 全局 approval.enabled → 新会话初始档位（默认 = Plan，[docs/thinking-scroll-fix](../../../docs/thinking-scroll-fix.md)；
     /// enabled=false ≈ 跳过确认，同样映射为 FullAccess）。
@@ -87,8 +86,7 @@ impl EffortLevel {
 }
 
 /// 会话运行偏好（前端 Tab.prefs 的后端镜像，整体替换语义）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionPrefs {
     /// 审批档位（会话内 Shift+Tab 循环切换）
     pub approval_mode: ApprovalMode,
@@ -99,7 +97,6 @@ pub struct SessionPrefs {
     #[serde(default)]
     pub reasoning_effort: Option<EffortLevel>,
 }
-
 
 impl SessionPrefs {
     /// 全局配置 → 新会话初始偏好。

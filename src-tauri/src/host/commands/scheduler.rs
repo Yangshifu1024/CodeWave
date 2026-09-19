@@ -1,4 +1,4 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 
 /// 停止会话内启动的后台 service 并从注册表移除。
 #[tauri::command]
@@ -72,4 +72,3 @@ pub async fn delete_scheduled_task(
 }
 
 // ---------- 统计查询（P2-H）----------
-

@@ -2,7 +2,7 @@
 //! 命令只做参数校验 + 转调 core / 状态机；文件布局与校验规则在 `core::ui_state`，
 //! 运行标记与中断标记在 `core::sessions::interrupt`。
 
-use super::util::{err, Core};
+use super::util::{Core, err};
 use crate::core::agent::AgentCore;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::{Emitter, Manager};
@@ -466,10 +466,8 @@ mod tests {
     #[test]
     fn running_session_ids_reads_in_memory_flags_and_sorts() {
         let d = tempfile::tempdir().unwrap();
-        let roots = crate::tools::pathutil::WriteRoots::new(
-            d.path().to_path_buf(),
-            d.path().to_path_buf(),
-        );
+        let roots =
+            crate::tools::pathutil::WriteRoots::new(d.path().to_path_buf(), d.path().to_path_buf());
         let core = crate::core::agent::test_support::make_core(&roots);
         let ws = d.path().to_path_buf();
         let _idle = core.get_or_create_session("sess-b", ws.clone(), None, vec![], None, vec![]);

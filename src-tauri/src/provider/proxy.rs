@@ -23,7 +23,9 @@ pub fn build_client_with(
     let b = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .redirect(redirect);
-    apply_proxy(b, cfg).build().unwrap_or_else(|_| reqwest::Client::new())
+    apply_proxy(b, cfg)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// 把 config 的代理决议套到 builder 上（[docs/network-proxy-settings](../../../docs/network-proxy-settings.md)）：
@@ -108,8 +110,8 @@ pub fn system_proxy_url() -> Option<String> {
 /// 的 `ProxyEnable`（DWORD，非 0 = 开）+ `ProxyServer`（SZ）。
 #[cfg(target_os = "windows")]
 fn windows_registry_proxy() -> Option<String> {
-    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
     let settings = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
         .ok()?;
@@ -149,7 +151,7 @@ fn parse_windows_proxyserver(raw: &str) -> Option<String> {
             "http" => (1, "http"),
             _ => continue,
         };
-        if best.map_or(true, |(r, _, _)| rank > r) {
+        if best.is_none_or(|(r, _, _)| rank > r) {
             best = Some((rank, scheme, addr));
         }
     }
@@ -173,11 +175,7 @@ pub fn parse_scutil(output: &str) -> Option<String> {
                 port = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
             }
         }
-        if enabled {
-            host.zip(port)
-        } else {
-            None
-        }
+        if enabled { host.zip(port) } else { None }
     };
     if let Some((h, p)) = get("SOCKS") {
         return Some(format!("socks5://{h}:{p}"));
@@ -255,7 +253,10 @@ mod tests {
     #[test]
     fn windows_proxyserver_pac_and_empty_ignored() {
         // PAC 脚本形态不解析（按未检测到处理，直连）
-        assert_eq!(parse_windows_proxyserver("http://pac.example.com/wpad.dat"), None);
+        assert_eq!(
+            parse_windows_proxyserver("http://pac.example.com/wpad.dat"),
+            None
+        );
         assert_eq!(parse_windows_proxyserver("  "), None);
         // 分协议但条目全空
         assert_eq!(parse_windows_proxyserver("http=;https="), None);
@@ -274,23 +275,41 @@ mod tests {
         // 与显式直连（Some(None)）严格区分
         assert_eq!(resolve_explicit_proxy(&cfg), None);
         // 显式无代理
-        cfg.proxy = Some(ProxyConfig { mode: ProxyMode::None, url: String::new() });
+        cfg.proxy = Some(ProxyConfig {
+            mode: ProxyMode::None,
+            url: String::new(),
+        });
         assert_eq!(resolve_explicit_proxy(&cfg), Some(None));
         // 手动空串 = 显式直连；手动值 trim 后原样（可含 userinfo）
-        cfg.proxy = Some(ProxyConfig { mode: ProxyMode::Manual, url: "   ".into() });
+        cfg.proxy = Some(ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: "   ".into(),
+        });
         assert_eq!(resolve_explicit_proxy(&cfg), Some(None));
-        cfg.proxy = Some(ProxyConfig { mode: ProxyMode::Manual, url: "socks5://h:1".into() });
+        cfg.proxy = Some(ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: "socks5://h:1".into(),
+        });
         assert_eq!(resolve_proxy(&cfg).as_deref(), Some("socks5://h:1"));
-        cfg.proxy = Some(ProxyConfig { mode: ProxyMode::Manual, url: " http://u:p@h:8080 ".into() });
+        cfg.proxy = Some(ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: " http://u:p@h:8080 ".into(),
+        });
         assert_eq!(resolve_proxy(&cfg).as_deref(), Some("http://u:p@h:8080"));
         // System：结果与系统探测同源（不校验具体值，跨平台确定性交给探测函数自身单测）
-        cfg.proxy = Some(ProxyConfig { mode: ProxyMode::System, url: String::new() });
+        cfg.proxy = Some(ProxyConfig {
+            mode: ProxyMode::System,
+            url: String::new(),
+        });
         assert_eq!(resolve_proxy(&cfg), system_proxy_url());
     }
 
     #[test]
     fn sanitize_proxy_url_strips_userinfo() {
-        assert_eq!(sanitize_proxy_url("http://user:secret@h:8080"), "http://***@h:8080");
+        assert_eq!(
+            sanitize_proxy_url("http://user:secret@h:8080"),
+            "http://***@h:8080"
+        );
         assert_eq!(sanitize_proxy_url("socks5://h:1080"), "socks5://h:1080");
         assert_eq!(sanitize_proxy_url("not-a-url"), "not-a-url");
     }

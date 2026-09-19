@@ -1,4 +1,4 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 use tauri::AppHandle;
 
 /// 弹出系统目录选择框，返回所选目录（取消为 None）。
@@ -212,7 +212,6 @@ pub async fn list_workspace_dir(
 
 // ---------- 计划任务（P2-G）----------
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,4 +319,3 @@ mod tests {
         assert!(e.starts_with("E_PATH_OUTSIDE"), "{e}");
     }
 }
-

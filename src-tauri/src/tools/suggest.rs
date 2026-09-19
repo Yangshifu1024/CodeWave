@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// suggest 工具入参。
 #[derive(Deserialize)]

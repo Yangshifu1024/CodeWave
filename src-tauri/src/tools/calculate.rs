@@ -2,7 +2,7 @@
 //! 文法：expr(加减) → term(乘除模) → factor(^ 右结合) → unary(−) → atom。
 //! 永不 eval；除零 / 溢出 / NaN 均产生干净错误。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 求值一个数学表达式字符串；非法输入返回干净的错误信息。
 pub fn evaluate(input: &str) -> Result<f64, String> {
@@ -279,7 +279,11 @@ fn apply_function(lname: &str, args: &[f64], name: &str) -> Result<f64, String> 
             let (a, b) = two_args(args, name)?;
             a.powf(b)
         }
-        _ => return Err(format!("未知函数：{name}（可用：sqrt cbrt ln log log2 log10 exp abs floor ceil round sin cos tan asin acos atan atan2 min max pow；常量 pi e tau）")),
+        _ => {
+            return Err(format!(
+                "未知函数：{name}（可用：sqrt cbrt ln log log2 log10 exp abs floor ceil round sin cos tan asin acos atan atan2 min max pow；常量 pi e tau）"
+            ));
+        }
     };
     let _ = arg;
     if !v.is_finite() {

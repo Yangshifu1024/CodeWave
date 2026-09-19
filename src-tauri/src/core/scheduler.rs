@@ -417,10 +417,7 @@ type TaskScope = (
 );
 
 /// 返回 None = 项目缺失 / 无有效目录；调用方跳过执行。
-fn task_scope(
-    core: &crate::core::agent::AgentCore,
-    task: &ScheduledTask,
-) -> Option<TaskScope> {
+fn task_scope(core: &crate::core::agent::AgentCore, task: &ScheduledTask) -> Option<TaskScope> {
     let Some(pid) = &task.project_id else {
         return Some((core.data_dir.clone(), None, None, Vec::new()));
     };
@@ -444,7 +441,10 @@ mod tests {
     #[test]
     fn every_interval_parse_bounds() {
         assert!(parse_schedule("every:30 d").is_ok());
-        assert!(parse_schedule("every:31 d").is_err(), "超过 30 天上限应报错");
+        assert!(
+            parse_schedule("every:31 d").is_err(),
+            "超过 30 天上限应报错"
+        );
         // u64 溢出域必须是解析期错误，而不是 tick 期静默隔离
         assert!(parse_schedule("every:99999999999999999999 d").is_err());
         assert!(parse_schedule("every:18446744073709551615 d").is_err());
@@ -624,7 +624,7 @@ mod tests {
                 directory: a.to_string_lossy().into_owned(),
                 data_dir: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
-                },
+            },
         )
         .unwrap();
         let task = ScheduledTask {

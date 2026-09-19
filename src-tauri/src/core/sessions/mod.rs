@@ -4,9 +4,6 @@
 pub mod interrupt;
 pub mod repair;
 
-
 mod store;
 
-pub use store::{
-    ArtifactOp, SessionMeta, SessionStore,
-};
+pub use store::{ArtifactOp, SessionMeta, SessionStore};

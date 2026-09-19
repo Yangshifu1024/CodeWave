@@ -14,7 +14,9 @@ pub(super) fn err(e: impl std::fmt::Display) -> String {
 
 /// 共享助手：在系统文件管理器中打开目录（平台分支在 core::openers：Windows 优先 Files 应用，
 /// 探测不到则 explorer；与 open_logs_dir / open_data_dir 同一路径）。
-pub(super) fn open_dir_in_file_manager(dir: &std::path::Path, err_label: &str) -> Result<(), String> {
+pub(super) fn open_dir_in_file_manager(
+    dir: &std::path::Path,
+    err_label: &str,
+) -> Result<(), String> {
     crate::core::openers::open_dir(dir).map_err(|e| format!("{err_label}：{e}"))
 }
-

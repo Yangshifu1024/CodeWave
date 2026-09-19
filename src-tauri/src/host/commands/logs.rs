@@ -1,5 +1,5 @@
-use super::util::{err, Core};
 use super::util::open_dir_in_file_manager;
+use super::util::{Core, err};
 
 /// 列出全局滚动日志文件（14 天清理策略下的现存文件）。
 #[tauri::command]
@@ -43,4 +43,3 @@ pub async fn open_logs_dir() -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(err)?;
     open_dir_in_file_manager(&dir, "打开日志目录失败")
 }
-

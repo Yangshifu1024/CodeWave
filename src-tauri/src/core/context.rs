@@ -223,8 +223,7 @@ pub async fn compact_history(
     };
     // 读锁 clone（std 锁不能跨 await）；save_config 热替换后此处取到新代理的 client
     let client = core.client.read().unwrap().clone();
-    let fut =
-        crate::provider::stream_model(&client, &model, Some(key), req, tx, cancel.clone());
+    let fut = crate::provider::stream_model(&client, &model, Some(key), req, tx, cancel.clone());
     // H2 修复：压缩响应可取消（cancel = 放弃本次压缩）；超时可配置（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）
     let usage = tokio::select! {
         _ = cancel.cancelled() => return Err("压缩已取消".into()),
@@ -298,10 +297,7 @@ mod tests {
         cfg.compact_timeout_seconds = 0;
         assert_eq!(summary_timeout(&cfg), std::time::Duration::from_secs(30));
         cfg.compact_timeout_seconds = 10_000;
-        assert_eq!(
-            summary_timeout(&cfg),
-            std::time::Duration::from_secs(3600)
-        );
+        assert_eq!(summary_timeout(&cfg), std::time::Duration::from_secs(3600));
         cfg.compact_timeout_seconds = 600;
         assert_eq!(summary_timeout(&cfg), std::time::Duration::from_secs(600));
     }
@@ -352,9 +348,7 @@ mod tests {
             bd.total_tokens,
             bd.system_tokens + bd.history_tokens + bd.tool_schema_tokens
         );
-        assert!(
-            (bd.ratio - bd.total_tokens as f64 / bd.context_window as f64).abs() < 1e-9
-        );
+        assert!((bd.ratio - bd.total_tokens as f64 / bd.context_window as f64).abs() < 1e-9);
         assert!(bd.total_tokens < bd.context_window as u64);
 
         // 30s 缓存：改动历史不影响本次上报的 breakdown

@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 /// 进程级写锁：并发任务写同一文件时防止行交错（每次 open-write-close 都很短）。
 static WRITE_LOCK: Mutex<()> = Mutex::new(());

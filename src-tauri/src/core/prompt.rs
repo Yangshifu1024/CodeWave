@@ -241,7 +241,10 @@ mod tests {
         assert!(!desc.is_empty(), "自动探测应给出非空描述");
         let out = platform_section(ws.path(), &desc, &[]);
         assert!(out.contains("<environment>"));
-        assert!(out.contains(&format!("- Shell: {desc}")), "描述全文注入 Shell 行");
+        assert!(
+            out.contains(&format!("- Shell: {desc}")),
+            "描述全文注入 Shell 行"
+        );
 
         // 显式注入文本（绕过本机探测差异）也逐字透传
         let marker = "pwsh -NoProfile -Command <command>";
@@ -258,10 +261,7 @@ mod tests {
         assert_eq!(a, b, "same input must be byte-stable");
         assert!(a.contains("priority-order"));
         assert!(a.contains("<environment>"));
-        assert!(
-            a.contains("<standard-workflow"),
-            "标准工作流常驻第 1 层"
-        );
+        assert!(a.contains("<standard-workflow"), "标准工作流常驻第 1 层");
 
         // 技能/记忆注入
         let c = assemble(
@@ -325,7 +325,10 @@ mod tests {
         };
         let out = assemble(ws.path(), &cfg, &[], "bash", "", "", None, None);
         assert!(out.contains("<custom-instructions>"));
-        assert!(out.contains("\nbe terse\n"), "surrounding whitespace trimmed");
+        assert!(
+            out.contains("\nbe terse\n"),
+            "surrounding whitespace trimmed"
+        );
 
         cfg.custom_prompt = Some("   ".into());
         let out = assemble(ws.path(), &cfg, &[], "bash", "", "", None, None);
@@ -358,7 +361,10 @@ mod tests {
         let ws2 = tempfile::tempdir().unwrap();
         std::fs::write(ws2.path().join("WAVESTUDIO.md"), "legacy instructions").unwrap();
         let out = assemble(ws2.path(), &cfg, &[], "bash", "", "", None, None);
-        assert!(out.contains("legacy instructions"), "旧指令文件名应兼容读取");
+        assert!(
+            out.contains("legacy instructions"),
+            "旧指令文件名应兼容读取"
+        );
     }
 
     #[test]
@@ -377,7 +383,10 @@ mod tests {
         let out = assemble(ws.path(), &cfg, &[], "bash", "", "", None, Some(pd.path()));
         assert!(out.contains("<project-context>"));
         assert!(out.contains("project lessons"));
-        assert!(!out.contains("repo lessons"), "repo-local compat source must be shadowed");
+        assert!(
+            !out.contains("repo lessons"),
+            "repo-local compat source must be shadowed"
+        );
 
         // 项目来源缺失 → 回落仓库本地兼容位置
         let pd2 = tempfile::tempdir().unwrap();
@@ -422,7 +431,10 @@ mod tests {
             );
         }
         // 用户点名子代理的 $<role> 委派规则必须在核心层（composer $ 菜单的语义后盾）
-        assert!(CORE_PROMPT.contains("$<role>"), "核心提示缺 $<role> 点名委派规则");
+        assert!(
+            CORE_PROMPT.contains("$<role>"),
+            "核心提示缺 $<role> 点名委派规则"
+        );
 
         // 引用的角色名必须是注册表可命中角色（与 agents/mod.rs 单一事实源联动）
         for name in ["backend-dev", "frontend-dev", "app-dev"] {
@@ -450,7 +462,10 @@ mod tests {
         assert!(out.contains("命令工作目录"));
 
         let out = assemble(ws.path(), &cfg, &[], "bash", "", "", None, None);
-        assert!(out.contains("工作目录："), "single-root keeps plain cwd line");
+        assert!(
+            out.contains("工作目录："),
+            "single-root keeps plain cwd line"
+        );
         assert!(!out.contains("命令工作目录"));
     }
 

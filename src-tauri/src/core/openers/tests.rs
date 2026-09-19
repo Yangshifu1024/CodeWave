@@ -25,7 +25,10 @@ fn files_alias_candidates_prefers_stable() {
     let candidates = files_alias_candidates(Path::new("C:/Users/demo/AppData/Local"));
     assert_eq!(candidates.len(), 4);
     let first = candidates[0].to_string_lossy().replace('\\', "/");
-    assert!(first.ends_with("Microsoft/WindowsApps/files-stable.exe"), "{first}");
+    assert!(
+        first.ends_with("Microsoft/WindowsApps/files-stable.exe"),
+        "{first}"
+    );
     assert_eq!(
         candidates
             .iter()
@@ -69,7 +72,10 @@ fn expand_template_only_maps_known_bases() {
         ..Default::default()
     };
     let expanded = expand_template("{LOCALAPPDATA}/Programs/Zed/zed.exe", &env).unwrap();
-    assert_eq!(expanded, PathBuf::from("C:/home/u/AppData/Local/Programs/Zed/zed.exe"));
+    assert_eq!(
+        expanded,
+        PathBuf::from("C:/home/u/AppData/Local/Programs/Zed/zed.exe")
+    );
     // 缺失基目录 / 未知前缀 → None（绝不猜测路径）
     assert!(expand_template("{APPLICATIONS}/Zed.app/Contents/MacOS/zed", &env).is_none());
     assert!(expand_template("{UNKNOWN}/x", &env).is_none());
@@ -201,15 +207,24 @@ fn jetbrains_scan_maps_product_names_and_appends_last() {
 
     let found = detect_editors_with(&env, &exists, &read_dir);
     let ids: Vec<&str> = found.iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(ids, vec!["vscode", "jetbrains:intellijidea", "jetbrains:rustrover"]);
+    assert_eq!(
+        ids,
+        vec!["vscode", "jetbrains:intellijidea", "jetbrains:rustrover"]
+    );
     let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["VS Code", "IntelliJ IDEA", "RustRover"]);
 }
 
 #[test]
 fn jetbrains_product_mapping_ignores_non_jetbrains_stems() {
-    assert_eq!(jetbrains_product_name("rustrover64"), Some("RustRover".to_string()));
-    assert_eq!(jetbrains_product_name("idea64"), Some("IntelliJ IDEA".to_string()));
+    assert_eq!(
+        jetbrains_product_name("rustrover64"),
+        Some("RustRover".to_string())
+    );
+    assert_eq!(
+        jetbrains_product_name("idea64"),
+        Some("IntelliJ IDEA".to_string())
+    );
     assert_eq!(jetbrains_product_name("zed"), None);
     assert_eq!(jetbrains_product_name("code"), None);
 }

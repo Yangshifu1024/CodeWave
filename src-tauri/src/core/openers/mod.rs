@@ -160,7 +160,9 @@ const EDITOR_SPECS: &[EditorSpec] = &[
         id: "vscode-insiders",
         name: "VS Code Insiders",
         path_names: &["code-insiders"],
-        fixed: &["{APPLICATIONS}/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code"],
+        fixed: &[
+            "{APPLICATIONS}/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code",
+        ],
     },
     EditorSpec {
         id: "cursor",
@@ -315,7 +317,10 @@ fn jetbrains_product_name(stem: &str) -> Option<String> {
 fn detect_jetbrains(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) -> Vec<EditorInfo> {
     let mut found: Vec<EditorInfo> = Vec::new();
     let mut push = |product: &str, path: PathBuf| {
-        let id = format!("jetbrains:{}", product.to_ascii_lowercase().replace(' ', ""));
+        let id = format!(
+            "jetbrains:{}",
+            product.to_ascii_lowercase().replace(' ', "")
+        );
         let path = path.to_string_lossy().to_string();
         if !found.iter().any(|e| e.id == id) {
             found.push(EditorInfo {
@@ -358,12 +363,8 @@ fn detect_jetbrains(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) ->
 
     // 2) 安装根下的 `<root>/<Product>/bin/*64.exe`
     let install_roots = [
-        env
-            .program_files
-            .as_ref()
-            .map(|b| b.join("JetBrains")),
-        env
-            .local_app_data
+        env.program_files.as_ref().map(|b| b.join("JetBrains")),
+        env.local_app_data
             .as_ref()
             .map(|b| b.join("Programs").join("JetBrains")),
     ];
@@ -388,7 +389,11 @@ fn detect_jetbrains(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) ->
 }
 
 /// 按注入环境探测编辑器列表（候选表顺序 + 末位 JetBrains 组）。
-pub fn detect_editors_with(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) -> Vec<EditorInfo> {
+pub fn detect_editors_with(
+    env: &EnvBases,
+    exists: Probe<'_>,
+    read_dir: ReadDir<'_>,
+) -> Vec<EditorInfo> {
     let mut out: Vec<EditorInfo> = Vec::new();
     for spec in EDITOR_SPECS {
         let hit = spec
@@ -490,10 +495,15 @@ pub fn open_in_editor(id: &str, dir: &Path) -> Result<(), String> {
 /// Windows Files 应用的渠道别名候选（按优先序）。
 pub fn files_alias_candidates(local_app_data: &Path) -> Vec<PathBuf> {
     let dir = local_app_data.join("Microsoft").join("WindowsApps");
-    ["files-stable.exe", "files-dev.exe", "files-preview.exe", "files-canary.exe"]
-        .iter()
-        .map(|name| dir.join(name))
-        .collect()
+    [
+        "files-stable.exe",
+        "files-dev.exe",
+        "files-preview.exe",
+        "files-canary.exe",
+    ]
+    .iter()
+    .map(|name| dir.join(name))
+    .collect()
 }
 
 /// 挑选 Windows 文件管理器：命中 Files 别名返回其路径；全不命中返回 None（= explorer）。
@@ -520,15 +530,15 @@ pub fn open_dir(dir: &Path) -> Result<(), String> {
                 return Ok(());
             }
         }
-        return spawn_detached(Path::new("explorer"), &[dir]);
+        spawn_detached(Path::new("explorer"), &[dir])
     }
     #[cfg(target_os = "macos")]
     {
-        return spawn_detached(Path::new("open"), &[dir]);
+        spawn_detached(Path::new("open"), &[dir])
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        return spawn_detached(Path::new("xdg-open"), &[dir]);
+        spawn_detached(Path::new("xdg-open"), &[dir])
     }
 }
 

@@ -1,7 +1,7 @@
 //! 订阅额度 IPC：只做转调，业务逻辑在 `core::quota`
 //! （[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
 
-use super::util::{err, Core};
+use super::util::{Core, err};
 use crate::core::quota::{self, QuotaSnapshot};
 
 /// 已配置凭证的提供商额度快照。

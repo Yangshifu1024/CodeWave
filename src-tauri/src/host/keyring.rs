@@ -2,7 +2,7 @@
 //! 明文 key 迁入系统 keyring，config 中以占位符替代；解析时按占位符回读。
 //! keyring 不可用（如 Linux 无 Secret Service）时回退明文并在日志中注明。
 
-use crate::core::config::{ConfigState, ModelConfig, KEYRING_PLACEHOLDER};
+use crate::core::config::{ConfigState, KEYRING_PLACEHOLDER, ModelConfig};
 /// keyring service 名（本应用所有凭据共用）。
 pub const SERVICE: &str = "codewave.yangshifu.xyz";
 

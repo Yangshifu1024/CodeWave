@@ -1,4 +1,4 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 use crate::core::config::ConfigState;
 
 /// 列出全部已注册项目。
@@ -97,24 +97,27 @@ pub async fn delete_project(
         .map(|m| m.id)
         .collect();
     for sid in &sessions {
-        match core.session(sid) { Some(rt) => {
-            // H5：先标 zombie——即使 run 未及时响应取消，迟到的 checkpoint 也不能复活幽灵会话
-            rt.zombie.store(true, std::sync::atomic::Ordering::SeqCst);
-            if rt.running.load(std::sync::atomic::Ordering::SeqCst) {
-                rt.cancel_active();
-                // 等待 run 收尾退出（尽力而为；zombie 保证超时后不复活）
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                    while rt.running.load(std::sync::atomic::Ordering::SeqCst) {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    }
-                })
-                .await;
+        match core.session(sid) {
+            Some(rt) => {
+                // H5：先标 zombie——即使 run 未及时响应取消，迟到的 checkpoint 也不能复活幽灵会话
+                rt.zombie.store(true, std::sync::atomic::Ordering::SeqCst);
+                if rt.running.load(std::sync::atomic::Ordering::SeqCst) {
+                    rt.cancel_active();
+                    // 等待 run 收尾退出（尽力而为；zombie 保证超时后不复活）
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                        while rt.running.load(std::sync::atomic::Ordering::SeqCst) {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await;
+                }
+                core.sessions.remove(sid);
+                let _ = core.store.remove(sid);
             }
-            core.sessions.remove(sid);
-            let _ = core.store.remove(sid);
-        } _ => {
-            let _ = core.store.remove(sid);
-        }}
+            _ => {
+                let _ = core.store.remove(sid);
+            }
+        }
     }
     let mut n = sessions.len();
     crate::core::projects::delete_project(&core.data_dir, &project_id).map_err(err)?;
@@ -138,4 +141,3 @@ pub async fn delete_project(
     core.lsp.shutdown_project(&project_id).await;
     Ok(serde_json::json!({ "deleted_sessions": n }))
 }
-

@@ -10,8 +10,8 @@
 
 use crate::core::config::{HeaderPair, RESERVED_REQUEST_HEADERS};
 use crate::util::USER_AGENT;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT as UA_HEADER};
 use reqwest::RequestBuilder;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT as UA_HEADER};
 
 /// `${session_id}` 占位符字面量（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）。
 const SESSION_PLACEHOLDER: &str = "${session_id}";
@@ -92,7 +92,10 @@ mod tests {
 
     #[test]
     fn session_placeholder_substituted() {
-        let r = build(&[pair("x-opencode-session", "${session_id}")], Some("sess-abc"));
+        let r = build(
+            &[pair("x-opencode-session", "${session_id}")],
+            Some("sess-abc"),
+        );
         assert_eq!(r.headers().get("x-opencode-session").unwrap(), "sess-abc");
     }
 

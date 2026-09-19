@@ -2,7 +2,7 @@
 //! [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：等待策略由 `auto_confirm` 决定——勾选后 5 分钟未响应
 //! 自动确认推荐选项（允许）；不勾选则永不超时。run 取消（H2 修复）始终可打断，按拒绝处理。
 //! 子代理审批例外：事件挂主会话下发（方案 B，emit_session_of）+ 有界超时自动拒绝（方案 C，SUB_APPROVAL_TIMEOUT）。
-//! 
+//!
 //! 寻址原理（2026-09-11 tester 卡死修复）：审批应答经 resolve_ask 路由到 rt.asks 表
 //! （主会话未命中时扫描 core.subs，M16 已有），与事件下发寻址解耦；子代理审批事件
 //! 以 sub_id 寻址会被前端 ask:opened 的「找不到桶即丢弃」守卫静默吞掉（tabs 以主会话
@@ -86,7 +86,10 @@ pub async fn confirm(
     if from_sub.is_some() {
         session_log::info(
             rt,
-            &format!("审批 [{ask_id}] 来自子代理 {}，事件挂主会话 {emit_session} 下发", rt.id),
+            &format!(
+                "审批 [{ask_id}] 来自子代理 {}，事件挂主会话 {emit_session} 下发",
+                rt.id
+            ),
         );
     }
     sink.emit(
@@ -288,7 +291,10 @@ mod tests {
         let (task, _ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
         // start_paused：await 即挂起、虚拟时钟自动推进；300s 超时到期释放任务
         let out = task.await.unwrap();
-        assert!(out.approved && !out.always, "超时应自动允许且不做「始终允许」：{out:?}");
+        assert!(
+            out.approved && !out.always,
+            "超时应自动允许且不做「始终允许」：{out:?}"
+        );
     }
 
     /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：不勾选 auto_confirm——永不超时；虚拟时间推进远超 300s 仍 pending，应答后按应答返回
@@ -350,7 +356,10 @@ mod tests {
         let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
         rt.resolve_ask(&ask_id, json!({ "approved": false }));
         let out = task.await.unwrap();
-        assert!(!out.approved && !out.always, "explicit deny must be honored: {out:?}");
+        assert!(
+            !out.approved && !out.always,
+            "explicit deny must be honored: {out:?}"
+        );
     }
 
     /// [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：畸形应答载荷 fail closed（approved 兜底为 false）。
@@ -375,7 +384,11 @@ mod tests {
     #[test]
     fn emit_session_of_routes_sub_to_root() {
         let (_ws, _dd, _core, rt) = setup();
-        assert_eq!(super::emit_session_of(&rt), (rt.id.clone(), None), "主会话自指");
+        assert_eq!(
+            super::emit_session_of(&rt),
+            (rt.id.clone(), None),
+            "主会话自指"
+        );
 
         let (_ws2, _dd2, core2, rt2) = setup();
         let sub = crate::core::agent::SessionRuntime::new_sub(&rt2, "sub_route1".into());
@@ -414,7 +427,10 @@ mod tests {
             "超时后 asks 表必须收口，不留悬空 waiter"
         );
         let out = task.await.unwrap();
-        assert!(!out.approved && !out.always, "子代理审批超时必须拒绝：{out:?}");
+        assert!(
+            !out.approved && !out.always,
+            "子代理审批超时必须拒绝：{out:?}"
+        );
     }
 
     /// 方案 C 边界：子代理审批在超时窗口内收到应答，应答优先于超时（拒绝仍是拒绝）。

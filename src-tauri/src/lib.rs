@@ -43,7 +43,11 @@ fn apply_saved_window_geometry(win: &tauri::WebviewWindow, data_dir: &std::path:
     };
     let to_area = |m: &tauri::Monitor| {
         let area = m.work_area();
-        let scale = if m.scale_factor() > 0.0 { m.scale_factor() } else { 1.0 };
+        let scale = if m.scale_factor() > 0.0 {
+            m.scale_factor()
+        } else {
+            1.0
+        };
         core::ui_state::WorkArea {
             x: area.position.x as f64 / scale,
             y: area.position.y as f64 / scale,
@@ -127,7 +131,9 @@ pub fn run() {
             // shell 探测预热（探测含子进程 spawn，后台执行不阻塞启动；PROBED 缓存后零开销）：
             // setup 同步上下文不能直接 tokio::spawn，走 tauri::async_runtime（踩坑清单）
             tauri::async_runtime::spawn(async move {
-                let _ = tauri::async_runtime::spawn_blocking(crate::tools::command::detect_all_shells).await;
+                let _ =
+                    tauri::async_runtime::spawn_blocking(crate::tools::command::detect_all_shells)
+                        .await;
             });
             let sup_core = core.clone();
             tauri::async_runtime::spawn(async move {
@@ -140,15 +146,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    let ttl = {
-                        lsp_core
-                            .cfg
-                            .read()
-                            .unwrap()
-                            .validation
-                            .lsp
-                            .idle_ttl_ms
-                    };
+                    let ttl = { lsp_core.cfg.read().unwrap().validation.lsp.idle_ttl_ms };
                     lsp_core.lsp.evict_idle(ttl).await;
                 }
             });
@@ -233,14 +231,23 @@ pub fn run() {
             // SubmenuBuilder.text() 无法附加快捷键（tauri 内部写死 None），快捷键条目改用 MenuItemBuilder。
             #[cfg(target_os = "macos")]
             {
-                use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
                 use tauri::Emitter;
-                let lang = core_cfg(app.handle()).ui.language;
-                let (about_label, settings_label, check_updates_label, edit_label, window_label) = if lang.starts_with("en") {
-                    ("About CodeWave…", "Settings…", "Check for Updates…", "Edit", "Window")
-                } else {
-                    ("关于 CodeWave…", "设置…", "检查更新…", "编辑", "窗口")
+                use tauri::menu::{
+                    AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
                 };
+                let lang = core_cfg(app.handle()).ui.language;
+                let (about_label, settings_label, check_updates_label, edit_label, window_label) =
+                    if lang.starts_with("en") {
+                        (
+                            "About CodeWave…",
+                            "Settings…",
+                            "Check for Updates…",
+                            "Edit",
+                            "Window",
+                        )
+                    } else {
+                        ("关于 CodeWave…", "设置…", "检查更新…", "编辑", "窗口")
+                    };
                 let _meta = AboutMetadataBuilder::new()
                     .version(Some(env!("CARGO_PKG_VERSION").to_string()))
                     .authors(Some(vec!["yangshifu".to_string()]))
@@ -249,9 +256,10 @@ pub fn run() {
                 let settings_item = MenuItemBuilder::with_id("menu-settings", settings_label)
                     .accelerator("CmdOrCtrl+Comma")
                     .build(app)?;
-                let check_updates_item = MenuItemBuilder::with_id("menu-check-updates", check_updates_label)
-                    .accelerator("CmdOrCtrl+Shift+U")
-                    .build(app)?;
+                let check_updates_item =
+                    MenuItemBuilder::with_id("menu-check-updates", check_updates_label)
+                        .accelerator("CmdOrCtrl+Shift+U")
+                        .build(app)?;
                 let app_submenu = SubmenuBuilder::new(app, "CodeWave")
                     .item(&about_item)
                     .separator()
@@ -392,8 +400,8 @@ pub fn run() {
             // （进程随即结束），故同步等一小段（超时即放弃，LspClient 的 Drop 兜底补刀）
             if let tauri::RunEvent::Exit = &event {
                 use tauri::Manager;
-                if let Some(core) = app_handle
-                    .try_state::<std::sync::Arc<crate::core::agent::AgentCore>>()
+                if let Some(core) =
+                    app_handle.try_state::<std::sync::Arc<crate::core::agent::AgentCore>>()
                 {
                     let lsp = core.lsp.clone();
                     tauri::async_runtime::block_on(async move {

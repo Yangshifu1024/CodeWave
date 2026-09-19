@@ -1,13 +1,13 @@
 //! `core::quota` 单测：凭证链、opencode 路径、7 家解析与展示序。
 //! 全部走注入（假环境变量 / 假文件 / 固定 now），不发网络请求、不读真实凭证。
 
-use super::credentials::{resolve, resolve_with, Credential, CredentialSpec, Resolver};
+use super::credentials::{Credential, CredentialSpec, Resolver, resolve, resolve_with};
 use super::opencode_paths::{
-    auth_candidates, config_candidates, parse_jsonc, provider_api_key, resolve_env_template,
-    strip_jsonc, RuntimeEnv,
+    RuntimeEnv, auth_candidates, config_candidates, parse_jsonc, provider_api_key,
+    resolve_env_template, strip_jsonc,
 };
 use super::providers::{deepseek, glm, kimi, minimax, opencode_go};
-use super::{host_of, order_for, sanitize, ProviderKind, QuotaStatus, ALL};
+use super::{ALL, ProviderKind, QuotaStatus, host_of, order_for, sanitize};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use std::collections::HashMap;
@@ -85,7 +85,10 @@ fn credential_chain_prefers_env_then_config_then_auth() {
     );
     // 配置文件缺失时回退 auth.json
     assert_eq!(
-        resolve_with(&DEEPSEEK, &resolver(runtime.clone(), &no_env, &read_auth_only)),
+        resolve_with(
+            &DEEPSEEK,
+            &resolver(runtime.clone(), &no_env, &read_auth_only)
+        ),
         Credential::Found {
             key: "auth-key".to_string(),
             source: "auth.json".to_string()
@@ -127,12 +130,19 @@ fn config_api_key_supports_env_templates_and_rejects_unknown_placeholders() {
         "from-env"
     );
     assert_eq!(
-        resolve_env_template("sk-${DEEPSEEK_API_KEY}-suffix", &["DEEPSEEK_API_KEY"], &lookup).unwrap(),
+        resolve_env_template(
+            "sk-${DEEPSEEK_API_KEY}-suffix",
+            &["DEEPSEEK_API_KEY"],
+            &lookup
+        )
+        .unwrap(),
         "sk-from-env-suffix"
     );
     // 未授权占位符 / 解析为空 → 失败（不静默降级）
     assert!(resolve_env_template("${OTHER_KEY}", &["DEEPSEEK_API_KEY"], &lookup).is_none());
-    assert!(resolve_env_template("${DEEPSEEK_API_KEY}", &["DEEPSEEK_API_KEY"], &|_| None).is_none());
+    assert!(
+        resolve_env_template("${DEEPSEEK_API_KEY}", &["DEEPSEEK_API_KEY"], &|_| None).is_none()
+    );
 }
 
 #[test]
@@ -219,7 +229,10 @@ fn deepseek_keeps_supported_currencies_and_marks_unavailable() {
         ]
     });
     let entries = deepseek::parse_balance(&body).unwrap();
-    let texts: Vec<&str> = entries.iter().map(|e| e.value_text.as_deref().unwrap()).collect();
+    let texts: Vec<&str> = entries
+        .iter()
+        .map(|e| e.value_text.as_deref().unwrap())
+        .collect();
     assert_eq!(texts, vec!["CNY 12.50 · 不可用", "USD 3.25 · 不可用"]);
     assert_eq!(entries[0].key, "balance_cny");
     // 无可用数据 → 报错
@@ -251,10 +264,7 @@ fn minimax_endpoint_semantics_differ_for_the_same_counts() {
     assert_eq!(intl[0].remaining_percent, Some(80.0));
     assert_eq!(intl[1].key, "week");
     assert_eq!(intl[1].remaining_percent, Some(50.0));
-    assert_eq!(
-        intl[0].resets_at.as_deref(),
-        Some("2026-01-21T13:53:20Z")
-    );
+    assert_eq!(intl[0].resets_at.as_deref(), Some("2026-01-21T13:53:20Z"));
 
     // 中国：计数 = 已用 → 20% 剩余（语义相反，防误改）
     let cn = minimax::parse_usage(&payload, minimax::Endpoint::China, now()).unwrap();
@@ -299,7 +309,10 @@ fn minimax_keeps_models_that_only_expose_the_weekly_reset() {
     assert_eq!(entries[0].key, "week");
     // 中国端点计数 = 已用 → 80/100 已用 = 20% 剩余
     assert_eq!(entries[0].remaining_percent, Some(20.0));
-    assert_eq!(entries[0].resets_at.as_deref(), Some("2026-01-21T13:53:20Z"));
+    assert_eq!(
+        entries[0].resets_at.as_deref(),
+        Some("2026-01-21T13:53:20Z")
+    );
 }
 
 #[test]
@@ -316,10 +329,14 @@ fn glm_maps_units_to_windows_and_handles_zai_error_envelope() {
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
     assert_eq!(keys, vec!["five_hour", "weekly", "mcp"]);
     assert_eq!(entries[0].remaining_percent, Some(75.0));
-    assert_eq!(entries[0].resets_at.as_deref(), Some("2026-01-21T12:53:20Z"));
+    assert_eq!(
+        entries[0].resets_at.as_deref(),
+        Some("2026-01-21T12:53:20Z")
+    );
 
     // Z.ai 顶层 limits 兜底 + 错误体
-    let zai_fallback = json!({ "limits": [{ "type": "CREDIT_LIMIT", "unit": 6, "percentage": 5.0 }] });
+    let zai_fallback =
+        json!({ "limits": [{ "type": "CREDIT_LIMIT", "unit": 6, "percentage": 5.0 }] });
     let entries = glm::parse_limits(&zai_fallback, glm::Flavor::Zai).unwrap();
     assert_eq!(entries[0].remaining_percent, Some(95.0));
 
@@ -349,14 +366,23 @@ fn kimi_parses_usage_and_limits_with_all_reset_sources() {
     assert_eq!(entries[0].key, "usage");
     assert_eq!(entries[0].label.as_deref(), Some("Weekly limit"));
     assert_eq!(entries[0].remaining_percent, Some(70.0));
-    assert_eq!(entries[0].resets_at.as_deref(), Some("2026-09-20T00:00:00Z"));
+    assert_eq!(
+        entries[0].resets_at.as_deref(),
+        Some("2026-09-20T00:00:00Z")
+    );
     // reset_in（秒）
     assert_eq!(entries[1].remaining_percent, Some(75.0));
-    assert_eq!(entries[1].resets_at.as_deref(), Some("2026-01-21T14:53:20Z"));
+    assert_eq!(
+        entries[1].resets_at.as_deref(),
+        Some("2026-01-21T14:53:20Z")
+    );
     // window.duration（秒）+ 时长标签
     assert_eq!(entries[2].label.as_deref(), Some("5h"));
     assert_eq!(entries[2].remaining_percent, Some(50.0));
-    assert_eq!(entries[2].resets_at.as_deref(), Some("2026-01-21T12:58:20Z"));
+    assert_eq!(
+        entries[2].resets_at.as_deref(),
+        Some("2026-01-21T12:58:20Z")
+    );
 
     // 顶层形态也受理；无可用行 → 报错
     let flat = json!({ "usage": { "limit": 10, "used": 1 } });
@@ -399,9 +425,18 @@ fn order_for_puts_current_session_provider_first() {
 
 #[test]
 fn host_of_handles_ports_userinfo_and_missing_scheme() {
-    assert_eq!(host_of("https://api.z.ai:8443/api").as_deref(), Some("api.z.ai"));
-    assert_eq!(host_of("https://user@api.kimi.com/x").as_deref(), Some("api.kimi.com"));
-    assert_eq!(host_of("api.minimax.io/v1").as_deref(), Some("api.minimax.io"));
+    assert_eq!(
+        host_of("https://api.z.ai:8443/api").as_deref(),
+        Some("api.z.ai")
+    );
+    assert_eq!(
+        host_of("https://user@api.kimi.com/x").as_deref(),
+        Some("api.kimi.com")
+    );
+    assert_eq!(
+        host_of("api.minimax.io/v1").as_deref(),
+        Some("api.minimax.io")
+    );
     assert_eq!(host_of("").as_deref(), None);
 }
 

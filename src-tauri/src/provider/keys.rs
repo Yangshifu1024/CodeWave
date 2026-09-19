@@ -14,8 +14,7 @@ pub const TRANSIENT_BASE: Duration = Duration::from_secs(10);
 pub const TRANSIENT_MAX: Duration = Duration::from_secs(30 * 60);
 
 /// 单个 key 的健康状态。
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 struct KeyHealth {
     /// 冷却截止时刻；None = 可用
     cool_until: Option<Instant>,

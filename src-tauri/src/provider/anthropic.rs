@@ -7,7 +7,7 @@ use super::sse::{SseEvent, SseParser};
 use crate::core::config::ModelConfig;
 use crate::core::types::{Content, Message, Role};
 use futures::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +22,10 @@ pub fn build_body(req: &StreamRequest) -> Value {
         // 历史代际断点：标注该内部消息产出的最后一条 wire 消息的末块。
         // 内部消息可能产出 0 条 wire 消息（如仅 thinking 被滤空）——此时静默跳过，防止错标到更早位置
         if req.cache_gen_index == Some(i) && messages.len() > before {
-            if let Some(blocks) = messages.last_mut().and_then(|m| m["content"].as_array_mut()) {
+            if let Some(blocks) = messages
+                .last_mut()
+                .and_then(|m| m["content"].as_array_mut())
+            {
                 if let Some(last_block) = blocks.last_mut() {
                     last_block["cache_control"] = json!({ "type": "ephemeral" });
                 }
@@ -230,7 +233,7 @@ pub fn handle_event(
             return Err(ProviderError::Server(format!(
                 "stream error: {}",
                 v["error"]["message"].as_str().unwrap_or(&v.to_string())
-            )))
+            )));
         }
         _ => {}
     }
@@ -344,7 +347,8 @@ pub async fn stream(
         req = req.header("x-api-key", &key);
     }
     // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
-    req = crate::provider::headers::apply_request_headers(req, &model.headers, session_id.as_deref());
+    req =
+        crate::provider::headers::apply_request_headers(req, &model.headers, session_id.as_deref());
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Err(ProviderError::Cancelled),
         r = req.json(&body).send() => r.map_err(|e| ProviderError::Network(e.to_string()))?,
@@ -618,7 +622,9 @@ mod tests {
                 Message::user_text("old-0"),
                 Message {
                     role: Role::Assistant,
-                    content: vec![Content::Text { text: "mid-1".into() }],
+                    content: vec![Content::Text {
+                        text: "mid-1".into(),
+                    }],
                     created_at: None,
                 },
                 Message::user_text("recent-2"),
@@ -646,13 +652,15 @@ mod tests {
             "ephemeral"
         );
         // 中间消息（mid-1）不带断点
-        assert!(blocks[1]["content"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()
-            .get("cache_control")
-            .is_none());
+        assert!(
+            blocks[1]["content"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .get("cache_control")
+                .is_none()
+        );
         // 消息 2（recent-2，最后一条非瞬态）末块 = 末条断点
         let last = blocks.last().unwrap();
         assert_eq!(
@@ -718,7 +726,8 @@ mod tests {
             cache_gen_index: None,
             messages: vec![Message::tool_results(vec![Content::ToolResult {
                 tool_use_id: "t1".into(),
-                content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。".into(),
+                content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。"
+                    .into(),
                 is_error: false,
             }])],
             tools: vec![],
@@ -728,7 +737,8 @@ mod tests {
         };
         let body = build_body(&req);
         assert!(
-            body.to_string().contains("计划提醒：当前计划没有进行中条目"),
+            body.to_string()
+                .contains("计划提醒：当前计划没有进行中条目"),
             "ToolResult content 尾部的提醒必须出现在请求体：{body}"
         );
     }
@@ -769,7 +779,7 @@ mod tests {
         assert_eq!(body["thinking"]["budget_tokens"], 3276); // 80% × 4096
         req.reasoning_effort = Some(crate::core::prefs::EffortLevel::Low);
         assert_eq!(build_body(&req)["thinking"]["budget_tokens"], 1024); // 20% 低于下限 → 抬到 1024
-                                                                         // max_tokens 空间不足：不发 thinking
+        // max_tokens 空间不足：不发 thinking
         req.model.max_tokens = 1024;
         assert!(build_body(&req).get("thinking").is_none());
         // 未配置 effort：不发

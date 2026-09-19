@@ -1,11 +1,11 @@
 //! web_fetch：GET + 正文抽取（dom_smoothie Readability），逐跳 SSRF 校验，按主机节流。
 
 use super::net::{
-    guard_host, read_body_limited, HopError, HostThrottle, MAX_BODY_BYTES, MAX_REDIRECTS,
+    HopError, HostThrottle, MAX_BODY_BYTES, MAX_REDIRECTS, guard_host, read_body_limited,
 };
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::OnceLock;
 
 /// web_fetch 工具入参。

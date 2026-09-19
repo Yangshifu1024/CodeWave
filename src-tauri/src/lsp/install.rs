@@ -6,7 +6,9 @@
 use super::discovery;
 use super::server_spec;
 use super::{InstallKind, Lang};
-use std::path::{Path, PathBuf};
+#[cfg(any(windows, test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
@@ -301,10 +303,7 @@ mod tests {
                             file_name, p.program,
                             "Unix 不补扩展名，file_name 就应是裸名：{r:?}"
                         );
-                        assert!(
-                            !r.shell_wrapped,
-                            "cmd /C 包装只属于 Windows：{r:?}"
-                        );
+                        assert!(!r.shell_wrapped, "cmd /C 包装只属于 Windows：{r:?}");
                         let parent = r.path.parent().expect("绝对路径必有父目录");
                         let parent = trim_dir_sep(parent);
                         let from_path = std::env::split_paths(&fresh)
@@ -450,7 +449,10 @@ mod tests {
             .expect("cmd /C 不得挂死")
             .expect("必须能启动 cmd");
         let text = String::from_utf8_lossy(&out.stdout).to_string();
-        assert!(text.contains("ran-ok"), "含空格与 `&` 的路径必须跑得起来：{text}");
+        assert!(
+            text.contains("ran-ok"),
+            "含空格与 `&` 的路径必须跑得起来：{text}"
+        );
     }
 
     /// 去尾部斜杠（Unix 侧校验「父目录来自 PATH 中的某个目录」时用）。
@@ -484,6 +486,9 @@ mod tests {
             .expect("并发读两路必须不卡死（120s 内返回）")
             .expect("噪声脚本应正常退出");
         assert!(out.contains("done"), "stdout 必须被收走：{out}");
-        assert!(out.contains("xxxx"), "stderr 也必须被收走（不截断到 stdout）：{out}");
+        assert!(
+            out.contains("xxxx"),
+            "stderr 也必须被收走（不截断到 stdout）：{out}"
+        );
     }
 }

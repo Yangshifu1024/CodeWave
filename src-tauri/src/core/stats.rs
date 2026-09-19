@@ -397,7 +397,10 @@ mod tests {
         pending.insert(today.clone(), DailyStats::default());
         flush(&dir.path().join("stats"), &mut pending);
         let days = query(dir.path(), 1);
-        assert_eq!(days[0].by_workspace["/w"].cache_read, 7, "old cache_read must survive");
+        assert_eq!(
+            days[0].by_workspace["/w"].cache_read, 7,
+            "old cache_read must survive"
+        );
     }
 
     #[test]
@@ -413,7 +416,11 @@ mod tests {
         flush(&dir.path().join("stats"), &mut pending);
         let days = query(dir.path(), 7);
         let dates: Vec<&str> = days.iter().map(|d| d.date.as_str()).collect();
-        assert_eq!(dates, vec![yesterday.as_str(), today.as_str()], "ascending by date");
+        assert_eq!(
+            dates,
+            vec![yesterday.as_str(), today.as_str()],
+            "ascending by date"
+        );
         assert_eq!(days[0].total.input, 2);
         assert_eq!(days[1].total.input, 1);
         // 跨天的 kind 桶互不混淆

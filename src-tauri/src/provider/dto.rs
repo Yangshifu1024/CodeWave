@@ -352,7 +352,10 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("Header中未收到Authorization参数"), "{text}");
         assert!(text.contains("(HTTP 401)"), "{text}");
-        assert!(!text.contains("{\"error\""), "原始 JSON 不应出现在文案：{text}");
+        assert!(
+            !text.contains("{\"error\""),
+            "原始 JSON 不应出现在文案：{text}"
+        );
         // 非 string / 缺失 message 时保留原始片段路径
         let fallback = ProviderError::from_status(
             reqwest::StatusCode::from_u16(403).unwrap(),
@@ -385,7 +388,10 @@ mod tests {
     #[test]
     fn redacted_json_masks_keys() {
         let model = crate::core::config::ModelConfig {
-            keys: vec!["sk-plaintext-SECRET-1".into(), "sk-plaintext-SECRET-2".into()],
+            keys: vec![
+                "sk-plaintext-SECRET-1".into(),
+                "sk-plaintext-SECRET-2".into(),
+            ],
             headers: vec![crate::core::config::HeaderPair {
                 name: "x-auth-token".into(),
                 value: "header-SECRET-3".into(),

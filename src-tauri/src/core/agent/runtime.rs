@@ -1,3 +1,4 @@
+use super::drive::run_chat;
 use crate::core::config::ConfigState;
 use crate::core::context::ContextBreakdown;
 use crate::core::sessions::SessionStore;
@@ -10,9 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use super::drive::run_chat;
 
 /// 单次 run 的步数硬上限（防模型无限工具循环；9999 实际由空响应/完成条件先行终止）。
 pub const MAX_STEPS: usize = 9999;
@@ -56,10 +56,7 @@ pub enum Frame {
     /// 子代理帧信封：子代理的流式帧借父会话通道下发；前端按 sub_id 路由进该子代理自己的
     /// 消息流（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）。
     /// 仅 host 层在子通道上发送时包装。
-    Sub {
-        sub_id: String,
-        frame: Box<Frame>,
-    },
+    Sub { sub_id: String, frame: Box<Frame> },
 }
 
 /// 事件汇抽象：core 只依赖此 trait（host 注入 Tauri 实现）。
@@ -278,12 +275,13 @@ impl SessionRuntime {
 
     /// 兑现一个待应答的 ask；有 waiter 收到值时返回 true。
     pub fn resolve_ask(&self, ask_id: &str, value: serde_json::Value) -> bool {
-        match self.asks.lock().unwrap().remove(ask_id) { Some(tx) => {
-            let _ = tx.send(value);
-            true
-        } _ => {
-            false
-        }}
+        match self.asks.lock().unwrap().remove(ask_id) {
+            Some(tx) => {
+                let _ = tx.send(value);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// 取消当前 run（空闲时无操作）。
@@ -447,4 +445,3 @@ impl AgentCore {
         Ok(run_id)
     }
 }
-

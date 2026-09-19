@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// scheduled_task 工具入参。
 #[derive(Deserialize)]
@@ -212,7 +212,10 @@ mod tests {
 
         // 坏语法 → E_SCHEDULE
         let out = tool
-            .run(&ctx, json!({"action": "create", "name": "n", "instruction": "i", "schedule": "weekly"}))
+            .run(
+                &ctx,
+                json!({"action": "create", "name": "n", "instruction": "i", "schedule": "weekly"}),
+            )
             .await;
         assert_eq!(out.error.unwrap().code, "E_SCHEDULE");
         // 过去的 once 时间 → E_SCHEDULE

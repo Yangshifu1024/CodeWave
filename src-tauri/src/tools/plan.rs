@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// todo 状态：待办 / 进行中 / 已完成。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

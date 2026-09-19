@@ -83,7 +83,10 @@ pub fn prompt_listing(metas: &[MemoryMeta]) -> String {
         .iter()
         .map(|m| format!("- {}: {}（{}）", m.name, m.description, m.path))
         .collect();
-    format!("<persistent-memories>\n可直接用 create/edit 工具维护上述记忆文件（目录在可写白名单内）。\n{}\n</persistent-memories>", lines.join("\n"))
+    format!(
+        "<persistent-memories>\n可直接用 create/edit 工具维护上述记忆文件（目录在可写白名单内）。\n{}\n</persistent-memories>",
+        lines.join("\n")
+    )
 }
 
 #[cfg(test)]
@@ -104,9 +107,11 @@ mod tests {
 
         let metas = scan(dd.path(), None);
         assert_eq!(metas.len(), 2);
-        assert!(metas
-            .iter()
-            .any(|m| m.name == "rust-prefs" && m.description.contains("edition 2024")));
+        assert!(
+            metas
+                .iter()
+                .any(|m| m.name == "rust-prefs" && m.description.contains("edition 2024"))
+        );
         let listing = prompt_listing(&metas);
         assert!(listing.contains("persistent-memories"));
         assert!(listing.contains("rust-prefs"));

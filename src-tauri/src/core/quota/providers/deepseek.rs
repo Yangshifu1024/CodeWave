@@ -2,7 +2,7 @@
 //! 响应含 `is_available` 与 `balance_infos[]`（currency/total_balance/granted_balance/topped_up_balance）。
 //! 这是**数值行**（余额）而非百分比行。
 
-use super::super::{fetch_json, AuthStyle, QuotaEntry};
+use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use serde_json::Value;
 
 pub(crate) const URL: &str = "https://api.deepseek.com/user/balance";

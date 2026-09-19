@@ -22,11 +22,7 @@ pub fn sanitize_title(raw: &str) -> Option<String> {
         .chars()
         .take(MAX_TITLE_CHARS)
         .collect();
-    if title.is_empty() {
-        None
-    } else {
-        Some(title)
-    }
+    if title.is_empty() { None } else { Some(title) }
 }
 
 /// 剥离开头的中文「标题：」式标签前缀（精确匹配下方字面量变体；模型偶尔无视

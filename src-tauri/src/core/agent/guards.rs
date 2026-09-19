@@ -1,7 +1,7 @@
+use super::runtime::SessionRuntime;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
-use super::runtime::SessionRuntime;
 
 /// panic unwind 兜底守卫：drive_agent 主路径提前解除武装（armed=false）后按序收尾；
 /// 一旦中途 panic，Drop 兜底停掉流式刷新 ticker 并清掉活跃 cancel token，

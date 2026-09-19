@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// HTML 字符数上限。
 const MAX_HTML: usize = 50_000;

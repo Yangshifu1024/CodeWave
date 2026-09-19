@@ -55,7 +55,13 @@ pub enum IdlePolicy {
 
 /// 只读工具名集合（进展判定用；core 层不依赖 tools 类型，按名称判读）。
 pub(crate) const READONLY_TOOLS: &[&str] = &[
-    "read", "batch_read", "grep", "calculate", "list_files", "web_fetch", "render_html",
+    "read",
+    "batch_read",
+    "grep",
+    "calculate",
+    "list_files",
+    "web_fetch",
+    "render_html",
 ];
 
 /// 单次工具调用的监督签名（批次层摘要）。
@@ -119,8 +125,9 @@ impl SupervisionState {
         while self.window.len() > WINDOW {
             self.window.pop_front();
         }
-        let count_in_window =
-            |s: &SupervisionState, target: &CallSig| s.window.iter().filter(|c| *c == target).count();
+        let count_in_window = |s: &SupervisionState, target: &CallSig| {
+            s.window.iter().filter(|c| *c == target).count()
+        };
         // 规则二：失败重复检测，双层签名（优先于规则一判定，达到硬介入阈值直接终止）：
         // 精确层 = 完全相同的失败调用（含参数）——真卡死，原样重试烧预算；
         // 宽松层 = 同工具同失败码任意参数——只有大面积连环失败（窗口内近满）才算烧穿。
@@ -275,12 +282,21 @@ mod tests {
     fn repeated_failure_nudges_once_then_escalates() {
         let mut s = SupervisionState::default();
         for _ in 0..FAIL_NUDGE_AT - 1 {
-            assert!(matches!(s.feed(sig("edit", Some("E_VERSION_STALE"), 1)), Verdict::None));
+            assert!(matches!(
+                s.feed(sig("edit", Some("E_VERSION_STALE"), 1)),
+                Verdict::None
+            ));
         }
         // 第 3 次：纠偏
-        assert!(matches!(s.feed(sig("edit", Some("E_VERSION_STALE"), 1)), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed(sig("edit", Some("E_VERSION_STALE"), 1)),
+            Verdict::Nudge(_)
+        ));
         // 纠偏后再来两次（窗口内累计 5）：硬介入
-        assert!(matches!(s.feed(sig("edit", Some("E_VERSION_STALE"), 1)), Verdict::None));
+        assert!(matches!(
+            s.feed(sig("edit", Some("E_VERSION_STALE"), 1)),
+            Verdict::None
+        ));
         assert!(matches!(
             s.feed(sig("edit", Some("E_VERSION_STALE"), 1)),
             Verdict::Escalate(_)
@@ -337,7 +353,10 @@ mod tests {
         let mut s = SupervisionState::default();
         for i in 0..FAIL_LOOSE_NUDGE_AT - 1 {
             assert!(
-                matches!(s.feed(sig("command", Some("E_EXIT_CODE"), i as u64)), Verdict::None),
+                matches!(
+                    s.feed(sig("command", Some("E_EXIT_CODE"), i as u64)),
+                    Verdict::None
+                ),
                 "第 {i} 次不同参数失败不应触发"
             );
         }
@@ -356,7 +375,10 @@ mod tests {
         }
         // 纠偏后继续：7~9 次 None，第 10 次（宽松层终止阈值）硬介入
         for i in FAIL_LOOSE_NUDGE_AT as u64..FAIL_LOOSE_ESCALATE_AT as u64 - 1 {
-            assert!(matches!(s.feed(sig("command", Some("E_EXIT_CODE"), i)), Verdict::None));
+            assert!(matches!(
+                s.feed(sig("command", Some("E_EXIT_CODE"), i)),
+                Verdict::None
+            ));
         }
         assert!(matches!(
             s.feed(sig("command", Some("E_EXIT_CODE"), 100)),
@@ -373,10 +395,16 @@ mod tests {
         }
         // 换参数的失败只进宽松层计数（此时 5 次 < 6）
         for hash in [2, 3] {
-            assert!(matches!(s.feed(sig("edit", Some("E_X"), hash)), Verdict::None));
+            assert!(matches!(
+                s.feed(sig("edit", Some("E_X"), hash)),
+                Verdict::None
+            ));
         }
         // 回到原参数：精确层第 3 次 → 纠偏
-        assert!(matches!(s.feed(sig("edit", Some("E_X"), 1)), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed(sig("edit", Some("E_X"), 1)),
+            Verdict::Nudge(_)
+        ));
     }
 
     #[test]
@@ -388,7 +416,10 @@ mod tests {
         // 早期的一次失败已被挤出窗口：新的失败序列重新从 1 计数
         assert!(matches!(s.feed(sig("edit", Some("E_Y"), 9)), Verdict::None));
         assert!(matches!(s.feed(sig("edit", Some("E_Y"), 9)), Verdict::None));
-        assert!(matches!(s.feed(sig("edit", Some("E_Y"), 9)), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed(sig("edit", Some("E_Y"), 9)),
+            Verdict::Nudge(_)
+        ));
     }
 
     // ===== 空转看门狗（feed_batch）=====
@@ -454,7 +485,10 @@ mod tests {
         for _ in 0..IDLE_NUDGE_AT - 1 {
             assert!(matches!(s.feed_batch(&idle_step(&["b.ts"])), Verdict::None));
         }
-        assert!(matches!(s.feed_batch(&idle_step(&["b.ts"])), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["b.ts"])),
+            Verdict::Nudge(_)
+        ));
     }
 
     #[test]
@@ -473,7 +507,10 @@ mod tests {
             };
             let _ = s.feed_batch(&d);
         }
-        assert!(matches!(s.feed_batch(&idle_step(&["a.ts"])), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["a.ts"])),
+            Verdict::Nudge(_)
+        ));
     }
 
     #[test]
@@ -481,21 +518,33 @@ mod tests {
         let mut s = SupervisionState::default();
         // 同文件连续读时空转与分段计数同步增长：第 8 步先触发空转纠偏（两计数独立去重），
         // 第 10 步再触发分段专用纠偏；分段纠偏本身不升级终止——终止仍只由 IDLE_ESCALATE_AT 驱动
-        assert!(matches!(s.feed_batch(&idle_step(&["big.ts"])), Verdict::None));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["big.ts"])),
+            Verdict::None
+        ));
         for _ in 0..IDLE_NUDGE_AT - 1 {
-            assert!(matches!(s.feed_batch(&idle_step(&["big.ts"])), Verdict::None));
+            assert!(matches!(
+                s.feed_batch(&idle_step(&["big.ts"])),
+                Verdict::None
+            ));
         }
         assert!(matches!(
             s.feed_batch(&idle_step(&["big.ts"])),
             Verdict::Nudge(text) if text.contains("实质进展")
         ));
-        assert!(matches!(s.feed_batch(&idle_step(&["big.ts"])), Verdict::None));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["big.ts"])),
+            Verdict::None
+        ));
         assert!(matches!(
             s.feed_batch(&idle_step(&["big.ts"])),
             Verdict::Nudge(text) if text.contains("分段读取")
         ));
         // 分段纠偏后不立即终止（此处尚未达 IDLE_ESCALATE_AT）
-        assert!(matches!(s.feed_batch(&idle_step(&["big.ts"])), Verdict::None));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["big.ts"])),
+            Verdict::None
+        ));
     }
 
     #[test]
@@ -512,7 +561,10 @@ mod tests {
         for _ in 0..IDLE_NUDGE_AT - 1 {
             assert!(matches!(s.feed_batch(&idle_step(&["a.ts"])), Verdict::None));
         }
-        assert!(matches!(s.feed_batch(&idle_step(&["a.ts"])), Verdict::Nudge(_)));
+        assert!(matches!(
+            s.feed_batch(&idle_step(&["a.ts"])),
+            Verdict::Nudge(_)
+        ));
     }
 
     // ===== 只读 run 策略（IdlePolicy::NudgeOnly，[docs/subagent-idle-watchdog-misfire]）=====

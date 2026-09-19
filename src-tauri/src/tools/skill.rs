@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// skill 工具入参。
 #[derive(Deserialize)]
@@ -149,7 +149,10 @@ mod tests {
         assert!(content.contains("DEMO BODY LINE"));
         assert!(content.trim_end().ends_with("</skill-loaded>"));
         // 耦合前提：ASK_INTERACTION_NORM 文本不得提及 caller-context，否则本断言失效
-        assert!(!content.contains("caller-context"), "no args → no caller-context block");
+        assert!(
+            !content.contains("caller-context"),
+            "no args → no caller-context block"
+        );
     }
 
     #[tokio::test]
@@ -196,7 +199,11 @@ mod tests {
     fn norm_text_never_contains_skill_loaded_closing_tag() {
         assert!(!ASK_INTERACTION_NORM.contains("</skill-loaded>"));
         assert!(ASK_INTERACTION_NORM.starts_with("<ask-interaction-norm>\n"));
-        assert!(ASK_INTERACTION_NORM.trim_end().ends_with("</ask-interaction-norm>"));
+        assert!(
+            ASK_INTERACTION_NORM
+                .trim_end()
+                .ends_with("</ask-interaction-norm>")
+        );
     }
 
     #[tokio::test]

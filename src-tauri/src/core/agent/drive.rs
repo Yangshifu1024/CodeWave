@@ -1,3 +1,14 @@
+use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
+use super::runtime::{
+    AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS,
+    STREAM_THROTTLE_MS, SessionRuntime,
+};
+use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
+use super::stream::{
+    build_assistant_message, build_stream_request, collect_deltas, flush_segments,
+    refresh_request_messages, stream_flush_loop,
+};
+use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
 use crate::core::context::{self};
 use crate::core::session_log;
 use crate::core::sessions::repair;
@@ -6,16 +17,11 @@ use crate::provider::dto::ProviderError;
 use crate::provider::retry;
 use crate::tools::batch::execute_batch;
 use serde::Deserialize;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
-use super::runtime::{AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS, SessionRuntime, STREAM_THROTTLE_MS};
-use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
-use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
-use super::stream::{build_assistant_message, build_stream_request, collect_deltas, flush_segments, refresh_request_messages, stream_flush_loop};
 
 /// 归一化后的工具调用（参数已修复为合法 JSON object；供批次执行层消费）。
 #[derive(Debug, Clone)]
@@ -93,8 +99,7 @@ pub async fn run_chat(
     rt.injected_plan_snapshot_for_run
         .store(false, Ordering::SeqCst);
     // plan 软提醒（batch::maybe_emit_plan_hint）每 run 至多一次：run 起点同模式复位
-    rt.plan_hint_emitted
-        .store(false, Ordering::SeqCst);
+    rt.plan_hint_emitted.store(false, Ordering::SeqCst);
 
     // 会话装载：内存为空但磁盘有历史 → 加载（历史 + todos）
     if rt.history.lock().unwrap().is_empty() {
@@ -458,8 +463,7 @@ pub async fn drive_agent(
     *rt.active_cancel.lock().unwrap() = Some(run_token.clone());
     // 非主 runtime（子代理/任务运行）：文件写认领随 drive 生命周期——
     // 正常结束与 panic unwind 都经 Drop 释放（[docs/subagent-file-isolation]）
-    let _claims =
-        (!params.main_session).then(|| crate::tools::claims::ReleaseGuard::arm(&rt.id));
+    let _claims = (!params.main_session).then(|| crate::tools::claims::ReleaseGuard::arm(&rt.id));
 
     // 64ms 流式刷新 ticker（无通道注册时帧被静默丢弃）
     let flush_stop = CancellationToken::new();
@@ -543,9 +547,12 @@ pub async fn drive_agent(
 
         // ⑤ 预算提醒（子代理）：剩余 20% 时提醒一次
         if params.budget_notice && step == budget_notice_step(params.max_steps) {
-            rt.history.lock().unwrap().push(Message::user_text(
-                "<budget-notice>步数预算即将耗尽，请尽快收敛并输出汇报。</budget-notice>",
-            ).stamped());
+            rt.history.lock().unwrap().push(
+                Message::user_text(
+                    "<budget-notice>步数预算即将耗尽，请尽快收敛并输出汇报。</budget-notice>",
+                )
+                .stamped(),
+            );
         }
         // ⑥ 强制汇报轮：最后一步
         if params.force_report && step == params.max_steps.saturating_sub(1) {
@@ -681,7 +688,7 @@ pub async fn drive_agent(
                     rt.id
                 );
                 if params.emit_events {
-                    emit_retry(&sink, &rt, run_id, attempt);
+                    emit_retry(&sink, rt, run_id, attempt);
                 }
                 sleep_backoff(attempt).await;
                 continue 'steps;
@@ -952,8 +959,13 @@ async fn run_llm_turn(
     run_usage: &mut crate::provider::RunUsage,
 ) -> Result<crate::provider::dto::Assembled, ProviderError> {
     // 流停滞阈值（serde default 300s；本地大上下文模型预首 token 慢可调大）
-    let stall_timeout =
-        Duration::from_secs(core.cfg.read().unwrap().stall_timeout_seconds.clamp(5, 3600));
+    let stall_timeout = Duration::from_secs(
+        core.cfg
+            .read()
+            .unwrap()
+            .stall_timeout_seconds
+            .clamp(5, 3600),
+    );
     loop {
         let (tx, rx) = mpsc::channel::<crate::provider::StreamDelta>(1024);
         let collector = tokio::spawn(collect_deltas(rx, rt.stream.clone()));
@@ -973,15 +985,8 @@ async fn run_llm_turn(
         let req_owned = req.clone();
         let token_for_task = attempt_token.clone();
         let fut = tokio::spawn(async move {
-            crate::provider::stream_model(
-                &client,
-                &model_owned,
-                key,
-                req_owned,
-                tx,
-                token_for_task,
-            )
-            .await
+            crate::provider::stream_model(&client, &model_owned, key, req_owned, tx, token_for_task)
+                .await
         });
         let watchdog = tokio::spawn(stall_watchdog(
             rt.stream.clone(),
@@ -1047,17 +1052,18 @@ async fn run_llm_turn(
                 let asm = collector.await.unwrap_or_default();
                 // 空响应按可重试处理
                 if asm.is_empty()
-                    && retry::should_retry(&ProviderError::Server("空响应".into()), *attempt) {
-                        *attempt += 1;
-                        rt.stream.reset(); // M4：重试前丢弃半刷残帧
-                        session_log::warn(rt, &format!("step {step} 空响应，第 {} 次重试", *attempt));
-                        tracing::warn!("session {} step {step} 空响应，重试 #{}", rt.id, *attempt);
-                        if params.emit_events {
-                            emit_retry(sink, rt, run_id, *attempt);
-                        }
-                        sleep_backoff(*attempt).await;
-                        continue;
+                    && retry::should_retry(&ProviderError::Server("空响应".into()), *attempt)
+                {
+                    *attempt += 1;
+                    rt.stream.reset(); // M4：重试前丢弃半刷残帧
+                    session_log::warn(rt, &format!("step {step} 空响应，第 {} 次重试", *attempt));
+                    tracing::warn!("session {} step {step} 空响应，重试 #{}", rt.id, *attempt);
+                    if params.emit_events {
+                        emit_retry(sink, rt, run_id, *attempt);
                     }
+                    sleep_backoff(*attempt).await;
+                    continue;
+                }
                 *attempt = 0; // M3：成功即复位重试预算（按轮，不按 run）
                 session_log::info(
                     rt,
@@ -1098,7 +1104,9 @@ async fn run_llm_turn(
                     // 后续出网副本不再回传思考（本 run 后续 step 与新 run 均生效）；
                     // 「要求回传」的端点绝不能置位（置位会让它彻底失效），修复也必须保思考。
                     let verdict = match &e {
-                        ProviderError::BadRequest { message, .. } => classify_reasoning_400(message),
+                        ProviderError::BadRequest { message, .. } => {
+                            classify_reasoning_400(message)
+                        }
                         _ => Reasoning400::Unrelated,
                     };
                     // 依分类更新粘性标记；`changed` = 状态是否翻转（日志只在真正翻转时才值得记）
@@ -1150,7 +1158,10 @@ async fn run_llm_turn(
                             session_log::trunc(&e.to_string(), ERROR_CAP)
                         ),
                     );
-                    tracing::warn!("session {} step {step} BadRequest sanitize 重试：{e}", rt.id);
+                    tracing::warn!(
+                        "session {} step {step} BadRequest sanitize 重试：{e}",
+                        rt.id
+                    );
                     continue;
                 }
                 if retry::should_retry(&e, *attempt) {
@@ -1166,7 +1177,11 @@ async fn run_llm_turn(
                             session_log::trunc(&e.to_string(), ERROR_CAP)
                         ),
                     );
-                    tracing::warn!("session {} step {step} 请求失败，重试 #{}：{e}", rt.id, *attempt);
+                    tracing::warn!(
+                        "session {} step {step} 请求失败，重试 #{}：{e}",
+                        rt.id,
+                        *attempt
+                    );
                     if params.emit_events {
                         emit_retry(sink, rt, run_id, *attempt);
                     }
@@ -1235,15 +1250,16 @@ async fn step_auto_compact(
         );
         // RAII 槽位：compact_history panic unwind 时 Drop 仍会复位 compacting；
         // 否则 start_chat 永远拒绝新 run（会话变砖，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md) 评审修复）
-        let compact_result = match CompactingGuard::acquire(rt) { Some(_compact_guard) => {
-            context::compact_history(core, rt, false, run_token).await
-        } _ => {
-            // 理论不可达（run 外手动压缩已被 running 阻断）；
-            // 按失败处理并冷却，继续本步
-            session_log::warn(rt, "自动压缩跳过：压缩互斥被占位");
-            Err("压缩互斥被占位".into())
-        }};
-            match compact_result {
+        let compact_result = match CompactingGuard::acquire(rt) {
+            Some(_compact_guard) => context::compact_history(core, rt, false, run_token).await,
+            _ => {
+                // 理论不可达（run 外手动压缩已被 running 阻断）；
+                // 按失败处理并冷却，继续本步
+                session_log::warn(rt, "自动压缩跳过：压缩互斥被占位");
+                Err("压缩互斥被占位".into())
+            }
+        };
+        match compact_result {
             Ok(usage) => {
                 *compact_fail_streak = 0;
                 // 空转看门狗联动：压缩丢细节后模型需要重读文件重建上下文——
@@ -1267,7 +1283,10 @@ async fn step_auto_compact(
                 if *compact_fail_streak >= 2 {
                     session_log::warn(
                         rt,
-                        &format!("自动压缩连续失败 {} 次，本 run 内不再自动压缩：{e}", *compact_fail_streak),
+                        &format!(
+                            "自动压缩连续失败 {} 次，本 run 内不再自动压缩：{e}",
+                            *compact_fail_streak
+                        ),
                     );
                 } else {
                     session_log::warn(rt, &format!("自动压缩失败（继续原历史）：{e}"));
@@ -1355,7 +1374,13 @@ pub async fn run_task_agent(
     let params = DriveParams {
         max_steps: crate::core::scheduler::TASK_BUDGET_STEPS,
         exclude_mcp: true,
-        exclude_tools: vec!["ask".into(), "subagent".into(), "scheduled_task".into(), "suggest".into(), "wait".into()],
+        exclude_tools: vec![
+            "ask".into(),
+            "subagent".into(),
+            "scheduled_task".into(),
+            "suggest".into(),
+            "wait".into(),
+        ],
         system_extra: format!(
             "\n<task-run>你正在执行计划任务「{}」。完成后用简短汇报结束，不要向用户提问；最终汇报必须用 <report>…</report> 包裹（未包裹的文字不会被当作任务结果）。指令：{}</task-run>",
             task.name, task.instruction
@@ -1378,7 +1403,9 @@ pub async fn run_task_agent(
     let (result, usage, _) = drive_agent(&core, &rt, params, &run_id).await;
     // 任务结果剥离 <report> 包裹（标记只用于收尾判定，不进入任务日志与通知）
     (
-        result.map(|r| split_report(&r).0).map_err(|e| e.to_string()),
+        result
+            .map(|r| split_report(&r).0)
+            .map_err(|e| e.to_string()),
         usage,
     )
 }
@@ -1462,7 +1489,7 @@ async fn stall_watchdog(
     }
 }
 
- /// 从 panic payload（&str / String / 其他）提取可读消息。
+/// 从 panic payload（&str / String / 其他）提取可读消息。
 fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
@@ -1476,8 +1503,8 @@ fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_digest, classify_reasoning_400, stalled, update_reasoning_sticky, NormalizedCall,
-        Reasoning400,
+        NormalizedCall, Reasoning400, batch_digest, classify_reasoning_400, stalled,
+        update_reasoning_sticky,
     };
 
     /// 构造归一化工具调用（`batch_digest` 单测用）。
@@ -1529,7 +1556,9 @@ mod tests {
     #[test]
     fn classify_reasoning_400_unrelated_for_other_400s() {
         assert_eq!(
-            classify_reasoning_400("Invalid assistant message: content or tool_calls must be set (HTTP 400)"),
+            classify_reasoning_400(
+                "Invalid assistant message: content or tool_calls must be set (HTTP 400)"
+            ),
             Reasoning400::Unrelated
         );
         assert_eq!(classify_reasoning_400(""), Reasoning400::Unrelated);
@@ -1607,9 +1636,7 @@ mod tests {
             Message {
                 role: Role::Assistant,
                 content: vec![
-                    Content::Thinking {
-                        text: "想".into(),
-                    },
+                    Content::Thinking { text: "想".into() },
                     Content::Text {
                         text: "答案".into(),
                     },
@@ -1631,7 +1658,10 @@ mod tests {
             "The `reasoning_content` in the thinking mode must be passed back to the API. (HTTP 400)",
         );
         assert_eq!(verdict, Reasoning400::Demanded);
-        assert!(update_reasoning_sticky(&rt, verdict), "复位必须报告状态变化");
+        assert!(
+            update_reasoning_sticky(&rt, verdict),
+            "复位必须报告状态变化"
+        );
         assert!(
             !rt.reasoning_rejected.load(Ordering::SeqCst),
             "Demanded 必须复位粘性标记"
@@ -1690,10 +1720,7 @@ mod tests {
     /// `normalize_read_path` 逐字一致——先 trim_start_matches 再转分隔符）。
     #[test]
     fn batch_digest_path_fallback() {
-        let d = batch_digest(&[call(
-            "read",
-            serde_json::json!({"path": "  ./src\\a.ts  "}),
-        )]);
+        let d = batch_digest(&[call("read", serde_json::json!({"path": "  ./src\\a.ts  "}))]);
         assert_eq!(d.read_paths, vec!["src/a.ts".to_string()]);
     }
 
@@ -1701,10 +1728,7 @@ mod tests {
     /// 且不得被误判为「有副作用」的进展。
     #[test]
     fn batch_digest_grep_only_yields_no_paths() {
-        let d = batch_digest(&[call(
-            "grep",
-            serde_json::json!({"pattern": "fn main"}),
-        )]);
+        let d = batch_digest(&[call("grep", serde_json::json!({"pattern": "fn main"}))]);
         assert!(d.read_paths.is_empty(), "grep 不产生 read 路径");
         assert!(!d.has_non_readonly, "grep 是只读工具");
     }
@@ -1726,7 +1750,12 @@ mod tests {
 }
 
 /// 发 run:retry 事件（带 gen 代数与退避时延，前端据此丢弃旧帧并等待）。
-pub(super) fn emit_retry(sink: &Arc<dyn EventSink>, rt: &SessionRuntime, run_id: &str, attempt: u32) {
+pub(super) fn emit_retry(
+    sink: &Arc<dyn EventSink>,
+    rt: &SessionRuntime,
+    run_id: &str,
+    attempt: u32,
+) {
     sink.emit(
         &rt.id,
         "run:retry",

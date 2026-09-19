@@ -1,5 +1,5 @@
-use crate::core::types::Message;
 use crate::core::sessions::repair;
+use crate::core::types::Message;
 use crate::util::atomic::atomic_write;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -470,12 +470,18 @@ impl SessionStore {
 
     /// 子代理历史文件路径：histories/subs/<parent>/<sub>.json.gz。
     fn sub_history_path(&self, parent: &str, sub: &str) -> PathBuf {
-        self.sub_histories_dir(parent).join(format!("{sub}.json.gz"))
+        self.sub_histories_dir(parent)
+            .join(format!("{sub}.json.gz"))
     }
 
     /// 持久化子代理的完整执行历史（drive_agent 结束/异常路径调用）。
     /// 复用主历史的 sanitize/trim/gzip 管线，但绝不触碰索引。
-    pub fn save_sub_history(&self, parent: &str, sub: &str, msgs: &[Message]) -> anyhow::Result<()> {
+    pub fn save_sub_history(
+        &self,
+        parent: &str,
+        sub: &str,
+        msgs: &[Message],
+    ) -> anyhow::Result<()> {
         let mut prepared = repair::prepare_for_save(msgs.to_vec());
         repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 2);
         let gz = gzip_history(&prepared)?;
@@ -569,7 +575,6 @@ impl SessionStore {
     }
 }
 
-
 /// 历史序列化 + gzip（save_history 超上限降级重试时复用）。
 fn gzip_history(msgs: &[Message]) -> anyhow::Result<Vec<u8>> {
     let json = serde_json::to_vec(msgs)?;
@@ -577,7 +582,6 @@ fn gzip_history(msgs: &[Message]) -> anyhow::Result<Vec<u8>> {
     std::io::Write::write_all(&mut enc, &json)?;
     Ok(enc.finish()?)
 }
-
 
 #[cfg(test)]
 mod tests;

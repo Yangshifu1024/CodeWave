@@ -8,9 +8,9 @@
 //! `ui/src/ipc/client.ts`），故不新造审批事件（事件面锁 29 键）——确认依据是引导卡上
 //! **已完整展示的命令 + 用户显式点击**。命令本身仍过 fence（灾难级照样拦）。
 
-use super::util::{err, Core};
+use super::util::{Core, err};
 use crate::core::config::ValidationSettings;
-use crate::lsp::{install, server_spec, Lang, ServerStatus};
+use crate::lsp::{Lang, ServerStatus, install, server_spec};
 use std::time::Duration;
 
 /// 一键安装的超时预算（npm / rustup / go install 都可能跑几分钟）。
@@ -122,10 +122,8 @@ pub async fn lsp_install(core: Core<'_>, language: String) -> Result<String, Str
     //    围栏仍照过：命令固定，但灾难级判定一律拦（审批关闭时高危也会退化为 Block）。
     {
         let cfg = core.cfg.read().unwrap().clone();
-        let roots = crate::tools::pathutil::WriteRoots::new(
-            core.data_dir.clone(),
-            core.data_dir.clone(),
-        );
+        let roots =
+            crate::tools::pathutil::WriteRoots::new(core.data_dir.clone(), core.data_dir.clone());
         let policy = crate::safety::fence::FencePolicy::legacy(
             cfg.approval.enabled,
             cfg.approval.confirm_outside_create,
@@ -150,7 +148,10 @@ pub async fn lsp_install(core: Core<'_>, language: String) -> Result<String, Str
     tracing::info!(command = %plan.display, "开始执行 LSP server 安装命令");
     let out = install::execute(&plan, INSTALL_TIMEOUT).await?;
     let total = out.chars().count();
-    let tail: String = out.chars().skip(total.saturating_sub(OUTPUT_TAIL_CHARS)).collect();
+    let tail: String = out
+        .chars()
+        .skip(total.saturating_sub(OUTPUT_TAIL_CHARS))
+        .collect();
     // ⑤ 安装改变 PATH / 探测面 → 清缓存重探测一次，下一次写入即可用上；把结论一并回给用户
     core.lsp.redetect().await;
     let vcfg_after = core.cfg.read().unwrap().validation.clone();
@@ -175,7 +176,7 @@ pub async fn lsp_install(core: Core<'_>, language: String) -> Result<String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::safety::fence::{check_command_policy, FencePolicy, Verdict};
+    use crate::safety::fence::{FencePolicy, Verdict, check_command_policy};
     use crate::tools::pathutil::WriteRoots;
 
     #[test]

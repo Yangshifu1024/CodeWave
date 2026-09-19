@@ -80,7 +80,9 @@ fn native_notify(
         .on_activated(move |_action| {
             // 点击回调：先原生拉起主窗口（前台锁绕行），再发事件让前端切 Tab
             //（窗口 reveal/聚焦统一由后端完成；前端只做 revealSession，见 AppShell）
-            tracing::info!("通知点击激活：session={payload_session}（raise main + emit notify:activate）");
+            tracing::info!(
+                "通知点击激活：session={payload_session}（raise main + emit notify:activate）"
+            );
             raise_main_window(&app);
             let payload = NotifyActivatePayload {
                 session_id: payload_session.clone(),
@@ -104,7 +106,10 @@ fn native_notify(
 fn aumid_registered(identifier: &str) -> bool {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     winreg::RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey_with_flags(format!(r"Software\Classes\AppUserModelId\{identifier}"), KEY_READ)
+        .open_subkey_with_flags(
+            format!(r"Software\Classes\AppUserModelId\{identifier}"),
+            KEY_READ,
+        )
         .is_ok()
 }
 

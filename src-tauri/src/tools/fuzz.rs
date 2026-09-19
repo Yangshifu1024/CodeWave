@@ -3,7 +3,7 @@
 //!（serde 解析 / parse_or_salvage / collect_unknown_fields）在任何输入下都不 panic。
 
 use crate::core::sessions::repair::parse_or_salvage;
-use crate::tools::{collect_unknown_fields, ToolOutcome};
+use crate::tools::{ToolOutcome, collect_unknown_fields};
 
 /// 线性同余伪随机数生成器：固定种子即可复现，满足测试确定性要求。
 struct Lcg(u64);
@@ -90,35 +90,35 @@ fn arg_parsers_never_panic_under_mutation() {
 /// LCG 是确定性生成器：同一种子重放同一序列。
 #[test]
 fn lcg_is_deterministic_per_seed() {
-        let mut a = Lcg(0x5741_5645_5354_5544);
-        let mut b = Lcg(0x5741_5645_5354_5544);
-        let mut c = Lcg(1);
-        let (mut seq_a, mut seq_b, mut seq_c) = (Vec::new(), Vec::new(), Vec::new());
-        for _ in 0..32 {
-            seq_a.push(a.next());
-            seq_b.push(b.next());
-            seq_c.push(c.next());
-        }
-        assert_eq!(seq_a, seq_b);
-        assert_ne!(seq_a, seq_c);
+    let mut a = Lcg(0x5741_5645_5354_5544);
+    let mut b = Lcg(0x5741_5645_5354_5544);
+    let mut c = Lcg(1);
+    let (mut seq_a, mut seq_b, mut seq_c) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..32 {
+        seq_a.push(a.next());
+        seq_b.push(b.next());
+        seq_c.push(c.next());
     }
+    assert_eq!(seq_a, seq_b);
+    assert_ne!(seq_a, seq_c);
+}
 
-    /// 退化基准（空 / 单字符 / 多字节 unicode）的变异永不 panic。
-    #[test]
-    fn mutate_handles_degenerate_bases() {
-        let mut rnd = Lcg(99);
-        for base in ["", "x", "中文🚀\"{\\}"] {
-            for _ in 0..200 {
-                let out = mutate(base, &mut rnd);
-                // 变异器只会插入/替换 ASCII 控制区字符或截断
-                assert!(out.chars().count() <= base.chars().count() + 20);
-                // 对变异后文本做 salvage + 未知字段收集保持无 panic
-                let parsed: Option<serde_json::Value> = serde_json::from_str(&out).ok();
-                let _ = parse_or_salvage(&out);
-                let _ = collect_unknown_fields(
-                    &parsed.unwrap_or(serde_json::Value::Null),
-                    r#"{"properties":{"a":{}}}"#,
-                );
-            }
+/// 退化基准（空 / 单字符 / 多字节 unicode）的变异永不 panic。
+#[test]
+fn mutate_handles_degenerate_bases() {
+    let mut rnd = Lcg(99);
+    for base in ["", "x", "中文🚀\"{\\}"] {
+        for _ in 0..200 {
+            let out = mutate(base, &mut rnd);
+            // 变异器只会插入/替换 ASCII 控制区字符或截断
+            assert!(out.chars().count() <= base.chars().count() + 20);
+            // 对变异后文本做 salvage + 未知字段收集保持无 panic
+            let parsed: Option<serde_json::Value> = serde_json::from_str(&out).ok();
+            let _ = parse_or_salvage(&out);
+            let _ = collect_unknown_fields(
+                &parsed.unwrap_or(serde_json::Value::Null),
+                r#"{"properties":{"a":{}}}"#,
+            );
         }
     }
+}

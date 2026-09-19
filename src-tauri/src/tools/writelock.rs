@@ -35,7 +35,9 @@ pub async fn acquire_all(
     for k in keys {
         let lock = {
             let mut g = locks().lock().unwrap();
-            g.entry(k).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
+            g.entry(k)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
         };
         let guard = match cancel {
             Some(c) => {
@@ -69,11 +71,8 @@ mod tests {
         std::fs::write(&a, "").unwrap();
         std::fs::write(&b, "").unwrap();
         let _ga = acquire_all(std::slice::from_ref(&a), None).await.unwrap();
-        let gb = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            acquire_all(&[b], None),
-        )
-        .await;
+        let gb =
+            tokio::time::timeout(std::time::Duration::from_secs(2), acquire_all(&[b], None)).await;
         assert!(gb.is_ok(), "不同路径不应被彼此阻塞");
     }
 
@@ -89,7 +88,10 @@ mod tests {
             acquire_all(&[a], None),
         )
         .await;
-        assert!(try_second.is_err(), "同路径持锁期间二次获取应等待而非立即返回");
+        assert!(
+            try_second.is_err(),
+            "同路径持锁期间二次获取应等待而非立即返回"
+        );
     }
 
     /// 取消盲区修复：等待被持有锁期间 cancel 置位 → 立即返回 Err，不再无限挂起。

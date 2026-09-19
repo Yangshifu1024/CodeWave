@@ -236,7 +236,13 @@ impl SkillIndex {
         disabled: &[String],
         project_dir: Option<&Path>,
     ) -> HashMap<String, Skill> {
-        Self::build_with_home(dirs::home_dir().as_deref(), workspace, data_dir, disabled, project_dir)
+        Self::build_with_home(
+            dirs::home_dir().as_deref(),
+            workspace,
+            data_dir,
+            disabled,
+            project_dir,
+        )
     }
 
     /// build 的可注入形态（home = None 表示无用户主目录）；测试借此验证用户级目录扫描与优先级。
@@ -503,11 +509,19 @@ mod tests {
             "agents ver",
             ".agents/skills 应被扫描"
         );
-        assert!(!map.contains_key("legacy-ws"), "workspace/.wavestudio/skills 旧托管名已移除");
+        assert!(
+            !map.contains_key("legacy-ws"),
+            "workspace/.wavestudio/skills 旧托管名已移除"
+        );
         assert!(!map.contains_key("legacy-bare"), "裸 skills/ 已移除");
         assert!(map.contains_key("repo-index")); // 内置
-                                                 // disabled 过滤
-        let map2 = SkillIndex::build(ws.path(), dd.path(), &["repo-index".into()], Some(pd.path()));
+        // disabled 过滤
+        let map2 = SkillIndex::build(
+            ws.path(),
+            dd.path(),
+            &["repo-index".into()],
+            Some(pd.path()),
+        );
         assert!(!map2.contains_key("repo-index"));
         // 无项目（临时会话）：project_dir None 时全局 data_dir/skills 兜底
         let map3 = SkillIndex::build(ws.path(), dd.path(), &[], None);
@@ -536,7 +550,14 @@ mod tests {
         let idx = SkillIndex::default();
         let metas = idx.list(ws.path(), dd.path(), &[], Some(pd.path()));
         // 只取本测试可控的技能（开发机 ~/.claude/skills 可能存在，属桶 3 不可控）
-        let controlled = ["doc-convert", "repo-index", "alpha", "beta", "gamma", "zeta"];
+        let controlled = [
+            "doc-convert",
+            "repo-index",
+            "alpha",
+            "beta",
+            "gamma",
+            "zeta",
+        ];
         let names: Vec<&str> = metas
             .iter()
             .map(|m| m.name.as_str())
@@ -544,7 +565,14 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["doc-convert", "repo-index", "alpha", "beta", "gamma", "zeta"],
+            [
+                "doc-convert",
+                "repo-index",
+                "alpha",
+                "beta",
+                "gamma",
+                "zeta"
+            ],
             "显示序：内置 > 项目 .codewave/skills > 全局 > 其他，桶内按名"
         );
     }
@@ -608,10 +636,20 @@ mod tests {
         let idx = SkillIndex::default();
         let metas = idx.list(ws.path(), dd.path(), &[], Some(pd.path()));
         let del = |n: &str| metas.iter().find(|m| m.name == n).unwrap().deletable;
-        assert!(del("global-skill") && del("project-skill"), "托管目录技能可删");
-        assert!(!del("compat-a") && !del("compat-b"), "工作区 compat 目录不可删");
         assert!(
-            !metas.iter().find(|m| m.name == "doc-convert").unwrap().deletable,
+            del("global-skill") && del("project-skill"),
+            "托管目录技能可删"
+        );
+        assert!(
+            !del("compat-a") && !del("compat-b"),
+            "工作区 compat 目录不可删"
+        );
+        assert!(
+            !metas
+                .iter()
+                .find(|m| m.name == "doc-convert")
+                .unwrap()
+                .deletable,
             "内置不可删"
         );
         // 删除成功：目录形态整目录移除 + 缓存自动失效（下次 list 立即不可见）
@@ -621,12 +659,14 @@ mod tests {
         let metas2 = idx.list(ws.path(), dd.path(), &[], Some(pd.path()));
         assert!(!metas2.iter().any(|m| m.name == "global-skill"));
         // 拒绝：不可删来源 / 不存在
-        assert!(idx
-            .delete_skill(ws.path(), dd.path(), Some(pd.path()), "compat-a")
-            .is_err());
-        assert!(idx
-            .delete_skill(ws.path(), dd.path(), Some(pd.path()), "nope")
-            .is_err());
+        assert!(
+            idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "compat-a")
+                .is_err()
+        );
+        assert!(
+            idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "nope")
+                .is_err()
+        );
         // 前缀混淆负例：临时会话（workspace == data_dir）下，工作区 .agents compat 技能
         // origin 位于 data_dir 之下但不在 data_dir/skills 内 → 不可删（旧实现按 data_dir 整体前缀会误标）
         install(dd.path(), ".agents/skills/ddcompat", "ddcompat");
@@ -659,10 +699,11 @@ mod tests {
             cache: Mutex::new(None),
             ttl: Duration::from_secs(3600),
         };
-        assert!(!idx
-            .list(ws.path(), dd.path(), &[], None)
-            .iter()
-            .any(|m| m.name == "later"));
+        assert!(
+            !idx.list(ws.path(), dd.path(), &[], None)
+                .iter()
+                .any(|m| m.name == "later")
+        );
         let dir = dd.path().join("skills/later");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -671,14 +712,16 @@ mod tests {
         )
         .unwrap();
         // TTL 内缓存命中：新技能不可见
-        assert!(!idx
-            .list(ws.path(), dd.path(), &[], None)
-            .iter()
-            .any(|m| m.name == "later"));
+        assert!(
+            !idx.list(ws.path(), dd.path(), &[], None)
+                .iter()
+                .any(|m| m.name == "later")
+        );
         idx.invalidate();
-        assert!(idx
-            .list(ws.path(), dd.path(), &[], None)
-            .iter()
-            .any(|m| m.name == "later"));
+        assert!(
+            idx.list(ws.path(), dd.path(), &[], None)
+                .iter()
+                .any(|m| m.name == "later")
+        );
     }
 }

@@ -4,7 +4,7 @@
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use crate::core::agent::{DriveParams, SessionRuntime};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// 子代理默认步数预算。
@@ -118,7 +118,7 @@ fn build_system_extra(
     // 只读角色（explore/reviewer/code-reviewer）补一句可执行约束：写工具已在工具层被排除
     //（见 readonly_extra_excludes），这里让子代理知道自己写不了文件，把发现写进汇报，
     // 免得它反复试探被拒而白烧步数（[docs/subagent-idle-watchdog-misfire]）。
-    let readonly_notice = if def.map_or(false, |d| d.readonly) {
+    let readonly_notice = if def.is_some_and(|d| d.readonly) {
         "你是只读角色，没有写工具（edit/create/delete 不可用）：不要尝试写文件，把发现写进最终汇报。"
     } else {
         ""
@@ -140,7 +140,7 @@ fn build_system_extra(
 /// 与 `is_analysis_role` 同风格：走 `crate::agents::find`，别名与大小写归一同源——
 /// 谓词只此一份，避免「改一处漏一处」。
 fn is_readonly_role(role: &str) -> bool {
-    crate::agents::find(role).map_or(false, |d| d.readonly)
+    crate::agents::find(role).is_some_and(|d| d.readonly)
 }
 
 /// 空转看门狗策略（[docs/subagent-idle-watchdog-misfire]）：只读角色 → `NudgeOnly`
@@ -222,7 +222,7 @@ impl Tool for SubagentTool {
                     format!(
                         "参数解析失败：{e}。入参要求：task/role 非空字符串、maxSteps 1–1000 整数、键名 camelCase（maxSteps/cleanContext）。此错误不计失败：请修正参数后立即重发。"
                     ),
-                )
+                );
             }
         };
         let max_steps = args.max_steps.unwrap_or(DEFAULT_STEPS).clamp(1, MAX_STEPS);
@@ -257,10 +257,7 @@ impl Tool for SubagentTool {
         }
         let _guard = GuardGuard;
 
-        let sub_id = format!(
-            "sub_{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        );
+        let sub_id = format!("sub_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let description = args
             .description
             .clone()
@@ -366,17 +363,17 @@ impl Tool for SubagentTool {
         let progress = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        let (steps, last_tool, detail) = {
-            let h = step_rt.history.lock().unwrap();
-            let (last_tool, detail) = summarize_sub_tail(&h);
-            // 真实步数（drive 每步 store），不是 history.len()——后者每步增约 2 条消息，
-            // 60 步预算会显示成 120+（前端 120/60 失真缺陷）
-            (
-                step_rt.step_count.load(std::sync::atomic::Ordering::SeqCst),
-                last_tool,
-                detail,
-            )
-        };
+                let (steps, last_tool, detail) = {
+                    let h = step_rt.history.lock().unwrap();
+                    let (last_tool, detail) = summarize_sub_tail(&h);
+                    // 真实步数（drive 每步 store），不是 history.len()——后者每步增约 2 条消息，
+                    // 60 步预算会显示成 120+（前端 120/60 失真缺陷）
+                    (
+                        step_rt.step_count.load(std::sync::atomic::Ordering::SeqCst),
+                        last_tool,
+                        detail,
+                    )
+                };
                 sink.emit(&session, "sub:step", json!({ "session": session, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail }));
             }
         });
@@ -401,11 +398,7 @@ impl Tool for SubagentTool {
         // 过程抽屉在会话恢复后可重建完整消息流
         {
             let h = sub_rt.history.lock().unwrap();
-            if let Err(e) = ctx
-                .core
-                .store
-                .save_sub_history(&ctx.rt.id, &sub_id, &h)
-            {
+            if let Err(e) = ctx.core.store.save_sub_history(&ctx.rt.id, &sub_id, &h) {
                 tracing::warn!("子代理 [{sub_id}] 过程历史落盘失败：{e}");
             }
         }
@@ -438,16 +431,16 @@ impl Tool for SubagentTool {
                 let (clean_report, tagged) = crate::core::agent::split_report(&report);
                 // 收尾原因：带标记 = 按约定汇报；步数用尽 = 预算耗尽；否则 = 未按约定汇报即结束
                 //（前端据此显示橙色警示而非绿色钩，不再让提前退出伪装成成功）
-                 let steps_used = sub_rt.step_count.load(std::sync::atomic::Ordering::SeqCst);
-                 // step_count 是「已启动步数」（每步开头写 step+1，见驱动循环顶）：
-                 // 真正跑完预算时 steps_used == max_steps，故用 >= 而非 >=
-                 let ended = if tagged {
-                     "report"
-                 } else if steps_used >= max_steps {
-                     "budget"
-                 } else {
-                     "no_report"
-                 };
+                let steps_used = sub_rt.step_count.load(std::sync::atomic::Ordering::SeqCst);
+                // step_count 是「已启动步数」（每步开头写 step+1，见驱动循环顶）：
+                // 真正跑完预算时 steps_used == max_steps，故用 >= 而非 >=
+                let ended = if tagged {
+                    "report"
+                } else if steps_used >= max_steps {
+                    "budget"
+                } else {
+                    "no_report"
+                };
                 crate::core::session_log::info(
                     &ctx.rt,
                     &format!(
@@ -507,7 +500,10 @@ impl Tool for SubagentTool {
                         "子代理随主会话停止而取消。".to_string(),
                     )
                 };
-                crate::core::session_log::warn(&ctx.rt, &format!("子代理 [{sub_id}] 取消：{ui_err}"));
+                crate::core::session_log::warn(
+                    &ctx.rt,
+                    &format!("子代理 [{sub_id}] 取消：{ui_err}"),
+                );
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:error",
@@ -552,7 +548,11 @@ impl Drop for SubCleanupGuard {
         if self.armed {
             // panic 路同样尽力落盘已产生的过程历史（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
             let h = self.sub_rt.history.lock().unwrap();
-            if let Err(e) = self.core.store.save_sub_history(&self.session, &self.sub_id, &h) {
+            if let Err(e) = self
+                .core
+                .store
+                .save_sub_history(&self.session, &self.sub_id, &h)
+            {
                 tracing::warn!("子代理 [{}] panic 路过程历史落盘失败：{e}", self.sub_id);
             }
             drop(h);
@@ -610,9 +610,7 @@ mod tests {
         let cancelled = tokio_util::sync::CancellationToken::new();
         cancelled.cancel();
         let started = std::time::Instant::now();
-        assert!(
-            !acquire_slot(&cancelled, std::time::Duration::from_secs(30)).await
-        );
+        assert!(!acquire_slot(&cancelled, std::time::Duration::from_secs(30)).await);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         for _ in 0..MAX_CONCURRENT {
             ACTIVE.fetch_sub(1, Ordering::SeqCst);

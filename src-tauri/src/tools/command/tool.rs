@@ -1,7 +1,6 @@
-
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
@@ -54,7 +53,15 @@ static PROBED: OnceLock<Vec<ShellInfo>> = OnceLock::new();
 
 /// 可选 shell id 的固定顺序（探测结果按此排序；`auto` 仅为配置内部值，不入探测列表）。
 pub const SHELL_IDS: &[&str] = &[
-    "bash", "git_bash", "zsh", "fish", "sh", "powershell", "pwsh", "cmd", "wsl",
+    "bash",
+    "git_bash",
+    "zsh",
+    "fish",
+    "sh",
+    "powershell",
+    "pwsh",
+    "cmd",
+    "wsl",
 ];
 
 /// 探测到的单个 shell 条目（设置页选择列表条目；字段名即 wire 契约）。
@@ -88,8 +95,9 @@ pub enum Shell {
     Fish,
     /// sh（最小 POSIX，可能是 dash/ash）
     Sh,
-    /// Windows PowerShell 5.1（System32 恒在）
-    PowerShell,
+    /// Windows PowerShell 5.1（System32 恒在；版次命名与 Pwsh 的 Core 对称）
+    // 不叫 WindowsPowerShell：clippy enum_variant_names 认为它仍以枚举名 Shell 结尾
+    PowerShellDesktop,
     /// PowerShell 7+（pwsh）
     Pwsh,
     /// Windows 命令提示符（受限语法）
@@ -148,7 +156,7 @@ impl Shell {
                  - 避免 bashism：数组、`[[ ]]`、`==` 比较等不可用\n\
                  - 路径分隔符 `/`；单引号内不展开、双引号内展开；重定向/管道/`&&` `||` `;` 同 POSIX"
                 .to_string(),
-            Shell::PowerShell => "PowerShell（Windows PowerShell 5.1，.NET 对象管道 shell）。调用方式：`powershell -NoProfile -Command <command>`。语法要点：\n\
+            Shell::PowerShellDesktop => "PowerShell（Windows PowerShell 5.1，.NET 对象管道 shell）。调用方式：`powershell -NoProfile -Command <command>`。语法要点：\n\
                  - 变量 `$var = value`（无需 export）；路径分隔符 `\\`（多数场景兼容 `/`）\n\
                  - 双引号内展开变量、单引号内字面；转义符是反引号；命令替换用 `$(...)`\n\
                  - 管道传递对象而非文本；`&&`/`||` 链 5.1 不支持（用 `;` 顺序执行并检查 `$LASTEXITCODE`）\n\
@@ -193,7 +201,7 @@ fn detect_shell() -> &'static Shell {
             if find_windows_bash().is_some() {
                 Shell::Bash { login: false }
             } else {
-                Shell::PowerShell
+                Shell::PowerShellDesktop
             }
         }
     })
@@ -244,6 +252,7 @@ pub fn detect_all_shells() -> Vec<ShellInfo> {
 /// 按用户选择解析实际 Shell：
 /// - None / "auto" → 自动探测（`detect_shell`：Unix bash；Windows 先 Git Bash 回退 PowerShell）；
 /// - 显式 id → 对应变体，但该 id 不在本机探测列表时回退自动探测。
+///
 /// 结果按 selection 值缓存（selection 变化立即生效；重复调用零探测开销）。
 pub fn resolve_shell(selection: Option<&str>) -> Shell {
     let key = selection.unwrap_or("auto").trim().to_string();
@@ -282,7 +291,7 @@ pub fn selection_to_shell(selection: &str) -> Option<Shell> {
         "zsh" => Some(Shell::Zsh),
         "fish" => Some(Shell::Fish),
         "sh" => Some(Shell::Sh),
-        "powershell" => Some(Shell::PowerShell),
+        "powershell" => Some(Shell::PowerShellDesktop),
         "pwsh" => Some(Shell::Pwsh),
         "cmd" => Some(Shell::Cmd),
         "wsl" => Some(Shell::Wsl),
@@ -330,7 +339,7 @@ fn shell_program(shell: &Shell) -> String {
         Shell::Zsh => "zsh".to_string(),
         Shell::Fish => "fish".to_string(),
         Shell::Sh => "sh".to_string(),
-        Shell::PowerShell => "powershell".to_string(),
+        Shell::PowerShellDesktop => "powershell".to_string(),
         Shell::Pwsh => "pwsh".to_string(),
         Shell::Cmd => "cmd".to_string(),
         Shell::Wsl => "wsl.exe".to_string(),
@@ -347,7 +356,7 @@ pub fn shell_args(shell: &Shell, command: &str, cwd: &std::path::Path) -> Vec<St
             ]
         }
         Shell::Zsh | Shell::Fish | Shell::Sh => vec!["-c".into(), command.into()],
-        Shell::PowerShell | Shell::Pwsh => {
+        Shell::PowerShellDesktop | Shell::Pwsh => {
             vec!["-NoProfile".into(), "-Command".into(), command.into()]
         }
         Shell::Cmd => vec!["/C".into(), command.into()],

@@ -4,7 +4,7 @@
 //! 每个限额项的明细可能在 `detail` 子对象里，重置时间有「字符串时间戳 / 秒数 / 窗口时长」
 //! 三种来源（与上游解析保持一致）。
 
-use super::super::{fetch_json, AuthStyle, QuotaEntry};
+use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use super::{number, text};
 use chrono::{DateTime, Duration, NaiveDateTime, SecondsFormat, Utc};
 use serde_json::Value;
@@ -28,7 +28,8 @@ fn as_object(value: Option<&Value>) -> Option<&Value> {
 /// 解析用量响应：顶层 `usage` 一行 + `limits[]` 每项一行。
 pub(crate) fn parse_usage(body: &Value, now: DateTime<Utc>) -> Result<Vec<QuotaEntry>, String> {
     let data = as_object(body.get("data"));
-    let usage = as_object(data.and_then(|d| d.get("usage"))).or_else(|| as_object(body.get("usage")));
+    let usage =
+        as_object(data.and_then(|d| d.get("usage"))).or_else(|| as_object(body.get("usage")));
     let limits = data
         .and_then(|d| d.get("limits"))
         .or_else(|| body.get("limits"))
@@ -151,15 +152,15 @@ fn reset_at(value: &Value, now: DateTime<Utc>) -> Option<String> {
 /// 时间戳解析：RFC3339 优先，其次无时区 ISO/空格分隔（按 UTC 处理）。
 fn parse_timestamp(raw: &str) -> Option<String> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
-        return Some(parsed.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Secs, true));
+        return Some(
+            parsed
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
     }
     for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(raw, format) {
-            return Some(
-                naive
-                    .and_utc()
-                    .to_rfc3339_opts(SecondsFormat::Secs, true),
-            );
+            return Some(naive.and_utc().to_rfc3339_opts(SecondsFormat::Secs, true));
         }
     }
     None

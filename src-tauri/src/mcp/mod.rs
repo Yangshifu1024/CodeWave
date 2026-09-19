@@ -3,6 +3,7 @@
 //! 自动协商回退 SSE，覆盖 [docs/p1-plan](../../../docs/p1-plan.md) 的 "sse" 形态）。
 //! 函数名映射 `mcp__<server>__<tool>`；全部工具（内置 + MCP）按名排序，保持请求字节稳定。
 
+use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
@@ -10,9 +11,8 @@ use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransportConfig, StreamableHttpClientWorker,
 };
 use rmcp::transport::{ConfigureCommandExt, WorkerTransport};
-use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,7 +119,10 @@ pub fn load_configs(
     for root in std::iter::once(workspace.to_path_buf())
         .chain(extra_roots.iter().map(std::path::PathBuf::from))
     {
-        paths.push(root.join(crate::core::config::MANAGED_DIR_NAME).join("mcp.json"));
+        paths.push(
+            root.join(crate::core::config::MANAGED_DIR_NAME)
+                .join("mcp.json"),
+        );
     }
     if let Some(pd) = project_dir {
         paths.push(pd.join("mcp.json"));
@@ -316,6 +319,10 @@ impl McpManager {
 
     /// 按 `mcp__server__tool` 函数名调用；会话失效时自动重连一次。
     /// `http` = 代理感知 client（与 start 同源），供重连路径复用。
+    // 7 个参数各对应一处独立输入（函数名 / 工具参数 / 数据目录 / 工作区 / 项目目录 /
+    // 额外根 / HTTP client），缺一不可；收成结构体只是换壳，却要连带动 batch.rs 的调用点与
+    // 本文件测试模块里的两个真实 server 调用点（后者本次范围禁改），收益不划算。
+    #[allow(clippy::too_many_arguments)]
     pub async fn call(
         self: &Arc<Self>,
         function: &str,
@@ -358,7 +365,9 @@ impl McpManager {
                     };
                     if let Some(cfg) = cfg {
                         tracing::info!("MCP {server} 会话失效，重连…");
-                        let _ = self.start(&server, cfg, http.take().unwrap_or_default()).await;
+                        let _ = self
+                            .start(&server, cfg, http.take().unwrap_or_default())
+                            .await;
                         continue;
                     }
                     return Err(e);

@@ -1,10 +1,9 @@
-
 use crate::core::types::Content;
 use crate::tools::pathutil;
 use crate::tools::validation;
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// edit 工具入参。
@@ -93,7 +92,13 @@ pub(super) fn min_indent(text: &str) -> usize {
 /// 每行剥除前 n 个字符（空行原样保留），返回按 \n 重组的文本。
 pub(super) fn strip_indent(text: &str, n: usize) -> String {
     text.split('\n')
-        .map(|l| if l.trim().is_empty() { l.to_string() } else { l.chars().skip(n).collect() })
+        .map(|l| {
+            if l.trim().is_empty() {
+                l.to_string()
+            } else {
+                l.chars().skip(n).collect()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -137,7 +142,11 @@ fn fuzzy_line_trimmed(content: &str, find: &str) -> Vec<String> {
     let mut out = Vec::new();
     for i in 0..=(lines.len() - n) {
         let window = &lines[i..i + n];
-        if window.iter().zip(&find_lines).all(|(a, b)| a.trim() == b.trim()) {
+        if window
+            .iter()
+            .zip(&find_lines)
+            .all(|(a, b)| a.trim() == b.trim())
+        {
             out.push(window.join("\n"));
         }
     }
@@ -152,14 +161,20 @@ pub fn apply_changes(content: &str, changes: &[Change]) -> Result<(String, Vec<S
     for (i, ch) in changes.iter().enumerate() {
         if let Some(old) = &ch.old_text {
             if ch.new_text.as_deref() == Some(old.as_str()) {
-                return Err(format!("change #{}：oldText 与 newText 相同（无变更）", i + 1));
+                return Err(format!(
+                    "change #{}：oldText 与 newText 相同（无变更）",
+                    i + 1
+                ));
             }
             let hits = buf.matches(old.as_str()).count();
             if hits == 0 {
                 // 两级低风险模糊匹配（由严到松）：唯一命中才替换；多命中报错；零命中留给 lineRange 兜底
                 let mut matched = false;
                 for (name, matcher) in [
-                    ("缩进平移归一", fuzzy_indent_flex as fn(&str, &str) -> Vec<String>),
+                    (
+                        "缩进平移归一",
+                        fuzzy_indent_flex as fn(&str, &str) -> Vec<String>,
+                    ),
                     ("行首尾空白归一", fuzzy_line_trimmed),
                 ] {
                     let cands = matcher(&buf, old);
@@ -211,7 +226,10 @@ pub fn apply_changes(content: &str, changes: &[Change]) -> Result<(String, Vec<S
             let e = e.min(lines.len());
             // UTF-8 BOM 交接：整段替换第一行时，把原 BOM 移植到新首行（防止 BOM 丢失）
             let bom = if s == 1 {
-                lines.first().filter(|l| l.starts_with('\u{FEFF}')).map(|_| "\u{FEFF}")
+                lines
+                    .first()
+                    .filter(|l| l.starts_with('\u{FEFF}'))
+                    .map(|_| "\u{FEFF}")
             } else {
                 None
             };
@@ -363,7 +381,8 @@ impl Tool for EditTool {
         // 锁内完成 读 → version 预检 → 试运行 → 备份 → 写入 → 回滚 全链路，消除试运行之后、
         // 写入之前文件被并发修改的 TOCTOU。同批次同路径写入已被批次层 E_WRITE_BATCH_CONFLICT 拒绝。
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行编辑。
-        let _guards = match crate::tools::writelock::acquire_all(&resolved, Some(&ctx.cancel)).await {
+        let _guards = match crate::tools::writelock::acquire_all(&resolved, Some(&ctx.cancel)).await
+        {
             Ok(g) => g,
             Err(_) => {
                 return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
@@ -385,7 +404,7 @@ impl Tool for EditTool {
                     return ToolOutcome::err(
                         "E_NOT_FOUND",
                         format!("{}: {e}（edit 前必须先 read）", f.path),
-                    )
+                    );
                 }
             };
             let mut stale = false;
@@ -400,7 +419,11 @@ impl Tool for EditTool {
             // version token 仍按原始字节计算（stale 判定不受归一影响）
             let text = crate::tools::read::read_text_content(&bytes);
             let eol = detect_eol(&text);
-            let norm = if eol == "\r\n" { text.replace("\r\n", "\n") } else { text };
+            let norm = if eol == "\r\n" {
+                text.replace("\r\n", "\n")
+            } else {
+                text
+            };
             let new_text = match apply_changes(&norm, &f.changes) {
                 Ok((t, w)) => {
                     fuzzy_warnings.extend(w);
@@ -431,7 +454,11 @@ impl Tool for EditTool {
                     f.path
                 ));
             }
-            let out_text = if eol == "\r\n" { new_text.replace('\n', "\r\n") } else { new_text };
+            let out_text = if eol == "\r\n" {
+                new_text.replace('\n', "\r\n")
+            } else {
+                new_text
+            };
             stale_flags.push(stale);
             prepared.push((resolved.clone(), out_text.into_bytes()));
         }
@@ -446,7 +473,8 @@ impl Tool for EditTool {
             let prev_content = std::fs::read(resolved)
                 .ok()
                 .map(|b| crate::tools::read::read_text_content(&b));
-            let target = validation::WriteTarget::new(resolved.clone(), f.path.clone(), prev_content);
+            let target =
+                validation::WriteTarget::new(resolved.clone(), f.path.clone(), prev_content);
             let base = if *stale {
                 tracing::debug!(path = %f.path, "内容戳不匹配：跳过写前基线，本轮不回喂诊断");
                 None
@@ -565,10 +593,22 @@ pub fn edit_approval_detail(roots: &pathutil::WriteRoots, files: &[FileEdit]) ->
         let bytes = std::fs::read(&resolved).ok()?;
         let text = crate::tools::read::read_text_content(&bytes);
         let eol = detect_eol(&text);
-        let norm = if eol == "\r\n" { text.replace("\r\n", "\n") } else { text.clone() };
+        let norm = if eol == "\r\n" {
+            text.replace("\r\n", "\n")
+        } else {
+            text.clone()
+        };
         let (new_norm, _) = apply_changes(&norm, &f.changes).ok()?;
-        let new_text = if eol == "\r\n" { new_norm.replace('\n', "\r\n") } else { new_norm };
-        out.push(format!("### {}\n{}", f.path, unified_diff(&text, &new_text)));
+        let new_text = if eol == "\r\n" {
+            new_norm.replace('\n', "\r\n")
+        } else {
+            new_norm
+        };
+        out.push(format!(
+            "### {}\n{}",
+            f.path,
+            unified_diff(&text, &new_text)
+        ));
     }
     Some(out.join("\n"))
 }

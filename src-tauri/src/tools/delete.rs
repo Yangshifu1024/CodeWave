@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// delete 工具入参。
 #[derive(Deserialize)]
@@ -77,13 +77,17 @@ impl Tool for DeleteTool {
         }
         // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：与 edit/create 的写路径互斥；
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行删除
-        let _guard =
-            match crate::tools::writelock::acquire_all(std::slice::from_ref(&resolved), Some(&ctx.cancel)).await {
-                Ok(g) => g,
-                Err(_) => {
-                    return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
-                }
-            };
+        let _guard = match crate::tools::writelock::acquire_all(
+            std::slice::from_ref(&resolved),
+            Some(&ctx.cancel),
+        )
+        .await
+        {
+            Ok(g) => g,
+            Err(_) => {
+                return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
+            }
+        };
         let meta = match std::fs::symlink_metadata(&resolved) {
             Ok(m) => m,
             Err(e) => return ToolOutcome::err("E_NOT_FOUND", format!("{}: {e}", args.path)),
@@ -215,7 +219,10 @@ mod tests {
         assert_eq!(out.error.unwrap().code, "E_DELETE_FORBIDDEN");
         let out = DeleteTool.run(&ctx, json!({"path": ".git/HEAD"})).await;
         assert_eq!(out.error.unwrap().code, "E_DELETE_FORBIDDEN");
-        assert!(ws.path().join(".git/HEAD").exists(), ".git contents must survive");
+        assert!(
+            ws.path().join(".git/HEAD").exists(),
+            ".git contents must survive"
+        );
     }
 
     #[tokio::test]
@@ -242,7 +249,10 @@ mod tests {
         // extra 写根内的普通内容仍可删除
         std::fs::write(extra.path().join("ok.txt"), b"z").unwrap();
         let out = DeleteTool
-            .run(&ctx, json!({"path": extra.path().join("ok.txt").to_str().unwrap()}))
+            .run(
+                &ctx,
+                json!({"path": extra.path().join("ok.txt").to_str().unwrap()}),
+            )
             .await;
         assert!(out.ok, "{out:?}");
         assert!(!extra.path().join("ok.txt").exists());

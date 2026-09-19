@@ -2,7 +2,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -271,7 +271,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     match crate::safety::fence::check_command_policy(&command, &cwd, &roots, policy) {
         crate::safety::fence::Verdict::Allow => {}
         crate::safety::fence::Verdict::Block { code, message } => {
-            return ToolOutcome::err(&code, message)
+            return ToolOutcome::err(&code, message);
         }
         crate::safety::fence::Verdict::Confirm(reason) => {
             use crate::safety::fence::ConfirmReason;
@@ -341,10 +341,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     let Some(pid) = child.id() else {
         return ToolOutcome::err("E_IO", "无法获取子进程 PID，无法注册为后台服务");
     };
-    let id = format!(
-        "svc_{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    );
+    let id = format!("svc_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let log = RingLog::new();
     let cancel = tokio_util::sync::CancellationToken::new();
     let done = Arc::new(std::sync::atomic::AtomicBool::new(false));

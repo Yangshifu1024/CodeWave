@@ -135,7 +135,10 @@ mod tests {
         let reg = ToolRegistry::default_tools();
         let read = reg.get("read").expect("read must be registered");
         assert_eq!(read.name(), "read");
-        assert!(reg.get("read").is_some(), "repeated get returns a fresh Arc clone");
+        assert!(
+            reg.get("read").is_some(),
+            "repeated get returns a fresh Arc clone"
+        );
         assert!(reg.get("no_such_tool").is_none());
     }
 

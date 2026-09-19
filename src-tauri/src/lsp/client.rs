@@ -906,11 +906,7 @@ fn strip_file_scheme(raw: &str) -> &str {
 fn collapse_leading_slashes(path: &str) -> &str {
     let trimmed = path.trim_start_matches('/');
     let extra = path.len() - trimmed.len();
-    if extra > 1 {
-        &path[extra - 1..]
-    } else {
-        path
-    }
+    if extra > 1 { &path[extra - 1..] } else { path }
 }
 
 /// 文本归一：分隔符统一为 `/` → 去盘符前的多余斜杠 → 去尾斜杠（盘根 `d:/` → `d:`）。
@@ -1078,12 +1074,18 @@ mod tests {
         // 病态多斜杠收敛成单个根斜杠（不能与上面落成两个不同的键）
         assert_eq!(strip_file_scheme("file:////tmp/x"), "/tmp/x");
         // Windows 盘符形态：保留前导 `/`，由 normalize_path_text 按盘符规则去
-        assert_eq!(strip_file_scheme("file:///d%3A/Work/x.ts"), "/d%3A/Work/x.ts");
+        assert_eq!(
+            strip_file_scheme("file:///d%3A/Work/x.ts"),
+            "/d%3A/Work/x.ts"
+        );
         assert_eq!(strip_file_scheme("FILE:///D%3A/x.ts"), "/D%3A/x.ts");
         // 真实 UNC authority 保留 host（与原行为一致）
         assert_eq!(strip_file_scheme("file://server/share/x"), "server/share/x");
         // 非 file scheme 原样返回
-        assert_eq!(strip_file_scheme("untitled:Untitled-1"), "untitled:Untitled-1");
+        assert_eq!(
+            strip_file_scheme("untitled:Untitled-1"),
+            "untitled:Untitled-1"
+        );
     }
 
     #[test]
@@ -1199,7 +1201,10 @@ mod tests {
         let warmup = Duration::from_millis(inner.warmup_ms.load(Ordering::Relaxed));
         *inner.initialized_at.lock().unwrap() = Some(Instant::now() - warmup * 2);
         assert_eq!(inner.readiness(), Readiness::Warm, "跨过预热窗的证据档位");
-        assert!(!inner.readiness().ready_for(true), "空集基线不得被 Warm 背书");
+        assert!(
+            !inner.readiness().ready_for(true),
+            "空集基线不得被 Warm 背书"
+        );
         // 强证据才给空集背书
         assert!(Readiness::Quiescent.ready_for(true));
         assert!(Readiness::Analyzed.ready_for(true));
@@ -1223,7 +1228,11 @@ mod tests {
             "method": "experimental/serverStatus",
             "params": { "health": "ok", "quiescent": false }
         }));
-        assert_eq!(inner.readiness(), Readiness::None, "quiescent=false 不算证据");
+        assert_eq!(
+            inner.readiness(),
+            Readiness::None,
+            "quiescent=false 不算证据"
+        );
         inner.dispatch(&json!({
             "jsonrpc": "2.0",
             "method": "experimental/serverStatus",

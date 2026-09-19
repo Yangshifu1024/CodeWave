@@ -1,14 +1,14 @@
+use super::drive::{DriveParams, NormalizedCall};
+use super::runtime::{AgentCore, EventSink, Frame, STREAM_THROTTLE_MS, SessionRuntime};
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, StreamRequest};
 use crate::tools::compact::compact_for_model;
 use crate::util::throttle::ThrottledStream;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use super::drive::{DriveParams, NormalizedCall};
-use super::runtime::{AgentCore, EventSink, Frame, SessionRuntime, STREAM_THROTTLE_MS};
 
 /// 会话日志 verbose 全文（请求/响应）的单会话上限（字符数；防止超大响应撑爆日志）
 pub(super) const VERBOSE_BODY_CAP: usize = 64 * 1024;
@@ -62,7 +62,7 @@ pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
 /// 仅当会话级标记 `reasoning_rejected` 置位时调用——该上游不认 `reasoning_content` 字段，
 /// 每次回传都会 400。只丢 Thinking 块，Text / ToolUse / ToolResult / Image 一律不动。
 /// 返回被丢弃的思考块数。
-pub(super) fn drop_thinking_blocks(messages: &mut Vec<Message>) -> usize {
+pub(super) fn drop_thinking_blocks(messages: &mut [Message]) -> usize {
     let mut dropped = 0;
     for m in messages.iter_mut() {
         let before = m.content.len();
@@ -90,7 +90,11 @@ pub(super) fn repair_before_send(mut messages: Vec<Message>) -> Vec<Message> {
 /// - 不重算 `cache_gen_index`：修复会缩短历史，该锚点可能落到别的消息上或失效，最坏结果是
 ///   本次重试少一个代际缓存断点（一次性 1.25x 前缀重写），不影响正确性。
 pub(super) fn refresh_request_messages(rt: &Arc<SessionRuntime>, req: &mut StreamRequest) {
-    let transient = req.messages.last().filter(|m| is_plan_transient(m)).cloned();
+    let transient = req
+        .messages
+        .last()
+        .filter(|m| is_plan_transient(m))
+        .cloned();
     req.messages = messages_for_request(rt);
     if let Some(t) = transient {
         if !req.messages.last().map(is_plan_transient).unwrap_or(false) {
@@ -293,7 +297,10 @@ mod anchor_tests {
                 _ => None,
             })
             .collect();
-        assert!(answered.contains(&"t1"), "悬空 tool_use 应被补 [interrupted] 结果");
+        assert!(
+            answered.contains(&"t1"),
+            "悬空 tool_use 应被补 [interrupted] 结果"
+        );
         assert!(!answered.contains(&"ghost"), "孤儿 tool_result 应被清掉");
     }
 
@@ -376,9 +383,7 @@ mod anchor_tests {
             Message {
                 role: Role::Assistant,
                 content: vec![
-                    Content::Thinking {
-                        text: "想".into(),
-                    },
+                    Content::Thinking { text: "想".into() },
                     Content::ToolUse {
                         id: "t1".into(),
                         name: "read".into(),
@@ -409,7 +414,10 @@ mod anchor_tests {
                 matches!(c, Content::ToolResult { content, .. } if content.starts_with("[interrupted]"))
             })
             .count();
-        assert_eq!(interrupted, 1, "悬空 tool_use 只能补一次 [interrupted] 结果");
+        assert_eq!(
+            interrupted, 1,
+            "悬空 tool_use 只能补一次 [interrupted] 结果"
+        );
         assert!(
             once.iter()
                 .flat_map(|m| m.content.iter())
@@ -471,7 +479,11 @@ mod anchor_tests {
         // 期望结果：仅 assistant 的 Thinking 块消失，其余部分逐字节相同
         let mut expected = messages.clone();
         expected[1].content.remove(0);
-        assert_eq!(super::drop_thinking_blocks(&mut messages), 1, "应报告剥除 1 个思考块");
+        assert_eq!(
+            super::drop_thinking_blocks(&mut messages),
+            1,
+            "应报告剥除 1 个思考块"
+        );
         assert_eq!(messages, expected, "除 Thinking 外任何块或顺序变动都是回归");
         assert!(
             !messages
@@ -502,9 +514,7 @@ mod anchor_tests {
             Message {
                 role: Role::Assistant,
                 content: vec![
-                    Content::Thinking {
-                        text: "想".into(),
-                    },
+                    Content::Thinking { text: "想".into() },
                     Content::Text {
                         text: "答案".into(),
                     },
@@ -532,7 +542,11 @@ mod anchor_tests {
                 .any(|c| matches!(c, Content::Thinking { .. })),
             "粘性标记置位后出网副本必须无思考块"
         );
-        assert_eq!(rt.history.lock().unwrap().as_slice(), history.as_slice(), "绝不得改写 rt.history");
+        assert_eq!(
+            rt.history.lock().unwrap().as_slice(),
+            history.as_slice(),
+            "绝不得改写 rt.history"
+        );
     }
 }
 
@@ -578,7 +592,9 @@ pub(super) async fn collect_deltas(
 /// 组装 assistant 消息 + 归一化调用；参数无法修复的调用直接拒绝，合成错误结果。
 /// text/thinking/tool_use 全部按真实到达顺序（AsmBlock 顺序）产出内容——
 /// 此前 tool_use 被统一挪到末尾，重开会话后工具卡穿插位置丢失（已修复，与流式 UI 对齐）。
-pub(super) fn build_assistant_message(asm: &Assembled) -> (Message, Vec<NormalizedCall>, Vec<Content>) {
+pub(super) fn build_assistant_message(
+    asm: &Assembled,
+) -> (Message, Vec<NormalizedCall>, Vec<Content>) {
     // 先归一化全部调用（保持顺序），再把 ToolUse 块插回真实位置
     let mut calls: Vec<NormalizedCall> = Vec::new();
     let mut synth = Vec::new();
@@ -693,4 +709,3 @@ pub async fn stream_flush_loop(
         }
     }
 }
-

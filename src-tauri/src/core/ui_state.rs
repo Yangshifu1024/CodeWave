@@ -100,7 +100,10 @@ pub fn save(data_dir: &Path, state: &Value) -> anyhow::Result<()> {
 /// 备份原文件：版本可识别 → `<名>.v<N>.bak`（E6），否则 `<名>.corrupt`（与索引损坏备份同一约定）。
 /// 备份失败只告警并保留原文件（宁可下次再判损坏，也不丢用户的现场态）。
 fn backup(file: &Path, version: Option<u64>) {
-    let name = file.file_name().and_then(|s| s.to_str()).unwrap_or(FILE_NAME);
+    let name = file
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(FILE_NAME);
     let target = match version {
         Some(v) => file.with_file_name(format!("{name}.v{v}.bak")),
         None => file.with_file_name(format!("{name}.corrupt")),
@@ -264,7 +267,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(path(d.path()), b"{ not json").unwrap();
         assert!(load(d.path()).is_none());
-        assert!(!path(d.path()).exists(), "损坏文件必须被移走备份，不得原地留存");
+        assert!(
+            !path(d.path()).exists(),
+            "损坏文件必须被移走备份，不得原地留存"
+        );
         assert!(d.path().join("ui-state.json.corrupt").exists());
     }
 
@@ -297,7 +303,10 @@ mod tests {
         save(d.path(), &state()).unwrap();
         let huge = json!({ "schema": 1, "blob": "x".repeat(MAX_BYTES + 1) });
         let err = save(d.path(), &huge).unwrap_err();
-        assert!(err.to_string().contains("上限"), "错误信息应说明体积上限：{err}");
+        assert!(
+            err.to_string().contains("上限"),
+            "错误信息应说明体积上限：{err}"
+        );
         // 原文件未被破坏（仍是上一次的合法内容）
         assert_eq!(load(d.path()).unwrap(), state());
         assert_eq!(dir_names(d.path()), vec![FILE_NAME.to_string()]);
@@ -334,12 +343,15 @@ mod tests {
             }
         );
         // 只记尺寸：位置缺省
-        let sized = window_geometry(&json!({ "window": { "width": 1000, "height": 700 } })).unwrap();
+        let sized =
+            window_geometry(&json!({ "window": { "width": 1000, "height": 700 } })).unwrap();
         assert_eq!((sized.x, sized.y), (None, None));
         // 缺失/类型错/非正数 → None
         assert!(window_geometry(&json!({})).is_none());
         assert!(window_geometry(&json!({ "window": { "height": 700 } })).is_none());
-        assert!(window_geometry(&json!({ "window": { "width": "1000", "height": 700 } })).is_none());
+        assert!(
+            window_geometry(&json!({ "window": { "width": "1000", "height": 700 } })).is_none()
+        );
         assert!(window_geometry(&json!({ "window": { "width": -100, "height": 700 } })).is_none());
         assert!(window_geometry(&json!({ "window": { "width": 1000, "height": 0 } })).is_none());
     }
@@ -347,41 +359,84 @@ mod tests {
     #[test]
     fn undersized_size_clamped_but_in_bounds_position_kept() {
         let areas = [
-            WorkArea { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
-            WorkArea { x: 1920.0, y: 0.0, width: 1280.0, height: 1024.0 },
+            WorkArea {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            WorkArea {
+                x: 1920.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 1024.0,
+            },
         ];
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 200.0, height: 100.0, x: Some(2000.0), y: Some(100.0) },
+            WindowGeometry {
+                width: 200.0,
+                height: 100.0,
+                x: Some(2000.0),
+                y: Some(100.0),
+            },
             &areas,
             Some(areas[0]),
         );
-        assert_eq!((placed.width, placed.height), (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+        assert_eq!(
+            (placed.width, placed.height),
+            (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        );
         assert_eq!((placed.x, placed.y), (Some(2000.0), Some(100.0)));
     }
 
     #[test]
     fn out_of_bounds_or_missing_position_falls_back_to_primary_center() {
         let areas = [
-            WorkArea { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
-            WorkArea { x: 1920.0, y: 0.0, width: 1280.0, height: 1024.0 },
+            WorkArea {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            WorkArea {
+                x: 1920.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 1024.0,
+            },
         ];
         // 显示器变更：原点跑到屏幕外 → 主显示器居中
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 1200.0, height: 800.0, x: Some(-5000.0), y: Some(-5000.0) },
+            WindowGeometry {
+                width: 1200.0,
+                height: 800.0,
+                x: Some(-5000.0),
+                y: Some(-5000.0),
+            },
             &areas,
             Some(areas[0]),
         );
         assert_eq!((placed.x, placed.y), (Some(360.0), Some(140.0)));
         // 未记录位置 → 主显示器居中
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 1200.0, height: 800.0, x: None, y: None },
+            WindowGeometry {
+                width: 1200.0,
+                height: 800.0,
+                x: None,
+                y: None,
+            },
             &areas,
             Some(areas[0]),
         );
         assert_eq!((placed.x, placed.y), (Some(360.0), Some(140.0)));
         // 位置刚好落在工作区右下边界外（半像素级越界）同样回落
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 1200.0, height: 800.0, x: Some(1920.0), y: Some(1024.0) },
+            WindowGeometry {
+                width: 1200.0,
+                height: 800.0,
+                x: Some(1920.0),
+                y: Some(1024.0),
+            },
             &areas,
             Some(areas[0]),
         );
@@ -390,9 +445,19 @@ mod tests {
 
     #[test]
     fn size_clamped_to_primary_work_area() {
-        let areas = [WorkArea { x: 0.0, y: 0.0, width: 1280.0, height: 720.0 }];
+        let areas = [WorkArea {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+        }];
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 3000.0, height: 2000.0, x: Some(10.0), y: Some(10.0) },
+            WindowGeometry {
+                width: 3000.0,
+                height: 2000.0,
+                x: Some(10.0),
+                y: Some(10.0),
+            },
             &areas,
             Some(areas[0]),
         );
@@ -403,7 +468,12 @@ mod tests {
     #[test]
     fn no_monitor_info_keeps_size_without_position() {
         let placed = resolve_window_geometry(
-            WindowGeometry { width: 1200.0, height: 900.0, x: Some(10.0), y: Some(10.0) },
+            WindowGeometry {
+                width: 1200.0,
+                height: 900.0,
+                x: Some(10.0),
+                y: Some(10.0),
+            },
             &[],
             None,
         );
@@ -413,7 +483,12 @@ mod tests {
 
     #[test]
     fn work_area_contains_is_half_open() {
-        let a = WorkArea { x: 0.0, y: 0.0, width: 100.0, height: 50.0 };
+        let a = WorkArea {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 50.0,
+        };
         assert!(a.contains(0.0, 0.0));
         assert!(a.contains(99.9, 49.9));
         assert!(!a.contains(100.0, 10.0));

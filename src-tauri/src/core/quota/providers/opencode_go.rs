@@ -2,7 +2,7 @@
 //! 响应形如 `{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"…"},…}}`，
 //! `percent` 是「已用」百分比。
 
-use super::super::{fetch_json, AuthStyle, QuotaEntry};
+use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use serde_json::Value;
 
 pub(crate) const URL: &str = "https://opencode.ai/zen/go/v1/usage";

@@ -9,7 +9,7 @@ use super::sse::{SseEvent, SseParser};
 use crate::core::config::ModelConfig;
 use crate::core::types::{Content, Message, Role};
 use futures::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -265,7 +265,11 @@ pub async fn stream(
         request = request.header("Authorization", format!("Bearer {k}"));
     }
     // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
-    request = crate::provider::headers::apply_request_headers(request, &model.headers, session_id.as_deref());
+    request = crate::provider::headers::apply_request_headers(
+        request,
+        &model.headers,
+        session_id.as_deref(),
+    );
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Err(ProviderError::Cancelled),
         r = request.send() => r.map_err(|e| ProviderError::Network(e.to_string()))?,
@@ -528,14 +532,16 @@ mod tests {
             session_id: None,
             messages: vec![Message::tool_results(vec![Content::ToolResult {
                 tool_use_id: "t1".into(),
-                content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。".into(),
+                content: "写\n计划提醒：当前计划没有进行中条目，完成后请用 plan 工具标记状态。"
+                    .into(),
                 is_error: false,
             }])],
             tools: vec![],
         };
         let body = build_body(&req);
         assert!(
-            body.to_string().contains("计划提醒：当前计划没有进行中条目"),
+            body.to_string()
+                .contains("计划提醒：当前计划没有进行中条目"),
             "ToolResult content 尾部的提醒必须出现在请求体：{body}"
         );
     }

@@ -40,19 +40,22 @@ impl EventSink for TauriSink {
         if let Some(parent) = self.channels.subs.get(session) {
             let parent_id = parent.value().clone();
             drop(parent); // 访问 map 前先释放 subs 读锁（两个 DashMap 互不冲突，纯缩短持锁窗口）
-            match self.channels.map.get(&parent_id) { Some(ch) => {
-                if let Err(e) = ch.send(Frame::Sub {
-                    sub_id: session.clone(),
-                    frame: Box::new(frame.clone()),
-                }) {
-                    // P4-1：发送失败变为可观测（此前 debug 级静默，丢帧不可见）
-                    tracing::warn!("子代理 [{session}] channel 发送失败：{e}");
+            match self.channels.map.get(&parent_id) {
+                Some(ch) => {
+                    if let Err(e) = ch.send(Frame::Sub {
+                        sub_id: session.clone(),
+                        frame: Box::new(frame.clone()),
+                    }) {
+                        // P4-1：发送失败变为可观测（此前 debug 级静默，丢帧不可见）
+                        tracing::warn!("子代理 [{session}] channel 发送失败：{e}");
+                    }
                 }
-            } _ => {
-                tracing::warn!(
-                    "子代理 [{session}] 父会话 [{parent_id}] 无已注册 channel，帧丢弃（R2 诊断锚点）"
-                );
-            }}
+                _ => {
+                    tracing::warn!(
+                        "子代理 [{session}] 父会话 [{parent_id}] 无已注册 channel，帧丢弃（R2 诊断锚点）"
+                    );
+                }
+            }
             return;
         }
         if let Some(ch) = self.channels.map.get(session) {

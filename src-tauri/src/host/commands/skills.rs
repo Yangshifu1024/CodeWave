@@ -1,4 +1,4 @@
-use super::util::{err, Core};
+use super::util::{Core, err};
 use std::path::PathBuf;
 
 /// 技能扫描上下文：有会话用会话快照 (workspace, data_dir, project_dir)；无会话回退全局 data_dir。
@@ -36,9 +36,13 @@ pub async fn get_skill(
 ) -> Result<Option<crate::skills::Skill>, String> {
     let (workspace, data_dir, project_dir) = skill_scope(&core, session_id.as_deref());
     let disabled = core.cfg.read().unwrap().disabled_skills.clone();
-    Ok(core
-        .skills
-        .get(&workspace, &data_dir, &disabled, project_dir.as_deref(), &name))
+    Ok(core.skills.get(
+        &workspace,
+        &data_dir,
+        &disabled,
+        project_dir.as_deref(),
+        &name,
+    ))
 }
 
 /// 重新加载技能：清空 SkillIndex TTL 缓存后重扫（设置页「重新加载」入口），返回最新列表。
@@ -86,4 +90,3 @@ pub async fn toggle_skill(
 }
 
 // ---------- 工作区目录（Explorer）----------
-

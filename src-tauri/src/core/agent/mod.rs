@@ -17,13 +17,12 @@ pub mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use drive::{
-    DriveParams, NormalizedCall, WRITE_TOOLS, drive_agent, main_drive_params,
-    run_task_agent,
-};
-pub use runtime::{AgentCore, EventSink, Frame, SessionRuntime};
-pub use supervise::{CallSig, IdlePolicy};
-pub(crate) use guards::{CompactingGuard, lock_ok};
 /// `<report>` 标记剥离（子代理 / 任务运行收尾消费）
 ///（[docs/subagent-text-turn-premature-exit]）。
 pub(crate) use drive::split_report;
+pub use drive::{
+    DriveParams, NormalizedCall, WRITE_TOOLS, drive_agent, main_drive_params, run_task_agent,
+};
+pub(crate) use guards::{CompactingGuard, lock_ok};
+pub use runtime::{AgentCore, EventSink, Frame, SessionRuntime};
+pub use supervise::{CallSig, IdlePolicy};

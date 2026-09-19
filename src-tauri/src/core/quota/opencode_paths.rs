@@ -106,7 +106,10 @@ pub fn config_candidates(env: &RuntimeEnv) -> Vec<ConfigCandidate> {
 
 /// auth.json 候选路径。
 pub fn auth_candidates(env: &RuntimeEnv) -> Vec<PathBuf> {
-    data_dirs(env).into_iter().map(|d| d.join("auth.json")).collect()
+    data_dirs(env)
+        .into_iter()
+        .map(|d| d.join("auth.json"))
+        .collect()
 }
 
 /// 从配置里取第一个命中的 `provider.<key>.options.apiKey`（原始值，可能含 `${ENV}` 模板）。
@@ -126,7 +129,11 @@ pub fn provider_api_key(config: &Value, keys: &[&str]) -> Option<String> {
 
 /// `${ENV}` 模板展开：仅允许该提供商自己的环境变量名单，未知占位符一律判失败
 /// （避免把别人的密钥名解析成空值静默降级）。
-pub fn resolve_env_template(value: &str, allowed: &[&str], lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+pub fn resolve_env_template(
+    value: &str,
+    allowed: &[&str],
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
     let mut out = String::new();
     let mut rest = value;
     while let Some(start) = rest.find("${") {
@@ -272,7 +279,11 @@ pub fn auth_entry(auth: &Value, keys: &[&str]) -> AuthEntry {
         if kind != "api" {
             return AuthEntry::Invalid(format!("auth.json 的 {key} 条目类型不支持（{kind}）"));
         }
-        let secret = entry.get("key").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let secret = entry
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if secret.is_empty() {
             return AuthEntry::Invalid(format!("auth.json 的 {key} 条目缺少 key"));
         }

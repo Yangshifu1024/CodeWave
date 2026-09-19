@@ -4,7 +4,7 @@
 use super::pathutil;
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// 支持视觉读取的图片扩展名 → MIME 映射。
@@ -333,21 +333,18 @@ mod tests {
     fn make_ctx(
         ws: &tempfile::TempDir,
         dd: &tempfile::TempDir,
-    ) -> (std::sync::Arc<crate::core::agent::AgentCore>, std::sync::Arc<crate::core::agent::SessionRuntime>) {
+    ) -> (
+        std::sync::Arc<crate::core::agent::AgentCore>,
+        std::sync::Arc<crate::core::agent::SessionRuntime>,
+    ) {
         let roots = super::super::pathutil::WriteRoots {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
         };
         let core = crate::core::agent::test_support::make_core(&roots);
-        let rt = core.get_or_create_session(
-            "t",
-            roots.workspace.clone(),
-            None,
-            vec![],
-            None,
-            vec![],
-        );
+        let rt =
+            core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
         (core, rt)
     }
 
@@ -376,7 +373,9 @@ mod tests {
             std::fs::write(ws.path().join(name), "line\n".repeat(1500)).unwrap();
         }
         let args = serde_json::json!({"files":[{"path":"a.txt"},{"path":"b.txt"}]});
-        let out = ReadTool.run(&ctx_for(core.clone(), main_rt.clone()), args.clone()).await;
+        let out = ReadTool
+            .run(&ctx_for(core.clone(), main_rt.clone()), args.clone())
+            .await;
         assert!(!out.ok, "{out:?}");
         assert_eq!(out.error.as_ref().unwrap().code, "E_READ_TOO_BROAD");
         assert!(out.error.as_ref().unwrap().message.contains("explore"));
@@ -394,11 +393,16 @@ mod tests {
         std::fs::write(ws.path().join("big.txt"), "line\n".repeat(3000)).unwrap();
         let ctx = ctx_for(core, main_rt);
         // 单文件整读：默认窗口 2000 行 = 预算上限，恰好放行（edit 前置读不受影响）
-        let out = ReadTool.run(&ctx, serde_json::json!({"files":[{"path":"big.txt"}]})).await;
+        let out = ReadTool
+            .run(&ctx, serde_json::json!({"files":[{"path":"big.txt"}]}))
+            .await;
         assert!(out.ok, "{out:?}");
         // 窗口读取远小于预算
         let out2 = ReadTool
-            .run(&ctx, serde_json::json!({"files":[{"path":"big.txt","startLine":1,"endLine":500}]}))
+            .run(
+                &ctx,
+                serde_json::json!({"files":[{"path":"big.txt","startLine":1,"endLine":500}]}),
+            )
             .await;
         assert!(out2.ok, "{out2:?}");
     }

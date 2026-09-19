@@ -252,8 +252,20 @@ fn is_http_token(s: &str) -> bool {
             b.is_ascii_alphanumeric()
                 || matches!(
                     b,
-                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
-                        | b'_' | b'`' | b'|' | b'~'
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
                 )
         })
 }
@@ -453,7 +465,6 @@ pub struct NetworkConfig {
     pub allow_private_network: bool,
 }
 
-
 /// 日志设置（[docs/session-logging-report](../../../docs/session-logging-report.md)）：全局级别可热切换 + 会话级 verbose 模式。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -474,17 +485,11 @@ impl Default for LogConfig {
 }
 
 /// shell 选择配置（设置 → 命令 shell；执行与 prompt 环境段共用同一事实源）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShellConfig {
     /// shell id（None / "auto" = 自动探测；其余值经 resolve_shell 按本机可用性解析）
     pub selection: Option<String>,
-}
-
-impl Default for ShellConfig {
-    fn default() -> Self {
-        ShellConfig { selection: None }
-    }
 }
 
 /// 全局配置状态（config.json 的根结构；所有新字段必须 serde default 向前兼容）。

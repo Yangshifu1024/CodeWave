@@ -5,7 +5,7 @@
 //! `data.limits[]`（Z.ai 另有 `limits` 顶层兜底），每项含
 //! `type`/`unit`/`percentage`（已用）/`nextResetTime`（毫秒时间戳）。
 
-use super::super::{fetch_json, AuthStyle, QuotaEntry};
+use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use chrono::{DateTime, SecondsFormat};
 use serde_json::Value;
 
@@ -62,9 +62,7 @@ pub(crate) fn parse_limits(body: &Value, flavor: Flavor) -> Result<Vec<QuotaEntr
     }
 
     let limits = match flavor {
-        Flavor::Zai => body
-            .pointer("/data/limits")
-            .or_else(|| body.get("limits")),
+        Flavor::Zai => body.pointer("/data/limits").or_else(|| body.get("limits")),
         Flavor::Zhipu => body.pointer("/data/limits"),
     }
     .and_then(Value::as_array)
@@ -75,10 +73,12 @@ pub(crate) fn parse_limits(body: &Value, flavor: Flavor) -> Result<Vec<QuotaEntr
         let Some(percentage) = limit.get("percentage").and_then(Value::as_f64) else {
             continue;
         };
-        let kind = limit.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = limit
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let unit = limit.get("unit").and_then(Value::as_i64);
-        let is_quota = kind == "TOKENS_LIMIT"
-            || (flavor == Flavor::Zai && kind == "CREDIT_LIMIT");
+        let is_quota = kind == "TOKENS_LIMIT" || (flavor == Flavor::Zai && kind == "CREDIT_LIMIT");
         let key = if is_quota && unit == Some(3) {
             "five_hour"
         } else if is_quota && unit == Some(6) {
@@ -98,10 +98,7 @@ pub(crate) fn parse_limits(body: &Value, flavor: Flavor) -> Result<Vec<QuotaEntr
     }
 
     if entries.is_empty() {
-        return Err(format!(
-            "{} 返回中未找到可展示的额度窗口",
-            flavor.label()
-        ));
+        return Err(format!("{} 返回中未找到可展示的额度窗口", flavor.label()));
     }
     Ok(entries)
 }
