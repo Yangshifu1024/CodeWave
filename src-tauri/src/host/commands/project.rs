@@ -260,11 +260,23 @@ mod tests {
     /// 未变化 / 跳过 / 改成「不清理」/ 非法天数都不触发。
     #[test]
     fn cleanup_due_only_when_retention_changes() {
-        assert_eq!(cleanup_due(None, Some(7), None), Some(7), "从「不清理」改成 7 天");
-        assert_eq!(cleanup_due(Some(3), Some(1), None), Some(1), "收紧保留期也要清");
+        assert_eq!(
+            cleanup_due(None, Some(7), None),
+            Some(7),
+            "从「不清理」改成 7 天"
+        );
+        assert_eq!(
+            cleanup_due(Some(3), Some(1), None),
+            Some(1),
+            "收紧保留期也要清"
+        );
         assert_eq!(cleanup_due(Some(7), Some(7), None), None, "没变不做事");
         assert_eq!(cleanup_due(None, None, None), None);
-        assert_eq!(cleanup_due(Some(7), None, None), None, "改成「不清理」不做事");
+        assert_eq!(
+            cleanup_due(Some(7), None, None),
+            None,
+            "改成「不清理」不做事"
+        );
         assert_eq!(
             cleanup_due(None, Some(7), Some(true)),
             None,
@@ -277,7 +289,11 @@ mod tests {
             None,
             "白名单之外的档位（1/3/7/14/30）不触发"
         );
-        assert_eq!(cleanup_due(None, Some(30), None), Some(30), "合法档位照常触发");
+        assert_eq!(
+            cleanup_due(None, Some(30), None),
+            Some(30),
+            "合法档位照常触发"
+        );
     }
 
     /// 页级保存的形状修正（调用点同一函数）：字体按当前生效值护住，其他字段照常采用提交值。

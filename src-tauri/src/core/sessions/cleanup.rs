@@ -169,9 +169,7 @@ pub fn resolve_retention(explicit: Option<u32>, saved: Option<u32>) -> Retention
         None => RetentionChoice::Skip,
         Some(d) if is_valid_retention_days(d) => RetentionChoice::Run(d),
         Some(d) => {
-            tracing::warn!(
-                "会话保留期档位非法（{d}）：只接受 1/3/7/14/30 天，本次不清理"
-            );
+            tracing::warn!("会话保留期档位非法（{d}）：只接受 1/3/7/14/30 天，本次不清理");
             RetentionChoice::Invalid(d)
         }
     }
@@ -216,7 +214,7 @@ pub fn preview(
     running: &HashSet<String>,
 ) -> CleanupPreview {
     let mut hits = expired_with_time(metas, now, days, running);
-    hits.sort_by(|a, b| b.1.cmp(&a.1));
+    hits.sort_by_key(|a| std::cmp::Reverse(a.1));
     CleanupPreview {
         count: hits.len() as u32,
         titles: hits
@@ -278,10 +276,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     }
     if let Some(pid) = meta.project_id.as_deref() {
         if !is_safe_session_id(pid) {
-            tracing::warn!(
-                "会话 {} 的项目编号非法（{pid}），跳过该会话的清理",
-                meta.id
-            );
+            tracing::warn!("会话 {} 的项目编号非法（{pid}），跳过该会话的清理", meta.id);
             return false;
         }
     }
@@ -640,7 +635,11 @@ mod tests {
             .into_iter()
             .map(|m| m.id)
             .collect();
-        assert_eq!(picked, vec!["over".to_string()], "1 天档位只删超过 24 小时的");
+        assert_eq!(
+            picked,
+            vec!["over".to_string()],
+            "1 天档位只删超过 24 小时的"
+        );
 
         // 3 天档位：24 小时前的还在保留期内
         assert!(select_expired(&metas, now(), 3, &none()).is_empty());
@@ -735,15 +734,11 @@ mod tests {
 
         let mut running = HashSet::new();
         running.insert("memory-running".to_string());
-        let picked: Vec<String> = select_expired(
-            &[indexed, in_process, idle.clone()],
-            now(),
-            1,
-            &running,
-        )
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
+        let picked: Vec<String> =
+            select_expired(&[indexed, in_process, idle.clone()], now(), 1, &running)
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
         assert_eq!(picked, vec!["idle".to_string()]);
 
         // running_set 同时汇总两条口径（进程内集合直接来自 store 的运行状态）
@@ -763,10 +758,7 @@ mod tests {
         let mut metas = Vec::new();
         // 7 个过期会话，活动时间从新到旧 t1（最新）… t7（最旧）
         for i in 1..=7 {
-            metas.push(meta(
-                &format!("s{i}"),
-                &ago(8 * 24 * 3600 + i * 3600),
-            ));
+            metas.push(meta(&format!("s{i}"), &ago(8 * 24 * 3600 + i * 3600)));
         }
         metas.push(meta("fresh", &ago(60)));
         let p = preview(&metas, now(), 7, &none());
@@ -793,8 +785,14 @@ mod tests {
 
         // 0 = 非法（不是「不清理」的写法，而是手改/旧数据里的怪值）
         assert!(!is_valid_retention_days(0));
-        assert_eq!(resolve_retention(Some(0), None), RetentionChoice::Invalid(0));
-        assert_eq!(resolve_retention(None, Some(0)), RetentionChoice::Invalid(0));
+        assert_eq!(
+            resolve_retention(Some(0), None),
+            RetentionChoice::Invalid(0)
+        );
+        assert_eq!(
+            resolve_retention(None, Some(0)),
+            RetentionChoice::Invalid(0)
+        );
 
         // 其它怪值 = 非法
         for bad in [2u32, 6, 31, 365, u32::MAX] {
@@ -806,9 +804,15 @@ mod tests {
         }
 
         // 显式值优先（设置页草稿值就是弹框里给用户看的那个）
-        assert_eq!(resolve_retention(Some(7), Some(30)), RetentionChoice::Run(7));
+        assert_eq!(
+            resolve_retention(Some(7), Some(30)),
+            RetentionChoice::Run(7)
+        );
         // 显式值非法时即使存量值合法也不清理：不能偷换成用户没看过的档位
-        assert_eq!(resolve_retention(Some(2), Some(7)), RetentionChoice::Invalid(2));
+        assert_eq!(
+            resolve_retention(Some(2), Some(7)),
+            RetentionChoice::Invalid(2)
+        );
     }
 
     // ---------- 文件删除 ----------
@@ -881,11 +885,7 @@ mod tests {
             )
             .unwrap();
         store
-            .append_artifact(
-                session,
-                &user_file.to_string_lossy(),
-                ArtifactOp::Create,
-            )
+            .append_artifact(session, &user_file.to_string_lossy(), ArtifactOp::Create)
             .unwrap();
 
         // 边车解析：kind 读回正确；右栏「文件」数据源过滤掉计划文件
@@ -936,7 +936,10 @@ mod tests {
         assert!(plan_path_allowed("/ws/.codewave/tasks/plan-1.md"));
         assert!(plan_path_allowed("C:\\ws\\.codewave\\tasks\\plan-1.md"));
         assert!(!plan_path_allowed("/ws/README.md"), "不在托管 tasks 目录");
-        assert!(!plan_path_allowed("/ws/.codewave/tasks/plan-1.txt"), "后缀不是 .md");
+        assert!(
+            !plan_path_allowed("/ws/.codewave/tasks/plan-1.txt"),
+            "后缀不是 .md"
+        );
         assert!(!plan_path_allowed("/ws/.codewave/other/plan-1.md"));
         assert!(!plan_path_allowed(""));
         // 分段里的 `..` 一律拒绝：先满足字面条件（.md + .codewave/tasks/）再靠 `..` 回退出去的路径
@@ -972,7 +975,9 @@ mod tests {
             .unwrap();
 
         // 合规的计划文件（托管 tasks 目录 + .md）
-        let ok_plan = dd.path().join(".codewave/tasks/plan-20260919-120000-abcd.md");
+        let ok_plan = dd
+            .path()
+            .join(".codewave/tasks/plan-20260919-120000-abcd.md");
         std::fs::create_dir_all(ok_plan.parent().unwrap()).unwrap();
         std::fs::write(&ok_plan, "# 计划").unwrap();
         store
@@ -1022,7 +1027,10 @@ mod tests {
 
         let outcome = execute(&store, &root, 1, &[bad]);
         assert_eq!(outcome.deleted, 0);
-        assert_eq!(outcome.failed, 1, "非法编号跳过该会话并计入失败（索引行保留）");
+        assert_eq!(
+            outcome.failed, 1,
+            "非法编号跳过该会话并计入失败（索引行保留）"
+        );
         assert!(outcome.ids.is_empty());
         assert!(victim.exists(), "数据目录外的文件绝不能被脏编号牵连删除");
         assert!(ok_hist.exists());
@@ -1052,8 +1060,12 @@ mod tests {
             )
             .unwrap();
         // 检查点会把 updated_at 刷成当前时间，重新写回旧时间才是「过期会话」
-        store.upsert_meta(meta("good", &real_ago(30 * 86_400))).unwrap();
-        store.upsert_meta(meta("bad", &real_ago(30 * 86_400))).unwrap();
+        store
+            .upsert_meta(meta("good", &real_ago(30 * 86_400)))
+            .unwrap();
+        store
+            .upsert_meta(meta("bad", &real_ago(30 * 86_400)))
+            .unwrap();
         std::fs::create_dir_all(store.history_path("bad").join("inner")).unwrap();
 
         let candidates = select_expired(&store.load_index().sessions, Utc::now(), 1, &none());
@@ -1169,7 +1181,10 @@ mod tests {
     fn deleted_ids_log_line_truncates_but_keeps_total() {
         let ids = |n: usize| (0..n).map(|i| format!("s{i}")).collect::<Vec<_>>();
         assert_eq!(format_deleted_ids(&ids(3)), "s0, s1, s2");
-        assert_eq!(format_deleted_ids(&ids(LOG_ID_LIMIT)).split(", ").count(), LOG_ID_LIMIT);
+        assert_eq!(
+            format_deleted_ids(&ids(LOG_ID_LIMIT)).split(", ").count(),
+            LOG_ID_LIMIT
+        );
 
         let line = format_deleted_ids(&ids(LOG_ID_LIMIT + 5));
         assert!(line.starts_with("s0, s1, s2, "), "{line}");
@@ -1206,7 +1221,7 @@ mod tests {
         let sub_gz = old("histories/sub_deadbeef.json.gz");
         let task_gz = old("histories/task_daily-1.json.gz");
         let task_todos = old("sessions/task_daily-1.todos.json");
-        
+
         // 索引写在最后（否则会被上面的占位文件覆盖）：known 在索引里 → 它不是孤儿
         store.upsert_meta(meta("known", &real_ago(0))).unwrap();
 
@@ -1224,7 +1239,10 @@ mod tests {
             store.sessions_dir().join("index.json").exists(),
             "清理绝不碰 index.json"
         );
-        assert!(store.sessions_dir().join("subs").is_dir(), "sessions/subs 目录不碰");
+        assert!(
+            store.sessions_dir().join("subs").is_dir(),
+            "sessions/subs 目录不碰"
+        );
         assert!(store.histories_dir().join("subs").is_dir());
     }
 
@@ -1350,7 +1368,9 @@ mod tests {
         let store = store_in(dd.path());
         std::fs::create_dir_all(store.histories_dir()).unwrap();
         // 用户真的没有会话：索引能解析、sessions 为空
-        store.upsert_meta(meta("ghost-in-index", &real_ago(0))).unwrap();
+        store
+            .upsert_meta(meta("ghost-in-index", &real_ago(0)))
+            .unwrap();
         store.remove_many(&["ghost-in-index".to_string()]).unwrap();
         assert!(store.index_is_trusted(), "索引仍是可解析的空列表");
         assert!(store.load_index().sessions.is_empty());
@@ -1384,7 +1404,10 @@ mod tests {
         let outcome = execute(&store, dd.path(), 1, &[]);
         assert_eq!(outcome.deleted, 0);
         assert!(!orphan.exists());
-        assert_eq!(count_orphan_files(&store, Utc::now() - chrono::Duration::hours(24)), 0);
+        assert_eq!(
+            count_orphan_files(&store, Utc::now() - chrono::Duration::hours(24)),
+            0
+        );
     }
 
     /// 索引外的孤儿随 `execute` 一起清掉，且索引行数与状态文件一致。

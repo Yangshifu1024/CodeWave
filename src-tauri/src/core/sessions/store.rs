@@ -703,11 +703,7 @@ impl SessionStore {
 
     /// 刷新「最近打开时间」（加载会话时调用）：持索引锁；距上次刷新不足节流窗口时**不写**
     ///（返回 false）；索引里没有这个会话则什么都不做（返回 false，不凭空造条目）。
-    pub fn touch_session_open(
-        &self,
-        id: &str,
-        now: chrono::DateTime<Utc>,
-    ) -> anyhow::Result<bool> {
+    pub fn touch_session_open(&self, id: &str, now: chrono::DateTime<Utc>) -> anyhow::Result<bool> {
         let Some(meta) = self.get(id) else {
             return Ok(false);
         };
