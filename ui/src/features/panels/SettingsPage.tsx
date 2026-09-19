@@ -301,6 +301,8 @@ export default function SettingsPage() {
   // LSP server 状态（lsp_status）：null = 未取到（探测失败/旧后端）→ 不显示状态徽标，面板不报错
   const [lspStatus, setLspStatus] = useState<LspServerStatus[] | null>(null);
   const [redetecting, setRedetecting] = useState(false);
+  /** 正在一键安装的语言（null = 空闲）：驱动行内「安装」按钮的 loading 与禁用 */
+  const [installing, setInstalling] = useState<LspLanguage | null>(null);
 
   // ---------- 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)） ----------
   /** 搜索查询串。trim 后非空即「搜索态」：结果列表替掉左导航 tablist（两套列表不同时存在） */
@@ -456,16 +458,106 @@ export default function SettingsPage() {
     }
   }
 
-  /** 状态徽标三态：未启用 = 已关闭；启用且找到 = 已找到（带版本）；启用但未探测到 = 未找到（警示色）；
-   *  状态未取到（null）→ 不渲染徽标。 */
-  function lspBadge(lang: LspLanguage): { text: string; warn: boolean } | null {
+  /** 语言服务器状态四态：已关闭 / 已找到（带版本）/ 未安装（语言工具链已就绪）/
+   *  未安装（且工具链也没就绪）。后端给的原因（detail）走 Tooltip，不占行高；状态未取到（null）→ 不渲染徽标。 */
+  function lspBadge(lang: LspLanguage): { text: string; warn: boolean; detail: string } | null {
     const st = lspStatus?.find((s) => s.language === lang);
     if (!st) return null;
-    if (!st.enabled) return { text: t("settings.lspDisabled"), warn: false };
+    if (!st.enabled) return { text: t("settings.lspDisabled"), warn: false, detail: st.detail };
     if (st.found) {
-      return { text: st.version ? t("settings.lspFoundVersion", { version: st.version }) : t("settings.lspFound"), warn: false };
+      return {
+        text: st.version ? t("settings.lspFoundVersion", { version: st.version }) : t("settings.lspFound"),
+        warn: false,
+        detail: st.detail,
+      };
     }
-    return { text: t("settings.lspMissing"), warn: true };
+    // 未找到：区分「只缺语言服务器」与「连语言工具链都没装」——后者不是本页一键安装能解决的
+    return {
+      text: st.sdk.ready
+        ? t("settings.lspServerMissing")
+        : t("settings.lspServerMissingNoSdk", { name: st.sdk.name }),
+      warn: true,
+      detail: st.detail,
+    };
+  }
+
+  /** 工具链段文案（与语言服务器状态分两块：工具链 = Go / JDK / Node.js，语言服务器 = gopls / jdtls / …）。
+   *  只在开关打开时显示：关掉的行不该再被催。 */
+  function sdkText(lang: LspLanguage): string | null {
+    const st = lspStatus?.find((s) => s.language === lang);
+    if (!st || !st.enabled) return null;
+    return st.sdk.ready
+      ? t("settings.lspSdkReady", { name: st.sdk.name })
+      : t("settings.lspSdkMissing", { name: st.sdk.name });
+  }
+
+  /** 行内动作：可一键安装 → 「安装」（前置命令缺失时禁用并提示先装运行库）；需手动安装 → 「手动安装」。
+   *  已关闭 / 已找到 / 无引导三态不渲染动作。 */
+  function lspAction(lang: LspLanguage) {
+    const st = lspStatus?.find((s) => s.language === lang);
+    if (!st || !st.enabled || st.found || !st.install) return null;
+    const hint = st.install;
+    if (hint.kind === "installable") {
+      const req = hint.requires;
+      const blocked = !!req && !req.ready;
+      const downloadUrl = req?.docs_url ?? null;
+      // 提示的是「缺哪个运行库」（Node.js），不是那个语言的 SDK：Python 行缺的正是 Node.js
+      const missingRuntime = req?.name ?? "";
+      return (
+        <>
+          <Button
+            size="small"
+            disabled={blocked}
+            loading={installing === lang}
+            onClick={() => void installServer(lang)}
+          >
+            {t("settings.lspInstall")}
+          </Button>
+          {blocked && (
+            <span className="validation-hint">
+              {t("settings.lspNeedRuntime", { name: missingRuntime })}
+              {downloadUrl && (
+                <Button size="small" type="link" onClick={() => void openDocs(downloadUrl)}>
+                  {t("settings.lspDownload")}
+                </Button>
+              )}
+            </span>
+          )}
+        </>
+      );
+    }
+    if (hint.kind === "manual" && hint.docs_url) {
+      const url = hint.docs_url;
+      return (
+        <Button size="small" type="link" onClick={() => void openDocs(url)}>
+          {t("settings.lspManualInstall")}
+        </Button>
+      );
+    }
+    return null;
+  }
+
+  /** 一键安装（lsp_install）：成功/失败文案由后端回喂（含安装输出尾部）；结束后重拉状态刷新本页。 */
+  async function installServer(lang: LspLanguage) {
+    setInstalling(lang);
+    try {
+      const out = await ipc.lspInstall(lang);
+      message.success(out || t("settings.lspInstallDone"));
+    } catch (e) {
+      message.error(`${t("settings.lspInstallFailed")}：${String(e).replace(/^Error[:\s]*/i, "")}`);
+    } finally {
+      setInstalling(null);
+      setLspStatus(await ipc.lspStatus().catch(() => null));
+    }
+  }
+
+  /** 官方地址：交后端 open_url 用系统浏览器打开（与应用内其他外链同一路径）。 */
+  async function openDocs(url: string) {
+    try {
+      await ipc.openUrl(url);
+    } catch (e) {
+      message.error(String(e));
+    }
   }
 
   /** 重新探测（lsp_redetect）：清 PATH 与探测缓存后重查，刷新本页徽标。 */
@@ -871,7 +963,7 @@ export default function SettingsPage() {
               </div>
             </Form.Item>
           </Form>
-          <ProvidersPanel draft={draft} patchDraft={patchDraft} advancedVisible={advancedVisible} />
+          <ProvidersPanel draft={draft} patchDraft={patchDraft} />
         </>
       ),
     },
@@ -891,42 +983,49 @@ export default function SettingsPage() {
                     ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
                     ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
                   ] as const).map(([mode, title, desc]) => (
-                    <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
-                      <div className="proxy-mode-head">
-                        <Radio value={mode} />
-                        <span className="proxy-mode-title">{title}</span>
-                      </div>
-                      <div className="proxy-mode-desc">{desc}</div>
-                      {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
-                      {mode === "system" && sysProxy !== undefined && (
-                        <div className="proxy-mode-echo">
-                          {sysProxy
-                            ? t("settings.proxyDetected", { url: sysProxy })
-                            : t("settings.proxyNotDetected")}
+                    <div key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
+                      {/* 整卡可点：主区（标题 + 说明 + 回显）是 label，点哪都能选中该模式 */}
+                      <label className="proxy-mode-main">
+                        <div className="proxy-mode-head">
+                          <Radio value={mode} />
+                          <span className="proxy-mode-title">{title}</span>
+                        </div>
+                        <div className="proxy-mode-desc">{desc}</div>
+                        {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
+                        {mode === "system" && sysProxy !== undefined && (
+                          <div className="proxy-mode-echo">
+                            {sysProxy
+                              ? t("settings.proxyDetected", { url: sysProxy })
+                              : t("settings.proxyNotDetected")}
+                          </div>
+                        )}
+                      </label>
+                      {/* 自定义模式独有的地址输入：放进卡片**内部**（不再单独占一行漂在卡片下方）。
+                          label 与输入框是字段区自己的，不嵌在外层 label 里（label 不能嵌 label） */}
+                      {mode === "manual" && proxyMode === "manual" && (
+                        <div className="proxy-mode-field">
+                          <Form.Item
+                            label={t("settings.proxyUrl")}
+                            extra={t("settings.proxyUrlHint")}
+                            validateStatus={proxyUrlInvalid ? "error" : undefined}
+                            help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
+                          >
+                            <Input
+                              size="small"
+                              className="w-wide"
+                              placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                              value={proxyUrl}
+                              onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+                            />
+                          </Form.Item>
                         </div>
                       )}
-                    </label>
+                    </div>
                   ))}
                 </div>
               </Radio.Group>
             </div>
           </Form.Item>
-          {proxyMode === "manual" && (
-            <Form.Item
-              label={t("settings.proxyUrl")}
-              extra={t("settings.proxyUrlHint")}
-              validateStatus={proxyUrlInvalid ? "error" : undefined}
-              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
-            >
-              <Input
-                size="small"
-                className="w-wide"
-                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                value={proxyUrl}
-                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
-              />
-            </Form.Item>
-          )}
           {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
           <Form.Item label={t("settings.allowPrivate")}>
             <div className="setting-anchor" data-setting-id="network.allow_private_network">
@@ -1014,6 +1113,7 @@ export default function SettingsPage() {
                 {LSP_LANGUAGES.map((lang) => {
                   const sw = langSwitchOf(lang);
                   const badge = lspBadge(lang);
+                  const sdk = sdkText(lang);
                   return (
                     /* 锚点 = 注册表 id（validation.<lang>，与下一行的 JSON 行同形）；行宽由 .validation-row 网格列决定，不设宽度档 */
                     <div className="validation-row" data-lang={lang} data-setting-id={`validation.${lang}`} key={lang}>
@@ -1025,7 +1125,18 @@ export default function SettingsPage() {
                         value={lspCommandOf(lspCfg, lang)}
                         onChange={(e) => patchLsp(withLspCommand(lspCfg, lang, e.target.value))}
                       />
-                      <span className={`validation-status${badge?.warn ? " warn" : ""}`}>{badge?.text ?? ""}</span>
+                      {/* 状态单元格：语言服务器状态（悬停看后端原因）+ 语言工具链状态 + 行内动作 */}
+                      <div className="validation-cell">
+                        {badge ? (
+                          <Tooltip title={badge.detail || undefined}>
+                            <span className={`validation-status${badge.warn ? " warn" : ""}`}>{badge.text}</span>
+                          </Tooltip>
+                        ) : (
+                          <span className="validation-status" />
+                        )}
+                        {sdk && <span className="validation-sdk">{sdk}</span>}
+                        {lspAction(lang)}
+                      </div>
                     </div>
                   );
                 })}
@@ -1033,7 +1144,9 @@ export default function SettingsPage() {
                   <span className="validation-label">{t("settings.validationLangJson")}</span>
                   <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
                   <span />
-                  <span className="validation-status" />
+                  <div className="validation-cell">
+                    <span className="validation-status" />
+                  </div>
                 </div>
               </div>
               {/* Java 代价提示：jdtls 首次启动会解析依赖树（可能数分钟、GB 级内存） */}

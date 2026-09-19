@@ -355,6 +355,15 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-hover\)/);
     // 审查返工：预算组两列网格类收回 app.css（不再用内联 style 复活等价格式）
     expect(appCss).toMatch(/\.lsp-budget-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(220px,\s*1fr\)\)/);
+    // 语言行第 2 列必须是 max-content：antd Switch 只给了 min-width（small 档 28px），
+    // 落在 auto 列里会被「Stretch auto Tracks」拉满整列——就是「开关长成一根长条」那个缺陷。
+    // 注：happy-dom 无布局引擎，只能锁样式规则文本，真实尺寸靠手动验证清单。
+    expect(appCss).toMatch(
+      /\.validation-row\s*\{[^}]*grid-template-columns:\s*150px\s+max-content\s+minmax\(200px,\s*320px\)\s+auto/,
+    );
+    expect(appCss).not.toMatch(
+      /\.validation-row\s*\{[^}]*grid-template-columns:\s*150px\s+auto\s/,
+    );
     const pageSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../features/panels/SettingsPage.tsx"), "utf8");
     expect(pageSrc).not.toContain("gridTemplateColumns");
   });

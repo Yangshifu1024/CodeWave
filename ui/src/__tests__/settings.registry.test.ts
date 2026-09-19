@@ -438,17 +438,18 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
 });
 
 describe("设置项注册表：进阶项派生（批③）", () => {
-  it("进阶项共 11 项（范围本批不变），与注册表 advanced 标记同源", () => {
-    expect(ADVANCED_ITEM_IDS.length).toBe(11);
+  it("进阶项共 10 项（2026-09-19 active_model_id 退出进阶：它只在编辑视图出现），与注册表 advanced 标记同源", () => {
+    expect(ADVANCED_ITEM_IDS.length).toBe(10);
     expect(new Set(ADVANCED_ITEM_IDS).size).toBe(ADVANCED_ITEM_IDS.length);
     expect(new Set(ADVANCED_ITEM_IDS)).toEqual(new Set(SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id)));
   });
 
-  it("advancedCountByPage 逐页统计，拾起来恰好 11", () => {
-    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(11);
+  it("advancedCountByPage 逐页统计，拾起来恰好 10", () => {
+    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(10);
     expect(advancedCountByPage("tools")).toBe(8); // LSP 预算 7 + JDK 路径
     expect(advancedCountByPage("security")).toBe(1); // 命令白名单
-    expect(advancedCountByPage("providers")).toBe(1); // 活跃模型
+    // 模型与供应商页：0——该页唯一候选 active_model_id 的锚点只在编辑视图，页级开关对它无意义
+    expect(advancedCountByPage("providers")).toBe(0);
     expect(advancedCountByPage("logs")).toBe(1); // 会话详细日志
     expect(advancedCountByPage("appearance")).toBe(0);
     expect(advancedCountByPage("network")).toBe(0);

@@ -114,6 +114,11 @@ export interface UiPrefs {
   language: string;
   /** AI 回复语言（自由输入，如 "中文"/"English"）；空 = 跟随用户消息语言 */
   ai_language?: string | null;
+  /** 界面字体（逗号分隔的已安装字体名，空 = 默认链）。
+   *  **真源在后端配置文件**；WebView 的 localStorage 只当首帧缓存（防闪变）。 */
+  font_sans?: string;
+  /** 等宽字体（代码与日志），同上。 */
+  font_mono?: string;
 }
 /** [docs/session-logging-report](../../../docs/session-logging-report.md)：全局日志级别（RUST_LOG 优先）+ 会话详尽模式（LLM 请求/响应全文进会话日志） */
 export interface LogConfig { level: string; session_verbose: boolean }
@@ -367,6 +372,30 @@ export interface LspInstallHint {
   docs_url: string | null;
   /** 前置条件（如「需 JDK 21+」） */
   prerequisite: string | null;
+  /** 一键安装所需的前置命令探测（仅 installable 有值；npm 缺失时前端提前提示而非等点击后报错） */
+  requires: LspInstallRequirement | null;
+}
+
+/** 一键安装的前置命令（如 TS/Python 依赖的 `npm`） */
+export interface LspInstallRequirement {
+  /** 可执行名（`npm` / `go` / `rustup`） */
+  command: string;
+  /** 展示名（如 `Node.js`）：与语言的 SDK 名分开——Python 行缺的是 Node.js，不能拿「Python」充数 */
+  name: string;
+  /** 当前能否解析到（生效 PATH + 语言约定目录） */
+  ready: boolean;
+  /** 缺失时的官方下载地址（如 Node.js 下载页） */
+  docs_url: string | null;
+}
+
+/** 语言工具链（SDK）就绪情况：与「语言服务器是否找到」分开表达（两件事的解决方式完全不同） */
+export interface LspSdkStatus {
+  /** 是否已就绪 */
+  ready: boolean;
+  /** 展示名（如 `Node.js` / `JDK 21+`） */
+  name: string;
+  /** 人类可读补充（找到的可执行文件路径，或没找到的原因） */
+  detail: string;
 }
 
 /** 单语言 server 状态（`lsp_status` / `lsp_redetect` 返回；设置页状态徽标数据源） */
@@ -376,8 +405,8 @@ export interface LspServerStatus {
   enabled: boolean;
   /** 是否找到可用 server */
   found: boolean;
-  /** 来源：config（命令覆盖）| project | path | fresh_path | extra_root | npx | heuristic | ""（未找到） */
-  source: "config" | "project" | "path" | "fresh_path" | "extra_root" | "npx" | "heuristic" | "";
+  /** 来源：config（命令覆盖）| project | path | fresh_path | lang_bin（语言约定安装目录）| extra_root | npx | heuristic | ""（未找到） */
+  source: "config" | "project" | "path" | "fresh_path" | "lang_bin" | "extra_root" | "npx" | "heuristic" | "";
   /** 解析出的启动命令（展示用，含参数） */
   command: string;
   version: string | null;
@@ -385,6 +414,8 @@ export interface LspServerStatus {
   detail: string;
   /** 未启用或未找到时才有值 */
   install: LspInstallHint | null;
+  /** 该语言的工具链（SDK）是否就绪（与 server 是否找到分开表达） */
+  sdk: LspSdkStatus;
 }
 
 /** 六语言 server 命令覆盖（留空 = 自动探测）；映射形态让按语言动态读写保持类型安全 */

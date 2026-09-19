@@ -99,9 +99,10 @@ Esc 的完整优先级（window 捕获监听，见 `SettingsPage` 的 `escRef`/`
   供应商三视图根节点），没有天然容器时在控件外包一层 `div.setting-anchor`。
 - 命中定位读 `[data-setting-id="<id>"]`；**锚点缺失或命中节点为 0 高度锚点时退化为高亮页体容器**（`.settings-pane-body`）。
   0 高度锚点判定 = `offsetHeight === 0` **与** `getClientRects().length === 0`（两个条件都成立才算没布局盒：无布局引擎的测试环境里 offsetHeight 恒为 0，单看它会把所有节点都判成退化）。
-- 当前**两个退化项**（表现均为「切页 + 高亮页体容器」）：
-  1. `active_model_id`——锚点本身不存在：「当前」标记只出现在「编辑供应商」视图的模型列表里（列表视图无此节点）；
-  2. `approval.command_allowlist`——锚点**常驻但常为 0 高度**：其内 `<Form.Item>` 只在白名单非空时渲染，而白名单默认为空
+ - 当前**两个退化项**（表现均为「切页 + 高亮页体容器」）：
+   1. `active_model_id`——锚点本身不存在：「当前」标记只出现在「编辑供应商」视图的模型列表里（列表视图无此节点）；
+      （2026-09-19 起它**不再是进阶项**，但锚点存在性的例外仍在：见 §2.3 注）
+   2. `approval.command_allowlist`——锚点**常驻但常为 0 高度**：其内 `<Form.Item>` 只在白名单非空时渲染，而白名单默认为空
      （不退化的话：`scrollIntoView` 无效、高亮退化成 1px 线，用户观感是「搜了没反应」）。
   契约测试 `锚点覆盖` 用例逐页核对全部 40 项，**锚点存在性**的例外清单仍只允许 `active_model_id` 这一项（0 高度不属于“缺锚点”）。
 - 排错提示：**动态条目**（供应商 / 模型、MCP 服务器、技能条目）没有锚点也不该有——搜索只覆盖注册表里的设置项。
@@ -128,15 +129,16 @@ Esc 的完整优先级（window 捕获监听，见 `SettingsPage` 的 `escRef`/`
 | 不可写时 | 隐私模式 / 配额受限 → `try/catch` 静默，本次会话内仍生效 |
 | 与脏标记 | 切换折叠**不碰 draft** → **不产生未保存改动**；进阶项自身的改动仍由 `PAGE_FIELDS` 判定（语义不变） |
 
-### 2.3 进阶项清单（11 项，本批范围不变）
+### 2.3 进阶项清单（10 项；2026-09-19 `active_model_id` 退出）
 
 | 页 | 项 | 说明 |
 |---|---|---|
-| 模型与供应商 | `active_model_id` | 活跃模型「当前」标记（模型列表内） |
 | 安全与审批 | `approval.command_allowlist` | 命令白名单（整行列表） |
 | 工具与集成 | `validation.lsp.sync_window_ms` / `max_diagnostics` / `max_chars` / `idle_ttl_ms` / `max_servers` / `max_file_bytes` / `dedupe_limit` | LSP 全局预算 7 项（**整组皆为进阶项** → 整组隐藏） |
 | 工具与集成 | `validation.lsp.java_home` | JDK 21+ 路径（发现组内单项） |
 | 日志 | `log.session_verbose` | 会话详细日志 |
+
+> **`active_model_id` 退出进阶（2026-09-19 用户反馈）**：它是供应商编辑视图模型列表里的「当前」标记，而页级开关在**列表视图**对它无能为力——用户看到「显示进阶项（1）」却拨开无任何变化。现改为常态显示，模型与供应商页进阶项数降为 0（该页不再出现开关行）。裁决见 [lsp-detection-and-settings-ux.md](./lsp-detection-and-settings-ux.md)。
 
 逐页计数：`tools` 8 / `security` 1 / `providers` 1 / `logs` 1，合计 11（契约测试断言）。
 
