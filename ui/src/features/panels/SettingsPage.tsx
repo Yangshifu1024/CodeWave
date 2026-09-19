@@ -1,10 +1,13 @@
 // 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md) /
 // 8 页重划 [docs/settings-ia](../../../../docs/settings-ia.md)）：绝对定位贴在内层 Layout 上的全屏页；
 // 8 个分区按左导航三组铺开，draft/save 全量提交语义不变。
-// 本文件承担三件事：
+// 本文件承担四件事：
 //   1. 容器：左导航列（返回工作区 + 运行中指示 + 三组 8 页自建导航）+ 右内容列（操作条 + 页体）；
 //   2. 逐页脏标记（draft 与已保存配置的差集，字段归属由注册表 PAGE_FIELDS 驱动，即时生效项不打点）；
-//   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）。
+//   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）；
+//   4. 搜索与进阶折叠（批③，[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)）：
+//      搜索命中结果**替掉**左导航（两套列表不同时存在，方向键不串味），进阶项按页级开关行内过滤
+//      （只加类、零 DOM 搬迁），控件宽度统一走 .w-narrow / .w-mid / .w-wide 三档。
 // 页面 JSX 手写（不做数据驱动渲染）：注册表只提供页序、页名、分组与字段归属。
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
@@ -28,16 +31,22 @@ import { AboutSettings } from "./AboutSettings";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import {
+  ADVANCED_ITEM_IDS,
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
   PAGE_FIELDS,
   PAGE_GROUPS,
   PAGE_LABEL_KEY,
   PAGE_ORDER,
+  SETTINGS_ADVANCED_PREF_KEY,
   SETTINGS_ITEMS,
+  advancedCountByPage,
+  isAdvancedOnlyGroup,
+  matchSettings,
   normalizePageKey,
   type PageKey,
   type SettingFieldPath,
+  type SettingItem,
 } from "./settingsRegistry";
 
 const { TextArea } = Input;
@@ -49,6 +58,24 @@ const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
 const SETTINGS_NAV_W = 280;
 /** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
 const SETTINGS_NAV_RATIO = 0.32;
+
+/** 搜索命中后的临时高亮时长（毫秒）：到点自动摘掉 .settings-item-hit */
+const HIT_HIGHLIGHT_MS = 1500;
+
+/** 搜索结果列表的 DOM id（combobox 的 aria-controls 与 option 的 aria-activedescendant 都指向它） */
+const SEARCH_LISTBOX_ID = "settings-search-listbox";
+
+/** 进阶项 id 集合（注册表派生）：行内过滤只认这个集合，不手写第二份名单 */
+const ADVANCED_ID_SET = new Set(ADVANCED_ITEM_IDS);
+
+/** 读进阶折叠偏好（localStorage，默认收起；不可写 / 隐私模式下按收起处理，不报错） */
+function readShowAdvanced(): boolean {
+  try {
+    return localStorage.getItem(SETTINGS_ADVANCED_PREF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** 逐段下钻取值（字段路径受 SettingFieldPath 联合类型约束，拼写错误在编译期暴露） */
 function drill(node: unknown, path: string): unknown {
@@ -141,6 +168,23 @@ function overlayOpen(): boolean {
   return !!document.querySelector(
     ".ant-select-dropdown:not(.ant-select-dropdown-hidden), .ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden), .ant-drawer:not(.ant-drawer-hidden)",
   );
+}
+
+/**
+ * 段二定位的落点：命中项锚点缺失、或存在但**没有布局盒**（0 高度锚点）时，退化为页体容器。
+ *
+ * 0 高度锚点的典型：`approval.command_allowlist` 的锚点容器常驻，但其内 `<Form.Item>` 只在白名单
+ * 非空时才渲染（默认空）——只说「锚点存在」不够：`scrollIntoView` 与 1px 高亮双双落空，
+ * 用户观感是「搜了没反应」。退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6。
+ *
+ * 判定用 `offsetHeight` 与 `getClientRects()` 的**与**：无布局引擎的测试环境里 offsetHeight 恒为 0，
+ * 单看它会把全部节点都判成退化（真实浏览器里 0 高度节点才两个条件同时成立）。
+ */
+function hitTargetOf(root: HTMLElement, id: string): HTMLElement | null {
+  const node = root.querySelector<HTMLElement>(`[data-setting-id="${id}"]`);
+  const zeroSized = !!node && node.offsetHeight === 0 && node.getClientRects().length === 0;
+  if (node && !zeroSized) return node;
+  return root.querySelector<HTMLElement>(".settings-pane-body");
 }
 
 // MCP 条目结构化视图（文件形态 {"mcpServers":{name:cfg}} 的前端呈现）
@@ -257,6 +301,102 @@ export default function SettingsPage() {
   // LSP server 状态（lsp_status）：null = 未取到（探测失败/旧后端）→ 不显示状态徽标，面板不报错
   const [lspStatus, setLspStatus] = useState<LspServerStatus[] | null>(null);
   const [redetecting, setRedetecting] = useState(false);
+
+  // ---------- 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)） ----------
+  /** 搜索查询串。trim 后非空即「搜索态」：结果列表替掉左导航 tablist（两套列表不同时存在） */
+  const [query, setQuery] = useState("");
+  /** 结果列表高亮项下标；-1 = 无默认选中（多项命中不自动跳转、不默认选中） */
+  const [hitIdx, setHitIdx] = useState(-1);
+  /** 进阶折叠偏好（localStorage，全局单一偏好、默认收起、跨页跨会话） */
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(readShowAdvanced);
+  /** 被「搜索命中」临时展开的页：**不写** localStorage，离开该页即回手动偏好值 */
+  const [forcedAdvanced, setForcedAdvanced] = useState<PageKey | null>(null);
+  /** 待定位的命中项：跨页时先切页，等目标页体渲染后再定位 */
+  const [pendingHit, setPendingHit] = useState<SettingItem | null>(null);
+  /** 本轮要滚动 + 临时高亮的命中项（带 nonce：同一项连点两次也要重新定位） */
+  const [hitTarget, setHitTarget] = useState<{ item: SettingItem; nonce: number } | null>(null);
+  const hitSeqRef = useRef(0);
+  const hitTimerRef = useRef<number | null>(null);
+  /** 当前挂着 .settings-item-hit 的元素：1.5s 内换项时先摘旧的（旧定时器已被 clearTimeout） */
+  const hitElRef = useRef<HTMLElement | null>(null);
+
+  /** 命中结果：显示名 + keywords + 页名 + 组名、多词 AND（纯函数 matchSettings 在注册表里，单独可测） */
+  const results = useMemo(() => matchSettings(query, t), [query, t, language]);
+  /** 搜索态：trim 后非空（空串 / 仅空格 → 不渲染结果列表，恢复常规导航） */
+  const searching = query.trim() !== "";
+  /** 结果列表当前高亮项的 id：越界保护（结果集收缩时 hitIdx 可能越界，不猜） */
+  const activeHitId = results[hitIdx]?.id;
+  /** 当前页进阶项数（页级开关文案的计数；0 → 该行不渲染） */
+  const advancedCount = advancedCountByPage(tab);
+  /** 进阶项是否可见：手动偏好 ∨ 当前页被搜索临时展开 */
+  const advancedVisible = showAdvanced || forcedAdvanced === tab;
+
+  /** 行内过滤判定：该进阶项现在是否被收起（只影响类名，不挪 DOM 位置） */
+  function advHidden(id: string): boolean {
+    return !advancedVisible && ADVANCED_ID_SET.has(id);
+  }
+
+  /** 设置项锚点包裹层的类名（锚点 + 折叠类；锚点值 = 注册表 id） */
+  function anchorCls(id: string): string {
+    return `setting-anchor${advHidden(id) ? " settings-advanced-hidden" : ""}`;
+  }
+
+  /** 整组皆为进阶项时的组容器类名（收起 → 整组隐藏；组内混有非进阶项则逐行隐藏） */
+  function groupCls(page: PageKey, group: string): string | undefined {
+    return isAdvancedOnlyGroup(page, group) && !advancedVisible ? "settings-advanced-hidden" : undefined;
+  }
+
+  /**
+   * 页级进阶开关：只写 localStorage，**不碰 draft** —— 折叠切换因此不会产生未保存改动；
+   * 进阶项自身的改动照旧由 PAGE_FIELDS 判定（语义不变）。
+   */
+  function toggleAdvanced(next: boolean) {
+    setShowAdvanced(next);
+    try {
+      localStorage.setItem(SETTINGS_ADVANCED_PREF_KEY, next ? "1" : "0");
+    } catch {
+      // 隐私模式 / 配额不可写：本次会话内仍然生效（不外抛、不阻断开关）
+    }
+  }
+
+  /** 清空搜索（Esc 第一次按 / 清除按钮）：连高亮下标一并复位，避免下次搜索带着旧下标 */
+  function clearSearch() {
+    setQuery("");
+    setHitIdx(-1);
+  }
+
+  /**
+   * 命中跳转：切页走与点击导航**同一条** onTabChange（脏改动存在时同样先走三选拦截，
+   * 选「留在原地」则不跳并放弃本次定位）；命中项已在当前页时只定位，不切页、不改导航选中态。
+   */
+  function jumpToItem(item: SettingItem) {
+    setPendingHit(item);
+    if (item.page !== tab) onTabChange(item.page);
+  }
+
+  /**
+   * 搜索框键盘：↑/↓ 只动结果列表（无默认选中：-1 起 ↑/↓ 都落到第 0 项，两端停住不循环）；
+   * Enter 跳转后**焦点留在搜索框**（不主动移焦，故无需回焦）；未选中时 Enter 不动作。
+   * IME 组合中（isComposing）不拦 ↑/↓ 与 Enter；Esc 交给全局链统一处置（先清空查询）。
+   */
+  function onSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (results.length === 0) return;
+      e.preventDefault();
+      setHitIdx((prev) => {
+        const next = e.key === "ArrowDown" ? prev + 1 : prev - 1;
+        return Math.min(Math.max(next, 0), results.length - 1);
+      });
+      return;
+    }
+    if (e.key === "Enter") {
+      const hit = results[hitIdx];
+      if (!hit) return; // 无默认选中：未显式选中时 Enter 不动作
+      e.preventDefault();
+      jumpToItem(hit);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -388,6 +528,9 @@ export default function SettingsPage() {
       if (draft.proxy.url !== "" && !PROXY_URL_RE.test(draft.proxy.url)) {
         message.error(t("settings.proxyUrlInvalid"));
         setTab("network");
+        // 校验失败 = 本次离开动作没执行 → 命中的定位一并作废（同「留在原地」：
+        // 否则用户之后手动切到目标页会莫名滚动 + 高亮）
+        setPendingHit(null);
         return false;
       }
     }
@@ -408,6 +551,7 @@ export default function SettingsPage() {
     if (problems.length > 0) {
       message.error(`${t("settings.vSaveBlocked")}${problems.join(t("settings.vProblemSep"))}`);
       setTab("providers");
+      setPendingHit(null); // 同上：报错跳页不是「离开」，定位作废
       return false;
     }
     const first = draft.providers.flatMap((p) => p.models)[0];
@@ -578,6 +722,8 @@ export default function SettingsPage() {
     const intent = leaveIntent;
     if (action === "stay") {
       setLeaveIntent(null);
+      // 搜索跳转被拦截：留在原地 → 丢弃本次定位（否则以后手动切到该页会莫名高亮）
+      setPendingHit(null);
       // 「留在原地」= 取消本次离开意图（切页/返回），**并且**取消这次退出（关窗路径）。
       // 两条并存时必须都处置：用户先点了切页/返回（intent）再关窗（exitPending）时，只清 intent
       // 而不回后端应答，后端就一直等在 ExitRequested 上（只有 2s 看门狗兜底）→ 应用退不出去。
@@ -589,11 +735,13 @@ export default function SettingsPage() {
     if (action === "save") {
       const ok = await save();
       // 校验不通过：留在设置页（错误提示由 save 内部给出），不执行离开动作
+      // （本次定位已由 save() 的两条校验失败分支丢弃，这里只需清离开意图）
       if (!ok) {
         setLeaveIntent(null);
         return;
       }
     } else {
+      // 「放弃改动」**不丢**定位：跳转照常执行（与「保存并离开」同形），故目标页仍要高亮
       discardDraft();
     }
     setLeaveIntent(null);
@@ -605,16 +753,27 @@ export default function SettingsPage() {
     // 关窗路径：设置侧已处置（脏标记已清零）→ 舞台交回 AppShell 的运行中会话确认
   }
 
-  // 页内 Esc：捕获阶段注册并 preventDefault，抢在 AppShell 的全局 Esc（停止运行中会话）之前收口；
-  // 浮层（Select/Dropdown/Popconfirm）或三选弹框开着时让位给组件库，不平级返回。
-  const escRef = useRef<{ blocked: boolean; close: () => void }>({ blocked: false, close: () => {} });
+  // 页内 Esc：捕获阶段注册并 preventDefault，抢在 AppShell 的全局 Esc（停止运行中会话）之前收口。
+  // 优先级（批③ 把搜索态插在最前）：三选弹框 / 浮层 → 清空搜索查询 → 既有「返回工作区」链。
+  const escRef = useRef<{ blocked: boolean; close: () => void; clearSearch: () => void }>({
+    blocked: false, close: () => {}, clearSearch: () => {},
+  });
+  /** 查询串的同步镜像：Esc 走的是 window 捕获监听（不随 query 重挂），故用 ref 取最新值 */
+  const queryRef = useRef("");
   useEffect(() => {
-    escRef.current = { blocked: confirmOpen, close: requestClose };
+    escRef.current = { blocked: confirmOpen, close: requestClose, clearSearch };
+    queryRef.current = query;
   });
   useEffect(() => {
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing) return;
-      if (escRef.current.blocked || overlayOpen()) return;
+      if (escRef.current.blocked || overlayOpen()) return; // 浮层优先：让位给组件库，不平级返回
+      if (queryRef.current.trim() !== "") {
+        // 搜索态：Esc 第一次只清空查询（焦点留在搜索框），清空后再按才回落既有 Esc 链
+        e.preventDefault();
+        escRef.current.clearSearch();
+        return;
+      }
       e.preventDefault();
       escRef.current.close();
     };
@@ -624,9 +783,57 @@ export default function SettingsPage() {
 
   // 可达性：设置页是全屏 dialog，打开时把焦点交给导航首项（「返回工作区」）。
   // 刻意**不**引入焦点陷阱库（本批范围是容器化）：只保证键盘用户不必先穿过整个工作区。
+  // 批③ 起用专用类名 .settings-nav-back 定位，不再泛选 `.settings-nav-head button`：
+  // 「搜索框是 antd Input + allowClear，值非空时渲染一个清除 button，泛选会把焦点抢到清除键上」
+  // 是**防御性**表述——搜索框挂载时值恒为空、清除按钮不存在，该保护当前不可构造验证；
+  // 保留专用类名定位以防未来实现变化（如打开设置时恢复上次查询）。
   const shellRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    shellRef.current?.querySelector<HTMLButtonElement>(".settings-nav-head button")?.focus();
+    shellRef.current?.querySelector<HTMLButtonElement>(".settings-nav-back")?.focus();
+  }, []);
+
+  // ---------- 搜索命中定位（两段式：跨页 / 需临时展开时，目标节点当帧还不存在） ----------
+  // 段一：目标页成为当前页（切页完成、脏改动三选已放行）后，需要时先临时展开该页进阶行，
+  //       再把命中项交给段二；命中项在当前页时 tab 不变也照样命中（不切页、不改导航选中态）。
+  useEffect(() => {
+    if (!pendingHit || pendingHit.page !== tab) return;
+    if (!advancedVisible && ADVANCED_ID_SET.has(pendingHit.id)) setForcedAdvanced(tab);
+    setPendingHit(null);
+    setHitTarget({ item: pendingHit, nonce: ++hitSeqRef.current });
+  }, [pendingHit, tab, advancedVisible]);
+
+  // 段二：节点已渲染（页体 + 临时展开都就位）→ 滚动到该项并加临时高亮类，约 1.5s 后摘掉。
+  // 锚点缺失 / 0 高度锚点时退化为高亮页体容器（退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6）。
+  useEffect(() => {
+    if (!hitTarget) return;
+    const root = shellRef.current;
+    if (!root) return;
+    const el = hitTargetOf(root, hitTarget.item.id);
+    if (!el) return;
+    el.scrollIntoView?.({ block: "center" });
+    // 命令式加类：高亮不属于渲染态（1.5s 后自动摘），故不往渲染态里塞第二个状态。
+    // 先摘掉上一次的高亮：1.5s 内换项时旧定时器已被 clearTimeout，旧元素上的类再无人移除。
+    hitElRef.current?.classList.remove("settings-item-hit");
+    el.classList.add("settings-item-hit");
+    hitElRef.current = el;
+    if (hitTimerRef.current !== null) window.clearTimeout(hitTimerRef.current);
+    hitTimerRef.current = window.setTimeout(() => {
+      el.classList.remove("settings-item-hit");
+      if (hitElRef.current === el) hitElRef.current = null;
+      hitTimerRef.current = null;
+    }, HIT_HIGHLIGHT_MS);
+  }, [hitTarget]);
+
+  // 离开被临时展开的页 → 回手动偏好值（临时展开只在本页有效，且从未写过 localStorage）
+  useEffect(() => {
+    setForcedAdvanced((prev) => (prev && prev !== tab ? null : prev));
+  }, [tab]);
+
+  // 卸载时清掉高亮定时器，并摘掉仍挂着的临时高亮类（元素随组件销毁，留类只会污染测试与复挂场景）
+  useEffect(() => () => {
+    if (hitTimerRef.current !== null) window.clearTimeout(hitTimerRef.current);
+    hitElRef.current?.classList.remove("settings-item-hit");
+    hitElRef.current = null;
   }, []);
 
   /** 8 页清单：页名键与页序来自注册表，页体按当前页渲染到右列（不做数据驱动渲染） */
@@ -646,20 +853,23 @@ export default function SettingsPage() {
             {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
                 经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
             <Form.Item label={t("settings.aiLanguage")} extra={t("settings.aiLanguageHint")}>
-              <Input
-                size="small"
-                style={{ width: 240 }}
-                maxLength={40}
-                placeholder={t("composer.effortDefault")}
-                value={draft.ui.ai_language ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  patchDraft({ ui: { ...draft.ui, ai_language: v.trim() === "" ? null : v } });
-                }}
-              />
+              {/* 锚点（= 注册表 id）+ 宽度档：批③ 搜索定位与三档宽度都从这里走 */}
+              <div className="setting-anchor" data-setting-id="ui.ai_language">
+                <Input
+                  size="small"
+                  className="w-mid"
+                  maxLength={40}
+                  placeholder={t("composer.effortDefault")}
+                  value={draft.ui.ai_language ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    patchDraft({ ui: { ...draft.ui, ai_language: v.trim() === "" ? null : v } });
+                  }}
+                />
+              </div>
             </Form.Item>
           </Form>
-          <ProvidersPanel draft={draft} patchDraft={patchDraft} />
+          <ProvidersPanel draft={draft} patchDraft={patchDraft} advancedVisible={advancedVisible} />
         </>
       ),
     },
@@ -669,32 +879,35 @@ export default function SettingsPage() {
       body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.proxyMode")}>
-            {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
-            <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
-              <div className="proxy-mode-list">
-                {([
-                  ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
-                  ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
-                  ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
-                ] as const).map(([mode, title, desc]) => (
-                  <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
-                    <div className="proxy-mode-head">
-                      <Radio value={mode} />
-                      <span className="proxy-mode-title">{title}</span>
-                    </div>
-                    <div className="proxy-mode-desc">{desc}</div>
-                    {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
-                    {mode === "system" && sysProxy !== undefined && (
-                      <div className="proxy-mode-echo">
-                        {sysProxy
-                          ? t("settings.proxyDetected", { url: sysProxy })
-                          : t("settings.proxyNotDetected")}
+            {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
+            <div className="setting-anchor" data-setting-id="network.proxy">
+              {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
+              <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
+                <div className="proxy-mode-list">
+                  {([
+                    ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
+                    ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
+                    ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
+                  ] as const).map(([mode, title, desc]) => (
+                    <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
+                      <div className="proxy-mode-head">
+                        <Radio value={mode} />
+                        <span className="proxy-mode-title">{title}</span>
                       </div>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </Radio.Group>
+                      <div className="proxy-mode-desc">{desc}</div>
+                      {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
+                      {mode === "system" && sysProxy !== undefined && (
+                        <div className="proxy-mode-echo">
+                          {sysProxy
+                            ? t("settings.proxyDetected", { url: sysProxy })
+                            : t("settings.proxyNotDetected")}
+                        </div>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </Radio.Group>
+            </div>
           </Form.Item>
           {proxyMode === "manual" && (
             <Form.Item
@@ -705,7 +918,7 @@ export default function SettingsPage() {
             >
               <Input
                 size="small"
-                style={{ width: 360 }}
+                className="w-wide"
                 placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
                 value={proxyUrl}
                 onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
@@ -714,7 +927,9 @@ export default function SettingsPage() {
           )}
           {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
           <Form.Item label={t("settings.allowPrivate")}>
-            <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
+            <div className="setting-anchor" data-setting-id="network.allow_private_network">
+              <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
+            </div>
           </Form.Item>
         </Form>
       ),
@@ -725,50 +940,61 @@ export default function SettingsPage() {
       body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.approvalEnabled")}>
-            <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
+            <div className="setting-anchor" data-setting-id="approval.enabled">
+              <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
+            </div>
           </Form.Item>
           <Form.Item label={t("settings.confirmOutside")}>
-            <Switch checked={draft.approval.confirm_outside_create} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_outside_create: v } })} />
+            <div className="setting-anchor" data-setting-id="approval.confirm_outside_create">
+              <Switch checked={draft.approval.confirm_outside_create} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_outside_create: v } })} />
+            </div>
           </Form.Item>
           <Form.Item label={t("settings.confirmPush")}>
-            <Switch checked={draft.approval.confirm_git_push} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_git_push: v } })} />
+            <div className="setting-anchor" data-setting-id="approval.confirm_git_push">
+              <Switch checked={draft.approval.confirm_git_push} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_git_push: v } })} />
+            </div>
           </Form.Item>
           {/* docs/ask-ink-accent-and-composer-cover：审批等待策略——勾选后 5 分钟无应答自动确认推荐选项（allowed），不勾 = 永不超时 */}
           <Form.Item label={t("settings.autoConfirm")} extra={t("settings.autoConfirmHint")}>
-            <Switch checked={draft.approval.auto_confirm} onChange={(v) => patchDraft({ approval: { ...draft.approval, auto_confirm: v } })} />
+            <div className="setting-anchor" data-setting-id="approval.auto_confirm">
+              <Switch checked={draft.approval.auto_confirm} onChange={(v) => patchDraft({ approval: { ...draft.approval, auto_confirm: v } })} />
+            </div>
           </Form.Item>
           {/* docs/run-queue-and-ask-revamp：「始终允许本项目」命令白名单（审批时选择加入，此处管理/移除）。
-              存储条目 = cwd \u{1} 完整命令文本（cwd 跟随项目 -> 白名单不跨项目生效），展示时拆开 */}
-          {(draft.approval.command_allowlist?.length ?? 0) > 0 && (
-            <Form.Item label={t("settings.cmdAllowlist")}>
-              <div className="cmd-allowlist">
-                {draft.approval.command_allowlist.map((entry, i) => {
-                  const sep = entry.indexOf("\u0001");
-                  const cwd = sep >= 0 ? entry.slice(0, sep) : "";
-                  const cmd = sep >= 0 ? entry.slice(sep + 1) : entry;
-                  return (
-                    <div className="cmd-allowlist-row" key={`${i}-${cmd}`}>
-                      <code className="cmd-allowlist-cmd" title={cwd ? `${cmd}\n${t("settings.cmdAllowlistCwd")}: ${cwd}` : cmd}>
-                        {cmd}
-                      </code>
-                      <Button
-                        size="small"
-                        type="text"
-                        danger
-                        onClick={() =>
-                          patchDraft({
-                            approval: { ...draft.approval, command_allowlist: draft.approval.command_allowlist.filter((_, j) => j !== i) },
-                          })
-                        }
-                      >
-                        {t("sessions.delete")}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            </Form.Item>
-          )}
+              存储条目 = cwd \u{1} 完整命令文本（cwd 跟随项目 -> 白名单不跨项目生效），展示时拆开。
+              advanced 项：包一层锚点容器，收起时整块（含 Form.Item 标签）加类隐藏 —— 零 DOM 搬迁 */}
+          <div className={anchorCls("approval.command_allowlist")} data-setting-id="approval.command_allowlist">
+            {(draft.approval.command_allowlist?.length ?? 0) > 0 && (
+              <Form.Item label={t("settings.cmdAllowlist")}>
+                <div className="cmd-allowlist">
+                  {draft.approval.command_allowlist.map((entry, i) => {
+                    const sep = entry.indexOf("\u0001");
+                    const cwd = sep >= 0 ? entry.slice(0, sep) : "";
+                    const cmd = sep >= 0 ? entry.slice(sep + 1) : entry;
+                    return (
+                      <div className="cmd-allowlist-row" key={`${i}-${cmd}`}>
+                        <code className="cmd-allowlist-cmd" title={cwd ? `${cmd}\n${t("settings.cmdAllowlistCwd")}: ${cwd}` : cmd}>
+                          {cmd}
+                        </code>
+                        <Button
+                          size="small"
+                          type="text"
+                          danger
+                          onClick={() =>
+                            patchDraft({
+                              approval: { ...draft.approval, command_allowlist: draft.approval.command_allowlist.filter((_, j) => j !== i) },
+                            })
+                          }
+                        >
+                          {t("sessions.delete")}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Form.Item>
+            )}
+          </div>
         </Form>
       ),
     },
@@ -787,7 +1013,8 @@ export default function SettingsPage() {
                   const sw = langSwitchOf(lang);
                   const badge = lspBadge(lang);
                   return (
-                    <div className="validation-row" data-lang={lang} key={lang}>
+                    /* 锚点 = 注册表 id（validation.<lang>，与下一行的 JSON 行同形）；行宽由 .validation-row 网格列决定，不设宽度档 */
+                    <div className="validation-row" data-lang={lang} data-setting-id={`validation.${lang}`} key={lang}>
                       <span className="validation-label">{t(LANG_LABEL_KEY[lang])}</span>
                       <Switch size="small" checked={sw.checked} aria-label={t(LANG_LABEL_KEY[lang])} onChange={sw.onChange} />
                       <Input
@@ -800,7 +1027,7 @@ export default function SettingsPage() {
                     </div>
                   );
                 })}
-                <div className="validation-row" data-lang="json">
+                <div className="validation-row" data-lang="json" data-setting-id="validation.json">
                   <span className="validation-label">{t("settings.validationLangJson")}</span>
                   <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
                   <span />
@@ -813,88 +1040,105 @@ export default function SettingsPage() {
               </div>
             </Form.Item>
 
-            <Divider plain>{t("settings.lspBudget")}</Divider>
-            {/* 预算组：两列网格（类收回 app.css，不写内联 style） */}
-            <div className="lsp-budget-grid">
-              <Form.Item label={t("settings.lspSyncWindow")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={0}
-                  max={60000}
-                  step={100}
-                  value={lspCfg.sync_window_ms}
-                  onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspMaxDiagnostics")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={1}
-                  max={200}
-                  value={lspCfg.max_diagnostics}
-                  onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspMaxChars")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={200}
-                  max={100000}
-                  step={200}
-                  value={lspCfg.max_chars}
-                  onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspIdleTtl")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={0}
-                  max={86400000}
-                  step={60000}
-                  value={lspCfg.idle_ttl_ms}
-                  onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspMaxServers")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={1}
-                  max={32}
-                  value={lspCfg.max_servers}
-                  onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspMaxFileBytes")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={1024}
-                  max={104857600}
-                  step={1024}
-                  value={lspCfg.max_file_bytes}
-                  onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
-                />
-              </Form.Item>
-              <Form.Item label={t("settings.lspDedupeLimit")}>
-                <InputNumber
-                  size="small"
-                  style={{ width: 180 }}
-                  min={0}
-                  max={10}
-                  value={lspCfg.dedupe_limit}
-                  onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
-                />
-              </Form.Item>
+            {/* 预算组 7 项全是进阶项 → 收起时整组隐藏（组容器只加类，行仍留在原分组内） */}
+            <div className={groupCls("tools", "settings.lspBudget")} data-setting-group-id="settings.lspBudget">
+              <Divider plain>{t("settings.lspBudget")}</Divider>
+              {/* 预算组：两列网格（类收回 app.css，不写内联 style） */}
+              <div className="lsp-budget-grid">
+                <Form.Item label={t("settings.lspSyncWindow")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.sync_window_ms">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={0}
+                      max={60000}
+                      step={100}
+                      value={lspCfg.sync_window_ms}
+                      onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspMaxDiagnostics")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.max_diagnostics">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={1}
+                      max={200}
+                      value={lspCfg.max_diagnostics}
+                      onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspMaxChars")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.max_chars">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={200}
+                      max={100000}
+                      step={200}
+                      value={lspCfg.max_chars}
+                      onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspIdleTtl")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.idle_ttl_ms">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={0}
+                      max={86400000}
+                      step={60000}
+                      value={lspCfg.idle_ttl_ms}
+                      onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspMaxServers")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.max_servers">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={1}
+                      max={32}
+                      value={lspCfg.max_servers}
+                      onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspMaxFileBytes")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.max_file_bytes">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={1024}
+                      max={104857600}
+                      step={1024}
+                      value={lspCfg.max_file_bytes}
+                      onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.lspDedupeLimit")}>
+                  <div className="setting-anchor" data-setting-id="validation.lsp.dedupe_limit">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={0}
+                      max={10}
+                      value={lspCfg.dedupe_limit}
+                      onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
+                    />
+                  </div>
+                </Form.Item>
+              </div>
             </div>
 
             <Divider plain>{t("settings.lspDiscovery")}</Divider>
             <Form.Item label={t("settings.lspExtraRoots")} extra={t("settings.lspExtraRootsHint")}>
-              <div className="lsp-roots">
+              <div className="lsp-roots setting-anchor" data-setting-id="validation.lsp.extra_roots">
                 {lspCfg.extra_roots.map((root, i) => (
                   <div className="lsp-root-row" key={i}>
                     <Input
@@ -922,15 +1166,18 @@ export default function SettingsPage() {
                 </div>
               </div>
             </Form.Item>
-            <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
-              <Input
-                size="small"
-                style={{ width: 360 }}
-                value={lspCfg.java_home}
-                placeholder={t("settings.lspCommandPh")}
-                onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
-              />
-            </Form.Item>
+            {/* 锚点挂在既有容器上：搜索定位落点是整行输入（不设宽度档） */}
+            <div className={anchorCls("validation.lsp.java_home")} data-setting-id="validation.lsp.java_home">
+              <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
+                <Input
+                  size="small"
+                  className="w-wide"
+                  value={lspCfg.java_home}
+                  placeholder={t("settings.lspCommandPh")}
+                  onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
+                />
+              </Form.Item>
+            </div>
             <Form.Item style={{ marginBottom: 0 }}>
               <Button size="small" loading={redetecting} onClick={() => void redetect()}>
                 {t("settings.lspRedetect")}
@@ -942,7 +1189,7 @@ export default function SettingsPage() {
           <Divider>{t("settings.mcp")}</Divider>
           {mcpEntries === null ? (
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
-            <div className="mcp-pane">
+            <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               <div className="hint">{t("settings.mcpRawHint")}</div>
               <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => setMcpRaw(e.target.value)} />
               <div>
@@ -950,21 +1197,21 @@ export default function SettingsPage() {
               </div>
             </div>
           ) : (
-            <div className="mcp-pane">
+            <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               <div className="hint">{t("settings.mcpHint")}</div>
               {mcpEntries.map((e, idx) => (
                 <div className="mcp-entry" key={idx}>
                   <div className="mcp-entry-head">
                     <Input
                       size="small"
-                      style={{ width: 160 }}
+                      className="w-narrow"
                       value={e.name}
                       placeholder={t("settings.mcpName")}
                       onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
                     />
                     <Select
                       size="small"
-                      style={{ width: 170 }}
+                      className="w-narrow"
                       value={e.transport}
                       options={[
                         { label: t("settings.mcpTransportStdio"), value: "stdio" },
@@ -1025,7 +1272,8 @@ export default function SettingsPage() {
           )}
 
           <Divider>{t("settings.skills")}</Divider>
-          <div>
+          {/* 锚点落在既有容器上：技能列表是整行行（名条 / 来源 / 开关 / 删除） */}
+          <div className="setting-anchor" data-setting-id="disabled_skills">
             <div className="skills-toolbar">
               <div className="hint">{t("settings.skillsHint")}</div>
               <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
@@ -1083,10 +1331,12 @@ export default function SettingsPage() {
       body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.shell")} tooltip={t("settings.shellHint")}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
+            {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
+            <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
               <Select
                 size="small"
-                style={{ width: 260, flexShrink: 0 }}
+                className="w-mid"
+                style={{ flexShrink: 0 }}
                 value={draft.shell?.selection ?? "auto"}
                 onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
                 options={[
@@ -1145,34 +1395,42 @@ export default function SettingsPage() {
             )}
           </Form.Item>
           <Form.Item label={t("settings.customPrompt")}>
-            <TextArea
-              rows={4}
-              value={draft.custom_prompt ?? ""}
-              // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
-              onChange={(e) => {
-                const v = e.target.value;
-                patchDraft({ custom_prompt: v.trim() === "" ? null : v });
-              }}
-            />
+            {/* TextArea 整行（不参与宽度三档），只补锚点 */}
+            <div className="setting-anchor" data-setting-id="custom_prompt">
+              <TextArea
+                rows={4}
+                value={draft.custom_prompt ?? ""}
+                // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
+                onChange={(e) => {
+                  const v = e.target.value;
+                  patchDraft({ custom_prompt: v.trim() === "" ? null : v });
+                }}
+              />
+            </div>
           </Form.Item>
           <Form.Item label={t("settings.compactThreshold")}>
-            <Slider
-              style={{ width: 320 }}
-              min={0.1}
-              max={0.9}
-              step={0.05}
-              value={draft.compact_threshold ?? 0.6}
-              onChange={(v) => patchDraft({ compact_threshold: v })}
-            />
+            {/* Slider 是整行控件（不参与宽度三档）：批③ 去掉内联 320 像素宽，宽度随容器 */}
+            <div className="setting-anchor" data-setting-id="compact_threshold">
+              <Slider
+                min={0.1}
+                max={0.9}
+                step={0.05}
+                value={draft.compact_threshold ?? 0.6}
+                onChange={(v) => patchDraft({ compact_threshold: v })}
+              />
+            </div>
           </Form.Item>
           <Form.Item label={t("settings.compactTimeout")}>
-            <InputNumber
-              min={30}
-              max={3600}
-              step={30}
-              value={draft.compact_timeout_seconds ?? 180}
-              onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
-            />
+            <div className="setting-anchor" data-setting-id="compact_timeout_seconds">
+              <InputNumber
+                className="w-narrow"
+                min={30}
+                max={3600}
+                step={30}
+                value={draft.compact_timeout_seconds ?? 180}
+                onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
+              />
+            </div>
           </Form.Item>
         </Form>
       ),
@@ -1183,21 +1441,28 @@ export default function SettingsPage() {
       body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.logLevel")} tooltip={t("settings.logLevelHint")}>
-            <Select
-              size="small"
-              style={{ width: 160 }}
-              value={draft.log?.level ?? "info"}
-              onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
-              options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
-            />
+            <div className="setting-anchor" data-setting-id="log.level">
+              <Select
+                size="small"
+                className="w-narrow"
+                value={draft.log?.level ?? "info"}
+                onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
+                options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
+              />
+            </div>
           </Form.Item>
-          <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
-            <Switch
-              size="small"
-              checked={draft.log?.session_verbose ?? false}
-              onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
-            />
-          </Form.Item>
+          {/* session_verbose 是进阶项：**整个 Form.Item** 包进锚点容器再加类隐藏（行留在原分组内）。
+              不能在 Form.Item 内部加类：antd 的 label 与 control 是兄弟节点，只藏 control 会留下
+              孤立标签 + 空控制行（与 approval.command_allowlist / validation.lsp.java_home 同形） */}
+          <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
+            <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
+              <Switch
+                size="small"
+                checked={draft.log?.session_verbose ?? false}
+                onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
+              />
+            </Form.Item>
+          </div>
         </Form>
       ),
     },
@@ -1246,9 +1511,13 @@ export default function SettingsPage() {
           且其 pane 机制与本页「页体渲染在右列」的布局要求相冲。 */}
       <nav className="settings-nav" style={{ width: navWidth }}>
         <div className="settings-nav-head">
+          {/* 专用类名 .settings-nav-back：打开设置时的初始焦点靠它定位，不泛选 button——
+              搜索框（antd Input + allowClear）值非空时会渲染一个清除 button，泛选会把焦点抢过去。
+              防御性写法：搜索框挂载时值恒为空、清除按钮不存在，故该保护当前不可构造验证 */}
           <Button
             type="text"
             size="small"
+            className="settings-nav-back"
             icon={<ArrowLeftOutlined />}
             aria-label={t("settings.backToWorkspace")}
             onClick={requestClose}
@@ -1262,33 +1531,93 @@ export default function SettingsPage() {
               <span>{t("settings.runningCount", { n: runningCount })}</span>
             </button>
           )}
+          {/* 搜索框：放在「返回工作区」**下方**、整行（.settings-search 靠 flex-basis:100%
+              在 .settings-nav-head 里独占一行，不与运行中指示挤同一行） */}
+          <div className="settings-search">
+            {/* combobox 语义挂在**输入框**上（aria-activedescendant 只有焦点元素会播报，挂无焦点的
+                listbox 上读屏不念）；结果列表只在搜索态存在，故 aria-expanded 直接跟 searching 走 */}
+            <Input
+              size="small"
+              allowClear
+              role="combobox"
+              aria-label={t("settings.searchPlaceholder")}
+              aria-expanded={searching}
+              aria-controls={searching ? SEARCH_LISTBOX_ID : undefined}
+              aria-activedescendant={activeHitId ? `settings-search-opt-${activeHitId}` : undefined}
+              placeholder={t("settings.searchPlaceholder")}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setHitIdx(-1); // 查询一变就清掉高亮：不默认选中、不自动跳转
+              }}
+              onKeyDown={onSearchKeyDown}
+            />
+          </div>
         </div>
-        <div className="settings-nav-list" role="tablist" aria-orientation="vertical" onKeyDown={onNavArrow}>
-          {PAGE_GROUPS.map((group) => (
-            <Fragment key={group.titleKey}>
-              {/* 组标题不是 tab：标 presentation，避免 tablist 的直接子节点混入非 tab 语义 */}
-              <div className="settings-nav-group" role="presentation">{t(group.titleKey)}</div>
-              {group.pages.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  id={`settings-tab-${key}`}
-                  aria-selected={key === tab}
-                  aria-controls="settings-panel"
-                  data-page={key}
-                  className={`settings-nav-item${key === tab ? " settings-nav-item-active" : ""}`}
-                  onClick={() => onTabChange(key)}
+        {/* 搜索态与导航态**互斥**：搜索时不渲染 tablist（结果行用独立类名），因此 ↑/↓ 不可能在
+            两套列表之间串味；清空查询即恢复常规导航（结果里无默认选中项） */}
+        {searching ? (
+          <div
+            id={SEARCH_LISTBOX_ID}
+            className="settings-search-results"
+            role="listbox"
+            aria-label={t("settings.searchResults")}
+            /* 列表不是焦点目标（tabIndex=-1）：方向键与 Enter 都由搜索框接管 */
+            tabIndex={-1}
+          >
+            {results.length === 0 ? (
+              <div className="settings-search-empty">
+                <div className="settings-search-empty-title">{t("settings.searchEmpty")}</div>
+                <div className="hint">{t("settings.searchEmptyHint")}</div>
+              </div>
+            ) : (
+              results.map((item, i) => (
+                /* 行属性用独立名 data-search-hit：data-setting-id 是页内锚点（定位用），两者不能混 */
+                <div
+                  key={item.id}
+                  id={`settings-search-opt-${item.id}`}
+                  role="option"
+                  aria-selected={i === hitIdx}
+                  data-search-hit={item.id}
+                  className={`settings-search-item${i === hitIdx ? " settings-search-item-active" : ""}`}
+                  onMouseEnter={() => setHitIdx(i)}
+                  onClick={() => jumpToItem(item)}
                 >
-                  <span className="settings-nav-label">
-                    {t(PAGE_LABEL_KEY[key])}
-                    {dirtyMap[key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
-                  </span>
-                </button>
-              ))}
-            </Fragment>
-          ))}
-        </div>
+                  <span className="settings-search-item-label">{t(item.labelKey)}</span>
+                  {/* 次标：所属页名（弱化） */}
+                  <span className="settings-search-item-page">{t(PAGE_LABEL_KEY[item.page])}</span>
+                </div>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="settings-nav-list" role="tablist" aria-orientation="vertical" onKeyDown={onNavArrow}>
+            {PAGE_GROUPS.map((group) => (
+              <Fragment key={group.titleKey}>
+                {/* 组标题不是 tab：标 presentation，避免 tablist 的直接子节点混入非 tab 语义 */}
+                <div className="settings-nav-group" role="presentation">{t(group.titleKey)}</div>
+                {group.pages.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    id={`settings-tab-${key}`}
+                    aria-selected={key === tab}
+                    aria-controls="settings-panel"
+                    data-page={key}
+                    className={`settings-nav-item${key === tab ? " settings-nav-item-active" : ""}`}
+                    onClick={() => onTabChange(key)}
+                  >
+                    <span className="settings-nav-label">
+                      {t(PAGE_LABEL_KEY[key])}
+                      {dirtyMap[key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
+                    </span>
+                  </button>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        )}
       </nav>
 
       <div className="settings-content">
@@ -1314,6 +1643,20 @@ export default function SettingsPage() {
             role="tabpanel"
             aria-labelledby={`settings-tab-${tab}`}
           >
+            {/* 页级进阶开关（该页进阶项数为 0 时不渲染）：开关反映**手动偏好**（搜索临时展开
+                不改开关状态），切换只写 localStorage、不碰 draft → 不产生未保存改动 */}
+            {advancedCount > 0 && (
+              <div className="settings-advanced-toggle">
+                <Switch
+                  size="small"
+                  checked={showAdvanced}
+                  onChange={toggleAdvanced}
+                  aria-label={t("settings.showAdvanced", { n: advancedCount })}
+                />
+                <span className="settings-advanced-label">{t("settings.showAdvanced", { n: advancedCount })}</span>
+                <span className="hint">{t("settings.advancedHint")}</span>
+              </div>
+            )}
             {activePage ? activePage.body : null}
           </div>
         </div>

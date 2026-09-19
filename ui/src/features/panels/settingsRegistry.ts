@@ -81,7 +81,9 @@ export function normalizePageKey(raw?: string | null): PageKey {
  *   或 `app.*`（只读信息与动作，如版本、检查更新）——全表唯一；
  * - `labelKey`：该项显示名键（zh-CN / en-US 双侧必须存在）；
  * - `group`：页内分组标题键（仅在有分组的页上出现：tools 的校验 / 预算 / 发现 / MCP / 技能）；
- * - `advanced`：进阶项（批③ 的「显示进阶」折叠将消费它，本批只登记不渲染）；
+ * - `advanced`：进阶项（批③ 的页级开关 + 行内过滤消费它）；
+ * - `width`：控件宽度档（窄 180 / 中 240 / 宽 360）——**不参与档位的项必须登记进
+ *   `WIDTH_EXEMPT_ITEM_IDS`**，让「每项要么标注 width、要么显式豁免」可被测试断言；
  * - `keywords`：直字符串搜索词（**不进 i18n**：中英混排的常见说法，批③ 搜索用）。
  */
 export interface SettingItem {
@@ -90,28 +92,32 @@ export interface SettingItem {
   page: PageKey;
   group?: string;
   advanced?: boolean;
+  width?: SettingWidth;
   keywords?: string[];
 }
+
+/** 控件宽度三档（窄 180 / 中 240 / 宽 360；类名见 WIDTH_CLASS，都带 max-width:100% 防窄窗横向溢出） */
+export type SettingWidth = "narrow" | "mid" | "wide";
 
 /** 全部设置项（登记制：改动设置项归属时必须同步本表与 PAGE_FIELDS） */
 export const SETTINGS_ITEMS: SettingItem[] = [
   // ---------- 界面 ----------
-  { id: "ui.theme", labelKey: "settings.theme", page: "appearance", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
+  { id: "ui.theme", labelKey: "settings.theme", page: "appearance", width: "narrow", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
   { id: "ui.font_sans", labelKey: "settings.uiFont", page: "appearance", keywords: ["font", "sans", "字体", "界面字体"] },
   { id: "ui.font_mono", labelKey: "settings.monoFont", page: "appearance", keywords: ["font", "mono", "等宽", "代码字体"] },
-  { id: "ui.language", labelKey: "settings.language", page: "appearance", keywords: ["language", "语言", "界面语言"] },
+  { id: "ui.language", labelKey: "settings.language", page: "appearance", width: "narrow", keywords: ["language", "语言", "界面语言"] },
 
   // ---------- 模型与供应商 ----------
-  { id: "providers", labelKey: "settings.providers", page: "providers", keywords: ["provider", "供应商", "模型", "api", "base url", "key"] },
-  { id: "active_model_id", labelKey: "settings.active", page: "providers", advanced: true, keywords: ["active", "当前", "活跃模型"] },
-  { id: "ui.ai_language", labelKey: "settings.aiLanguage", page: "providers", keywords: ["ai", "language", "回复语言", "ai 语言"] },
+  { id: "providers", labelKey: "settings.providers", page: "providers", keywords: ["provider", "供应商", "供应商配置", "模型", "模型配置", "api", "base url", "key"] },
+  { id: "active_model_id", labelKey: "settings.active", page: "providers", advanced: true, keywords: ["active", "当前", "活跃模型", "current model", "默认模型"] },
+  { id: "ui.ai_language", labelKey: "settings.aiLanguage", page: "providers", width: "mid", keywords: ["ai", "language", "回复语言", "ai 语言"] },
 
   // ---------- 网络与连接 ----------
-  { id: "network.proxy", labelKey: "settings.proxyMode", page: "network", keywords: ["proxy", "代理", "socks", "http"] },
+  { id: "network.proxy", labelKey: "settings.proxyMode", page: "network", width: "wide", keywords: ["proxy", "代理", "socks", "http"] },
   { id: "network.allow_private_network", labelKey: "settings.allowPrivate", page: "network", keywords: ["private", "内网", "局域网", "本地模型"] },
 
   // ---------- 安全与审批 ----------
-  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "危险命令", "弹窗"] },
+  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "危险命令", "弹窗", "审批"] },
   { id: "approval.confirm_outside_create", labelKey: "settings.confirmOutside", page: "security", keywords: ["workspace", "工作区", "新建路径"] },
   { id: "approval.confirm_git_push", labelKey: "settings.confirmPush", page: "security", keywords: ["git", "push", "确认"] },
   { id: "approval.auto_confirm", labelKey: "settings.autoConfirm", page: "security", keywords: ["auto", "自动确认", "超时", "5 分钟"] },
@@ -127,33 +133,88 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "validation.dart", labelKey: "settings.validationLangDart", page: "tools", group: "settings.validation", keywords: ["dart", "flutter", "校验"] },
   { id: "validation.json", labelKey: "settings.validationLangJson", page: "tools", group: "settings.validation", keywords: ["json", "校验"] },
   // 预算组
-  { id: "validation.lsp.sync_window_ms", labelKey: "settings.lspSyncWindow", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["sync", "诊断等待", "毫秒"] },
-  { id: "validation.lsp.max_diagnostics", labelKey: "settings.lspMaxDiagnostics", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["diagnostics", "诊断条数"] },
-  { id: "validation.lsp.max_chars", labelKey: "settings.lspMaxChars", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["chars", "诊断字符"] },
-  { id: "validation.lsp.idle_ttl_ms", labelKey: "settings.lspIdleTtl", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["idle", "回收", "闲置"] },
-  { id: "validation.lsp.max_servers", labelKey: "settings.lspMaxServers", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["server", "并发上限"] },
-  { id: "validation.lsp.max_file_bytes", labelKey: "settings.lspMaxFileBytes", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["file", "体积", "字节", "跳过"] },
-  { id: "validation.lsp.dedupe_limit", labelKey: "settings.lspDedupeLimit", page: "tools", group: "settings.lspBudget", advanced: true, keywords: ["dedupe", "重复回喂"] },
+  { id: "validation.lsp.sync_window_ms", labelKey: "settings.lspSyncWindow", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "sync", "诊断等待", "毫秒"] },
+  { id: "validation.lsp.max_diagnostics", labelKey: "settings.lspMaxDiagnostics", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "diagnostics", "诊断条数"] },
+  { id: "validation.lsp.max_chars", labelKey: "settings.lspMaxChars", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "chars", "诊断字符"] },
+  { id: "validation.lsp.idle_ttl_ms", labelKey: "settings.lspIdleTtl", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "idle", "回收", "闲置"] },
+  { id: "validation.lsp.max_servers", labelKey: "settings.lspMaxServers", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "server", "并发上限"] },
+  { id: "validation.lsp.max_file_bytes", labelKey: "settings.lspMaxFileBytes", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "file", "体积", "字节", "跳过"] },
+  { id: "validation.lsp.dedupe_limit", labelKey: "settings.lspDedupeLimit", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "dedupe", "重复回喂"] },
   // 发现组
-  { id: "validation.lsp.extra_roots", labelKey: "settings.lspExtraRoots", page: "tools", group: "settings.lspDiscovery", keywords: ["sdk", "root", "目录", "发现"] },
-  { id: "validation.lsp.java_home", labelKey: "settings.lspJavaHome", page: "tools", group: "settings.lspDiscovery", advanced: true, keywords: ["jdk", "java home", "java"] },
+  { id: "validation.lsp.extra_roots", labelKey: "settings.lspExtraRoots", page: "tools", group: "settings.lspDiscovery", keywords: ["lsp", "sdk", "root", "目录", "发现"] },
+  { id: "validation.lsp.java_home", labelKey: "settings.lspJavaHome", page: "tools", group: "settings.lspDiscovery", width: "wide", advanced: true, keywords: ["lsp", "jdk", "java home", "java"] },
   // MCP 与技能
-  { id: "mcp.servers", labelKey: "settings.mcp", page: "tools", group: "settings.mcp", keywords: ["mcp", "server", "服务器", "工具"] },
-  { id: "disabled_skills", labelKey: "settings.skills", page: "tools", group: "settings.skills", keywords: ["skill", "技能", "启用", "禁用"] },
+  { id: "mcp.servers", labelKey: "settings.mcp", page: "tools", group: "settings.mcp", width: "narrow", keywords: ["mcp", "mcp server", "mcp 服务器", "server", "服务器", "工具"] },
+  { id: "disabled_skills", labelKey: "settings.skills", page: "tools", group: "settings.skills", keywords: ["skill", "skills", "技能", "启用", "禁用", "禁用技能"] },
 
   // ---------- 工作区与智能体 ----------
-  { id: "shell.selection", labelKey: "settings.shell", page: "agent", keywords: ["shell", "bash", "powershell", "终端"] },
-  { id: "custom_prompt", labelKey: "settings.customPrompt", page: "agent", keywords: ["prompt", "提示词", "自定义"] },
-  { id: "compact_threshold", labelKey: "settings.compactThreshold", page: "agent", keywords: ["compact", "压缩", "阈值", "上下文"] },
-  { id: "compact_timeout_seconds", labelKey: "settings.compactTimeout", page: "agent", keywords: ["compact", "压缩", "超时"] },
+  { id: "shell.selection", labelKey: "settings.shell", page: "agent", width: "mid", keywords: ["shell", "bash", "powershell", "终端"] },
+  { id: "custom_prompt", labelKey: "settings.customPrompt", page: "agent", keywords: ["prompt", "system prompt", "提示词", "系统提示词", "自定义"] },
+  { id: "compact_threshold", labelKey: "settings.compactThreshold", page: "agent", keywords: ["compact", "压缩", "自动压缩", "阈值", "上下文"] },
+  { id: "compact_timeout_seconds", labelKey: "settings.compactTimeout", page: "agent", width: "narrow", keywords: ["compact", "压缩", "超时"] },
 
   // ---------- 日志 ----------
-  { id: "log.level", labelKey: "settings.logLevel", page: "logs", keywords: ["log", "日志", "级别", "debug"] },
-  { id: "log.session_verbose", labelKey: "settings.sessionVerbose", page: "logs", advanced: true, keywords: ["log", "日志", "详细", "排障"] },
+  { id: "log.level", labelKey: "settings.logLevel", page: "logs", width: "narrow", keywords: ["log", "日志", "级别", "debug"] },
+  { id: "log.session_verbose", labelKey: "settings.sessionVerbose", page: "logs", advanced: true, keywords: ["log", "verbose", "日志", "详细", "排障"] },
 
   // ---------- 关于 ----------
-  { id: "ui.auto_update", labelKey: "settings.updates", page: "about", keywords: ["update", "更新", "自动检查"] },
+  { id: "ui.auto_update", labelKey: "settings.updates", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
   { id: "app.check_updates", labelKey: "settings.checkForUpdates", page: "about", keywords: ["update", "更新", "检查更新"] },
+];
+
+/**
+ * 控件宽度三档的类名（定义于 `ui/src/theme/app.css`；三档都带 `max-width:100%`——窄窗下
+ * 宽档被 max-width 兜住，不横向溢出）。页体内**不得**再写像素内联 `width`，改挂这三个类。
+ */
+export const WIDTH_CLASS: Record<SettingWidth, string> = {
+  narrow: "w-narrow",
+  mid: "w-mid",
+  wide: "w-wide",
+};
+
+/** 三档档位清单（契约测试遍历用） */
+export const WIDTH_TIERS: SettingWidth[] = ["narrow", "mid", "wide"];
+
+/**
+ * 宽度档豁免清单：这些设置项**不参与**三档，故不标 `width`。契约测试双向断言：
+ * ① 每项要么有合法 `width`、要么在本清单内；② 清单与「已标注 width 的项」不得重叠
+ * （重叠 = 清单在掩盖过时登记）。扩容必须写清「为什么它没有宽度档」。
+ * 分类：整行 / 多行文本、整行开关、Slider、行内网格控件、整行列表与复合容器 / 动作项。
+ */
+export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
+  // —— 整行 / 多行文本：内容长度不可预知，占满整行（宽度由容器决定） ——
+  "ui.font_sans", // 界面字体名（可含多个 family，逗号分隔）+ 行内「恢复默认」按钮
+  "ui.font_mono", // 等宽字体名，同上
+  "custom_prompt", // TextArea：多行自定义提示词
+  "validation.lsp.extra_roots", // 动态 SDK 根目录行：整行 Input + 行尾删除按钮（.lsp-root-row）
+
+  // —— 整行开关：Switch 无宽度档，行宽即容器宽 ——
+  "network.allow_private_network", // Switch
+  "approval.enabled", // Switch
+  "approval.confirm_outside_create", // Switch
+  "approval.confirm_git_push", // Switch
+  "approval.auto_confirm", // Switch
+  "log.session_verbose", // Switch
+  "ui.auto_update", // Switch（关于页更新行内的内联开关）
+
+  // —— Slider：整行滑动条，宽度随容器（无内联宽度） ——
+  "compact_threshold", // Slider：自动压缩阈值
+
+  // —— 行内网格控件：宽度由 .validation-row / .lsp-budget-grid 的网格列决定，不另设档 ——
+  "validation.typescript", // .validation-row 内的开关 + 命令覆盖输入
+  "validation.rust",
+  "validation.python",
+  "validation.go",
+  "validation.java",
+  "validation.dart",
+  "validation.json", // 只有开关（内置解析，无命令覆盖）
+
+  // —— 整行列表 / 复合容器 / 动作与只读标记 ——
+  "approval.command_allowlist", // 整行命令列表（每行一条 + 删除按钮）
+  "disabled_skills", // 整行技能行（名称 / 来源 / 开关 / 删除）
+  "providers", // 供应商列表/新增/编辑三视图复合容器：宽度由 maxWidth 420/560/640 定（本批明确非目标）
+  "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
+  "app.check_updates", // 动作按钮（检查更新），宽度随文案
 ];
 
 /** MCP 的字段路径（不在 config 内：独立 mcp.json，脏判定走组件内的文本基线 + 折叠比较） */
@@ -293,6 +354,14 @@ export const SHELL_SETTING_KEYS: string[] = [
   "leaveDiscard", // 三选：放弃改动
   "leaveStay", // 三选：留在原地
 
+  // —— 搜索与进阶折叠的页壳文案（非可配置项；项由 SETTINGS_ITEMS 提供、开关状态存 localStorage） ——
+  "searchPlaceholder", // 搜索框占位符
+  "searchResults", // 结果列表的 aria-label（role=listbox）
+  "searchEmpty", // 无命中空态
+  "searchEmptyHint", // 无命中引导（动态条目在各自页面内查找）
+  "showAdvanced", // 页级开关文案（含 {{n}} 计数）
+  "advancedHint", // 进阶折叠说明（偏好跨页跨会话）
+
   // —— 界面页的从属文案（项已登记：ui.theme / ui.font_sans / ui.font_mono） ——
   "themeHint", // → ui.theme 的选择说明
   "themeSystem", // → ui.theme 选项
@@ -413,3 +482,66 @@ export const SHELL_SETTING_KEYS: string[] = [
   "updatesHint", // → ui.auto_update 的说明
   "autoUpdateCheckbox", // → ui.auto_update 的开关内联标签
 ];
+
+/**
+ * 进阶项偏好（localStorage，全局单一偏好、默认收起、跨页跨会话记忆）：
+ * 存 "1" = 展开、"0" / 缺省 = 收起。页级开关只影响显示，**不参与脏标记**（PAGE_FIELDS 语义不变）。
+ */
+export const SETTINGS_ADVANCED_PREF_KEY = "ws_settings_show_advanced";
+
+/** 进阶项 id（`advanced: true` 的全部项；页级开关的计数与行内过滤都从这里派生） */
+export const ADVANCED_ITEM_IDS: string[] = SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id);
+
+/** 该页进阶项数量（页级开关文案「显示进阶项（N）」的计数；N = 0 时该行不渲染） */
+export function advancedCountByPage(page: PageKey): number {
+  return SETTINGS_ITEMS.filter((i) => i.page === page && i.advanced).length;
+}
+
+/**
+ * 该页该组是否**整组皆为进阶项**（是 → 收起时整组隐藏，而不是逐行隐藏）。
+ * 组不存在 / 页不匹配 / 组内有非进阶项 → false（逐行判断由 ADVANCED_ITEM_IDS 承担）。
+ */
+export function isAdvancedOnlyGroup(page: PageKey, group: string): boolean {
+  const items = SETTINGS_ITEMS.filter((i) => i.page === page && i.group === group);
+  return items.length > 0 && items.every((i) => i.advanced);
+}
+
+/** 项序（注册表原序）：结果排序的最后一级，保证稳定输出 */
+const ITEM_RANK = new Map<string, number>(SETTINGS_ITEMS.map((item, idx) => [item.id, idx]));
+/** 组序（注册表内首次出现顺序）：同页内组按页体渲染顺序登记，故可直接当排序键 */
+const GROUP_RANK = new Map<string, number>();
+for (const item of SETTINGS_ITEMS) {
+  if (item.group && !GROUP_RANK.has(item.group)) GROUP_RANK.set(item.group, GROUP_RANK.size);
+}
+
+/** 搜索结果的稳定排序：页序（PAGE_ORDER） → 组序 → 注册表原序 */
+function compareHits(a: SettingItem, b: SettingItem): number {
+  const byPage = PAGE_ORDER.indexOf(a.page) - PAGE_ORDER.indexOf(b.page);
+  if (byPage !== 0) return byPage;
+  const groupOf = (item: SettingItem) => (item.group ? GROUP_RANK.get(item.group)! + 1 : 0);
+  const byGroup = groupOf(a) - groupOf(b);
+  if (byGroup !== 0) return byGroup;
+  return ITEM_RANK.get(a.id)! - ITEM_RANK.get(b.id)!;
+}
+
+/**
+ * 设置项搜索：命中范围 = 该项 i18n 显示名 + `keywords`（直字符串，中英混排）+ 所属页名 + 所属组名。
+ * 规则：query 先小写归一 + trim + 按空白切分为多词，**词之间 AND**（每个词都要命中同一项的命中范围）；
+ * 不做拼音 / 首字母 / 模糊 / 权重 / 词内高亮（非目标）。
+ * 输出按「页序 → 组序 → 注册表原序」稳定排序；空串 / 仅空白返回 `[]`（调用方据此回到常规导航）。
+ */
+export function matchSettings(query: string, t: (key: string) => string): SettingItem[] {
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+  return SETTINGS_ITEMS.filter((item) => {
+    const haystack = [
+      t(item.labelKey),
+      ...(item.keywords ?? []),
+      t(PAGE_LABEL_KEY[item.page]),
+      item.group ? t(item.group) : "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  }).sort(compareHits);
+}

@@ -18,6 +18,7 @@ import zh from "../i18n/zh-CN";
 import en from "../i18n/en-US";
 import { LSP_LANGUAGES } from "../ipc/types";
 import {
+  ADVANCED_ITEM_IDS,
   DEFAULT_PAGE,
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
@@ -26,8 +27,15 @@ import {
   PAGE_GROUPS,
   PAGE_LABEL_KEY,
   PAGE_ORDER,
+  SETTINGS_ADVANCED_PREF_KEY,
   SETTINGS_ITEMS,
   SHELL_SETTING_KEYS,
+  WIDTH_CLASS,
+  WIDTH_EXEMPT_ITEM_IDS,
+  WIDTH_TIERS,
+  advancedCountByPage,
+  isAdvancedOnlyGroup,
+  matchSettings,
   normalizePageKey,
 } from "../features/panels/settingsRegistry";
 
@@ -228,5 +236,186 @@ describe("设置项注册表：页字段归属（脏标记数据源）", () => {
     // 六个 labelKey 互不相同：否则语言行的展示名会串（改错一个也不会有界面上的表现差异之外的报错）
     const labelKeys = items.map((i) => i!.labelKey);
     expect(new Set(labelKeys).size, `语言行 labelKey 有重复：${labelKeys.join("、")}`).toBe(labelKeys.length);
+  });
+});
+
+// ---------- 批③：宽度档 / 搜索 / 进阶折叠（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ----------
+
+/** 用 zh-CN 的实值模拟 i18n 的 t（键存在性由上面的用例守护，这里只取样值） */
+function zhT(key: string): string {
+  const dict = zh.settings as Record<string, unknown>;
+  return String(dict[key.replace(/^settings\./, "")] ?? key);
+}
+
+/** 用 en-US 的实值模拟 i18n 的 t（英文显示名首字母大写，是 haystack 归一的作用对象） */
+function enT(key: string): string {
+  const dict = en.settings as Record<string, unknown>;
+  return String(dict[key.replace(/^settings\./, "")] ?? key);
+}
+
+/** 读页体源码（宽度档禁用像素内联 width 的正则断言用） */
+function panelSrc(file: string): string {
+  return readFileSync(join(PANELS_DIR, file), "utf8");
+}
+
+describe("设置项注册表：宽度档与豁免（批③）", () => {
+  it("每项要么标注合法 width、要么在豁免清单内", () => {
+    const tiers = new Set<string>(WIDTH_TIERS);
+    const exempt = new Set(WIDTH_EXEMPT_ITEM_IDS);
+    const unclassified = SETTINGS_ITEMS.filter((i) => !i.width && !exempt.has(i.id)).map((i) => i.id);
+    expect(unclassified, `未标注 width 也未豁免：${unclassified.join("、")}`).toEqual([]);
+    const illegal = SETTINGS_ITEMS.filter((i) => i.width && !tiers.has(i.width)).map((i) => `${i.id}=${i.width}`);
+    expect(illegal, `width 取值非法：${illegal.join("、")}`).toEqual([]);
+  });
+
+  it("豁免清单不重叠、不悬空，且与 width 项相加恰好覆盖全表", () => {
+    const byId = new Map(SETTINGS_ITEMS.map((i) => [i.id, i]));
+    const overlap = WIDTH_EXEMPT_ITEM_IDS.filter((id) => byId.get(id)?.width);
+    expect(overlap, `既标了 width 又豁免（清单过时）：${overlap.join("、")}`).toEqual([]);
+    const stale = WIDTH_EXEMPT_ITEM_IDS.filter((id) => !byId.has(id));
+    expect(stale, `豁免清单里有未登记的 id：${stale.join("、")}`).toEqual([]);
+    expect(new Set(WIDTH_EXEMPT_ITEM_IDS).size, "豁免清单有重复项").toBe(WIDTH_EXEMPT_ITEM_IDS.length);
+    expect(SETTINGS_ITEMS.filter((i) => i.width).length + WIDTH_EXEMPT_ITEM_IDS.length).toBe(SETTINGS_ITEMS.length);
+  });
+
+  it("WIDTH_CLASS 三档齐备且类名互不相同（与 app.css 的类名同源）", () => {
+    expect(Object.keys(WIDTH_CLASS).sort()).toEqual([...WIDTH_TIERS].sort());
+    expect(WIDTH_TIERS.map((tier) => WIDTH_CLASS[tier])).toEqual(["w-narrow", "w-mid", "w-wide"]);
+  });
+});
+
+describe("宽度档：app.css 类与页体（批③）", () => {
+  const css = readFileSync(join(SRC, "theme/app.css"), "utf8");
+
+  it("app.css 定三档类，各带 max-width:100%（窄窗不横向溢出）", () => {
+    for (const [tier, px] of [
+      ["w-narrow", 180],
+      ["w-mid", 240],
+      ["w-wide", 360],
+    ] as const) {
+      const rule = css.match(new RegExp(`\\.${tier}\\s*\\{[^}]*\\}`))?.[0];
+      expect(rule, `app.css 缺 .${tier} 规则`).toBeTruthy();
+      expect(rule, `.${tier} 宽度不是 ${px}px`).toContain(`width: ${px}px`);
+      expect(rule, `.${tier} 缺 max-width:100%`).toMatch(/max-width:\s*100%/);
+    }
+  });
+
+  it("搜索框整行：导航头可换行 + .settings-search 占满一行", () => {
+    expect(css).toMatch(/\.settings-nav-head\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.settings-search\s*\{[^}]*flex:\s*1 0 100%/);
+  });
+
+  it("设置页体不再出现像素内联 width（SettingsPage / ProvidersPanel / FontSettings）", () => {
+    for (const file of ["SettingsPage.tsx", "ProvidersPanel.tsx", "FontSettings.tsx"]) {
+      const offenders = panelSrc(file).match(/\bwidth:\s*\d+/g) ?? [];
+      expect(offenders, `${file} 仍有像素内联 width：${offenders.join("、")}`).toEqual([]);
+    }
+  });
+
+  it("三档在页体里各至少用一处", () => {
+    const src = ["SettingsPage.tsx", "ProvidersPanel.tsx", "FontSettings.tsx"].map(panelSrc).join("\n");
+    for (const cls of WIDTH_TIERS.map((tier) => WIDTH_CLASS[tier])) {
+      expect(src, `${cls} 未在页体里使用`).toContain(`"${cls}"`);
+    }
+  });
+
+  it("进阶折叠的隐藏类在 app.css 里是 display:none（只加类、不搬 DOM）", () => {
+    expect(css).toMatch(/\.settings-advanced-hidden\s*\{\s*display:\s*none/);
+  });
+});
+
+describe("设置项注册表：搜索 matchSettings（批③）", () => {
+  const ids = (q: string) => matchSettings(q, zhT).map((i) => i.id);
+
+  it("空串 / 仅空白返回空数组（调用方据此回到常规导航）", () => {
+    expect(matchSettings("", zhT)).toEqual([]);
+    expect(matchSettings("   ", zhT)).toEqual([]);
+    expect(matchSettings("\t \n", zhT)).toEqual([]);
+  });
+
+  it("中文显示名 / 中文关键词 / 英文关键词 / 大小写都命中", () => {
+    expect(ids("代理模式")).toContain("network.proxy"); // 显示名
+    expect(ids("代理")).toContain("network.proxy"); // 中文关键词
+    expect(ids("proxy")).toContain("network.proxy"); // 英文关键词
+    expect(ids("PROXY")).toContain("network.proxy"); // 小写归一
+    expect(ids("lsp")).toContain("validation.lsp.max_chars"); // 关键词补的 lsp
+    expect(ids("日志")).toContain("log.level");
+    expect(ids("主题")).toContain("ui.theme");
+  });
+
+  it("页名与组名参与命中", () => {
+    const budget = ids("全局预算");
+    expect(budget.length).toBe(7); // 预算组 7 项全命中
+    expect(budget).toEqual([
+      "validation.lsp.sync_window_ms",
+      "validation.lsp.max_diagnostics",
+      "validation.lsp.max_chars",
+      "validation.lsp.idle_ttl_ms",
+      "validation.lsp.max_servers",
+      "validation.lsp.max_file_bytes",
+      "validation.lsp.dedupe_limit",
+    ]);
+    // 页名命中整页（工具与集成页含 MCP / 技能）
+    expect(ids("工具与集成")).toContain("mcp.servers");
+    expect(ids("工具与集成")).toContain("disabled_skills");
+  });
+
+  it("多词 AND：每个词都要命中同一项（词序无关）", () => {
+    expect(ids("诊断 毫秒")).toEqual(["validation.lsp.sync_window_ms"]);
+    expect(ids("毫秒 诊断")).toEqual(["validation.lsp.sync_window_ms"]);
+    expect(ids("诊断 zzz")).toEqual([]);
+    expect(ids("proxy 代理")).toContain("network.proxy");
+  });
+
+  it("haystack 大小写归一：小写 query 命中「首字母大写 / 全大写缩写」的英文显示名（keywords 里没这个写法）", () => {
+    // en 显示名 "Server idle TTL (ms)"：query 用小写缩写 ttl。该词的**大写形式**只存在于显示名里
+    // （keywords 只有 lsp/idle/回收/闲置，页面与组名也没有）——删掉 haystack 的 .toLowerCase() 后
+    // haystack 里只剩 "TTL"，本用例必红（keywords 全小写只能偶然盖住其它项，盖不住这一项）。
+    expect(matchSettings("ttl", enT).map((i) => i.id)).toContain("validation.lsp.idle_ttl_ms");
+    // 同形第二例：句首大写的 "Confirm writes creating paths outside workspace"
+    expect(matchSettings("confirm", enT).map((i) => i.id)).toContain("approval.confirm_outside_create");
+  });
+
+  it("结果稳定排序：页序 → 组序 → 注册表原序", () => {
+    // 页序在前：同一次查询里 appearance 的命中排在 tools 之前
+    const pageRanks = matchSettings("a", zhT).map((i) => PAGE_ORDER.indexOf(i.page));
+    expect([...pageRanks].sort((x, y) => x - y)).toEqual(pageRanks);
+    // 多次调用结果一致（纯函数、无隐藏状态）
+    expect(ids("lsp")).toEqual(ids("lsp"));
+    // 组序：预算组（lspBudget）在发现组（lspDiscovery）之前
+    const lspIds = ids("lsp");
+    expect(lspIds.indexOf("validation.lsp.sync_window_ms")).toBeLessThan(lspIds.indexOf("validation.lsp.extra_roots"));
+  });
+});
+
+describe("设置项注册表：进阶项派生（批③）", () => {
+  it("进阶项共 11 项（范围本批不变），与注册表 advanced 标记同源", () => {
+    expect(ADVANCED_ITEM_IDS.length).toBe(11);
+    expect(new Set(ADVANCED_ITEM_IDS).size).toBe(ADVANCED_ITEM_IDS.length);
+    expect(new Set(ADVANCED_ITEM_IDS)).toEqual(new Set(SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id)));
+  });
+
+  it("advancedCountByPage 逐页统计，拾起来恰好 11", () => {
+    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(11);
+    expect(advancedCountByPage("tools")).toBe(8); // LSP 预算 7 + JDK 路径
+    expect(advancedCountByPage("security")).toBe(1); // 命令白名单
+    expect(advancedCountByPage("providers")).toBe(1); // 活跃模型
+    expect(advancedCountByPage("logs")).toBe(1); // 会话详细日志
+    expect(advancedCountByPage("appearance")).toBe(0);
+    expect(advancedCountByPage("network")).toBe(0);
+    expect(advancedCountByPage("about")).toBe(0);
+  });
+
+  it("整组皆为进阶项：只有 LSP 预算组（发现组含非进阶的额外 SDK 根目录）", () => {
+    expect(isAdvancedOnlyGroup("tools", "settings.lspBudget")).toBe(true);
+    expect(isAdvancedOnlyGroup("tools", "settings.validation")).toBe(false);
+    expect(isAdvancedOnlyGroup("tools", "settings.lspDiscovery")).toBe(false);
+    expect(isAdvancedOnlyGroup("tools", "settings.mcp")).toBe(false);
+    expect(isAdvancedOnlyGroup("tools", "settings.skills")).toBe(false);
+    expect(isAdvancedOnlyGroup("tools", "settings.nope")).toBe(false);
+  });
+
+  it("折叠偏好键固定为 ws_settings_show_advanced（全局单一偏好，不得静默改名）", () => {
+    expect(SETTINGS_ADVANCED_PREF_KEY).toBe("ws_settings_show_advanced");
   });
 });

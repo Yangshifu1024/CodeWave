@@ -116,13 +116,15 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 
 beforeAll(() => {
   Element.prototype.scrollTo = (Element.prototype as any).scrollTo ?? (() => {});
+  // 批③ 搜索命中定位会调 scrollIntoView：happy-dom 可能没有 → 垫桩（避免用例因环境差异变红）
+  (Element.prototype as any).scrollIntoView = (Element.prototype as any).scrollIntoView ?? (() => {});
 });
 
 import App from "../App";
 import { useUi } from "../stores/ui";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
-import { PAGE_GROUPS, PAGE_ORDER, type PageKey } from "../features/panels/settingsRegistry";
+import { PAGE_GROUPS, PAGE_ORDER, SETTINGS_ITEMS, type PageKey } from "../features/panels/settingsRegistry";
 
 /** 当前 IPC mock（用例覆盖实现后再复位） */
 async function invokeMock() {
@@ -426,9 +428,11 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     expect(page.getAttribute("role")).toBe("dialog");
     expect(page.getAttribute("aria-modal")).toBe("true");
     // 不引入焦点陷阱库：只保证打开时焦点不在工作区（工作区已 aria-hidden）
-    expect(document.activeElement).toBe(
-      document.querySelector('[data-testid="settings-page"] .settings-nav-head button'),
-    );
+    // 批③：焦点定位改用专用类名 .settings-nav-back（**防御性**写法：搜索框挂载时值恒为空、
+    // allowClear 的清除按钮不存在，故「泛选会把焦点抢到清除键上」当前不可构造验证）
+    const back = document.querySelector('[data-testid="settings-page"] .settings-nav-back') as HTMLButtonElement;
+    expect(back).toBeTruthy();
+    expect(document.activeElement).toBe(back);
   });
 
   it("运行中指示：两个会话同时运行显示 2", async () => {
@@ -696,7 +700,7 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
 
     // ③ 安全与审批：危险命令确认开关（config.approval.enabled）
     clickNavTab("安全与审批");
-    const approvalSwitch = document.querySelectorAll('[data-testid="settings-page"] .ant-switch')[0] as HTMLElement;
+    const approvalSwitch = document.querySelectorAll('[data-testid="settings-page"] .ant-form-item .ant-switch')[0] as HTMLElement;
     fireEvent.click(approvalSwitch);
     await waitFor(() => expect(navDot("security")).toBe(true));
     expect(navDotCount()).toBe(1);
@@ -724,7 +728,7 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
 
     // ⑥ 日志：会话详细日志开关（config.log.session_verbose）
     clickNavTab("日志");
-    const verboseSwitch = document.querySelectorAll('[data-testid="settings-page"] .ant-switch')[0] as HTMLElement;
+    const verboseSwitch = document.querySelectorAll('[data-testid="settings-page"] .ant-form-item .ant-switch')[0] as HTMLElement;
     fireEvent.click(verboseSwitch);
     await waitFor(() => expect(navDot("logs")).toBe(true));
     expect(navDotCount()).toBe(1);
@@ -954,8 +958,9 @@ describe("设置页：可保存字段的脏点往返（PAGE_FIELDS 逐字段守�
   it("安全与审批：4 个开关各自「改→亮、改回→灭」", async () => {
     await mountWithSession();
     await openPage("安全与审批");
-    // 白名单为空时不渲染白名单区块 → 本页恰好 4 个开关
-    const switches = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .ant-switch'));
+    // 白名单为空时不渲染白名单区块 → 本页恰好 4 个可保存开关
+    // （页体顶部还有页级「显示进阶项」开关（批③），它不在 Form.Item 内，故用 .ant-form-item 收窄）
+    const switches = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .ant-form-item .ant-switch'));
     expect(switches().length).toBe(4);
     for (const i of [0, 1, 2, 3]) {
       await roundTrip("security", () => fireEvent.click(switches()[i]), () => fireEvent.click(switches()[i]));
@@ -1065,5 +1070,452 @@ describe("设置页：可保存字段的脏点往返（PAGE_FIELDS 逐字段守�
       () => fireEvent.change(jdk(), { target: { value: "C:/jdk-21" } }),
       () => fireEvent.change(jdk(), { target: { value: "" } }),
     );
+  });
+});
+
+describe("设置页：搜索与进阶折叠（批③）", () => {
+  /** 设置选项的锚点包裹层（data-setting-id = 注册表 id） */
+  function anchor(id: string): HTMLElement | null {
+    return document.querySelector<HTMLElement>(`[data-testid="settings-page"] [data-setting-id="${id}"]`);
+  }
+
+  /** 导航头部整行的搜索框 */
+  function searchBox(): HTMLInputElement {
+    const el = document.querySelector<HTMLInputElement>('[data-testid="settings-page"] .settings-search input');
+    if (!el) throw new Error("搜索框缺失");
+    return el;
+  }
+
+  /** 输入查询串并等结果列表就位（空串 / 仅空格不进入搜索态） */
+  async function search(q: string) {
+    fireEvent.change(searchBox(), { target: { value: q } });
+    await waitFor(() => expect(!!document.querySelector(".settings-search-results")).toBe(q.trim() !== ""));
+  }
+
+  /** 结果行（独立类名 .settings-search-item：与 .settings-nav-item 分离） */
+  function resultRows(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .settings-search-item'));
+  }
+
+  /** 按显示名找结果行 */
+  function resultRow(label: string): HTMLElement {
+    const row = resultRows().find((r) => (r.textContent ?? "").includes(label));
+    if (!row) throw new Error(`结果行缺失：${label}`);
+    return row;
+  }
+
+  /** 页级进阶开关（该页进阶项数为 0 时不渲染） */
+  function advancedToggle(): HTMLElement {
+    return document.querySelector(
+      '[data-testid="settings-page"] .settings-advanced-toggle .ant-switch',
+    ) as HTMLElement;
+  }
+
+  /** 播放 Esc（window 捕获链：先清空查询，清空后才回落「返回工作区」） */
+  function pressEsc() {
+    fireEvent.keyDown(window, { key: "Escape" });
+  }
+
+  it("搜索框整行位于「返回工作区」下方；打开设置后焦点仍在返回工作区（.settings-nav-back）", async () => {
+    await mountWithSession();
+    await openSettings();
+
+    const head = document.querySelector('[data-testid="settings-page"] .settings-nav-head') as HTMLElement;
+    const back = head.querySelector(".settings-nav-back") as HTMLElement;
+    const box = head.querySelector(".settings-search") as HTMLElement;
+    expect(back).toBeTruthy();
+    expect(box).toBeTruthy();
+    // 顺序：返回工作区 → （可选运行中指示）→ 搜索框；搜索框是最后一个子节点，整行由
+    // .settings-search 的 flex-basis:100% 保证（无布局引擎，故样式契约另在注册表测试里断言）
+    const order = Array.from(head.children);
+    expect(order.indexOf(back)).toBeLessThan(order.indexOf(box));
+    expect(head.lastElementChild).toBe(box);
+    expect(searchBox().getAttribute("placeholder")).toBe("搜索设置项…");
+    // 焦点不被搜索框抢走：搜索框挂载时值为空 → 清除 button 不存在，本断言只能验证「焦点落在返回工作区」，
+    // 「泛选 button 会被清除键抢焦点」是防御性写法（当前不可构造验证）
+    expect(document.activeElement).toBe(back);
+  });
+
+  it("搜索态替掉左导航 tablist：结果行独立类名、无默认选中、不自动跳页", async () => {
+    await mountWithSession();
+    await openSettings();
+    await search("日志");
+
+    expect(resultRows().length).toBe(2); // 日志级别 + 会话详细日志
+    // 两套列表互斥：搜索态不渲染 tablist（方向键因此不可能串味）
+    expect(document.querySelector('[data-testid="settings-page"] .settings-nav-list')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] [role="tablist"]')).toBeFalsy();
+    const listbox = document.querySelector('[data-testid="settings-page"] .settings-search-results') as HTMLElement;
+    expect(listbox.getAttribute("role")).toBe("listbox");
+    expect(listbox.querySelectorAll('[role="option"]').length).toBe(resultRows().length);
+    // 无默认选中：所有 option 的 aria-selected 都是 false
+    expect(resultRows().every((r) => r.getAttribute("aria-selected") === "false")).toBe(true);
+    expect(document.querySelectorAll('[data-testid="settings-page"] .settings-search-item-active').length).toBe(0);
+    // 不自动跳页
+    expect(useUi.getState().settingsTab).toBe("appearance");
+    // 结果行 = 显示名 + 所属页名（次标）
+    const row = resultRow("日志级别");
+    expect(row.querySelector(".settings-search-item-label")?.textContent).toBe("日志级别");
+    expect(row.querySelector(".settings-search-item-page")?.textContent).toBe("日志");
+  });
+
+  it("↑/↓ 只动结果列表（两端停住），未选中时 Enter 不动作，焦点始终留在搜索框", async () => {
+    await mountWithSession();
+    await openPage("日志");
+    await search("详细");
+    expect(resultRows().length).toBe(1);
+
+    const input = searchBox();
+    input.focus();
+    // 未选中（-1）时 Enter 不动作
+    fireEvent.keyDown(input, { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.querySelector(".settings-item-hit")).toBeFalsy();
+
+    // ↑ 从 -1 起停在第 0 项（不循环、不回绕）
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(resultRows()[0].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(input);
+    // 已是末项：再 ↓ 两次仍停在第 0 项
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(resultRows()[0].getAttribute("aria-selected")).toBe("true");
+    expect(resultRows().length).toBe(1);
+    expect(document.activeElement).toBe(input);
+
+    // Enter 跳转后焦点仍在搜索框
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true));
+    expect(document.activeElement).toBe(input);
+    expect(useUi.getState().settingsTab).toBe("logs");
+  });
+
+  it("跨页命中：切到目标页并给目标项打临时高亮", async () => {
+    await mountWithSession();
+    await openSettings();
+
+    await search("代理");
+    fireEvent.click(resultRow("代理模式"));
+    await waitFor(() => expect(useUi.getState().settingsTab).toBe("network"));
+    await waitFor(() => expect(anchor("network.proxy")?.classList.contains("settings-item-hit")).toBe(true));
+    // 查询串保留（可继续换结果下的另选）
+    expect(searchBox().value).toBe("代理");
+  });
+
+  it("命中当前页：只定位高亮，不切页、不改导航选中态", async () => {
+    await mountWithSession();
+    await openPage("日志");
+
+    await search("日志级别");
+    fireEvent.click(resultRows()[0]);
+    await waitFor(() => expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(true));
+    // 页没换：store 的 settingsTab 与导航选中态都停在日志页
+    expect(useUi.getState().settingsTab).toBe("logs");
+    expect(activeNavTabText()).toBe(""); // 搜索态下页体/导航 tablist 不渲染 → 此处只看 store
+    pressEsc();
+    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+  });
+
+  it("临时高亮约 1.5s 后自动摘掉（不永驻）", async () => {
+    await mountWithSession();
+    await openPage("日志");
+    await search("日志级别");
+    fireEvent.click(resultRows()[0]);
+    await waitFor(() => expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(true));
+    await waitFor(() => expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(false), {
+      timeout: 3000,
+    });
+  });
+
+  it("无命中：空态文案 + 动态条目引导（供应商/模型、MCP 服务器、技能在各自页面内查找）", async () => {
+    await mountWithSession();
+    await openSettings();
+    await search("zzzzzz");
+
+    expect(resultRows().length).toBe(0);
+    const empty = document.querySelector('[data-testid="settings-page"] .settings-search-empty') as HTMLElement;
+    expect(empty).toBeTruthy();
+    const text = empty.textContent ?? "";
+    expect(text).toContain("没有匹配的设置项");
+    expect(text).toContain("供应商 / 模型、MCP 服务器、技能等条目请在各自页面内查找");
+  });
+
+  it("Esc 第一次只清空查询（恢复导航），第二次才回落既有「返回工作区」链", async () => {
+    await mountWithSession();
+    await openSettings();
+    await search("代理");
+    expect(document.querySelector(".settings-search-results")).toBeTruthy();
+
+    pressEsc();
+    await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
+    expect(searchBox().value).toBe("");
+    expect(document.querySelector('[data-testid="settings-page"] [role="tablist"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"]')).toBeTruthy(); // 未离开设置页
+
+    pressEsc();
+    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
+    expect(cancelRunLog).toEqual([]);
+  });
+
+  it("进阶折叠：默认收起、开关拨开可见、偏好落 localStorage 且跨页跨次打开都记得", async () => {
+    await mountWithSession();
+    await openPage("日志");
+
+    // 默认收起 + 开关文案带该页计数（本页 1 项）
+    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
+    expect(document.querySelector(".settings-advanced-toggle")?.textContent ?? "").toContain("显示进阶项（1）");
+    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
+
+    fireEvent.click(advancedToggle());
+    await waitFor(() =>
+      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
+    );
+    expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1");
+    // 折叠切换不产生未保存改动
+    expect(navDotCount()).toBe(0);
+
+    // 跨页记忆
+    clickNavTab("安全与审批");
+    await waitFor(() => expect(activeNavTabText()).toBe("安全与审批"));
+    expect(anchor("approval.command_allowlist")?.classList.contains("settings-advanced-hidden")).toBe(false);
+    clickNavTab("日志");
+    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
+
+    // 跨次打开（离开设置页再进去）仍记得
+    fireEvent.click(buttonByText("返回工作区"));
+    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
+    await openSettings();
+    clickNavTab("日志");
+    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
+  });
+
+  it("命中被折叠的进阶项：临时展开该页进阶行（不写 localStorage），离开该页回到手动值", async () => {
+    await mountWithSession();
+    await openPage("日志");
+    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
+
+    await search("详细");
+    fireEvent.click(resultRows()[0]);
+    await waitFor(() =>
+      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
+    );
+    expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true);
+    // 临时展开不写偏好（开关仍反映手动值）
+    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
+    expect(
+      document.querySelector('[data-testid="settings-page"] .settings-advanced-toggle .ant-switch')?.getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("false");
+
+    // 离开该页 → 回手动值（收起）
+    pressEsc();
+    await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
+    clickNavTab("界面");
+    await waitFor(() => expect(activeNavTabText()).toBe("界面"));
+    clickNavTab("日志");
+    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
+  });
+
+  it("进阶项改动仍正常亮脏点且可保存（折叠不影响 PAGE_FIELDS 语义）", async () => {
+    await mountWithSession();
+    await openPage("日志");
+    expect(navDotCount()).toBe(0);
+
+    fireEvent.click(advancedToggle());
+    await waitFor(() => expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1"));
+    expect(navDotCount()).toBe(0); // 展开本身不是改动
+
+    fireEvent.click(anchor("log.session_verbose")?.querySelector(".ant-switch") as HTMLElement);
+    await waitFor(() => expect(navDot("logs")).toBe(true));
+    expect(navDotCount()).toBe(1);
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(navDotCount()).toBe(0));
+  });
+
+  it("搜索框 ARIA：combobox 语义与 aria-activedescendant 都挂在输入框上，listbox 只作投影", async () => {
+    await mountWithSession();
+    await openSettings();
+
+    const input = searchBox();
+    expect(input.getAttribute("role")).toBe("combobox");
+    expect(input.getAttribute("aria-label")).toBe("搜索设置项…");
+    expect(input.getAttribute("aria-expanded")).toBe("false"); // 非搜索态：无结果列表
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+
+    await search("日志");
+    const listbox = document.querySelector('[data-testid="settings-page"] .settings-search-results') as HTMLElement;
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+    // 容器不是焦点目标，也不承载 aria-activedescendant（挂在无焦点的 listbox 上读屏不会播报）
+    expect(listbox.getAttribute("role")).toBe("listbox");
+    expect(listbox.getAttribute("tabindex")).toBe("-1");
+    expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const active = resultRows().find((r) => r.getAttribute("aria-selected") === "true");
+    expect(active).toBeTruthy();
+    expect(active!.id).toContain("settings-search-opt-");
+    expect(input.getAttribute("aria-activedescendant")).toBe(active!.id);
+  });
+
+  it("同页连续命中不同项：旧高亮先被摘掉（任一时刻只有一处 .settings-item-hit）", async () => {
+    await mountWithSession();
+    await openPage("日志");
+    await search("日志");
+
+    fireEvent.click(resultRow("日志级别"));
+    await waitFor(() => expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(true));
+
+    // 1.5s 内再命中另一项：旧定时器被 clearTimeout 后，旧元素上的类只能由新一次命中去摘
+    fireEvent.click(resultRow("会话详细日志"));
+    await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true));
+    expect(document.querySelectorAll(".settings-item-hit").length).toBe(1);
+    expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(false);
+  });
+
+  it("0 高度锚点退化：命中 approval.command_allowlist（白名单为空 → 锚点无高度）时高亮页体容器", async () => {
+    await mountWithSession();
+    // 该锚点只在安全与审批页的页体里（每次只渲染当前页）→ 先上页再搜，命中项即在当前页
+    await openPage("安全与审批");
+    await search("白名单");
+
+    const anchorEl = anchor("approval.command_allowlist")!;
+    expect(anchorEl).toBeTruthy();
+    // happy-dom 无布局引擎：手工把该锚点伪装成真实浏览器里「白名单为空」时的 0 高度盒
+    Object.defineProperty(anchorEl, "offsetHeight", { value: 0, configurable: true });
+    Object.defineProperty(anchorEl, "getClientRects", { value: () => [], configurable: true });
+
+    fireEvent.click(resultRow("命令白名单"));
+    await waitFor(() =>
+      expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(true),
+    );
+    expect(anchorEl.classList.contains("settings-item-hit")).toBe(false);
+  });
+
+  it("折叠 log.session_verbose：整行（Form.Item 与 label）都在隐藏容器内，不留孤立标签与空控制行", async () => {
+    await mountWithSession();
+    await openPage("日志");
+
+    const wrapper = anchor("log.session_verbose")!;
+    const row = wrapper.querySelector(".ant-form-item") as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row.querySelector(".ant-form-item-label")?.textContent).toContain("会话详细日志");
+    // antd 的 label 与 control 是兄弟节点：包层必须在 Form.Item **外部**，收起时整行一起消失
+    expect(row.closest(".settings-advanced-hidden")).toBe(wrapper);
+    expect(wrapper.classList.contains("settings-advanced-hidden")).toBe(true);
+
+    fireEvent.click(advancedToggle());
+    await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false));
+  });
+
+  describe("命中跳转 × 三选拦截（三条离开路径的定位归属）", () => {
+    /** 网络页代理模式卡片（三张 Radio 卡片，按标题找） */
+    function proxyCard(title: string): HTMLElement {
+      const card = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .proxy-mode-card'),
+      ).find((el) => (el.querySelector(".proxy-mode-title")?.textContent ?? "") === title);
+      if (!card) throw new Error(`代理模式卡片缺失：${title}`);
+      return card;
+    }
+
+    it("① 留在原地：本次定位被丢弃（之后手动切到目标页也不高亮）", async () => {
+      await mountWithSession();
+      await openSettings();
+      makeDirty(); // 工作区与智能体页的自定义提示词 → 有未保存改动
+
+      await search("日志级别");
+      fireEvent.click(resultRow("日志级别"));
+      // 命中跳转走与点击导航同一条 onTabChange：脏改动存在 → 先走三选
+      await waitFor(() => expect(confirmPending()).toBe(true));
+      fireEvent.click(buttonByText("留在原地"));
+      await waitFor(() => expect(confirmPending()).toBe(false));
+      expect(useUi.getState().settingsTab).toBe("agent");
+
+      // 之后手动切到目标页（仍有脏改动 → 再走一次三选，这次放弃改动放行）也不该高亮
+      pressEsc();
+      await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
+      clickNavTab("日志");
+      await waitFor(() => expect(confirmPending()).toBe(true));
+      fireEvent.click(buttonByText("放弃改动"));
+      // 等页体与导航真的渲染完（只读 store 会比渲染早，会掩盖定位是否真的发生）
+      await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(document.querySelector(".settings-item-hit")).toBeFalsy();
+    });
+
+    it("② 保存成功：落盘后跳页并照常定位高亮", async () => {
+      await mountWithSession();
+      await openSettings();
+      makeDirty();
+
+      await search("日志级别");
+      fireEvent.click(resultRow("日志级别"));
+      await waitFor(() => expect(confirmPending()).toBe(true));
+      fireEvent.click(buttonByText("保存并离开"));
+
+      await waitFor(() => expect(useUi.getState().settingsTab).toBe("logs"));
+      await waitFor(() => expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(true));
+    });
+
+    it("③ 保存失败（代理地址非法）：定位被丢弃，手动切到目标页也不高亮", async () => {
+      await mountWithSession();
+      await openPage("网络与连接");
+      // 自定义代理 + 非法地址：save() 校验失败 → 报错跳回网络页、不落盘
+      fireEvent.click(proxyCard("自定义代理").querySelector(".ant-radio-input") as HTMLElement);
+      const urlInput = await waitFor(() => {
+        const el = controlByLabel("代理地址").querySelector("input") as HTMLInputElement | null;
+        expect(el).toBeTruthy();
+        return el!;
+      });
+      fireEvent.change(urlInput, { target: { value: "ftp://127.0.0.1:7890" } });
+      await waitFor(() => expect(navDot("network")).toBe(true));
+
+      await search("日志级别");
+      fireEvent.click(resultRow("日志级别"));
+      await waitFor(() => expect(confirmPending()).toBe(true));
+      fireEvent.click(buttonByText("保存并离开"));
+      // 保存被拦：留在网络页（离开动作不执行），弹框关闭
+      await waitFor(() => expect(confirmPending()).toBe(false));
+      expect(useUi.getState().settingsTab).toBe("network");
+
+      // 之后切到目标页也不该高亮：定位已随保存失败一并丢弃。
+      // 这里**直接经 store 切页**（act + useUi.setState），故意不走 onTabChange（走导航点击会再弹三选）。
+      // 已知限度（审查返工实测，未最终定位）：把 save() 保存失败分支里的 setPendingHit(null) 删掉后，
+      // 本用例**仍绿** —— 疑因保存失败后弹框关闭会再走一次「留在原地」路径（那条也清 pendingHit），
+      // 使该缺陷不可观测。即本条属「行为正确但变异不可分辨」的守卫，已写入 PR 说明。
+      pressEsc();
+      await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
+      act(() => {
+        useUi.setState({ settingsTab: "logs" });
+      });
+      await waitFor(() => expect(activeNavTabText()).toBe("日志"));
+      // 等页体渲染完 + 给两段式定位的 effect 一次机会，再断言没有高亮
+      await new Promise((r) => setTimeout(r, 100));
+      expect(document.querySelector(".settings-item-hit")).toBeFalsy();
+    });
+  });
+
+  it("锚点覆盖：每项在其所属页都有 data-setting-id（例外：只在编辑供应商视图出现的 active_model_id）", async () => {
+    await mountWithSession();
+    await openSettings();
+
+    // active_model_id 的「当前」标记只在「编辑供应商」视图的模型列表里（列表视图无此节点）→
+    // 搜索命中该项时退化为「切页 + 高亮页体容器」，已在文档登记
+    const EXCEPTIONS = ["active_model_id"];
+    const missing: string[] = [];
+    for (const page of PAGE_ORDER) {
+      fireEvent.click(navItem(page) as HTMLElement);
+      await waitFor(() => expect(useUi.getState().settingsTab).toBe(page));
+      for (const item of SETTINGS_ITEMS.filter((i) => i.page === page)) {
+        if (EXCEPTIONS.includes(item.id)) continue;
+        if (!anchor(item.id)) missing.push(`${page}/${item.id}`);
+      }
+    }
+    expect(missing, `缺锚点：${missing.join("、")}`).toEqual([]);
   });
 });
