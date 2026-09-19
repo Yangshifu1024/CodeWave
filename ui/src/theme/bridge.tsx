@@ -28,6 +28,10 @@ export default function ThemeBridge() {
     s.setProperty("--ws-text-1", token.colorText);
     s.setProperty("--ws-text-2", token.colorTextSecondary);
     s.setProperty("--ws-dim", token.colorTextTertiary);
+    // 基础字号（[docs/proxy-mode-title-invisible](../../../docs/proxy-mode-title-invisible.md)）：antd 6 给
+    // `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 空白间隙），挂在其中且未显式声明
+    // font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）。需要还原字号的容器统一取此变量。
+    s.setProperty("--ws-font-size", `${token.fontSize}px`);
     // 强调色取 colorPrimaryText（[docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)）：算法自适应的前景变体——亮色 = 近黑 primary 本身，
     // 暗色 = 提亮后的灰（colorPrimary #424242 作为文字/边框/流光在暗底上不可读）。
     // --ws-accent 的全部消费点都是前景用法（文字/图标/边框/流光/条形填充），没有任何一处拿它当背景画白字
