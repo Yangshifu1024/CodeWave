@@ -5,7 +5,6 @@
 mod agents;
 mod git;
 mod logs;
-mod lsp;
 mod mcp;
 mod openers;
 mod project;
@@ -22,7 +21,6 @@ mod workspace;
 pub use agents::*;
 pub use git::*;
 pub use logs::*;
-pub use lsp::*;
 pub use mcp::*;
 pub use openers::*;
 pub use project::*;

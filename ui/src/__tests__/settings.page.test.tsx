@@ -32,7 +32,7 @@ const fixtureConfig = {
   compact_threshold: 0.6,
   compact_timeout_seconds: 180,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false, command_allowlist: [] },
-  validation: { python: true, rust: true, typescript: true, go: true, json: true },
+  post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
   ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
   custom_prompt: null,
   disabled_skills: [],
@@ -285,7 +285,6 @@ afterEach(async () => {
   useRun.setState((s) => {
     s.tabs = {};
     s.drafts = {};
-    s.lspGuide = {};
   });
   // 会话/Tab 也是模块级单例：不清就再也回不到空态（空态引导入口是建临时会话的唯一途径）
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [] });
@@ -355,17 +354,11 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
     expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
     expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-hover\)/);
-    // 审查返工：预算组两列网格类收回 app.css（不再用内联 style 复活等价格式）
-    expect(appCss).toMatch(/\.lsp-budget-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(220px,\s*1fr\)\)/);
-    // 语言行第 2 列必须是 max-content：antd Switch 只给了 min-width（small 档 28px），
-    // 落在 auto 列里会被「Stretch auto Tracks」拉满整列——就是「开关长成一根长条」那个缺陷。
-    // 注：happy-dom 无布局引擎，只能锁样式规则文本，真实尺寸靠手动验证清单。
-    expect(appCss).toMatch(
-      /\.validation-row\s*\{[^}]*grid-template-columns:\s*150px\s+max-content\s+minmax\(200px,\s*320px\)\s+auto/,
-    );
-    expect(appCss).not.toMatch(
-      /\.validation-row\s*\{[^}]*grid-template-columns:\s*150px\s+auto\s/,
-    );
+    // 写入后检查的两列网格类收回 app.css（不再用内联 style）
+    expect(appCss).toMatch(/\.postcheck-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(180px,\s*1fr\)\)/);
+    // 已删除的 LSP 样式类不得残留
+    expect(appCss).not.toContain(".lsp-budget-grid");
+    expect(appCss).not.toContain(".validation-row");
     const pageSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../features/panels/SettingsPage.tsx"), "utf8");
     expect(pageSrc).not.toContain("gridTemplateColumns");
   });
@@ -610,19 +603,16 @@ describe("设置全屏页：逐页脏标记与深链", () => {
     await waitFor(() => expect(document.querySelector(".settings-dirty-dot")).toBeTruthy());
   });
 
-  it("脏标记空值归一：新增的空 SDK 根行不算改动，填了路径才脏", async () => {
+  it("脏标记空值归一：空命令不算改动，填了命令才脏", async () => {
     await mountWithSession();
     await openPage("工具与集成");
 
-    // 「添加目录」只补一个空行（保存时会被丢掉）→ 不该染脏
-    // （同时守住 validation 段的缺省项：draft 里的 lsp 段与后端 serde default 等价）
-    fireEvent.click(buttonByText("添加目录"));
-    await new Promise((r) => setTimeout(r, 60));
-    expect(document.querySelectorAll(".lsp-root-row").length).toBe(1);
+    // 默认命令为空（draft 里的 post_write_check 与后端 serde default 等价）→ 不该染脏
     expect(document.querySelector(".settings-dirty-dot")).toBeFalsy();
 
-    // 填了真实路径 → 脏
-    fireEvent.change(document.querySelector(".lsp-root-row input") as HTMLElement, { target: { value: "D:/Sdk" } });
+    // 填了真实命令 → 脏
+    const input = document.querySelector('[data-setting-id="post_write_check.command"] input') as HTMLElement;
+    fireEvent.change(input, { target: { value: "npx eslint {file}" } });
     await waitFor(() => expect(document.querySelector(".settings-dirty-dot")).toBeTruthy());
   });
 
@@ -1072,30 +1062,23 @@ describe("设置页：可保存字段的脏点往返（PAGE_FIELDS 逐字段守�
     await waitFor(() => expect(navDotCount()).toBe(0));
   });
 
-  it("工具与集成：六语言开关、命令覆盖、JDK 路径往返", async () => {
+  it("工具与集成：写入后检查开关与命令往返", async () => {
     await mountWithSession();
     await openPage("工具与集成");
 
-    for (const lang of ["typescript", "rust", "python", "go", "java", "dart"]) {
-      const sw = () => document.querySelector(`.validation-row[data-lang="${lang}"] .ant-switch`) as HTMLElement;
-      expect(sw(), `${lang} 行的开关缺失`).toBeTruthy();
-      await roundTrip("tools", () => fireEvent.click(sw()), () => fireEvent.click(sw()));
-    }
+    // 开关：点开 → 亮；点回 → 灭
+    const sw = () =>
+      document.querySelector('[data-setting-id="post_write_check.enabled"] .ant-switch') as HTMLElement;
+    expect(sw(), "写入后检查开关缺失").toBeTruthy();
+    await roundTrip("tools", () => fireEvent.click(sw()), () => fireEvent.click(sw()));
 
-    // 命令覆盖：python 行填 mypy → 亮；清空回默认（留空 = 自动探测）→ 灭
-    const cmd = () => document.querySelector('.validation-row[data-lang="python"] input') as HTMLInputElement;
+    // 命令：填命令 → 亮；清空回默认（空命令 = 未配置）→ 灭
+    const cmd = () =>
+      document.querySelector('[data-setting-id="post_write_check.command"] input') as HTMLInputElement;
     await roundTrip(
       "tools",
-      () => fireEvent.change(cmd(), { target: { value: "mypy" } }),
+      () => fireEvent.change(cmd(), { target: { value: "npx eslint {file}" } }),
       () => fireEvent.change(cmd(), { target: { value: "" } }),
-    );
-
-    // JDK 路径（advanced 项，但同样是可保存字段）
-    const jdk = () => controlByLabel("Java 所用 JDK 21+ 路径").querySelector("input") as HTMLInputElement;
-    await roundTrip(
-      "tools",
-      () => fireEvent.change(jdk(), { target: { value: "C:/jdk-21" } }),
-      () => fireEvent.change(jdk(), { target: { value: "" } }),
     );
   });
 });

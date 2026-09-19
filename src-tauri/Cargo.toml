@@ -7,8 +7,8 @@ repository = "https://github.com/Yangshifu1024/CodeWave"
 authors = ["Yangzhenbiao"]
 edition = "2024"
 rust-version = "1.85"
-# 多 bin 目标（主程序 + 集成测试用的假 LSP server `codewave-fake-lsp`）下，`cargo run` 靠它确定默认二进制，
-# 否则报 could not determine which binary to run；`cargo test` 不受影响，所以 CI 拦不住（2026-09-19 补登）。
+# 多 bin 目标历史上用于承载假 LSP server；LSP 机制已随 post-write-check 删除（[docs/post-write-check-plan]），
+# 现仅剩主程序，保留 default-run 以免未来新增 bin 时 `cargo run` 歧义。
 default-run = "codewave"
 
 [lib]
@@ -72,15 +72,6 @@ dom_smoothie = "0.18.0"
 tokio-cron-scheduler = "0.15.1"
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
 cron = "0.17.0"
-# Language Server Protocol 类型（docs/lsp-post-write-diagnostics）：只做 wire 类型与能力/诊断结构的
-# 序列化落点，framing 与进程管理都是自实现（分片安全见 lsp/protocol.rs）
-lsp-types = "0.97"
-
-# 假 LSP server（仅测试用：集成测试经 CARGO_BIN_EXE_codewave-fake-lsp 启动；生产构建可分发
-# 但不被任何运行期路径引用）
-[[bin]]
-name = "codewave-fake-lsp"
-path = "src/bin/codewave-fake-lsp.rs"
 
 [dev-dependencies]
 tempfile = "3"

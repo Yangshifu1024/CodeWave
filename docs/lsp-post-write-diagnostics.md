@@ -1,5 +1,9 @@
 # LSP 写后语义校验 · 实施报告
 
+> **⚠️ 已被取代（2026-09-20）**：本机制整体删除，改为「写入后检查命令」——见
+> [post-write-check-plan](./post-write-check-plan.md)。删除动因：写前干净文件永远判「未就绪」不回喂（缺陷 A），
+> 且结论只达前端 `warnings`、模型侧读不到（缺陷 B）。本文保留为历史实施报告。
+
 > 本批次把 create / edit 写后校验从**单文件外部命令**（`tools/validation.rs` 按扩展名路由）升级为**项目级常驻 LSP 语义诊断**：新增后端顶层 `src-tauri/src/lsp/`（与 `mcp/` 平级，纯 Rust 不依赖 tauri），覆盖 TypeScript/JavaScript、Rust、Python、Go、Java、Dart 六语言，JSON 继续走内置 `serde_json` 解析。
 > 同时记一笔决策推翻：本文件对应 [builtin-tools-source-comparison](./builtin-tools-source-comparison.md) §13.4 / §15 P3-1 中「LSP 成本高、故意后置」的结论——该结论已作废，见 §2。
 

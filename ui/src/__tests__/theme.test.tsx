@@ -20,7 +20,7 @@ const fixtureConfig = {
   network: { allow_private_network: false },
   compact_threshold: 0.6,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false },
-  validation: { python: true, rust: true, typescript: true, go: true, json: true },
+  post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
   ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
   custom_prompt: null,
   disabled_skills: [],

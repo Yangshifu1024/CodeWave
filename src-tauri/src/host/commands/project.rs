@@ -114,7 +114,7 @@ fn cleanup_due(
 ///
 /// 为什么单独一条命令：字体是「即改即生效」的 UI 偏好，不该拖到页级「保存」才生效；
 /// 也就不能走 `save_config`（那是整份覆盖，会把用户还没保存的其他改动一并写进去）。
-/// 与 `lsp_enable` 同一纪律：**先落盘再改内存**，且只 patch 这两个字段。
+/// 与其它「即改即生效」偏好同一纪律：**先落盘再改内存**，且只 patch 这两个字段。
 /// 值净化（引号/控制字符、折叠空白）由前端 `utils/fonts.ts` 负责，这里只做 trim。
 #[tauri::command]
 pub async fn set_font_prefs(core: Core<'_>, sans: String, mono: String) -> Result<(), String> {
@@ -224,8 +224,7 @@ pub async fn delete_project(
         let _ = core.store.remove(&sid);
         n += 1;
     }
-    // LSP：关掉该项目的全部 server 实例（项目删除会级联删会话，绝不留孤儿 server）
-    core.lsp.shutdown_project(&project_id).await;
+    // LSP 机制已随 post-write-check 删除：项目删除不再需要关闭常驻 server
     Ok(serde_json::json!({ "deleted_sessions": n }))
 }
 

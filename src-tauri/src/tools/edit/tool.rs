@@ -395,8 +395,6 @@ impl Tool for EditTool {
         let mut prepared: Vec<(PathBuf, Vec<u8>)> = Vec::new();
         let mut stale_warnings: Vec<String> = Vec::new();
         let mut fuzzy_warnings: Vec<String> = Vec::new();
-        // 逐文件的 version 令牌状态（写前基线按「戳不匹配 → 无基线」收紧，见下方）
-        let mut stale_flags: Vec<bool> = Vec::new();
         for (f, resolved) in args.files.iter().zip(&resolved) {
             let bytes = match std::fs::read(resolved) {
                 Ok(b) => b,
@@ -459,31 +457,18 @@ impl Tool for EditTool {
             } else {
                 new_text
             };
-            stale_flags.push(stale);
             prepared.push((resolved.clone(), out_text.into_bytes()));
         }
 
-        // 写前基线（[docs/lsp-post-write-diagnostics](../../../../docs/lsp-post-write-diagnostics.md)）：**先全部 baseline，再全部写入**——
-        // 同一文件的写前诊断与写后诊断必须配对，绝不能出现「旧诊断配新内容」。
-        // 内容戳不匹配（文件被外部改动、模型没重读）的文件按「无基线」处理：本轮不回喂任何诊断。
-        let vcfg = ctx.core.cfg.read().unwrap().validation.clone();
-        let mut targets: Vec<validation::WriteTarget> = Vec::new();
-        let mut baselines: Vec<Option<crate::lsp::Baseline>> = Vec::new();
-        for (f, (resolved, stale)) in args.files.iter().zip(resolved.iter().zip(&stale_flags)) {
-            let prev_content = std::fs::read(resolved)
-                .ok()
-                .map(|b| crate::tools::read::read_text_content(&b));
-            let target =
-                validation::WriteTarget::new(resolved.clone(), f.path.clone(), prev_content);
-            let base = if *stale {
-                tracing::debug!(path = %f.path, "内容戳不匹配：跳过写前基线，本轮不回喂诊断");
-                None
-            } else {
-                validation::baseline(ctx, &target, &vcfg).await
-            };
-            targets.push(target);
-            baselines.push(base);
-        }
+        // 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：目标在写入**之后**构造，
+        // 不再需要写前基线 / 差集 / 就绪判据（命令本就懂工程上下文）。
+        let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
+        let targets: Vec<validation::WriteTarget> = args
+            .files
+            .iter()
+            .zip(&resolved)
+            .map(|(f, p)| validation::WriteTarget::new(p.clone(), f.path.clone()))
+            .collect();
 
         // 备份 → 倒序写入 → 失败回滚
         let backup_dir = ctx.rt.data_dir.join("tmp").join("edit-backup");
@@ -543,20 +528,15 @@ impl Tool for EditTool {
                 }
             }
         }
-        // 写后语义校验（[docs/lsp-post-write-diagnostics](../../../../docs/lsp-post-write-diagnostics.md)）：逐文件与写前基线配对，
-        // 结果（含「未跑过」的如实告知）经 warnings 回传模型
-        let mut checks: Vec<validation::CheckedFile> = Vec::new();
-        for (target, base) in targets.iter().zip(&baselines) {
-            checks.push(validation::check(ctx, target, base.as_ref(), &vcfg).await);
-        }
-        let summary = validation::summarize(&checks, &vcfg);
+        // 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：结论进 `outcome.data.checks`
+        // （模型侧读 data；warnings 只达前端是缺陷 B 的根因）。命令含 `{file}` 时逐文件成条，
+        // 不含时整调用一条（path=null）——绝不因为批里某个文件跑过就给整批打「通过」。
+        let checks = validation::run(ctx, &settings, &targets).await;
         let mut out = ToolOutcome::ok(json!({
             "edited": args.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
             "count": written.len(),
+            "checks": checks.iter().map(|c| c.to_json()).collect::<Vec<_>>(),
         }));
-        if !summary.is_empty() {
-            out.warnings.push(summary);
-        }
         for w in stale_warnings {
             out.warnings.push(w);
         }
