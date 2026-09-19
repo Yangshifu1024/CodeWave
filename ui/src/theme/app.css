@@ -791,6 +791,52 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-nav-label { display: inline-flex; align-items: center; gap: 6px; line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
 .settings-nav-item-active .settings-nav-label { color: var(--ws-text-1); }
 
+/* ---------- 设置页批③：搜索 + 进阶折叠 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ---------- */
+/* 控件宽度三档（窄 180 / 中 240 / 宽 360）：都带 max-width:100% —— 窄窗下宽档被 max-width 兜住
+   → 变 100% 且不横向溢出。页体内**不得**再写像素内联 width（测试正则守护）。
+   注：antd 自带宽度规则（.ant-input 100%、.ant-input-number 90px）与下面的单类规则同权重，
+   而后注入的 antd 样式可能胜出 —— 故三档都补一组复合选择器抬高权重，保证在任何注入顺序下生效。 */
+.w-narrow { width: 180px; max-width: 100%; }
+.w-mid { width: 240px; max-width: 100%; }
+.w-wide { width: 360px; max-width: 100%; }
+.w-narrow.ant-input, .w-narrow.ant-input-number, .w-narrow.ant-select, .w-narrow.ant-input-affix-wrapper { width: 180px; max-width: 100%; }
+.w-mid.ant-input, .w-mid.ant-input-number, .w-mid.ant-select, .w-mid.ant-input-affix-wrapper { width: 240px; max-width: 100%; }
+.w-wide.ant-input, .w-wide.ant-input-number, .w-wide.ant-select, .w-wide.ant-input-affix-wrapper { width: 360px; max-width: 100%; }
+
+/* 搜索框：「返回工作区」下方整行（.settings-nav-head 是 flex-wrap:wrap，靠 flex-basis:100%
+   独占一行，不与运行中指示挤在一起） */
+.settings-search { flex: 1 0 100%; }
+.settings-search .ant-input-affix-wrapper { width: 100%; }
+
+/* 搜索结果列表：搜索态**替掉**左导航 tablist（两套列表不同时存在，方向键不会串味） */
+.settings-search-results { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.settings-search-item {
+  min-height: 28px; padding: 0 8px; margin: 0 0 2px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.settings-search-item:hover { background: var(--ws-hover); }
+.settings-search-item-active { background: var(--ws-hover); }
+.settings-search-item-label {
+  font-size: 12.5px; color: var(--ws-text-2);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.settings-search-item-active .settings-search-item-label { color: var(--ws-text-1); }
+/* 次标（所属页名）弱化：11px dim，不抢显示名的层次 */
+.settings-search-item-page { flex: none; font-size: 11px; color: var(--ws-dim); }
+.settings-search-empty { padding: 6px 8px; }
+.settings-search-empty .settings-search-empty-title { font-size: 12.5px; color: var(--ws-text-2); margin-bottom: 4px; }
+
+/* 页体顶部的进阶开关行（该页进阶项数 N = 0 时不渲染；切换不产生未保存改动） */
+.settings-advanced-toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 0 10px; }
+.settings-advanced-toggle .settings-advanced-label { font-size: 12.5px; color: var(--ws-text-2); }
+/* 进阶行/组收起：只加类隐藏，**零 DOM 搬迁**（行仍留在原分组内，展开后在原位重现） */
+.settings-advanced-hidden { display: none; }
+
+/* 设置项锚点包裹层（data-setting-id 挂在这里）：供搜索命中定位与临时高亮 */
+.setting-anchor { min-width: 0; }
+/* 搜索命中临时高亮（约 1.5s 后由 JS 摘掉；墨色描边 + 浅底，不用彩色 accent） */
+.settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-hover); }
+
 /* 右内容列：操作条常驻可点（窄窗换行），页体自己滚 */
 .settings-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .settings-actions {

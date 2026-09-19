@@ -125,3 +125,25 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
 
 批④ 再做同义键收敛与键重命名（如 `settings.updates` 与 `settings.autoUpdateCheckbox`、
 `settings.providers` 与页名 `settings.pageProviders` 的重叠语义）。本批只登记不改名。
+
+## 8. 批③ 追加的登记要求（宽度档与进阶标记）
+
+批③ 起「新增一项设置」的流程（§3）多出三项硬要求（细则与完整映射表见
+[settings-search-and-advanced](./settings-search-and-advanced.md)）：
+
+- **宽度档**：可调宽度的 `Input` / `Select` / `InputNumber` 在 `SETTINGS_ITEMS` 里标 `width`
+  （`narrow` 180 / `mid` 240 / `wide` 360），并在页体挂 `.w-narrow` / `.w-mid` / `.w-wide`
+  （三档都带 `max-width:100%`，窄窗不横向溢出）；整行控件（TextArea / Switch / Radio / Slider /
+  网格内控件 / 复合容器 / 动作按钮）**必须**进 `WIDTH_EXEMPT_ITEM_IDS` 并写清「为什么没有宽度档」。
+  两个清单不得重叠、相加恰好覆盖 `SETTINGS_ITEMS`（契约测试双向断言）；
+  **页体内不得再写像素内联 `width`**（容器级 `maxWidth` 不属本批范围）。
+- **进阶标记**：`advanced: true` 的项由页级「显示进阶项（N）」开关（`.settings-advanced-toggle`，
+  偏好存 localStorage `ws_settings_show_advanced`、默认收起、跨页跨会话）按行过滤——收起时只加类
+  `.settings-advanced-hidden`（`display:none`），**零 DOM 搬迁**，进阶行留在原分组内；
+  整组皆为进阶项的组整组隐藏（组容器标 `data-setting-group-id`）。折叠切换**不产生未保存改动**
+  （不碰 draft），进阶项自身的改动仍由 `PAGE_FIELDS` 判定。
+- **锚点**：每项需带 `data-setting-id="<item.id>"`（`.setting-anchor` 包裹层）供搜索命中定位；
+  唯一退化项 `active_model_id`（其标记只在「编辑供应商」视图出现）已在上述文档登记。
+
+搜索能力本身也在注册表里：`matchSettings(query, t)` 的命中范围 = 显示名 + `keywords`（直字符串、不进 i18n）
++ 页名 + 组名，多词 AND、空串返回空、按「页序 → 组序 → 注册表原序」稳定输出。

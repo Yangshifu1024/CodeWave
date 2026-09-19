@@ -92,18 +92,23 @@ export function AboutSettings() {
       <Form layout="vertical">
         <Form.Item label={t("settings.updates")} tooltip={t("settings.updatesHint")}>
           <div className="settings-update-row">
-            {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记 */}
-            <Switch
-              size="small"
-              checked={autoUpdate}
-              onChange={setAutoUpdate}
-              aria-label={t("settings.autoUpdateCheckbox")}
-            />
+            {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记。
+                两个锚点（data-setting-id）供批③ 搜索定位：两者都是整行控件，不参与宽度三档 */}
+            <div className="setting-anchor" data-setting-id="ui.auto_update">
+              <Switch
+                size="small"
+                checked={autoUpdate}
+                onChange={setAutoUpdate}
+                aria-label={t("settings.autoUpdateCheckbox")}
+              />
+            </div>
             <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
             <span className="settings-instant">{t("settings.instantApply")}</span>
-            <Button size="small" icon={<CloudDownloadOutlined />} loading={checking} onClick={() => void runUpdateCheck()}>
-              {t("settings.checkForUpdates")}
-            </Button>
+            <div className="setting-anchor" data-setting-id="app.check_updates">
+              <Button size="small" icon={<CloudDownloadOutlined />} loading={checking} onClick={() => void runUpdateCheck()}>
+                {t("settings.checkForUpdates")}
+              </Button>
+            </div>
           </div>
         </Form.Item>
       </Form>

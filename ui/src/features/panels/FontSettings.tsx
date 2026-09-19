@@ -29,36 +29,41 @@ export function AppearanceSettings({ draft, patchDraft }: {
   return (
     <Form layout="vertical">
       <Form.Item label={t("settings.theme")} extra={t("settings.themeHint")}>
-        <Select
-          size="small"
-          style={{ width: 160 }}
-          value={theme}
-          onChange={(v) => useUi.getState().setTheme(v as ThemePref)}
-          options={[
-            { label: t("settings.themeSystem"), value: "system" },
-            { label: t("settings.themeLight"), value: "light" },
-            { label: t("settings.themeDark"), value: "dark" },
-          ]}
-        />
+        {/* 锚点 + 宽度档：批③ 搜索命中定位靠 data-setting-id，控件宽度走 .w-narrow（见 app.css） */}
+        <div className="setting-anchor" data-setting-id="ui.theme">
+          <Select
+            size="small"
+            className="w-narrow"
+            value={theme}
+            onChange={(v) => useUi.getState().setTheme(v as ThemePref)}
+            options={[
+              { label: t("settings.themeSystem"), value: "system" },
+              { label: t("settings.themeLight"), value: "light" },
+              { label: t("settings.themeDark"), value: "dark" },
+            ]}
+          />
+        </div>
       </Form.Item>
       <FontSettings />
       {draft && patchDraft && (
         <Form.Item label={t("settings.language")}>
           {/* 即时生效：改完立即写 useUi.setLanguage（并镜像进 draft.ui.language），
               因此不进脏标记（也就不会亮脏点） */}
-          <Select
-            size="small"
-            style={{ width: 160 }}
-            value={draft.ui.language}
-            onChange={(v) => {
-              patchDraft({ ui: { ...draft.ui, language: v } });
-              useUi.getState().setLanguage(v as "zh-CN" | "en-US");
-            }}
-            options={[
-              { label: "中文", value: "zh-CN" },
-              { label: "English", value: "en-US" },
-            ]}
-          />
+          <div className="setting-anchor" data-setting-id="ui.language">
+            <Select
+              size="small"
+              className="w-narrow"
+              value={draft.ui.language}
+              onChange={(v) => {
+                patchDraft({ ui: { ...draft.ui, language: v } });
+                useUi.getState().setLanguage(v as "zh-CN" | "en-US");
+              }}
+              options={[
+                { label: "中文", value: "zh-CN" },
+                { label: "English", value: "en-US" },
+              ]}
+            />
+          </div>
           <span className="settings-instant">{t("settings.instantApply")}</span>
         </Form.Item>
       )}
@@ -67,10 +72,12 @@ export function AppearanceSettings({ draft, patchDraft }: {
 }
 
 /** 单个字体槽输入项：Enter/失焦提交、值有变化才落盘，附一键恢复默认按钮。 */
-function FontField({ slot, label, hint, onApplied }: {
+function FontField({ slot, label, hint, settingId, onApplied }: {
   slot: FontSlot;
   label: string;
   hint: string;
+  /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
+  settingId: string;
   /** 提交生效后的回调（父组件刷新预览） */
   onApplied: () => void;
 }) {
@@ -88,21 +95,24 @@ function FontField({ slot, label, hint, onApplied }: {
 
   return (
     <Form.Item label={label} help={hint}>
-      <Input
-        value={draft}
-        placeholder={DEFAULT_FONT_LEADS[slot]}
-        onChange={(e) => setDraft(e.target.value)}
-        onPressEnter={() => commit(draft)}
-        onBlur={() => commit(draft)}
-        suffix={
-          <Button
-            type="text" size="small" title={t("settings.fontReset")}
-            aria-label={`${t("settings.fontReset")}・${label}`}
-            icon={<UndoOutlined />}
-            onClick={() => { setDraft(""); commit(""); }}
-          />
-        }
-      />
+      {/* 字体槽是整行输入（不参与宽度三档，见 WIDTH_EXEMPT_ITEM_IDS）：只补锚点 */}
+      <div className="setting-anchor" data-setting-id={settingId}>
+        <Input
+          value={draft}
+          placeholder={DEFAULT_FONT_LEADS[slot]}
+          onChange={(e) => setDraft(e.target.value)}
+          onPressEnter={() => commit(draft)}
+          onBlur={() => commit(draft)}
+          suffix={
+            <Button
+              type="text" size="small" title={t("settings.fontReset")}
+              aria-label={`${t("settings.fontReset")}・${label}`}
+              icon={<UndoOutlined />}
+              onClick={() => { setDraft(""); commit(""); }}
+            />
+          }
+        />
+      </div>
     </Form.Item>
   );
 }
@@ -118,8 +128,8 @@ function FontSettings() {
 
   return (
     <>
-      <FontField slot="sans" label={t("settings.uiFont")} hint={t("settings.fontHint")} onApplied={() => setApplied(sanitizeStored())} />
-      <FontField slot="mono" label={t("settings.monoFont")} hint={t("settings.fontHint")} onApplied={() => setApplied(sanitizeStored())} />
+      <FontField slot="sans" label={t("settings.uiFont")} hint={t("settings.fontHint")} settingId="ui.font_sans" onApplied={() => setApplied(sanitizeStored())} />
+      <FontField slot="mono" label={t("settings.monoFont")} hint={t("settings.fontHint")} settingId="ui.font_mono" onApplied={() => setApplied(sanitizeStored())} />
       <Form.Item>
         <div className="font-preview">
           <div className="font-preview-row" style={{ fontFamily: previewFontFamily(applied.sans, "sans") }}>
