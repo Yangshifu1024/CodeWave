@@ -3,6 +3,11 @@
 > 状态：已实施（批②）。批① 把设置从弹窗改为常驻全屏页（[settings-fullscreen-shell](./settings-fullscreen-shell.md)）；
 > 本批把 7 页按「用户找东西的顺序」重划为 8 页 + 3 组导航，并把「哪一项住在哪一页」这件事
 > 从组件 JSX 里抽成可被测试断言的数据（设置项注册表）。术语统一留批④。
+>
+> **后续变更（2026-09-20，[post-write-check-plan](./post-write-check-plan.md)）**：工具与集成页的
+> 「写入后语义校验」（六语言 LSP 开关 + 命令覆盖 + 预算 / 发现共 19 项）已整体删除，改为
+> **写入后检查**一项命令（`post_write_check.enabled / command / timeout_seconds / tail_chars` 四项）。
+> 本文中凡涉及 `validation.*` / `validation.lsp.*` / LSP 行的描述均为历史记录，现行实现见上述方案文档。
 
 ## 1. 页集合与 3 组导航
 
@@ -12,7 +17,7 @@
 | 外观与模型 | `providers` | 模型与供应商 | AI 回复语言、供应商列表 / 新增 / 编辑（含活跃模型） |
 | 外观与模型 | `network` | 网络与连接 | 代理模式与地址、允许访问内网地址 |
 | 安全与能力 | `security` | 安全与审批 | 危险命令确认、工作区外新建路径确认、git push 前确认、5 分钟自动确认、命令白名单 |
-| 安全与能力 | `tools` | 工具与集成 | 写入后语义校验（页内三组：校验 / 预算 / 发现）、MCP 服务器、技能 |
+| 安全与能力 | `tools` | 工具与集成 | 写入后检查（[post-write-check-plan](./post-write-check-plan.md)：一条检查命令 + 开关 / 超时 / 输出尾部字符数）、MCP 服务器、技能 |
 | 安全与能力 | `agent` | 工作区与智能体 | Shell、自定义提示词、自动压缩阈值、压缩请求超时 |
 | 诊断与其他 | `logs` | 日志 | 日志级别、会话详细日志 |
 | 诊断与其他 | `about` | 关于 | logo / 名称 / 简介、版本、数据目录、日志目录、代码仓库、开源许可证、自动更新开关、手动检查更新 |
@@ -38,7 +43,7 @@
 | 模型与供应商 | `ui.ai_language`、`providers`、`active_model_id` | 通用·AI 语言 + 供应商 |
 | 网络与连接 | `network.proxy`（= config.proxy）、`network.allow_private_network` | 网络 + 安全·内网访问 |
 | 安全与审批 | `approval.enabled / confirm_outside_create / confirm_git_push / auto_confirm / command_allowlist` | 安全（迁出内网访问与语义校验） |
-| 工具与集成 | `validation.<6 语言>`、`validation.json`、`validation.lsp.*`（命令 / 预算 / 发现）、`mcp.servers`（独立 mcp.json）、`disabled_skills` | 安全·LSP + MCP + 技能 |
+| 工具与集成 | `post_write_check.enabled / command / timeout_seconds / tail_chars`、`mcp.servers`（独立 mcp.json）、`disabled_skills` | 安全·写入后检查 + MCP + 技能 |
 | 工作区与智能体 | `shell.selection`、`custom_prompt`、`compact_threshold`、`compact_timeout_seconds` | 通用（这 4 项） |
 | 日志 | `log.level`、`log.session_verbose` | 通用（这 2 项） |
 | 关于 | `ui.auto_update`（localStorage）、`app.check_updates`（动作）；批④ 追加：`app.version` / `app.data_dir` / `app.logs_dir` / `app.repo` / `app.license`（只读信息与入口，均为 `app.*` 无落盘字段） | AboutModal 全部内容 + 通用·自动更新开关 |
@@ -55,7 +60,7 @@
   `keywords` 是**直字符串**、不进 i18n，供批③ 搜索用；`advanced` 供批③ 折叠用，本批只登记不渲染）；
 - **`PAGE_FIELDS: Record<PageKey, SettingFieldPath[]>`**：每页拥有的配置字段路径（脏标记的数据源）；
 - `MCP_FIELD_ID`、`INSTANT_APPLY_FIELD_IDS`、`SHELL_SETTING_KEYS`（豁免清单）、
-  `PAGE_FIELD_EXCEPTIONS`（页字段里没有独立设置项的路径，目前仅 `validation.lsp.commands`）。
+  `PAGE_FIELD_EXCEPTIONS`（页字段里没有独立设置项的路径；写入后检查四项各自成项后该清单为空）。
 
 ### 新增一项设置的登记流程
 
@@ -88,9 +93,9 @@
 - `pageSlice(config, page)` 只取 `PAGE_FIELDS[page]` 的字段；两类字段刻意跳过：
   `INSTANT_APPLY_FIELD_IDS`（改完立即生效，纳入会永远显示「未保存」）与 `MCP_FIELD_ID`
   （MCP 不在 config 内，脏判定走 mcp.json 文本基线，结果并在 `tools` 页上）。
-- 归一语义保持不变：空值三态折叠（`null`/`undefined`/`""`/纯空白）、`validation.java` 缺省 false、
-  `validation.dart` 缺省 true、`validation.lsp.*` 缺省 = `DEFAULT_LSP_SETTINGS`、
+- 归一语义保持不变：空值三态折叠（`null`/`undefined`/`""`/纯空白）、
   `proxy: null` 折默认对象（`mode = system`）、数组内空条目与全空对象视作空值。
+  （历史：`validation.java` / `validation.dart` / `validation.lsp.*` 的缺省折叠已随写入后检查的引入删除。）
 - 由此：**「界面」与「关于」两页永不亮脏点**——它们只有即时生效项（主题 / 字体 / 界面语言 / 自动更新开关）
   与只读身份信息，没有可保存的改动。这是有意为之，`settings.page.test.tsx` 有对应用例守护。
 
@@ -114,10 +119,10 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
 
 - 删除 `ui/src/features/panels/AboutModal.tsx`、`ui.aboutOpen`、左下角状态区的「关于」入口
   （`InfoCircleOutlined` 按钮）；关于页用例并入 `__tests__/settings.page.test.tsx`。
-- 删除零引用 CSS：`.validation-grid` / `.validation-item` / `.lsp-budget-item`、导航列内的
-  `.settings-nav .ant-tabs*` 规则。**`.lsp-budget-grid` 不在删除之列**（预算组两列网格仍在用）：
-  批② 一度把它退化成 `SettingsPage.tsx` 里的内联 `gridTemplateColumns`，审查返工已收回 `app.css` 用类名
-  （样式集中在 app.css / antd 接管的约定；`settings.page.test.tsx` 有对应用例守护）。
+- 删除零引用 CSS：导航列内的 `.settings-nav .ant-tabs*` 规则。
+  （历史：`.lsp-budget-grid` 曾随写入后检查的引入被删除，现行页体用 `.postcheck-grid` 两列网格类。）
+- 用户可见名历史：批④ 曾把「写入后**语法**校验」改叫「写入后**语义**校验」；2026-09-20 起整套语义校验
+  被**写入后检查**取代（[post-write-check-plan](./post-write-check-plan.md)），`validation*` 一族键名与设置项已删除。
 - 删除零引用 i18n 键（删前全仓 grep 确认）：`settings.general`、`settings.appearance`、
   `settings.security`、`settings.network`、`settings.accent`、`about.title`、`about.checkUpdates`、`app.about`。
   保留 `settings.providers` / `settings.mcp` / `settings.skills`（分别是供应商列表、MCP 服务器、

@@ -1,5 +1,5 @@
 // 每个 Tab 运行态 store 的共享类型（run.ts、runFrames.ts 与 UI 组件共同消费）。
-import type { Breakdown, LspInstallKind, Todo } from "../ipc/types";
+import type { Breakdown, Todo } from "../ipc/types";
 
 /** 工具卡视图模型：timeline 锚点（callKey）+ 卡体数据；progressTail 为流式进度尾迹 */
 export interface ToolView {
@@ -147,33 +147,4 @@ export interface TabRunState {
   lastDoneRunId: string | null;
   /** 压缩进行中（run:compacting 与 run:compacted/failed 之间）：CompactButton loading + notice 去重 */
   compacting: boolean;
-}
-
-/** LSP 引导卡片视图模型（`lsp:server_missing` 事件落地；三景渲染见 features/chat/LspGuideCard.tsx） */
-export interface LspHint {
-  /** 语言 id（typescript/rust/python/go/java/dart） */
-  language: string;
-  /** 所属项目（临时会话为 null） */
-  projectId: string | null;
-  kind: LspInstallKind;
-  /** server 名（jdtls / rust-analyzer / typescript-language-server …，后端给） */
-  server: string;
-  /** 可一键执行的安装命令（仅 installable 有值） */
-  command: string | null;
-  docsUrl: string | null;
-  prerequisite: string | null;
-  /** 未找到的人类可读原因（后端文案） */
-  reason: string;
-}
-
-/** 单个 Tab 的 LSP 引导态：hints = 待展示卡片；dismissed = 已忽略的 (language, project_id) 键。
- *  归在 run store 的平行分桶（而非 TabRunState）：环境事件不该把整桶订阅者（ChatMessages 等）引用刷新。 */
-export interface LspGuideState {
-  hints: LspHint[];
-  dismissed: string[];
-}
-
-/** 引导卡去重键：同一 (language, project_id) 在同一会话内只看一次（忽略后不再弹） */
-export function lspHintKey(language: string, projectId: string | null): string {
-  return `${language}:${projectId ?? ""}`;
 }

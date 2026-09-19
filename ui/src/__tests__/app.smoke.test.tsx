@@ -23,7 +23,7 @@ const fixtureConfig = {
   network: { allow_private_network: false },
   compact_threshold: 0.6,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false },
-  validation: { python: true, rust: true, typescript: true, go: true, json: true },
+  post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
   ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
   custom_prompt: null,
   disabled_skills: [],
@@ -273,10 +273,10 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-switch').length).toBeGreaterThanOrEqual(4);
     expect(document.body.textContent ?? "").toContain("5 分钟后自动确认推荐选项");
 
-    // 工具与集成页：语义校验行（LSP）+ MCP + 技能三段同页
+    // 工具与集成页：写入后检查 + MCP + 技能三段同页
     await clickTab("工具与集成");
-    expect(document.querySelectorAll(".validation-row").length).toBe(7);
-    expect(document.body.textContent ?? "").toContain("写入后语义校验");
+    expect(document.querySelectorAll('[data-setting-id^="post_write_check."]').length).toBe(4);
+    expect(document.body.textContent ?? "").toContain("写入后检查");
     expect(document.body.textContent ?? "").toContain("添加服务器");
     expect(document.body.textContent ?? "").toContain("技能");
 

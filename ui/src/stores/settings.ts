@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
 import type { CleanupOutcome, ConfigState, FlatModel } from "../ipc/types";
-import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
+import { DEFAULT_POST_WRITE_CHECK } from "../ipc/types";
 import { findModel } from "../utils/models";
 import { reconcileFontsFromConfig } from "../utils/fonts";
 
@@ -16,17 +16,8 @@ const DEFAULT_CONFIG: ConfigState = {
   compact_threshold: 0.6,
   compact_timeout_seconds: 180,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false, command_allowlist: [] },
-  validation: {
-    python: true,
-    rust: true,
-    typescript: true,
-    go: true,
-    json: true,
-    // java 默认关闭（jdtls 需 JDK 21+ 与依赖树索引，首次启用需确认）；dart 默认开启——与后端 ValidationSettings::default() 同源
-    java: false,
-    dart: true,
-    lsp: DEFAULT_LSP_SETTINGS,
-  },
+  // 写入后检查默认关闭且命令留空——与后端 PostWriteCheckSettings::default() 同源
+  post_write_check: DEFAULT_POST_WRITE_CHECK,
   ui: { font_size: 15, accent: "cyan", language: "zh-CN", font_sans: "", font_mono: "" },
   custom_prompt: null,
   disabled_skills: [],

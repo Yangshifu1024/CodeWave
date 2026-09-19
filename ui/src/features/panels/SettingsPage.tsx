@@ -17,8 +17,8 @@ import {
 import { ArrowLeftOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import { DEFAULT_LSP_SETTINGS, LSP_LANGUAGES, lspCommandOf, withLspCommand } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, LspLanguage, LspServerStatus, ShellInfo, SkillMeta, ValidationSettings } from "../../ipc/types";
+import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -43,7 +43,6 @@ import {
   SETTINGS_ADVANCED_PREF_KEY,
   SETTINGS_ITEMS,
   advancedCountByPage,
-  isAdvancedOnlyGroup,
   matchSettings,
   normalizePageKey,
   type PageKey,
@@ -122,19 +121,12 @@ function drill(node: unknown, path: string): unknown {
  * 单个字段路径的脏比较片段。缺省折叠与后端 serde default 对齐（不折缺省时，「点开又改回原样」会永远显示未保存）：
  *  - network.proxy：null 等价于 ProxyConfig::default()（mode = system，[docs/network-proxy-settings]）——
  *    否则打开设置后点一下本来就处于选中态的「系统代理」卡片就凭空染脏（字段路径按页面语义命名，指向 config.proxy）；
- *  - validation.java 缺省 false、validation.dart 缺省 true；
- *  - validation.lsp.* 缺省 = DEFAULT_LSP_SETTINGS（后端 `LspSettings::default()` 的同形镜像）；
  *  - shell.selection / ui.ai_language：undefined 折 null（后端 serde default 语义）。
  */
 function fieldSlice(c: ConfigState, path: SettingFieldPath): unknown {
   if (path === "network.proxy") return c.proxy ?? { mode: "system", url: "" };
-  if (path === "validation.java") return c.validation.java ?? false;
-  if (path === "validation.dart") return c.validation.dart ?? true;
   if (path === "ui.ai_language") return c.ui.ai_language ?? null;
   if (path === "shell.selection") return c.shell?.selection ?? null;
-  if (path.startsWith("validation.lsp.")) {
-    return drill(c.validation.lsp ?? DEFAULT_LSP_SETTINGS, path.slice("validation.lsp.".length));
-  }
   return drill(c, path);
 }
 
@@ -288,16 +280,6 @@ function resolveShellDisplay(selection: string | null | undefined, shells: Shell
   return { kind: "path", text: current.path };
 }
 
-/**
- * 语言 → i18n 展示名：**从注册表派生**（单一事实源 = `SETTINGS_ITEMS` 里 `validation.<lang>` 项的 labelKey，
- * 行序与后端 `Lang::all()` 一致：typescript、rust、python、go、java、dart）。
- * 不再在本文件维护第二份映射：两份副本一旦漂移（改错一个键），原测试全绿而界面只会回显 i18n 键名；
- * 「六语言项齐备 + labelKey 互不相同」由 settings.registry.test.ts 断言守护，故此处不做静默退化。
- */
-const LANG_LABEL_KEY: Record<LspLanguage, string> = Object.fromEntries(
-  LSP_LANGUAGES.map((lang) => [lang, SETTINGS_ITEMS.find((i) => i.id === `validation.${lang}`)!.labelKey]),
-) as Record<LspLanguage, string>;
-
 /** 设置页：8 个分区（界面 / 模型与供应商 / 网络与连接 / 安全与审批 / 工具与集成 / 工作区与智能体 /
  *  日志 / 关于），按左导航三组铺开。draft 只改内存、「保存」一次性提交；供应商校验失败报错并跳页不落盘；
  *  MCP 支持结构化条目与原文本兜底双模式。
@@ -329,11 +311,6 @@ export default function SettingsPage() {
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
   const [sysProxy, setSysProxy] = useState<string | null | undefined>(undefined);
-  // LSP server 状态（lsp_status）：null = 未取到（探测失败/旧后端）→ 不显示状态徽标，面板不报错
-  const [lspStatus, setLspStatus] = useState<LspServerStatus[] | null>(null);
-  const [redetecting, setRedetecting] = useState(false);
-  /** 正在一键安装的语言（null = 空闲）：驱动行内「安装」按钮的 loading 与禁用 */
-  const [installing, setInstalling] = useState<LspLanguage | null>(null);
   // ---------- 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
   /** 上次清理记录（null = 未取到：只读行回退「还没有清理记录」）；进入设置页拉一次、每次清理后刷新 */
   const [cleanupStatus, setCleanupStatus] = useState<CleanupStatus | null>(null);
@@ -387,11 +364,6 @@ export default function SettingsPage() {
   /** 设置项锚点包裹层的类名（锚点 + 折叠类；锚点值 = 注册表 id） */
   function anchorCls(id: string): string {
     return `setting-anchor${advHidden(id) ? " settings-advanced-hidden" : ""}`;
-  }
-
-  /** 整组皆为进阶项时的组容器类名（收起 → 整组隐藏；组内混有非进阶项则逐行隐藏） */
-  function groupCls(page: PageKey, group: string): string | undefined {
-    return isAdvancedOnlyGroup(page, group) && !advancedVisible ? "settings-advanced-hidden" : undefined;
   }
 
   /**
@@ -467,8 +439,6 @@ export default function SettingsPage() {
       setShells(await ipc.listAvailableShells().catch(() => null));
       // 系统代理探测回显：失败不阻塞（null = 未检测到提示）
       setSysProxy(await ipc.resolveProxy().catch(() => null));
-      // LSP server 状态：失败静默降级为不显示徽标（设置面板不得因此报错）
-      setLspStatus(await ipc.lspStatus().catch(() => null));
       // 上次清理记录（只读行数据源）：同样失败静默 —— 只读信息缺失不该阻断设置页
       setCleanupStatus(await ipc.getCleanupStatus().catch(() => null));
     })();
@@ -489,144 +459,12 @@ export default function SettingsPage() {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
   }
 
-  /** validation 段局部更新（开关 / LSP 配置） */
-  function patchValidation(patch: Partial<ValidationSettings>) {
+  /** post_write_check 段局部更新（写入后检查命令；缺字段时以 DEFAULT_POST_WRITE_CHECK 为基准） */
+  function patchPostWrite(patch: Partial<PostWriteCheckSettings>) {
     if (!draft) return;
-    patchDraft({ validation: { ...draft.validation, ...patch } });
-  }
-
-  /** LSP 全局配置局部更新（预算 / 发现 / 命令覆盖；缺字段时以 DEFAULT_LSP_SETTINGS 为基准） */
-  function patchLsp(next: typeof DEFAULT_LSP_SETTINGS) {
-    patchValidation({ lsp: next });
-  }
-
-  /** 语言开关三态读写（显式分支而非动态键：java 缺省 false、dart 缺省 true，与后端 serde default 同源） */
-  function langSwitchOf(lang: LspLanguage): { checked: boolean; onChange: (v: boolean) => void } {
-    if (!draft) return { checked: false, onChange: () => {} };
-    const v = draft.validation;
-    switch (lang) {
-      case "typescript": return { checked: v.typescript, onChange: (b) => patchValidation({ typescript: b }) };
-      case "rust": return { checked: v.rust, onChange: (b) => patchValidation({ rust: b }) };
-      case "python": return { checked: v.python, onChange: (b) => patchValidation({ python: b }) };
-      case "go": return { checked: v.go, onChange: (b) => patchValidation({ go: b }) };
-      case "java": return { checked: v.java ?? false, onChange: (b) => patchValidation({ java: b }) };
-      case "dart": return { checked: v.dart ?? true, onChange: (b) => patchValidation({ dart: b }) };
-    }
-  }
-
-  /** 语言服务器状态四态：已关闭 / 已找到（带版本）/ 未安装（语言工具链已就绪）/
-   *  未安装（且工具链也没就绪）。后端给的原因（detail）走 Tooltip，不占行高；状态未取到（null）→ 不渲染徽标。 */
-  function lspBadge(lang: LspLanguage): { text: string; warn: boolean; detail: string } | null {
-    const st = lspStatus?.find((s) => s.language === lang);
-    if (!st) return null;
-    if (!st.enabled) return { text: t("settings.lspDisabled"), warn: false, detail: st.detail };
-    if (st.found) {
-      return {
-        text: st.version ? t("settings.lspFoundVersion", { version: st.version }) : t("settings.lspFound"),
-        warn: false,
-        detail: st.detail,
-      };
-    }
-    // 未找到：区分「只缺语言服务器」与「连语言工具链都没装」——后者不是本页一键安装能解决的
-    return {
-      text: st.sdk.ready
-        ? t("settings.lspServerMissing")
-        : t("settings.lspServerMissingNoSdk", { name: st.sdk.name }),
-      warn: true,
-      detail: st.detail,
-    };
-  }
-
-  /** 工具链段文案（与语言服务器状态分两块：工具链 = Go / JDK / Node.js，语言服务器 = gopls / jdtls / …）。
-   *  只在开关打开时显示：关掉的行不该再被催。 */
-  function sdkText(lang: LspLanguage): string | null {
-    const st = lspStatus?.find((s) => s.language === lang);
-    if (!st || !st.enabled) return null;
-    return st.sdk.ready
-      ? t("settings.lspSdkReady", { name: st.sdk.name })
-      : t("settings.lspSdkMissing", { name: st.sdk.name });
-  }
-
-  /** 行内动作：可一键安装 → 「安装」（前置命令缺失时禁用并提示先装运行库）；需手动安装 → 「手动安装」。
-   *  已关闭 / 已找到 / 无引导三态不渲染动作。 */
-  function lspAction(lang: LspLanguage) {
-    const st = lspStatus?.find((s) => s.language === lang);
-    if (!st || !st.enabled || st.found || !st.install) return null;
-    const hint = st.install;
-    if (hint.kind === "installable") {
-      const req = hint.requires;
-      const blocked = !!req && !req.ready;
-      const downloadUrl = req?.docs_url ?? null;
-      // 提示的是「缺哪个运行库」（Node.js），不是那个语言的 SDK：Python 行缺的正是 Node.js
-      const missingRuntime = req?.name ?? "";
-      return (
-        <>
-          <Button
-            size="small"
-            disabled={blocked}
-            loading={installing === lang}
-            onClick={() => void installServer(lang)}
-          >
-            {t("settings.lspInstall")}
-          </Button>
-          {blocked && (
-            <span className="validation-hint">
-              {t("settings.lspNeedRuntime", { name: missingRuntime })}
-              {downloadUrl && (
-                <Button size="small" type="link" onClick={() => void openDocs(downloadUrl)}>
-                  {t("settings.lspDownload")}
-                </Button>
-              )}
-            </span>
-          )}
-        </>
-      );
-    }
-    if (hint.kind === "manual" && hint.docs_url) {
-      const url = hint.docs_url;
-      return (
-        <Button size="small" type="link" onClick={() => void openDocs(url)}>
-          {t("settings.lspManualInstall")}
-        </Button>
-      );
-    }
-    return null;
-  }
-
-  /** 一键安装（lsp_install）：成功/失败文案由后端回喂（含安装输出尾部）；结束后重拉状态刷新本页。 */
-  async function installServer(lang: LspLanguage) {
-    setInstalling(lang);
-    try {
-      const out = await ipc.lspInstall(lang);
-      message.success(out || t("settings.lspInstallDone"));
-    } catch (e) {
-      message.error(`${t("settings.lspInstallFailed")}：${String(e).replace(/^Error[:\s]*/i, "")}`);
-    } finally {
-      setInstalling(null);
-      setLspStatus(await ipc.lspStatus().catch(() => null));
-    }
-  }
-
-  /** 官方地址：交后端 open_url 用系统浏览器打开（与应用内其他外链同一路径）。 */
-  async function openDocs(url: string) {
-    try {
-      await ipc.openUrl(url);
-    } catch (e) {
-      message.error(String(e));
-    }
-  }
-
-  /** 重新探测（lsp_redetect）：清 PATH 与探测缓存后重查，刷新本页徽标。 */
-  async function redetect() {
-    setRedetecting(true);
-    try {
-      setLspStatus(await ipc.lspRedetect());
-      message.success(t("settings.lspRedetected"));
-    } catch (e) {
-      message.error(`${t("settings.lspRedetectFailed")}：${String(e).replace(/^Error[:\s]*/i, "")}`);
-    } finally {
-      setRedetecting(false);
-    }
+    patchDraft({
+      post_write_check: { ...(draft.post_write_check ?? DEFAULT_POST_WRITE_CHECK), ...patch },
+    });
   }
 
   function toggleSkill(name: string, disabled: boolean) {
@@ -875,22 +713,11 @@ export default function SettingsPage() {
         .map((h) => ({ name: h.name.trim(), value: h.value.trim() }))
         .filter((h) => h.name !== "");
     });
-    // LSP 配置落盘前归一化：命令覆盖 / JDK 路径 trim，额外 SDK 根丢空行（编辑期间保留空行以便连续录入）
-    if (draft.validation.lsp) {
-      const lsp = draft.validation.lsp;
-      const c = lsp.commands;
-      draft.validation.lsp = {
-        ...lsp,
-        java_home: lsp.java_home.trim(),
-        extra_roots: lsp.extra_roots.map((r) => r.trim()).filter((r) => r !== ""),
-        commands: {
-          typescript: c.typescript.trim(),
-          rust: c.rust.trim(),
-          python: c.python.trim(),
-          go: c.go.trim(),
-          java: c.java.trim(),
-          dart: c.dart.trim(),
-        },
+    // 写入后检查命令落盘前归一化：命令 trim（空命令与关闭等价，后端也会按空命令跳过）
+    if (draft.post_write_check) {
+      draft.post_write_check = {
+        ...draft.post_write_check,
+        command: draft.post_write_check.command.trim(),
       };
     }
     setSaving(true);
@@ -962,8 +789,8 @@ export default function SettingsPage() {
   const proxyMode = draft?.proxy?.mode ?? "system";
   const proxyUrl = draft?.proxy?.url ?? "";
   const proxyUrlInvalid = proxyMode === "manual" && proxyUrl.trim() !== "" && !PROXY_URL_RE.test(proxyUrl.trim());
-  // LSP 配置视图态：旧配置缺 lsp 段时以 DEFAULT_LSP_SETTINGS（后端默认）为基准回显
-  const lspCfg = draft?.validation.lsp ?? DEFAULT_LSP_SETTINGS;
+  // 写入后检查视图态：旧配置缺该段时以 DEFAULT_POST_WRITE_CHECK（后端默认）为基准回显
+  const postWrite = draft?.post_write_check ?? DEFAULT_POST_WRITE_CHECK;
 
   function patchProxyMode(mode: "none" | "system" | "manual") {
     // 切模式保留已填地址：来回切换不丢草稿
@@ -1344,199 +1171,57 @@ export default function SettingsPage() {
       body: draft && (
         <>
           <Form layout="vertical">
-            <Divider>{t("settings.validation")}</Divider>
-            <div className="hint" style={{ marginBottom: 10 }}>{t("settings.validationHint")}</div>
-            <Form.Item style={{ marginBottom: 0 }}>
-              {/* 六语言各一行：语言名 | 开关 | 命令覆盖 | 状态徽标（行序与后端 Lang::all() 同源；JSON 走内置解析，只给开关） */}
-              <div className="validation-rows">
-                {LSP_LANGUAGES.map((lang) => {
-                  const sw = langSwitchOf(lang);
-                  const badge = lspBadge(lang);
-                  const sdk = sdkText(lang);
-                  return (
-                    /* 锚点 = 注册表 id（validation.<lang>，与下一行的 JSON 行同形）；行宽由 .validation-row 网格列决定，不设宽度档 */
-                    <div className="validation-row" data-lang={lang} data-setting-id={`validation.${lang}`} key={lang}>
-                      <span className="validation-label">{t(LANG_LABEL_KEY[lang])}</span>
-                      <Switch size="small" checked={sw.checked} aria-label={t(LANG_LABEL_KEY[lang])} onChange={sw.onChange} />
-                      <Input
-                        size="small"
-                        placeholder={t("settings.lspCommandPh")}
-                        value={lspCommandOf(lspCfg, lang)}
-                        onChange={(e) => patchLsp(withLspCommand(lspCfg, lang, e.target.value))}
-                      />
-                      {/* 状态单元格：语言服务器状态（悬停看后端原因）+ 语言工具链状态 + 行内动作 */}
-                      <div className="validation-cell">
-                        {badge ? (
-                          <Tooltip title={badge.detail || undefined}>
-                            <span className={`validation-status${badge.warn ? " warn" : ""}`}>{badge.text}</span>
-                          </Tooltip>
-                        ) : (
-                          <span className="validation-status" />
-                        )}
-                        {sdk && <span className="validation-sdk">{sdk}</span>}
-                        {lspAction(lang)}
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="validation-row" data-lang="json" data-setting-id="validation.json">
-                  <span className="validation-label">{t("settings.validationLangJson")}</span>
-                  <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
-                  <span />
-                  <div className="validation-cell">
-                    <span className="validation-status" />
-                  </div>
-                </div>
-              </div>
-              {/* Java 代价提示：jdtls 首次启动会解析依赖树（可能数分钟、GB 级内存） */}
-              <div className="hint" style={{ marginTop: 8 }} data-testid="lsp-java-cost">
-                {t("settings.lspJavaCost")}
-              </div>
-            </Form.Item>
-
-            {/* 预算组 7 项全是进阶项 → 收起时整组隐藏（组容器只加类，行仍留在原分组内） */}
-            <div className={groupCls("tools", "settings.lspBudget")} data-setting-group-id="settings.lspBudget">
-              <Divider plain>{t("settings.lspBudget")}</Divider>
-              {/* 预算组：两列网格（类收回 app.css，不写内联 style） */}
-              <div className="lsp-budget-grid">
-                <Form.Item label={t("settings.lspSyncWindow")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.sync_window_ms">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={0}
-                      max={60000}
-                      step={100}
-                      value={lspCfg.sync_window_ms}
-                      onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspMaxDiagnostics")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.max_diagnostics">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={1}
-                      max={200}
-                      value={lspCfg.max_diagnostics}
-                      onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspMaxChars")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.max_chars">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={200}
-                      max={100000}
-                      step={200}
-                      value={lspCfg.max_chars}
-                      onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspIdleTtl")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.idle_ttl_ms">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={0}
-                      max={86400000}
-                      step={60000}
-                      value={lspCfg.idle_ttl_ms}
-                      onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspMaxServers")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.max_servers">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={1}
-                      max={32}
-                      value={lspCfg.max_servers}
-                      onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspMaxFileBytes")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.max_file_bytes">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={1024}
-                      max={104857600}
-                      step={1024}
-                      value={lspCfg.max_file_bytes}
-                      onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
-                    />
-                  </div>
-                </Form.Item>
-                <Form.Item label={t("settings.lspDedupeLimit")}>
-                  <div className="setting-anchor" data-setting-id="validation.lsp.dedupe_limit">
-                    <InputNumber
-                      size="small"
-                      className="w-narrow"
-                      min={0}
-                      max={10}
-                      value={lspCfg.dedupe_limit}
-                      onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
-                    />
-                  </div>
-                </Form.Item>
-              </div>
+            <Divider>{t("settings.postWriteCheck")}</Divider>
+            <div className="hint" style={{ marginBottom: 10 }}>{t("settings.postWriteHint")}</div>
+            {/* 开关：Switch 无宽度档，锚点挂整行 */}
+            <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
+              <Form.Item style={{ marginBottom: 8 }}>
+                <Switch
+                  checked={postWrite.enabled}
+                  aria-label={t("settings.postWriteEnabled")}
+                  onChange={(v) => patchPostWrite({ enabled: v })}
+                />
+                <span style={{ marginInlineStart: 8 }}>{t("settings.postWriteEnabled")}</span>
+              </Form.Item>
             </div>
-
-            <Divider plain>{t("settings.lspDiscovery")}</Divider>
-            <Form.Item label={t("settings.lspExtraRoots")} extra={t("settings.lspExtraRootsHint")}>
-              <div className="lsp-roots setting-anchor" data-setting-id="validation.lsp.extra_roots">
-                {lspCfg.extra_roots.map((root, i) => (
-                  <div className="lsp-root-row" key={i}>
-                    <Input
-                      size="small"
-                      value={root}
-                      aria-label={t("settings.lspExtraRoots")}
-                      onChange={(e) =>
-                        patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.map((r, j) => (j === i ? e.target.value : r)) })
-                      }
-                    />
-                    <Button
-                      size="small"
-                      type="text"
-                      danger
-                      aria-label={t("common.delete")}
-                      icon={<DeleteOutlined />}
-                      onClick={() => patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.filter((_, j) => j !== i) })}
-                    />
-                  </div>
-                ))}
-                <div>
-                  <Button size="small" onClick={() => patchLsp({ ...lspCfg, extra_roots: [...lspCfg.extra_roots, ""] })}>
-                    {t("settings.lspAddRoot")}
-                  </Button>
-                </div>
-              </div>
-            </Form.Item>
-            {/* 锚点挂在既有容器上：搜索定位落点是整行输入（不设宽度档） */}
-            <div className={anchorCls("validation.lsp.java_home")} data-setting-id="validation.lsp.java_home">
-              <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
+            {/* 命令：整行输入 + {file} 占位符与各技术栈示例说明 */}
+            <div className={anchorCls("post_write_check.command")} data-setting-id="post_write_check.command">
+              <Form.Item label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
                 <Input
-                  size="small"
-                  className="w-wide"
-                  value={lspCfg.java_home}
-                  placeholder={t("settings.lspCommandPh")}
-                  onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
+                  value={postWrite.command}
+                  placeholder={t("settings.postWriteCommandPh")}
+                  onChange={(e) => patchPostWrite({ command: e.target.value })}
                 />
               </Form.Item>
             </div>
-            <Form.Item style={{ marginBottom: 0 }}>
-              <Button size="small" loading={redetecting} onClick={() => void redetect()}>
-                {t("settings.lspRedetect")}
-              </Button>
-            </Form.Item>
+            {/* 超时 / 输出尾部字符：两项都是进阶项（窄档；行内网格类收回 app.css） */}
+            <div className="postcheck-grid">
+              <Form.Item label={t("settings.postWriteTimeout")}>
+                <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
+                  <InputNumber
+                    size="small"
+                    className="w-narrow"
+                    min={1}
+                    max={3600}
+                    value={postWrite.timeout_seconds}
+                    onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
+                  />
+                </div>
+              </Form.Item>
+              <Form.Item label={t("settings.postWriteTailChars")}>
+                <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
+                  <InputNumber
+                    size="small"
+                    className="w-narrow"
+                    min={100}
+                    max={100000}
+                    step={100}
+                    value={postWrite.tail_chars}
+                    onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
+                  />
+                </div>
+              </Form.Item>
+            </div>
           </Form>
 
           {/* MCP：不在 config 内（独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它） */}
@@ -1848,7 +1533,7 @@ export default function SettingsPage() {
           </Form.Item>
           {/* session_verbose 是进阶项：**整个 Form.Item** 包进锚点容器再加类隐藏（行留在原分组内）。
               不能在 Form.Item 内部加类：antd 的 label 与 control 是兄弟节点，只藏 control 会留下
-              孤立标签 + 空控制行（与 approval.command_allowlist / validation.lsp.java_home 同形） */}
+              孤立标签 + 空控制行（与 approval.command_allowlist 同形） */}
           <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
             <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
               <Switch

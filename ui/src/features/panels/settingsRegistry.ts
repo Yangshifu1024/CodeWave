@@ -123,26 +123,12 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "approval.auto_confirm", labelKey: "settings.autoConfirm", page: "security", keywords: ["auto", "自动确认", "超时", "5 分钟"] },
   { id: "approval.command_allowlist", labelKey: "settings.cmdAllowlist", page: "security", advanced: true, keywords: ["allowlist", "白名单", "允许", "命令"] },
 
-  // ---------- 工具与集成（页内三组：校验 / 预算 / 发现 + MCP + 技能） ----------
-  // 六语言各一行（开关 + 命令覆盖），行序与后端 Lang::all() 同源
-  { id: "validation.typescript", labelKey: "settings.validationLangTypescript", page: "tools", group: "settings.validation", keywords: ["typescript", "javascript", "vue", "校验"] },
-  { id: "validation.rust", labelKey: "settings.validationLangRust", page: "tools", group: "settings.validation", keywords: ["rust", "校验"] },
-  { id: "validation.python", labelKey: "settings.validationLangPython", page: "tools", group: "settings.validation", keywords: ["python", "校验"] },
-  { id: "validation.go", labelKey: "settings.validationLangGo", page: "tools", group: "settings.validation", keywords: ["go", "golang", "校验"] },
-  { id: "validation.java", labelKey: "settings.validationLangJava", page: "tools", group: "settings.validation", keywords: ["java", "jdtls", "校验"] },
-  { id: "validation.dart", labelKey: "settings.validationLangDart", page: "tools", group: "settings.validation", keywords: ["dart", "flutter", "校验"] },
-  { id: "validation.json", labelKey: "settings.validationLangJson", page: "tools", group: "settings.validation", keywords: ["json", "校验"] },
-  // 预算组
-  { id: "validation.lsp.sync_window_ms", labelKey: "settings.lspSyncWindow", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "sync", "诊断等待", "毫秒"] },
-  { id: "validation.lsp.max_diagnostics", labelKey: "settings.lspMaxDiagnostics", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "diagnostics", "诊断条数"] },
-  { id: "validation.lsp.max_chars", labelKey: "settings.lspMaxChars", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "chars", "诊断字符"] },
-  { id: "validation.lsp.idle_ttl_ms", labelKey: "settings.lspIdleTtl", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "idle", "回收", "闲置"] },
-  { id: "validation.lsp.max_servers", labelKey: "settings.lspMaxServers", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "server", "并发上限"] },
-  { id: "validation.lsp.max_file_bytes", labelKey: "settings.lspMaxFileBytes", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "file", "体积", "字节", "跳过"] },
-  { id: "validation.lsp.dedupe_limit", labelKey: "settings.lspDedupeLimit", page: "tools", group: "settings.lspBudget", width: "narrow", advanced: true, keywords: ["lsp", "dedupe", "重复回喂"] },
-  // 发现组
-  { id: "validation.lsp.extra_roots", labelKey: "settings.lspExtraRoots", page: "tools", group: "settings.lspDiscovery", keywords: ["lsp", "sdk", "root", "目录", "发现"] },
-  { id: "validation.lsp.java_home", labelKey: "settings.lspJavaHome", page: "tools", group: "settings.lspDiscovery", width: "wide", advanced: true, keywords: ["lsp", "jdk", "java home", "java"] },
+  // ---------- 工具与集成（页内分组：写入后检查 + MCP + 技能） ----------
+  // 写入后检查命令（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：取代 LSP 写后语义校验
+  { id: "post_write_check.enabled", labelKey: "settings.postWriteEnabled", page: "tools", group: "settings.postWriteCheck", keywords: ["post", "write", "check", "lint", "写入后检查", "检查", "校验"] },
+  { id: "post_write_check.command", labelKey: "settings.postWriteCommand", page: "tools", group: "settings.postWriteCheck", keywords: ["command", "命令", "lint", "eslint", "tsc", "ruff", "cargo", "{file}", "写入后检查", "检查命令"] },
+  { id: "post_write_check.timeout_seconds", labelKey: "settings.postWriteTimeout", page: "tools", group: "settings.postWriteCheck", width: "narrow", advanced: true, keywords: ["timeout", "超时", "秒"] },
+  { id: "post_write_check.tail_chars", labelKey: "settings.postWriteTailChars", page: "tools", group: "settings.postWriteCheck", width: "narrow", advanced: true, keywords: ["tail", "输出", "字符", "尾部", "截断"] },
   // MCP 与技能
   { id: "mcp.servers", labelKey: "settings.mcp", page: "tools", group: "settings.mcp", width: "narrow", keywords: ["mcp", "mcp server", "mcp 服务器", "server", "服务器", "工具"] },
   { id: "disabled_skills", labelKey: "settings.skills", page: "tools", group: "settings.skills", keywords: ["skill", "skills", "技能", "启用", "禁用", "禁用技能"] },
@@ -198,9 +184,8 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "ui.font_sans", // 界面字体名（可含多个 family，逗号分隔）+ 行内「恢复默认」按钮
   "ui.font_mono", // 等宽字体名，同上
   "custom_prompt", // TextArea：多行自定义提示词
-  "validation.lsp.extra_roots", // 动态 SDK 根目录行：整行 Input + 行尾删除按钮（.lsp-root-row）
 
-  // —— 整行开关：Switch 无宽度档，行宽即容器宽 ——
+  // —— 整行开关 / 输入：Switch / 整行命令输入 ——
   "network.allow_private_network", // Switch
   "approval.enabled", // Switch
   "approval.confirm_outside_create", // Switch
@@ -208,18 +193,11 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "approval.auto_confirm", // Switch
   "log.session_verbose", // Switch
   "ui.auto_update", // Switch（关于页更新行内的内联开关）
+  "post_write_check.enabled", // Switch（写入后检查总开关）
+  "post_write_check.command", // 整行命令输入（含 {file} 占位符；说明文字自带）
 
   // —— Slider：整行滑动条，宽度随容器（无内联宽度） ——
   "compact_threshold", // Slider：自动压缩阈值
-
-  // —— 行内网格控件：宽度由 .validation-row / .lsp-budget-grid 的网格列决定，不另设档 ——
-  "validation.typescript", // .validation-row 内的开关 + 命令覆盖输入
-  "validation.rust",
-  "validation.python",
-  "validation.go",
-  "validation.java",
-  "validation.dart",
-  "validation.json", // 只有开关（内置解析，无命令覆盖）
 
   // —— 整行列表 / 复合容器 / 动作与只读标记 ——
   "approval.command_allowlist", // 整行命令列表（每行一条 + 删除按钮）
@@ -270,23 +248,10 @@ export type SettingFieldPath =
   | "approval.confirm_git_push"
   | "approval.auto_confirm"
   | "approval.command_allowlist"
-  | "validation.typescript"
-  | "validation.rust"
-  | "validation.python"
-  | "validation.go"
-  | "validation.java"
-  | "validation.dart"
-  | "validation.json"
-  | "validation.lsp.commands"
-  | "validation.lsp.sync_window_ms"
-  | "validation.lsp.max_diagnostics"
-  | "validation.lsp.max_chars"
-  | "validation.lsp.idle_ttl_ms"
-  | "validation.lsp.max_servers"
-  | "validation.lsp.max_file_bytes"
-  | "validation.lsp.dedupe_limit"
-  | "validation.lsp.extra_roots"
-  | "validation.lsp.java_home"
+  | "post_write_check.enabled"
+  | "post_write_check.command"
+  | "post_write_check.timeout_seconds"
+  | "post_write_check.tail_chars"
   | "mcp.servers"
   | "disabled_skills"
   | "shell.selection"
@@ -317,23 +282,10 @@ export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
     "approval.command_allowlist",
   ],
   tools: [
-    "validation.typescript",
-    "validation.rust",
-    "validation.python",
-    "validation.go",
-    "validation.java",
-    "validation.dart",
-    "validation.json",
-    "validation.lsp.commands",
-    "validation.lsp.sync_window_ms",
-    "validation.lsp.max_diagnostics",
-    "validation.lsp.max_chars",
-    "validation.lsp.idle_ttl_ms",
-    "validation.lsp.max_servers",
-    "validation.lsp.max_file_bytes",
-    "validation.lsp.dedupe_limit",
-    "validation.lsp.extra_roots",
-    "validation.lsp.java_home",
+    "post_write_check.enabled",
+    "post_write_check.command",
+    "post_write_check.timeout_seconds",
+    "post_write_check.tail_chars",
     "mcp.servers",
     "disabled_skills",
   ],
@@ -345,12 +297,9 @@ export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
 
 /**
  * 页字段豁免清单：登记在 PAGE_FIELDS 里但**没有**独立设置项的路径（唯一一处，勿轻易扩容）。
- * 只有 `validation.lsp.commands`：它是六语言行共用的命令覆盖容器，每语言的设置项是行本身
- * （`validation.<lang>`，见 SETTINGS_ITEMS 的校验组）——再给容器登记一项会与「六语言各一行」的
- * 导航 / 搜索语义重复。契约测试反向断言：PAGE_FIELDS 里每条路径要么有对应项（且与项登记同页），
- * 要么在本清单内；清单里的路径若又有了设置项，同样报错（清单不得与 SETTINGS_ITEMS 重叠）。
+ * 当前为空——写入后检查的四项各自成项，无共用容器。
  */
-export const PAGE_FIELD_EXCEPTIONS: string[] = ["validation.lsp.commands"];
+export const PAGE_FIELD_EXCEPTIONS: string[] = [];
 
 /**
  * 豁免清单：这些 settings.* 键**不是**可配置项，因此不进 SETTINGS_ITEMS。
@@ -452,30 +401,10 @@ export const SHELL_SETTING_KEYS: string[] = [
   "autoConfirmHint", // → approval.auto_confirm 的说明
   "cmdAllowlistCwd", // → approval.command_allowlist 的悬浮目录标注
 
-  // —— 工具与集成的从属文案（项已登记：validation.* / mcp.servers / disabled_skills） ——
-  "validationHint", // → 校验组说明（探测结果 / 命令覆盖留空 = 自动探测）
-  "lspCommandPh", // → 语言行命令覆盖输入框占位
-  "lspFound", // → 状态徽标：已找到
-  "lspFoundVersion", // → 状态徽标：已找到 vX
-  "lspMissing", // → 状态徽标：未找到（历史键，仍保留）
-  "lspDisabled", // → 状态徽标：已关闭
-  "lspServerMissing", // → 状态徽标：语言服务器未安装（工具链已就绪）
-  "lspServerMissingNoSdk", // → 状态徽标：语言服务器未安装且工具链未就绪
-  "lspSdkReady", // → 语言工具链段：已就绪
-  "lspSdkMissing", // → 语言工具链段：未找到
-  "lspInstall", // → 动作：一键安装语言服务器
-  "lspInstallDone", // → 安装完成提示（后端未回喂文案时的兑底）
-  "lspInstallFailed", // → 安装失败提示
-  "lspNeedRuntime", // → 前置运行库缺失提示（需先安装 Node.js）
-  "lspDownload", // → 动作：打开运行库下载页
-  "lspManualInstall", // → 动作：打开手动安装官方地址
-  "lspJavaCost", // → validation.java 的启用代价说明
-  "lspExtraRootsHint", // → validation.lsp.extra_roots 的说明
-  "lspAddRoot", // → 动作：添加额外 SDK 根目录
-  "lspJavaHomeHint", // → validation.lsp.java_home 的说明
-  "lspRedetect", // → 动作：重新探测
-  "lspRedetected", // → 重新探测成功提示
-  "lspRedetectFailed", // → 重新探测失败提示
+  // —— 工具与集成的从属文案（项已登记：post_write_check.* / mcp.servers / disabled_skills） ——
+  "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
+  "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
+  "postWriteCommandPh", // → post_write_check.command 输入框占位
   "mcpHint", // → mcp.servers 结构化编辑说明
   "mcpRawHint", // → mcp.servers 文本兜底模式说明
   "mcpName", // → mcp.servers 条目字段

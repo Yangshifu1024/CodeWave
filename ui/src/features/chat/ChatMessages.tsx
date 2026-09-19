@@ -23,7 +23,6 @@ import type { ScrollAnchor } from "../../utils/scrollAnchor";
 import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/uiState";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
-import LspGuideCards from "./LspGuideCard";
 
 // 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/titlebar-content-batch](../../../../docs/titlebar-content-batch.md) 缺陷修复）
 function ts(iso: string | undefined): string {
@@ -470,11 +469,6 @@ export default function ChatMessages() {
           </div>
         )}
         {active.items.map(renderItem)}
-
-        {/* LSP 语义校验引导卡（`lsp:server_missing`）：消息列表尾部的独立块；
-            数据来自 run store 的 lspGuide 平行桶（不进 items，不改 tool 段渲染语义） */}
-        <LspGuideCards />
-
 
         {active.suggestions.length > 0 && !active.running && (
           <div className="chips">

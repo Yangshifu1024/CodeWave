@@ -299,9 +299,13 @@ struct ToolOutcome { ok, data: Value, error: Option<ToolError>, warnings: Vec<St
 
 `serde_json` 手动解码：未知字段 → `serde_ignored` 收集为 warnings 回填模型；类型错误（如双重编码字符串）尝试自动修复；修复失败且疑似截断 → 走抢救；否则拒执行并给出可自纠的错误说明。
 
-### 4.3.6 写入后校验（P1）
+### 4.3.6 写入后检查（P1；2026-09-20 重定）
 
-edit/create 成功后对 py/rs/ts/tsx/vue/go/json 跑低成本语法检查（调用各自 CLI 或轻量解析器），结果字符串回填模型："文件已写入；校验失败：\<详情\>，请修复"。Settings 按语言开关。
+edit/create 成功后执行用户配置的一条检查命令（`post_write_check`，在项目根目录运行，支持 `{file}` 占位符），
+输出尾部随工具结果的 `outcome.data`（`check` / `checks` 字段）交给模型："文件已写入；检查输出：\<尾部\>，请修复"。
+命令由用户按项目配置、执行环境即项目环境，故不需要写前基准 / 差集 / 就绪判据。默认关闭。
+（历史：P1 曾实现「六语言 LSP 语义校验」，因写后结论只达前端 warnings、模型读不到而废弃，
+见 [post-write-check-plan](./post-write-check-plan.md)。）
 
 ## 4.4 safety —— 安全围栏与确认弹窗（D4 决策）
 
@@ -510,7 +514,7 @@ Esc 停止 run、`Cmd/Ctrl+T` 新 Tab、`Cmd/Ctrl+W` 关 Tab、`Cmd/Ctrl+N` 新�
 ```
 ~/.codewave/
 ├── config.json          # 主配置：models[]（provider/apiFormat/baseUrl/keys[]/contextWindow/
-│                        #   reasoningEffort…）、proxy、compact_threshold、ui、validation 开关…
+│                        #   reasoningEffort…）、proxy、compact_threshold、ui、post_write_check 命令…
 │                        #   （P0 明文存 key；P1 keyring 迁移，服务名 codewave.yangshifu.xyz）
 ├── mcp.json             # 用户级 MCP 配置（P1）
 ├── sessions/  histories/ # §4.5

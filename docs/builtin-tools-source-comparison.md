@@ -5,6 +5,10 @@
 > 源码基准：`src-tauri/src/tools/`（工作区当前状态，含未提交修改：`edit.rs` / `batch.rs` / `validation.rs` / `core/agent.rs`）。
 >
 > 阅读约定：代码引用形如 `tools/command.rs:237`（相对 `src-tauri/src/`）。
+>
+> **后续变更（2026-09-20，[post-write-check-plan](./post-write-check-plan.md)）**：写后校验已从「项目级常驻 LSP
+> 语义诊断」再次改为「**写入后检查命令**」（用户配置一条命令，结论进 `outcome.data`）；本文 §4.2 / §13.4 / §15 P3-1
+> 中关于 LSP 与「写入后语义校验」的记述均为历史沿革存档。
 
 ---
 

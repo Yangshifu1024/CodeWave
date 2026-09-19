@@ -4,6 +4,10 @@
 > 批③ 搜索 / 进阶折叠 / 3 档宽度（[settings-search-and-advanced](./settings-search-and-advanced.md)）。
 > 本批收口前四批遗留的两类问题——**同义键与跨段借键**、**关于页版式与入口**——并修一处真实缺陷：
 > 「工具与集成 → 技能」空列表时显示的是**「暂无会话」**（借用了 `sessions.empty`）。
+>
+> **后续变更（2026-09-20，[post-write-check-plan](./post-write-check-plan.md)）**：写入后语义校验（LSP）机制整体删除，
+> 改为 **写入后检查**（`settings.postWriteCheck` 分组 + `post_write_check.*` 四项）；本文中
+> 「写入后**语义**校验」/ `settings.validation` 相关条目均为历史记录，现行定名为「写入后检查」。
 
 本批**不做**（边界）：后端任何改动（`src-tauri/**` 零 diff）；代码标识符（组件名 / 文件名 / 注册表导出名与 id / 配置字段路径 / CSS 类名 / localStorage 键）；
 全 8 页说明位大改造；第三方许可清单生成与许可证全文页；构建信息 / 平台 / 架构；批①-③ 的任何能力回退；新设置项功能与配置字段；i18n 机制更换与第三语言；GUI 自动点验。
