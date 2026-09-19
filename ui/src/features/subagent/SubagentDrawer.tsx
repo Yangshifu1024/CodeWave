@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Drawer, Tag, Tooltip } from "antd";
-import { CaretRightOutlined, CloseOutlined, RobotOutlined } from "@ant-design/icons";
+import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useActiveRun, useRun } from "../../stores/run";
 import { renderCached, TimelineSegsView } from "../chat/segments";
@@ -248,7 +248,13 @@ export default function SubagentDrawer() {
               // 归档分支（sub.report）保持不动：它本来就是后端剥离过的干净文本。
               stripReport
             />
-            {stream.status === "running" && <span className="cursor">▍</span>}
+            {/* 等待指示（[docs/chat-loading-indicator]）：与聊天窗口同款（antd 加载图标 + 同一语义化类名），
+                位置仍在过程流的末尾，运行状态判定不变 */}
+            {stream.status === "running" && (
+              <span className="ws-streaming-indicator">
+                <LoadingOutlined spin />
+              </span>
+            )}
           </div>
         ) : sub?.report ? (
           <>

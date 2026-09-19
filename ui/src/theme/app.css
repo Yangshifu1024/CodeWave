@@ -230,9 +230,26 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 @media (prefers-reduced-motion: reduce) {
   .thinking-block .thinking-roll.rolling { animation: none; }
   .thinking-block .thinking-roll-line { transition: none; }
+  /* 流式等待指示（下方 .ws-streaming-indicator）在减弱动效偏好下停转：
+     antd 图标的旋转只挂在 `.anticon-spin` 这一条规则上，作用域收在本类里关掉，不波及其他位置的加载图标。 */
+  .ws-streaming-indicator .anticon-spin { animation: none; }
 }
-.cursor { color: var(--ws-accent); animation: blink 1s steps(2) infinite; }
-@keyframes blink { 50% { opacity: 0; } }
+/* 流式等待指示（[docs/chat-loading-indicator](../../../docs/chat-loading-indicator.md)）：模型正在输出时，
+   跟在末尾的行内加载图标（antd LoadingOutlined spin），替代原自绘方块字符 `▍` 与 `.cursor` 闪烁动画
+   （`.cursor` 与 `@keyframes blink` 已随本次改动删除——别再加回来：cursor 与 CSS 的 cursor 属性同名，
+   是键盘高亮类名历史误伤点，见 features/tools/AskPanel.tsx 的类名坑注释）。
+   位置语义不变：仍跟在本条消息最后一个未定稿文本段之后（features/chat/segments.tsx 的 tailIdx）。
+   字号 0.9em（与正文相近、略小）+ 盒宽高钉死 1em——不靠「正文行高比较大」兜住（line-height 只作用于
+   inline-block 块内部，行盒按它的 margin-box 算，antd 图标 SVG 恒为 1em 见方，不钉死时盒高其实是 1em）：
+   @ant-design/icons 的 svgBaseProps 给 SVG 写死 width/height="1em"，em 取 SVG 自身继承到的字号，
+   故盒宽高 1em = 0.9 × 正文字号，盒内正好装下图标；行盒取「该盒」与「正文行盒」中的较大者 → 仍是正文行高。
+   flex: none 防将来放进 flex 容器被压缩。 */
+.ws-streaming-indicator {
+  display: inline-block; vertical-align: -0.125em;
+  margin-left: 4px; color: var(--ws-accent);
+  font-size: 0.9em; line-height: 1;
+  width: 1em; height: 1em; flex: none;
+}
 /* 追问建议区（antd 6 filled 胶囊 + 语义标签头） */
 .chips { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 4px; }
 .chips-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); }

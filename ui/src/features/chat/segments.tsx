@@ -198,7 +198,7 @@ export function TimelineSegsView({
    *  默认 false：主聊天正文引用该标记是合法内容，不可全局剥离。 */
   stripReport?: boolean;
 }) {
-  // 流式光标跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，光标落在空尾）
+  // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
   let tailIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
     const s = timeline[i];
@@ -221,7 +221,7 @@ export function TimelineSegsView({
           // （可能仍是占位名 "?"）到达顺序无保证，store 层无法可靠判定；渲染层过滤对两种顺序
           // 都成立，且与恢复路径「不留工具卡段」的语义一致。
           // 仅在工具名明确等于 "subagent" 时跳过；"?"（占位未回填）照常渲染，避免误伤真正运行中的工具。
-          // 段本身仍保留在 timeline 里（光标定位等既有逻辑依赖它），只是不渲染卡片。
+          // 段本身仍保留在 timeline 里（等待指示定位等既有逻辑依赖它），只是不渲染卡片。
           // 例外：**失败的调用必须照常渲染**——E_ARGS / E_SUBAGENT_BUSY 在 sub:spawn 之前就返回了
           // （tools/subagent.rs 的校验与并发抢槽早于 spawn），此时 timeline 里根本没有 sub 段，
           // 再过滤掉工具卡就会让这次调用在聊天里零痕迹（连错误码都看不到）。

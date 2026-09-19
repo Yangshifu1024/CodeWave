@@ -7,6 +7,7 @@ import {
   MessageOutlined,
   FolderAddOutlined,
   DownOutlined,
+  LoadingOutlined,
   ThunderboltOutlined,
   RightOutlined,
 } from "@ant-design/icons";
@@ -137,7 +138,13 @@ const AssistantMessage = memo(function AssistantMessage({
       </div>
       {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagent-interaction-drawer 抽取至 segments.tsx） */}
       <TimelineSegsView timeline={item.timeline} toolsMap={item.toolsMap} streaming={streaming} onUserToggle={onUserToggle} />
-      {streaming && <span className="cursor">▍</span>}
+      {/* 等待指示（[docs/chat-loading-indicator](../../../../docs/chat-loading-indicator.md)）：antd 加载图标，
+          样式类承载颜色/字号（theme/app.css 的 .ws-streaming-indicator）；位置仍在末尾、状态判定不变 */}
+      {streaming && (
+        <span className="ws-streaming-indicator">
+          <LoadingOutlined spin />
+        </span>
+      )}
     </div>
   );
 });

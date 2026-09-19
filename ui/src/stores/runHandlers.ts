@@ -77,8 +77,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.running = false;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
-        // 兜底收尾：不能只翻末项的光标——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
-        // 漏网的 streaming 项就是聊天里那个永久残留光标（见 runFrames.currentAssistantIm 的不变量注释）。
+        // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
+        // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
         // 这里扫全部 assistant 项统一收尾（streaming=false + 冻结思考时长）；本 handler 其余语义一概不动。
         closeStreamingAssistantItems(t);
         if (p.suggestions) t.suggestions = p.suggestions;
