@@ -7,6 +7,9 @@ repository = "https://github.com/Yangshifu1024/CodeWave"
 authors = ["Yangzhenbiao"]
 edition = "2024"
 rust-version = "1.85"
+# 多 bin 目标（主程序 + 集成测试用的假 LSP server `codewave-fake-lsp`）下，`cargo run` 靠它确定默认二进制，
+# 否则报 could not determine which binary to run；`cargo test` 不受影响，所以 CI 拦不住（2026-09-19 补登）。
+default-run = "codewave"
 
 [lib]
 name = "codewave_lib"
