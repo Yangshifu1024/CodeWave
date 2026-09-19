@@ -174,13 +174,14 @@ describe("设置 → 外观：主题选择即时生效", () => {
   it("Select 切到暗色后 store/localStorage/html.dark 三处同步", async () => {
     await mountApp();
     // seed 配置后 store 直驱打开设置弹窗并落在「外观」页签（既有惯例，见 shell.settings.test；
-    // SettingsModal 的 Tabs 依赖 draft=useSettings.config，未 seed 时仅渲染空 Modal）
+    // SettingsPage 的 Tabs 依赖 draft=useSettings.config，未 seed 时仅渲染空页）
+    // 设置页全屏覆盖层已不再有 Modal 外壳（docs/settings-fullscreen-shell）：选择器锚 .settings-shell
     useSettings.setState({ config: JSON.parse(JSON.stringify(fixtureConfig)), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "appearance" });
     // 外观页签唯一的 Select 即主题三档（字体项是 Input）；antd 6.6 需对 .ant-select 根元素 mouseDown 展开
     const themeSelect = await waitFor(
       () => {
-        const el = document.querySelector(".ant-modal .ant-select") as HTMLElement | null;
+        const el = document.querySelector(".settings-shell .ant-select") as HTMLElement | null;
         expect(el).toBeTruthy();
         return el as HTMLElement;
       },

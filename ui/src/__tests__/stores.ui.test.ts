@@ -51,14 +51,15 @@ describe("stores/ui", () => {
     expect(useUi.getState().rbTab).toBe("changes");
   });
 
-  it("showSettings opens the modal on the requested tab, defaulting to general (docs/auth-error-guidance)", () => {
-    // residue from a previous auth-error jump must not leak into a plain open
-    useUi.setState({ settingsTab: "providers", settingsOpen: false });
-    useUi.getState().showSettings();
-    expect(useUi.getState().settingsOpen).toBe(true);
-    expect(useUi.getState().settingsTab).toBe("general");
-    useUi.setState({ settingsOpen: false });
+  it("showSettings：带页签跳到该页，无参保持当前页不重置（docs/settings-fullscreen-shell）", () => {
+    // 带参深链：错误卡「打开模型设置」→ providers、LSP 引导卡 → 所在页靠它落地（auth-error-guidance）
+    useUi.setState({ settingsTab: "general", settingsOpen: false });
     useUi.getState().showSettings("providers");
+    expect(useUi.getState().settingsOpen).toBe(true);
+    expect(useUi.getState().settingsTab).toBe("providers");
+    // 无参 = 保持当前页（有意变更：旧实现无参一律回 general，设置改成常驻全屏页后会把用户甩回第一页）
+    useUi.setState({ settingsOpen: false });
+    useUi.getState().showSettings();
     expect(useUi.getState().settingsOpen).toBe(true);
     expect(useUi.getState().settingsTab).toBe("providers");
   });

@@ -1,11 +1,11 @@
 // Shell settings tests: general-tab Shell select fed by list_available_shells, persisted via config.shell.selection.
-// SettingsModal is mounted standalone (like providers.panel.test.tsx): useUi controls settingsOpen/settingsTab.
+// SettingsPage is mounted standalone (like providers.panel.test.tsx): useUi controls settingsOpen/settingsTab.
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：es/app 子路径会产生另一个 context，
 // 导致 App.useApp() 拿到空壳 message（message.error is not a function）
 import "../i18n"; // Component mounted standalone must init i18next explicitly (no global entry outside App.tsx)
-import SettingsModal from "../features/panels/SettingsModal";
+import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import type { ConfigState } from "../ipc/types";
@@ -39,7 +39,7 @@ const fixtureShells = [
 
 let savedConfigs: ConfigState[] = [];
 
-// Base mock: mirror the backend contract (commands used by SettingsModal resolve with well-typed values)
+// Base mock: mirror the backend contract (commands used by SettingsPage resolve with well-typed values)
 async function baseInvoke(cmd: string, _args?: any) {
   switch (cmd) {
     case "get_config": return makeConfig();
@@ -99,7 +99,7 @@ async function openSettings() {
   useUi.setState({ settingsOpen: true, settingsTab: "general" });
   render(
     <AntApp>
-      <SettingsModal />
+      <SettingsPage />
     </AntApp>,
   );
   await waitFor(() => expect(screen.getByText("Shell")).toBeTruthy());
@@ -107,7 +107,7 @@ async function openSettings() {
 
 /** The shell Select is the second select in the general pane (first = language) */
 function shellSelect(): HTMLElement {
-  return document.querySelectorAll(".ant-modal .ant-select")[1] as HTMLElement;
+  return document.querySelectorAll(".settings-shell .ant-select")[1] as HTMLElement;
 }
 
 /** Open the shell dropdown (antd Select needs mousedown, not click) and pick an option by text */
@@ -131,7 +131,7 @@ describe("settings store：shell 默认值", () => {
   });
 });
 
-describe("SettingsModal general tab：Shell 选择", () => {
+describe("SettingsPage general tab：Shell 选择", () => {
   it("打开面板拉取探测列表：选项数量正确，limited 项有（有限支持）标注，path 进 option title", async () => {
     await openSettings();
     // 默认选中「自动」，auto label 附探测列表首个（非 limited）默认 shell 名
@@ -160,7 +160,7 @@ describe("SettingsModal general tab：Shell 选择", () => {
     useUi.setState({ settingsOpen: true, settingsTab: "general" });
     render(
       <AntApp>
-        <SettingsModal />
+        <SettingsPage />
       </AntApp>,
     );
     await waitFor(() => expect(screen.getByText("Shell")).toBeTruthy());
@@ -188,7 +188,7 @@ describe("SettingsModal general tab：Shell 选择", () => {
     useUi.setState({ settingsOpen: true, settingsTab: "general" });
     render(
       <AntApp>
-        <SettingsModal />
+        <SettingsPage />
       </AntApp>,
     );
     await waitFor(() => expect(screen.getByText("Shell")).toBeTruthy());
@@ -216,7 +216,7 @@ describe("SettingsModal general tab：Shell 选择", () => {
 
     it("回显元素带 title 悬停完整路径（code + mono token）", async () => {
       await openSettings();
-      const code = document.querySelector(".ant-modal .ant-form-item code[title]") as HTMLElement | null;
+      const code = document.querySelector(".settings-shell .ant-form-item code[title]") as HTMLElement | null;
       expect(code).toBeTruthy();
       expect(code!.getAttribute("title")).toBe("C:/Program Files/Git/bin/bash.exe");
       expect(code!.textContent).toContain("bash.exe");

@@ -219,18 +219,18 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector(".chat-empty-guide")).toBeFalsy();
   });
 
-  it("设置弹窗：6 个分区页签 + 表单字段渲染", async () => {
+  it("设置页：7 个分区页签 + 表单字段渲染", async () => {
     await mountApp();
     await clickIconBtn("设置");
 
     // All tabs render (regression: wrong Tabs items config → blank content)
     const tabTexts = Array.from(document.querySelectorAll(".ant-tabs-tab")).map((x) => x.textContent).join("|");
-    for (const tab of ["通用", "外观", "供应商", "安全", "MCP", "技能"]) {
+    for (const tab of ["通用", "外观", "供应商", "安全", "网络", "MCP", "技能"]) {
       expect(tabTexts).toContain(tab);
     }
-    // All forms vertical ([docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)): no horizontal form inside the settings modal
-    expect(document.querySelector(".ant-modal .ant-form-horizontal")).toBeFalsy();
-    expect(document.querySelector(".ant-modal .ant-form-vertical")).toBeTruthy();
+    // All forms vertical ([docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)): no horizontal form inside the settings page
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeTruthy();
     // General tab form renders: language select exists
     expect(document.querySelectorAll(".ant-select").length).toBeGreaterThan(0);
     // Custom prompt textarea exists
@@ -273,7 +273,8 @@ describe("App 渲染冒烟", () => {
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已保存"));
     expect(useUi.getState().settingsOpen).toBe(true);
-    expect(document.querySelector(".ant-modal")).toBeTruthy();
+    // 全屏设置页常驻 DOM（不再是 Modal 外壳）：docs/settings-fullscreen-shell
+    expect(document.querySelector("[data-testid='settings-page']")).toBeTruthy();
     // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers tab
     await clickTab("供应商");
     await clickButton("编辑供应商");
@@ -287,8 +288,8 @@ describe("App 渲染冒烟", () => {
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("供应商配置无效"));
     expect(useUi.getState().settingsOpen).toBe(true);
-    // Scope to the modal: the first document-level .ant-tabs-tab-active may be the RightBar/topbar tab strip
-    expect(document.querySelector(".ant-modal .ant-tabs-tab-active")?.textContent ?? "").toContain("供应商");
+    // Scope to the settings page: the first document-level .ant-tabs-tab-active may be the RightBar tab strip
+    expect(document.querySelector('[data-testid="settings-page"] .ant-tabs-tab-active')?.textContent ?? "").toContain("供应商");
   });
 
   it("自绘标题栏：后端返回 native 时 html 标记 native（回退布局分支，docs/custom-font-and-titlebar）", async () => {
@@ -420,13 +421,14 @@ describe("App 渲染冒烟", () => {
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);
-    // Skills tab still works（左栏技能分段也会渲染同名技能，此处范围限定到设置弹框）
+    // Skills tab still works（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
     await clickTab("技能");
     await waitFor(() => {
-      const inModal = [...document.querySelectorAll(".ant-modal")].some((m) =>
-        [...m.querySelectorAll(".skill-row")].some((r) => r.textContent?.includes("demo")),
-      );
-      expect(inModal).toBe(true);
+      const page = document.querySelector('[data-testid="settings-page"]');
+      const inSettings = page
+        ? [...page.querySelectorAll(".skill-row")].some((r) => r.textContent?.includes("demo"))
+        : false;
+      expect(inSettings).toBe(true);
     });
   });
 

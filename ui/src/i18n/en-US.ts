@@ -140,6 +140,14 @@ export default {
     skillsHint: "Dirs: project .codewave/skills/ > user ~/.codewave/skills/, ~/.agents/skills/ & ~/.claude/skills/ > workspace .agents/skills/, .claude/skills/ > builtin",
     reloadSkills: "Reload", skillsReloaded: "Reloaded, {{n}} skills in total", skillsReloadFailed: "Reload failed",
     deleteSkill: "Delete skill", deleteSkillConfirm: "Delete skill \"{{name}}\"? Its files will be removed and cannot be recovered", deleteSkillSuccess: "Deleted skill: {{name}}", deleteSkillFailed: "Delete failed",
+    // Full-screen settings page shell ([docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md))
+    backToWorkspace: "Back to workspace",
+    runningCount: "{{n}} running", runningHint: "Sessions keep running while settings is open; click to return to the workspace",
+    dirtyHint: "Unsaved changes", instantApply: "Applies immediately",
+    cancelHint: "Discard unsaved changes and return to the workspace",
+    leaveTitle: "Unsaved settings changes",
+    leaveDesc: "Choose what to do with these changes before leaving; the cancel button discards everything without asking again.",
+    leaveSave: "Save and leave", leaveDiscard: "Discard changes", leaveStay: "Stay here",
   },
   chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment" },
   // LSP guide cards (`lsp:server_missing`, three shapes: one-click install / manual install / disabled-by-default confirm)

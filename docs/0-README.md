@@ -90,6 +90,8 @@
 - 2026-09-16 · [session-restore-batch1.md](./session-restore-batch1.md) — 会话保存与恢复优化 · 批1「回到现场」：后端 `ui-state.json`（schema v1 + 原子写 + 损坏备份）+ 中断标记与退出拦截（`running.marker` / `app:exit_requested`，事件面 27 → 28 键）+ 前端启动 hydrate（Tab/树态/未读/草稿/面板态）与滚动锚点（sig + 偏移，替掉切 Tab 贴底硬重置）+ 关 Tab 二次确认
 - 2026-09-16 · [empty-assistant-and-request-rebuild-fix.md](./empty-assistant-and-request-rebuild-fix.md) — 缺陷修复：空 assistant 消息上 wire（400 Invalid assistant message）与「修复后重试」不重建请求体（sanitize 结果从未发出，同文 400 相隔 2.45s）——三层纵深防御（历史层清理 / 出网副本 repair / wire 层拦截）+ 出网消息数组幂等性守护
 
+- 2026-09-19 · [settings-fullscreen-shell.md](./settings-fullscreen-shell.md) — 设置全屏容器化 · 批①（含审查返工）：`SettingsModal`（Modal 880px）→ `SettingsPage` 覆盖式全屏页（`.settings-shell` = 返回工作区 + 运行中指示 + 7 页 Tabs 导航｜`.settings-content` = 操作条 + 页体）；工作区只加 `.workspace-covered`（`visibility:hidden`，**禁用 `display:none`**——不得让 ResizeObserver 测到 0 尺寸而干扰运行中任务）；Esc 三层收口（settingsOpen 短路 + `.settings-shell` 白名单 + 页面捕获阶段 preventDefault），任何情况下不停运行；逐页脏标记（即时生效项不打点 + 空值三态归一，避免「删空自定义提示词仍常亮」）+ 三选拦截 `保存并离开/放弃改动/留在原地` 覆盖切页/返回/Esc/关窗四条路径（关窗复用 `app:exit_requested` 链）；`showSettings` 深链契约变更（无参不再重置到 general）；新增 `settings.page.test.tsx`（20 例）与跨文件选择器迁移（前端 67 文件 / 567 例全绿）
+
 ## 供应商与设置
 
 - 2026-09-02 · [provider-management-refactor.md](./provider-management-refactor.md) — 供应商管理重构：config schema v2（providers 嵌套 models）+ 移除 models.dev 目录 + 设置弹窗供应商页签 + keyring 账户迁移
