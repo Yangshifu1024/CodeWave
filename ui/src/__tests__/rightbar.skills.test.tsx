@@ -2,6 +2,7 @@
 // 列表渲染（后端分桶排序原样展示）+ 点击技能行弹详情（get_skill 正文渲染）
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
@@ -93,6 +94,26 @@ describe("RightBar 技能段", () => {
       await waitFor(() => expect(inserted).toEqual(["/demo "]));
     } finally {
       window.removeEventListener("ws:composer-insert", onInsert);
+    }
+  });
+
+  // 批④ 返工补的 DOM 守护：右栏技能空态此前无任何断言 —— 把文案换成他段键（如 sessions.empty）全量零变红；
+  // 现在这里再钉一次（借键本身由 settings.registry.test.ts 的跨目录守门兜住）。
+  it("技能为空时显示空态文案「暂无可用技能」（批④ 起不再是「暂无会话」）", async () => {
+    const mock = vi.mocked(invoke);
+    const original = mock.getMockImplementation()!;
+    mock.mockImplementation(async (cmd: string) => (cmd === "list_skills" ? [] : original(cmd)));
+    try {
+      seedTab();
+      render(<RightBar />);
+      await waitFor(() => {
+        const dims = Array.from(document.querySelectorAll(".rb-collapse .rb-dim")).map((el) => el.textContent);
+        expect(dims).toContain("暂无可用技能");
+      });
+      // 技能空态也不允许退回「暂无会话」（批④ 修的缺陷就在这条借用键上）
+      expect(document.body.textContent ?? "").not.toContain("暂无会话");
+    } finally {
+      mock.mockImplementation(original);
     }
   });
 });

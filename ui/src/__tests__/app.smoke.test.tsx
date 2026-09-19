@@ -276,7 +276,7 @@ describe("App 渲染冒烟", () => {
     // 工具与集成页：语义校验行（LSP）+ MCP + 技能三段同页
     await clickTab("工具与集成");
     expect(document.querySelectorAll(".validation-row").length).toBe(7);
-    expect(document.body.textContent ?? "").toContain("写入后语法校验");
+    expect(document.body.textContent ?? "").toContain("写入后语义校验");
     expect(document.body.textContent ?? "").toContain("添加服务器");
     expect(document.body.textContent ?? "").toContain("技能");
 

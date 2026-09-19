@@ -15,7 +15,7 @@
 | 安全与能力 | `tools` | 工具与集成 | 写入后语义校验（页内三组：校验 / 预算 / 发现）、MCP 服务器、技能 |
 | 安全与能力 | `agent` | 工作区与智能体 | Shell、自定义提示词、自动压缩阈值、压缩请求超时 |
 | 诊断与其他 | `logs` | 日志 | 日志级别、会话详细日志 |
-| 诊断与其他 | `about` | 关于 | logo / 版本 / slogan、数据目录、GitHub 仓库、自动更新开关、手动检查更新 |
+| 诊断与其他 | `about` | 关于 | logo / 名称 / 简介、版本、数据目录、日志目录、代码仓库、开源许可证、自动更新开关、手动检查更新 |
 
 - 默认页 `appearance`；`ui.settingsTab` 的类型是 `PageKey`（不再是 `string`）。
 - 左导航自建（替掉 antd `Tabs`）：组标题（复用 `.nav-section-title` 度量：11px dim）+ 页行
@@ -37,11 +37,11 @@
 | 界面 | `ui.theme`、`ui.font_sans`、`ui.font_mono`（localStorage）、`ui.language` | 外观 + 通用·界面语言 |
 | 模型与供应商 | `ui.ai_language`、`providers`、`active_model_id` | 通用·AI 语言 + 供应商 |
 | 网络与连接 | `network.proxy`（= config.proxy）、`network.allow_private_network` | 网络 + 安全·内网访问 |
-| 安全与审批 | `approval.enabled / confirm_outside_create / confirm_git_push / auto_confirm / command_allowlist` | 安全（迁出内网访问与语法校验） |
+| 安全与审批 | `approval.enabled / confirm_outside_create / confirm_git_push / auto_confirm / command_allowlist` | 安全（迁出内网访问与语义校验） |
 | 工具与集成 | `validation.<6 语言>`、`validation.json`、`validation.lsp.*`（命令 / 预算 / 发现）、`mcp.servers`（独立 mcp.json）、`disabled_skills` | 安全·LSP + MCP + 技能 |
 | 工作区与智能体 | `shell.selection`、`custom_prompt`、`compact_threshold`、`compact_timeout_seconds` | 通用（这 4 项） |
 | 日志 | `log.level`、`log.session_verbose` | 通用（这 2 项） |
-| 关于 | `ui.auto_update`（localStorage）、`app.check_updates`（动作） | AboutModal 全部内容 + 通用·自动更新开关 |
+| 关于 | `ui.auto_update`（localStorage）、`app.check_updates`（动作）；批④ 追加：`app.version` / `app.data_dir` / `app.logs_dir` / `app.repo` / `app.license`（只读信息与入口，均为 `app.*` 无落盘字段） | AboutModal 全部内容 + 通用·自动更新开关 |
 
 设置项的行为语义（字段名 / 默认值 / 保存时机 / 校验规则）**一字未改**；关于页只是把弹框内容搬进页面。
 
@@ -66,7 +66,8 @@
    即时生效项（localStorage / 立即生效）加进 `INSTANT_APPLY_FIELD_IDS`。
 3. 双侧 i18n 加键（zh-CN + en-US，`i18n.keys.test.ts` 守护）。
 4. 跑 `pnpm --dir ui test`：`settings.registry.test.ts` 会拦住漏登记
-   （引用闭包（扫描 `features/panels/*.tsx`，单/双/反引号三种写法都认）/ 键存在性 / 页合法 / 分组完备 /
+   （引用闭包（扫 `features/**/*.tsx`：panels 目录看是否属于 `settings.*` / `common.*`，其余目录看「文件 → 允许段」白名单；
+   单/双/反引号三种写法都认，变量拼出的键名另需登记）/ 键存在性 / 页合法 / 分组完备 /
    PAGE_FIELDS 覆盖 / 字段归属唯一 / **「项 ↔ 页字段」双向闭合** / 豁免清单不重叠）。
    双向闭合的语义：① 每条设置项的 `id` 必须出现在 `PAGE_FIELDS[item.page]` 里（`app.*` 动作 / 只读信息项
    除外——它们本就没有落盘字段）；② `PAGE_FIELDS` 里每条路径必须有同页的设置项，例外只能写进
@@ -75,9 +76,12 @@
 ### 豁免清单 `SHELL_SETTING_KEYS` 说明
 
 只收「不是可配置项」的 `settings.*` 键，逐条带注释，分五类：
-页壳与离开拦截（`title`/`save`/`cancel`/`leaveXxx` 等）；从属文案（hint / 占位 / 内联标签 / 选项文案，
+页壳与离开拦截（`title`/`cancelHint`/`leaveXxx` 等）；从属文案（hint / 占位 / 内联标签 / 选项文案，
 已注明其所属项）；供应商编辑器的表单字段与动作；保存校验文案（`vRequired` 等）；
 状态徽标与反馈提示（`lspFound`/`reloadSkills` 等）。豁免清单与注册表**不得重叠**（测试断言）。
+
+批④ 起 `save` / `saved` / `cancel` / `remove` 已从本清单移除（收敛进 `common` 段；`common.*` 不是 `settings.*`，
+既不进注册表也不进本清单），空态与占位符的拆出键（`skillsEmpty` / `aiLanguagePlaceholder`）与关于页只读入口的从属文案按同类登记。
 
 ## 4. 脏标记：`PAGE_FIELDS` 驱动
 
@@ -121,10 +125,18 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
 - 新增键：`settings.pageAppearance/pageProviders/pageNetwork/pageSecurity/pageTools/pageAgent/pageLogs/pageAbout`
   与 `settings.groupUiModel/groupSafetyTools/groupDiagnostics`（中英双侧同步）。
 
-## 7. 术语表（占位 · 批④）
+## 7. 术语表
 
-批④ 再做同义键收敛与键重命名（如 `settings.updates` 与 `settings.autoUpdateCheckbox`、
-`settings.providers` 与页名 `settings.pageProviders` 的重叠语义）。本批只登记不改名。
+术语与键统一的全文（定名与判定规则、选段规则、键名前缀原则、旧→新键映射表、en 侧可见变更记账、三条守门用例）
+已随**批④**落到 [settings-terminology](./settings-terminology.md)；批② 曾在此留了占位。
+
+批④ 的浓缩口径（细则见上篇）：
+
+- 同义键收敛到 `common.*`（`save` / `saved` / `cancel` / `delete` / `builtin`），带宾语的动作（`settings.deleteSkill`）与不同动作（`settings.mcpSave`）不并入；
+- 跨段借键清零：`sessions.empty` → `settings.skillsEmpty`（**修缺陷**：技能空态曾显示「暂无会话」）、`composer.effortDefault` → `settings.aiLanguagePlaceholder`；
+- `about.*` 段整体迁入 `settings.about*`（否则不在引用闭包的守护范围内）；
+- 用户可见名「写入后**语法**校验」→「写入后**语义**校验」（en: `Post-write semantic validation`）；
+- 键名前缀原则：**前缀 = 页面 / 功能归属，不追技术栈名** —— 故 `validation*` 键名一律不改。
 
 ## 8. 批③ 追加的登记要求（宽度档与进阶标记）
 

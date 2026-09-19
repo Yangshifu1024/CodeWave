@@ -122,8 +122,8 @@ function ModelModal(props: {
       open={open}
       title={initial ? t("settings.editModel") : t("settings.addModel")}
       width={520}
-      okText={t("settings.save")}
-      cancelText={t("settings.cancel")}
+      okText={t("common.save")}
+      cancelText={t("common.cancel")}
       onOk={() => {
         if (!idTrimmed) {
           setIdError(true);
@@ -230,7 +230,7 @@ function ModelListSection(props: {
               <Button key="edit" size="small" type="text" icon={<EditOutlined />} onClick={() => onEdit(m)}>
                 {t("settings.editModel")}
               </Button>,
-              <Popconfirm key="del" title={`${t("settings.remove")}「${m.model}」?`} onConfirm={() => onRemove(m)}>
+              <Popconfirm key="del" title={`${t("common.delete")}「${m.model}」?`} onConfirm={() => onRemove(m)}>
                 <Button size="small" type="text" danger icon={<DeleteOutlined />} />
               </Popconfirm>,
             ]}
@@ -570,10 +570,10 @@ export default function ProvidersPanel({ draft, patchDraft, advancedVisible = tr
           <b>{t("settings.editProvider")}</b>
           <div className="flex" />
           <Popconfirm
-            title={`${t("settings.remove")}「${editing.name || editing.id}」?`}
+            title={`${t("common.delete")}「${editing.name || editing.id}」?`}
             onConfirm={() => removeProvider(editing)}
           >
-            <Button size="small" type="text" danger icon={<DeleteOutlined />}>{t("settings.remove")}</Button>
+            <Button size="small" type="text" danger icon={<DeleteOutlined />}>{t("common.delete")}</Button>
           </Popconfirm>
         </div>
         <ProviderFields
@@ -629,7 +629,7 @@ export default function ProvidersPanel({ draft, patchDraft, advancedVisible = tr
               </Button>,
               <Popconfirm
                 key="del"
-                title={`${t("settings.remove")}「${p.name || p.id}」?`}
+                title={`${t("common.delete")}「${p.name || p.id}」?`}
                 onConfirm={(e) => {
                   e?.stopPropagation();
                   removeProvider(p);

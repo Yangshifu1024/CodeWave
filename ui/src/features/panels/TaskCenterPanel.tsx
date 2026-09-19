@@ -90,8 +90,8 @@ export default function TaskCenterPanel() {
               {task.last_status ?? "待触发"}
             </Tag>
             <div className="flex" />
-            <Popconfirm title={`${t("tasks.delete")}?`} onConfirm={() => void remove(task.id)}>
-              <Button size="small" type="text" danger>{t("tasks.delete")}</Button>
+            <Popconfirm title={`${t("common.delete")}?`} onConfirm={() => void remove(task.id)}>
+              <Button size="small" type="text" danger>{t("common.delete")}</Button>
             </Popconfirm>
           </div>
           <div className="row2 dim">{task.instruction}</div>

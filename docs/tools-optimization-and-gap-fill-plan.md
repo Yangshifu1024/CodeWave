@@ -302,7 +302,7 @@
 
 | 项 | 结论 | 理由（[docs/builtin-tools-source-comparison](./builtin-tools-source-comparison.md) 出处） |
 |---|---|---|
-| LSP 横切服务（read 预热/write 诊断/lsp 工具） | 远期评估（P3-1） | 常驻进程管理成本高；现有 validation.rs 轻量语法校验是务实取舍。触发条件：用户高频反馈"语义错误要到运行才发现" |
+| LSP 横切服务（read 预热/write 诊断/lsp 工具） | 远期评估（P3-1） | 常驻进程管理成本高；现有 validation.rs 轻量语法校验是务实取舍（**历史文案**：本篇成文时的旧写法，用户可见的现行定名是「写入后语义校验」，见 [settings-terminology](./settings-terminology.md) §1）。触发条件：用户高频反馈"语义错误要到运行才发现" |
 | code-mode 沙箱编排 | 远期评估（P3-2） | 依赖 Rust 侧 JS 沙箱选型（deno_core/rquickjs）；仅 MCP 密集场景收益明显 |
 | apply_patch 通道 | 不做（P3-4） | 仅 gpt-5 系模型需要；现有 edit 多文件能力已覆盖；接入该类模型时再评估 |
 | invalid 兜底工具 / plan_exit 工具 | 不做 | `E_UNKNOWN_TOOL` 与 ask 批准协议已分别覆盖（[docs/builtin-tools-source-comparison](./builtin-tools-source-comparison.md) §13.6/§13.3） |

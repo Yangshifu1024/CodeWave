@@ -221,7 +221,7 @@ CodeWave 的路径边界由 `WriteRoots`（workspace + data_dir + extra_roots �
 
 - **覆盖语义**：默认拒绝 + 显式 `overwrite` 防误覆盖，语义贴合 create 本名；代价是「整文件重写」模型须两步（先失败再补 overwrite），description 应强化指引（§15 P2-2）。
 - **审批表达**：ConfirmEach 档 detail 目前是参数 JSON dump（`batch.rs:226`），对写类工具可专门渲染语义 diff 预览（§15 P1-1）。
-- **写后反馈取向**：外部工具链语法校验（单文件、轻量）而非 LSP 语义诊断（常驻、重）——对无 LSP 场景更务实（LSP 见 §13.4 / §15 P3-1）。
+- **写后反馈取向**：外部工具链语法校验（单文件、轻量）而非 LSP 语义诊断（常驻、重）——对无 LSP 场景更务实（LSP 见 §13.4 / §15 P3-1）。（**历史文案**：本篇成文时的旧写法；用户可见的现行定名是「写入后语义校验」，见 [settings-terminology](./settings-terminology.md) §1。）
 - **BOM**：读侧 `from_utf8_lossy` 已丢 BOM 信息，UTF-8 BOM 文件 round-trip 会丢 BOM（Windows 记事本场景小坑）。
 - **产物登记**：前端「文件」标签页数据源（[docs/session-artifacts-and-files-tab](./session-artifacts-and-files-tab.md)）。
 
@@ -233,7 +233,7 @@ CodeWave 的路径边界由 `WriteRoots`（workspace + data_dir + extra_roots �
 2. 已存在且未 `overwrite` → `E_EXISTS`（**防误覆盖默认**：模型想覆盖必须显式声明）；
 3. 建父目录 → `util::atomic::atomic_write`（原子写：先临时文件再 rename，防半写状态）；
 4. 成功后：**产物登记**（`create.rs:62-75`）——非 task runtime 时 `append_artifact(owner=主会话 id, canonical 路径, Create)`（[docs/session-artifacts-and-files-tab](./session-artifacts-and-files-tab.md)：前端"文件"标签页数据源；子代理写入归属主会话；相对/绝对路径 canonical 归一去重）；失败仅 warn 不影响结果；
-5. **写入后校验**（`create.rs:76-84`）：`validation::validate_file`（按扩展名路由：py→`python3 -m py_compile`、rs→`rustc --emit=metadata`、ts→`npx typescript@5 tsc --noEmit`、js/vue→`node --check`、go→`go vet`、json→serde 内建解析；工具链未装跳过、超时 10–60s、错误取 stderr 末 6 行截 2048 字符）；summary 非空进 warnings 回填模型（"写入后语法校验失败，请用 edit 修复"）。
+5. **写入后校验**（`create.rs:76-84`）：`validation::validate_file`（按扩展名路由：py→`python3 -m py_compile`、rs→`rustc --emit=metadata`、ts→`npx typescript@5 tsc --noEmit`、js/vue→`node --check`、go→`go vet`、json→serde 内建解析；工具链未装跳过、超时 10–60s、错误取 stderr 末 6 行截 2048 字符）；summary 非空进 warnings 回填模型（"写入后语法校验失败，请用 edit 修复"——**历史文案**：那时回填给模型的原话，用户可见的现行定名是「写入后语义校验」，见 [settings-terminology](./settings-terminology.md) §1）。
 
 ### 4.3 优化建议
 
@@ -255,7 +255,7 @@ CodeWave 的路径边界由 `WriteRoots`（workspace + data_dir + extra_roots �
 | 换行处理 | 按字节精确匹配（CRLF 文件要求模型给 CRLF——实际模型常给 LF，已知缺口 → §15 P0-1） |
 | 回滚 | 备份 → 倒序写 → 失败回滚已写文件 |
 | 审批 | 档位 gate（batch 层） |
-| 写后 | validation 语法校验 + 产物登记 |
+| 写后 | validation 语法校验 + 产物登记（**历史文案**：现行定名「写入后语义校验」，见 [settings-terminology](./settings-terminology.md) §1） |
 | 附加 | stale warnings、产物 canonical 去重 |
 
 ### 5.1 备选匹配机制评估（多级模糊替换器链）

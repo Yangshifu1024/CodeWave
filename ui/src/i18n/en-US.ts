@@ -1,4 +1,14 @@
 export default {
+  // Cross-page shared actions (batch ④ terminology unification: [docs/settings-terminology](../../../docs/settings-terminology.md)).
+  // Only words with the same value *and* context merge here; actions taking an object or living in a
+  // different context (settings.deleteSkill, settings.mcpSave) stay in their own page segment.
+  common: {
+    save: "Save",
+    saved: "Saved",
+    cancel: "Cancel",
+    delete: "Delete",
+    builtin: "Built-in",
+  },
   app: {
     title: "CodeWave",
     newSession: "New tab",
@@ -28,13 +38,9 @@ export default {
     tasks: "Tasks",
     stats: "Stats",
   },
-  about: {
-    // title / checkUpdates retired with the About page ([docs/settings-ia](../../../docs/settings-ia.md), zero references):
-    // the page name is settings.pageAbout and the manual check uses settings.checkForUpdates (no duplicate keys)
-    slogan: "Local-first desktop AI coding agent",
-    appData: "Data folder",
-    repo: "Repository",
-  },
+  // The `about` segment moved into settings.about* (batch ④): the registry's reference closure only
+  // scans the settings.* prefix, so only after the move are these keys guarded by the contract test.
+  // See [docs/settings-terminology](../../../docs/settings-terminology.md)
   tools: {
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
     command: "Command", grep: "Search", ask: "Ask", web_fetch: "Web fetch", http_request: "HTTP request",
@@ -71,7 +77,9 @@ export default {
     pageLogs: "Logs", pageAbout: "About",
     groupUiModel: "Appearance & Models", groupSafetyTools: "Security & Capabilities", groupDiagnostics: "Diagnostics & Other",
     providers: "Providers", mcp: "MCP", skills: "Skills",
-    language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
+    language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language",
+    // Batch ④: the placeholder used to borrow composer.effortDefault (cross-segment key); now its own key (same value)
+    aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeHint: "Choose the light/dark appearance; “Follow system” tracks the OS in real time", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
     uiFont: "UI font", monoFont: "Monospace font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter/blur",
     fontReset: "Reset to default",
@@ -86,7 +94,7 @@ export default {
     proxyUrlInvalid: "Invalid proxy URL: only http://, https://, socks5://, socks5h:// prefixes are supported",
     proxyDetected: "Detected: {{url}}", proxyNotDetected: "No system proxy detected; requests will connect directly",
     cmdAllowlist: "Command allowlist (always allowed)", cmdAllowlistCwd: "Working directory",
-    validation: "Post-write syntax validation",
+    validation: "Post-write semantic validation",
     validationHint: "Per-language language-server probe results; an empty command override means auto-detect. When a server is missing you can install it in one click or follow the manual instructions.",
     validationLangTypescript: "TypeScript / JS / Vue", validationLangRust: "Rust", validationLangPython: "Python",
     validationLangGo: "Go", validationLangJava: "Java", validationLangDart: "Dart / Flutter",
@@ -101,6 +109,8 @@ export default {
     lspExtraRoots: "Extra SDK roots", lspExtraRootsHint: "Probes <root>/<language>/bin (e.g. D:\\Sdk) for SDKs that are not on PATH",
     lspAddRoot: "Add root",
     lspJavaHome: "JDK 21+ path for Java", lspJavaHomeHint: "empty = auto-detect; JAVA_HOME is ignored (it often points to an older JDK)",
+    // The Java cost sentence was merged with lsp.confirmCost: this key stays and LspGuideCard now
+    // references it (settings.* is guarded by the registry closure; map in docs/settings-terminology.md)
     lspJavaCost: "Enabling Java semantic checks starts jdtls and resolves the dependency tree; it may take minutes and use gigabytes of memory.",
     lspRedetect: "Re-detect", lspRedetected: "Re-detected", lspRedetectFailed: "Re-detect failed",
     customPrompt: "Custom prompt (appended to system prompt)",
@@ -116,12 +126,28 @@ export default {
     autoUpdateCheckbox: "Check for updates on startup",
     updatesHint: "Runs a silent check 3s after launch; a newer version opens the update window (release notes + download progress). Turn it off to keep manual checks only.",
     checkForUpdates: "Check for updates",
+    // —— About page: read-only identity and entry points (batch ④ registers them so batch ③ search can hit them) ——
+    aboutVersion: "Version",
+    aboutVersionHint: "The version currently running, reported by the app itself (includes the short commit sha when available)",
+    aboutSlogan: "Local-first desktop AI coding agent",
+    aboutAppData: "Data folder",
+    aboutAppDataHint: "Global folder holding managed data such as config, sessions and skills — ~/.codewave",
+    aboutOpenAppData: "Open data folder",
+    aboutLogsDir: "Logs folder",
+    aboutLogsDirHint: "Folder holding the global diagnostic logs; the level is set by “Log level” on the Logs page",
+    aboutOpenLogsDir: "Open logs folder",
+    aboutRepo: "Repository",
+    aboutRepoHint: "Source code and release notes, opened in your system browser",
+    aboutOpenRepo: "Open repository",
+    aboutLicense: "Open-source license",
+    aboutLicenseHint: "MIT License, opened in your system browser",
+    aboutViewLicense: "View license",
     addModel: "Add model", editModel: "Edit model", apiFormat: "API format",
     baseUrl: "Base URL", apiKeys: "API key (one per line, rotating pool)", modelId: "Model ID",
     maxTokens: "Max output tokens", contextWindow: "Context window", reasoning: "Default reasoning effort (optional)",
     maxTokensHint: "Max output per reply (thinking included); replies are truncated when it runs out. Too small cuts long replies short.",
     contextWindowHint: "Only used for the auto-compaction threshold and usage display; it does not affect per-reply output length.",
-    active: "Active", remove: "Remove", save: "Save", saved: "Saved", cancel: "Cancel",
+    active: "Active",
     addProvider: "Add provider", editProvider: "Edit provider",
     addProviderHint: "Configure a fully custom API endpoint and its initial models.",
     providerName: "Name", providerNamePh: "e.g. Zhipu GLM",
@@ -146,6 +172,9 @@ export default {
     mcpTransportStdio: "stdio (local process)", mcpTransportHttp: "streamable_http (remote)",
     skillsHint: "Dirs: project .codewave/skills/ > user ~/.codewave/skills/, ~/.agents/skills/ & ~/.claude/skills/ > workspace .agents/skills/, .claude/skills/ > builtin",
     reloadSkills: "Reload", skillsReloaded: "Reloaded, {{n}} skills in total", skillsReloadFailed: "Reload failed",
+    // Skills empty state (batch ④ defect fix: it used to borrow sessions.empty, so an empty skill
+    // list displayed “No sessions yet”)
+    skillsEmpty: "No skills yet",
     deleteSkill: "Delete skill", deleteSkillConfirm: "Delete skill \"{{name}}\"? Its files will be removed and cannot be recovered", deleteSkillSuccess: "Deleted skill: {{name}}", deleteSkillFailed: "Delete failed",
     // Full-screen settings page shell ([docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md))
     backToWorkspace: "Back to workspace",
@@ -176,7 +205,7 @@ export default {
     prerequisite: "Requirement: {{prerequisite}}",
     docs: "Official install guide",
     confirmTitle: "Java semantic checks are off by default",
-    confirmCost: "Enabling starts jdtls and resolves the dependency tree; it may take minutes and use gigabytes of memory.",
+    // The cost sentence now references settings.lspJavaCost (one sentence, one place: docs/settings-terminology.md)
     enable: "Enable",
     enableDone: "Enabled: {{server}}",
     enableFailed: "Enable failed",
@@ -274,7 +303,7 @@ export default {
     recalledImage: "Recalled image {{n}}",
     submit: "Submit",
   },
-  sessions: { empty: "No sessions yet", load: "Open", delete: "Delete", rename: "Rename", untitled: "Session" },
+  sessions: { load: "Open", rename: "Rename", untitled: "Session" },
   subagent: {
     label: "Subagent",
     close: "Close",
@@ -296,7 +325,7 @@ export default {
   tasks: {
     title: "Scheduled tasks", name: "Task name", scheduleHint: "Schedule: cron:0 9 * * * / every:30m / once:ISO",
     instruction: "Instruction (runs in isolated context)", create: "Create", created: "Created",
-    delete: "Delete", empty: "No scheduled tasks (process-local, cleared on restart)",
+    empty: "No scheduled tasks (process-local, cleared on restart)",
   },
   stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", cacheHit: "Cache hit {{read}} tokens ({{rate}}) · cache write {{write}} tokens", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources (output tokens): {{list}}" },
   skills: {
@@ -308,7 +337,7 @@ export default {
     openInFileManager: "Open in file manager", openDirFailed: "Failed to open directory",
     openInEditor: "Open in editor", openInEditorFailed: "Failed to open editor",
     currentPlan: "Current plan",
-    skills: "Skills", noSkills: "No skills yet", skillBuiltin: "Built-in",
+    skills: "Skills", noSkills: "No skills yet",
     scopeSession: "Session", scopeGlobal: "Global", auto: "Auto", manual: "Manual",
     refresh: "Refresh", openDir: "Folder", noLogFiles: "No log files",
     logFileKb: "{{name}} ({{kb}}KB)", noActiveSession: "No active session", noLogs: "(no logs yet)",
@@ -329,7 +358,7 @@ export default {
   },
   queue: {
     dragToSort: "Drag to reorder", images: "{{n}} image(s)",
-    runNowTip: "Interrupt the current task and run this one now", runNow: "Run now", edit: "Edit", delete: "Delete",
+    runNowTip: "Interrupt the current task and run this one now", runNow: "Run now", edit: "Edit",
     paused: "Queue paused (the previous task was cancelled or failed)", resume: "Resume",
   },
   files: {
@@ -340,7 +369,6 @@ export default {
   },
   nav: {
     justNow: "Just now", minutes: "{{n}}m", hours: "{{n}}h", days: "{{n}}d",
-    saved: "Saved", cancel: "Cancel", save: "Save",
     tempSessions: "Temp sessions", newTempSessionTip: "New temp session (no directory needed, chat right away)",
     projects: "Projects", newProject: "New project", editProject: "Edit project", manageProjects: "Manage projects",
     noProjects: "No projects yet", noProjectsEmpty: "No projects",
@@ -348,7 +376,7 @@ export default {
     projectName: "Project name", projectNamePh: "e.g. CodeWave",
     projectDir: "Project directory (project data lives under its .codewave/)", chooseDir: "Choose directory",
     renameSession: "Rename session", sessionNamePh: "Session name", renameFailed: "Rename failed: {{error}}",
-    deleteProject: "Delete project", deleteProjectTitle: "Delete project “{{name}}”?", delete: "Delete",
+    deleteProject: "Delete project", deleteProjectTitle: "Delete project “{{name}}”?",
     deleteProjectData: "· Project-managed data will be deleted: temps / logs / memory / skills / mcp / lessons / scheduled tasks",
     deleteProjectSessions: "· The {{n}} session(s) under this project will also be deleted (including transcripts); this cannot be undone",
     deleteProjectCodeSafe: "· Your code directory is not affected",

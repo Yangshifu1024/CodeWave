@@ -158,6 +158,13 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "log.session_verbose", labelKey: "settings.sessionVerbose", page: "logs", advanced: true, keywords: ["log", "verbose", "日志", "详细", "排障"] },
 
   // ---------- 关于 ----------
+  // 只读身份 / 目录入口 / 许可证（批④ 登记）：app.* 前缀 = 无落盘字段（与 app.check_updates 同形），
+  // 登记前批③ 搜索在关于页只能命中 2 项；锚点在各行的锚点容器上（settings.page.test.tsx 锚点覆盖用例）
+  { id: "app.version", labelKey: "settings.aboutVersion", page: "about", keywords: ["version", "版本", "版本号", "app version"] },
+  { id: "app.data_dir", labelKey: "settings.aboutAppData", page: "about", keywords: ["data", "data dir", "数据目录", "配置目录", ".codewave"] },
+  { id: "app.logs_dir", labelKey: "settings.aboutLogsDir", page: "about", keywords: ["log", "logs", "日志", "日志目录", "诊断日志"] },
+  { id: "app.repo", labelKey: "settings.aboutRepo", page: "about", keywords: ["repo", "repository", "github", "仓库", "代码仓库", "源码"] },
+  { id: "app.license", labelKey: "settings.aboutLicense", page: "about", keywords: ["license", "mit", "许可", "许可证", "开源"] },
   { id: "ui.auto_update", labelKey: "settings.updates", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
   { id: "app.check_updates", labelKey: "settings.checkForUpdates", page: "about", keywords: ["update", "更新", "检查更新"] },
 ];
@@ -215,6 +222,13 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "providers", // 供应商列表/新增/编辑三视图复合容器：宽度由 maxWidth 420/560/640 定（本批明确非目标）
   "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
+
+  // —— 关于页的只读信息与目录 / 许可证入口（批④）：整行「标签 + extra 说明 + 值/按钮」，无独立控件宽度 ——
+  "app.version", // 只读版本串（懒加载）
+  "app.data_dir", // 整行：说明（extra）+ 「打开数据目录」按钮
+  "app.logs_dir", // 整行：说明（extra）+ 「打开日志目录」按钮
+  "app.repo", // 整行：说明（extra）+ 「打开代码仓库」按钮
+  "app.license", // 整行：说明（extra）+ 「查看许可证」按钮
 ];
 
 /** MCP 的字段路径（不在 config 内：独立 mcp.json，脏判定走组件内的文本基线 + 折叠比较） */
@@ -338,11 +352,10 @@ export const PAGE_FIELD_EXCEPTIONS: string[] = ["validation.lsp.commands"];
  */
 export const SHELL_SETTING_KEYS: string[] = [
   // —— 页壳与离开拦截：全屏页容器自身的文案，与任何设置项无关 ——
+  // 保存 / 已保存 / 取消 / 删除已收进 `common` 段（批④；common.* 不是 settings.*，
+  // 不进本清单也不进注册表，见 docs/settings-terminology.md）
   "title", // 设置页标题 / 全屏 dialog 的 aria-label
-  "save", // 操作条「保存」
-  "saved", // 保存成功提示
-  "cancel", // 操作条「取消」
-  "cancelHint", // 取消按钮 Tooltip
+  "cancelHint", // 取消按钮 Tooltip（→ 对应按钮文案 = common.cancel）
   "dirtyHint", // 脏圆点 Tooltip
   "instantApply", // 「即时生效」标注（挂在即时生效项旁）
   "backToWorkspace", // 左导航返回工作区
@@ -372,6 +385,7 @@ export const SHELL_SETTING_KEYS: string[] = [
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
   "aiLanguageHint", // → ui.ai_language 的输入说明
+  "aiLanguagePlaceholder", // → ui.ai_language 的占位符（批④ 拆出，不再借用 composer.effortDefault）
 
   // —— 供应商编辑器的表单字段与动作（本页主项：providers） ——
   "addProvider", // 动作：添加供应商
@@ -379,7 +393,6 @@ export const SHELL_SETTING_KEYS: string[] = [
   "editProvider", // 动作：编辑供应商
   "addModel", // 动作：添加模型
   "editModel", // 动作：编辑模型
-  "remove", // 动作：删除条目
   "providerName", // 供应商表单字段（亦用于保存校验文案）
   "providerNamePh", // 同上，占位符
   "apiFormat", // 供应商表单字段
@@ -457,6 +470,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpAdd", // → 动作：添加服务器
   "mcpSave", // → 动作：保存并重连（MCP 独立文件，不走页级保存）
   "skillsHint", // → disabled_skills 的目录来源说明
+  "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能
   "skillsReloaded", // → 重载成功提示
   "skillsReloadFailed", // → 重载失败提示
@@ -478,9 +492,20 @@ export const SHELL_SETTING_KEYS: string[] = [
   "logLevelHint", // → log.level 的说明
   "sessionVerboseHint", // → log.session_verbose 的说明
 
-  // —— 关于的从属文案（项已登记：ui.auto_update / app.check_updates） ——
+  // —— 关于的从属文案（项已登记：ui.auto_update / app.check_updates / app.version / app.data_dir /
+  // app.logs_dir / app.repo / app.license） ——
   "updatesHint", // → ui.auto_update 的说明
   "autoUpdateCheckbox", // → ui.auto_update 的开关内联标签
+  "aboutVersionHint", // → app.version 的说明
+  "aboutSlogan", // → 身份块的一句简介（非设置项，无锚点）
+  "aboutAppDataHint", // → app.data_dir 的说明
+  "aboutOpenAppData", // → app.data_dir 的动作按钮
+  "aboutLogsDirHint", // → app.logs_dir 的说明
+  "aboutOpenLogsDir", // → app.logs_dir 的动作按钮
+  "aboutRepoHint", // → app.repo 的说明
+  "aboutOpenRepo", // → app.repo 的动作按钮
+  "aboutLicenseHint", // → app.license 的说明
+  "aboutViewLicense", // → app.license 的动作按钮
 ];
 
 /**

@@ -2,6 +2,9 @@
 // 手法同 titlebar.style.test.ts —— node fs 直读源码做「引用闭包」断言，其余断言直接校验注册表数据。
 //   1. 引用闭包：`ui/src/features/panels/*.tsx`（扫描目录，非硬编码文件表）里的 t("settings.X") /
 //      t('settings.X') / t(`settings.X`) 必须在注册表（项 / 分组 / 页名）内或显式豁免；
+//      批④ 起另加两道（见文件末尾 §批④ 返工）：
+//      a) 覆盖面从 `panels/*.tsx` 扩到 `features/**/*.tsx`，非 panels 文件按「文件 → 允许段」白名单逐条登记；
+//      b) 变量拼出的键名（t(key)）必须进 DYNAMIC_KEY_CALLS 豁免清单，否则静默逃出闭包。
 //   2. 键存在性：注册表里每个键在 zh-CN 与 en-US 都存在（与 i18n.keys.test.ts 双侧同步守护叠加）；
 //   3. 页合法性：每项的 page ∈ PAGE_ORDER，id 全表唯一（同 id 登记两页即冲突）；
 //   4. 分组完备：PAGE_GROUPS 不重不漏覆盖 PAGE_ORDER；
@@ -41,6 +44,33 @@ import {
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/**
+ * `t(...)` 调用点三分类（批④ 返工的「变量键名」补丁，口径见 [docs/settings-terminology](../../../docs/settings-terminology.md) §5 守门用例 ②）：
+ * - `literal` —— `t("seg.key")`：首个非空字符是引号且引号内是完整键（闭包正则的直接目标）；
+ * - `inline`  —— `t(cond ? "a.b" : "c.d")`：首个字符不是引号，但参数区里有字面键（键纳入守护）；
+ * - `dynamic` —— `t(key)` / `t(LANG_LABEL_KEY[lang])`：键名由变量拼出，正则看不见 → 必须显式登记。
+ * 参数区取 `t(` 之后到首个 `)`（限 130 字符窗口）：足以覆盖本仓库的写法，也不会把兄弟代码的键卷进来。
+ */
+function callSites(src: string): { text: string; literal: string | null; inline: string[] }[] {
+  const literalAt = new Map<number, string>();
+  for (const m of src.matchAll(/(?<![A-Za-z0-9_$.])t\(\s*(["'`])([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\1/g)) {
+    literalAt.set(m.index!, m[2]);
+  }
+  const sites: { text: string; literal: string | null; inline: string[] }[] = [];
+  for (const m of src.matchAll(/(?<![A-Za-z0-9_$.])t\(/g)) {
+    const i = m.index!;
+    const close = src.indexOf(")", i + 2);
+    const end = close === -1 || close > i + 130 ? -1 : close;
+    const literal = literalAt.get(i) ?? null;
+    const args = end === -1 ? "" : src.slice(i + 2, end);
+    const inline = [...args.matchAll(/(["'`])([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\1/g)]
+      .map((k) => k[2])
+      .filter((k) => k.includes(".") && k !== literal);
+    sites.push({ text: end === -1 ? src.slice(i, i + 40) : src.slice(i, end + 1), literal, inline });
+  }
+  return sites;
+}
+
 /** 展开嵌套字典为点号路径键集合 */
 function keyPaths(node: unknown, prefix = ""): string[] {
   if (node === null || typeof node !== "object" || Array.isArray(node)) return [prefix];
@@ -58,15 +88,34 @@ const enKeys = new Set(keyPaths(en));
 const PANELS_DIR = join(SRC, "features/panels");
 
 /**
- * 组件源码里出现的 t("settings.X") / t('settings.X') / t(`settings.X`) 字面键。
- * 三种引号都认：只用双引号的正则会漏掉单引号 / 反引号写法（改了也全绿 = 假绿）。
- * 动态键（如 t(LANG_LABEL_KEY[lang])）不在此列，由注册表的项覆盖。
+ * 组件源码里的字面键（任意段）：t("seg.key") / t('seg.key') / t(`seg.key`)，三种引号都认；
+ * 参数区里内联的字面键（t(cond ? "a.b" : "c.d")）同样纳入——否则这种写法能同时躲过
+ * 「字面键闭包」与「纯动态键登记」两道门。
+ * 批④ 起闭包从「只认 settings.*」扩到「所有字面键」——只认 settings.* 时，
+ * 页面借用他段键（settings 页借 composer.effortDefault / sessions.empty）会静默逃出守护。
+ * 前置否定断言 `(?<![A-Za-z0-9_$.])` 不可省：否则 `respondExitRequest("cancel")` 这类
+ * 以 `t(` 结尾的调用会被误当成 `t("cancel")`（改成任意段后才会暴露的假阳性）。
+ * 变量拼出的键名不在此列（看不见）：调用点必须进 DYNAMIC_KEY_CALLS 显式登记，见下面的守门用例。
  */
-function literalSettingKeys(file: string): string[] {
-  const src = readFileSync(join(PANELS_DIR, file), "utf8");
+function literalKeysIn(src: string): string[] {
   const out = new Set<string>();
-  for (const m of src.matchAll(/t\(\s*(["'`])settings\.([A-Za-z0-9_]+)\1/g)) out.add(m[2]);
+  for (const site of callSites(src)) {
+    if (site.literal) out.add(site.literal);
+    for (const k of site.inline) out.add(k);
+  }
   return [...out];
+}
+
+/** 设置页页体的字面键（相对 panels/ 的文件名） */
+function literalKeys(file: string): string[] {
+  return literalKeysIn(readFileSync(join(PANELS_DIR, file), "utf8"));
+}
+
+/** 只取 settings.* 段并剥掉前缀（批② 的注册表引用闭包用例用） */
+function literalSettingKeys(file: string): string[] {
+  return literalKeys(file)
+    .filter((k) => k.startsWith("settings."))
+    .map((k) => k.slice("settings.".length));
 }
 
 /**
@@ -417,5 +466,314 @@ describe("设置项注册表：进阶项派生（批③）", () => {
 
   it("折叠偏好键固定为 ws_settings_show_advanced（全局单一偏好，不得静默改名）", () => {
     expect(SETTINGS_ADVANCED_PREF_KEY).toBe("ws_settings_show_advanced");
+  });
+});
+
+// ---------- 批④：术语与 i18n 键统一（[docs/settings-terminology](../../../docs/settings-terminology.md)） ----------
+
+/**
+ * 本目录里**不是设置页页体**的独立面板（各有自己的键段，与设置无关）。
+ * 豁免粒度是「文件 → 段」而不是「整文件」：在 TaskCenterPanel.tsx 里写 t("sessions.empty") 同样会被抓住。
+ */
+const NON_SETTINGS_PANEL_SEGMENTS: Record<string, string[]> = {
+  "TaskCenterPanel.tsx": ["tasks."],
+  "TokenStatsModal.tsx": ["stats."],
+  "UpdateModal.tsx": ["updater."],
+};
+
+/** 设置页页体允许引用的键段（批④ 收敛目标：跨页通用动作进 common，页面专属留页面段） */
+const ALLOWED_KEY_PREFIXES = ["settings.", "common."];
+
+describe("设置项注册表：panels 不得借他段键（批④）", () => {
+  it("panels/*.tsx 里的字面键必须属于 settings.* / common.*，或在显式豁免清单内", () => {
+    const offenders: string[] = [];
+    for (const file of CLOSURE_FILES) {
+      const exempt = NON_SETTINGS_PANEL_SEGMENTS[file] ?? [];
+      for (const key of literalKeys(file)) {
+        if (ALLOWED_KEY_PREFIXES.some((p) => key.startsWith(p))) continue;
+        if (exempt.some((p) => key.startsWith(p))) continue;
+        offenders.push(`${file}: ${key}`);
+      }
+    }
+    expect(offenders, `设置页借用了非 settings.*/common.* 的键：${offenders.join("、")}`).toEqual([]);
+  });
+
+  it("豁免清单只覆盖非设置页面板，且不悬空 / 不整文件豁免", () => {
+    for (const [file, segments] of Object.entries(NON_SETTINGS_PANEL_SEGMENTS)) {
+      expect(CLOSURE_FILES, `${file} 不在闭包扫描范围`).toContain(file);
+      const keys = literalKeys(file);
+      expect(keys.length, `${file} 未取到任何字面键`).toBeGreaterThan(0);
+      // 该文件仍必须引用豁免段内的键：否则清单已过时（或文件悄悄变成了设置页页体）
+      expect(
+        keys.some((k) => segments.some((s) => k.startsWith(s))),
+        `${file} 已无豁免段键，清单过时`,
+      ).toBe(true);
+      // 豁免段不得与允许段重叠（否则豁免会掩盖真正的借键）
+      expect(segments.some((s) => ALLOWED_KEY_PREFIXES.some((p) => s.startsWith(p)))).toBe(false);
+    }
+  });
+
+  it("正则失效守卫：源码里出现 t( 的页体都必须被扫到字面键（防静默逃逸）", () => {
+    for (const file of CLOSURE_FILES) {
+      const src = readFileSync(join(PANELS_DIR, file), "utf8");
+      if (!/\bt\(/.test(src)) continue;
+      expect(
+        literalKeys(file).length,
+        `${file} 含 t( 却未取到任何字面键（正则失效？变量拼出的键请进 DYNAMIC_KEY_CALLS 登记）`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ---------- 批④ 返工：守门② 扩到 features 全目录 + 变量键名（[docs/settings-terminology](../../../docs/settings-terminology.md) §5） ----------
+
+/** `features/` 根（守门② 的覆盖面从 `panels/` 扩到 `features/**`） */
+const FEATURES_DIR = join(SRC, "features");
+
+/** `features/` 下排除 `panels/`（已由上面的闭包覆盖）的全部 `.tsx`，路径相对 `features/`（POSIX 分隔符） */
+function listFeatureFiles(dir: string, prefix = ""): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return rel === "panels" ? [] : listFeatureFiles(join(dir, entry.name), rel);
+    return entry.name.endsWith(".tsx") ? [rel] : [];
+  });
+}
+
+const FEATURE_FILES = listFeatureFiles(FEATURES_DIR).sort();
+
+/** 读 `features/` 下的组件源码（相对 `features/` 的路径，panels 用 `panels/X.tsx`） */
+function featureSrc(rel: string): string {
+  return readFileSync(join(FEATURES_DIR, rel), "utf8");
+}
+
+/** 源码里用到的 i18n 段（以 `.` 结尾，如 `queue.`） */
+function usedSegments(src: string): string[] {
+  return [...new Set(literalKeysIn(src).map((k) => `${k.split(".")[0]}.`))].sort();
+}
+
+/**
+ * 纯动态键调用点（`t(key)` / `t(LANG_LABEL_KEY[lang])`）：键名由变量拼出，闭包正则看不见。
+ * 这类调用点必须逐条登记进 DYNAMIC_KEY_CALLS，否则静默逃出守门②。
+ */
+function pureDynamicCalls(src: string): string[] {
+  return callSites(src)
+    .filter((s) => !s.literal && s.inline.length === 0)
+    .map((s) => s.text);
+}
+
+/** 应用级共享段：任何文件都可引用（`app.*` 应用级通用文案；`common.*` 批④ 新增的跨页通用动作） */
+const SHARED_SEGMENTS = ["app.", "common."];
+
+/**
+ * 功能目录 → 自有段：目录内的文件只允许引用自有段 + 共享段 + 登记在案的跨段借用。
+ * 这道表负责机械判定「哪些段是借来的」——`settings.*` 不在任何非 panels 目录的自有段里，
+ * 因此任何非设置页文件引用它都必须登记（批④ 自己新增的 `LspGuideCard → settings.lspJavaCost` 就是这一格）。
+ */
+const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
+  chat: ["chat.", "composer.", "lsp.", "notice.", "queue."], // 消息区 / 输入区 / LSP 引导卡 / 引导条 / 运行队列
+  files: ["files."], // 会话产物与文件列表
+  quota: [], // 订阅额度：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
+  shell: ["closeTab.", "exitApp.", "git.", "nav.", "rightbar.", "sessions.", "skills.", "titlebar."], // 壳层：左导航 / 顶栏 / 右栏 / 拦截框 / git 身份条 / 技能详情
+  subagent: ["subagent."], // 子代理抽屉与卡片
+  tools: ["ask.", "tools."], // 审批面板与工具调用卡
+  workspace: ["diff."], // 变更面板
+};
+
+/**
+ * 「文件 → 允许的 i18n 段」白名单（**精确到文件，不做整目录放行**）。
+ * 关掉的逃逸面：本守门原只覆盖 `features/panels/*.tsx`——在 `chat/QueuePanel.tsx` 里写 `t("sessions.empty")`、
+ * 在 `shell/RightBar.tsx` 里把空态换成他段键，全量用例零变红，而看不见的段恰好最容易悄悄借错。
+ * 每条的构成 = 该文件功能面的段 + 共享段（SHARED_SEGMENTS）；跨段借用另在 CROSS_SEGMENT_BORROWINGS 逐条写理由。
+ * 新增文件 / 新增段：先想清楚归属再登记（未登记即判红——这正是本表的用意）。
+ */
+const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
+  "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
+  "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
+  "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
+  "chat/LspGuideCard.tsx": ["lsp.", "settings."], // lsp.* 自有（引导卡三景）；settings.* 为批④ 同句合并后的借用
+  "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
+  "chat/segments.tsx": ["chat."], // 流式段落状态词
+  "files/FileViewerModal.tsx": ["files."], // 产物预览弹窗
+  "files/FilesPanel.tsx": ["files."], // 产物登记列表
+  "quota/QuotaSection.tsx": ["rightbar."], // 额度段挂在右栏信息页，沿用 rightbar.*
+  "shell/AppShell.tsx": ["app.", "closeTab.", "exitApp.", "git.", "nav."], // 壳层：顶栏动作 / 两个拦截框 / git 身份条 / 中断提示
+  "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
+  "shell/ProjectNav.tsx": ["common.", "nav.", "sessions."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名
+  "shell/RightBar.tsx": ["common.", "rightbar."], // rightbar.* 自有；common.builtin 与设置页共用的来源标签
+  "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
+  "shell/TopBar.tsx": ["app.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏
+  "subagent/SubagentDrawer.tsx": ["subagent."], // 子代理抽屉
+  "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
+  "tools/AskPanel.tsx": ["ask."], // 审批面板
+  "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
+  "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
+};
+
+/**
+ * 跨段借用登记（文件 → 借来的段 → 理由）：借别的功能面的段必须逐条写理由，
+ * 否则「允许段清单」会变成一张谁都可以往上加段的橡皮图章。
+ */
+const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
+  "chat/LspGuideCard.tsx": {
+    "settings.": "批④ 同句合并：引导卡正文改引 settings.lspJavaCost（lsp.confirmCost 已删，同一句话只留一处）",
+  },
+  "chat/Composer.tsx": {
+    "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
+    "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
+  },
+  "quota/QuotaSection.tsx": {
+    "rightbar.": "额度段是本目录独立的组件（quota/）但渲染在右栏信息页里，文案沿用右栏段 rightbar.*",
+  },
+};
+
+/**
+ * 纯动态键调用点豁免清单（文件 → 调用点原文 → 理由）。
+ * 键名由变量拼出，字面键扫描看不见，所以必须逐条登记（未登记即判红）；
+ * 键值域由别处守护：注册表用例（labelKey / PAGE_LABEL_KEY）与 i18n 双侧键集合用例。
+ */
+const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
+  "panels/SettingsPage.tsx": {
+    "t(LANG_LABEL_KEY[lang])": "语言行标签由 LSP_LANGUAGES 派生（六个 labelKey 已由注册表用例逐项守护）",
+    "t(item.labelKey)": "搜索命中行的项名由注册表 labelKey 派生",
+    "t(PAGE_LABEL_KEY[item.page])": "搜索命中行的所属页名由注册表页名键派生",
+    "t(group.titleKey)": "左导航组标题由 PAGE_GROUPS.titleKey 派生",
+    "t(PAGE_LABEL_KEY[key])": "左导航页名由注册表页名键派生",
+    "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
+  },
+  "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
+  "chat/Composer.tsx": { "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）" },
+  "quota/QuotaSection.tsx": {
+    "t(`rightbar.window.${k}`)": "窗口名键由 entry.key 派生（rolling/weekly/monthly 三键已由 i18n 键集合用例断言）",
+    "t(reset.key, reset.params)": "重置倒计时文案的键与参数由 countdown() 组装",
+    "t(updated.key, updated.params)": "额度更新时间文案的键与参数由相对时间计算组装",
+  },
+  "tools/ToolCallCard.tsx": { "t(key)": "工具动词键由 VERBS[tool.tool] 派生" },
+};
+
+describe("features 全目录：不得跨段借键（批④ 返工 · 守门②扩面）", () => {
+  it("每个用到字面键的非 panels 文件都在「文件 → 允许段」白名单内（新文件未登记即判红）", () => {
+    const withKeys = FEATURE_FILES.filter((rel) => callSites(featureSrc(rel)).length > 0);
+    const unregistered = withKeys.filter((rel) => !FEATURE_FILE_SEGMENTS[rel]);
+    const stale = Object.keys(FEATURE_FILE_SEGMENTS).filter((rel) => !withKeys.includes(rel));
+    expect({ unregistered, stale }).toEqual({ unregistered: [], stale: [] });
+  });
+
+  it("非 panels 文件的字面键必须落在本文件的允许段内（在 QueuePanel 里写 t(\"sessions.empty\") 必红）", () => {
+    const offenders: string[] = [];
+    for (const [rel, allowed] of Object.entries(FEATURE_FILE_SEGMENTS)) {
+      for (const key of literalKeysIn(featureSrc(rel))) {
+        if (!allowed.some((p) => key.startsWith(p))) offenders.push(`${rel}: ${key}`);
+      }
+    }
+    expect(offenders, `非设置页组件借用了未允许的键段：${offenders.join("、")}`).toEqual([]);
+  });
+
+  it("白名单里的段要么是共享段 / 本目录自有段，要么登记在案：借段不能悄悄进白名单", () => {
+    const unregistered: string[] = [];
+    for (const [rel, segments] of Object.entries(FEATURE_FILE_SEGMENTS)) {
+      const owned = DIR_OWNED_SEGMENTS[rel.split("/")[0]] ?? [];
+      const borrowed = Object.keys(CROSS_SEGMENT_BORROWINGS[rel] ?? {});
+      for (const seg of segments) {
+        if (SHARED_SEGMENTS.includes(seg) || owned.includes(seg) || borrowed.includes(seg)) continue;
+        unregistered.push(`${rel}: ${seg}`);
+      }
+    }
+    expect(unregistered, `跨段借用未登记理由：${unregistered.join("、")}`).toEqual([]);
+
+    // 反向：登记的借用必须在白名单里、且该文件真的还在用（清单不悬空）
+    const bad: string[] = [];
+    for (const [rel, borrows] of Object.entries(CROSS_SEGMENT_BORROWINGS)) {
+      const allowed = FEATURE_FILE_SEGMENTS[rel] ?? [];
+      const used = usedSegments(featureSrc(rel));
+      for (const seg of Object.keys(borrows)) {
+        if (!allowed.includes(seg)) bad.push(`${rel} 的借用段 ${seg} 不在允许段清单里`);
+        else if (!used.includes(seg)) bad.push(`${rel} 已不再用 ${seg}，借用登记过时`);
+      }
+    }
+    expect(bad, bad.join("、")).toEqual([]);
+  });
+
+  it("每个目录都有自有段登记（除 quota/ 这种整体借他段渲染的目录外，不得为空）", () => {
+    const dirs = [...new Set(FEATURE_FILES.map((rel) => rel.split("/")[0]))].sort();
+    const missing = dirs.filter((d) => !(d in DIR_OWNED_SEGMENTS));
+    expect(missing, `目录未登记自有段：${missing.join("、")}`).toEqual([]);
+    expect(DIR_OWNED_SEGMENTS.quota, "quota/ 是「全部文案借右栏段」的唯一例外，改动请连带更新说明").toEqual([]);
+  });
+});
+
+describe("守门② · 变量键名（批④ 返工）", () => {
+  const SCANNED = [...CLOSURE_FILES.map((f) => `panels/${f}`), ...FEATURE_FILES];
+
+  it("每个文件的 t( 调用点三分类可对账（字面键 + 内联字面键 + 纯动态），纯动态必须显式登记", () => {
+    const offenders: string[] = [];
+    for (const rel of SCANNED) {
+      const sites = callSites(featureSrc(rel));
+      if (sites.length === 0) continue;
+      const literal = sites.filter((s) => s.literal).length;
+      const inline = sites.filter((s) => !s.literal && s.inline.length > 0).length;
+      const dynamic = pureDynamicCalls(featureSrc(rel));
+      // 对账：t( 出现次数 = 字面键调用 + 内联字面键调用 + 纯动态调用（不等即有正则失效）
+      expect(literal + inline + dynamic.length, `${rel}: t( 调用点分类对账不平`).toBe(sites.length);
+      const registered = DYNAMIC_KEY_CALLS[rel] ?? {};
+      const unregistered = dynamic.filter((text) => !(text in registered));
+      if (unregistered.length) offenders.push(`${rel}: ${unregistered.join(" + ")}`);
+    }
+    expect(offenders, `变量拼出的键名未登记（闭包看不见，改引他段键也不会红）：${offenders.join("；")}`).toEqual([]);
+  });
+
+  it("纯动态键豁免清单不悬空（登记了却已不存在的调用点 = 清单过时）", () => {
+    const stale: string[] = [];
+    for (const [rel, calls] of Object.entries(DYNAMIC_KEY_CALLS)) {
+      const live = pureDynamicCalls(featureSrc(rel));
+      for (const text of Object.keys(calls)) if (!live.includes(text)) stale.push(`${rel}: ${text}`);
+    }
+    expect(stale, `DYNAMIC_KEY_CALLS 有过时条目：${stale.join("、")}`).toEqual([]);
+  });
+});
+
+/** 展开字典为「叶子键 → 字符串值」（i18n 值层面的术语扫描用） */
+function leafValues(node: unknown, prefix = ""): [string, string][] {
+  if (node === null || typeof node !== "object" || Array.isArray(node)) {
+    return [[prefix, String(node)]];
+  }
+  return Object.entries(node as Record<string, unknown>).flatMap(([k, v]) =>
+    leafValues(v, prefix ? `${prefix}.${k}` : k),
+  );
+}
+
+describe("术语一致性：写后校验一律叫「语义校验」（批④）", () => {
+  it("i18n 双语的设置项名与新术语同源，且全字典不再出现「语法校验」写法", () => {
+    expect(zh.settings.validation).toBe("写入后语义校验");
+    expect(en.settings.validation).toBe("Post-write semantic validation");
+    const offenders = ([[zh, "zh-CN"], [en, "en-US"]] as const).flatMap(([dict, name]) =>
+      leafValues(dict)
+        .filter(([, value]) => /语法校验|syntax validation/i.test(value))
+        .map(([key, value]) => `${name}: ${key} = ${value}`),
+    );
+    expect(offenders, `i18n 仍写旧术语：${offenders.join("、")}`).toEqual([]);
+  });
+
+  it("已同步的文档与新术语对齐（命名现状的文档整篇不得留旧写法）", () => {
+    const docsDir = join(SRC, "..", "..", "docs");
+    // 命名现状的文档：含 AGENTS.md 列为必读的技术基准 technical-design.md（批④ 返工补入；
+    // 只查前三篇时，基准文档仍写着旧名字也没人拦）
+    for (const doc of ["settings-ia.md", "settings-terminology.md", "technical-design.md"]) {
+      const text = readFileSync(join(docsDir, doc), "utf8");
+      expect(text, `${doc} 仍写「写入后语法校验」`).not.toContain("写入后语法校验");
+      expect(text, `${doc} 没有出现新术语`).toContain("语义校验");
+    }
+    // 历史实施报告里对**旧路径历史文案**的引用允许保留，但必须同时标注它已不是现行定名
+    for (const doc of [
+      "lsp-post-write-diagnostics.md",
+      "builtin-tools-source-comparison.md",
+      "p1-plan.md",
+      "tools-optimization-and-gap-fill-plan.md",
+    ]) {
+      const text = readFileSync(join(docsDir, doc), "utf8");
+      expect(text, `${doc} 没有出现新术语（历史文案括注里要点明现行定名）`).toContain("语义校验");
+      if (text.includes("写入后语法校验")) {
+        expect(text, `${doc} 的历史文案引用未标注「历史文案」`).toContain("历史文案");
+      }
+    }
   });
 });

@@ -1,22 +1,35 @@
 // 设置页「关于」页（[docs/settings-ia](../../../../docs/settings-ia.md)）：
-// 原「关于」弹框（AboutModal，本批退役）的内容整体迁入全屏设置页第 8 页，
-// 并收编旧「通用」页的自动更新开关 + 手动检查更新 —— 从此「关于」只有一处入口。
+// 原「关于」弹框（AboutModal，批② 退役）的内容整体迁入全屏设置页第 8 页。
+// 批④（[docs/settings-terminology](../../../../docs/settings-terminology.md)）做两件事：
+//   1. 版式对齐（仅本页页内）：说明位一律走 Form.Item 的 extra（不再依赖悬停 tooltip），
+//      只读身份与入口（版本 / 数据目录 / 日志目录 / 代码仓库 / 开源许可证）各自成「标签行 + 说明 + 行内控件」；
+//   2. 补两个入口：打开日志目录（复用 ipc.openLogsDir，右栏「日志」Tab 的入口保留）
+//      与开源许可证（复用 ipc.openUrl 打开仓库 LICENSE）——两个都零后端改动。
 // 版本号仍是懒加载（失败降级 ?.?.?）：本页被渲染时才拉一次（离开本页即卸载、再进入重新拉取），
 // 不在应用启动时拉取。
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Button, Form, Switch } from "antd";
 import { useTranslation } from "react-i18next";
-import { CloudDownloadOutlined, FolderOpenOutlined, GithubOutlined } from "@ant-design/icons";
+import {
+  CloudDownloadOutlined,
+  FileProtectOutlined,
+  FileTextOutlined,
+  FolderOpenOutlined,
+  GithubOutlined,
+} from "@ant-design/icons";
 import { ipc } from "../../ipc/client";
 import { checkForUpdates, useAutoUpdateSetting } from "../../utils/updateCheck";
 import storeLogo from "../../assets/store-logo.png";
 
 // 仓库地址（收拢为单一常量，迁移只需改一行）
 const REPO_URL = "https://github.com/Yangshifu1024/CodeWave";
+// 许可证指向同一仓库的默认分支（main）根目录 LICENSE，不复制许可证全文（本批明确非目标）
+const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
 
-/** 关于页：应用身份（logo / 版本 / slogan）+ 数据目录与仓库入口 + 自动更新开关与手动检查更新。
- *  「检查更新」是 Windows/Linux 的唯一更新入口（macOS 另有应用菜单项，
- *  [docs/version-bump-and-release](../../../../docs/version-bump-and-release.md)）。 */
+/** 关于页：应用身份（logo / 名称 / 简介）+ 只读身份与入口（版本 / 数据目录 / 日志目录 / 代码仓库 / 许可证）
+ *  + 自动更新开关与手动检查更新。「检查更新」是 Windows/Linux 的唯一更新入口
+ * （macOS 另有应用菜单项，[docs/version-bump-and-release](../../../../docs/version-bump-and-release.md)）。 */
 export function AboutSettings() {
   const { t } = useTranslation();
   const [version, setVersion] = useState<string | null>(null);
@@ -53,44 +66,78 @@ export function AboutSettings() {
     }
   }
 
-  async function openDataDir() {
+  /** 目录 / 外链入口共用一条「失败就地提示」路径（.about-error，位于 Form 末尾；不离开设置页） */
+  async function runAction(action: () => Promise<void>) {
     setActionError(null);
     try {
-      await ipc.openDataDir();
+      await action();
     } catch (e) {
       setActionError(String(e));
     }
   }
 
-  async function openRepo() {
-    setActionError(null);
-    try {
-      await ipc.openUrl(REPO_URL);
-    } catch (e) {
-      setActionError(String(e));
-    }
+  /** 只读入口行的公共结构：锚点容器（= 注册表 id，批③ 搜索定位）+ 行内按钮 */
+  function entryRow(label: string, hint: string, settingId: string, icon: ReactNode, buttonText: string, onClick: () => void) {
+    return (
+      <Form.Item label={label} extra={hint}>
+        <div className="setting-anchor" data-setting-id={settingId}>
+          <Button size="small" icon={icon} onClick={onClick}>
+            {buttonText}
+          </Button>
+        </div>
+      </Form.Item>
+    );
   }
 
   return (
     <div className="about-pane">
+      {/* 身份区（只读、非设置项）：logo + 名称 + 一句简介。版本不进这里——它是设置项（app.version），单独成行 */}
       <div className="about-body">
         <img className="about-logo" src={storeLogo} alt="CodeWave" draggable={false} />
         <div className="about-name">CodeWave</div>
-        <div className="about-version">{version ?? "…"}</div>
-        <div className="about-slogan">{t("about.slogan")}</div>
-        <div className="about-actions">
-          <Button size="small" icon={<FolderOpenOutlined />} onClick={() => void openDataDir()}>
-            {t("about.appData")}
-          </Button>
-          <Button size="small" icon={<GithubOutlined />} onClick={() => void openRepo()}>
-            {t("about.repo")}
-          </Button>
-        </div>
-        {actionError && <div className="about-error">{actionError}</div>}
+        <div className="about-slogan">{t("settings.aboutSlogan")}</div>
       </div>
 
       <Form layout="vertical">
-        <Form.Item label={t("settings.updates")} tooltip={t("settings.updatesHint")}>
+        {/* 只读身份与入口：标签行 + extra 说明（不依赖悬停）+ 行内值 / 按钮，与其余 7 页同版式 */}
+        <Form.Item label={t("settings.aboutVersion")} extra={t("settings.aboutVersionHint")}>
+          <div className="setting-anchor" data-setting-id="app.version">
+            <span className="about-version">{version ?? "…"}</span>
+          </div>
+        </Form.Item>
+        {entryRow(
+          t("settings.aboutAppData"),
+          t("settings.aboutAppDataHint"),
+          "app.data_dir",
+          <FolderOpenOutlined />,
+          t("settings.aboutOpenAppData"),
+          () => void runAction(() => ipc.openDataDir()),
+        )}
+        {entryRow(
+          t("settings.aboutLogsDir"),
+          t("settings.aboutLogsDirHint"),
+          "app.logs_dir",
+          <FileTextOutlined />,
+          t("settings.aboutOpenLogsDir"),
+          () => void runAction(() => ipc.openLogsDir()),
+        )}
+        {entryRow(
+          t("settings.aboutRepo"),
+          t("settings.aboutRepoHint"),
+          "app.repo",
+          <GithubOutlined />,
+          t("settings.aboutOpenRepo"),
+          () => void runAction(() => ipc.openUrl(REPO_URL)),
+        )}
+        {entryRow(
+          t("settings.aboutLicense"),
+          t("settings.aboutLicenseHint"),
+          "app.license",
+          <FileProtectOutlined />,
+          t("settings.aboutViewLicense"),
+          () => void runAction(() => ipc.openUrl(LICENSE_URL)),
+        )}
+        <Form.Item label={t("settings.updates")} extra={t("settings.updatesHint")}>
           <div className="settings-update-row">
             {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记。
                 两个锚点（data-setting-id）供批③ 搜索定位：两者都是整行控件，不参与宽度三档 */}
@@ -111,6 +158,7 @@ export function AboutSettings() {
             </div>
           </div>
         </Form.Item>
+        {actionError && <div className="about-error">{actionError}</div>}
       </Form>
     </div>
   );

@@ -3,7 +3,8 @@
 > 状态：已实施（批③）。批① 把设置从弹窗改成常驻全屏页（[settings-fullscreen-shell](./settings-fullscreen-shell.md)）；
 > 批② 把 7 页重划为 8 页 + 3 组导航，并把「哪一项住在哪一页」抽成设置项注册表（[settings-ia](./settings-ia.md)）。
 > 本批在注册表之上补三件事：**找得到**（搜索）、**收得住**（进阶折叠）、**排得齐**（控件宽度三档）。
-> 术语统一与键重命名仍留批④。
+> 术语统一、键重命名与关于页打磨已随批④ 落地（[settings-terminology](./settings-terminology.md)）；
+> 批④ 同时把本批的引用闭包从「只认 `settings.*`」扩到「所有字面键 + `common.*` 段」，见下 §5。
 
 本批**不做**（边界）：动态条目搜索（供应商 / 模型、MCP 服务器、技能条目）；`Cmd/Ctrl+,`、`Cmd/Ctrl+F`；
 后端与配置 schema；容器级宽度与其他面板宽度；焦点陷阱；搜索增强（拼音 / 首字母 / 模糊 / 权重 / 词内 mark / 历史 / 最近访问）；
@@ -213,6 +214,15 @@ MCP 行内控件（名称 / 传输方式）与 LSP 额外 SDK 根目录行（`ls
 4. **锚点**：新项的控件/行必须带 `data-setting-id="<item.id>"`（`.setting-anchor` 包裹层），
    否则搜索命中会退化为「高亮页体容器」（契约测试的锚点覆盖用例会先红）。
 
+批④（含返工）在 `settings.registry.test.ts` 上追加的**闭包扩容**（口径见 [settings-terminology](./settings-terminology.md) §5）：
+
+- 引用闭包不再只认 `t("settings.X")`，而是扫 `features/panels/*.tsx` 里**所有字面 `t("...")` 键**，
+  断言它们属于 `settings.*` / `common.*`，或在显式豁免清单 `NON_SETTINGS_PANEL_SEGMENTS`（粒度：文件 → 段）内；
+- 覆盖面扩到 `features/**/*.tsx`：非 panels 目录额外持一张「**文件 → 允许段**」白名单（`FEATURE_FILE_SEGMENTS`，精确到文件），
+  允许段只能是共享段 / 本目录自有段 / 登记在案的跨段借用（`CROSS_SEGMENT_BORROWINGS`，逐条写理由）；
+- 变量拼出的键名（`t(key)`）看不见 → 纯动态调用点必须进 `DYNAMIC_KEY_CALLS` 逐条登记理由；
+- 豁免 / 登记清单不悬空、不与允许段重叠；源码里出现 `t(` 的页体必须被扫到 ≥1 个字面键（正则失效守卫，防静默逃逸）。
+
 ## 5. 测试与文件
 
 | 文件 | 内容 |
@@ -222,7 +232,7 @@ MCP 行内控件（名称 / 传输方式）与 LSP 额外 SDK 根目录行（`ls
 | `FontSettings.tsx` / `AboutSettings.tsx` / `ProvidersPanel.tsx` | 界面页 / 关于页锚点、供应商三视图锚点与 `active_model_id` 折叠、`providers` 内散装控件归档 |
 | `theme/app.css` | 三档宽度类、搜索框与结果列表、进阶开关行、`.settings-advanced-hidden`、`.setting-anchor`、`.settings-item-hit` |
 | `i18n/zh-CN.ts` + `en-US.ts` | `settings.searchPlaceholder` / `searchResults` / `searchEmpty` / `searchEmptyHint` / `showAdvanced` / `advancedHint`（双侧同步）；`SHELL_SETTING_KEYS` 同步豁免登记 |
-| `__tests__/settings.page.test.tsx` | 新增 19 例：搜索框整行与焦点（防御性表述）、搜索框 ARIA（combobox/aria-activedescendant）、搜索态替掉 tablist、↑↓/Enter 语义与焦点、跨页命中与临时高亮、命中当前页、同页连中两项只留一处高亮、高亮自动摘除、0 高度锚点退化、空态、Esc 两级、进阶折叠与记忆、折叠整行（含 label）隐藏、临时展开、进阶项脏点往返、命中跳转 × 三选拦截三路径、锚点覆盖 40 项 |
+| `__tests__/settings.page.test.tsx` | 新增 19 例：搜索框整行与焦点（防御性表述）、搜索框 ARIA（combobox/aria-activedescendant）、搜索态替掉 tablist、↑↓/Enter 语义与焦点、跨页命中与临时高亮、命中当前页、同页连中两项只留一处高亮、高亮自动摘除、0 高度锚点退化、空态、Esc 两级、进阶折叠与记忆、折叠整行（含 label）隐藏、临时展开、进阶项脏点往返、命中跳转 × 三选拦截三路径、锚点覆盖 40 项（批④ 起 45 项：关于页新增 5 个只读入口） |
 | `__tests__/settings.registry.test.ts` | 新增 18 例：宽度档与豁免双向闭合、CSS 三档与 `max-width:100%`、页体无像素内联宽度、`matchSettings` 归一（含 haystack 大小写归一的 en 大写用例）/ 多词 AND / 空值 / 稳定排序、进阶项计数与整组判定、偏好键钉死 |
 
 前端全量：`pnpm --dir ui test` 全绿（67 文件 / 627 例），`pnpm --dir ui build`（`tsc --noEmit` + vite build）通过。

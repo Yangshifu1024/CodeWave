@@ -190,7 +190,7 @@ export default function ProjectNav() {
       } else {
         await useSessions.getState().addProject(entry);
       }
-      message.success(t("nav.saved"));
+      message.success(t("common.saved"));
       setModalOpen(false);
     } catch (e) {
       message.error(String(e));
@@ -203,7 +203,7 @@ export default function ProjectNav() {
     const count = allSessions.filter((s) => s.project_id === p.id).length;
     modal.confirm({
       title: t("nav.deleteProjectTitle", { name: p.name }),
-      okText: t("nav.delete"),
+      okText: t("common.delete"),
       okButtonProps: { danger: true },
       content: (
         <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
@@ -230,7 +230,7 @@ export default function ProjectNav() {
     setRenaming(true);
     try {
       await useSessions.getState().rename(renameTarget, title);
-      useUi.getState().toast(t("nav.saved"));
+      useUi.getState().toast(t("common.saved"));
       setRenameTarget(null);
     } catch (e) {
       // 失败反馈：弹框保持打开便于修正重试，不再静默
@@ -336,14 +336,14 @@ export default function ProjectNav() {
         onCancel={() => setModalOpen(false)}
         footer={
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <Button onClick={() => setModalOpen(false)}>{t("nav.cancel")}</Button>
+            <Button onClick={() => setModalOpen(false)}>{t("common.cancel")}</Button>
             <Button
               type="primary"
               loading={savingProject}
               disabled={!projName.trim() || !projDir}
               onClick={() => void saveProject()}
             >
-              {t("nav.save")}
+              {t("common.save")}
             </Button>
           </div>
         }
@@ -377,7 +377,7 @@ export default function ProjectNav() {
         title={t("nav.renameSession")}
         onCancel={() => setRenameTarget(null)}
         confirmLoading={renaming}
-        okText={t("nav.save")}
+        okText={t("common.save")}
         okButtonProps={{ disabled: !renameTitle.trim() }}
         onOk={() => void submitRename()}
       >
@@ -508,7 +508,7 @@ function SessionRow({
         <span className="row-actions" onClick={(e) => e.stopPropagation()}>
           <Button className="row-action" type="text" size="small" title={t("sessions.rename")} icon={<EditOutlined />} onClick={onRename} />
           <Popconfirm title={t("nav.deleteSessionConfirm")} onConfirm={onRemove}>
-            <Button className="row-action" type="text" size="small" danger title={t("sessions.delete")} icon={<DeleteOutlined />} />
+            <Button className="row-action" type="text" size="small" danger title={t("common.delete")} icon={<DeleteOutlined />} />
           </Popconfirm>
         </span>
       )}
