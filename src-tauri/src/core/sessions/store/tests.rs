@@ -605,7 +605,11 @@ fn touch_open_is_throttled_within_ten_minutes() {
 
     // 1 分钟后再打开：跳过写入（索引写次数不得增加、值不变）
     let writes = store.index_write_count();
-    assert!(!store.touch_session_open("s1", t0 + chrono::Duration::minutes(1)).unwrap());
+    assert!(
+        !store
+            .touch_session_open("s1", t0 + chrono::Duration::minutes(1))
+            .unwrap()
+    );
     assert_eq!(store.index_write_count(), writes, "节流窗口内不得写索引");
     assert_eq!(store.get("s1").unwrap().last_opened_at, first);
 
@@ -692,7 +696,11 @@ fn remove_many_writes_index_once_and_clears_memory_running() {
     let removed = store
         .remove_many(&["a".to_string(), "ghost".to_string()])
         .unwrap();
-    assert_eq!(removed, vec!["a".to_string()], "索引中不存在的 id 不计入已删结果");
+    assert_eq!(
+        removed,
+        vec!["a".to_string()],
+        "索引中不存在的 id 不计入已删结果"
+    );
     assert_eq!(store.index_write_count(), before + 1, "整批只写一次索引");
     assert_eq!(store.list().len(), 2);
     assert!(

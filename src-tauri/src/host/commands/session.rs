@@ -74,7 +74,10 @@ pub async fn load_session(
     let msgs = core.store.load_history(&session_id).map_err(err)?;
     // [docs/session-cleanup](../../../../docs/session-cleanup.md)：打开即刷新「最近打开时间」（10 分钟节流，
     // 避免每次打开都重写整份索引；失败只记告警，绝不影响打开会话）
-    if let Err(e) = core.store.touch_session_open(&session_id, chrono::Utc::now()) {
+    if let Err(e) = core
+        .store
+        .touch_session_open(&session_id, chrono::Utc::now())
+    {
         tracing::warn!("会话 {session_id} 最近打开时间落盘失败：{e}");
     }
     // 项目快照加载：project_id/roots 以 meta 为准（legacy 免目录会话自然回退单根）
