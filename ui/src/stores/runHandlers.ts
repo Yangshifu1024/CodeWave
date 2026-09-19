@@ -1,4 +1,4 @@
-// 后端事件 handler 工厂 —— 29 键事件面（契约测试锚点；键名不可增删）。
+// 后端事件 handler 工厂 —— 28 键事件面（契约测试锚点；键名不可增删）。
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
@@ -9,8 +9,6 @@ import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
 import { blank, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
-import { lspHintKey } from "./run.types";
-import type { LspInstallKind } from "../ipc/types";
 import type { RunStore } from "./run";
 
 /** immer set：对 store 草稿原地变异 */
@@ -361,43 +359,13 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
   };
 }
 
-/** 其他（4 键）：MCP 连接状态 upsert；service 工具卡尾迹/退出反映；退出拦截请求；LSP server 缺失引导 */
+/** 其他（3 键）：MCP 连接状态 upsert；service 工具卡尾迹/退出反映；退出拦截请求 */
 export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
   return {
     // 退出拦截（会话保存与恢复优化 · 批1）：后端在 ExitRequested 下不可退，
     // 下发在跑的会话列表问询处置方式；这里只落到 ui store，弹窗由 AppShell 唯一渲染
     "app:exit_requested": (p) => {
       useUi.setState({ exitRequest: { running: Array.isArray(p?.running) ? p.running : [] } });
-    },
-    /** LSP 语义校验：某语言的 server 找不到（或默认关闭）时的引导卡落地。
-     *  payload 是项目级事件（无 session）：落到当前活跃 Tab 的 lspGuide 平行桶；
-     *  若后端后续补下 session 字段则优先使用（前向兼容，不改现有契约）。
-     *  去重：(language, project_id) 在同一 Tab 内只留一张卡，忽略过的永不再弹。 */
-    "lsp:server_missing": (p) => {
-      const sid = typeof p?.session === "string" ? p.session : useSessions.getState().activeKey;
-      const language = typeof p?.language === "string" ? p.language : "";
-      if (!sid || !language) return;
-      const projectId = typeof p?.project_id === "string" ? p.project_id : null;
-      const key = lspHintKey(language, projectId);
-      // 未知/缺下的 kind 一律按 manual（最保守：只给文档与前置条件，不乱装东西）
-      const kind: LspInstallKind =
-        p?.kind === "installable" || p?.kind === "confirm_enable" ? p.kind : "manual";
-      set((s) => {
-        const g = s.lspGuide[sid] ?? { hints: [], dismissed: [] };
-        if (g.dismissed.includes(key)) return; // 已忽略：不再打扰
-        if (g.hints.some((h) => lspHintKey(h.language, h.projectId) === key)) return; // 同会话内只留一张
-        g.hints.push({
-          language,
-          projectId,
-          kind,
-          server: typeof p?.server === "string" ? p.server : language,
-          command: typeof p?.command === "string" ? p.command : null,
-          docsUrl: typeof p?.docs_url === "string" ? p.docs_url : null,
-          prerequisite: typeof p?.prerequisite === "string" ? p.prerequisite : null,
-          reason: typeof p?.reason === "string" ? p.reason : "",
-        });
-        s.lspGuide[sid] = g;
-      });
     },
     "mcp:status": (p) => {
       // 按 name upsert，绝不累积重复项

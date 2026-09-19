@@ -8,7 +8,6 @@ pub mod agents;
 mod core;
 mod git;
 mod host;
-pub mod lsp;
 pub mod mcp;
 pub mod memory;
 pub mod provider;
@@ -172,17 +171,6 @@ pub fn run() {
             let sup_core = core.clone();
             tauri::async_runtime::spawn(async move {
                 crate::core::scheduler::start_supervisor(sup_core).await;
-            });
-            // LSP server 池的闲置回收 ticker（[docs/lsp-post-write-diagnostics](../../docs/lsp-post-write-diagnostics.md)）：
-            // manager 内部的惰性 ticker 只在有过校验活动后才存在，这里起一条常驻兜底
-            // （空池时是空转成本极低的 no-op）。setup 同步上下文不能直接 tokio::spawn（踩坑清单）
-            let lsp_core = core.clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    let ttl = { lsp_core.cfg.read().unwrap().validation.lsp.idle_ttl_ms };
-                    lsp_core.lsp.evict_idle(ttl).await;
-                }
             });
             app.manage(core);
             // 退出拦截状态机（批1）：ExitRequested 处理器与 resolve_exit_request 命令共享
@@ -383,11 +371,6 @@ pub fn run() {
             host::commands::git_user_info,
             host::commands::get_token_breakdown,
             host::commands::stop_service,
-            host::commands::lsp_status,
-            host::commands::lsp_redetect,
-            host::commands::lsp_restart,
-            host::commands::lsp_enable,
-            host::commands::lsp_install,
             host::commands::set_font_prefs,
             host::commands::get_mcp_config,
             host::commands::save_mcp_config,
@@ -433,23 +416,6 @@ pub fn run() {
             // 不经此处）；app.exit(0) 会再次触发本事件，由 ExitGuard 的 confirmed 标志放行（重入保护）
             if let tauri::RunEvent::ExitRequested { api, .. } = &event {
                 host::commands::handle_exit_requested(app_handle, api);
-            }
-            // 应用退出：关掉全部 LSP server（不留孤儿进程）。退出回调用 async 任务来不及跑完
-            // （进程随即结束），故同步等一小段（超时即放弃，LspClient 的 Drop 兜底补刀）
-            if let tauri::RunEvent::Exit = &event {
-                use tauri::Manager;
-                if let Some(core) =
-                    app_handle.try_state::<std::sync::Arc<crate::core::agent::AgentCore>>()
-                {
-                    let lsp = core.lsp.clone();
-                    tauri::async_runtime::block_on(async move {
-                        let _ = tokio::time::timeout(
-                            std::time::Duration::from_secs(3),
-                            lsp.shutdown_all(),
-                        )
-                        .await;
-                    });
-                }
             }
         });
 }

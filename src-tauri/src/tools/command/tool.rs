@@ -1075,7 +1075,8 @@ fn purge_stale_spills() {
 }
 
 /// 终止整个进程组（TERM → 3s → KILL）；M12：阻塞轮询移入 block_in_place。
-fn terminate_tree(pid: u32) {
+/// pub(crate)：postcheck 复用同一套整树终止（不另起实现）。
+pub(crate) fn terminate_tree(pid: u32) {
     tokio::task::block_in_place(|| terminate_tree_blocking(pid));
 }
 

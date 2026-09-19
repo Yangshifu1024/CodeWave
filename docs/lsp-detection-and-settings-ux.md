@@ -1,5 +1,9 @@
 # 语言服务器探测补齐 + 设置页状态说清（含两条界面缺陷）
 
+> **⚠️ 已被取代（2026-09-20）**：LSP 机制整体删除，改为「写入后检查命令」——见
+> [post-write-check-plan](./post-write-check-plan.md)。本文涉及的 `lsp_*` IPC、`ServerStatus` 状态徽标、
+> 事件面第 29 键均已移除（现为 28 键）。本文保留为历史实施报告。
+
 > 日期：2026-09-19 · 类型：缺陷修复 + 界面批次 · 分支：`fix/lsp-detect-status`（基线 `09bba86`，v0.4.0）
 > 涉及：`src-tauri/src/lsp/*`（含新文件 `sdk.rs`）、`src-tauri/src/host/commands/lsp.rs`、`ui/src/` 前端 7 文件、`docs/` 2 文件
 > 契约：`ServerStatus` / `InstallHint` **纯追加字段**；IPC 命令名与入参零变化；事件面仍为 **29 键**（`lsp:server_missing` 载荷是显式取字段拼装，`requires` / `sdk` 不进载荷）。

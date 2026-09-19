@@ -20,7 +20,7 @@ pub struct Args {
 /// create 工具：在工作区创建新文件。
 /// 入参为 path + content + 可选 overwrite；FileWrite 分级，ConfirmEach 档下经审批（approval_detail 提供 diff/预览），
 /// 写路径经 fence 解析与写根校验，创建区之外的写入按 confirm_outside_create 策略确认。
-/// 成功写入后登记会话产物并做 post-write 校验（问题以 warnings 透出，不影响结果）。
+/// 成功写入后登记会话产物并做写入后检查（结论进 `outcome.data.check`，不影响结果）。
 pub struct CreateTool;
 
 #[async_trait::async_trait]
@@ -94,16 +94,11 @@ impl Tool for CreateTool {
                 return ToolOutcome::err("E_IO", format!("创建目录失败：{e}"));
             }
         }
-        // 写前基线（[docs/lsp-post-write-diagnostics](../../../docs/lsp-post-write-diagnostics.md)）：必须在写入**之前**取——
-        // 此刻盘上仍是旧内容（新文件 = 读不到 → 基线视为空集），与写后诊断成对才算得出「本次新增」；
-        // 未覆盖类型 / 临时会话 / 开关关闭 / server 未就绪时返回 None（本轮不回喂任何诊断）
-        let vcfg = ctx.core.cfg.read().unwrap().validation.clone();
-        let prev_content = std::fs::read(&resolved)
-            .ok()
-            .map(|b| crate::tools::read::read_text_content(&b));
-        let target =
-            super::validation::WriteTarget::new(resolved.clone(), args.path.clone(), prev_content);
-        let baseline = super::validation::baseline(ctx, &target, &vcfg).await;
+        // 写入后检查（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：结论进
+        // `outcome.data.check`（模型侧读 data，读得到；warnings 只达前端）。写后构造目标即可，
+        // 不再需要写前基线 / 差集 / 就绪判据。
+        let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
+        let target = super::validation::WriteTarget::new(resolved.clone(), args.path.clone());
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
                 // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：产物登记（子代理归属主会话；路径规范化，
@@ -126,15 +121,15 @@ impl Tool for CreateTool {
                         tracing::warn!("产物登记失败（create {}）：{e}", args.path);
                     }
                 }
-                // 写后语义校验：与写前基线配对（LSP 差集），文案经 warnings 透出；
-                // 不影响写入结果本身（跳过必须如实带原因，绝不渲染成「通过」）
-                let checked =
-                    super::validation::check(ctx, &target, baseline.as_ref(), &vcfg).await;
-                let summary = super::validation::summarize(std::slice::from_ref(&checked), &vcfg);
+                // 写入后检查：命令输出 / JSON 内置解析的结论放进 data（跳过如实带原因；
+                // 检查失败不改变工具自身成败语义，ok 保持为真）
+                let checks =
+                    super::validation::run(ctx, &settings, std::slice::from_ref(&target)).await;
                 let mut out =
                     ToolOutcome::ok(json!({ "path": args.path, "bytes": args.content.len() }));
-                if !summary.is_empty() {
-                    out.warnings.push(summary);
+                if let Some(first) = checks.into_iter().next() {
+                    out.data["check"] = serde_json::to_value(&first.check)
+                        .unwrap_or(serde_json::Value::Null);
                 }
                 out
             }
@@ -301,13 +296,13 @@ mod tests {
         assert_eq!(out.error.unwrap().code, "E_ARGS");
     }
 
-    /// 写后语义校验的接线（[docs/lsp-post-write-diagnostics](../../../docs/lsp-post-write-diagnostics.md)）：
-    /// 三条早退路径（临时会话 / 未覆盖类型 / JSON 内置）必须各自给出如实文案——
-    /// 不静默、也绝不把「没跑」渲染成「通过」。
+    /// 写入后检查的接线（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+    /// 结论必须进 `outcome.data.check`（模型读 data；读 warnings 的旧机制是缺陷 B 的根因），
+    /// 跳过必须如实带原因、绝不渲染成「通过」。
     #[tokio::test]
-    async fn run_reports_semantic_check_outcome_honestly() {
+    async fn run_reports_post_write_check_in_data() {
         let (ctx, _ws, _dd) = setup("t5");
-        // 临时会话（无项目）→ 不做语义校验（不拉起 server）
+        // 临时会话 + 未配置命令：非 JSON 文件如实报 disabled（ran=false、无「通过」）
         let out = CreateTool
             .run(
                 &ctx,
@@ -315,31 +310,35 @@ mod tests {
             )
             .await;
         assert!(out.ok, "{out:?}");
-        assert_eq!(out.warnings, vec!["（临时会话不做语义校验）".to_string()]);
-        // 未覆盖类型 → 明说该类型不做语义校验（带扩展名）
-        let out = CreateTool
-            .run(
-                &ctx,
-                json!({"path": "ui/App.vue", "content": "<template/>"}),
-            )
-            .await;
-        assert!(out.ok, "{out:?}");
-        assert_eq!(
-            out.warnings,
-            vec!["（该文件类型不做语义校验：vue）".to_string()]
-        );
-        // JSON 走内置解析：坏 JSON 回喂错误（文案里没有「通过」）
+        assert_eq!(out.data["check"]["ran"], json!(false));
+        assert_eq!(out.data["check"]["ok"], json!(false));
+        assert_eq!(out.data["check"]["skipped"], json!("disabled"));
+        assert!(out.warnings.is_empty(), "检查不再走 warnings：{:?}", out.warnings);
+
+        // JSON 走内置解析：坏 JSON → ok=false、output 带错误；结论同样在 data
         let out = CreateTool
             .run(&ctx, json!({"path": "cfg/bad.json", "content": "{broken"}))
             .await;
         assert!(out.ok, "{out:?}");
+        assert_eq!(out.data["check"]["command"], json!("builtin:json-parse"));
+        assert_eq!(out.data["check"]["ok"], json!(false));
         assert!(
-            out.warnings[0].contains("JSON 解析失败"),
+            out.data["check"]["output"]
+                .as_str()
+                .unwrap()
+                .contains("JSON 解析失败"),
             "{:?}",
-            out.warnings
+            out.data
         );
-        assert!(!out.warnings[0].contains("校验通过"), "{:?}", out.warnings);
-        // 好 JSON → 通过（内置路径同样给出结论）
+        // 模型侧文本经 compact 从 data 生成，必须能看到该结论（缺陷 B 的回归防线）
+        let model_text =
+            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out);
+        assert!(
+            model_text.contains("JSON 解析失败"),
+            "模型侧必须看得到检查结论：{model_text}"
+        );
+
+        // 好 JSON → 内置解析通过
         let out = CreateTool
             .run(
                 &ctx,
@@ -347,9 +346,74 @@ mod tests {
             )
             .await;
         assert!(out.ok, "{out:?}");
-        assert_eq!(
-            out.warnings,
-            vec!["（写入后语义校验通过：JSON）".to_string()]
+        assert_eq!(out.data["check"]["ran"], json!(true));
+        assert_eq!(out.data["check"]["ok"], json!(true));
+        assert_eq!(out.data["check"]["skipped"], serde_json::Value::Null);
+    }
+
+    /// 配置了检查命令时：命令输出进 `outcome.data.check`，且模型侧文本含该结论
+    /// （[docs/post-write-check-plan](../../../docs/post-write-check-plan.md) 缺陷 B 的回归防线）。
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_configured_command_reaches_data_and_model() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        {
+            let mut cfg = core.cfg.write().unwrap();
+            cfg.shell.selection = Some("sh".into());
+            cfg.post_write_check = crate::core::config::PostWriteCheckSettings {
+                enabled: true,
+                command: "echo checked:{file}".into(),
+                timeout_seconds: 10,
+                tail_chars: 2000,
+            };
+        }
+        let rt = core.get_or_create_session(
+            "t",
+            roots.workspace.clone(),
+            Some("proj".into()),
+            vec![],
+            None,
+            vec![],
         );
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::AutoEdit,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        let ctx = ToolCtx {
+            core,
+            rt,
+            batch_id: "b".into(),
+            call_index: 0,
+            call_key: "b:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let out = CreateTool
+            .run(&ctx, json!({"path": "x.ts", "content": "let a = 1;\n"}))
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.data["check"]["ran"], json!(true));
+        assert_eq!(out.data["check"]["ok"], json!(true));
+        assert!(
+            out.data["check"]["output"]
+                .as_str()
+                .unwrap()
+                .contains("checked:x.ts"),
+            "{:?}",
+            out.data
+        );
+        // 模型侧经 compact 从 data 生成 → 必须看得到
+        let model_text =
+            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out);
+        assert!(model_text.contains("checked:x.ts"), "模型侧：{model_text}");
+        // 检查结论不走 warnings
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
     }
 }

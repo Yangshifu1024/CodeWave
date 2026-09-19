@@ -30,8 +30,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（Windows 实测 **815 passed**（798 lib + 17 集成）/ 3 ignored，个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过（2026-09-19 复测：两轮一漏一过）；以本地最新全绿为准） |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（Windows 实测 **643 passed / 67 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **768 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空，原 17 条集成用例随之移除；个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过（2026-09-19 复测：两轮一漏一过）；以本地最新全绿为准） |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **702 passed / 71 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
@@ -65,7 +65,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 ## 契约锚点（改前必读）
 
-- **事件面 29 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（最近一次新增：`lsp:server_missing`，LSP 写后语义校验的引导卡）
+- **事件面 28 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（`lsp:server_missing` 已随 LSP 机制删除，见 [docs/post-write-check-plan](./docs/post-write-check-plan.md)）
 - **SessionMeta `project_id + roots` 快照**是 @ 提及 / git 聚合的唯一数据源，勿绕过回查注册表（左栏文件树已随 [docs/workspace-explorer-removal-and-chat-scrollbar](./docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除）
 - `create_session(project_id?, workspace?)` 双形态；`delete_project` 级联删除（先取消运行中会话）
 - **anthropic SSE 流内绝不调 `parser.finish()`**（由分片撕裂集成测试守护）

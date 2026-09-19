@@ -327,102 +327,30 @@ impl Default for ApprovalSettings {
     }
 }
 
-/// 写文件后自动语义校验的语言开关集。
-/// [docs/lsp-post-write-diagnostics](../../../docs/lsp-post-write-diagnostics.md)：v3 起
-/// typescript/rust/python/go/java/dart 为对应语言的 **LSP 语义诊断**开关；json 仍走内置 serde_json 解析。
+/// 写入后检查命令（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+/// 取代 LSP 写后语义校验——create / edit 成功后执行用户配置的一条检查命令（如
+/// `npx eslint {file}`），在项目根目录运行，输出尾部随工具结果交给模型。
+/// 默认关闭且命令留空（零配置体验让位于显式配置；aider `--lint-cmd` 思路）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ValidationSettings {
-    /// Python 语义校验开关
-    pub python: bool,
-    /// Rust 语义校验开关
-    pub rust: bool,
-    /// TypeScript/JavaScript 语义校验开关
-    pub typescript: bool,
-    /// Go 语义校验开关
-    pub go: bool,
-    /// JSON 校验开关（内置解析，非 LSP）
-    pub json: bool,
-    /// Java 语义校验开关（默认关闭：jdtls 需要 JDK 21+ 与依赖树索引，首次启用需用户确认）
-    pub java: bool,
-    /// Dart/Flutter 语义校验开关
-    pub dart: bool,
-    /// LSP 服务配置（命令覆盖 / JDK / 额外 SDK 根 / 预算）
-    pub lsp: LspSettings,
+pub struct PostWriteCheckSettings {
+    /// 总开关（默认关闭）
+    pub enabled: bool,
+    /// 检查命令（默认空串 = 未配置；含 `{file}` 时每个被写文件执行一次）
+    pub command: String,
+    /// 单次执行超时秒数（默认 30；Rust 全项目 `cargo check` 建议调大）
+    pub timeout_seconds: u64,
+    /// 交给模型的输出尾部字符数（默认 3000）
+    pub tail_chars: usize,
 }
 
-impl Default for ValidationSettings {
+impl Default for PostWriteCheckSettings {
     fn default() -> Self {
-        ValidationSettings {
-            python: true,
-            rust: true,
-            typescript: true,
-            go: true,
-            json: true,
-            java: false,
-            dart: true,
-            lsp: LspSettings::default(),
-        }
-    }
-}
-
-/// 六语言 server 命令覆盖（留空 = 自动探测；探测顺序见 `lsp::discovery`）。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LspCommands {
-    /// TypeScript/JavaScript server 命令
-    pub typescript: String,
-    /// Rust server 命令
-    pub rust: String,
-    /// Python server 命令
-    pub python: String,
-    /// Go server 命令
-    pub go: String,
-    /// Java server 命令（jdtls）
-    pub java: String,
-    /// Dart server 命令
-    pub dart: String,
-}
-
-/// 语言服务器诊断的全局预算与发现配置（新字段必须 serde default 向前兼容）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LspSettings {
-    /// 各语言 server 命令覆盖
-    pub commands: LspCommands,
-    /// jdtls 使用的 JDK 21+ 路径（留空 = 自动探测；**不读 JAVA_HOME**，它常指向旧版本）
-    pub java_home: String,
-    /// 额外 SDK 根目录（如 `D:\\Sdk`；探测 `<root>/<lang>/bin`）
-    pub extra_roots: Vec<String>,
-    /// 写后同步等待诊断的毫秒预算
-    pub sync_window_ms: u64,
-    /// 单次回喂的诊断条数上限
-    pub max_diagnostics: usize,
-    /// 单次回喂的诊断文本字符上限
-    pub max_chars: usize,
-    /// 项目级 server 闲置回收时长（毫秒）
-    pub idle_ttl_ms: u64,
-    /// 单项目并发 server 上限
-    pub max_servers: usize,
-    /// 超过该体积的文件跳过语义校验
-    pub max_file_bytes: u64,
-    /// 同一诊断指纹在同一文件最多回喂次数
-    pub dedupe_limit: usize,
-}
-
-impl Default for LspSettings {
-    fn default() -> Self {
-        LspSettings {
-            commands: LspCommands::default(),
-            java_home: String::new(),
-            extra_roots: Vec::new(),
-            sync_window_ms: 1500,
-            max_diagnostics: 20,
-            max_chars: 4000,
-            idle_ttl_ms: 600_000,
-            max_servers: 8,
-            max_file_bytes: 1024 * 1024,
-            dedupe_limit: 2,
+        PostWriteCheckSettings {
+            enabled: false,
+            command: String::new(),
+            timeout_seconds: 30,
+            tail_chars: 3000,
         }
     }
 }
@@ -536,8 +464,8 @@ pub struct ConfigState {
     pub stall_timeout_seconds: u64,
     /// 审批设置
     pub approval: ApprovalSettings,
-    /// 语法校验开关
-    pub validation: ValidationSettings,
+    /// 写入后检查命令设置（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）
+    pub post_write_check: PostWriteCheckSettings,
     /// 界面偏好
     pub ui: UiPrefs,
     /// 自定义 prompt（第 6 层注入）
@@ -564,7 +492,7 @@ impl Default for ConfigState {
             compact_timeout_seconds: 180,
             stall_timeout_seconds: 300,
             approval: ApprovalSettings::default(),
-            validation: ValidationSettings::default(),
+            post_write_check: PostWriteCheckSettings::default(),
             ui: UiPrefs::default(),
             custom_prompt: None,
             disabled_skills: Vec::new(),

@@ -562,3 +562,77 @@ async fn files_as_object_salvaged_and_applied() {
         "{out:?}"
     );
 }
+
+/// 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：edit 把逐文件结论放进
+/// `outcome.data.checks`——模型侧经 compact 从 data 生成（缺陷 B 的回归防线），不再走 warnings。
+#[cfg(unix)]
+#[tokio::test]
+async fn edit_puts_post_write_check_into_data_per_file() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = super::super::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let core = crate::core::agent::test_support::make_core(&roots);
+    {
+        let mut cfg = core.cfg.write().unwrap();
+        cfg.shell.selection = Some("sh".into());
+        cfg.post_write_check = crate::core::config::PostWriteCheckSettings {
+            enabled: true,
+            command: "echo checked:{file}; exit 1".into(),
+            timeout_seconds: 10,
+            tail_chars: 2000,
+        };
+    }
+    let rt = core.get_or_create_session(
+        "t",
+        roots.workspace.clone(),
+        Some("proj".into()),
+        vec![],
+        None,
+        vec![],
+    );
+    rt.set_prefs(crate::core::prefs::SessionPrefs {
+        approval_mode: crate::core::prefs::ApprovalMode::AutoEdit,
+        model_id: None,
+        reasoning_effort: None,
+    });
+    let ctx = test_ctx(core, rt);
+    std::fs::write(ws.path().join("a.txt"), "one\n").unwrap();
+    std::fs::write(ws.path().join("b.txt"), "two\n").unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            serde_json::json!({"files":[
+                {"path":"a.txt","changes":[{"oldText":"one","newText":"ONE"}]},
+                {"path":"b.txt","changes":[{"oldText":"two","newText":"TWO"}]}]}),
+        )
+        .await;
+    assert!(out.ok, "{out:?}");
+    let checks = out.data["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 2, "逐文件成条：{checks:?}");
+    assert_eq!(checks[0]["path"], serde_json::json!("a.txt"));
+    assert!(checks[0]["check"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("a.txt"));
+    assert_eq!(checks[0]["check"]["ok"], serde_json::json!(false));
+    assert!(checks[0]["check"]["output"]
+        .as_str()
+        .unwrap()
+        .contains("checked:a.txt"));
+    assert_eq!(checks[1]["path"], serde_json::json!("b.txt"));
+    // 结论必须到达模型侧（compact 从 data 生成）；检查不再走 warnings
+    let model_text = crate::tools::compact::compact_for_model(crate::tools::ToolKind::FileWrite, "edit", &out);
+    assert!(
+        model_text.contains("checked:a.txt"),
+        "模型侧必须看得到检查结论：{model_text}"
+    );
+    assert!(
+        out.warnings.iter().all(|w| !w.contains("checked:")),
+        "检查结论不得再走 warnings：{:?}",
+        out.warnings
+    );
+}

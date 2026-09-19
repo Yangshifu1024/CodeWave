@@ -19,7 +19,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import zh from "../i18n/zh-CN";
 import en from "../i18n/en-US";
-import { LSP_LANGUAGES } from "../ipc/types";
 import {
   ADVANCED_ITEM_IDS,
   DEFAULT_PAGE,
@@ -275,16 +274,19 @@ describe("设置项注册表：页字段归属（脏标记数据源）", () => {
     expect(overlapping, `豁免路径已有设置项，应从 PAGE_FIELD_EXCEPTIONS 移除：${overlapping.join("、")}`).toEqual([]);
   });
 
-  it("六语言校验项齐备且各带独立 labelKey（SettingsPage 的语言行标签从本表派生）", () => {
-    const items = LSP_LANGUAGES.map((lang) => SETTINGS_ITEMS.find((i) => i.id === `validation.${lang}`));
-    const missing = LSP_LANGUAGES.filter((_, i) => !items[i]);
-    expect(missing, `注册表缺少 language 项：${missing.join("、")}`).toEqual([]);
-    for (const [i, lang] of LSP_LANGUAGES.entries()) {
-      expect(items[i]!.page, `validation.${lang} 不在工具与集成页`).toBe("tools");
-    }
-    // 六个 labelKey 互不相同：否则语言行的展示名会串（改错一个也不会有界面上的表现差异之外的报错）
+  it("写入后检查四项齐备且各带独立 labelKey（SettingsPage 的控件标签从本表派生）", () => {
+    const ids = [
+      "post_write_check.enabled",
+      "post_write_check.command",
+      "post_write_check.timeout_seconds",
+      "post_write_check.tail_chars",
+    ];
+    const items = ids.map((id) => SETTINGS_ITEMS.find((i) => i.id === id));
+    expect(items.filter((i) => !i), `注册表缺少写入后检查项：${ids.filter((_, i) => !items[i]).join("、")}`).toEqual([]);
+    for (const item of items) expect(item!.page, `${item!.id} 不在工具与集成页`).toBe("tools");
+    // labelKey 互不相同：否则行的展示名会串
     const labelKeys = items.map((i) => i!.labelKey);
-    expect(new Set(labelKeys).size, `语言行 labelKey 有重复：${labelKeys.join("、")}`).toBe(labelKeys.length);
+    expect(new Set(labelKeys).size, `写入后检查 labelKey 有重复：${labelKeys.join("、")}`).toBe(labelKeys.length);
   });
 });
 
@@ -387,22 +389,19 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
     expect(ids("代理")).toContain("network.proxy"); // 中文关键词
     expect(ids("proxy")).toContain("network.proxy"); // 英文关键词
     expect(ids("PROXY")).toContain("network.proxy"); // 小写归一
-    expect(ids("lsp")).toContain("validation.lsp.max_chars"); // 关键词补的 lsp
+    expect(ids("eslint")).toContain("post_write_check.command"); // 命令示例关键词
     expect(ids("日志")).toContain("log.level");
     expect(ids("主题")).toContain("ui.theme");
   });
 
   it("页名与组名参与命中", () => {
-    const budget = ids("全局预算");
-    expect(budget.length).toBe(7); // 预算组 7 项全命中
-    expect(budget).toEqual([
-      "validation.lsp.sync_window_ms",
-      "validation.lsp.max_diagnostics",
-      "validation.lsp.max_chars",
-      "validation.lsp.idle_ttl_ms",
-      "validation.lsp.max_servers",
-      "validation.lsp.max_file_bytes",
-      "validation.lsp.dedupe_limit",
+    // 组名「写入后检查」命中整组 4 项（组名 + 各项关键词）
+    const group = ids("写入后检查");
+    expect(group).toEqual([
+      "post_write_check.enabled",
+      "post_write_check.command",
+      "post_write_check.timeout_seconds",
+      "post_write_check.tail_chars",
     ]);
     // 页名命中整页（工具与集成页含 MCP / 技能）
     expect(ids("工具与集成")).toContain("mcp.servers");
@@ -410,17 +409,16 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
   });
 
   it("多词 AND：每个词都要命中同一项（词序无关）", () => {
-    expect(ids("诊断 毫秒")).toEqual(["validation.lsp.sync_window_ms"]);
-    expect(ids("毫秒 诊断")).toEqual(["validation.lsp.sync_window_ms"]);
-    expect(ids("诊断 zzz")).toEqual([]);
+    expect(ids("输出 字符")).toEqual(["post_write_check.tail_chars"]);
+    expect(ids("字符 输出")).toEqual(["post_write_check.tail_chars"]);
+    expect(ids("输出 zzz")).toEqual([]);
     expect(ids("proxy 代理")).toContain("network.proxy");
   });
 
-  it("haystack 大小写归一：小写 query 命中「首字母大写 / 全大写缩写」的英文显示名（keywords 里没这个写法）", () => {
-    // en 显示名 "Server idle TTL (ms)"：query 用小写缩写 ttl。该词的**大写形式**只存在于显示名里
-    // （keywords 只有 lsp/idle/回收/闲置，页面与组名也没有）——删掉 haystack 的 .toLowerCase() 后
-    // haystack 里只剩 "TTL"，本用例必红（keywords 全小写只能偶然盖住其它项，盖不住这一项）。
-    expect(matchSettings("ttl", enT).map((i) => i.id)).toContain("validation.lsp.idle_ttl_ms");
+  it("haystack 大小写归一：小写 query 命中英文显示名（keywords 里没这个写法）", () => {
+    // en 显示名 "Output tail chars handed to the model"：query 用小写 output，该词只存在于显示名里
+    // （keywords 只有 tail/输出/字符/尾部/截断）——删掉 haystack 的 .toLowerCase() 后本用例必红。
+    expect(matchSettings("output", enT).map((i) => i.id)).toContain("post_write_check.tail_chars");
     // 同形第二例：句首大写的 "Confirm writes creating paths outside workspace"
     expect(matchSettings("confirm", enT).map((i) => i.id)).toContain("approval.confirm_outside_create");
   });
@@ -430,23 +428,27 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
     const pageRanks = matchSettings("a", zhT).map((i) => PAGE_ORDER.indexOf(i.page));
     expect([...pageRanks].sort((x, y) => x - y)).toEqual(pageRanks);
     // 多次调用结果一致（纯函数、无隐藏状态）
-    expect(ids("lsp")).toEqual(ids("lsp"));
-    // 组序：预算组（lspBudget）在发现组（lspDiscovery）之前
-    const lspIds = ids("lsp");
-    expect(lspIds.indexOf("validation.lsp.sync_window_ms")).toBeLessThan(lspIds.indexOf("validation.lsp.extra_roots"));
+    expect(ids("check")).toEqual(ids("check"));
+    // 组内按注册表原序：写入后检查四项的顺序稳定
+    expect(ids("写入后检查")).toEqual([
+      "post_write_check.enabled",
+      "post_write_check.command",
+      "post_write_check.timeout_seconds",
+      "post_write_check.tail_chars",
+    ]);
   });
 });
 
 describe("设置项注册表：进阶项派生（批③）", () => {
-  it("进阶项共 10 项（2026-09-19 active_model_id 退出进阶：它只在编辑视图出现），与注册表 advanced 标记同源", () => {
-    expect(ADVANCED_ITEM_IDS.length).toBe(10);
+  it("进阶项共 4 项（写入后检查 2 + 命令白名单 + 会话详细日志），与注册表 advanced 标记同源", () => {
+    expect(ADVANCED_ITEM_IDS.length).toBe(4);
     expect(new Set(ADVANCED_ITEM_IDS).size).toBe(ADVANCED_ITEM_IDS.length);
     expect(new Set(ADVANCED_ITEM_IDS)).toEqual(new Set(SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id)));
   });
 
-  it("advancedCountByPage 逐页统计，拾起来恰好 10", () => {
-    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(10);
-    expect(advancedCountByPage("tools")).toBe(8); // LSP 预算 7 + JDK 路径
+  it("advancedCountByPage 逐页统计，拾起来恰好 4", () => {
+    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(4);
+    expect(advancedCountByPage("tools")).toBe(2); // 写入后检查：超时 / 输出尾部字符
     expect(advancedCountByPage("security")).toBe(1); // 命令白名单
     // 模型与供应商页：0——该页唯一候选 active_model_id 的锚点只在编辑视图，页级开关对它无意义
     expect(advancedCountByPage("providers")).toBe(0);
@@ -456,10 +458,8 @@ describe("设置项注册表：进阶项派生（批③）", () => {
     expect(advancedCountByPage("about")).toBe(0);
   });
 
-  it("整组皆为进阶项：只有 LSP 预算组（发现组含非进阶的额外 SDK 根目录）", () => {
-    expect(isAdvancedOnlyGroup("tools", "settings.lspBudget")).toBe(true);
-    expect(isAdvancedOnlyGroup("tools", "settings.validation")).toBe(false);
-    expect(isAdvancedOnlyGroup("tools", "settings.lspDiscovery")).toBe(false);
+  it("整组皆为进阶项：写入后检查组含非进阶的开关与命令，故不是整组折叠", () => {
+    expect(isAdvancedOnlyGroup("tools", "settings.postWriteCheck")).toBe(false);
     expect(isAdvancedOnlyGroup("tools", "settings.mcp")).toBe(false);
     expect(isAdvancedOnlyGroup("tools", "settings.skills")).toBe(false);
     expect(isAdvancedOnlyGroup("tools", "settings.nope")).toBe(false);
@@ -571,7 +571,7 @@ const SHARED_SEGMENTS = ["app.", "common."];
  * 因此任何非设置页文件引用它都必须登记（批④ 自己新增的 `LspGuideCard → settings.lspJavaCost` 就是这一格）。
  */
 const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
-  chat: ["chat.", "composer.", "lsp.", "notice.", "queue."], // 消息区 / 输入区 / LSP 引导卡 / 引导条 / 运行队列
+  chat: ["chat.", "composer.", "notice.", "queue."], // 消息区 / 输入区 / 引导条 / 运行队列
   files: ["files."], // 会话产物与文件列表
   quota: [], // 订阅额度：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
   shell: ["closeTab.", "exitApp.", "git.", "nav.", "rightbar.", "sessions.", "skills.", "titlebar."], // 壳层：左导航 / 顶栏 / 右栏 / 拦截框 / git 身份条 / 技能详情
@@ -591,7 +591,6 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
-  "chat/LspGuideCard.tsx": ["lsp.", "settings."], // lsp.* 自有（引导卡三景）；settings.* 为批④ 同句合并后的借用
   "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
   "chat/segments.tsx": ["chat."], // 流式段落状态词
   "files/FileViewerModal.tsx": ["files."], // 产物预览弹窗
@@ -615,9 +614,6 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
  * 否则「允许段清单」会变成一张谁都可以往上加段的橡皮图章。
  */
 const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
-  "chat/LspGuideCard.tsx": {
-    "settings.": "批④ 同句合并：引导卡正文改引 settings.lspJavaCost（lsp.confirmCost 已删，同一句话只留一处）",
-  },
   "chat/Composer.tsx": {
     "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
     "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
@@ -634,7 +630,6 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
  */
 const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
   "panels/SettingsPage.tsx": {
-    "t(LANG_LABEL_KEY[lang])": "语言行标签由 LSP_LANGUAGES 派生（六个 labelKey 已由注册表用例逐项守护）",
     "t(item.labelKey)": "搜索命中行的项名由注册表 labelKey 派生",
     "t(PAGE_LABEL_KEY[item.page])": "搜索命中行的所属页名由注册表页名键派生",
     "t(group.titleKey)": "左导航组标题由 PAGE_GROUPS.titleKey 派生",
@@ -742,10 +737,10 @@ function leafValues(node: unknown, prefix = ""): [string, string][] {
   );
 }
 
-describe("术语一致性：写后校验一律叫「语义校验」（批④）", () => {
-  it("i18n 双语的设置项名与新术语同源，且全字典不再出现「语法校验」写法", () => {
-    expect(zh.settings.validation).toBe("写入后语义校验");
-    expect(en.settings.validation).toBe("Post-write semantic validation");
+describe("术语一致性：写后检查（post-write-check）", () => {
+  it("i18n 双语的设置分组名与新术语同源，且全字典不再出现「语法校验」写法", () => {
+    expect(zh.settings.postWriteCheck).toBe("写入后检查");
+    expect(en.settings.postWriteCheck).toBe("Post-write check");
     const offenders = ([[zh, "zh-CN"], [en, "en-US"]] as const).flatMap(([dict, name]) =>
       leafValues(dict)
         .filter(([, value]) => /语法校验|syntax validation/i.test(value))
@@ -756,25 +751,11 @@ describe("术语一致性：写后校验一律叫「语义校验」（批④）"
 
   it("已同步的文档与新术语对齐（命名现状的文档整篇不得留旧写法）", () => {
     const docsDir = join(SRC, "..", "..", "docs");
-    // 命名现状的文档：含 AGENTS.md 列为必读的技术基准 technical-design.md（批④ 返工补入；
-    // 只查前三篇时，基准文档仍写着旧名字也没人拦）
+    // 命名现状的文档：含 AGENTS.md 列为必读的技术基准 technical-design.md
     for (const doc of ["settings-ia.md", "settings-terminology.md", "technical-design.md"]) {
       const text = readFileSync(join(docsDir, doc), "utf8");
       expect(text, `${doc} 仍写「写入后语法校验」`).not.toContain("写入后语法校验");
-      expect(text, `${doc} 没有出现新术语`).toContain("语义校验");
-    }
-    // 历史实施报告里对**旧路径历史文案**的引用允许保留，但必须同时标注它已不是现行定名
-    for (const doc of [
-      "lsp-post-write-diagnostics.md",
-      "builtin-tools-source-comparison.md",
-      "p1-plan.md",
-      "tools-optimization-and-gap-fill-plan.md",
-    ]) {
-      const text = readFileSync(join(docsDir, doc), "utf8");
-      expect(text, `${doc} 没有出现新术语（历史文案括注里要点明现行定名）`).toContain("语义校验");
-      if (text.includes("写入后语法校验")) {
-        expect(text, `${doc} 的历史文案引用未标注「历史文案」`).toContain("历史文案");
-      }
+      expect(text, `${doc} 没有出现新术语「写入后检查」`).toContain("写入后检查");
     }
   });
 });
@@ -834,11 +815,11 @@ describe("设置项注册表：会话保留期与清理的登记（[docs/session
     }
   });
 
-  it("三个新项都不标进阶（进阶项总数保持 10，页级折叠不牵动清理界面）", () => {
+  it("三个新项都不标进阶（进阶项总数保持 4，页级折叠不牵动清理界面）", () => {
     for (const id of ["sessions.retention_days", "app.cleanup_now", "app.cleanup_status"]) {
       expect(SETTINGS_ITEMS.find((i) => i.id === id)?.advanced, `${id} 不该标进阶`).toBeFalsy();
     }
-    expect(ADVANCED_ITEM_IDS.length).toBe(10);
+    expect(ADVANCED_ITEM_IDS.length).toBe(4);
     expect(advancedCountByPage("agent"), "工作区与智能体页进阶项数不应因清理界面变化").toBe(0);
   });
 

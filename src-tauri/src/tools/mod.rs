@@ -18,6 +18,7 @@ pub mod list_files;
 pub mod net;
 pub mod pathutil;
 pub mod plan;
+pub mod postcheck;
 pub mod read;
 pub mod registry;
 pub mod render_html;
