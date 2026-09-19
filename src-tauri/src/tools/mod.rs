@@ -21,6 +21,7 @@ pub mod plan;
 pub mod read;
 pub mod registry;
 pub mod render_html;
+pub mod sanitize;
 pub mod scheduled_task;
 pub mod service;
 pub mod skill;

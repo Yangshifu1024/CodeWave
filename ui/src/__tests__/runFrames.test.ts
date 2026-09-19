@@ -53,6 +53,22 @@ describe("applyFrameToTab", () => {
     expect(last.toolsMap["b1:2"].progressTail).toBe("...");
   });
 
+  it('「开始」帧（空 chunk + 工具名）立刻建运行中卡片——修「调用结束才显示」', () => {
+    const t = blank();
+    t.running = true;
+    // 后端在工具真正执行前发的帧：chunk 为空、name = 真工具名
+    applyFrameToTab(t, { type: "tool_progress", batch: "b9", index: 3, chunk: "", name: "read" } as any);
+    const last = t.items[t.items.length - 1] as any;
+    expect(last.timeline[0]).toEqual({ kind: "tool", callKey: "b9:3" });
+    const tool = last.toolsMap["b9:3"];
+    expect(tool).toMatchObject({ tool: "read", status: "running", progressTail: "" });
+
+    // 后续输出帧照常填进度尾部；状态仍为运行中，直到 tool:result 落定
+    applyFrameToTab(t, { type: "tool_progress", batch: "b9", index: 3, chunk: "file body", name: "read" } as any);
+    expect(tool.progressTail).toBe("file body");
+    expect(tool.status).toBe("running");
+  });
+
   it("backfills the running placeholder card with the frame's tool name (running-name fix)", () => {
     const t = blank();
     t.running = true;

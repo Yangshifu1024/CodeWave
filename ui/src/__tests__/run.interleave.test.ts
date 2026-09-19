@@ -174,6 +174,30 @@ describe("思考与工具穿插顺序", () => {
     expect((items[1] as any).toolsMap["b2:0"].tool).toBe("edit");
   });
 
+  it("结果落定时清掉流式进度尾部（残留 progressTail 不进已落定卡片）", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    useRun.setState((s) => {
+      const t = s.tabs[session]!;
+      t.items.push({ kind: "assistant", timeline: [], toolsMap: {}, streaming: true });
+      // 运行中：进度帧把尾部填上
+      applyFrameToTab(t, { type: "tool_progress", batch: "b7", index: 0, chunk: "partial output", name: "command" } as any);
+    });
+    const assistant = () => tabOf(session).items.find((i) => i.kind === "assistant") as any;
+    expect(assistant().toolsMap["b7:0"].progressTail).toBe("partial output");
+    expect(assistant().toolsMap["b7:0"].status).toBe("running");
+
+    handlers["tool:result"]({
+      session,
+      call_key: "b7:0",
+      tool: "command",
+      args_preview: "",
+      outcome: { ok: true, data: {} },
+      duration_ms: 12,
+    });
+    expect(assistant().toolsMap["b7:0"].status).toBe("ok");
+    expect(assistant().toolsMap["b7:0"].progressTail).toBe("");
+  });
+
   it("run:retry 后旧 attempt 的半截帧按代次丢弃（审查 C2）", () => {
     const handlers = useRun.getState().bindGlobalHandlers();
     useRun.setState((s) => {

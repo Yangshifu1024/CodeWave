@@ -42,37 +42,62 @@ pub struct ServiceTool;
 /// 环形日志容量（字节）：超出即丢弃最旧数据。
 const RING_CAP: usize = 512 * 1024;
 
+/// 环形日志内部状态：字节环 + 输出清洗器。
+///
+/// 清洗器必须与字节环同在锁内：stdout / stderr 两条 drain 共享同一个 `RingLog`，
+/// 串行化后它们的半截转义/多字节状态才不会互相污染。
+struct RingLogInner {
+    ring: VecDeque<u8>,
+    clean: crate::tools::sanitize::OutputSanitizer,
+}
+
 /// 字节级环形日志：Arc + Mutex 共享，超过 RING_CAP 时逐字节淘汰最旧数据。
+/// 写入前先过 [`crate::tools::sanitize::OutputSanitizer`]（剥 ANSI/控制序列 + 跨块安全解码）。
 #[derive(Clone)]
-pub struct RingLog(Arc<std::sync::Mutex<VecDeque<u8>>>);
+pub struct RingLog(Arc<std::sync::Mutex<RingLogInner>>);
 
 impl RingLog {
     /// 创建空日志。
     fn new() -> Self {
-        RingLog(Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
-            RING_CAP,
-        ))))
+        RingLog(Arc::new(std::sync::Mutex::new(RingLogInner {
+            ring: VecDeque::with_capacity(RING_CAP),
+            clean: crate::tools::sanitize::OutputSanitizer::new(),
+        })))
     }
-    /// 追加字节，超容量时淘汰最旧的。
+    /// 追加一块原始输出（先清洗），超容量时淘汰最旧的。
     pub fn push(&self, bytes: &[u8]) {
         let mut g = self.0.lock().unwrap();
-        for b in bytes {
-            if g.len() >= RING_CAP {
-                g.pop_front();
+        let text = g.clean.push(bytes);
+        Self::append(&mut g, &text);
+    }
+    /// 流结束：把清洗器里的残留吐进环（半截多字节兜底；半截转义序列丢弃）。
+    pub fn flush(&self) {
+        let mut g = self.0.lock().unwrap();
+        let text = g.clean.finish();
+        Self::append(&mut g, &text);
+    }
+    /// 已清洗文本入环（超容量逐字节淘汰最旧）。
+    fn append(inner: &mut RingLogInner, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        for b in text.as_bytes() {
+            if inner.ring.len() >= RING_CAP {
+                inner.ring.pop_front();
             }
-            g.push_back(*b);
+            inner.ring.push_back(*b);
         }
     }
     /// 读尾部 n 字节并按 UTF-8 宽松解码。
     pub fn tail(&self, n: usize) -> String {
         let g = self.0.lock().unwrap();
-        let skip = g.len().saturating_sub(n);
-        let s: Vec<u8> = g.iter().skip(skip).copied().collect();
+        let skip = g.ring.len().saturating_sub(n);
+        let s: Vec<u8> = g.ring.iter().skip(skip).copied().collect();
         String::from_utf8_lossy(&s).into_owned()
     }
     /// 当前缓冲字节数。
     pub fn len(&self) -> usize {
-        self.0.lock().unwrap().len()
+        self.0.lock().unwrap().ring.len()
     }
 }
 
@@ -359,6 +384,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
                 Ok(n) => log.push(&buf[..n]),
             }
         }
+        // 流结束：把清洗器的残留（半截多字节兜底）吐进环
+        log.flush();
     }
     let pump_a = tokio::spawn(drain(stdout.expect("stdout 已 piped"), log.clone()));
     let pump_b = tokio::spawn(drain(stderr.expect("stderr 已 piped"), log.clone()));
@@ -432,6 +459,26 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// service 环形日志的写作入口必须清洗：带色输出不得把 ANSI 转义写进日志。
+    #[test]
+    fn ring_log_strips_ansi_and_keeps_surviving_bytes() {
+        let log = RingLog::new();
+        log.push(b"\x1b[32mok\x1b[0m\n");
+        assert_eq!(log.tail(4096), "ok\n");
+        assert!(!log.tail(4096).contains('\u{1b}'));
+
+        // 多字节字符被分块切开也不出替换符
+        let check = "✓".as_bytes();
+        log.push(&[check[0], check[1]]);
+        log.push(&check[2..]);
+        assert_eq!(log.tail(4096), "ok\n✓");
+
+        // 超容量逐字节淘汰仍然成立
+        let big = vec![b'x'; RING_CAP + 16];
+        log.push(&big);
+        assert_eq!(log.len(), RING_CAP);
+    }
 
     #[tokio::test]
     async fn service_lifecycle() {

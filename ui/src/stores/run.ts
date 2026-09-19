@@ -359,6 +359,9 @@ export const useRun = create<RunStore>()(
           tool.outcome = p.outcome as any;
           tool.argsPreview = p.args_preview;
           tool.durationMs = p.duration_ms;
+          // 结果落定：清掉流式期间的进度尾部。结果卡自带完整输出且只在 running 时展示尾部，
+          // 残留的 tail 已无意义（且是 ANSI/裂字符的载体）
+          tool.progressTail = "";
           return;
         }
         // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：每次成功文件写递增信号；文件页签据此去抖拉取最新登记
@@ -372,6 +375,8 @@ export const useRun = create<RunStore>()(
         tool.outcome = p.outcome as any;
         tool.argsPreview = p.args_preview;
         tool.durationMs = p.duration_ms;
+        // 同上：落定即清进度尾部（主会话与子代理流两处同步）
+        tool.progressTail = "";
       });
     },
 
