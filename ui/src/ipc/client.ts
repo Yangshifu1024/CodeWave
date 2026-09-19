@@ -168,4 +168,8 @@ export const ipc = {
   lspRedetect: () => invoke<LspServerStatus[]>("lsp_redetect"),
   /** 重启某语言的 server（拾取命令覆盖 / 清诊断缓存） */
   lspRestart: (language: LspLanguage) => invoke<void>("lsp_restart", { language }),
+
+  // ---------- 界面字体（[docs/custom-font-and-titlebar]）----------
+  /** 字体偏好落盘（真源在配置文件的 ui.font_sans / ui.font_mono；只写这两个字段） */
+  setFontPrefs: (sans: string, mono: string) => invoke<void>("set_font_prefs", { sans, mono }),
 };

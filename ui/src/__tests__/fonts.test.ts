@@ -1,7 +1,8 @@
 // Custom font preferences ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)): sanitize / override building / localStorage round-trip / <html> application
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  applyInitialFonts, buildFontOverride, previewFontFamily, readStoredFonts, sanitizeFontList, storeFonts,
+  applyInitialFonts, buildFontOverride, previewFontFamily, readStoredFonts, reconcileFontsFromConfig,
+  sanitizeFontList, storeFonts,
 } from "../utils/fonts";
 
 describe("sanitizeFontList", () => {
@@ -86,5 +87,42 @@ describe("持久化与应用", () => {
     expect(readStoredFonts()).toEqual({ sans: "", mono: "" });
     expect(document.documentElement.style.getPropertyValue("--ws-font-sans")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--ws-font-mono")).toBe("");
+  });
+});
+
+describe("与后端配置对账（reconcileFontsFromConfig：后端为真源、缓存为首帧镜像）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.style.removeProperty("--ws-font-sans");
+    document.documentElement.style.removeProperty("--ws-font-mono");
+  });
+
+  it("后端有值 → 以后端为准：应用并回写缓存（换版本/清缓存后不丢）", () => {
+    localStorage.setItem("ws_font_sans", "Maple");
+    const r = reconcileFontsFromConfig({ sans: "PingFang SC", mono: "JetBrains Mono" });
+    expect(r).toEqual({ prefs: { sans: "PingFang SC", mono: "JetBrains Mono" }, migrate: false });
+    expect(localStorage.getItem("ws_font_sans")).toBe("PingFang SC");
+    expect(localStorage.getItem("ws_font_mono")).toBe("JetBrains Mono");
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue("--ws-font-sans")).toBe('"PingFang SC", var(--ws-font-sans-fallback)');
+    expect(style.getPropertyValue("--ws-font-mono")).toBe('"JetBrains Mono", var(--ws-font-mono-fallback)');
+  });
+
+  it("后端为空、缓存有值（老版本只存 localStorage）→ 保留缓存并回报待迁移", () => {
+    localStorage.setItem("ws_font_mono", "Consolas");
+    const r = reconcileFontsFromConfig({});
+    expect(r.migrate).toBe(true);
+    expect(r.prefs).toEqual({ sans: "", mono: "Consolas" });
+    expect(document.documentElement.style.getPropertyValue("--ws-font-mono")).toBe(
+      '"Consolas", var(--ws-font-mono-fallback)',
+    );
+  });
+
+  it("两侧都空 → 默认链且不迁移（顺带清掉脏缓存键）", () => {
+    localStorage.setItem("ws_font_sans", ' "" ; } ');
+    const r = reconcileFontsFromConfig({ sans: "", mono: "" });
+    expect(r).toEqual({ prefs: { sans: "", mono: "" }, migrate: false });
+    expect(localStorage.getItem("ws_font_sans")).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--ws-font-sans")).toBe("");
   });
 });

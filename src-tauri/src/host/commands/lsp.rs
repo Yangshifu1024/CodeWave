@@ -100,6 +100,27 @@ pub async fn lsp_install(core: Core<'_>, language: String) -> Result<String, Str
                 spec.server_name, st.command
             ));
         }
+        // ①b 前置运行库缺失（如没装 Node.js → 没有 npm）：**提前**给出可操作指引，
+        //     不让用户点了按钮才拿到一句含糊的「未找到 npm，无法执行安装」。
+        if let Some(req) = st.install.as_ref().and_then(|i| i.requires.as_ref()) {
+            if !req.ready {
+                let docs = req
+                    .docs_url
+                    .as_deref()
+                    .map(|u| format!("（{u}）"))
+                    .unwrap_or_default();
+                // 说「缺哪个运行库」而不是「缺哪个语言 SDK」：Python 行缺的是 Node.js
+                let runtime = if req.name.trim().is_empty() {
+                    "对应运行库"
+                } else {
+                    req.name.as_str()
+                };
+                return Err(format!(
+                    "未找到 {}，无法执行一键安装：请先安装 {runtime}{docs}",
+                    req.command
+                ));
+            }
+        }
     }
 
     // ② 只有可一键安装的形态有执行计划；Java/Dart 是 Manual（指向官方地址，不静默）

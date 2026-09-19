@@ -17,6 +17,12 @@ pub struct InstallSpec {
     pub docs_url: &'static str,
     /// 前置条件说明
     pub prerequisite: Option<String>,
+    /// 前置运行库（安装命令依赖的可执行文件，如 `npm`）的官方下载地址；
+    /// 仅当该运行库缺失时展示（`npm i -g` 没了 npm 就是一串死命令）。
+    pub runtime_docs_url: Option<&'static str>,
+    /// 前置运行库的展示名（如 `Node.js`）：不能拿语言的 SDK 名充数——Python 行缺的是 Node.js，
+    /// 说「需先安装 Python」会把用户带偏。
+    pub runtime_name: Option<&'static str>,
 }
 
 /// 单语言 server 描述。
@@ -73,6 +79,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 command: Some("npm i -g typescript-language-server typescript".into()),
                 docs_url: "https://github.com/typescript-language-server/typescript-language-server",
                 prerequisite: Some("需 Node.js（npm 在 PATH 中）".into()),
+                runtime_docs_url: Some("https://nodejs.org/en/download"),
+                runtime_name: Some("Node.js"),
             },
         },
         Lang::Rust => ServerSpec {
@@ -89,6 +97,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 command: Some("rustup component add rust-analyzer".into()),
                 docs_url: "https://rust-analyzer.github.io/",
                 prerequisite: Some("需 rustup（或从 release 页下载独立二进制）".into()),
+                runtime_docs_url: Some("https://rustup.rs/"),
+                runtime_name: Some("rustup"),
             },
         },
         Lang::Python => ServerSpec {
@@ -109,6 +119,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 command: Some("npm i -g pyright".into()),
                 docs_url: "https://microsoft.github.io/pyright/",
                 prerequisite: Some("需 Node.js（npm 在 PATH 中）".into()),
+                runtime_docs_url: Some("https://nodejs.org/en/download"),
+                runtime_name: Some("Node.js"),
             },
         },
         Lang::Go => ServerSpec {
@@ -136,6 +148,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 prerequisite: Some(
                     "需 Go 工具链；`go install` 的产物在 $(go env GOPATH)/bin".into(),
                 ),
+                runtime_docs_url: Some("https://go.dev/dl/"),
+                runtime_name: Some("Go 工具链"),
             },
         },
         Lang::Java => ServerSpec {
@@ -158,6 +172,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 command: None,
                 docs_url: "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
                 prerequisite: Some("需 JDK 21+；jdtls 不会使用 JAVA_HOME".into()),
+                runtime_docs_url: None,
+                runtime_name: None,
             },
         },
         Lang::Dart => ServerSpec {
@@ -173,6 +189,8 @@ pub fn spec(lang: Lang) -> ServerSpec {
                 command: None,
                 docs_url: "https://dart.dev/get-dart",
                 prerequisite: Some("需 Flutter/Dart SDK（cmd 中已 `flutter pub get`）".into()),
+                runtime_docs_url: None,
+                runtime_name: None,
             },
         },
     }
@@ -266,6 +284,30 @@ mod tests {
                 .unwrap()
                 .contains("JDK 21")
         );
+    }
+
+    /// 可一键安装的语言必须写明「前置运行库缺失时去哪下载」：否则 npm 不在机器上时，
+    /// 用户只拿到一句「未找到 npm，无法执行安装」。
+    #[test]
+    fn installable_languages_declare_runtime_docs() {
+        for lang in [Lang::TypeScript, Lang::Rust, Lang::Python, Lang::Go] {
+            let s = spec(lang);
+            assert_eq!(s.install.kind, InstallKind::Installable);
+            let url = s
+                .install
+                .runtime_docs_url
+                .unwrap_or_else(|| panic!("{} 必须给前置运行库的下载地址", lang.id()));
+            assert!(url.starts_with("https://"), "{}：{url}", lang.id());
+            // 运行库展示名必须给：缺的是 Node.js/Go 工具链/rustup，而不是那个语言的 SDK
+            assert!(
+                s.install.runtime_name.is_some(),
+                "{} 必须给前置运行库的展示名（否则会拿语言 SDK 名充数）",
+                lang.id()
+            );
+        }
+        // Manual 的语言没有一键安装命令，也就没有前置运行库一说
+        assert!(spec(Lang::Java).install.runtime_docs_url.is_none());
+        assert!(spec(Lang::Dart).install.runtime_docs_url.is_none());
     }
 
     #[test]

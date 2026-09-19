@@ -37,7 +37,7 @@ pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), Stri
     }
     {
         let current = core.cfg.read().unwrap().clone();
-        updated.unmask_from(&current);
+        apply_page_save_shape(&mut updated, &current);
     }
     updated.save().map_err(err)?;
     // 明文 key 保存时直接迁入 keyring（不留明文窗口，[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）；失败保留明文并告警
@@ -58,6 +58,43 @@ pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), Stri
     // 仍然 failover 到其他 key
     core.key_pool.reset_all();
     Ok(())
+}
+
+/// 只写字体偏好（界面字体 / 等宽字体）并**落盘**。
+///
+/// 为什么单独一条命令：字体是「即改即生效」的 UI 偏好，不该拖到页级「保存」才生效；
+/// 也就不能走 `save_config`（那是整份覆盖，会把用户还没保存的其他改动一并写进去）。
+/// 与 `lsp_enable` 同一纪律：**先落盘再改内存**，且只 patch 这两个字段。
+/// 值净化（引号/控制字符、折叠空白）由前端 `utils/fonts.ts` 负责，这里只做 trim。
+#[tauri::command]
+pub async fn set_font_prefs(core: Core<'_>, sans: String, mono: String) -> Result<(), String> {
+    let mut snapshot = core.cfg.read().unwrap().clone();
+    apply_font_prefs(&mut snapshot.ui, &sans, &mono);
+    snapshot.save().map_err(err)?;
+    {
+        let mut guard = core.cfg.write().unwrap();
+        apply_font_prefs(&mut guard.ui, &sans, &mono);
+    }
+    tracing::debug!("字体偏好已落盘");
+    Ok(())
+}
+
+/// 字体偏好写入 `ui` 段（空串 = 默认字体链）。
+fn apply_font_prefs(ui: &mut crate::core::config::UiPrefs, sans: &str, mono: &str) {
+    ui.font_sans = sans.trim().to_string();
+    ui.font_mono = mono.trim().to_string();
+}
+
+/// 页级保存的形状修正：掩码回填（不回写脱敏占位）+ 护住由专门命令独占维护的字段。
+///
+/// 抽成独立函数是为了让**调用点**也进测试边界：原缺陷正是「页级保存少护了一次」，
+/// 只测 preserve 辅助函数的话，删掉调用点仍然全绿。
+fn apply_page_save_shape(updated: &mut ConfigState, current: &ConfigState) {
+    updated.unmask_from(current);
+    // 字体偏好由 `set_font_prefs` 独占维护（即时生效、不进草稿）：页级「保存」不得用
+    // 「打开设置页时的旧快照」覆盖它（否则「改完字体 → 保存其他设置 → 重启」会静默回滚）
+    updated.ui.font_sans = current.ui.font_sans.clone();
+    updated.ui.font_mono = current.ui.font_mono.clone();
 }
 
 /// 当前配置解析出的代理 URL（None = 直连）：设置页「系统代理」回显与前端更新检查传参共用
@@ -140,4 +177,67 @@ pub async fn delete_project(
     // LSP：关掉该项目的全部 server 实例（项目删除会级联删会话，绝不留孤儿 server）
     core.lsp.shutdown_project(&project_id).await;
     Ok(serde_json::json!({ "deleted_sessions": n }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::ConfigState;
+
+    /// 字体偏好只改 `ui.font_sans` / `ui.font_mono`，且两侧都 trim（空串 = 默认链）。
+    #[test]
+    fn font_prefs_patch_only_font_fields() {
+        let mut cfg = ConfigState::default();
+        cfg.ui.language = "en-US".into();
+        cfg.ui.font_size = 17.0;
+        cfg.ui.close_to_tray = false;
+
+        apply_font_prefs(&mut cfg.ui, "  PingFang SC ", " JetBrains Mono ");
+        assert_eq!(cfg.ui.font_sans, "PingFang SC");
+        assert_eq!(cfg.ui.font_mono, "JetBrains Mono");
+        // 同段其他字段一律不动（命令是即时生效的，不得顺手改写别人的偏好）
+        assert_eq!(cfg.ui.language, "en-US");
+        assert_eq!(cfg.ui.font_size, 17.0);
+        assert!(!cfg.ui.close_to_tray);
+
+        // 清空 = 恢复默认链（存空串，不删字段）
+        apply_font_prefs(&mut cfg.ui, "", "");
+        assert_eq!(cfg.ui.font_sans, "");
+        assert_eq!(cfg.ui.font_mono, "");
+    }
+
+    /// 页级保存的形状修正（调用点同一函数）：字体按当前生效值护住，其他字段照常采用提交值。
+    /// 🔴 审查发现：不护住就会被「改完字体 → 保存其他设置 → 重启」静默回滚。
+    #[test]
+    fn page_save_shape_preserves_live_font_prefs_only() {
+        // 当前生效值（用户刚改完、已由 set_font_prefs 落盘）
+        let mut current = ConfigState::default();
+        apply_font_prefs(&mut current.ui, "PingFang SC", "JetBrains Mono");
+        // 前端提交的整份配置：字体还是「打开设置页时」的旧值（空），其他字段是用户的新改动
+        let mut updated = ConfigState::default();
+        updated.ui.font_size = 18.0;
+        updated.ui.language = "en-US".into();
+        updated.ui.ai_language = Some("English".into());
+        updated.compact_threshold = 0.8;
+
+        apply_page_save_shape(&mut updated, &current);
+
+        assert_eq!(updated.ui.font_sans, "PingFang SC");
+        assert_eq!(updated.ui.font_mono, "JetBrains Mono");
+        // 同段其他字段照常采用本次提交的值（护住的只有字体两项）
+        assert_eq!(updated.ui.font_size, 18.0);
+        assert_eq!(updated.ui.language, "en-US");
+        assert_eq!(updated.ui.ai_language.as_deref(), Some("English"));
+        assert_eq!(updated.compact_threshold, 0.8);
+    }
+
+    /// 旧配置没这两个字段也必须能读（serde default 向前兼容，不得报错）。
+    #[test]
+    fn old_config_without_font_fields_still_deserializes() {
+        let json = r#"{ "schema_version": 2, "ui": { "font_size": 15.0, "language": "zh-CN" } }"#;
+        let cfg: ConfigState = serde_json::from_str(json).expect("缺字体字段的旧配置必须可读");
+        assert_eq!(cfg.ui.font_sans, "");
+        assert_eq!(cfg.ui.font_mono, "");
+        assert_eq!(cfg.ui.font_size, 15.0);
+    }
 }

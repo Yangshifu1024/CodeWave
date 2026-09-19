@@ -4,6 +4,7 @@ import { ipc } from "../ipc/client";
 import type { ConfigState, FlatModel } from "../ipc/types";
 import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
 import { findModel } from "../utils/models";
+import { reconcileFontsFromConfig } from "../utils/fonts";
 
 // IPC 不可用（如纯浏览器调试）时回退默认配置，保证 UI 仍可渲染
 const DEFAULT_CONFIG: ConfigState = {
@@ -26,7 +27,7 @@ const DEFAULT_CONFIG: ConfigState = {
     dart: true,
     lsp: DEFAULT_LSP_SETTINGS,
   },
-  ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
+  ui: { font_size: 15, accent: "cyan", language: "zh-CN", font_sans: "", font_mono: "" },
   custom_prompt: null,
   disabled_skills: [],
   log: { level: "info", session_verbose: false },
@@ -46,7 +47,18 @@ export const useSettings = create<SettingsState>((set) => ({
   config: null,
   loaded: false,
   async load() {
-    set({ config: await ipc.getConfig().catch(() => DEFAULT_CONFIG), loaded: true });
+    const config = await ipc.getConfig().catch(() => DEFAULT_CONFIG);
+    set({ config, loaded: true });
+    // 字体真源在后端配置：配置到手后与 localStorage 缓存对账（后端优先；
+    // 老版本只把字体存在 localStorage 的用户，这里会把缓存值自动迁移回后端，
+    // 见 utils/fonts.ts::reconcileFontsFromConfig）
+    const { prefs, migrate } = reconcileFontsFromConfig({
+      sans: config.ui.font_sans,
+      mono: config.ui.font_mono,
+    });
+    if (migrate) {
+      void ipc.setFontPrefs(prefs.sans, prefs.mono).catch(() => null);
+    }
   },
   async save(next) {
     await ipc.saveConfig(next);

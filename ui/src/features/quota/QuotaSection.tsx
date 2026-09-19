@@ -82,8 +82,10 @@ function ProviderBlock({
             !
           </span>
         )}
-        {summary?.value_text && <span className="rb-quota-value">{summary.value_text}</span>}
-        {remaining !== null && remaining !== undefined && (
+        {/* 额度摘要（余额文本 / 最紧张窗口 + 剩余% + 进度条）：**只在折叠时显示**——
+            展开后明细行里有更完整的一份，标题行再重复一遍会与明细互相打架 */}
+        {!expanded && summary?.value_text && <span className="rb-quota-value">{summary.value_text}</span>}
+        {!expanded && remaining !== null && remaining !== undefined && (
           <>
             <span className="rb-quota-window">{summaryLabel}</span>
             <span className={`rb-quota-remaining risk-${risk}`}>

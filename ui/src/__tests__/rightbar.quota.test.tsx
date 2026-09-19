@@ -128,6 +128,44 @@ describe("右栏订阅额度段", () => {
     expect(JSON.parse(localStorage.getItem(EXPANDED_QUOTA_KEY)!)).toContain("opencode-go");
   });
 
+  it("展开后标题行的额度摘要隐藏，再点折叠则恢复", async () => {
+    seed();
+    renderBar();
+    const summary = await screen.findByRole("button", { name: /OpenCode Go/ });
+    // 折叠态：摘要就是该家最紧张的窗口（weekly 31%）+ 进度条
+    expect(summary.textContent).toContain("31%");
+    expect(summary.querySelector(".ant-progress")).toBeTruthy();
+
+    fireEvent.click(summary);
+    await waitFor(() => expect(summary.getAttribute("aria-expanded")).toBe("true"));
+    // 展开态：标题行只剩名称（额度信息在明细行里，标题不再重复），异常标记不受影响
+    expect(summary.textContent).toBe("OpenCode Go");
+    expect(summary.querySelector(".ant-progress")).toBeNull();
+    // 明细行照旧带剩余百分比
+    const provider = summary.closest(".rb-quota-provider")!;
+    expect(provider.querySelectorAll(".rb-quota-entry").length).toBeGreaterThan(0);
+    expect(provider.textContent).toContain("31%");
+
+    fireEvent.click(summary);
+    await waitFor(() => expect(summary.getAttribute("aria-expanded")).toBe("false"));
+    expect(summary.textContent).toContain("31%");
+    expect(summary.querySelector(".ant-progress")).toBeTruthy();
+  });
+
+  it("余额型（数值行）展开后标题行也不再重复余额文本", async () => {
+    seed();
+    renderBar();
+    const row = await screen.findByRole("button", { name: /DeepSeek/ });
+    expect(row.textContent).toContain("CNY 12.50");
+
+    fireEvent.click(row);
+    await waitFor(() => expect(row.getAttribute("aria-expanded")).toBe("true"));
+    expect(row.textContent).not.toContain("CNY");
+    // 余额改在明细行里展示（可复制文本）
+    const provider = row.closest(".rb-quota-provider")!;
+    expect(provider.querySelector(".rb-quota-entry .rb-quota-value")?.textContent).toBe("CNY 12.50");
+  });
+
   it("数值行（余额型提供商）直接给文本，不画进度条", async () => {
     seed();
     renderBar();

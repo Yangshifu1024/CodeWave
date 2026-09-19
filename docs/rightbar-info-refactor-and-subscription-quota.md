@@ -42,7 +42,7 @@
 - `ipc/types.ts` / `client.ts`：`EditorInfo`、`QuotaEntry`、`QuotaSnapshot` 与三个调用；UI 只认通用结构，**未来加提供商不改组件**。
 - `features/shell/RightBar.tsx`：删数据目录行与会话段；标签行 = 文件管理器按钮 + `<OpenInEditorSelect>`；技能/计划改 `Collapse`（ghost；标题字号/颜色与信息页其他标题统一为 **11px + dim**，选择器钉 antd 6 的 `.ant-collapse-title`（旧版 `-header-text` 已废弃，写成它等于死规则）；箭头用 `expandIconPosition="end"` 落行末，使标题文字与「项目目录 / 订阅额度」左对齐）；`<QuotaSection visible={rightBarOpen && rbTab === "info"}>`。
 - `features/shell/OpenInEditorSelect.tsx`（新）：下拉默认第一个检测到的 / 上次选择，改选即打开并记忆，未检测到不渲染。
-- `features/quota/QuotaSection.tsx`（新）+ `quotaFormat.ts`（纯函数：风险分级、窗口标签映射、摘要取值、倒计时、相对更新时间）：每家一行摘要（名 + 最紧张窗口 + 剩余% + 细条），点整行展开全部窗口；百分比行按**剩余**方向渲染（<20% 橙、<5% 红，颜色走 `--ws-warn` / `--ws-err` token）；数值行（DeepSeek 余额）直接给文本；凭证形态异常/请求失败 → 摘要行带 `!` 标记（详情在展开内容里）；全家无凭证 → 单行指引 + 悬浮列出环境变量与两个路径；刷新 = 可见时进入拉一次 + 每 5 分钟 + 手动（`visible` 门控，面板收起/切页签即停）；另有 60s 纯文本 ticker 刷新倒计时与「X 分钟前更新」（**写在刷新按钮左侧的同一标签行**，不占列表底部）。
+- `features/quota/QuotaSection.tsx`（新）+ `quotaFormat.ts`（纯函数：风险分级、窗口标签映射、摘要取值、倒计时、相对更新时间）：每家一行摘要（名 + 最紧张窗口 + 剩余% + 细条），点整行展开全部窗口（**展开后标题行的额度摘要隐藏**，只留提供商名与异常标记，避免与明细行重复；再点折叠则恢复）；百分比行按**剩余**方向渲染（<20% 橙、<5% 红，颜色走 `--ws-warn` / `--ws-err` token）；数值行（DeepSeek 余额）直接给文本；凭证形态异常/请求失败 → 摘要行带 `!` 标记（详情在展开内容里）；全家无凭证 → 单行指引 + 悬浮列出环境变量与两个路径；刷新 = 可见时进入拉一次 + 每 5 分钟 + 手动（`visible` 门控，面板收起/切页签即停）；另有 60s 纯文本 ticker 刷新倒计时与「X 分钟前更新」（**写在刷新按钮左侧的同一标签行**，不占列表底部）。
 - 可拖拽栏宽：`utils/layout.ts`（常量 + `clampNavWidth` / `clampRightBarWidth` / `resolveDisplayWidths` / `dragLimit` 纯函数）、`features/shell/ResizeHandle.tsx`（`role=separator` + `aria-*` + `setPointerCapture` + 方向键 + 双击复位 + 拖动期间 `<html>.ws-resizing` 关过渡）、`useDisplayWidths.ts`（AppShell 的 Sider / 顶栏左段 / **RightBar 的 `--rb-width`** 三处消费同一份显示宽度，保证分隔线不断开）；`ui` store 新增 `navWidth` / `rightBarWidth`（localStorage `ws_nav_width` / `ws_rb_width`）。
 - **显示被夹取时禁用拖动**（`aria-disabled` + `not-allowed`）：窗口放不下时拖动会把夹取后的显示宽写回记忆值，静默抹掉用户原来的宽度；夹取期间只保留双击复位，与「只夹显示、保留记忆值」的决策一致。
 - 右栏宽度改为 `width: var(--rb-width, 328px)`（折叠态 `width: 0` 契约与 0.2s 过渡不变）；右栏下限 328 = 内容下限 300 + 左右 padding 28（`.rb-tabs{min-width:300px}` 与既有样式契约测试不破、不裁切）。
@@ -63,7 +63,7 @@
 1. **文件管理器**：Windows 上点项目目录后的图标 → 应拉起 Files 应用并定位到该目录（装了 Files 时）；卸载/改名 Files 别名后应回退 explorer。
 2. **编辑器下拉**：默认显示 VS Code（本机候选表第一个检测到的）；下拉切到 Zed → 应当即用 Zed 打开项目主目录；重启后下拉仍停在 Zed。
 3. **折叠**：点「技能」「当前计划」标题可折叠/展开；重启后折叠态保持（全局一份，所有项目一致）。
-4. **额度段**：应显示 OpenCode Go（本机 `auth.json` 有凭证）的三窗口；摘要行是最紧张的窗口，点开看全部与重置倒计时；切到其他页签或收起右栏后不应再发请求（可用后端日志观察）。
+4. **额度段**：应显示 OpenCode Go（本机 `auth.json` 有凭证）的三窗口；摘要行是最紧张的窗口，**展开后标题行不再重复额度信息**（名称下方的窗口/剩余%/进度条隐去，折叠即恢复），点开看全部与重置倒计时；切到其他页签或收起右栏后不应再发请求（可用后端日志观察）。
 5. **无凭证态**：临时把 `~/.local/share/opencode/auth.json` 改名 → 面板应显示一行提示，悬浮可见环境变量名与两个路径。
 6. **栏宽**：拖左右栏分隔条、方向键微调、双击复位；重启后宽度保持；把窗口拖到最小宽（1024）时三栏仍可用（左栏自动收窄但不会被压没）。
 

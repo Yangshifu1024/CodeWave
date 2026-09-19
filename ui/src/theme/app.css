@@ -878,14 +878,23 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .mcp-entry-row { display: flex; flex-direction: column; gap: 3px; } /* label 在上（[docs/settings-forms-vertical](../../../docs/docs/settings-forms-vertical.md)） */
 .mcp-entry-row .mcp-label { flex: none; font-size: 12px; color: var(--ws-dim); }
 .mcp-entry-row .ant-input { flex: 1; }
-/* 语义校验（LSP）行：语言名 | 开关 | 命令覆盖 | 状态徽标（中性色：墨色强调，徽标只在「未找到」用警示橙）；
+/* 语义校验（LSP）行：语言名 | 开关 | 命令覆盖 | 状态与动作（中性色：墨色强调，只在「未找到」用警示橙）；
    批② 可配置项归入「工具与集成」页：旧类 .validation-grid / .validation-item / .lsp-budget-item 已零引用删除，
    而 .lsp-budget-grid（预算组两列网格）仍在用——审查返工把它从内联 style 收回本文件（样式集中在 app.css） */
 .validation-rows { display: flex; flex-direction: column; gap: 6px; }
-.validation-row { display: grid; grid-template-columns: 150px auto minmax(200px, 320px) auto; align-items: center; gap: 10px; font-size: 13px; }
+/* 第 2 列必须是 max-content：antd Switch 只给了 min-width（small 档 28px），落在 auto 列里会被
+   「Stretch auto Tracks」拉满整列——这就是曾经的「开关长成一根长条」缺陷（见 docs 手动验证清单）。 */
+.validation-row { display: grid; grid-template-columns: 150px max-content minmax(200px, 320px) auto; align-items: center; gap: 10px; font-size: 13px; }
 .validation-row .validation-label { white-space: nowrap; }
+/* 状态单元格：语言服务器状态（悬停看原因）+ 语言工具链状态 + 行内动作（安装 / 下载 / 手动安装） */
+.validation-row .validation-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .validation-row .validation-status { color: var(--ws-dim); font-size: 12px; white-space: nowrap; }
 .validation-row .validation-status.warn { color: var(--ws-warn); }
+/* 工具链段（Go 工具链 / JDK 21+ / Node.js）：与语言服务器状态同色，用分隔点区隔为第二块 */
+.validation-row .validation-sdk { color: var(--ws-dim); font-size: 12px; white-space: nowrap; }
+.validation-row .validation-sdk::before { content: "·"; margin-right: 6px; }
+/* 前置运行库缺失提示（「需先安装 Node.js」+ 下载链接） */
+.validation-row .validation-hint { display: inline-flex; align-items: center; font-size: 12px; color: var(--ws-dim); white-space: nowrap; }
 /* LSP 预算组网格：预算 7 项两列铺开（窄窗由 minmax(220px) 自动压缩；行距 0 = 沿用 Form.Item 自带下边距） */
 .lsp-budget-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 0 20px; }
 /* 发现区的额外 SDK 根目录行（输入框 + 删除按钮） */
@@ -1151,3 +1160,9 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
   margin: 6px 0 0 24px; font-size: 12px; color: var(--ws-dim);
   font-family: var(--ws-font-mono); word-break: break-all;
 }
+/* 卡片主区（标题 + 说明 + 回显）：整块可点选中该模式；子字段区在它**外面**（label 不能嵌 label） */
+.proxy-mode-main { display: block; }
+/* 自定义模式独有的代理地址区：留在卡片内部，与说明文字左对齐（缩进 24px 同 .proxy-mode-desc） */
+.proxy-mode-field { margin: 10px 0 0 24px; }
+.proxy-mode-field .ant-form-item { margin-bottom: 0; }
+.proxy-mode-field .ant-form-item-label { padding-bottom: 2px; }

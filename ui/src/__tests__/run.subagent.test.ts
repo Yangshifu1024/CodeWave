@@ -149,7 +149,8 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     h["tool:result"]({ session: "sub_1", call_key: "b1:0", tool: "grep", args_preview: "{}", outcome: { ok: true, data: {} }, duration_ms: 3 });
     const st = tabOf(session).subStreams.sub_1;
     expect(st.timeline.map((s) => s.kind)).toEqual(["tool"]);
-    expect(st.toolsMap["b1:0"]).toMatchObject({ tool: "grep", status: "ok" });
+    // 结果落定：进度尾部一并清掉（与主会话同步）
+    expect(st.toolsMap["b1:0"]).toMatchObject({ tool: "grep", status: "ok", progressTail: "" });
 
     // subagent file writes also bump the main session writeTick ([docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md) attribution semantics)
     const before = tabOf(session).writeTick;

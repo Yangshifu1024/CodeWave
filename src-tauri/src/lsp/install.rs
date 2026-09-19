@@ -27,6 +27,12 @@ pub struct InstallPlan {
     pub args: Vec<String>,
     /// 展示用整条命令
     pub display: String,
+    /// 语言（解析不到时到该语言的约定安装目录里再找一次，见 [`resolve_install_program`]）
+    pub lang: Lang,
+    /// 前置运行库的展示名（`Node.js` / `Go 工具链`；空串时文案回落用可执行名）
+    pub runtime_name: String,
+    /// 前置运行库的官方下载地址（解析不到 `program` 时用于给出可操作提示）
+    pub runtime_docs_url: Option<String>,
 }
 
 /// 取某语言的安装计划（Manual/ConfirmEnable 返回 `None`）。
@@ -42,6 +48,9 @@ pub fn plan(lang: Lang) -> Option<InstallPlan> {
         program,
         args: words.collect(),
         display: command,
+        lang,
+        runtime_name: spec.install.runtime_name.unwrap_or_default().to_string(),
+        runtime_docs_url: spec.install.runtime_docs_url.map(|u| u.to_string()),
     })
 }
 
@@ -83,14 +92,7 @@ pub fn resolve_program(
         }
     }
     let path = found.ok_or_else(|| format!("未找到 {name}，无法执行安装"))?;
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    Ok(ResolvedProgram {
-        path,
-        shell_wrapped: cfg!(windows) && matches!(ext.as_str(), "cmd" | "bat"),
-    })
+    Ok(resolved_program(path))
 }
 
 /// 组装实际执行的命令：`.cmd`/`.bat` 经 `cmd /C`（批处理不能被 `CreateProcess` 直接执行）。
@@ -157,6 +159,57 @@ async fn read_all<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u8> {
     buf
 }
 
+/// 前置运行库缺失时的错误文案：补上「去哪装」的地址。
+///
+/// 为什么必须补：安装命令写死为 `npm i -g ...`，而机器上没装 Node.js 时用户只会拿到一句
+/// 「未找到 npm，无法执行安装」——知道发生了什么，但不知道下一步做什么。
+fn missing_runtime_message(err: String, plan: &InstallPlan) -> String {
+    match &plan.runtime_docs_url {
+        Some(url) => {
+            // 说「Node.js」而不是「npm」：可执行名是给人对着找的，运行库名才是给人去装的
+            let runtime = if plan.runtime_name.trim().is_empty() {
+                plan.program.as_str()
+            } else {
+                plan.runtime_name.as_str()
+            };
+            format!("{err}：请先安装 {runtime}（{url}）")
+        }
+        None => err,
+    }
+}
+
+/// 按绝对路径包装成 [`ResolvedProgram`]（`.cmd`/`.bat` 标 Windows 的 `cmd /C` 包装需求）。
+fn resolved_program(path: PathBuf) -> ResolvedProgram {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    ResolvedProgram {
+        path,
+        shell_wrapped: cfg!(windows) && matches!(ext.as_str(), "cmd" | "bat"),
+    }
+}
+
+/// 解析安装命令的可执行文件：PATH（新鲜 → 快照）→ 语言约定安装目录。
+///
+/// **判据必须与设置页的 `InstallRequirement.ready` 同源**（后者走 `discovery::locate_command`）：
+/// 否则会出现「按钮显示可用、点了却说未找到 `rustup`」——而 `rustup` 明明就在 `~/.cargo/bin` 里，
+/// 正是本批次要消灭的那类体验。
+fn resolve_install_program(
+    plan: &InstallPlan,
+    fresh: &str,
+    snapshot: &str,
+    extra_dirs: &[PathBuf],
+) -> Result<ResolvedProgram, String> {
+    match resolve_program(&plan.program, fresh, snapshot) {
+        Ok(r) => Ok(r),
+        Err(e) => match discovery::find_in_dirs(&plan.program, extra_dirs) {
+            Some(path) => Ok(resolved_program(path)),
+            None => Err(missing_runtime_message(e, plan)),
+        },
+    }
+}
+
 /// 执行安装计划（解析可执行文件 + 超时 + 抓输出）。**不做围栏/审批**——调用方必须先过审批。
 ///
 /// 三条硬纪律：
@@ -166,7 +219,8 @@ async fn read_all<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u8> {
 /// 3. 超时分支杀完进程组还要 `wait()` 回收，否则留僵尸进程。
 pub async fn execute(plan: &InstallPlan, timeout: Duration) -> Result<String, String> {
     let (fresh, snapshot) = install_paths();
-    let resolved = resolve_program(&plan.program, &fresh, &snapshot)?;
+    let extra_dirs = discovery::conventional_bin_dirs(plan.lang);
+    let resolved = resolve_install_program(plan, &fresh, &snapshot, &extra_dirs)?;
     let timeout = timeout.max(MIN_TIMEOUT);
     tracing::debug!(
         command = %plan.display,
@@ -236,6 +290,65 @@ mod tests {
     fn manual_languages_have_no_plan() {
         assert!(plan(Lang::Java).is_none());
         assert!(plan(Lang::Dart).is_none());
+    }
+
+    /// 🟡：一键安装计划必须带上前置运行库的下载地址（npm 不在机器上时的可操作提示来源）。
+    #[test]
+    fn installable_plans_carry_runtime_docs() {
+        for lang in [Lang::TypeScript, Lang::Python] {
+            let p = plan(lang).expect("npm 安装计划");
+            assert_eq!(p.program, "npm", "{}", lang.id());
+            assert_eq!(p.lang, lang, "计划必须带语言（约定目录回退用）");
+            assert_equals_runtime(&p, "Node.js");
+        }
+        assert_equals_runtime(&plan(Lang::Go).unwrap(), "Go 工具链");
+        assert_equals_runtime(&plan(Lang::Rust).unwrap(), "rustup");
+    }
+
+    /// 断言计划里的运行库名与下载地址（两侧都是「先装什么（去哪装）」的文案来源）。
+    fn assert_equals_runtime(p: &InstallPlan, name: &str) {
+        assert_eq!(p.runtime_name, name, "{} 的运行库展示名", p.program);
+        assert!(
+            p.runtime_docs_url
+                .as_deref()
+                .is_some_and(|u| u.starts_with("https://")),
+            "{} 缺下载地址：{p:?}",
+            p.program
+        );
+    }
+
+    /// 前置运行库解析不到时，错误文案必须写明「先装什么、去哪下载」。
+    #[test]
+    fn missing_runtime_error_mentions_how_to_install_it() {
+        let plan = plan(Lang::Python).expect("python 安装计划");
+        let err = resolve_program("definitely-missing-npm-xyz", "", "").unwrap_err();
+        let msg = missing_runtime_message(err, &plan);
+        assert!(msg.contains("未找到"), "{msg}");
+        // 说的是运行库名（Node.js），不是可执行名（npm）——两者口径必须与设置页刮齐
+        assert!(msg.contains("Node.js"), "{msg}");
+        assert!(msg.contains("https://nodejs.org/en/download"), "{msg}");
+    }
+
+    /// 🔴-1（审查）：安装执行器的解析面必须与设置页的 `requires.ready` 同源——
+    /// PATH 里没有、但语言约定目录里有（`~/go/bin`、`~/.cargo/bin`）时必须能执行；
+    /// 两处都没有时，错误文案必须可操作。
+    #[test]
+    fn resolve_install_program_falls_back_to_conventional_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) { "npm.cmd" } else { "npm" };
+        std::fs::write(tmp.path().join(name), "x").unwrap();
+        let plan = plan(Lang::Python).expect("python 安装计划");
+        let dirs = vec![tmp.path().to_path_buf()];
+
+        let resolved = resolve_install_program(&plan, "", "", &dirs).expect("应回退到约定目录");
+        assert!(resolved.path.is_file(), "{resolved:?}");
+        assert_eq!(
+            resolved.shell_wrapped,
+            cfg!(windows) && name.ends_with(".cmd")
+        );
+
+        let err = resolve_install_program(&plan, "", "", &[]).unwrap_err();
+        assert!(err.contains("未找到") && err.contains("Node.js"), "{err}");
     }
 
     #[test]
@@ -480,6 +593,9 @@ mod tests {
             program: bat.to_string_lossy().to_string(),
             args: Vec::new(),
             display: bat.to_string_lossy().to_string(),
+            lang: Lang::Rust,
+            runtime_name: String::new(),
+            runtime_docs_url: None,
         };
         let out = tokio::time::timeout(Duration::from_secs(120), execute(&p, MIN_TIMEOUT))
             .await

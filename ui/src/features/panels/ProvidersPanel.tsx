@@ -202,13 +202,11 @@ function ModelModal(props: {
 function ModelListSection(props: {
   models: ProviderModel[];
   activeModelId: string | null;
-  /** 进阶项（active_model_id 的「当前」标记）是否可见：批③ 页级开关下传，收起时只加类隐藏 */
-  advancedVisible: boolean;
   onAdd: () => void;
   onEdit: (m: ProviderModel) => void;
   onRemove: (m: ProviderModel) => void;
 }) {
-  const { models, activeModelId, advancedVisible, onAdd, onEdit, onRemove } = props;
+  const { models, activeModelId, onAdd, onEdit, onRemove } = props;
   const { t } = useTranslation();
   if (models.length === 0) {
     return (
@@ -244,11 +242,10 @@ function ModelListSection(props: {
               </span>
               {activeModelId === m.id && (
                 /* [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md) 墨色化：去掉 preset 蓝（processing），改为与全应用强调色一致的描边墨色。
-                  锚点 data-setting-id = 注册表 id（批③ 搜索定位）；active_model_id 是进阶项，收起时只加类隐藏（零 DOM 搬迁） */
-                <span
-                  className={`setting-anchor${advancedVisible ? "" : " settings-advanced-hidden"}`}
-                  data-setting-id="active_model_id"
-                >
+                  锚点 data-setting-id = 注册表 id（批③ 搜索定位）。
+                  本标记**不是**进阶项（2026-09-19 用户反馈修正）：它只存在于「编辑/新建供应商」视图里，
+                  页级「显示进阶项」开关在列表视图对它无能为力（打开也没东西可变），故不再折叠 */
+                <span className="setting-anchor" data-setting-id="active_model_id">
                   <Tag style={{ marginInlineEnd: 0, background: "transparent", borderColor: "var(--ws-accent)", color: "var(--ws-accent)" }}>
                     {t("settings.active")}
                   </Tag>
@@ -392,8 +389,6 @@ function ProviderFields(props: {
 interface Props {
   draft: ConfigState;
   patchDraft(patch: Partial<ConfigState>): void;
-  /** 进阶项是否可见（批③ 页级开关下传；缺省 true = 显示，供独立挂载 / 测试场景） */
-  advancedVisible?: boolean;
 }
 
 /** 视图状态：列表 / 新增供应商（本地表单，提交时整体并入 draft）/ 编辑既有供应商（直接改 draft）。 */
@@ -401,7 +396,7 @@ type View = { kind: "list" } | { kind: "add" } | { kind: "edit"; providerId: str
 
 /** 供应商页签：列表 / 新增 / 编辑三视图。新增用本地表单（提交才并入 draft），编辑直接补丁 draft；
  *  模型增删改经 ModelModal，删除供应商/模型时回收 active_model_id。 */
-export default function ProvidersPanel({ draft, patchDraft, advancedVisible = true }: Props) {
+export default function ProvidersPanel({ draft, patchDraft }: Props) {
   const { t } = useTranslation();
   const [view, setView] = useState<View>({ kind: "list" });
   // 新增供应商的本地表单（提交前不并入 draft）
@@ -541,7 +536,6 @@ export default function ProvidersPanel({ draft, patchDraft, advancedVisible = tr
           <ModelListSection
             models={addForm.models}
             activeModelId={draft.active_model_id}
-            advancedVisible={advancedVisible}
             onAdd={() => setModelModal({ target: "add-form", editing: null })}
             onEdit={(m) => setModelModal({ target: "add-form", editing: m })}
             onRemove={(m) => setAddForm((prev) => ({ ...prev, models: prev.models.filter((x) => x.id !== m.id) }))}
@@ -590,7 +584,6 @@ export default function ProvidersPanel({ draft, patchDraft, advancedVisible = tr
           <ModelListSection
             models={editing.models}
             activeModelId={draft.active_model_id}
-            advancedVisible={advancedVisible}
             onAdd={() => setModelModal({ target: { providerId: editing.id }, editing: null })}
             onEdit={(m) => setModelModal({ target: { providerId: editing.id }, editing: m })}
             onRemove={(m) => removeModel(editing.id, m.id)}

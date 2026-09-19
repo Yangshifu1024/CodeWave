@@ -109,7 +109,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
 
   // ---------- 模型与供应商 ----------
   { id: "providers", labelKey: "settings.providers", page: "providers", keywords: ["provider", "供应商", "供应商配置", "模型", "模型配置", "api", "base url", "key"] },
-  { id: "active_model_id", labelKey: "settings.active", page: "providers", advanced: true, keywords: ["active", "当前", "活跃模型", "current model", "默认模型"] },
+  { id: "active_model_id", labelKey: "settings.active", page: "providers", keywords: ["active", "当前", "活跃模型", "current model", "默认模型"] },
   { id: "ui.ai_language", labelKey: "settings.aiLanguage", page: "providers", width: "mid", keywords: ["ai", "language", "回复语言", "ai 语言"] },
 
   // ---------- 网络与连接 ----------
@@ -241,8 +241,8 @@ export const MCP_FIELD_ID = "mcp.servers";
 export const INSTANT_APPLY_FIELD_IDS: string[] = [
   "ui.language", // 界面语言：useUi.setLanguage
   "ui.theme", // 主题：localStorage ws_theme
-  "ui.font_sans", // 界面字体：localStorage
-  "ui.font_mono", // 等宽字体：localStorage
+  "ui.font_sans", // 界面字体：localStorage 缓存 + 后端 config.ui.font_sans（set_font_prefs）
+  "ui.font_mono", // 等宽字体：同上
   "ui.auto_update", // 启动时自动检查更新：localStorage ws_auto_update
 ];
 
@@ -449,8 +449,18 @@ export const SHELL_SETTING_KEYS: string[] = [
   "lspCommandPh", // → 语言行命令覆盖输入框占位
   "lspFound", // → 状态徽标：已找到
   "lspFoundVersion", // → 状态徽标：已找到 vX
-  "lspMissing", // → 状态徽标：未找到
+  "lspMissing", // → 状态徽标：未找到（历史键，仍保留）
   "lspDisabled", // → 状态徽标：已关闭
+  "lspServerMissing", // → 状态徽标：语言服务器未安装（工具链已就绪）
+  "lspServerMissingNoSdk", // → 状态徽标：语言服务器未安装且工具链未就绪
+  "lspSdkReady", // → 语言工具链段：已就绪
+  "lspSdkMissing", // → 语言工具链段：未找到
+  "lspInstall", // → 动作：一键安装语言服务器
+  "lspInstallDone", // → 安装完成提示（后端未回喂文案时的兑底）
+  "lspInstallFailed", // → 安装失败提示
+  "lspNeedRuntime", // → 前置运行库缺失提示（需先安装 Node.js）
+  "lspDownload", // → 动作：打开运行库下载页
+  "lspManualInstall", // → 动作：打开手动安装官方地址
   "lspJavaCost", // → validation.java 的启用代价说明
   "lspExtraRootsHint", // → validation.lsp.extra_roots 的说明
   "lspAddRoot", // → 动作：添加额外 SDK 根目录

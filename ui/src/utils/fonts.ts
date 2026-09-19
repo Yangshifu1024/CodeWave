@@ -1,6 +1,9 @@
 // 自定义字体偏好（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）：
 // 双槽位——sans（界面）/ mono（代码与日志）；值为逗号分隔的已安装字体名，空 = 默认链。
-// 经 localStorage 持久化（纯 UI 偏好，不入后端配置）；挂载前应用以防 FOUC。
+//
+// 持久化（2026-09-19 修正）：**真源在后端配置文件**（`config.ui.font_sans` / `font_mono`，经
+// `set_font_prefs` 即时落盘）；localStorage 降级为「首帧防闪变缓存」——启动时先按缓存应用到 <html>
+// （挂载前，防 FOUC），配置到手后再用 [`reconcileFontsFromConfig`] 对账（后端优先，老版本只存缓存的自动迁移）。
 /** 字体槽位：sans = 界面 / mono = 代码与日志 */
 export type FontSlot = "sans" | "mono";
 
@@ -103,4 +106,41 @@ export function storeFonts(prefs: FontPreferences): FontPreferences {
   applyFont("sans", saved.sans);
   applyFont("mono", saved.mono);
   return saved;
+}
+
+/** 提交一个槽位：净化 + 写缓存 + 立即应用（返回净化后的两槽值）。 */
+export function commitFontSlot(slot: FontSlot, candidate: string): FontPreferences {
+  return storeFonts({ ...readStoredFonts(), [slot]: candidate });
+}
+
+/** 后端配置里的字体偏好（`config.ui.font_sans` / `font_mono`；字段可缺 = 旧后端） */
+export interface BackendFontPrefs {
+  sans?: string;
+  mono?: string;
+}
+
+/**
+ * 与后端配置对账（配置加载后调用一次）。
+ *
+ * 真源在后端配置，localStorage 只是首帧缓存，两者按三条规则协调：
+ * 1. 后端有值 → **以后端为准**：应用 + 回写缓存（换版本 / 清缓存 / dev 与打包版之间都不会丢）；
+ * 2. 后端为空、缓存有值（2026-09-19 之前字体只存 localStorage 的老用户）→ 保留缓存值并返回
+ *    `migrate = true`，由调用方写回后端（**自动迁移，老设置不丢**）；
+ * 3. 两侧都空 → 保持默认链（顺带清掉可能的脏缓存键）。
+ */
+export function reconcileFontsFromConfig(backend: BackendFontPrefs): {
+  prefs: FontPreferences;
+  migrate: boolean;
+} {
+  const backendSans = sanitizeFontList(backend.sans ?? "");
+  const backendMono = sanitizeFontList(backend.mono ?? "");
+  if (backendSans !== "" || backendMono !== "") {
+    const prefs = { sans: backendSans, mono: backendMono };
+    storeFonts(prefs); // 应用 + 回写缓存（缓存只是镜像，写失败不影响后端真源）
+    return { prefs, migrate: false };
+  }
+  const cached = readStoredFonts();
+  const prefs = { sans: sanitizeFontList(cached.sans), mono: sanitizeFontList(cached.mono) };
+  storeFonts(prefs);
+  return { prefs, migrate: prefs.sans !== "" || prefs.mono !== "" };
 }

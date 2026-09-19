@@ -8,7 +8,7 @@ import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
-import type { ConfigState, LspServerStatus } from "../ipc/types";
+import type { ConfigState, LspSdkStatus, LspServerStatus } from "../ipc/types";
 
 function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
   return {
@@ -39,12 +39,48 @@ function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
   };
 }
 
-/** 三态徽标数据源：typescript 已找到（带版本）/ rust 启用但未找到 / java 默认关闭；其余语言不给状态（不显示徽标） */
+/** 工具链状态构造（默认详情留空，只有需要看 Tooltip 的用例才给具体路径） */
+function sdk(ready: boolean, name: string, detail = ""): LspSdkStatus {
+  return { ready, name, detail };
+}
+
+/** 状态四态数据源：
+ *  typescript 已找到（带版本）/ rust 缺 server 但工具链已就绪（可一键安装）/ python 缺 server 且工具链未就绪
+ *  （前置 npm 缺失 → 安装按钮禁用 + 下载链接）/ java 默认关闭；其余语言不给状态（不显示徽标） */
 function statusFixture(): LspServerStatus[] {
   return [
-    { language: "typescript", enabled: true, found: true, source: "npx", command: "npx -y typescript-language-server --stdio", version: "1.2.3", detail: "", install: null },
-    { language: "rust", enabled: true, found: false, source: "", command: "", version: null, detail: "未在 PATH 找到 rust-analyzer", install: { kind: "installable", command: "rustup component add rust-analyzer", docs_url: null, prerequisite: null } },
-    { language: "java", enabled: false, found: false, source: "", command: "", version: null, detail: "Java 语义校验默认关闭", install: { kind: "confirm_enable", command: null, docs_url: null, prerequisite: "需 JDK 21+" } },
+    {
+      language: "typescript", enabled: true, found: true, source: "npx",
+      command: "npx -y typescript-language-server --stdio", version: "1.2.3",
+      detail: "未安装本地 server，降级用 npx 临时拉取（首次会慢）", install: null,
+      sdk: sdk(true, "Node.js", "已找到 node：/usr/local/bin/node"),
+    },
+    {
+      language: "rust", enabled: true, found: false, source: "",
+      command: "", version: null, detail: "未找到 rust-analyzer（https://rust-analyzer.github.io/）",
+      install: {
+        kind: "installable", command: "rustup component add rust-analyzer",
+        docs_url: "https://rust-analyzer.github.io/", prerequisite: "需 rustup",
+        requires: { command: "rustup", name: "rustup", ready: true, docs_url: "https://rustup.rs/" },
+      },
+      sdk: sdk(true, "Rust 工具链"),
+    },
+    {
+      language: "python", enabled: true, found: false, source: "",
+      command: "", version: null, detail: "未找到 pyright-langserver（https://microsoft.github.io/pyright/）",
+      install: {
+        kind: "installable", command: "npm i -g pyright",
+        docs_url: "https://microsoft.github.io/pyright/", prerequisite: "需 Node.js（npm 在 PATH 中）",
+        requires: { command: "npm", name: "Node.js", ready: false, docs_url: "https://nodejs.org/en/download" },
+      },
+      sdk: sdk(false, "Python", "未找到 python3 / python"),
+    },
+    {
+      language: "java", enabled: false, found: false, source: "",
+      command: "", version: null, detail: "Java 语义校验默认关闭",
+      install: { kind: "confirm_enable", command: null, docs_url: null, prerequisite: "需 JDK 21+", requires: null },
+      sdk: sdk(false, "JDK 21+"),
+    },
   ];
 }
 
@@ -66,6 +102,8 @@ async function baseInvoke(cmd: string, _args?: any) {
       if (lspStatusFails) throw new Error("lsp_status unavailable");
       return statusFixture();
     case "lsp_redetect": return redetectResult;
+    case "lsp_install": return `已安装 ${_args?.language}`;
+    case "open_url": return null;
     default: throw new Error(`unmocked command: ${cmd}`);
   }
 }
@@ -107,6 +145,20 @@ function buttonByText(text: string): HTMLButtonElement {
     (b) => (b.textContent ?? "").replace(/\s/g, "") === text,
   );
   if (!btn) throw new Error(`button not found: ${text}`);
+  return btn as HTMLButtonElement;
+}
+
+/** 按钮文本（去空白，绕开 antd 的两字空格） */
+function buttonLabel(b: Element): string {
+  return (b.textContent ?? "").replace(/\s/g, "");
+}
+
+/** 某语言行内的按钮（找不到就抛错，避免「按钮不存在」被当成通过） */
+function rowButton(lang: string, label: string): HTMLButtonElement {
+  const btn = Array.from(rowOf(lang).querySelectorAll("button")).find(
+    (b) => buttonLabel(b) === label,
+  );
+  if (!btn) throw new Error(`row ${lang} 上找不到按钮：${label}`);
   return btn as HTMLButtonElement;
 }
 
@@ -178,14 +230,90 @@ describe("设置页工具与集成页：LSP 语义校验", () => {
     expect(savedConfigs[0].validation.lsp?.commands.typescript).toBe("");
   });
 
-  it("状态徽标三态：已找到（带版本）/ 未找到（警示）/ 已关闭", async () => {
+  it("状态四态：已找到（带版本）/ 未安装（工具链就绪）/ 未安装（工具链也没找到）/ 已关闭", async () => {
     await openToolsTab();
     await waitFor(() => expect(statusText("typescript")).toBe("已找到 v1.2.3"));
-    expect(statusText("rust")).toBe("未找到");
+    expect(statusText("rust")).toBe("语言服务器未安装");
     expect(rowOf("rust").querySelector(".validation-status")?.className).toContain("warn");
+    // 工具链也未就绪：必须说清楚「连语言本身都没装」，否则用户会一直点安装
+    expect(statusText("python")).toBe("语言服务器未安装（且未找到 Python）");
     expect(statusText("java")).toBe("已关闭");
     // 未给状态的语言不显示徽标（探测失败语言不撒谎）
     expect(statusText("go")).toBe("");
+  });
+
+  it("工具链状态与语言服务器状态分两块显示（已关闭的行不显示）", async () => {
+    await openToolsTab();
+    await waitFor(() => expect(statusText("typescript")).toBe("已找到 v1.2.3"));
+    const sdkText = (lang: string) => rowOf(lang).querySelector(".validation-sdk")?.textContent ?? "";
+    expect(sdkText("typescript")).toBe("Node.js 已就绪");
+    expect(sdkText("rust")).toBe("Rust 工具链 已就绪");
+    expect(sdkText("python")).toBe("未找到 Python");
+    // 关掉的行不显示工具链段（关掉就是关掉，不再催）
+    expect(sdkText("java")).toBe("");
+  });
+
+  it("状态悬停显示后端给的原因（detail）", async () => {
+    await openToolsTab();
+    await waitFor(() => expect(statusText("typescript")).toBe("已找到 v1.2.3"));
+    fireEvent.mouseEnter(rowOf("typescript").querySelector(".validation-status")!);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("未安装本地 server，降级用 npx 临时拉取"),
+    );
+  });
+
+  it("行内安装：可一键安装时点击发 lsp_install", async () => {
+    await openToolsTab();
+    await waitFor(() => expect(statusText("rust")).toBe("语言服务器未安装"));
+    // 前置命令就绪（rustup）→ 按钮可用
+    const installBtn = rowButton("rust", "安装");
+    expect(installBtn.disabled).toBe(false);
+    fireEvent.click(installBtn);
+    await waitFor(async () =>
+      expect(await invokedWith("lsp_install", { language: "rust" })).toBe(true),
+    );
+    // 安装结束必须重拉一次状态（否则页面还停在旧结论）
+    await waitFor(async () => {
+      const mock = await invokeMock();
+      const calls = mock.mock.calls.filter((c: any[]) => c[0] === "lsp_status");
+      expect(calls.length).toBeGreaterThan(1);
+    });
+  });
+
+  it("前置运行库缺失：安装按钮禁用，并提示先装什么 + 给下载入口", async () => {
+    await openToolsTab();
+    await waitFor(() => expect(statusText("python")).toBe("语言服务器未安装（且未找到 Python）"));
+    // 缺的是 npm（Node.js），不是 Python——提示必须说 Node.js
+    expect(rowButton("python", "安装").disabled).toBe(true);
+    expect(rowOf("python").querySelector(".validation-hint")?.textContent).toContain(
+      "需先安装 Node.js",
+    );
+    expect(rowButton("python", "下载")).toBeTruthy();
+  });
+
+  it("需手动安装的语言：给官方地址入口而非安装按钮", async () => {
+    redetectResult = [
+      {
+        language: "java", enabled: true, found: false, source: "",
+        command: "", version: null, detail: "未找到 jdtls（https://github.com/eclipse-jdtls/eclipse.jdt.ls）",
+        install: {
+          kind: "manual", command: null,
+          docs_url: "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
+          prerequisite: "需 JDK 21+；jdtls 不会使用 JAVA_HOME", requires: null,
+        },
+        sdk: sdk(true, "JDK 21+"),
+      },
+    ];
+    await openToolsTab();
+    await waitFor(() => expect(statusText("java")).toBe("已关闭"));
+    fireEvent.click(buttonByText("重新探测"));
+    await waitFor(() => expect(statusText("java")).toBe("语言服务器未安装"));
+    expect(rowButton("java", "手动安装")).toBeTruthy();
+    // 手动形态不得再给一个点了也没用的「安装」按钮
+    const installBtns = Array.from(rowOf("java").querySelectorAll("button")).filter(
+      (b) => buttonLabel(b) === "安装",
+    );
+    expect(installBtns).toHaveLength(0);
   });
 
   it("lsp_status 失败时静默降级：面板照常渲染，徽标留空", async () => {
@@ -197,9 +325,13 @@ describe("设置页工具与集成页：LSP 语义校验", () => {
 
   it("「重新探测」调 lsp_redetect 并刷新徽标", async () => {
     await openToolsTab();
-    await waitFor(() => expect(statusText("rust")).toBe("未找到"));
+    await waitFor(() => expect(statusText("rust")).toBe("语言服务器未安装"));
     redetectResult = [
-      { language: "rust", enabled: true, found: true, source: "path", command: "rust-analyzer", version: "0.3.2000", detail: "", install: null },
+      {
+        language: "rust", enabled: true, found: true, source: "lang_bin",
+        command: "rust-analyzer", version: "0.3.2000", detail: "",
+        install: null, sdk: sdk(true, "Rust 工具链"),
+      },
     ];
     fireEvent.click(buttonByText("重新探测"));
     await waitFor(() => expect(statusText("rust")).toBe("已找到 v0.3.2000"));

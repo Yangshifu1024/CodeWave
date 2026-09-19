@@ -154,8 +154,9 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
   `.settings-advanced-hidden`（`display:none`），**零 DOM 搬迁**，进阶行留在原分组内；
   整组皆为进阶项的组整组隐藏（组容器标 `data-setting-group-id`）。折叠切换**不产生未保存改动**
   （不碰 draft），进阶项自身的改动仍由 `PAGE_FIELDS` 判定。
-- **锚点**：每项需带 `data-setting-id="<item.id>"`（`.setting-anchor` 包裹层）供搜索命中定位；
-  唯一退化项 `active_model_id`（其标记只在「编辑供应商」视图出现）已在上述文档登记。
+ - **锚点**：每项需带 `data-setting-id="<item.id>"`（`.setting-anchor` 包裹层）供搜索命中定位；
+   唯一退化项 `active_model_id`（其标记只在「编辑供应商」视图出现）已在上述文档登记；
+   2026-09-19 起它同时**不再是进阶项**（列表视图没落点，页级开关对它无意义），详见 [lsp-detection-and-settings-ux.md](./lsp-detection-and-settings-ux.md)。
 
 搜索能力本身也在注册表里：`matchSettings(query, t)` 的命中范围 = 显示名 + `keywords`（直字符串、不进 i18n）
 + 页名 + 组名，多词 AND、空串返回空、按「页序 → 组序 → 注册表原序」稳定输出。

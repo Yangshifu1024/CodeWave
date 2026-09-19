@@ -1,11 +1,11 @@
-//! server 发现：新鲜 PATH、PATH 查找、JDK 扫描、命令解析 → [`ServerResolution`]。
+//! server 发现：新鲜 PATH、PATH 查找、语言约定目录、JDK 扫描、命令解析 → [`ServerResolution`]。
 //!
 //! 探测顺序（**写死**，设置页与报告都按此解释）：
-//! ① 设置里的命令覆盖 → ② 项目内 `node_modules/.bin` → ③ 新鲜 PATH → ④ 进程快照 PATH
-//! → ⑤ `extra_roots` 扫描 → ⑥ npx 降级（TS/Python）→ ⑦ Dart/Flutter 反推。
+//! ① 设置里的命令覆盖 → ② 项目内 `node_modules/.bin` → ③ 新鲜 PATH → ④ 语言约定安装目录
+//! → ⑤ 进程快照 PATH → ⑥ `extra_roots` 扫描 → ⑦ npx 降级（TS/Python）→ ⑧ Dart/Flutter 反推。
 
-use super::Lang;
 use super::server_spec::{self, ServerSpec};
+use super::{InstallHint, InstallRequirement, Lang};
 use crate::core::config::LspSettings;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,8 @@ pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub struct ServerResolution {
     /// 是否找到可用 server
     pub found: bool,
-    /// 来源：`config` | `project` | `fresh_path` | `path` | `extra_root` | `npx` | `heuristic` | `""`
+    /// 来源：`config` | `project` | `fresh_path` | `lang_bin` | `path` | `extra_root` | `npx`
+    /// | `heuristic` | `""`
     pub source: String,
     /// 启动程序（未找到时为空路径）
     pub program: PathBuf,
@@ -32,12 +33,18 @@ pub struct ServerResolution {
     /// 人类可读补充（未找到原因 / JDK 状态 / 降级说明）
     pub detail: String,
     /// 未找到时的安装引导
-    pub install: Option<super::InstallHint>,
+    pub install: Option<InstallHint>,
 }
 
 impl ServerResolution {
-    /// 未找到的构造。
-    fn missing(source: &str, detail: String, spec: &ServerSpec) -> Self {
+    /// 未找到的构造（安装引导里带「前置命令是否就绪」的探测结论）。
+    fn missing(
+        source: &str,
+        detail: String,
+        lang: Lang,
+        spec: &ServerSpec,
+        discoverer: &Discoverer,
+    ) -> Self {
         ServerResolution {
             found: false,
             source: source.into(),
@@ -45,12 +52,7 @@ impl ServerResolution {
             args: Vec::new(),
             version: None,
             detail,
-            install: Some(super::InstallHint {
-                kind: spec.install.kind,
-                command: spec.install.command.clone(),
-                docs_url: Some(spec.install.docs_url.to_string()),
-                prerequisite: spec.install.prerequisite.clone(),
-            }),
+            install: Some(install_hint(lang, spec, discoverer)),
         }
     }
 
@@ -106,6 +108,197 @@ fn dedup_key(p: &str) -> String {
     } else {
         p.to_string()
     }
+}
+
+/// 某个语言的「约定安装目录」——各工具链的默认落点，**通常不在 PATH 里**。
+///
+/// 为什么单列一档：`go install` 落 `$(go env GOPATH)/bin`（默认 `~/go/bin`）、
+/// `rustup component add` 落 `~/.cargo/bin`（shim）或**工具链目录**的 `bin`、
+/// `bun install -g` 落 `~/.bun/bin`；这些目录进不进 PATH 完全取决于用户的 shell 配置
+/// （本机实测：`~/.zshrc` 里加了 `~/go/bin`，登录非交互 shell 看不见它），
+/// 不查它们就会出现「明明装了却显示未找到」。
+///
+/// 顺序：环境变量显式指定的位置（用户已配好）→ 主目录下的默认落点 → 需读目录才能得出的一档
+/// （rustup 各工具链的 `bin`，见 [`rustup_toolchain_bins`]）。
+pub fn conventional_bin_dirs(lang: Lang) -> Vec<PathBuf> {
+    conventional_bin_dirs_for(lang, dirs::home_dir().as_deref(), &|name| {
+        std::env::var(name).ok()
+    })
+}
+
+/// [`conventional_bin_dirs`] 的可注入形态（`home` / `env` 由调用方给，单测用临时目录）。
+///
+/// 与 [`conventional_bin_dirs_with`] 的区别：这一层还包含**需要读目录**才能得出的一档
+/// （rustup 工具链的 `bin`），所以单测必须注入 `home` 才能保持确定性。
+pub fn conventional_bin_dirs_for(
+    lang: Lang,
+    home: Option<&Path>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Vec<PathBuf> {
+    let mut dirs = conventional_bin_dirs_with(lang, home, env);
+    if lang == Lang::Rust {
+        for bin in rustup_toolchain_bins(home, env("RUSTUP_HOME").as_deref()) {
+            if !dirs.contains(&bin) {
+                dirs.push(bin);
+            }
+        }
+    }
+    dirs
+}
+
+/// rustup 各工具链的 `bin` 目录（`$RUSTUP_HOME/toolchains/<toolchain>/bin`，默认 `~/.rustup/...`）。
+///
+/// **为什么必须扫**：`rustup component add rust-analyzer` 把二进制装进**工具链目录**，
+/// 只有 shim 目录（`~/.cargo/bin`）在 PATH 上时才叫得到 `rust-analyzer`；
+/// 而 Homebrew 装的 rustup 根本不创建 shim 目录（本机实测：组件装成功、`~/.cargo/bin` 不存在）
+/// → 只查 PATH 就永远「未找到」，正是用户报的那个现象。
+///
+/// 目录名排序后再返回（`read_dir` 顺序不定，排序保证探测结果可复现）；无 `toolchains` 目录则返回空。
+pub fn rustup_toolchain_bins(home: Option<&Path>, rustup_home: Option<&str>) -> Vec<PathBuf> {
+    let configured = rustup_home.map(str::trim).filter(|s| !s.is_empty());
+    let root = match (configured, home) {
+        (Some(dir), _) => PathBuf::from(expand_vars(dir, &|n| std::env::var(n).ok())),
+        (None, Some(home)) => home.join(".rustup"),
+        (None, None) => return Vec::new(),
+    };
+    let Ok(entries) = std::fs::read_dir(root.join("toolchains")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path().join("bin"))
+        .filter(|bin| bin.is_dir())
+        .collect();
+    out.sort();
+    out
+}
+
+/// 可注入形态（单测用）：`home` 与 `env` 由调用方给，不依赖真实机器环境。
+pub fn conventional_bin_dirs_with(
+    lang: Lang,
+    home: Option<&Path>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    /// 读一个环境变量当目录用（`sub` 为 Some 时再拼一级子目录）；空值/未设置返回 None。
+    fn env_dir(
+        env: &dyn Fn(&str) -> Option<String>,
+        name: &str,
+        sub: Option<&str>,
+    ) -> Option<PathBuf> {
+        let raw = env(name)?;
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let base = PathBuf::from(expand_vars(raw, env));
+        Some(match sub {
+            Some(s) => base.join(s),
+            None => base,
+        })
+    }
+
+    // ① 环境变量显式指定的位置（用户已经配好，最优先）
+    match lang {
+        Lang::Go => {
+            push_unique(&mut out, env_dir(env, "GOBIN", None));
+            push_unique(&mut out, env_dir(env, "GOPATH", Some("bin")));
+        }
+        Lang::Rust => push_unique(&mut out, env_dir(env, "CARGO_HOME", Some("bin"))),
+        Lang::TypeScript | Lang::Python => {
+            push_unique(&mut out, env_dir(env, "PNPM_HOME", None));
+            // Windows：npm / pnpm 的全局 bin 由环境变量给出，与 home 无关（home 取不到也得能推）
+            #[cfg(windows)]
+            {
+                push_unique(&mut out, env_dir(env, "APPDATA", Some("npm")));
+                push_unique(&mut out, env_dir(env, "LOCALAPPDATA", Some("pnpm")));
+            }
+        }
+        Lang::Java | Lang::Dart => {}
+    }
+
+    // ② 用户主目录下的默认落点
+    if let Some(home) = home {
+        #[cfg(windows)]
+        {
+            match lang {
+                Lang::Go => push_unique(&mut out, Some(home.join("go").join("bin"))),
+                Lang::Rust => push_unique(&mut out, Some(home.join(".cargo").join("bin"))),
+                Lang::TypeScript | Lang::Python => {
+                    push_unique(&mut out, Some(home.join(".bun").join("bin")));
+                    push_unique(&mut out, Some(home.join(".local").join("bin")));
+                }
+                Lang::Java => {}
+                Lang::Dart => push_unique(&mut out, Some(home.join("flutter").join("bin"))),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            match lang {
+                Lang::Go => push_unique(&mut out, Some(home.join("go").join("bin"))),
+                // rustup 的 shim 目录（`rustup component add rust-analyzer` 的落点）
+                Lang::Rust => push_unique(&mut out, Some(home.join(".cargo").join("bin"))),
+                Lang::TypeScript | Lang::Python => {
+                    // bun / pnpm 的全局 bin：两者都能拉 typescript-language-server 与 pyright
+                    push_unique(&mut out, Some(home.join(".bun").join("bin")));
+                    push_unique(&mut out, Some(home.join("Library").join("pnpm")));
+                    push_unique(
+                        &mut out,
+                        Some(home.join(".local").join("share").join("pnpm")),
+                    );
+                    push_unique(&mut out, Some(home.join(".local").join("bin")));
+                }
+                Lang::Java => {}
+                Lang::Dart => {
+                    push_unique(
+                        &mut out,
+                        Some(home.join("development").join("flutter").join("bin")),
+                    );
+                    push_unique(&mut out, Some(home.join("flutter").join("bin")));
+                    push_unique(&mut out, Some(home.join("fvm").join("default").join("bin")));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 去重入列（保持原顺序；空路径丢弃）。
+fn push_unique(out: &mut Vec<PathBuf>, p: Option<PathBuf>) {
+    let Some(p) = p else { return };
+    if p.as_os_str().is_empty() || out.contains(&p) {
+        return;
+    }
+    out.push(p);
+}
+
+/// 在一组目录里找可执行文件（Windows 按 `PATHEXT` 补扩展名）。
+pub fn find_in_dirs(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in dirs {
+        for cand in candidates(&dir.join(name)) {
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
+/// 定位一个命令：生效 PATH → 进程快照 PATH → 该语言的约定安装目录（**不起进程**）。
+///
+/// 设置页的「SDK 是否就绪」与「一键安装的前置命令是否就绪」共用本函数。
+pub fn locate_command(lang: Lang, name: &str, discoverer: &Discoverer) -> Option<PathBuf> {
+    if let Some(p) = which_in(name, discoverer.path()) {
+        return Some(p);
+    }
+    let snapshot = discoverer.snapshot_cached();
+    if snapshot != discoverer.path() {
+        if let Some(p) = which_in(name, snapshot) {
+            return Some(p);
+        }
+    }
+    find_in_dirs(name, &conventional_bin_dirs(lang))
 }
 
 /// 展开 `%NAME%` 形态的变量；未命中时保留原文（大小写不敏感由 `lookup` 决定）。
@@ -176,30 +369,71 @@ pub fn fresh_env_path() -> Option<String> {
     Some(merge_paths(&user_path, &system_path))
 }
 
-/// 非 Windows：登录 shell 里 `echo $PATH`（`-lc` 失败再试 `-lic`）。
+/// 登录 shell 查询 PATH 时的哨兵前缀：交互式 rc（zsh 插件、nvm、starship）可能往 stdout 写别的
+/// 字符，只有带哨兵的行才是 PATH 本体。
+pub const PATH_SENTINEL: &str = "__cwave_path__";
+
+/// 单次登录 shell 查询的超时（交互式 shell 要加载 nvm / oh-my-zsh，秒级；超时即放弃）。
+pub const SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 从哨兵行里取出 PATH（取**最后一个**哨兵行；没有哨兵返回 None）。
+pub fn extract_sentinel_path(text: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.trim_end_matches('\r').strip_prefix(PATH_SENTINEL) {
+            found = Some(rest.trim().to_string());
+        }
+    }
+    found.filter(|s| !s.is_empty())
+}
+
+/// 合并两次 shell 查询的结论：`-lc`（登录非交互）在前——既有优先级不变；`-lic`（交互登录）
+/// 补在后面。
+///
+/// 为什么两次都要问：`~/go/bin`、nvm 的 node 这类 PATH 追加常写在 `~/.zshrc` / `~/.bashrc` 里，
+/// 只有**交互式** shell 才读；只问 `-lc` 会让「装好的 server 看不见」。
+pub fn merge_shell_paths(login: Option<&str>, interactive: Option<&str>) -> Option<String> {
+    match (login, interactive) {
+        (Some(a), Some(b)) => Some(merge_paths(a, b)),
+        (Some(a), None) | (None, Some(a)) => Some(a.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// 跑一次登录 shell 取 PATH（`flags` = `-lc` / `-lic`）。
+///
+/// 超时（[`SHELL_PATH_TIMEOUT`]）与失败一律返回 None：宁可用进程快照，也不让交互式 rc
+/// 把探测（进而把首次写入）卡死。
+#[cfg(not(windows))]
+fn shell_env_path(shell: &str, flags: &str) -> Option<String> {
+    use std::process::Stdio;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let shell = shell.to_string();
+    let flags = flags.to_string();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&shell)
+            .arg(&flags)
+            .arg(format!("printf '%s%s\\n' {PATH_SENTINEL} \"$PATH\""))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        let _ = tx.send(out);
+    });
+    let out = rx.recv_timeout(SHELL_PATH_TIMEOUT).ok()?.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    extract_sentinel_path(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// 非 Windows：登录非交互（`-lc`）+ 交互登录（`-lic`）两次查询并合并（见 [`merge_shell_paths`]）。
 #[cfg(not(windows))]
 pub fn fresh_env_path() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    for flag in ["-lc", "-lic"] {
-        let out = std::process::Command::new(&shell)
-            .args([flag, "echo $PATH"])
-            .output()
-            .ok();
-        if let Some(out) = out {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .last()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if !s.is_empty() {
-                    return Some(s);
-                }
-            }
-        }
-    }
-    None
+    let login = shell_env_path(&shell, "-lc");
+    let interactive = shell_env_path(&shell, "-lic");
+    merge_shell_paths(login.as_deref(), interactive.as_deref())
 }
 
 /// PATH 解析器：新鲜探测一次并永久缓存（`OnceLock` 无锁快路径）。
@@ -226,6 +460,18 @@ impl Discoverer {
             fallback: std::env::var("PATH").unwrap_or_default(),
             versions: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 固定 PATH 的新实例（单测专用）：既不读进程环境，也不跑登录 shell，探测面完全可控。
+    #[cfg(test)]
+    pub fn with_path(path: &str) -> Self {
+        let d = Discoverer {
+            fresh: OnceLock::new(),
+            fallback: path.to_string(),
+            versions: Mutex::new(HashMap::new()),
+        };
+        let _ = d.fresh.set(Some(path.to_string()));
+        d
     }
 
     /// 生效 PATH：新鲜探测成功用新鲜值，失败回落进程快照。
@@ -574,12 +820,55 @@ pub fn java_launch_env(cfg: &crate::core::config::LspSettings) -> Vec<(String, S
     }
 }
 
+/// 组装安装引导（含「一键安装所需的前置命令是否就绪」的探测结论）。
+///
+/// `requires` 只对 `Installable` 有意义：`command` 取自安装命令的可执行名（`npm` / `go` /
+/// `rustup`），就绪与否用 [`locate_command`] 判（生效 PATH + 语言约定目录，不启进程）。
+/// 设置页据此在用户点「安装」之前就提示「需先安装 Node.js」。
+pub fn install_hint(lang: Lang, spec: &ServerSpec, discoverer: &Discoverer) -> InstallHint {
+    let requires = spec.install.command.as_deref().and_then(|raw| {
+        let program = split_command(raw).into_iter().next()?;
+        let ready = locate_command(lang, &program, discoverer).is_some();
+        Some(InstallRequirement {
+            command: program,
+            name: spec.install.runtime_name.unwrap_or_default().to_string(),
+            ready,
+            docs_url: spec.install.runtime_docs_url.map(|u| u.to_string()),
+        })
+    });
+    InstallHint {
+        kind: spec.install.kind,
+        command: spec.install.command.clone(),
+        docs_url: Some(spec.install.docs_url.to_string()),
+        prerequisite: spec.install.prerequisite.clone(),
+        requires,
+    }
+}
+
 /// 解析某语言的 server（优先级见模块头注释）。
 pub fn resolve(
     lang: Lang,
     cfg: &LspSettings,
     project_root: &Path,
     discoverer: &Discoverer,
+) -> ServerResolution {
+    resolve_with(
+        lang,
+        cfg,
+        project_root,
+        discoverer,
+        &conventional_bin_dirs(lang),
+    )
+}
+
+/// [`resolve`] 的可注入形态：约定安装目录由调用方给（单测用来控制探测面；生产走
+/// [`conventional_bin_dirs`]）。
+pub fn resolve_with(
+    lang: Lang,
+    cfg: &LspSettings,
+    project_root: &Path,
+    discoverer: &Discoverer,
+    conventional: &[PathBuf],
 ) -> ServerResolution {
     let spec = server_spec::spec(lang);
     let mut jdk_note = String::new();
@@ -622,7 +911,9 @@ pub fn resolve(
                     return ServerResolution::missing(
                         "config",
                         format!("设置中的命令不存在或不可执行：{program_raw}"),
+                        lang,
                         &spec,
+                        discoverer,
                     );
                 }
             }
@@ -665,7 +956,29 @@ pub fn resolve(
         };
     }
 
-    // ④ 进程快照 PATH（新鲜探测失败时的回落）
+    // ④ 语言约定安装目录（`go install` / `rustup` / bun 的默认落点，常不在 PATH 中）
+    for dir in conventional {
+        for cand in candidates(&dir.join(spec.server_name)) {
+            if cand.is_file() {
+                let mut detail = format!("在语言约定安装目录中找到：{}", cand.display());
+                if !jdk_note.is_empty() {
+                    detail.push('；');
+                    detail.push_str(&jdk_note);
+                }
+                return ServerResolution {
+                    found: true,
+                    source: "lang_bin".into(),
+                    program: cand.clone(),
+                    args: spec.args.clone(),
+                    version: discoverer.cached_version(&cand),
+                    detail,
+                    install: None,
+                };
+            }
+        }
+    }
+
+    // ⑤ 进程快照 PATH（新鲜探测失败时的回落）
     let snapshot = discoverer.snapshot_cached();
     if snapshot != discoverer.path() {
         if let Some(p) = which_in(spec.server_name, snapshot) {
@@ -681,7 +994,7 @@ pub fn resolve(
         }
     }
 
-    // ⑤ extra_roots：`<root>/<lang>/bin/<server>`
+    // ⑥ extra_roots：`<root>/<lang>/bin/<server>`
     for root in cfg.extra_roots.iter().filter(|r| !r.trim().is_empty()) {
         let dir = PathBuf::from(expand_vars(root, &|n| std::env::var(n).ok()))
             .join(lang.id())
@@ -701,7 +1014,7 @@ pub fn resolve(
         }
     }
 
-    // ⑥ npx 降级（仅 TS/Python）
+    // ⑦ npx 降级（仅 TS/Python）
     if let Some(fallback) = &spec.npx_fallback {
         if let Some(npx) = which_in(&fallback[0], discoverer.path()) {
             return ServerResolution {
@@ -716,7 +1029,7 @@ pub fn resolve(
         }
     }
 
-    // ⑦ Dart 专有：由 flutter 反推 `<flutter>/bin/dart`
+    // ⑧ Dart 专有：由 flutter 反推 `<flutter>/bin/dart`
     if lang == Lang::Dart {
         if let Some(flutter) = which_in("flutter", discoverer.path()) {
             if let Some(bin_dir) = flutter.parent() {
@@ -742,7 +1055,7 @@ pub fn resolve(
         detail.push('；');
         detail.push_str(&jdk_note);
     }
-    ServerResolution::missing("", detail, &spec)
+    ServerResolution::missing("", detail, lang, &spec, discoverer)
 }
 
 /// 配置里的语言命令覆盖字段。
@@ -1021,6 +1334,213 @@ mod tests {
             ]
         );
         assert_eq!(split_command("  gopls   "), vec!["gopls"]);
+    }
+
+    #[test]
+    fn conventional_bin_dirs_prefer_env_over_home_defaults() {
+        let home = PathBuf::from("/home/tester");
+        let env = |n: &str| match n {
+            "GOBIN" => Some("/opt/gobin".to_string()),
+            "GOPATH" => Some("/opt/gopath".to_string()),
+            _ => None,
+        };
+        let dirs = conventional_bin_dirs_with(Lang::Go, Some(&home), &env);
+        assert_eq!(dirs[0], PathBuf::from("/opt/gobin"), "GOBIN 就是目录本身");
+        assert_eq!(dirs[1], PathBuf::from("/opt/gopath/bin"), "GOPATH 要拼 bin");
+        assert!(dirs.contains(&home.join("go").join("bin")), "{dirs:?}");
+    }
+
+    /// 约定目录必须**按语言**给：Go 不该去 `~/.cargo/bin` 里找 gopls（反之亦然）。
+    #[test]
+    fn conventional_bin_dirs_are_language_specific() {
+        let home = PathBuf::from("/home/tester");
+        let env = |_: &str| None::<String>;
+        let go = conventional_bin_dirs_with(Lang::Go, Some(&home), &env);
+        let rust = conventional_bin_dirs_with(Lang::Rust, Some(&home), &env);
+        let ts = conventional_bin_dirs_with(Lang::TypeScript, Some(&home), &env);
+        #[cfg(not(windows))]
+        {
+            assert!(go.contains(&home.join("go").join("bin")), "{go:?}");
+            assert!(
+                !go.contains(&home.join(".cargo").join("bin")),
+                "Go 不该看 Rust 的目录：{go:?}"
+            );
+            assert!(rust.contains(&home.join(".cargo").join("bin")), "{rust:?}");
+            assert!(ts.contains(&home.join(".bun").join("bin")), "{ts:?}");
+            assert!(ts.contains(&home.join("Library").join("pnpm")), "{ts:?}");
+        }
+        // jdtls 没有跨平台固定安装位置：Java 的约定目录清单为空（引导改走官方地址）
+        assert!(conventional_bin_dirs_with(Lang::Java, Some(&home), &env).is_empty());
+    }
+
+    #[test]
+    fn conventional_bin_dirs_without_home_only_use_env() {
+        let env = |n: &str| (n == "CARGO_HOME").then(|| "/x/cargo".to_string());
+        assert_eq!(
+            conventional_bin_dirs_with(Lang::Rust, None, &env),
+            vec![PathBuf::from("/x/cargo/bin")]
+        );
+        let none = |_: &str| None::<String>;
+        assert!(conventional_bin_dirs_with(Lang::Go, None, &none).is_empty());
+    }
+
+    /// 本机实测缺陷：`rustup component add rust-analyzer` 成功了，但二进制落在**工具链目录**，
+    /// 而 Homebrew 装的 rustup 不建 `~/.cargo/bin`（shim 目录）→ 只查 PATH / shim 就永远「未找到」。
+    #[test]
+    fn conventional_bin_dirs_include_rustup_toolchain_bins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let stable = home
+            .join(".rustup")
+            .join("toolchains")
+            .join("stable-aarch64-apple-darwin")
+            .join("bin");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(
+            stable.join(if cfg!(windows) {
+                "rust-analyzer.exe"
+            } else {
+                "rust-analyzer"
+            }),
+            "x",
+        )
+        .unwrap();
+        let none = |_: &str| None::<String>;
+
+        let rust = conventional_bin_dirs_for(Lang::Rust, Some(home), &none);
+        assert!(
+            rust.contains(&stable),
+            "工具链 bin 必须在扫描面内：{rust:?}"
+        );
+        // 只负责 Rust：Go 不该去扫 rustup 的工具链
+        let go = conventional_bin_dirs_for(Lang::Go, Some(home), &none);
+        assert!(!go.contains(&stable), "{go:?}");
+
+        // RUSTUP_HOME 覆盖时以它为准（与 rustup 自身语义一致）
+        let custom = tmp.path().join("custom-rustup");
+        let nightly = custom.join("toolchains").join("nightly").join("bin");
+        std::fs::create_dir_all(&nightly).unwrap();
+        let env = |n: &str| (n == "RUSTUP_HOME").then(|| custom.to_string_lossy().to_string());
+        let rust2 = conventional_bin_dirs_for(Lang::Rust, Some(home), &env);
+        assert!(rust2.contains(&nightly), "{rust2:?}");
+        assert!(!rust2.contains(&stable), "覆盖后不再看默认 home：{rust2:?}");
+    }
+
+    /// 工具链扫描：按目录名排序（read_dir 顺序不定，排序保证可复现），没有 bin 的条目跳过。
+    #[test]
+    fn rustup_toolchain_bins_is_sorted_and_skips_entries_without_bin() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 未设 RUSTUP_HOME 时，根目录 = home/.rustup（与 rustup 自身的默认一致）
+        let toolchains = tmp.path().join(".rustup").join("toolchains");
+        std::fs::create_dir_all(toolchains.join("stable-x").join("bin")).unwrap();
+        std::fs::create_dir_all(toolchains.join("system").join("bin")).unwrap();
+        std::fs::create_dir_all(toolchains.join("empty")).unwrap(); // 有目录无 bin
+        std::fs::write(toolchains.join("stray-file"), "x").unwrap();
+
+        let bins = rustup_toolchain_bins(Some(tmp.path()), None);
+        assert_eq!(
+            bins,
+            vec![
+                toolchains.join("stable-x").join("bin"),
+                toolchains.join("system").join("bin"),
+            ],
+            "按目录名排序且跳过无 bin 的条目"
+        );
+
+        // 无 toolchains 目录 / 无 home 也不报错，返回空
+        assert!(rustup_toolchain_bins(Some(&tmp.path().join("nope")), None).is_empty());
+        assert!(rustup_toolchain_bins(None, None).is_empty());
+        assert!(rustup_toolchain_bins(None, Some("   ")).is_empty());
+    }
+
+    /// `-lic`（交互登录）里才有的目录必须补进来，且不得打乱 `-lc` 的原有顺序。
+    #[test]
+    fn merge_shell_paths_appends_interactive_dirs_after_login_order() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let login = format!("/a{sep}/b");
+        let interactive = format!("/b{sep}/go/bin");
+        assert_eq!(
+            merge_shell_paths(Some(&login), Some(&interactive)).unwrap(),
+            format!("/a{sep}/b{sep}/go/bin")
+        );
+        assert_eq!(
+            merge_shell_paths(Some(&login), None).unwrap(),
+            login,
+            "只有 -lc 时结论不变"
+        );
+        assert_eq!(
+            merge_shell_paths(None, Some(&interactive)).unwrap(),
+            interactive
+        );
+        assert!(merge_shell_paths(None, None).is_none());
+    }
+
+    /// 哨兵提取：交互式 rc 往 stdout 写的东西不得被当成 PATH。
+    #[test]
+    fn sentinel_extraction_ignores_shell_noise() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let text = format!("nvm: loading\nsome banner\n{PATH_SENTINEL}/usr/bin{sep}/bin\n");
+        assert_eq!(
+            extract_sentinel_path(&text).unwrap(),
+            format!("/usr/bin{sep}/bin")
+        );
+        // 取最后一条哨兵行
+        let two = format!("{PATH_SENTINEL}A\nnoise\n{PATH_SENTINEL}B\n");
+        assert_eq!(extract_sentinel_path(&two).unwrap(), "B");
+        assert!(extract_sentinel_path("no sentinel here").is_none());
+        assert!(
+            extract_sentinel_path(&format!("{PATH_SENTINEL}\n")).is_none(),
+            "空 PATH 不得当成有效结论"
+        );
+    }
+
+    /// 本机实测的缺陷回归：gopls 装在约定目录（`~/go/bin`）而该目录不在 PATH 里，
+    /// 也必须被找到（source = `lang_bin`）。
+    #[test]
+    fn resolve_finds_server_in_conventional_bin_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("go").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let name = if cfg!(windows) { "gopls.exe" } else { "gopls" };
+        std::fs::write(bin.join(name), "x").unwrap();
+        // 固定 PATH（不跑 shell、不依赖本机装没装 gopls）
+        let d = Discoverer::with_path("");
+        let res = resolve_with(
+            Lang::Go,
+            &LspSettings::default(),
+            tmp.path(),
+            &d,
+            std::slice::from_ref(&bin),
+        );
+        assert!(res.found, "{res:?}");
+        assert_eq!(res.source, "lang_bin");
+        assert_eq!(res.program, bin.join(name));
+        assert!(res.detail.contains("约定安装目录"), "{}", res.detail);
+    }
+
+    /// 约定目录不得抢在用户显式配置之前。
+    #[test]
+    fn configured_command_wins_over_conventional_bin_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) { "gopls.exe" } else { "gopls" };
+        let conv = tmp.path().join("conv");
+        let cfg_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(&conv).unwrap();
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(conv.join(name), "x").unwrap();
+        std::fs::write(cfg_dir.join(name), "x").unwrap();
+
+        let cfg = LspSettings {
+            commands: crate::core::config::LspCommands {
+                go: cfg_dir.join(name).to_string_lossy().to_string(),
+                ..Default::default()
+            },
+            ..LspSettings::default()
+        };
+        let d = Discoverer::with_path("");
+        let res = resolve_with(Lang::Go, &cfg, tmp.path(), &d, std::slice::from_ref(&conv));
+        assert_eq!(res.source, "config", "{res:?}");
+        assert_eq!(res.program, cfg_dir.join(name));
     }
 
     #[test]

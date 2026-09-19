@@ -49,16 +49,17 @@
 
 | 文件 | 行数 | 职责 | 关键位置 |
 |---|---|---|---|
-| `lsp/mod.rs` | 304 | 公共契约类型：`Lang`、`DiagnosticItem`、`ValidationOutcome`、`SkipReason`、`ValidateRequest`、`Baseline`、`InstallKind`/`InstallHint`、`ServerStatus` | `Lang` L37、`ValidationOutcome` L169、`SkipReason` L204、`ValidateRequest` L227、`Baseline` L246 |
+| `lsp/mod.rs` | 347 | 公共契约类型：`Lang`、`DiagnosticItem`、`ValidationOutcome`、`SkipReason`、`ValidateRequest`、`Baseline`、`InstallKind`/`InstallHint`（含 `requires`）、`SdkStatus`、`ServerStatus`（含 `sdk`） | `Lang` L37、`ValidationOutcome` L169、`SkipReason` L204、`ValidateRequest` L227、`Baseline` L246 |
 | `lsp/protocol.rs` | 306 | `Content-Length` 分片 framing（编码 / 写 / 读 + 头部与帧长上限） | 上限 L11/L14、`encode_message` L45、`write_message` L53、`FrameReader` L69、`read_message` L154 |
-| `lsp/client.rs` | 811 | 单连接：spawn、stderr 独立泵、读循环三态分发、服务端主动请求应答、Full 同步、URI 编解码、shutdown | 超时 L24–L30、`spawn_resolved` L239、`initialize` L385、`did_open` L410、`did_change` L423、`diagnostics_for` L437、`read_loop` L528、`pump_stderr` L513、`kill_process_group` L613、`path_to_uri` L636 |
-| `lsp/discovery.rs` | 1005 | 新鲜 PATH + 六语言探测 + JDK 21 定位 + 版本探测 | `merge_paths` L81、`fresh_env_path` L140（Windows）/ L181（非 Windows）、`which_in` L279、`find_jdk21` L314、`java_launch_env` L525、`resolve` L533 |
-| `lsp/server_spec.rs` | 253 | 六语言静态表（server 名 / languageId / init options / 安装形态与官方地址） | `spec` L42、`all_specs` L163、`assemble_init_options` L171 |
+| `lsp/client.rs` | 1348 | 单连接：spawn、stderr 独立泵、读循环三态分发、服务端主动请求应答、Full 同步、URI 编解码、shutdown | 超时、`spawn_resolved`、`initialize`、`did_open`、`did_change`、`diagnostics_for`、`read_loop`、`pump_stderr`、`kill_process_group`、`path_to_uri` |
+| `lsp/discovery.rs` | 1495 | 新鲜 PATH（登录非交互 + 交互登录双壳合并）+ 六语言探测（含语言约定安装目录）+ JDK 21 定位 + 版本探测 | `merge_paths`、`conventional_bin_dirs`、`fresh_env_path`、`shell_env_path`、`which_in`、`find_jdk21`、`java_launch_env`、`install_hint`、`resolve` / `resolve_with` |
+| `lsp/sdk.rs` | 120 | 语言工具链（SDK）就绪探测：命令存在性（`node`/`cargo`/`go`/`python3`/`dart`）+ JDK 定位；只做文件存在性检查、不起进程 | `targets`、`probe` |
+| `lsp/server_spec.rs` | 334 | 六语言静态表（server 名 / languageId / init options / 安装形态与官方地址 / 前置运行库名与下载页） | `spec`、`all_specs`、`assemble_init_options` |
 | `lsp/workspace.rs` | 191 | root 判定（按 manifest 就近上溯，找不到回落项目根） | `has_manifest` L27、`scan_roots` L38、`root_for_file` L77 |
 | `lsp/diagnostics.rs` | 455 | 指纹 / 差集 / 刹车 / 解析 / 文案渲染 | `fingerprint` L26、`diff` L37、`DedupBrake` L54、`parse_diagnostics` L119、`format_feedback` L230 |
-| `lsp/pool.rs` | 465 | 项目级池：key `(project_id, root, language)`，惰性启动 + 闲置回收 + 并发上限 | `PoolKey` L41、`acquire` L115、`tag_project` L311、`evict_idle` L322、`shutdown_project` L342 |
-| `lsp/manager.rs` | 638 | 门面：写前基线 / 写后校验 / 异步补条 / 状态 / 重探测 / 重启 / 回收 | `baseline` L82、`validate` L145、`validate_async` L204、`status` L246、`redetect` L287、`restart` L298、`evict_idle` L318 |
-| `lsp/install.rs` | 110 | 安装计划与执行 | `InstallPlan` L13、`plan` L23、`execute` L39 |
+| `lsp/pool.rs` | 464 | 项目级池：key `(project_id, root, language)`，惰性启动 + 闲置回收 + 并发上限 | `PoolKey`、`acquire`、`tag_project`、`evict_idle`、`shutdown_project` |
+| `lsp/manager.rs` | 702 | 门面：写前基线 / 写后校验 / 异步补条 / 状态 / 重探测 / 重启 / 回收 | `baseline`、`validate`、`validate_async`、`status`、`redetect`、`restart`、`evict_idle` |
+| `lsp/install.rs` | 547 | 安装计划与执行（含前置运行库缺失时的可操作文案） | `InstallPlan`（含 `runtime_docs_url`）、`plan`、`execute`、`missing_runtime_message` |
 
 客户端层是**通用通道**（能力协商 + 可发任意 request + 服务端主动请求应答分发），本批次只交付写后诊断；将来加语义查询（definition / references / hover）只需加封装，不动协议层。
 
@@ -155,7 +156,7 @@ pub enum SkipReason { NoServer { server }, ServerLoading, ServerNotReady, Unsupp
 
 **前端**
 
-- 设置页六语言行（开关 / 命令覆盖 / 状态徽标）+ 预算 + 发现区（额外 SDK 根目录、JDK 21 路径）+「重新探测」（`ui/src/features/panels/SettingsModal.tsx`，状态加载 L129/L151，重新探测 L201）；
+- 设置页六语言行（开关 / 命令覆盖 / 状态与动作：语言服务器状态 + 工具链状态 + 安装入口）+ 预算 + 发现区（额外 SDK 根目录、JDK 21 路径）+「重新探测」（`ui/src/features/panels/SettingsPage.tsx`；行渲染与 `lspBadge` / `sdkText` / `lspAction` 同文件）；
 - 聊天内嵌引导卡片三景（`ui/src/features/chat/LspGuideCard.tsx`：`installable` 调 `lsp_install` L42、`manual` 展示前置条件与官方地址、`confirm_enable` 调 `lsp_enable` L58）；**同会话同语言不重复打扰**；挂载点在 `ui/src/features/chat/ChatMessages.tsx` L464；
 - i18n 中英双语（`zh-CN.ts` / `en-US.ts` L98、L145）。
 
@@ -167,9 +168,22 @@ Rust GUI 应用从桌面启动时拿不到用户 login shell 里 export 的路�
 
 因此 `discovery.rs` 的探测策略是：**先在进程 PATH 里找，未命中时再读系统权威 PATH**——
 
-- Windows：读 `HKCU\Environment` + `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` 合并（用户优先，`merge_paths` L81），展开 `%VAR%`（`expand_vars` L112）；
-- macOS / Linux：跑 login shell 取 `$PATH`（`-lc` 失败再退 `-lic`，`fresh_env_path` L181），失败则降级；
-- 该次读取**只做一次**并缓存（`OnceLock` 无锁快路径，L205 附近），另有手动「重新探测」（`lsp_redetect`）兜底。
+- Windows：读 `HKCU\Environment` + `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` 合并（用户优先，`merge_paths`），展开 `%VAR%`（`expand_vars`）；
+- macOS / Linux：**登录非交互（`-lc`）与交互登录（`-lic`）各跑一次并合并**（`shell_env_path` + `merge_shell_paths`），查询用哨兵行 `printf '__cwave_path__%s\n' "$PATH"` 提取（交互式 rc 的输出不会混进 PATH），每次尝试 5s 超时；两段都失败才回落进程快照。
+
+  为什么必须问两次（2026-09-19 用户反馈后补）：`~/.zshrc` / `~/.bashrc` 只被**交互式** shell 读取，而 `~/go/bin`、`~/.bun/bin`、nvm 的 node 这些目录恰恰写在里面——只问 `-lc` 会让「装好的 server 看不见」（本机实测：`zsh -lc` 的 PATH 里没有 `~/go/bin`，`zsh -lic` 里有，耗时约 40ms）；
+- 该次读取**只做一次**并缓存（`OnceLock` 无锁快路径），另有手动「重新探测」（`lsp_redetect`）兜底；
+- **最坏预算**：两次 shell 查询各 5s 超时，故首次探测最坏 10s，而它可能落在**首次写入路径**上（缓存建立后不再发生）；交互式 shell 实测约 40ms，正常机器无感。超时分支只放弃该次结果（读取线程孤立结束），**不杀进程**——已知留待改进项（可复用 `kill_process_group` 的同类手法）。
+
+### 3.7b 语言约定安装目录（`go install` 类落点）
+
+`go install` 落 `$(go env GOPATH)/bin`（默认 `~/go/bin`）、`rustup component add` 落 `~/.cargo/bin`（shim）**或工具链目录** `~/.rustup/toolchains/<toolchain>/bin`、bun/pnpm 全局落 `~/.bun/bin` / `~/Library/pnpm`——这些目录进不进 PATH 完全取决于用户的 shell 配置，故在探测顺序里单列一档（`conventional_bin_dirs`，见 §3.7c）；其中 rustup 的工具链目录还需要**读目录**才能得出（`rustup_toolchain_bins`，2026-09-19 补：Homebrew 装的 rustup 不建 shim 目录，实测「组件装成功却始终未找到」）。
+
+为什么不能只靠 PATH：否则「一键安装成功」与「显示已找到」之间会断链（安装命令写的就是 `go install`，产物落到 `~/go/bin` 却探测不到）。
+
+### 3.7c 探测顺序（2026-09-19 起）
+
+① 设置里的命令覆盖 → ② 项目内 `node_modules/.bin` → ③ 新鲜 PATH → ④ **语言约定安装目录（`source = lang_bin`）** → ⑤ 进程快照 PATH → ⑥ `extra_roots` → ⑦ npx 降级（TS/Python）→ ⑧ Dart/Flutter 反推。
 
 ### 3.8 就绪判据（空集基线只认强证据）
 

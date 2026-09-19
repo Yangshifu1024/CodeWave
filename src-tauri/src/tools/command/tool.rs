@@ -760,6 +760,7 @@ async fn run_process(
         buf: String::new(),
         bytes_since_emit: 0,
         last_emit: std::time::Instant::now(),
+        progress_emitted: false,
         spilled: false,
         spill_path: None,
         total_bytes: 0,
@@ -775,18 +776,27 @@ async fn run_process(
     ) {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 4096];
+        // 每条流各持一个清洗器：剥 ANSI/控制序列 + 跨块安全解码（不把多字节字符切出替换符），
+        // 见 tools/sanitize.rs 与 [docs/command-output-ansi-sanitize-plan](../../../../docs/command-output-ansi-sanitize-plan.md)
+        let mut clean = crate::tools::sanitize::OutputSanitizer::new();
         loop {
             match s.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx
-                        .send(String::from_utf8_lossy(&buf[..n]).into_owned())
-                        .is_err()
-                    {
+                    let text = clean.push(&buf[..n]);
+                    if text.is_empty() {
+                        continue; // 纯转义/纯控制字符块：不发空事件
+                    }
+                    if tx.send(text).is_err() {
                         break;
                     }
                 }
             }
+        }
+        // 流结束：把清洗器里的残留（半截多字节兜底）发出去，不丢尾巴
+        let rest = clean.finish();
+        if !rest.is_empty() {
+            let _ = tx.send(rest);
         }
     }
     tokio::spawn(pump(stdout, line_tx.clone()));
@@ -830,7 +840,14 @@ async fn run_process(
                 }
             }
             c.bytes_since_emit += line.len();
-            if c.bytes_since_emit >= 2048 && c.last_emit.elapsed() >= Duration::from_millis(200) {
+            // 首帧**不等 2KB**：长命令（编译/装包）一开始就要有卡片，否则输出攒够之前界面是空的；
+            // 其后仍按「≥2KB 且距上次 ≥200ms」节流，避免刷帧
+            let first_frame = !c.progress_emitted;
+            if first_frame
+                || (c.bytes_since_emit >= 2048
+                    && c.last_emit.elapsed() >= Duration::from_millis(200))
+            {
+                c.progress_emitted = true;
                 c.bytes_since_emit = 0;
                 c.last_emit = std::time::Instant::now();
                 let tail: String = c
@@ -917,6 +934,8 @@ struct Collector {
     buf: String,
     /// 距上次进度推送累计的字节数（节流用）。
     bytes_since_emit: usize,
+    /// 是否已发过至少一帧进度（首帧不受 2KB 阈值限制：长命令一开始就要有卡片）。
+    progress_emitted: bool,
     /// 上次进度推送时刻。
     last_emit: std::time::Instant,
     /// 是否已发生溢出落盘。

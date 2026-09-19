@@ -1,6 +1,8 @@
-# command 输出链 ANSI 乱码与「正在运行？」锚点缺陷——根因分析与修复方案（已批准，待实施）
+# command 输出链 ANSI 乱码与「正在运行？」锚点缺陷——根因分析与修复方案
 
-> 状态：**方案已批准，实施延后**（2025 年会话批准记录：用户批复「保存文档，稍后实施」）。
+> 状态：**已全部实施（2026-09-19）**。后端：输出清洗（`tools/sanitize.rs`）+ 工具「开始」帧；前端：`progressTail` 落定清空；「`tool === "?"` 中性标题」一项**已由「开始帧带真工具名」替代解决**（首帧就把占位名回填成真名，不再出现孤悬的 `?`）。
+> 实施记录（2026-09-19，用户再次提出「限制输出颜色转义」时落地）：新增 `src-tauri/src/tools/sanitize.rs`（`OutputSanitizer`：CSI/OSC/两字符转义 + 裸 `\r` + 其余控制字符剔除；跨块安全解码不再产出 U+FFFD）；`command` 工具的 `pump()` 每条流各持一个实例（EOF 刷尾、空结果不发事件），`service` 的 `RingLog` 把清洗器与字节环同放锁内（`push`/`flush`）。单测 9 例（含转义跨块、多字节逐字节切块、OSC 两种终结、finish 兜底）+ service 环日志 1 例。验证：`cargo test` 827 passed（+17 集成）、`cargo fmt --check` 干净、`cargo clippy --lib` 零警告。
+> 已知取舍：裸 `\r` 只丢弃、**不**模拟「回到行首重写」，所以进度条重绘会连成一串（模拟重写要把整行缓到换行才吐，会拖慢流式展示）。
 > 来源：用户运行 `pnpm --dir ui test` 后报告终端输出乱码 + 工具卡标题「正在运行？？ ▸」异常（附截图）。
 
 ## 一、现象
@@ -63,3 +65,35 @@
 
 - 前置批次：[docs/tool-optimizations-port](./tool-optimizations-port.md)（工具输出瘦身 / 凡截断必落盘）、[docs/subagent-interaction-drawer](./subagent-interaction-drawer.md)（子代理流式帧信封）。
 - 遗留相关：`progressTail` 残留清理与 [docs/tool-card-multi-file-summary](./tool-card-multi-file-summary.md)「入参截断后头部空白」同属工具卡回填链 hygiene，可一并回归。
+
+## 六、追加修复（2026-09-19）：工具「开始」帧
+
+### 6.1 用户报的现象与实测结论
+
+用户报「工具调用有时在调用结束后才显示到聊天窗口」。排查证实**确实存在且是必然的**，不是偶发：
+
+- 聊天窗口里「运行中」工具卡的**唯一实时来源**是 `Frame::ToolProgress` 帧（前端 `ensureToolAnchorIm` 收到帧才建卡）；建卡另两条路径（`tool:result` / `tool:error` 事件、历史恢复预扫描）都是**结束后**才有。
+- 而后端此前**只有 `command` 工具**发这种帧，且门槛是「累计输出 ≥2048 字节且距上次 ≥200ms」（`tools/command/tool.rs`）——于是：读文件 / 搜索 / 改文件 / 计划 / 子代理等工具的调用**整个执行期间界面上什么都没有**；输出不足 2KB 的短命令同样如此；长命令也要等输出攒够才冒出卡片。
+
+### 6.2 改动
+
+| 位置 | 改动 |
+|---|---|
+| `src-tauri/src/tools/batch.rs` | 新增 `emit_tool_start()`：每次工具调用**在真正执行前**发一条 `ToolProgress` 帧（`chunk` 空、`name` = 真工具名）。两条路径都接：MCP 工具与注册表工具。位置放在审批 / 计划门**之后**（避免「等待审批时显示运行中」）。 |
+| `src-tauri/src/tools/command/tool.rs` | 命令输出**首帧不再受 2KB 阈值限制**（新增 `Collector.progress_emitted`），长命令一开始就有卡片；其后仍按「≥2KB 且 ≥200ms」节流。 |
+| 前端 | **零改动**：`runFrames.ts` 早已支持空 chunk + `name` 回填（含「迟到帧不得覆盖 `tool:result` 已回填真名」的幂等守卫）。 |
+
+契约面零变化（复用既有 `ToolProgress` 帧，结构不动；事件面 29 键不变）。额外收益：卡片位置从「结果落定那一刻」改为「调用开始那一刻」，与转录里工具调用的位置一致；「正在运行 <工具名>」标题也由首帧直接填上。
+
+### 6.3 测试
+
+- 后端 `tools/batch.rs`（2 例）：非 command 工具（`calculate`）走真实批次入口时，**开始帧必须早于 `tool:result` 事件**；短命令（`echo hi`，远小于 2KB）必须发进度帧。用例自带 `RecordingSink` 按到达顺序记录帧与事件（`make_core` 的 `NoopSink` 观察不到帧）。
+- 前端 `runFrames.test.ts`（+1 例）：「开始」帧（空 chunk + 工具名）立刻建运行中卡片、后续输出帧只填进度尾部、状态仍为运行中直到结果落定。
+
+验证：`cargo test` 829 passed（+17 集成）/ `cargo fmt --check` 干净 / `cargo clippy --lib` 零警告；`pnpm --dir ui test` 662 passed（68 文件）/ `build` / `lint` 全绿。
+
+### 6.4 收尾：`progressTail` 落定清空（同日补做）
+
+`ui/src/stores/run.ts` 的 `onToolResult` 在回填结果时把 `tool.progressTail` 置空（**主会话与子代理流两条分支同步**）：结果卡自带完整输出，而进度尾部只在 `status === "running"` 时渲染，落定后残留已无意义（且是 ANSI/裂字符的载体）。
+
+用例：`run.interleave.test.ts` 新增「结果落定时清掉流式进度尾部」（进度帧先填上 → 结果落定后为空、状态转 ok）；`run.subagent.test.ts` 既有子代理用例补断言 `progressTail: ""`。

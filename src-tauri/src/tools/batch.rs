@@ -368,6 +368,7 @@ async fn run_tool(
 ) -> (ToolOutcome, Vec<Content>, u128) {
     // MCP 工具分发：mcp__<server>__<tool>
     if call.name.starts_with("mcp__") {
+        emit_tool_start(core, rt, call, batch_id, index);
         let started = Instant::now();
         let args = call.args.clone();
         let data_dir = rt.data_dir.clone();
@@ -552,6 +553,8 @@ async fn run_tool(
             }
         }
     }
+    // 真正要执行了（审批 / 计划门已在上面放行）：先发「开始」帧，让前端立刻建运行中卡片
+    emit_tool_start(core, rt, call, batch_id, index);
     let warnings = collect_unknown_fields(&call.args, tool.schema());
     let started = Instant::now();
 
@@ -607,6 +610,31 @@ fn model_content(
         content: text,
         is_error: !out.ok,
     }
+}
+
+/// 向前端发一条「工具开始执行」的进度帧（chunk 空、带真工具名）。
+///
+/// 为什么需要：前端建「运行中」工具卡的**唯一实时来源**就是 `tool_progress` 帧，而此前只有 `command`
+/// 工具在输出累计 ≥2KB 时才会发帧——于是读文件 / 搜索 / 改文件 / 计划 / 子代理这类调用
+/// 在整个执行期间界面上什么都没有，卡片只会在 `tool:result` 到达（即调用结束）时才冒出来
+/// （用户报「工具调用有时在调用结束后才显示」）。这里让每次调用在真正执行前先发一帧，
+/// 前端 `ensureToolAnchorIm` 立刻建卡、`name` 回填标题（空 chunk 不污染进度尾部）。
+fn emit_tool_start(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    call: &NormalizedCall,
+    batch_id: &str,
+    index: usize,
+) {
+    core.sink.channel_frame(
+        &rt.id,
+        &crate::core::agent::Frame::ToolProgress {
+            batch: batch_id.to_string(),
+            index,
+            chunk: String::new(),
+            name: call.name.clone(),
+        },
+    );
 }
 
 /// 向前端发出 tool:result / tool:error 事件并写会话日志（每个工具调用一行）。
@@ -761,6 +789,147 @@ mod tests {
         );
         // 监督摘要同样覆盖全部调用（call_summary 与 results 同长）
         assert_eq!(out.call_summary.len(), 2);
+    }
+
+    /// 帧与事件的到达顺序记录（`make_core` 用的是 NoopSink，观察不到帧）。
+    type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    struct RecordingSink(Log);
+
+    impl crate::core::agent::EventSink for RecordingSink {
+        fn channel_frame(&self, _s: &crate::core::types::SessionId, f: &crate::core::agent::Frame) {
+            let tag = match f {
+                crate::core::agent::Frame::ToolProgress { name, chunk, .. } => format!(
+                    "frame:tool_progress:{name}:{}",
+                    if chunk.is_empty() { "empty" } else { "chunk" }
+                ),
+                other => format!("frame:{other:?}"),
+            };
+            self.0.lock().unwrap().push(tag);
+        }
+        fn emit(&self, _s: &crate::core::types::SessionId, e: &str, _p: serde_json::Value) {
+            self.0.lock().unwrap().push(format!("event:{e}"));
+        }
+    }
+
+    /// 带记录事件汇的测试核心 + 已切 AutoEdit 的 runtime。
+    /// 临时目录有意泄漏（`Box::leak`）：core/rt 在整个用例里要用它们，不能随函数返回被删。
+    fn recording_core(session: &str) -> (Arc<AgentCore>, Arc<SessionRuntime>, Log) {
+        let ws = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let dd = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let log: Log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut cfg = crate::core::config::ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            models: vec![crate::core::config::ProviderModel::default()],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+        let store = Arc::new(crate::core::sessions::SessionStore::new(
+            roots.data_dir.clone(),
+        ));
+        let core = Arc::new(AgentCore::new(
+            cfg,
+            Arc::new(RecordingSink(log.clone())),
+            store,
+            reqwest::Client::new(),
+            roots.data_dir.clone(),
+        ));
+        let rt = core.get_or_create_session(
+            session,
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::AutoEdit,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        (core, rt, log)
+    }
+
+    /// 回归（用户报「工具调用有时在调用结束后才显示」）：**非 command 工具**也必须能实时建卡——
+    /// 执行前先发一条空 chunk 的「开始」帧，且它必须早于结果事件。
+    #[tokio::test]
+    async fn non_command_tool_emits_start_frame_before_result() {
+        let (core, rt, log) = recording_core("tstart");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "calculate".into(),
+            args: serde_json::json!({ "expression": "1+1" }),
+            index: 0,
+        };
+        // 走真实批次入口：结果事件由批次层（emit_result）发出，直接调 run_tool 看不到它
+        let res = execute_batch(
+            &core,
+            &rt,
+            vec![call],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert_eq!(res.results.len(), 1, "批次必有结果");
+
+        let entries = log.lock().unwrap().clone();
+        let start = entries
+            .iter()
+            .position(|e| e == "frame:tool_progress:calculate:empty")
+            .unwrap_or_else(|| panic!("缺「开始」帧：{entries:?}"));
+        let result = entries
+            .iter()
+            .position(|e| e == "event:tool:result")
+            .unwrap_or_else(|| panic!("缺结果事件：{entries:?}"));
+        assert!(start < result, "开始帧必须早于结果事件：{entries:?}");
+    }
+
+    /// 回归：命令首帧进度不受 2KB 阈值限制——短命令（`echo hi`）也必须发帧，
+    /// 否则短命令的卡片只会在调用结束后才出现。
+    #[tokio::test]
+    async fn short_command_emits_progress_frame_despite_gate() {
+        let (core, rt, log) = recording_core("tshort");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "command".into(),
+            args: serde_json::json!({ "command": "echo hi" }),
+            index: 0,
+        };
+        let (out, _, _) = run_tool(
+            &core,
+            &rt,
+            &call,
+            "b1",
+            0,
+            tokio_util::sync::CancellationToken::new(),
+            false,
+        )
+        .await;
+        assert!(out.ok, "{out:?}");
+
+        // 进度帧由独立任务异步发出（读通道 + 节流）：轮询等它到位
+        let mut seen = false;
+        for _ in 0..100 {
+            if log
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e == "frame:tool_progress:command:chunk")
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(seen, "短命令必须发首帧进度：{:?}", log.lock().unwrap());
     }
 
     #[test]

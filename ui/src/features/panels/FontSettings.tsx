@@ -3,14 +3,15 @@
 // （[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)，Enter/失焦提交）。
 // 三组偏好均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮；
 // 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-ia](../../../../docs/settings-ia.md)）。
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Form, Input, Select } from "antd";
 import { UndoOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ConfigState } from "../../ipc/types";
+import { ipc } from "../../ipc/client";
 import { useUi, type ThemePref } from "../../stores/ui";
 import {
-  DEFAULT_FONT_LEADS, previewFontFamily, readStoredFonts, sanitizeFontList, storeFonts,
+  commitFontSlot, DEFAULT_FONT_LEADS, previewFontFamily, readStoredFonts, sanitizeFontList,
   type FontPreferences, type FontSlot,
 } from "../../utils/fonts";
 
@@ -71,7 +72,23 @@ export function AppearanceSettings({ draft, patchDraft }: {
   );
 }
 
-/** 单个字体槽输入项：Enter/失焦提交、值有变化才落盘，附一键恢复默认按钮。 */
+/** 输入停止多久后自动提交（敲完就走也不丢；回车/失焦立即提交） */
+const COMMIT_IDLE_MS = 600;
+
+/** 后端真源落盘（失败不打断使用：字体已在本地生效，下次提交会再试） */
+async function persistFontPrefsToBackend(prefs: FontPreferences): Promise<void> {
+  try {
+    await ipc.setFontPrefs(prefs.sans, prefs.mono);
+  } catch (e) {
+    console.warn("字体偏好落盘失败（本地已生效）", e);
+  }
+}
+
+/** 单个字体槽输入项：回车 / 失焦 / 停手 / 卸载四处都提交，值有变化才落盘，附一键恢复默认按钮。
+ *
+ * 为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
+ * 「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
+ * 界面看上去就是「字体没保存」。 */
 function FontField({ slot, label, hint, settingId, onApplied }: {
   slot: FontSlot;
   label: string;
@@ -83,15 +100,57 @@ function FontField({ slot, label, hint, settingId, onApplied }: {
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => readStoredFonts()[slot]);
+  /** 用户是否真的改过输入框：**没改过的空提交一律不写**（否则一次误触发就把已有偏好抹掉） */
+  const edited = useRef(false);
+  /** 输入法组合态：组合期间不提交（半成品不该落盘） */
+  const composing = useRef(false);
+  const idleTimer = useRef<number | null>(null);
+  /** 卸载兑底提交要拿到最新草稿（闭包里的 draft 会过期） */
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
-  /** 仅当净化后的值与已生效值不同才落盘（失焦但内容无变化时保持安静） */
-  function commit(candidate: string) {
-    const applied = readStoredFonts()[slot];
-    const sanitized = sanitizeFontList(candidate);
-    if (sanitized === applied) return;
-    setDraft(storeFonts({ ...readStoredFonts(), [slot]: candidate })[slot]);
-    onApplied();
+  function clearIdle() {
+    if (idleTimer.current !== null) {
+      window.clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    }
   }
+
+  /** 提交草稿：净化 → 写缓存并应用 → 后端落盘。返回是否真的写了。 */
+  function commit(candidate: string, syncInput = true): boolean {
+    clearIdle();
+    if (composing.current || !edited.current) return false;
+    const applied = readStoredFonts()[slot];
+    if (sanitizeFontList(candidate) === applied) {
+      edited.current = false;
+      return false;
+    }
+    edited.current = false;
+    const next = commitFontSlot(slot, candidate);
+    if (syncInput) setDraft(next[slot]);
+    void persistFontPrefsToBackend(next);
+    onApplied();
+    return true;
+  }
+
+  /** 停手 COMMIT_IDLE_MS 后自动提交（每次击键重置计时） */
+  function scheduleIdleCommit() {
+    clearIdle();
+    idleTimer.current = window.setTimeout(() => {
+      idleTimer.current = null;
+      commit(draftRef.current);
+    }, COMMIT_IDLE_MS);
+  }
+
+  // 卸载前兑底提交：切页 / 关设置页时，刚敲进去的内容不能丢
+  useEffect(() => {
+    return () => {
+      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+      if (composing.current || !edited.current) return;
+      if (sanitizeFontList(draftRef.current) === readStoredFonts()[slot]) return;
+      void persistFontPrefsToBackend(commitFontSlot(slot, draftRef.current));
+    };
+  }, [slot]);
 
   return (
     <Form.Item label={label} help={hint}>
@@ -100,15 +159,33 @@ function FontField({ slot, label, hint, settingId, onApplied }: {
         <Input
           value={draft}
           placeholder={DEFAULT_FONT_LEADS[slot]}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            edited.current = true;
+            setDraft(e.target.value);
+            scheduleIdleCommit();
+          }}
+          onCompositionStart={() => {
+            composing.current = true;
+          }}
+          onCompositionEnd={() => {
+            composing.current = false;
+            scheduleIdleCommit();
+          }}
           onPressEnter={() => commit(draft)}
-          onBlur={() => commit(draft)}
+          onBlur={() => {
+            // 失焦时先把组合态强制结束：compositionend 漏发（某些输入法/粘贴场景）时
+            // 不能让 composing 永久为真——否则回车、停手、卸载三条提交路径全被挡住
+            composing.current = false;
+            commit(draft, false);
+            // 失焦回填：显示值与存储对齐（已存值 / 刚净化后的值），避免两者漂移
+            setDraft(readStoredFonts()[slot]);
+          }}
           suffix={
             <Button
               type="text" size="small" title={t("settings.fontReset")}
               aria-label={`${t("settings.fontReset")}・${label}`}
               icon={<UndoOutlined />}
-              onClick={() => { setDraft(""); commit(""); }}
+              onClick={() => { edited.current = true; setDraft(""); commit(""); }}
             />
           }
         />
