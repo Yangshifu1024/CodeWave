@@ -74,6 +74,7 @@
 - 2026-09-03 · [topbar-migration-and-git-identity.md](./topbar-migration-and-git-identity.md) — 顶栏「变更/任务/统计/设置」四入口迁移 + 左下角 git 提交身份条
 - 2026-09-03 · [titlebar-content-batch.md](./titlebar-content-batch.md) — 顶栏标题栏内容批次：两段式背景 + 会话历史导航（后移除）+ 标题/工作目录/分支胶囊 + 用户消息悬停操作
 - 2026-09-03 · [focus-ring-fix.md](./focus-ring-fix.md) — 输入控件 focus 双重边框缺陷修复：token 全局 controlOutline transparent
+- 2026-09-19 · [proxy-mode-title-invisible.md](./proxy-mode-title-invisible.md) — 缺陷修复：设置·网络「代理模式」三个选项名肉眼不可见（antd 6 给 `.ant-radio-group` 设 `font-size: 0`，未声明字号的 `.proxy-mode-title` 继承成 0 号字；DOM 里有文本所以既有断言全绿）——列表容器还原字号 + bridge 新增 `--ws-font-size` + 条纹级契约测试
 - 2026-09-04 · [rightbar-visual-batch.md](./rightbar-visual-batch.md) — 右栏视觉批次：侧栏分色 token + 页签调序 + 日志滚动根因修复
 - 2026-09-18 · [rightbar-info-refactor-and-subscription-quota.md](./rightbar-info-refactor-and-subscription-quota.md) — 右栏信息面板重构 + 订阅额度 + 可拖拽栏宽：数据目录行/会话段移除、Files 应用与编辑器下拉（VS Code/Cursor/Windsurf/Zed/Sublime/Notepad++/JetBrains）、技能与计划可折叠、`core/quota` 七家额度提供商（OpenCode Go/DeepSeek/MiniMax 国际+CN/Kimi/Zhipu/Z.ai，自动读本机 opencode 凭证）、手写栏宽分隔条（记忆 + 双击复位 + 窄窗只夹显示）、窗口最小宽 960→1024
 - 2026-09-04 · [titlebar-logo-toggle.md](./titlebar-logo-toggle.md) — 标题栏批次：会话历史导航移除 + 左栏开合入口收口到标题栏 Logo（悬停同位交换）
