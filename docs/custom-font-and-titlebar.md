@@ -12,12 +12,13 @@
 - `ui/src/theme/native.css` 定义 `--ws-font-sans(-fallback)` / `--ws-font-mono(-fallback)` 四个 token；body 与全部代码面（app.css 原 13 处硬编码 `"SF Mono", Menlo, Consolas, monospace` 链）统一改引 `var(--ws-font-mono)`。
 - `ui/src/utils/fonts.ts`（移植 GitWave fonts.ts，去字号缩放部分）：偏好为逗号分隔的**本机已安装字体名**，空 = 默认链。`sanitizeFontList` 剥离可逃逸 CSS 字面量的字符（引号/反斜杠/花括号/分号/尖括号/控制字符）但保留中文等非 ASCII 名；`buildFontOverride` 生成 `"用户字体", var(--ws-font-*-fallback)` 引导链写入 `<html>` 内联。
 - `main.tsx` 在 `createRoot().render()` 前调 `applyInitialFonts()`——先于 React 挂载应用，防首帧默认字体闪变。
-- 持久化走 localStorage（`ws_font_sans` / `ws_font_mono`）：纯 UI 偏好不入后端 config（与 GitWave 一致），空值移除键。
+- **持久化（2026-09-19 改）**：真源后来改为**后端配置** `config.ui.font_sans` / `font_mono`（`set_font_prefs` 即时落盘，模式同 `lsp_enable`）；WebView 的 localStorage（`ws_font_sans` / `ws_font_mono`）降级为**首帧防闪变缓存**，启动后由 `utils/fonts.ts::reconcileFontsFromConfig` 与后端对账（后端优先；老版本只存缓存的自动迁移回后端）。原「只存 localStorage」的做法实测出现过「输了界面字体却从来没写进去」（存储里连已回收页的残留文本都没有），故改为双写 + 后端为真源。
+- **提交时机（2026-09-19 改）**：原来是「回车或失焦才提交」，输入后直接关设置页 / 关窗就丢；现为回车 / 失焦 / **停手 600ms** / **组件卸载**四处都提交，且只有「用户确实改过」才写（未编辑过的空提交不抹掉已存值），输入法组合期间不提交。
 - **antd 接线**（CodeWave 特有，GitWave 是 tailwind 无此问题）：antd 组件不继承 body 字体，`App.tsx` ConfigProvider token 下发 `fontFamily: "var(--ws-font-sans)"` + `fontFamilyCode: "var(--ws-font-mono)"`，随设置即时生效。
 
 ### 1.2 设置 UI：外观页签
 
-- SettingsModal 新增「外观」页签（`ui/src/features/panels/FontSettings.tsx`）：界面字体 / 等宽字体两个输入框（placeholder = 默认链头部名），**回车或失焦即时生效**（不走保存按钮），带恢复默认按钮与双行预览（同一段样本文字分别走 sans/mono 槽，预览空草稿时回落默认链）。
+- SettingsModal 新增「外观」页签（`ui/src/features/panels/FontSettings.tsx`）：界面字体 / 等宽字体两个输入框（placeholder = 默认链头部名，**回车 / 失焦 / 停手 600ms / 卸载四处即时生效**，不走保存按钮），带恢复默认按钮与双行预览（同一段样本文字分别走 sans/mono 槽，预览空草稿时回落默认链）。
 - i18n 双语新增 `settings.appearance / uiFont / monoFont / fontHint / fontReset`。
 
 ### 1.3 不移植项（有意裁剪）
@@ -72,6 +73,8 @@
 3. 输入不存在的字体名（如 `NoSuchFont`）→ 回落到默认链（外观无异常）。
 4. 两个输入框分别点恢复默认按钮 → 回默认；重启应用 → 偏好保持且**首帧即为所选字体**（无闪变）。
 5. 输入 `Map"le` 之类带引号内容 → 被清洗为 `Maple`。
+6. **（2026-09-19 新增）提交不丢**：输入界面字体后**不按回车**，直接关设置页（或切到别的设置页、关窗口）→ 重开设置页应仍是刚输入的值；重启应用仍生效。
+7. **（2026-09-19 新增）后端为真源**：退出应用后把配置文件 `ui.font_sans` 改成别的字体名再启动 → 界面字体跟随配置文件（首帧可能先闪一下缓存值，随即纠正）；反向「老用户只在 localStorage 里有值」的情况应被自动迁移到配置文件（启动后开设置页看输入框有值、配置文件里也写上了）。
 
 ### 4.2 自绘标题栏（Windows 11）
 
@@ -84,6 +87,34 @@
 7. `pnpm tauri dev` 与打包版分别验证（单实例互斥仍生效）。
 
 macOS（如有条件）：红绿灯悬浮于顶栏左侧、Tab 条不与之重叠；红绿灯拖拽/双击缩放正常。Linux（Wayland）：控制按钮渲染为 GTK 风格圆钮；X11 下预期回退原生标题栏。
+
+## 6. 2026-09-19 字体持久化修复（用户报「界面字体没有持久化保存」）
+
+### 6.1 根因（含实测证据）
+
+打包版 WebView 的 localStorage 里**只有** `ws_font_mono`，`ws_font_sans` 在任何 WebView 存储里都不存在（连已回收页的残留文本都没有）→ 界面字体**从来没被写进去过**。原实现只在「回车 / 失焦」两个时机提交，且提交前有「值没变就 return」的短路，输入后直接切页 / 关窗就等于什么都没发生。
+
+### 6.2 改动
+
+| 层 | 改动 |
+|---|---|
+| 配置（Rust） | `UiPrefs` 新增 `font_sans` / `font_mono`（容器级 serde default 已覆盖，空串 = 默认链） |
+| 新命令（Rust） | `set_font_prefs { sans, mono }`：即时落盘、只 patch 这两个字段（先落盘再改内存，模式同 `lsp_enable`） |
+| 页级保存（Rust） | `save_config` 经 `apply_page_save_shape` 护住这两个字段（**审查 🔴**：否则「改完字体 → 保存其他设置 → 重启」会静默回滚） |
+| 提交时机（前端） | 回车 / 失焦 / **停手 600ms** / **组件卸载**四处都提交；新增 `edited`（未编辑过的空提交不写存储）、`composing`（组合态不提交，失焦时强制解除，防 `compositionend` 漏发卡死）、失焦回填显示值 |
+| 真源与对账（前端） | `reconcileFontsFromConfig`：后端优先并回写缓存；后端为空而缓存有值时自动迁移回后端（老用户不丢）；配置加载后执行一次 |
+
+### 6.3 验证
+
+`cargo test` **815 passed / 3 ignored**（+17 集成）；`cargo fmt --check` 干净、`cargo clippy --lib` 零警告；`pnpm --dir ui test` **660 passed / 68 文件**；`pnpm --dir ui build`、`lint` 通过。新增用例：后端只改目标字段 / 旧配置缺字段可读 / 页级保存护住字体；前端 reconcile 三分支、停手自动落盘、卸载兜底、回车即时、组合态不落盘、失焦提交与回填、未编辑不写、恢复默认同步后端。
+
+### 6.4 审查结论与遗留
+
+两轮 code-reviewer：第一轮 **不通过**（1 个 🔴：页级保存回写旧字体快照 + 若干 🟡），修完后第二轮 **通过**。遗留（均为「测试表达 / 文档 / 理论竞态」级，不阻塞）：
+
+- 落盘失败只 `console.warn`，用户不可见（字体已在本地生效，且下次启动的迁移会自动重试写回，失败可自愈）；
+- 「整份读改写 + 原子写」与 `save_config` 之间无配置写锁，极端交错下可能相互覆盖（与仓库既有同类竞态同口径，留待统一收敛）；
+- `FontField` 的草稿与预览取的是**挂载时**的缓存快照，若设置页先于配置对账挂载，输入框可能短暂显示旧值（失焦或重挂载自愈）。
 
 ## 5. code-reviewer 审查与修复批次
 

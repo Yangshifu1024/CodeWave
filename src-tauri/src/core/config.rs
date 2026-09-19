@@ -442,6 +442,15 @@ pub struct UiPrefs {
     /// 指示 AI 回复所用语言（设置 → 通用 → AI 语言；自由输入，如 "中文" /
     /// "English" / "日本語"）。None/空 = 跟随用户消息语言（默认 output-style 行为）。
     pub ai_language: Option<String>,
+    /// 界面字体（逗号分隔的已安装字体名，空 = 默认链）。
+    ///
+    /// 真源在后端配置文件（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）：
+    /// 2026-09-19 之前只存 WebView 的 localStorage，实测出现过「输了界面字体却从来没写进去」；
+    /// 现改为「配置为真源 + localStorage 当首帧缓存」（防闪变），对照逻辑在前端 `utils/fonts.ts`。
+    /// 该字段由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
+    pub font_sans: String,
+    /// 等宽字体（代码与日志），同上。
+    pub font_mono: String,
 }
 
 impl Default for UiPrefs {
@@ -452,6 +461,8 @@ impl Default for UiPrefs {
             language: "zh-CN".into(),
             close_to_tray: true,
             ai_language: None,
+            font_sans: String::new(),
+            font_mono: String::new(),
         }
     }
 }

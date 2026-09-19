@@ -4,7 +4,9 @@
 // 持久化边界（[docs/technical-design] 之外的批1 约定，见 plan.md §三）：
 //   进 ui-state：Tab 集合/顺序/活跃 Tab/活跃项目、窗口几何、滚动锚点、草稿、前端队列、
 //                会话树展开态与未读集合、面板级 UI 态（子代理抽屉/todos/suggestions）
-//   留在 localStorage：主题/语言/字体/左右栏开合 —— 首屏同步可得，改走 IPC 会闪一帧；两类不双写
+//   留在 localStorage：主题/语言/左右栏开合 —— 首屏同步可得，改走 IPC 会闪一帧；两类不双写
+//   例外（2026-09-19）：字体偏好 localStorage 降级为「首帧缓存」，真源在后端 config.ui.font_sans/font_mono
+//   （修「输了界面字体却没写进去」的缺陷），启动时按后端对账——见 utils/fonts.ts::reconcileFontsFromConfig
 //
 // 模块级单例：内存里有「锚点表 / 关 Tab 后保留的内容 / 最近一次窗口几何」三类易变态，
 // 由 store 订阅与各写入口驱动 1.2s 防抖落盘（scheduleFlush，另有一枚不重置的 2s 最长等待计时器兜住流式持续输出），

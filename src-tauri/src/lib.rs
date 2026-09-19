@@ -354,6 +354,7 @@ pub fn run() {
             host::commands::lsp_restart,
             host::commands::lsp_enable,
             host::commands::lsp_install,
+            host::commands::set_font_prefs,
             host::commands::get_mcp_config,
             host::commands::save_mcp_config,
             host::commands::connect_mcp,
