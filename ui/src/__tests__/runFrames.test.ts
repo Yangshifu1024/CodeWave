@@ -26,7 +26,7 @@ describe("applyFrameToTab", () => {
     ]);
   });
 
-  it("drops late frames after run end (ghost cursor guard, review C1)", () => {
+  it("drops late frames after run end (ghost indicator guard, review C1)", () => {
     const t = blank();
     t.running = false;
     applyFrameToTab(t, { type: "delta_text", gen: 0, text: "ghost" } as any);

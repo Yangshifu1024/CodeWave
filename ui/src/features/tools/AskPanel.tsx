@@ -1,5 +1,8 @@
-// 键盘高亮类名是 "kb"（绝不能用 "cursor"：app.css 的全局 .cursor 是打字光标闪烁动画，
-// 类名相撞会让高亮行永远闪烁——用户报的「执行计划按钮行闪烁」正是这个）。
+// 键盘高亮类名是 "kb"（绝不能用 "cursor"：app.css 曾有个全局 `.cursor`——流式等待指示的闪烁动画，
+// 类名相撞会让高亮行永远闪烁，用户报的「执行计划按钮行闪烁」正是这个）。
+// `.cursor` 与 `@keyframes blink` 已随 [docs/chat-loading-indicator](../../../../docs/chat-loading-indicator.md)
+// 删除（等待指示改为语义化的 `.ws-streaming-indicator` + antd 加载图标）。
+// **别再新建任何叫 cursor 的类**：它与 CSS 的 cursor 属性同名，是历史误伤高发点。
 // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：询问窗口重构——卡片布局 + 编号选项 + 键盘导航（Tab/方向键移动、数字快选、Enter 确认）。
 // 审批形态：需要权限 + 命令块 + 允许 / 始终允许本项目 / 拒绝 三选项；
 // 询问形态：分页多题作答 + 补充说明 + 忽略/提交；计划批准形态额外渲染「方案」卡
