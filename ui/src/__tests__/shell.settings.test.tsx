@@ -72,7 +72,7 @@ afterEach(async () => {
   // restore the base implementation (mockImplementation in tests would otherwise leak)
   (await invokeMock()).mockImplementation(baseInvoke);
   // zustand module-level singletons persist across tests: reset panel toggles + settings mirror
-  useUi.setState({ settingsOpen: false, settingsTab: "general" });
+  useUi.setState({ settingsOpen: false, settingsTab: "agent" });
   useSettings.setState({ config: null, loaded: false });
   savedConfigs = [];
 });
@@ -96,7 +96,7 @@ async function clickSaveAndSettle() {
 /** Open the standalone modal and wait for the draft (config mirror) to load */
 async function openSettings() {
   useSettings.setState({ config: makeConfig(), loaded: true });
-  useUi.setState({ settingsOpen: true, settingsTab: "general" });
+  useUi.setState({ settingsOpen: true, settingsTab: "agent" });
   render(
     <AntApp>
       <SettingsPage />
@@ -105,9 +105,9 @@ async function openSettings() {
   await waitFor(() => expect(screen.getByText("Shell")).toBeTruthy());
 }
 
-/** The shell Select is the second select in the general pane (first = language) */
+/** 工作区与智能体页上唯一的 Select 就是 Shell（界面语言已随批② 归「界面」页：[docs/settings-ia](../../../docs/settings-ia.md)） */
 function shellSelect(): HTMLElement {
-  return document.querySelectorAll(".settings-shell .ant-select")[1] as HTMLElement;
+  return document.querySelectorAll(".settings-shell .ant-select")[0] as HTMLElement;
 }
 
 /** Open the shell dropdown (antd Select needs mousedown, not click) and pick an option by text */
@@ -131,7 +131,7 @@ describe("settings store：shell 默认值", () => {
   });
 });
 
-describe("SettingsPage general tab：Shell 选择", () => {
+describe("SettingsPage 工作区与智能体页：Shell 选择", () => {
   it("打开面板拉取探测列表：选项数量正确，limited 项有（有限支持）标注，path 进 option title", async () => {
     await openSettings();
     // 默认选中「自动」，auto label 附探测列表首个（非 limited）默认 shell 名
@@ -157,7 +157,7 @@ describe("SettingsPage general tab：Shell 选择", () => {
 
   it("从固定 shell 切回自动 → 保存参数 shell.selection = null", async () => {
     useSettings.setState({ config: makeConfig({ shell: { selection: "powershell" } }), loaded: true });
-    useUi.setState({ settingsOpen: true, settingsTab: "general" });
+    useUi.setState({ settingsOpen: true, settingsTab: "agent" });
     render(
       <AntApp>
         <SettingsPage />
@@ -185,7 +185,7 @@ describe("SettingsPage general tab：Shell 选择", () => {
 
   it("所选 shell 已卸载（探测列表不含 selection）：保留选项 + 警告提示", async () => {
     useSettings.setState({ config: makeConfig({ shell: { selection: "zsh" } }), loaded: true });
-    useUi.setState({ settingsOpen: true, settingsTab: "general" });
+    useUi.setState({ settingsOpen: true, settingsTab: "agent" });
     render(
       <AntApp>
         <SettingsPage />

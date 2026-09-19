@@ -90,7 +90,7 @@ const JAVA_CONFIRM = {
 
 describe("LSP 引导卡（lsp:server_missing 三景）", () => {
   beforeEach(() => {
-    useUi.setState({ settingsOpen: false, settingsTab: "general" });
+    useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
     useRun.setState({ tabs: {}, drafts: {}, lspGuide: {} });
     useSessions.setState({
       tabs: [{ key: "s1", sessionId: "s1", workspace: "/tmp/ws", title: "s1", projectId: "p1", createdAt: "2026-09-01T00:00:00Z", prefs: { approval_mode: "auto_edit", model_id: null, reasoning_effort: null } }],

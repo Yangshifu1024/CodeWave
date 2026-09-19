@@ -777,23 +777,19 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
 }
 .settings-nav-head { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; padding: 2px 2px 8px; }
-.settings-nav .ant-tabs { flex: 1; min-height: 0; }
-.settings-nav .ant-tabs-nav { margin: 0; }
-/* 行高 28px + 选中态仅换背景（复用工作区左栏度量；强调色只用于边框/圆点这类前景用法） */
-.settings-nav .ant-tabs-tab {
-  height: 28px; padding: 0 8px; margin: 0 0 2px !important;
-  border-radius: 6px; justify-content: flex-start;
+/* 自建导航（批② 替掉 antd Tabs，[docs/settings-ia](../../../docs/settings-ia.md)）：组标题 + 页行两列式，
+   行高 28px、选中态仅换背景（复用工作区左栏度量；强调色只用于脏圆点这类前景用法） */
+.settings-nav-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 组标题与工作区左栏 .nav-section-title 同度量（11px dim） */
+.settings-nav-group { font-size: 11px; color: var(--ws-dim); padding: 10px 8px 4px; }
+.settings-nav-item {
+  height: 28px; padding: 0 8px; margin: 0 0 2px; border: none; border-radius: 6px;
+  background: transparent; text-align: left; cursor: pointer;
 }
-.settings-nav .ant-tabs-tab .ant-tabs-tab-btn { line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
-.settings-nav .ant-tabs-tab-active { background: var(--ws-hover); }
-.settings-nav .ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--ws-text-1) !important; }
-/* tabPlacement="start" 的左侧墨条与「选中态仅换背景」相冲，隐掉 */
-.settings-nav .ant-tabs-ink-bar { display: none; }
-.settings-nav-label { display: inline-flex; align-items: center; gap: 6px; }
-/* 页体渲染在右列（两列式布局）：导航列内那个**空的** content-holder 不占位。
-   作用域限定在 .settings-nav 内（Tabs 只消费 key/label，pane 从不由它渲染本页内容），
-   与「工作区禁用 display:none」的硬约束无关：工作区里没有任何 .ant-tabs-content-holder。 */
-.settings-nav .ant-tabs-content-holder { display: none; }
+.settings-nav-item:hover { background: var(--ws-hover); }
+.settings-nav-item-active { background: var(--ws-hover); }
+.settings-nav-label { display: inline-flex; align-items: center; gap: 6px; line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
+.settings-nav-item-active .settings-nav-label { color: var(--ws-text-1); }
 
 /* 右内容列：操作条常驻可点（窄窗换行），页体自己滚 */
 .settings-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -836,22 +832,20 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .mcp-entry-row { display: flex; flex-direction: column; gap: 3px; } /* label 在上（[docs/settings-forms-vertical](../../../docs/docs/settings-forms-vertical.md)） */
 .mcp-entry-row .mcp-label { flex: none; font-size: 12px; color: var(--ws-dim); }
 .mcp-entry-row .ant-input { flex: 1; }
-.validation-grid { display: grid; grid-template-columns: repeat(3, auto); gap: 10px 24px; }
-.validation-item { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
-.validation-item .validation-label { white-space: nowrap; }
-/* 语义校验（LSP）行：语言名 | 开关 | 命令覆盖 | 状态徽标（中性色：墨色强调，徽标只在「未找到」用警示橙） */
+/* 语义校验（LSP）行：语言名 | 开关 | 命令覆盖 | 状态徽标（中性色：墨色强调，徽标只在「未找到」用警示橙）；
+   批② 可配置项归入「工具与集成」页：旧类 .validation-grid / .validation-item / .lsp-budget-item 已零引用删除，
+   而 .lsp-budget-grid（预算组两列网格）仍在用——审查返工把它从内联 style 收回本文件（样式集中在 app.css） */
 .validation-rows { display: flex; flex-direction: column; gap: 6px; }
 .validation-row { display: grid; grid-template-columns: 150px auto minmax(200px, 320px) auto; align-items: center; gap: 10px; font-size: 13px; }
 .validation-row .validation-label { white-space: nowrap; }
 .validation-row .validation-status { color: var(--ws-dim); font-size: 12px; white-space: nowrap; }
 .validation-row .validation-status.warn { color: var(--ws-warn); }
+/* LSP 预算组网格：预算 7 项两列铺开（窄窗由 minmax(220px) 自动压缩；行距 0 = 沿用 Form.Item 自带下边距） */
+.lsp-budget-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 0 20px; }
 /* 发现区的额外 SDK 根目录行（输入框 + 删除按钮） */
 .lsp-roots { display: flex; flex-direction: column; gap: 6px; }
 .lsp-root-row { display: flex; align-items: center; gap: 8px; }
 .lsp-root-row .ant-input { flex: 1; min-width: 0; }
-.lsp-budget-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 8px 20px; }
-.lsp-budget-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
-.lsp-budget-item .validation-label { white-space: nowrap; }
 /* 聊天内嵌 LSP 引导卡：与错误引导行同宽度的块，不参与消息锚点 */
 .lsp-guide-cards { display: flex; flex-direction: column; }
 .lsp-guide-card .lsp-guide-body { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
@@ -873,7 +867,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .skills-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .skills-toolbar .hint { flex: 1; min-width: 0; }
 
-/* ---------- 关于弹框（AboutModal） ---------- */
+/* ---------- 设置页「关于」页（批② 从 AboutModal 迁入，[docs/settings-ia](../../../docs/settings-ia.md)） ---------- */
+/* 页形态左对齐：「关于」从 320px 弹框变成全屏页的一页，居中的卡片造型在此收成左对齐身份块 + 更新行 */
+.about-pane { display: flex; flex-direction: column; gap: 6px; }
+.about-pane .about-body { align-items: flex-start; text-align: left; }
+.about-pane .about-slogan { text-align: left; }
 .about-body { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 8px 0 4px; }
 .about-logo { width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
 .about-name { font-size: 16px; font-weight: 600; color: var(--ws-text-1); }
@@ -882,7 +880,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .about-actions { display: flex; gap: 8px; margin-top: 10px; }
 .about-error { margin-top: 10px; font-size: 11.5px; color: var(--ws-err); word-break: break-all; }
 
-/* 设置 → 通用 → 更新：开关 + 文案 + 手动检查按钮同一行 */
+/* 设置 → 关于 → 更新：开关 + 文案 + 手动检查按钮同一行 */
 .settings-update-row { display: flex; align-items: center; gap: 8px; }
 .settings-update-row .settings-update-label { font-size: 12.5px; color: var(--ws-text-2); margin-right: auto; }
 

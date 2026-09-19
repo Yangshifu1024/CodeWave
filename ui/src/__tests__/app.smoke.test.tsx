@@ -134,9 +134,10 @@ async function clickButton(text: string) {
 }
 
 function clickTab(label: string) {
-  const tabs = Array.from(document.querySelectorAll(".ant-tabs-tab"));
+  // 批② 起设置页左导航自建（替掉 antd Tabs）：[docs/settings-ia](../../../docs/settings-ia.md)
+  const tabs = Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-item'));
   const tab = tabs.find((x) => x.textContent?.trim() === label);
-  if (!tab) throw new Error(`找不到页签：${label}`);
+  if (!tab) throw new Error(`找不到设置页导航项：${label}`);
   fireEvent.click(tab);
   return new Promise((r) => setTimeout(r, 80));
 }
@@ -219,36 +220,37 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector(".chat-empty-guide")).toBeFalsy();
   });
 
-  it("设置页：7 个分区页签 + 表单字段渲染", async () => {
+  it("设置页：8 个分区导航（三组）+ 逐页表单渲染", async () => {
     await mountApp();
     await clickIconBtn("设置");
 
-    // All tabs render (regression: wrong Tabs items config → blank content)
-    const tabTexts = Array.from(document.querySelectorAll(".ant-tabs-tab")).map((x) => x.textContent).join("|");
-    for (const tab of ["通用", "外观", "供应商", "安全", "网络", "MCP", "技能"]) {
-      expect(tabTexts).toContain(tab);
-    }
-    // All forms vertical ([docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)): no horizontal form inside the settings page
+    // 8 页导航 + 三组标题（回归：导航项配置错了会渲染空页体）
+    const navLabels = Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-item')).map((x) =>
+      (x.textContent ?? "").trim(),
+    );
+    expect(navLabels).toEqual(["界面", "模型与供应商", "网络与连接", "安全与审批", "工具与集成", "工作区与智能体", "日志", "关于"]);
+    expect(
+      Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-group')).map((x) =>
+        (x.textContent ?? "").trim(),
+      ),
+    ).toEqual(["外观与模型", "安全与能力", "诊断与其他"]);
+    // 表单一律 vertical（[docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)）：设置页内不得出现 horizontal 表单
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeFalsy();
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeTruthy();
-    // General tab form renders: language select exists
-    expect(document.querySelectorAll(".ant-select").length).toBeGreaterThan(0);
-    // Custom prompt textarea exists
-    expect(document.querySelectorAll("textarea").length).toBeGreaterThan(0);
 
-    // Switch to the Appearance tab: dual font slots + preview render ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md))
-    await clickTab("外观");
-    const appearanceText = document.body.textContent ?? "";
-    expect(appearanceText).toContain("界面字体");
-    expect(appearanceText).toContain("等宽字体");
+    // 落地页「界面」：主题 / 界面语言两个 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
+    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(2);
+    expect(document.body.textContent ?? "").toContain("界面字体");
+    expect(document.body.textContent ?? "").toContain("等宽字体");
     expect(document.querySelectorAll(".font-preview-row").length).toBe(2);
 
-    // Switch to the Providers tab ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md)): list + edit form fields
-    await clickTab("供应商");
+    // 模型与供应商页（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：列表 + 编辑表单字段 + AI 回复语言
+    await clickTab("模型与供应商");
     const providerTexts = document.body.textContent ?? "";
     expect(providerTexts).toContain("Test Provider"); // provider list row
     expect(providerTexts).toContain("test-model");    // model wire id
     expect(providerTexts).toContain("1 个模型");
+    expect(providerTexts).toContain("AI 语言");        // 从旧「通用」页迁入
     // Catalog fill removed ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md): user input is the single source of truth)
     expect(providerTexts).not.toContain("从目录填充");
     // Enter edit: form fields render
@@ -260,23 +262,52 @@ describe("App 渲染冒烟", () => {
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     expect(inputs.some((i) => i.value === "https://api.example.com/v1")).toBe(true);
 
-    // Switch to the Security tab: switches exist + [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) auto-confirm approval option renders
-    await clickTab("安全");
-    expect(document.querySelectorAll(".ant-switch").length).toBeGreaterThanOrEqual(9);
-    expect((document.body.textContent ?? "")).toContain("5 分钟后自动确认推荐选项");
+    // 网络与连接页：代理模式三张卡片 + 内网访问（批② 从「安全」迁入）
+    await clickTab("网络与连接");
+    expect(document.body.textContent ?? "").toContain("代理模式");
+    expect(document.body.textContent ?? "").toContain("允许访问内网地址");
+    expect(document.querySelectorAll(".proxy-mode-card").length).toBe(3);
+
+    // 安全与审批页：审批开关 + [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) 自动确认选项
+    await clickTab("安全与审批");
+    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-switch').length).toBeGreaterThanOrEqual(4);
+    expect(document.body.textContent ?? "").toContain("5 分钟后自动确认推荐选项");
+
+    // 工具与集成页：语义校验行（LSP）+ MCP + 技能三段同页
+    await clickTab("工具与集成");
+    expect(document.querySelectorAll(".validation-row").length).toBe(7);
+    expect(document.body.textContent ?? "").toContain("写入后语法校验");
+    expect(document.body.textContent ?? "").toContain("添加服务器");
+    expect(document.body.textContent ?? "").toContain("技能");
+
+    // 工作区与智能体页：Shell 下拉 + 自定义提示词 + 压缩两项（旧「通用」页的这 4 项）
+    await clickTab("工作区与智能体");
+    expect(document.body.textContent ?? "").toContain("Shell");
+    expect(document.querySelector('[data-testid="settings-page"] textarea')).toBeTruthy();
+    expect(document.body.textContent ?? "").toContain("自动压缩阈值");
+
+    // 日志页：日志级别 + 会话详细日志
+    await clickTab("日志");
+    expect(document.body.textContent ?? "").toContain("日志级别");
+    expect(document.body.textContent ?? "").toContain("会话详细日志");
+
+    // 关于页（原弹框迁入第 8 页）：身份块 + 自动更新开关
+    await clickTab("关于");
+    expect(document.querySelector(".about-logo")).toBeTruthy();
+    expect(document.body.textContent ?? "").toContain("启动时自动检查更新");
   });
 
-  it("设置保存（docs/provider-form-validation）：成功不关闭弹框；无效供应商阻止保存并跳转供应商页签", async () => {
+  it("设置保存（docs/provider-form-validation）：成功不关闭页面；无效供应商阻止保存并跳转供应商页", async () => {
     await mountApp();
     await clickIconBtn("设置");
-    // Valid config: save succeeds → toast only, modal stays open (the user decides when to close)
+    // Valid config: save succeeds → toast only, the page stays open (the user decides when to close)
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已保存"));
     expect(useUi.getState().settingsOpen).toBe(true);
     // 全屏设置页常驻 DOM（不再是 Modal 外壳）：docs/settings-fullscreen-shell
     expect(document.querySelector("[data-testid='settings-page']")).toBeTruthy();
-    // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers tab
-    await clickTab("供应商");
+    // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers page
+    await clickTab("模型与供应商");
     await clickButton("编辑供应商");
     const urlInput = Array.from(document.querySelectorAll("input")).find(
       (i) => (i as HTMLInputElement).value === "https://api.example.com/v1",
@@ -288,8 +319,8 @@ describe("App 渲染冒烟", () => {
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("供应商配置无效"));
     expect(useUi.getState().settingsOpen).toBe(true);
-    // Scope to the settings page: the first document-level .ant-tabs-tab-active may be the RightBar tab strip
-    expect(document.querySelector('[data-testid="settings-page"] .ant-tabs-tab-active')?.textContent ?? "").toContain("供应商");
+    // 跳回「模型与供应商」页：范围限定到设置页（文档级 .ant-tabs-tab-active 可能是右栏的）
+    expect(document.querySelector('[data-testid="settings-page"] .settings-nav-item-active')?.textContent ?? "").toContain("模型与供应商");
   });
 
   it("自绘标题栏：后端返回 native 时 html 标记 native（回退布局分支，docs/custom-font-and-titlebar）", async () => {
@@ -412,17 +443,16 @@ describe("App 渲染冒烟", () => {
     await waitFor(() => expect(screen.getByText("Token 用量（近 30 天）")).toBeTruthy());
   });
 
-  it("设置：MCP 结构化编辑器渲染", async () => {
+  it("设置：工具与集成页的 MCP 结构化编辑器 + 技能列表同页渲染", async () => {
     await mountApp();
     await clickIconBtn("设置");
-    await clickTab("MCP");
+    await clickTab("工具与集成");
     // Single-entry editing: add server → entry fields expand
     await clickButton("添加服务器");
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);
-    // Skills tab still works（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
-    await clickTab("技能");
+    // 技能段与 MCP 段同在「工具与集成」页（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
     await waitFor(() => {
       const page = document.querySelector('[data-testid="settings-page"]');
       const inSettings = page

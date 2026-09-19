@@ -216,7 +216,7 @@ afterEach(() => {
   cleanup();
   // zustand store 是模块级单例：面板开关 / 请求位 / 树态复位，避免弹窗与快照串味
   useUi.setState({
-    settingsOpen: false, tasksOpen: false, statsOpen: false, aboutOpen: false,
+    settingsOpen: false, tasksOpen: false, statsOpen: false,
     exitRequest: null, closeTabRequest: null,
     treeExpand: {}, treeCollapsed: false, rightBarOpen: true, rbTab: "info",
     notifications: [], mcpStatus: [], // 中断提示条用例会产生 toast（6 秒后自行消失），别漏给后面的用例

@@ -1,6 +1,9 @@
 // UI 偏好：语言、主题、面板开关、通知堆栈（强调色锁定中性墨色，无自定义强调色）
 import { create } from "zustand";
 import { clampNavWidth, clampRightBarWidth, NAV_W_DEFAULT, RB_W_DEFAULT } from "../utils/layout";
+// 设置页页 key 归一（旧页 key 别名 / 非法值回退）与默认页都住在注册表里（纯数据模块，无 React/store 依赖，
+// 所以 store 反向引用它不构成循环：[docs/settings-ia](../../../docs/settings-ia.md)）
+import { DEFAULT_PAGE, normalizePageKey, type PageKey } from "../features/panels/settingsRegistry";
 // 树展开/折叠态的落盘链路（uiState → ipc.setUiState）。本文件与 utils/uiState 互为引用（那边要读 useUi），
 // 但双方都只在函数体内取用对方的绑定，模块顶层互不触达，ESM 活绑定足以支撑这个环。
 import {
@@ -29,9 +32,12 @@ interface UiState {
   /** 主题偏好档位（设置 → 外观选择；localStorage 持久化，即时生效） */
   theme: ThemePref;
   settingsOpen: boolean;
-  /** 设置页当前页签（通用/外观/供应商/安全/网络/MCP/技能）：提升进 store 以便外部调用方（认证错误引导等）指定页签打开（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；
-   *  深链语义见 showSettings（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)） */
-  settingsTab: string;
+  /** 设置页当前页（8 页重划后的 PageKey；提升进 store 以便外部调用方（认证错误引导等）指定页打开
+   *  （[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；深链语义见 showSettings
+   *  （[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md) / [docs/settings-ia](../../../docs/settings-ia.md)） */
+  settingsTab: PageKey;
+  /** 切页（左导航与保存校验跳页用）：非法 / 未知值经 normalizePageKey 回退默认页 */
+  setSettingsTab(tab: string): void;
   /** 设置页是否存在未保存改动（全页聚合；SettingsPage 同步）：退出拦截链（ExitConfirm）读它决定
    *  先弹设置三选还是直接弹运行中会话选择。住 store 是因为两处渲染点分属 SettingsPage 与 AppShell */
   settingsDirty: boolean;
@@ -57,8 +63,6 @@ interface UiState {
   setTreeGroupExpanded(key: string, next?: boolean): void;
   /** 折叠/展开左栏「项目」区 */
   setTreeCollapsed(collapsed: boolean): void;
-  /** 关于弹框（[docs/oss-prep-batch](../../../docs/oss-prep-batch.md) 批次）：从左下角状态区打开 */
-  aboutOpen: boolean;
   /** 右栏开合持久态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
   rightBarOpen: boolean;
   setRightBarOpen(open: boolean): void;
@@ -74,10 +78,11 @@ interface UiState {
   /** 打开「变更」：确保右栏展开并落在变更页签 */
   showChanges(): void;
   /** 打开设置页。
-   *  - 带 tab：跳到该页（错误卡「打开模型设置」→ providers、LSP 引导卡 → 所在页，深链语义不变）
-   *  - 不带 tab：保持当前页不重置（**有意变更**：[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)；
+   *  - 带页：跳到该页（错误卡「打开模型设置」→ providers，macOS 菜单「关于」→ about；
+   *    旧页 key（general / mcp / skills 等）经 LEGACY_PAGE_ALIASES 归一，未知值回默认页）
+   *  - 不带页：保持当前页不重置（**有意变更**：[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)；
    *    旧实现是「无参一律回 general」。设置从弹窗改为常驻全屏页后，重复点入口/菜单项不应把用户甩回第一页）
-   *  两条路径在存在未保存改动时的拦截由 SettingsPage 承担（本动作只动开关与页签） */
+   *  两条路径在存在未保存改动时的拦截由 SettingsPage 承担（本动作只动开关与页 key） */
   showSettings(tab?: string): void;
   /** 空态引导：ProjectNav 监听此标志打开新建项目弹框（用完即复位） */
   createProjectRequested: boolean;
@@ -99,7 +104,10 @@ export const useUi = create<UiState>((set, get) => ({
   language: (localStorage.getItem("ws_lang") as Lang) || "zh-CN",
   theme: readStoredTheme(),
   settingsOpen: false,
-  settingsTab: "general",
+  settingsTab: DEFAULT_PAGE,
+  setSettingsTab(tab) {
+    set({ settingsTab: normalizePageKey(tab) });
+  },
   settingsDirty: false,
   setSettingsDirty(dirty) {
     if (get().settingsDirty !== dirty) set({ settingsDirty: dirty });
@@ -122,7 +130,6 @@ export const useUi = create<UiState>((set, get) => ({
   setTreeCollapsed(collapsed) {
     persistTreeCollapsed(collapsed);
   },
-  aboutOpen: false,
   rightBarOpen: localStorage.getItem("ws_right_bar_open") !== "0",
   setRightBarOpen(open) {
     localStorage.setItem("ws_right_bar_open", open ? "1" : "0");
@@ -153,9 +160,9 @@ export const useUi = create<UiState>((set, get) => ({
     get().setRightBarOpen(true);
     set({ rbTab: "changes" });
   },
-  showSettings(tab?: string) {
+  showSettings(tab) {
     // 无参 = 保持当前页（旧实现回 general，见接口注释里的「有意变更」说明）
-    set(tab ? { settingsOpen: true, settingsTab: tab } : { settingsOpen: true });
+    set(tab ? { settingsOpen: true, settingsTab: normalizePageKey(tab) } : { settingsOpen: true });
   },
   createProjectRequested: false,
   mcpStatus: [],

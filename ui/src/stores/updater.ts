@@ -125,7 +125,7 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
   },
 
   fail(error) {
-    // modalOpen 置真：显式检查失败时弹窗本就没开（AboutModal 按钮 / macOS 菜单触发），
+    // modalOpen 置真：显式检查失败时弹窗本就没开（设置页「关于」的手动检查按钮 / macOS 菜单触发），
     // 不打开就等于把失败吞掉——原先的 toast 反馈由这个错误弹窗接管
     set({
       phase: "error",

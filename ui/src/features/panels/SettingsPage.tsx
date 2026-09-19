@@ -1,14 +1,15 @@
-// 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）：
-// 从 SettingsModal 迁入——去掉 Modal 外壳与 footer，改为绝对定位贴在内层 Layout 上的全屏页；
-// 7 页签、draft/save 全量提交语义不变。
+// 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md) /
+// 8 页重划 [docs/settings-ia](../../../../docs/settings-ia.md)）：绝对定位贴在内层 Layout 上的全屏页；
+// 8 个分区按左导航三组铺开，draft/save 全量提交语义不变。
 // 本文件承担三件事：
-//   1. 容器：左导航列（返回工作区 + 运行中指示 + 7 页导航）+ 右内容列（操作条 + 页体）；
-//   2. 逐页脏标记（draft 与已保存配置的差集，即时生效项不打点）；
+//   1. 容器：左导航列（返回工作区 + 运行中指示 + 三组 8 页自建导航）+ 右内容列（操作条 + 页体）；
+//   2. 逐页脏标记（draft 与已保存配置的差集，字段归属由注册表 PAGE_FIELDS 驱动，即时生效项不打点）；
 //   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）。
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+// 页面 JSX 手写（不做数据驱动渲染）：注册表只提供页序、页名、分组与字段归属。
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
-  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tabs, Tooltip, Typography,
+  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
 } from "antd";
 import { ArrowLeftOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -22,70 +23,75 @@ import { useActiveId } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
-import { checkForUpdates, useAutoUpdateSetting } from "../../utils/updateCheck";
 import { useDisplayWidths } from "../shell/useDisplayWidths";
+import { AboutSettings } from "./AboutSettings";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
+import {
+  INSTANT_APPLY_FIELD_IDS,
+  MCP_FIELD_ID,
+  PAGE_FIELDS,
+  PAGE_GROUPS,
+  PAGE_LABEL_KEY,
+  PAGE_ORDER,
+  SETTINGS_ITEMS,
+  normalizePageKey,
+  type PageKey,
+  type SettingFieldPath,
+} from "./settingsRegistry";
 
 const { TextArea } = Input;
 
 /** 自定义代理地址前缀白名单（与后端 reqwest 支持一致；保存校验用） */
 const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
 
-/** 设置页 7 个分区（本批沿用既有归属；8 页重划 / 注册表 / 自建导航都是后续批次） */
-type PageKey = "general" | "appearance" | "providers" | "security" | "network" | "mcp" | "skills";
-
-const PAGE_ORDER: PageKey[] = ["general", "appearance", "providers", "security", "network", "mcp", "skills"];
-
 /** 左导航列基准宽（= 工作区左栏默认宽 280，复用同一套栏宽度量） */
 const SETTINGS_NAV_W = 280;
 /** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
 const SETTINGS_NAV_RATIO = 0.32;
 
-/**
- * 逐页脏判定的比较片段：只取该页真正写进 draft 的配置键。
- * 即时生效项（界面语言 ui.language、自动更新开关）刻意**不**纳入——它们改完立即生效，不该亮脏点（
- * 界面语言同时写 useUi 与 draft.ui.language，纳入就会永远显示未保存）；
- * 外观页的字体/主题走 localStorage（FontSettings），配置侧只有 font_size/accent，本批没有编辑入口。
- * MCP 不在 config 里（独立 mcp.json），脏判定在组件内单独算。
- */
-function pageSlice(c: ConfigState, key: PageKey): unknown {
-  switch (key) {
-    case "general":
-      return {
-        ai_language: c.ui.ai_language ?? null,
-        compact_threshold: c.compact_threshold,
-        compact_timeout_seconds: c.compact_timeout_seconds,
-        custom_prompt: c.custom_prompt,
-        log: c.log,
-        shell: c.shell,
-      };
-    case "appearance":
-      return { font_size: c.ui.font_size, accent: c.ui.accent };
-    case "providers":
-      return { providers: c.providers, active_model_id: c.active_model_id };
-    case "security":
-      // validation 段的缺省语义与后端 serde default 对齐：java 缺省 false、dart 缺省 true、
-      // lsp 缺省 = DEFAULT_LSP_SETTINGS（后端 `LspSettings::default()` 的同形镜像）。
-      // 不折缺省时：把 java 开关打开又关掉、或点开任意 LSP 字段后改回原样，都会永远显示未保存。
-      return {
-        approval: c.approval,
-        validation: {
-          ...c.validation,
-          java: c.validation.java ?? false,
-          dart: c.validation.dart ?? true,
-          lsp: c.validation.lsp ?? DEFAULT_LSP_SETTINGS,
-        },
-      };
-    case "network":
-      // proxy = null 等价于 ProxyConfig::default()（mode = system，[docs/network-proxy-settings]）：
-      // 折成默认对象再比，否则打开设置后点一下本来就处于选中态的「系统代理」卡片就凭空染脏。
-      return { proxy: c.proxy ?? { mode: "system", url: "" }, network: c.network };
-    case "skills":
-      return { disabled_skills: c.disabled_skills };
-    case "mcp":
-      return null;
+/** 逐段下钻取值（字段路径受 SettingFieldPath 联合类型约束，拼写错误在编译期暴露） */
+function drill(node: unknown, path: string): unknown {
+  let cur: unknown = node;
+  for (const seg of path.split(".")) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
   }
+  return cur;
+}
+
+/**
+ * 单个字段路径的脏比较片段。缺省折叠与后端 serde default 对齐（不折缺省时，「点开又改回原样」会永远显示未保存）：
+ *  - network.proxy：null 等价于 ProxyConfig::default()（mode = system，[docs/network-proxy-settings]）——
+ *    否则打开设置后点一下本来就处于选中态的「系统代理」卡片就凭空染脏（字段路径按页面语义命名，指向 config.proxy）；
+ *  - validation.java 缺省 false、validation.dart 缺省 true；
+ *  - validation.lsp.* 缺省 = DEFAULT_LSP_SETTINGS（后端 `LspSettings::default()` 的同形镜像）；
+ *  - shell.selection / ui.ai_language：undefined 折 null（后端 serde default 语义）。
+ */
+function fieldSlice(c: ConfigState, path: SettingFieldPath): unknown {
+  if (path === "network.proxy") return c.proxy ?? { mode: "system", url: "" };
+  if (path === "validation.java") return c.validation.java ?? false;
+  if (path === "validation.dart") return c.validation.dart ?? true;
+  if (path === "ui.ai_language") return c.ui.ai_language ?? null;
+  if (path === "shell.selection") return c.shell?.selection ?? null;
+  if (path.startsWith("validation.lsp.")) {
+    return drill(c.validation.lsp ?? DEFAULT_LSP_SETTINGS, path.slice("validation.lsp.".length));
+  }
+  return drill(c, path);
+}
+
+/**
+ * 该页的字段比较片段（PAGE_FIELDS 驱动）。两类字段刻意排除：
+ *  - 即时生效项（INSTANT_APPLY_FIELD_IDS）：改完立即生效，纳入就会永远显示未保存；
+ *  - MCP（MCP_FIELD_ID）：不在 config 里（独立 mcp.json），脏判定在组件内按文本基线单独算。
+ */
+function pageSlice(c: ConfigState, page: PageKey): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const path of PAGE_FIELDS[page]) {
+    if (path === MCP_FIELD_ID || INSTANT_APPLY_FIELD_IDS.includes(path)) continue;
+    out[path] = fieldSlice(c, path);
+  }
+  return out;
 }
 
 /**
@@ -124,7 +130,7 @@ function sameSlice(a: unknown, b: unknown): boolean {
 }
 
 /** 离开拦截意图：切页（带目标页）或「返回工作区」/页内 Esc；关窗退出由 ui.exitRequest 驱动 */
-type LeaveIntent = { kind: "tab"; tab: string } | { kind: "leave" };
+type LeaveIntent = { kind: "tab"; tab: PageKey } | { kind: "leave" };
 
 /**
  * 页内 Esc 前的浮层探测：Select/Dropdown/Popover/Drawer 展开时，Esc 先归组件库（先关浮层，不平级返回）。
@@ -207,19 +213,21 @@ function resolveShellDisplay(selection: string | null | undefined, shells: Shell
   return { kind: "path", text: current.path };
 }
 
-/** 语言 → i18n 展示名（行序与后端 `Lang::all()` 一致：typescript、rust、python、go、java、dart） */
-const LANG_LABEL_KEY: Record<LspLanguage, string> = {
-  typescript: "settings.validationLangTypescript",
-  rust: "settings.validationLangRust",
-  python: "settings.validationLangPython",
-  go: "settings.validationLangGo",
-  java: "settings.validationLangJava",
-  dart: "settings.validationLangDart",
-};
+/**
+ * 语言 → i18n 展示名：**从注册表派生**（单一事实源 = `SETTINGS_ITEMS` 里 `validation.<lang>` 项的 labelKey，
+ * 行序与后端 `Lang::all()` 一致：typescript、rust、python、go、java、dart）。
+ * 不再在本文件维护第二份映射：两份副本一旦漂移（改错一个键），原测试全绿而界面只会回显 i18n 键名；
+ * 「六语言项齐备 + labelKey 互不相同」由 settings.registry.test.ts 断言守护，故此处不做静默退化。
+ */
+const LANG_LABEL_KEY: Record<LspLanguage, string> = Object.fromEntries(
+  LSP_LANGUAGES.map((lang) => [lang, SETTINGS_ITEMS.find((i) => i.id === `validation.${lang}`)!.labelKey]),
+) as Record<LspLanguage, string>;
 
-/** 设置页：7 个分区（通用 / 外观 / 供应商 / 安全 / 网络 / MCP / 技能）。draft 只改内存、「保存」一次性提交；
- *  供应商校验失败报错并跳转页签不落盘；MCP 支持结构化条目与原文本兜底双模式。
- *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */export default function SettingsPage() {
+/** 设置页：8 个分区（界面 / 模型与供应商 / 网络与连接 / 安全与审批 / 工具与集成 / 工作区与智能体 /
+ *  日志 / 关于），按左导航三组铺开。draft 只改内存、「保存」一次性提交；供应商校验失败报错并跳页不落盘；
+ *  MCP 支持结构化条目与原文本兜底双模式。
+ *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */
+export default function SettingsPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const language = useUi((s) => s.language);
@@ -233,10 +241,10 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
   // 技能区异步操作 loading：reloadSkills 全局、删除按行（Popconfirm 确认按钮 loading）
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
-  // 受控页签：上收到 useUi（[docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)），外部可指定页签打开设置页；
+  // 受控页：上收到 useUi（[docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)），外部可指定页打开设置页；
   // 下方保存校验跳页也走同一 store 状态（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）
-  const tab = useUi((s) => s.settingsTab);
-  const setTab = (t: string) => useUi.setState({ settingsTab: t });
+  const tab = normalizePageKey(useUi((s) => s.settingsTab));
+  const setTab = (next: PageKey) => useUi.getState().setSettingsTab(next);
   // MCP：结构化条目；null = 原 JSON 解析失败，回退 textarea 模式避免丢配置
   const [mcpEntries, setMcpEntries] = useState<McpEntry[] | null>(null);
   const [mcpRaw, setMcpRaw] = useState("");
@@ -374,7 +382,7 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
   /** 保存（全量提交语义不变）。返回是否真的落盘：离开拦截靠它判断能否执行「保存并离开」 */
   async function save(): Promise<boolean> {
     if (!draft) return false;
-    // 代理地址校验（网络页签）：仅自定义模式且非空时校验前缀白名单，非法跳转页签不落盘
+    // 代理地址校验（网络页）：仅自定义模式且非空时校验前缀白名单，非法跳页不落盘
     if (draft.proxy?.mode === "manual") {
       draft.proxy.url = draft.proxy.url.trim();
       if (draft.proxy.url !== "" && !PROXY_URL_RE.test(draft.proxy.url)) {
@@ -383,7 +391,7 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
         return false;
       }
     }
-    // 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：无效时逐项报错、跳转供应商页签、不落盘
+    // 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：无效时逐项报错、跳转供应商页、不落盘
     const problems: string[] = [];
     for (const p of draft.providers) {
       for (const issue of validateProvider(p)) {
@@ -436,7 +444,7 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
     setSaving(true);
     try {
       await useSettings.getState().save(draft);
-      // 保存成功不关闭弹窗（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
+      // 保存成功不关闭页面（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
       message.success(t("settings.saved"));
       // 系统代理模式：保存即触发后端重探测（save_config 热重建 client），刷新回显
       if ((draft.proxy?.mode ?? "system") === "system") {
@@ -450,11 +458,6 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
       setSaving(false);
     }
   }
-
-  // 自动更新偏好（设置 → 通用 → 更新）：与 GitWave 同形，localStorage 落盘、默认开启
-  const [autoUpdate, setAutoUpdate] = useAutoUpdateSetting();
-  // 设置页的「检查更新」按钮 loading（结果经 UpdateModal / toast 反馈）
-  const [updateChecking, setUpdateChecking] = useState(false);
 
   async function saveMcp() {
     try {
@@ -503,21 +506,17 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
 
   // ---------- 逐页脏标记与离开拦截（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)） ----------
   const config = useSettings((s) => s.config);
-  // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集
+  // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集，挂在拥有它的 tools 页
   const mcpSerialized = mcpEntries !== null ? serializeMcpEntries(mcpEntries) : mcpRaw;
+  const mcpDirty = mcpSerialized !== mcpOriginal;
   const dirtyMap = useMemo(() => {
-    const out: Record<PageKey, boolean> = {
-      general: false, appearance: false, providers: false, security: false, network: false, mcp: false, skills: false,
-    };
-    for (const key of PAGE_ORDER) {
-      if (key === "mcp") {
-        out.mcp = mcpSerialized !== mcpOriginal;
-        continue;
-      }
-      out[key] = !!draft && !!config && !sameSlice(pageSlice(draft, key), pageSlice(config, key));
+    const out = {} as Record<PageKey, boolean>;
+    for (const page of PAGE_ORDER) {
+      const configDirty = !!draft && !!config && !sameSlice(pageSlice(draft, page), pageSlice(config, page));
+      out[page] = configDirty || (page === "tools" && mcpDirty);
     }
     return out;
-  }, [draft, config, mcpSerialized, mcpOriginal]);
+  }, [draft, config, mcpDirty]);
   const anyDirty = PAGE_ORDER.some((k) => dirtyMap[k]);
 
   // 聚合脏标记回写 store：关窗/退出时由 AppShell 的 ExitConfirm 读它决定先弹哪一层确认
@@ -556,7 +555,7 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
   }
 
   /** 切页：脏改动存在时先走三选拦截（保存并离开 → 落盘后跳页；放弃 → 回基线后跳页；留在原地 → 停在本页） */
-  function onTabChange(next: string) {
+  function onTabChange(next: PageKey) {
     if (next === tab) return;
     if (!anyDirty) {
       setTab(next);
@@ -630,193 +629,99 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
     shellRef.current?.querySelector<HTMLButtonElement>(".settings-nav-head button")?.focus();
   }, []);
 
-  /** 7 页清单：导航项与页体同源（导航只消费 key/labelKey，页体按当前页渲染到右列） */
+  /** 8 页清单：页名键与页序来自注册表，页体按当前页渲染到右列（不做数据驱动渲染） */
   const pages: { key: PageKey; labelKey: string; body: ReactNode }[] = [
     {
-      key: "general",
-      labelKey: "settings.general",
-      body: (
-        <Form layout="vertical">
-          <Form.Item label={t("settings.language")}>
-            {/* 即时生效：改完立即写 useUi.setLanguage，因此不进 draft 脏标记（也就不会亮脏点） */}
-            <Select
-              size="small"
-              style={{ width: 160 }}
-              value={draft?.ui.language}
-              onChange={(v) => {
-                patchDraft({ ui: { ...draft!.ui, language: v } });
-                useUi.getState().setLanguage(v as "zh-CN" | "en-US");
-              }}
-              options={[
-                { label: "中文", value: "zh-CN" },
-                { label: "English", value: "en-US" },
-              ]}
-            />
-            <span className="settings-instant">{t("settings.instantApply")}</span>
-          </Form.Item>
-          {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
-              经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
-          <Form.Item label={t("settings.aiLanguage")} extra={t("settings.aiLanguageHint")}>
-            <Input
-              size="small"
-              style={{ width: 240 }}
-              maxLength={40}
-              placeholder={t("composer.effortDefault")}
-              value={draft?.ui.ai_language ?? ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                patchDraft({ ui: { ...draft!.ui, ai_language: v.trim() === "" ? null : v } });
-              }}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.compactThreshold")}>
-            <Slider
-              style={{ width: 320 }}
-              min={0.1}
-              max={0.9}
-              step={0.05}
-              value={draft?.compact_threshold ?? 0.6}
-              onChange={(v) => patchDraft({ compact_threshold: v })}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.compactTimeout")}>
-            <InputNumber
-              min={30}
-              max={3600}
-              step={30}
-              value={draft?.compact_timeout_seconds ?? 180}
-              onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.shell")} tooltip={t("settings.shellHint")}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
-              <Select
+      key: "appearance",
+      labelKey: PAGE_LABEL_KEY.appearance,
+      // 界面页：主题 + 双字体槽 + 界面语言（后两者与主题一样即时生效，不参与脏标记）
+      body: <AppearanceSettings draft={draft} patchDraft={patchDraft} />,
+    },
+    {
+      key: "providers",
+      labelKey: PAGE_LABEL_KEY.providers,
+      body: draft && (
+        <>
+          <Form layout="vertical">
+            {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
+                经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
+            <Form.Item label={t("settings.aiLanguage")} extra={t("settings.aiLanguageHint")}>
+              <Input
                 size="small"
-                style={{ width: 260, flexShrink: 0 }}
-                value={draft?.shell?.selection ?? "auto"}
-                onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
-                options={[
-                  {
-                    // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
-                    // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
-                    label:
-                      shells?.find((s) => s.auto)?.name !== undefined
-                        ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
-                        : t("settings.shellAuto"),
-                    value: "auto",
-                  },
-                  ...(shells ?? []).map((s) => ({
-                    label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
-                    value: s.id,
-                    title: s.path ?? s.name,
-                  })),
-                ]}
-              />
-              {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
-              {(() => {
-                const display = resolveShellDisplay(draft?.shell?.selection ?? null, shells);
-                if (!display) return null;
-                return display.kind === "path" ? (
-                  <code
-                    title={display.text}
-                    style={{
-                      fontFamily: "var(--ws-font-mono)",
-                      fontSize: 12,
-                      color: "var(--ws-dim)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      minWidth: 0,
-                    }}
-                  >
-                    {display.text}
-                  </code>
-                ) : (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t("settings.shellNoPath")}
-                  </Typography.Text>
-                );
-              })()}
-            </div>
-            {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
-            {draft?.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                {t("settings.shellNotDetected")}
-              </Typography.Text>
-            )}
-            {shells === null && (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                {t("settings.shellDetectFailed")}
-              </Typography.Text>
-            )}
-          </Form.Item>
-          <Form.Item label={t("settings.customPrompt")}>
-            <TextArea
-              rows={4}
-              value={draft?.custom_prompt ?? ""}
-              // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
-              onChange={(e) => {
-                const v = e.target.value;
-                patchDraft({ custom_prompt: v.trim() === "" ? null : v });
-              }}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.logLevel")} tooltip={t("settings.logLevelHint")}>
-            <Select
-              size="small"
-              style={{ width: 160 }}
-              value={draft?.log?.level ?? "info"}
-              onChange={(v) => patchDraft({ log: { ...draft!.log, level: v } })}
-              options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.updates")} tooltip={t("settings.updatesHint")}>
-            <div className="settings-update-row">
-              <Switch
-                size="small"
-                checked={autoUpdate}
-                onChange={setAutoUpdate}
-                aria-label={t("settings.autoUpdateCheckbox")}
-              />
-              <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
-              {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft */}
-              <span className="settings-instant">{t("settings.instantApply")}</span>
-              <Button
-                size="small"
-                loading={updateChecking}
-                onClick={() => {
-                  // 结果经 UpdateModal / toast 反馈（有更新与失败会弹窗），设置页不需要自己展示
-                  setUpdateChecking(true);
-                  void checkForUpdates().finally(() => setUpdateChecking(false));
+                style={{ width: 240 }}
+                maxLength={40}
+                placeholder={t("composer.effortDefault")}
+                value={draft.ui.ai_language ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  patchDraft({ ui: { ...draft.ui, ai_language: v.trim() === "" ? null : v } });
                 }}
-              >
-                {t("settings.checkForUpdates")}
-              </Button>
-            </div>
+              />
+            </Form.Item>
+          </Form>
+          <ProvidersPanel draft={draft} patchDraft={patchDraft} />
+        </>
+      ),
+    },
+    {
+      key: "network",
+      labelKey: PAGE_LABEL_KEY.network,
+      body: draft && (
+        <Form layout="vertical">
+          <Form.Item label={t("settings.proxyMode")}>
+            {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
+            <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
+              <div className="proxy-mode-list">
+                {([
+                  ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
+                  ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
+                  ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
+                ] as const).map(([mode, title, desc]) => (
+                  <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
+                    <div className="proxy-mode-head">
+                      <Radio value={mode} />
+                      <span className="proxy-mode-title">{title}</span>
+                    </div>
+                    <div className="proxy-mode-desc">{desc}</div>
+                    {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
+                    {mode === "system" && sysProxy !== undefined && (
+                      <div className="proxy-mode-echo">
+                        {sysProxy
+                          ? t("settings.proxyDetected", { url: sysProxy })
+                          : t("settings.proxyNotDetected")}
+                      </div>
+                    )}
+                  </label>
+                ))}
+              </div>
+            </Radio.Group>
           </Form.Item>
-          <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
-            <Switch
-              size="small"
-              checked={draft?.log?.session_verbose ?? false}
-              onChange={(v) => patchDraft({ log: { ...draft!.log, session_verbose: v } })}
-            />
+          {proxyMode === "manual" && (
+            <Form.Item
+              label={t("settings.proxyUrl")}
+              extra={t("settings.proxyUrlHint")}
+              validateStatus={proxyUrlInvalid ? "error" : undefined}
+              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
+            >
+              <Input
+                size="small"
+                style={{ width: 360 }}
+                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                value={proxyUrl}
+                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+              />
+            </Form.Item>
+          )}
+          {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
+          <Form.Item label={t("settings.allowPrivate")}>
+            <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
           </Form.Item>
         </Form>
       ),
     },
     {
-      key: "appearance",
-      labelKey: "settings.appearance",
-      body: <AppearanceSettings />,
-    },
-    {
-      key: "providers",
-      labelKey: "settings.providers",
-      body: draft && <ProvidersPanel draft={draft} patchDraft={patchDraft} />,
-    },
-    {
       key: "security",
-      labelKey: "settings.security",
+      labelKey: PAGE_LABEL_KEY.security,
       body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.approvalEnabled")}>
@@ -864,368 +769,466 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
               </div>
             </Form.Item>
           )}
-          <Form.Item label={t("settings.allowPrivate")}>
-            <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
-          </Form.Item>
-          <Divider>{t("settings.validation")}</Divider>
-          <div className="hint" style={{ marginBottom: 10 }}>{t("settings.validationHint")}</div>
-          <Form.Item style={{ marginBottom: 0 }}>
-            {/* 六语言各一行：语言名 | 开关 | 命令覆盖 | 状态徽标（行序与后端 Lang::all() 同源；JSON 走内置解析，只给开关） */}
-            <div className="validation-rows">
-              {LSP_LANGUAGES.map((lang) => {
-                const sw = langSwitchOf(lang);
-                const badge = lspBadge(lang);
-                return (
-                  <div className="validation-row" data-lang={lang} key={lang}>
-                    <span className="validation-label">{t(LANG_LABEL_KEY[lang])}</span>
-                    <Switch size="small" checked={sw.checked} aria-label={t(LANG_LABEL_KEY[lang])} onChange={sw.onChange} />
-                    <Input
-                      size="small"
-                      placeholder={t("settings.lspCommandPh")}
-                      value={lspCommandOf(lspCfg, lang)}
-                      onChange={(e) => patchLsp(withLspCommand(lspCfg, lang, e.target.value))}
-                    />
-                    <span className={`validation-status${badge?.warn ? " warn" : ""}`}>{badge?.text ?? ""}</span>
-                  </div>
-                );
-              })}
-              <div className="validation-row" data-lang="json">
-                <span className="validation-label">{t("settings.validationLangJson")}</span>
-                <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
-                <span />
-                <span className="validation-status" />
-              </div>
-            </div>
-            {/* Java 代价提示：jdtls 首次启动会解析依赖树（可能数分钟、GB 级内存） */}
-            <div className="hint" style={{ marginTop: 8 }} data-testid="lsp-java-cost">
-              {t("settings.lspJavaCost")}
-            </div>
-          </Form.Item>
-
-          <Divider plain>{t("settings.lspBudget")}</Divider>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(220px, 1fr))", gap: "0 20px" }}>
-            <Form.Item label={t("settings.lspSyncWindow")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={0}
-                max={60000}
-                step={100}
-                value={lspCfg.sync_window_ms}
-                onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspMaxDiagnostics")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={1}
-                max={200}
-                value={lspCfg.max_diagnostics}
-                onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspMaxChars")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={200}
-                max={100000}
-                step={200}
-                value={lspCfg.max_chars}
-                onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspIdleTtl")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={0}
-                max={86400000}
-                step={60000}
-                value={lspCfg.idle_ttl_ms}
-                onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspMaxServers")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={1}
-                max={32}
-                value={lspCfg.max_servers}
-                onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspMaxFileBytes")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={1024}
-                max={104857600}
-                step={1024}
-                value={lspCfg.max_file_bytes}
-                onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
-              />
-            </Form.Item>
-            <Form.Item label={t("settings.lspDedupeLimit")}>
-              <InputNumber
-                size="small"
-                style={{ width: 180 }}
-                min={0}
-                max={10}
-                value={lspCfg.dedupe_limit}
-                onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
-              />
-            </Form.Item>
-          </div>
-
-          <Divider plain>{t("settings.lspDiscovery")}</Divider>
-          <Form.Item label={t("settings.lspExtraRoots")} extra={t("settings.lspExtraRootsHint")}>
-            <div className="lsp-roots">
-              {lspCfg.extra_roots.map((root, i) => (
-                <div className="lsp-root-row" key={i}>
-                  <Input
-                    size="small"
-                    value={root}
-                    aria-label={t("settings.lspExtraRoots")}
-                    onChange={(e) =>
-                      patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.map((r, j) => (j === i ? e.target.value : r)) })
-                    }
-                  />
-                  <Button
-                    size="small"
-                    type="text"
-                    danger
-                    aria-label={t("sessions.delete")}
-                    icon={<DeleteOutlined />}
-                    onClick={() => patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.filter((_, j) => j !== i) })}
-                  />
-                </div>
-              ))}
-              <div>
-                <Button size="small" onClick={() => patchLsp({ ...lspCfg, extra_roots: [...lspCfg.extra_roots, ""] })}>
-                  {t("settings.lspAddRoot")}
-                </Button>
-              </div>
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
-            <Input
-              size="small"
-              style={{ width: 360 }}
-              value={lspCfg.java_home}
-              placeholder={t("settings.lspCommandPh")}
-              onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
-            />
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button size="small" loading={redetecting} onClick={() => void redetect()}>
-              {t("settings.lspRedetect")}
-            </Button>
-          </Form.Item>
         </Form>
       ),
     },
     {
-      key: "network",
-      labelKey: "settings.network",
+      key: "tools",
+      labelKey: PAGE_LABEL_KEY.tools,
       body: draft && (
-        <Form layout="vertical">
-          <Form.Item label={t("settings.proxyMode")}>
-            {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
-            <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
-              <div className="proxy-mode-list">
-                {([
-                  ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
-                  ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
-                  ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
-                ] as const).map(([mode, title, desc]) => (
-                  <label key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
-                    <div className="proxy-mode-head">
-                      <Radio value={mode} />
-                      <span className="proxy-mode-title">{title}</span>
+        <>
+          <Form layout="vertical">
+            <Divider>{t("settings.validation")}</Divider>
+            <div className="hint" style={{ marginBottom: 10 }}>{t("settings.validationHint")}</div>
+            <Form.Item style={{ marginBottom: 0 }}>
+              {/* 六语言各一行：语言名 | 开关 | 命令覆盖 | 状态徽标（行序与后端 Lang::all() 同源；JSON 走内置解析，只给开关） */}
+              <div className="validation-rows">
+                {LSP_LANGUAGES.map((lang) => {
+                  const sw = langSwitchOf(lang);
+                  const badge = lspBadge(lang);
+                  return (
+                    <div className="validation-row" data-lang={lang} key={lang}>
+                      <span className="validation-label">{t(LANG_LABEL_KEY[lang])}</span>
+                      <Switch size="small" checked={sw.checked} aria-label={t(LANG_LABEL_KEY[lang])} onChange={sw.onChange} />
+                      <Input
+                        size="small"
+                        placeholder={t("settings.lspCommandPh")}
+                        value={lspCommandOf(lspCfg, lang)}
+                        onChange={(e) => patchLsp(withLspCommand(lspCfg, lang, e.target.value))}
+                      />
+                      <span className={`validation-status${badge?.warn ? " warn" : ""}`}>{badge?.text ?? ""}</span>
                     </div>
-                    <div className="proxy-mode-desc">{desc}</div>
-                    {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
-                    {mode === "system" && sysProxy !== undefined && (
-                      <div className="proxy-mode-echo">
-                        {sysProxy
-                          ? t("settings.proxyDetected", { url: sysProxy })
-                          : t("settings.proxyNotDetected")}
-                      </div>
-                    )}
-                  </label>
-                ))}
+                  );
+                })}
+                <div className="validation-row" data-lang="json">
+                  <span className="validation-label">{t("settings.validationLangJson")}</span>
+                  <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
+                  <span />
+                  <span className="validation-status" />
+                </div>
               </div>
-            </Radio.Group>
-          </Form.Item>
-          {proxyMode === "manual" && (
-            <Form.Item
-              label={t("settings.proxyUrl")}
-              extra={t("settings.proxyUrlHint")}
-              validateStatus={proxyUrlInvalid ? "error" : undefined}
-              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
-            >
+              {/* Java 代价提示：jdtls 首次启动会解析依赖树（可能数分钟、GB 级内存） */}
+              <div className="hint" style={{ marginTop: 8 }} data-testid="lsp-java-cost">
+                {t("settings.lspJavaCost")}
+              </div>
+            </Form.Item>
+
+            <Divider plain>{t("settings.lspBudget")}</Divider>
+            {/* 预算组：两列网格（类收回 app.css，不写内联 style） */}
+            <div className="lsp-budget-grid">
+              <Form.Item label={t("settings.lspSyncWindow")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={0}
+                  max={60000}
+                  step={100}
+                  value={lspCfg.sync_window_ms}
+                  onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspMaxDiagnostics")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={1}
+                  max={200}
+                  value={lspCfg.max_diagnostics}
+                  onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspMaxChars")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={200}
+                  max={100000}
+                  step={200}
+                  value={lspCfg.max_chars}
+                  onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspIdleTtl")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={0}
+                  max={86400000}
+                  step={60000}
+                  value={lspCfg.idle_ttl_ms}
+                  onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspMaxServers")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={1}
+                  max={32}
+                  value={lspCfg.max_servers}
+                  onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspMaxFileBytes")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={1024}
+                  max={104857600}
+                  step={1024}
+                  value={lspCfg.max_file_bytes}
+                  onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
+                />
+              </Form.Item>
+              <Form.Item label={t("settings.lspDedupeLimit")}>
+                <InputNumber
+                  size="small"
+                  style={{ width: 180 }}
+                  min={0}
+                  max={10}
+                  value={lspCfg.dedupe_limit}
+                  onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
+                />
+              </Form.Item>
+            </div>
+
+            <Divider plain>{t("settings.lspDiscovery")}</Divider>
+            <Form.Item label={t("settings.lspExtraRoots")} extra={t("settings.lspExtraRootsHint")}>
+              <div className="lsp-roots">
+                {lspCfg.extra_roots.map((root, i) => (
+                  <div className="lsp-root-row" key={i}>
+                    <Input
+                      size="small"
+                      value={root}
+                      aria-label={t("settings.lspExtraRoots")}
+                      onChange={(e) =>
+                        patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.map((r, j) => (j === i ? e.target.value : r)) })
+                      }
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      aria-label={t("sessions.delete")}
+                      icon={<DeleteOutlined />}
+                      onClick={() => patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.filter((_, j) => j !== i) })}
+                    />
+                  </div>
+                ))}
+                <div>
+                  <Button size="small" onClick={() => patchLsp({ ...lspCfg, extra_roots: [...lspCfg.extra_roots, ""] })}>
+                    {t("settings.lspAddRoot")}
+                  </Button>
+                </div>
+              </div>
+            </Form.Item>
+            <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
               <Input
                 size="small"
                 style={{ width: 360 }}
-                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                value={proxyUrl}
-                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+                value={lspCfg.java_home}
+                placeholder={t("settings.lspCommandPh")}
+                onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
               />
             </Form.Item>
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button size="small" loading={redetecting} onClick={() => void redetect()}>
+                {t("settings.lspRedetect")}
+              </Button>
+            </Form.Item>
+          </Form>
+
+          {/* MCP：不在 config 内（独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它） */}
+          <Divider>{t("settings.mcp")}</Divider>
+          {mcpEntries === null ? (
+            // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
+            <div className="mcp-pane">
+              <div className="hint">{t("settings.mcpRawHint")}</div>
+              <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => setMcpRaw(e.target.value)} />
+              <div>
+                <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="mcp-pane">
+              <div className="hint">{t("settings.mcpHint")}</div>
+              {mcpEntries.map((e, idx) => (
+                <div className="mcp-entry" key={idx}>
+                  <div className="mcp-entry-head">
+                    <Input
+                      size="small"
+                      style={{ width: 160 }}
+                      value={e.name}
+                      placeholder={t("settings.mcpName")}
+                      onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
+                    />
+                    <Select
+                      size="small"
+                      style={{ width: 170 }}
+                      value={e.transport}
+                      options={[
+                        { label: t("settings.mcpTransportStdio"), value: "stdio" },
+                        { label: t("settings.mcpTransportHttp"), value: "streamable_http" },
+                      ]}
+                      onChange={(v) => patchMcpEntry(idx, { transport: v })}
+                    />
+                    <div className="flex" />
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeMcpEntry(idx)} />
+                  </div>
+                  {e.transport === "stdio" ? (
+                    <>
+                      <div className="mcp-entry-row">
+                        <span className="mcp-label">{t("settings.mcpCommand")}</span>
+                        <Input
+                          size="small"
+                          value={e.command}
+                          placeholder="npx -y @modelcontextprotocol/server-fs"
+                          onChange={(ev) => patchMcpEntry(idx, { command: ev.target.value })}
+                        />
+                      </div>
+                      <div className="mcp-entry-row">
+                        <span className="mcp-label">{t("settings.mcpArgs")}</span>
+                        <Input
+                          size="small"
+                          value={e.argsText}
+                          onChange={(ev) => patchMcpEntry(idx, { argsText: ev.target.value })}
+                        />
+                      </div>
+                      <div className="mcp-entry-row">
+                        <span className="mcp-label">{t("settings.mcpEnv")}</span>
+                        <TextArea
+                          rows={2}
+                          size="small"
+                          value={e.envText}
+                          onChange={(ev) => patchMcpEntry(idx, { envText: ev.target.value })}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mcp-entry-row">
+                      <span className="mcp-label">{t("settings.mcpUrl")}</span>
+                      <Input
+                        size="small"
+                        value={e.url}
+                        placeholder="https://example.com/mcp"
+                        onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 10 }}>
+                <Button size="small" onClick={addMcpEntry}>{t("settings.mcpAdd")}</Button>
+                <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
+              </div>
+            </div>
           )}
+
+          <Divider>{t("settings.skills")}</Divider>
+          <div>
+            <div className="skills-toolbar">
+              <div className="hint">{t("settings.skillsHint")}</div>
+              <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
+                {t("settings.reloadSkills")}
+              </Button>
+            </div>
+            {skills.length === 0 && <Empty description={t("sessions.empty")} style={{ marginTop: 24 }} />}
+            {skills.map((s) => {
+              const builtin = s.origin === "<builtin>";
+              const label = originLabel(s.origin);
+              return (
+                <div className="skill-row" key={s.name}>
+                  <div className="skill-info">
+                    <b>{s.name}</b>
+                    {builtin ? (
+                      <span className="skill-origin">{t("rightbar.skillBuiltin")}</span>
+                    ) : (
+                      label && <span className="skill-origin" title={s.origin}>{label}</span>
+                    )}
+                    <span className="dim"> {s.description}</span>
+                    {s.whenToUse && <div className="dim small">when: {s.whenToUse}</div>}
+                  </div>
+                  <div className="skill-actions">
+                    <Switch
+                      checked={!draft?.disabled_skills.includes(s.name)}
+                      onChange={(v) => toggleSkill(s.name, !v)}
+                    />
+                    {s.deletable && (
+                      <Popconfirm
+                        title={t("settings.deleteSkillConfirm", { name: s.name })}
+                        description={s.origin}
+                        okButtonProps={{ loading: deletingName === s.name }}
+                        onConfirm={() => void removeSkill(s.name)}
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          danger
+                          aria-label={t("settings.deleteSkill")}
+                          icon={<DeleteOutlined />}
+                        />
+                      </Popconfirm>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "agent",
+      labelKey: PAGE_LABEL_KEY.agent,
+      body: draft && (
+        <Form layout="vertical">
+          <Form.Item label={t("settings.shell")} tooltip={t("settings.shellHint")}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
+              <Select
+                size="small"
+                style={{ width: 260, flexShrink: 0 }}
+                value={draft.shell?.selection ?? "auto"}
+                onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
+                options={[
+                  {
+                    // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
+                    // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
+                    label:
+                      shells?.find((s) => s.auto)?.name !== undefined
+                        ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
+                        : t("settings.shellAuto"),
+                    value: "auto",
+                  },
+                  ...(shells ?? []).map((s) => ({
+                    label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
+                    value: s.id,
+                    title: s.path ?? s.name,
+                  })),
+                ]}
+              />
+              {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
+              {(() => {
+                const display = resolveShellDisplay(draft.shell?.selection ?? null, shells);
+                if (!display) return null;
+                return display.kind === "path" ? (
+                  <code
+                    title={display.text}
+                    style={{
+                      fontFamily: "var(--ws-font-mono)",
+                      fontSize: 12,
+                      color: "var(--ws-dim)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }}
+                  >
+                    {display.text}
+                  </code>
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {t("settings.shellNoPath")}
+                  </Typography.Text>
+                );
+              })()}
+            </div>
+            {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
+            {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t("settings.shellNotDetected")}
+              </Typography.Text>
+            )}
+            {shells === null && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t("settings.shellDetectFailed")}
+              </Typography.Text>
+            )}
+          </Form.Item>
+          <Form.Item label={t("settings.customPrompt")}>
+            <TextArea
+              rows={4}
+              value={draft.custom_prompt ?? ""}
+              // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
+              onChange={(e) => {
+                const v = e.target.value;
+                patchDraft({ custom_prompt: v.trim() === "" ? null : v });
+              }}
+            />
+          </Form.Item>
+          <Form.Item label={t("settings.compactThreshold")}>
+            <Slider
+              style={{ width: 320 }}
+              min={0.1}
+              max={0.9}
+              step={0.05}
+              value={draft.compact_threshold ?? 0.6}
+              onChange={(v) => patchDraft({ compact_threshold: v })}
+            />
+          </Form.Item>
+          <Form.Item label={t("settings.compactTimeout")}>
+            <InputNumber
+              min={30}
+              max={3600}
+              step={30}
+              value={draft.compact_timeout_seconds ?? 180}
+              onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
+            />
+          </Form.Item>
         </Form>
       ),
     },
     {
-      key: "mcp",
-      labelKey: "settings.mcp",
-      body: mcpEntries === null ? (
-        // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
-        <div className="mcp-pane">
-          <div className="hint">{t("settings.mcpRawHint")}</div>
-          <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => setMcpRaw(e.target.value)} />
-          <div>
-            <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
-          </div>
-        </div>
-      ) : (
-        <div className="mcp-pane">
-          <div className="hint">{t("settings.mcpHint")}</div>
-          {mcpEntries.map((e, idx) => (
-            <div className="mcp-entry" key={idx}>
-              <div className="mcp-entry-head">
-                <Input
-                  size="small"
-                  style={{ width: 160 }}
-                  value={e.name}
-                  placeholder={t("settings.mcpName")}
-                  onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
-                />
-                <Select
-                  size="small"
-                  style={{ width: 170 }}
-                  value={e.transport}
-                  options={[
-                    { label: t("settings.mcpTransportStdio"), value: "stdio" },
-                    { label: t("settings.mcpTransportHttp"), value: "streamable_http" },
-                  ]}
-                  onChange={(v) => patchMcpEntry(idx, { transport: v })}
-                />
-                <div className="flex" />
-                <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeMcpEntry(idx)} />
-              </div>
-              {e.transport === "stdio" ? (
-                <>
-                  <div className="mcp-entry-row">
-                    <span className="mcp-label">{t("settings.mcpCommand")}</span>
-                    <Input
-                      size="small"
-                      value={e.command}
-                      placeholder="npx -y @modelcontextprotocol/server-fs"
-                      onChange={(ev) => patchMcpEntry(idx, { command: ev.target.value })}
-                    />
-                  </div>
-                  <div className="mcp-entry-row">
-                    <span className="mcp-label">{t("settings.mcpArgs")}</span>
-                    <Input
-                      size="small"
-                      value={e.argsText}
-                      onChange={(ev) => patchMcpEntry(idx, { argsText: ev.target.value })}
-                    />
-                  </div>
-                  <div className="mcp-entry-row">
-                    <span className="mcp-label">{t("settings.mcpEnv")}</span>
-                    <TextArea
-                      rows={2}
-                      size="small"
-                      value={e.envText}
-                      onChange={(ev) => patchMcpEntry(idx, { envText: ev.target.value })}
-                    />
-                  </div>
-                </>
-              ) : (
-                <div className="mcp-entry-row">
-                  <span className="mcp-label">{t("settings.mcpUrl")}</span>
-                  <Input
-                    size="small"
-                    value={e.url}
-                    placeholder="https://example.com/mcp"
-                    onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-          <div style={{ display: "flex", gap: 10 }}>
-            <Button size="small" onClick={addMcpEntry}>{t("settings.mcpAdd")}</Button>
-            <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
-          </div>
-        </div>
+      key: "logs",
+      labelKey: PAGE_LABEL_KEY.logs,
+      body: draft && (
+        <Form layout="vertical">
+          <Form.Item label={t("settings.logLevel")} tooltip={t("settings.logLevelHint")}>
+            <Select
+              size="small"
+              style={{ width: 160 }}
+              value={draft.log?.level ?? "info"}
+              onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
+              options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
+            />
+          </Form.Item>
+          <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
+            <Switch
+              size="small"
+              checked={draft.log?.session_verbose ?? false}
+              onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
+            />
+          </Form.Item>
+        </Form>
       ),
     },
     {
-      key: "skills",
-      labelKey: "settings.skills",
-      body: (
-        <div>
-          <div className="skills-toolbar">
-            <div className="hint">{t("settings.skillsHint")}</div>
-            <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
-              {t("settings.reloadSkills")}
-            </Button>
-          </div>
-          {skills.length === 0 && <Empty description={t("sessions.empty")} style={{ marginTop: 24 }} />}
-          {skills.map((s) => {
-            const builtin = s.origin === "<builtin>";
-            const label = originLabel(s.origin);
-            return (
-              <div className="skill-row" key={s.name}>
-                <div className="skill-info">
-                  <b>{s.name}</b>
-                  {builtin ? (
-                    <span className="skill-origin">{t("rightbar.skillBuiltin")}</span>
-                  ) : (
-                    label && <span className="skill-origin" title={s.origin}>{label}</span>
-                  )}
-                  <span className="dim"> {s.description}</span>
-                  {s.whenToUse && <div className="dim small">when: {s.whenToUse}</div>}
-                </div>
-                <div className="skill-actions">
-                  <Switch
-                    checked={!draft?.disabled_skills.includes(s.name)}
-                    onChange={(v) => toggleSkill(s.name, !v)}
-                  />
-                  {s.deletable && (
-                    <Popconfirm
-                      title={t("settings.deleteSkillConfirm", { name: s.name })}
-                      description={s.origin}
-                      okButtonProps={{ loading: deletingName === s.name }}
-                      onConfirm={() => void removeSkill(s.name)}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        danger
-                        aria-label={t("settings.deleteSkill")}
-                        icon={<DeleteOutlined />}
-                      />
-                    </Popconfirm>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ),
+      key: "about",
+      labelKey: PAGE_LABEL_KEY.about,
+      // 关于页不需要 draft：身份信息只读，自动更新开关走 localStorage（即时生效）
+      body: <AboutSettings />,
     },
   ];
 
   const activePage = pages.find((p) => p.key === tab) ?? pages[0];
   // 窄窗导航列宽：基准 280，随窗口宽度收缩，由 clampNavWidth 夹在 180..480 内
   const navWidth = clampNavWidth(Math.min(SETTINGS_NAV_W, Math.round(windowWidth * SETTINGS_NAV_RATIO)));
+
+  /**
+   * 导航方向键：↑/↓（兼认 ←/→）在页行之间移动**焦点**，Enter/Space 才激活（手动激活模式）——
+   * 不动 tabIndex、不引入 roving tabindex，因此 Tab 键可达性与批① 的「打开即聚焦返回按钮」都不变；
+   * 焦点不在页行上（如「返回工作区」/运行中指示）时让位给浏览器默认行为。
+   */
+  function onNavArrow(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const delta = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+    if (delta === 0) return;
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".settings-nav-item"));
+    const idx = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (idx < 0) return;
+    const next = items[idx + delta];
+    if (!next) return; // 首尾不循环：停在两端
+    e.preventDefault();
+    next.focus();
+  }
 
   return (
     // 全屏 dialog 语义（焦点在打开时移到导航首项，见上方 focus effect）
@@ -1238,9 +1241,9 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
       aria-modal="true"
       aria-label={t("settings.title")}
     >
-      {/* 左导航列：返回工作区 + 运行中指示 + 7 页导航。
-          导航仍由 antd Tabs 提供（自建导航是后续批次），但它只消费 key/label——页体渲染在右列，
-          这是「二列式全屏页」的布局要求（Tabs 自身无法把 nav 与 pane 拆到两列）。 */}
+      {/* 左导航列：返回工作区 + 运行中指示 + 三组 8 页导航。
+          导航自建（批② 起替掉 antd Tabs）：Tabs 无法承载「组标题 + 页行」两列式布局，
+          且其 pane 机制与本页「页体渲染在右列」的布局要求相冲。 */}
       <nav className="settings-nav" style={{ width: navWidth }}>
         <div className="settings-nav-head">
           <Button
@@ -1260,20 +1263,32 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
             </button>
           )}
         </div>
-        <Tabs
-          tabPlacement="start"
-          activeKey={tab}
-          onChange={onTabChange}
-          items={pages.map((p) => ({
-            key: p.key,
-            label: (
-              <span className="settings-nav-label">
-                {t(p.labelKey)}
-                {dirtyMap[p.key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
-              </span>
-            ),
-          }))}
-        />
+        <div className="settings-nav-list" role="tablist" aria-orientation="vertical" onKeyDown={onNavArrow}>
+          {PAGE_GROUPS.map((group) => (
+            <Fragment key={group.titleKey}>
+              {/* 组标题不是 tab：标 presentation，避免 tablist 的直接子节点混入非 tab 语义 */}
+              <div className="settings-nav-group" role="presentation">{t(group.titleKey)}</div>
+              {group.pages.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  id={`settings-tab-${key}`}
+                  aria-selected={key === tab}
+                  aria-controls="settings-panel"
+                  data-page={key}
+                  className={`settings-nav-item${key === tab ? " settings-nav-item-active" : ""}`}
+                  onClick={() => onTabChange(key)}
+                >
+                  <span className="settings-nav-label">
+                    {t(PAGE_LABEL_KEY[key])}
+                    {dirtyMap[key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
+                  </span>
+                </button>
+              ))}
+            </Fragment>
+          ))}
+        </div>
       </nav>
 
       <div className="settings-content">
@@ -1292,7 +1307,15 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
           </div>
         </div>
         <div className="settings-pane">
-          <div className="settings-pane-body">{activePage ? activePage.body : null}</div>
+          {/* 页体容器与导航 tab 配对（aria-controls ← → aria-labelledby 闭环；同一时刻只渲染一页） */}
+          <div
+            className="settings-pane-body"
+            id="settings-panel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${tab}`}
+          >
+            {activePage ? activePage.body : null}
+          </div>
         </div>
       </div>
 

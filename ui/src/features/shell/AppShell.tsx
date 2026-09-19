@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Avatar, Button, Layout, Modal, Tooltip } from "antd";
-import { BarChartOutlined, ClockCircleOutlined, InfoCircleOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, ClockCircleOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -21,7 +21,6 @@ import ChatMessages from "../chat/ChatMessages";
 import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
 import SettingsPage from "../panels/SettingsPage";
-import AboutModal from "../panels/AboutModal";
 import UpdateModal from "../panels/UpdateModal";
 import TaskCenterPanel from "../panels/TaskCenterPanel";
 import TokenStatsModal from "../panels/TokenStatsModal";
@@ -106,9 +105,6 @@ function SiderFooter() {
         </Tooltip>
         <Tooltip title={t("app.settings")}>
           <Button type="text" size="small" icon={<SettingOutlined />} aria-label={t("app.settings")} onClick={() => useUi.getState().showSettings()} />
-        </Tooltip>
-        <Tooltip title={t("app.about")}>
-          <Button type="text" size="small" icon={<InfoCircleOutlined />} aria-label={t("app.about")} onClick={() => useUi.setState({ aboutOpen: true })} />
         </Tooltip>
       </div>
     </div>
@@ -335,16 +331,17 @@ export default function AppShell() {
     };
   }, []);
 
-  // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项
-  // （关于 / 设置 / 检查更新）经 menu:action 路由至此；三项均打开应用内界面
-  // （AboutModal / SettingsPage / 更新检查弹窗）。检查更新走共享流程
-  // utils/updateCheck（check → 弹窗展示发布说明 → 下载安装 → 重启；Windows/Linux 从「关于」弹框触发）。
+  // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项（关于 / 设置 / 检查更新）
+  // 经 menu:action 路由至此，三项均打开应用内界面：「关于」落到设置页第 8 页
+  // （批② 起不再有独立弹框，[docs/settings-ia](../../../../docs/settings-ia.md)）/ 设置页 / 更新检查弹窗。
+  // 检查更新走共享流程 utils/updateCheck（check → 弹窗展示发布说明 → 下载安装 → 重启；
+  // Windows/Linux 从设置页「关于」的手动检查按钮触发）。
   useEffect(() => {
     let un: (() => void) | undefined;
     let disposed = false;
     void listen<{ action: string }>("menu:action", (e) => {
       if (e.payload?.action === "menu-about") {
-        useUi.setState({ aboutOpen: true });
+        useUi.getState().showSettings("about");
       } else if (e.payload?.action === "menu-settings") {
         useUi.getState().showSettings();
       } else if (e.payload?.action === "menu-check-updates") {
@@ -406,7 +403,6 @@ export default function AppShell() {
   const settingsOpen = useUi((s) => s.settingsOpen);
   const tasksOpen = useUi((s) => s.tasksOpen);
   const statsOpen = useUi((s) => s.statsOpen);
-  const aboutOpen = useUi((s) => s.aboutOpen);
 
   return (
     <Layout style={{ height: "100%", background: "var(--ws-bg)" }}>
@@ -496,7 +492,6 @@ export default function AppShell() {
         {settingsOpen && <SettingsPage />}
       </Layout>
 
-      {aboutOpen && <AboutModal />}
       {/* 自动更新弹窗：常驻挂载（可见性取自 store 的 modalOpen），phase 驱动标题/正文/页脚 */}
       <UpdateModal />
       {tasksOpen && <TaskCenterPanel />}
