@@ -179,7 +179,7 @@ export function normalizeUiState(raw: unknown): UiState | null {
 /** 启动时读一次 ui-state：读失败或结构损坏 ⇒ null（无快照启动）。
  *  草稿/队列/面板态先落进驻留表（retained），按 Tab 打开时机回填，保证「未开的 Tab 也有草稿」 */
 export async function loadUiState(): Promise<UiState | null> {
-  let raw: unknown = null;
+  let raw: unknown;
   try {
     raw = await ipc.getUiState();
   } catch {

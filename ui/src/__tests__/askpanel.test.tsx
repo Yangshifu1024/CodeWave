@@ -398,7 +398,7 @@ describe("AskPanel docs/ask-approval-shape-note-nav", () => {
     const key = (k: string) => fireEvent.keyDown(card, { key: k, bubbles: true });
     key("Tab"); // cursor=1 (option B)
     key(" "); // 空格 = 切换高亮项（回车已让位给 下一题/提交）
-    let checked = document.querySelectorAll(".opt-box.check.checked");
+    const checked = document.querySelectorAll(".opt-box.check.checked");
     expect(checked).toHaveLength(1);
     expect((checked[0].parentElement as HTMLElement).textContent).toContain("乙");
     expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false); // 空格只选中不提交

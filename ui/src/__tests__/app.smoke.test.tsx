@@ -540,8 +540,8 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     // Order: the compact icon and the context label both precede the model icon button
     const order = [
       compactBtn!,
-      toolbar?.querySelector(".ctx-label")!,
-      toolbar?.querySelector('button[aria-label="模型"]')!,
+      toolbar?.querySelector(".ctx-label") ?? null,
+      toolbar?.querySelector('button[aria-label="模型"]') ?? null,
     ];
     for (const el of order) expect(el).toBeTruthy();
     const pos = toolbar!.innerHTML.indexOf.bind(toolbar!.innerHTML);

@@ -5,7 +5,6 @@ import enUS from "antd/locale/en_US";
 import { I18nextProvider } from "react-i18next";
 import { i18n } from "./i18n";
 import { useUi } from "./stores/ui";
-import type { ThemePref } from "./stores/ui";
 import ThemeBridge from "./theme/bridge";
 import AppShell from "./features/shell/AppShell";
 import { bindCodeCopyDelegate } from "./utils/codecopy";

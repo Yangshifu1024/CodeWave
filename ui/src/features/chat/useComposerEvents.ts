@@ -26,7 +26,7 @@ export function useComposerEvents(opts: {
     };
     window.addEventListener("ws:focus-composer", onFocus);
     return () => window.removeEventListener("ws:focus-composer", onFocus);
-  }, []);
+  }, [taRef]);
 
   // 用户消息「修改」回填（ChatMessages 经 ws:composer-fill 派发）：文本 + 附件覆盖草稿并聚焦到末尾；不自动发送
   useEffect(() => {
@@ -43,7 +43,7 @@ export function useComposerEvents(opts: {
     };
     window.addEventListener("ws:composer-fill", onFill);
     return () => window.removeEventListener("ws:composer-fill", onFill);
-  }, []);
+  }, [taRef, setText, setImages, recalledImages]);
 
   // 技能详情「使用」（右栏 SkillDetailModal 经 ws:composer-insert 派发）：文本以空格分隔追加草稿
   // （与 + 菜单 insertTrigger 同语义，保留既有草稿）并聚焦到末尾；不自动发送
@@ -59,5 +59,5 @@ export function useComposerEvents(opts: {
     };
     window.addEventListener("ws:composer-insert", onInsert);
     return () => window.removeEventListener("ws:composer-insert", onInsert);
-  }, []);
+  }, [taRef, setText]);
 }

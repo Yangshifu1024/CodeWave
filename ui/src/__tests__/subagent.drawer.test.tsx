@@ -1,6 +1,6 @@
 // Subagent interaction batch ([docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)) component-level tests: chat card single-row clickable / process drawer render and close-without-destroy / Composer run indicator.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, fireEvent, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // directly mounted components must explicitly init i18next (no global entry outside App.tsx)
 

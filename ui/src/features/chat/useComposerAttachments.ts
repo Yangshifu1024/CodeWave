@@ -1,7 +1,7 @@
 // Composer 图片附件（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：文件选择、粘贴与历史召回共用同一条
 // 校验链——仅图片类型、单张 5MB、最多 4 张、base64 总量 20MB 预算。
 // 附件列表本体存 run store 每 Tab 桶（TabRunState.draft.images，按 Tab 隔离）；本 hook 只持校验链与入口，列表经 opts 注入。
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import type { PendingImage } from "../../stores/run.types";
 
 export type { PendingImage };
@@ -21,8 +21,9 @@ export function useComposerAttachments(opts: {
   const { t, message, images, setImages } = opts;
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // 历史图片 → 待发附件（防御性兜底：按 4 张上限 / 20MB base64 预算截断；正常不会触达）
-  function recalledImages(imgs: { mediaType: string; data: string }[]): PendingImage[] {
+  // 用 useCallback 固定标识：本函数会被 Composer / useComposerEvents 放进 effect 依赖，
+  // 普通函数声明每次渲染都是新引用，会把这些「绑定一次」的监听反复重绑。
+  const recalledImages = useCallback((imgs: { mediaType: string; data: string }[]): PendingImage[] => {
     const out: PendingImage[] = [];
     let total = 0;
     for (const im of imgs) {
@@ -38,7 +39,7 @@ export function useComposerAttachments(opts: {
       });
     }
     return out;
-  }
+  }, [t]);
 
   // 附件校验链核心：文件选择与粘贴两个入口共用（行为与提示语一致）
   async function addImageFiles(files: File[]) {

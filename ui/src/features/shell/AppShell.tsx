@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { Avatar, Button, Layout, Modal, Tooltip } from "antd";
 import { BarChartOutlined, ClockCircleOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { useRun } from "../../stores/run";
-import { useActiveTab, useActiveWorkspace, useSessions } from "../../stores/sessions";
+import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { bindEvents } from "../../ipc/events";
@@ -32,10 +31,8 @@ import { useDisplayWidths } from "./useDisplayWidths";
 import {
   dragLimit,
   NAV_W_DEFAULT,
-  NAV_W_MAX,
   NAV_W_MIN,
   RB_W_DEFAULT,
-  RB_W_MAX,
   RB_W_MIN,
 } from "../../utils/layout";
 import { useTitlebarActivation } from "./useTitlebar";
@@ -265,7 +262,6 @@ export default function AppShell() {
   // （拖动会把夹取后的显示宽写回记忆值，静默抹掉用户原来的宽度）
   const storedNavWidth = useUi((s) => s.navWidth);
   const storedRightBarWidth = useUi((s) => s.rightBarWidth);
-  const activeWorkspace = useActiveWorkspace();
 
   // 挂载初始化：配置/会话/项目加载 + ui-state 现场态恢复 + 事件绑定
   // （M-5：unlisten 必须在卸载时清理，防 HMR 后重复注册）

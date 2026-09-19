@@ -301,6 +301,16 @@ export default function ChatMessages() {
   // 内容增长 / 定稿（streaming 翻转）时：贴底则跟随滚动；同时升级 katex/mermaid 占位符
   // （流式期间 diagrams 跳过 mermaid；收尾时 streamCount 变化重跑本 effect 补渲染）
   const streamCount = active.items.reduce((a, i) => a + (i.kind === "assistant" && i.streaming ? 1 : 0), 0);
+  // 内容指纹（下方 effect 的依赖项）：抽成变量是为了满足 exhaustive-deps 的「依赖数组不做复杂表达式」，
+  // 每次渲染都会算，与内联在数组里等价
+  const contentLen = active.items.reduce(
+    (a, i) =>
+      a +
+      (i.kind === "assistant"
+        ? i.timeline.reduce((n, s) => n + (s.kind === "tool" || s.kind === "sub" ? 1 : s.text.length), 0)
+        : 0),
+    0,
+  );
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -319,14 +329,7 @@ export default function ChatMessages() {
     active.items.length,
     active.subs.length,
     streamCount, // done/error/cancelled 是三条翻 streaming 的收尾路径——必须触发补渲染
-    active.items.reduce(
-      (a, i) =>
-        a +
-        (i.kind === "assistant"
-          ? i.timeline.reduce((n, s) => n + (s.kind === "tool" || s.kind === "sub" ? 1 : s.text.length), 0)
-          : 0),
-      0,
-    ),
+    contentLen,
   ]);
 
   // 用户滚动 -> 更新贴底态（离底 >40px 记为离开）。程序化豁免窗口用目标值比对：

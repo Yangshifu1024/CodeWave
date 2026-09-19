@@ -321,6 +321,8 @@ export default function SettingsPage() {
   const hitElRef = useRef<HTMLElement | null>(null);
 
   /** 命中结果：显示名 + keywords + 页名 + 组名、多词 AND（纯函数 matchSettings 在注册表里，单独可测） */
+  // language 是「切语言即重算」的触发器：matchSettings 的显示名来自 t，而 t 的标识不随语言变化
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const results = useMemo(() => matchSettings(query, t), [query, t, language]);
   /** 搜索态：trim 后非空（空串 / 仅空格 → 不渲染结果列表，恢复常规导航） */
   const searching = query.trim() !== "";

@@ -4,7 +4,6 @@ import { ipc } from "../ipc/client";
 import type { ConfigState, FlatModel } from "../ipc/types";
 import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
 import { findModel } from "../utils/models";
-import { i18n } from "../i18n";
 
 // IPC 不可用（如纯浏览器调试）时回退默认配置，保证 UI 仍可渲染
 const DEFAULT_CONFIG: ConfigState = {

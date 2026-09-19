@@ -1,7 +1,7 @@
 // 主题三档（跟随系统/亮色/暗色）契约测试：store 持久化 + effectiveDark 派生单源 + html.dark 同步 + 设置页切换即时生效。
 // mock 结构对齐 app.smoke.test.tsx；matchMedia 垫片可编程控制 OS 亮暗（setup.ts 的静态垫片对本文件不够用）。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 
 // ---------- Tauri IPC mock（App 挂载最小依赖面） ----------
 const fixtureConfig = {

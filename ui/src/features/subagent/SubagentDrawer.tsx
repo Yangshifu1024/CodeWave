@@ -22,6 +22,9 @@ export default function SubagentDrawer() {
   const running = sub?.status === "running";
   // 经 useMemo 在打开时重算宽度——open 翻转的同一渲染内取值就绪（useEffect 里的 ref 写入
   // 落在渲染之后且不触发重渲染，关闭期间 resize 曾以旧宽度打开抽屉）；antd 6 的 size 接受数字
+  // open 不是宽度的输入，而是「打开这一刻重算」的触发器：drawerWidth() 读的是窗口/DOM 尺寸，
+  // 状态写入发生在渲染之后，删掉这个依赖会以旧宽度打开抽屉
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const width = useMemo(() => drawerWidth(), [open]);
 
   // 轻量贴底：内容增长即滚到底部；滚轮上滚 = 阅读意图，暂停跟随。
@@ -74,7 +77,6 @@ export default function SubagentDrawer() {
     // 若 flex 链一直在约束滚动容器，其布局高度已等于 cap；内容溢出时钳制前反而更高
     // 说明链没有约束住——已自愈，但大声说出来。
     if (import.meta.env.DEV && before > cap + 2 && el.scrollHeight > cap) {
-      // eslint-disable-next-line no-console
       console.warn(
         `[sub-drawer-probe] viewport clamp engaged (${Math.round(before)}px -> ${cap}px): CSS scroll chain is not bounding the scroller — inspect app.css drawer rules / antd DOM drift`,
       );
@@ -143,7 +145,6 @@ export default function SubagentDrawer() {
       return `[${name}] display=${cs.display} height=${cs.height} overflow=${cs.overflow}/${cs.overflowY} client=${(node as HTMLElement).clientHeight} scroll=${(node as HTMLElement).scrollHeight}`;
     };
     const section = el.closest(".ant-drawer-section");
-    // eslint-disable-next-line no-console
     console.warn(
       "[sub-drawer-probe] scroller reports no overflow while content exceeds the viewport — scroll chain is broken:\n" +
         [dump(section?.parentElement ?? null, "content-wrapper"), dump(section, "section"), dump(section?.querySelector(":scope > .ant-drawer-body") ?? null, "ant-drawer-body"), dump(el, "sub-drawer-body")].join("\n"),

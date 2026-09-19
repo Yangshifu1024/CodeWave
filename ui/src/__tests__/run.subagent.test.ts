@@ -158,7 +158,6 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
   });
 
   it("归档化：新一轮 run 不再清空子代理卡与消息流（跨 run 可回看）", async () => {
-    const h = handlers();
     useRun.setState((s) => {
       const t = s.tabs[session]!;
       t.items.push({ kind: "assistant", timeline: [{ kind: "sub", subId: "sub_1" }], toolsMap: {}, streaming: false });
@@ -232,7 +231,7 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
 
     await useRun.getState().openSubDrawer(session, "sub_9");
     expect(ipc.loadSubagentHistory).toHaveBeenCalledWith(session, "sub_9");
-    let st = tabOf(session).subStreams.sub_9;
+    const st = tabOf(session).subStreams.sub_9;
     expect(st.loaded).toBe(true);
     // message stream rebuild: text/thinking interleave + tool card backfill (user task message stays out of the stream, shown separately in the drawer header)
     expect(st.timeline.map((s) => s.kind)).toEqual(["thinking", "tool", "text"]);

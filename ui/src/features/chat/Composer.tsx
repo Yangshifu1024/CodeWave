@@ -2,9 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { App, BorderBeam, Button, Dropdown, Image, Input, Popover } from "antd";
 import type { MenuProps } from "antd";
 import {
-  ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined, CodeOutlined,
+  ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined,
   DownOutlined, ExclamationCircleOutlined, FileAddOutlined, FileTextOutlined,
-  LoadingOutlined, PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
+  PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
   SettingOutlined, StopOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -94,6 +94,9 @@ export default function Composer() {
     clearSkills();
     clearAgents();
     setActiveIndex(0);
+    // clear* 由 useComposerMentions 每次渲染新建（普通函数声明）：纳入依赖会让本 effect 每渲染重跑，
+    // 刚拉回的候选列表立刻被清空；这里只按切 Tab 驱动是有意为之
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabKey]);
 
   // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
@@ -112,7 +115,7 @@ export default function Composer() {
     useRun.getState().consumeDraftFromQueue(targetKey);
     const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
     el?.focus?.();
-  }, [draftFromQueue]);
+  }, [draftFromQueue, tab?.key, recalledImages]);
 
   // 会话生效模型：会话覆盖 -> 全局活跃（展示与发送守卫同一数据源，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)；摊平视图 [docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
   const globalModel = findModel(config, config?.active_model_id ?? null);

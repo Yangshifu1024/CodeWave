@@ -40,10 +40,6 @@ function navOrder(a: SessionMeta, b: SessionMeta): number {
   return (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || "");
 }
 
-function dirName(p: string): string {
-  return p.split("/").filter(Boolean).pop() || p;
-}
-
 interface NavGroup {
   key: string;
   name: string;

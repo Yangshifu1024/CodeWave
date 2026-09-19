@@ -15,11 +15,6 @@ import { isImagePath } from "./FileViewerModal";
 function baseName(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 }
-function dirOf(p: string): string {
-  const parts = p.split(/[\\/]/).filter(Boolean);
-  parts.pop();
-  return parts.join("/");
-}
 
 function relTime(iso: string): string {
   const t = Date.parse(iso);

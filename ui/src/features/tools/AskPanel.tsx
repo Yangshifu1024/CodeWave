@@ -38,7 +38,7 @@ export default function AskPanel() {
   // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：当前会话审批档（ConfirmEach 在 ask 卡上显示切档提示）
   const tabMode = useSessions((s) => s.tabs.find((x) => x.key === s.activeKey)?.prefs.approval_mode);
   const askId = ask?.askId;
-  const questions = useMemo(() => (ask?.questions ?? []) as any[], [ask?.askId, ask?.questions]);
+  const questions = useMemo(() => (ask?.questions ?? []) as any[], [ask?.questions]);
 
   // L-2：新问题到来时重置全部交互状态，不残留上一次 ask；
   // 空载荷缺陷修复：推荐选项默认选中（视觉与状态一致；否则提交按钮会发出空 selections）
@@ -65,7 +65,7 @@ export default function AskPanel() {
     }
     opts.push({ id: "deny", label: t("ask.deny"), desc: t("ask.denyDesc"), approved: false, always: false });
     return opts;
-  }, [ask?.askId, ask?.allowAlways, t]);
+  }, [ask?.allowAlways, t]);
 
   if (!ask) return null;
 

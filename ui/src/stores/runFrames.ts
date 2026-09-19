@@ -4,7 +4,6 @@
 import type { Frame, Message } from "../ipc/types";
 import type {
   AssistantItem,
-  SubStream,
   TabRunState,
   TimelineSeg,
   ToolView,

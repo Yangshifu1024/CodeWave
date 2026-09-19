@@ -25,7 +25,7 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
-  const data: any = tool.outcome?.data ?? {};
+  const data: any = useMemo(() => tool.outcome?.data ?? {}, [tool.outcome?.data]);
   const files: any[] = data.files ?? [];
   const isEditLike = ["edit", "create"].includes(tool.tool);
 

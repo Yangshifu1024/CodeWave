@@ -48,7 +48,7 @@ function createMd() {
     tokens[idx].attrSet("rel", "noopener");
     return defLink ? defLink(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
   };
-  useMath(md);
+  installMath(md);
   return md;
 }
 
@@ -80,7 +80,7 @@ function isValidDelim(state: any, pos: number): { can_open: boolean; can_close: 
 }
 
 function mathInline(state: any, silent: boolean): boolean {
-  let start = state.pos;
+  const start = state.pos;
   if (state.src[start] !== "$") return false;
   if (!isValidDelim(state, start).can_open) {
     if (!silent) state.pending += "$";
@@ -158,7 +158,8 @@ function mathBlock(state: any, start: number, end: number, silent: boolean): boo
   return true;
 }
 
-function useMath(md: MarkdownItInstance) {
+/** 就地装上数学插件（不叫 use* —— 它不是 Hook，旧名 useMath 会触发 rules-of-hooks 误报） */
+function installMath(md: MarkdownItInstance) {
   md.inline.ruler.after("escape", "math_inline", mathInline);
   md.block.ruler.before("fence", "math_block", mathBlock, { alt: ["paragraph", "blockquote"] });
   const esc = (s: string) => md.utils.escapeHtml(s);
