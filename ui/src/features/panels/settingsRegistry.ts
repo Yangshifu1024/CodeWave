@@ -152,6 +152,11 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "custom_prompt", labelKey: "settings.customPrompt", page: "agent", keywords: ["prompt", "system prompt", "提示词", "系统提示词", "自定义"] },
   { id: "compact_threshold", labelKey: "settings.compactThreshold", page: "agent", keywords: ["compact", "压缩", "自动压缩", "阈值", "上下文"] },
   { id: "compact_timeout_seconds", labelKey: "settings.compactTimeout", page: "agent", width: "narrow", keywords: ["compact", "压缩", "超时"] },
+  // 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：下拉是**页级保存**字段；
+  // 后面的只读状态行与动作按钮用 `app.*` 前缀（无落盘字段，不进 PAGE_FIELDS，只提供搜索 / 锚点）
+  { id: "sessions.retention_days", labelKey: "settings.sessionRetention", page: "agent", width: "narrow", keywords: ["session", "retention", "cleanup", "会话保留期", "保留期", "清理", "自动清理", "删除会话"] },
+  { id: "app.cleanup_now", labelKey: "settings.cleanupNow", page: "agent", keywords: ["cleanup", "清理", "立即清理", "clean up now", "删除会话"] },
+  { id: "app.cleanup_status", labelKey: "settings.cleanupStatus", page: "agent", keywords: ["cleanup", "清理", "上次清理", "last cleanup", "清理记录"] },
 
   // ---------- 日志 ----------
   { id: "log.level", labelKey: "settings.logLevel", page: "logs", width: "narrow", keywords: ["log", "日志", "级别", "debug"] },
@@ -222,6 +227,8 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "providers", // 供应商列表/新增/编辑三视图复合容器：宽度由 maxWidth 420/560/640 定（本批明确非目标）
   "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
+  "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
+  "app.cleanup_status", // 整行只读信息项：标签 + extra 说明 + 「时间 · 删除条数」回显，无独立控件
 
   // —— 关于页的只读信息与目录 / 许可证入口（批④）：整行「标签 + extra 说明 + 值/按钮」，无独立控件宽度 ——
   "app.version", // 只读版本串（懒加载）
@@ -286,6 +293,7 @@ export type SettingFieldPath =
   | "custom_prompt"
   | "compact_threshold"
   | "compact_timeout_seconds"
+  | "sessions.retention_days"
   | "log.level"
   | "log.session_verbose";
 
@@ -329,7 +337,7 @@ export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
     "mcp.servers",
     "disabled_skills",
   ],
-  agent: ["shell.selection", "custom_prompt", "compact_threshold", "compact_timeout_seconds"],
+  agent: ["shell.selection", "custom_prompt", "compact_threshold", "compact_timeout_seconds", "sessions.retention_days"],
   logs: ["log.level", "log.session_verbose"],
   // 关于页：只有「启动时自动检查更新」（localStorage 偏好，即时生效）+ 只读身份信息 —— 同样永不亮脏点
   about: ["ui.auto_update"],
@@ -497,6 +505,31 @@ export const SHELL_SETTING_KEYS: string[] = [
   "shellDetectFailed", // → 探测失败警示
   "shellNotDetected", // → 所选 shell 已卸载警示
   "shellNoPath", // → 无固定可执行文件路径的占位文案
+
+  // —— 会话保留期与清理的从属文案（项已登记：sessions.retention_days / app.cleanup_now / app.cleanup_status）
+  //    （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/25/26/27 条） ——
+  "sessionRetentionHint", // → sessions.retention_days 的说明
+  "cleanupNever", // → sessions.retention_days 选项：不清理（= null）
+  "cleanupDays", // → sessions.retention_days 选项：N 天（带 {{n}}）
+  "cleanupNeedRetention", // → 保留期为「不清理」时的按钮禁用原因（先选择保留期）
+  "cleanupUnsavedFirst", // → 保留期有未保存改动时的按钮禁用原因（先保存）
+  "cleanupNonePending", // → 预览 0 条时的轻提示（不弹确认框）
+  "cleanupPreviewFailed", // → 预览失败提示（本次不清理，配置照常保存）
+  "cleanupConfirmTitle", // → 手动「立即清理」的确认框标题
+  "cleanupSaveConfirmTitle", // → 保存前清理的确认框标题
+  "cleanupConfirmDesc", // → 确认框说明（删除条数，带 {{n}}）
+  "cleanupOrphanDesc", // → 只删索引外残留文件（会话一条不删）时的确认框说明（带 {{n}}）
+  "cleanupConfirmListTitle", // → 确认框里的会话标题清单标题
+  "cleanupConfirmOk", // → 确认框的确认按钮（清理）
+  "cleanupSaveSkip", // → 保存前确认框的取消按钮（写明：仅本次跳过，下次启动仍会清理）
+  "cleanupSavedSkipped", // → 取消清理后的保存提示
+  "cleanupDone", // → 清理完成提示（已清理 N 个会话，关闭 M 个标签页）
+  "cleanupNeverRun", // → app.cleanup_status 的「还没有清理记录」空态
+  "cleanupLastRun", // → app.cleanup_status 的回显（时间 + 删除条数）
+  "cleanupLastFailed", // → app.cleanup_status 的失败条数补充（带 {{n}}）
+  "cleanupFailed", // → 清理后「N 个会话未能清理」的警示（手动 / 保存两条路径共用）
+  "cleanupOrphanExtra", // → 会话与残留数据文件同时要删时，确认框里补的一句残留条数
+  "cleanupDoneOrphans", // → 同一情形的完成提示后缀（另有 N 个残留数据文件）
 
   // —— 日志的从属文案（项已登记：log.*） ——
   "logLevelHint", // → log.level 的说明

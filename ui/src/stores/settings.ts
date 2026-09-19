@@ -1,7 +1,7 @@
 // 配置状态（设置中心的镜像）
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
-import type { ConfigState, FlatModel } from "../ipc/types";
+import type { CleanupOutcome, ConfigState, FlatModel } from "../ipc/types";
 import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
 import { findModel } from "../utils/models";
 import { reconcileFontsFromConfig } from "../utils/fonts";
@@ -32,6 +32,8 @@ const DEFAULT_CONFIG: ConfigState = {
   disabled_skills: [],
   log: { level: "info", session_verbose: false },
   shell: { selection: null },
+  // 会话保留期与清理：null = 不清理（与后端默认值同源，绝不把「删数据」当默认）
+  sessions: { retention_days: null },
 };
 
 /** 设置 store 契约：加载 / 保存全局配置 */
@@ -40,7 +42,10 @@ interface SettingsState {
   /** 是否已完成首次加载 */
   loaded: boolean;
   load(): Promise<void>;
-  save(next: ConfigState): Promise<void>;
+  /** 保存整份配置。opts.skipCleanup = 本次跳过清理（保留期照常落盘）。
+   *  返回本次清理结果（保留期未变或本次跳过时为 null）——调用方用它报「删了 N 个会话」；
+   *  返回值与异常都不得在此层被吞掉。 */
+  save(next: ConfigState, opts?: { skipCleanup?: boolean }): Promise<CleanupOutcome | null>;
 }
 
 export const useSettings = create<SettingsState>((set) => ({
@@ -60,9 +65,12 @@ export const useSettings = create<SettingsState>((set) => ({
       void ipc.setFontPrefs(prefs.sans, prefs.mono).catch(() => null);
     }
   },
-  async save(next) {
-    await ipc.saveConfig(next);
+  async save(next, opts) {
+    // 清理结果必须原样交给调用方（设置页要拿它报「已清理 N 个会话」）；失败时异常照旧浮出：
+    // 保存没成功就不入 store，保持界面上仍显旧配置，由调用方决定怎么提示
+    const outcome = await ipc.saveConfig(next, opts);
     set({ config: next });
+    return outcome;
   },
 }));
 

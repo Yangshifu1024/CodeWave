@@ -105,7 +105,8 @@ fn session_files_payload(
     store: &crate::core::sessions::SessionStore,
     owner: &str,
 ) -> Vec<serde_json::Value> {
-    let mut items = store.load_artifacts(owner);
+    // [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件不进右栏「文件」列表（数据源过滤）
+    let mut items = store.load_file_artifacts(owner);
     items.sort_by(|a, b| b.last_at.cmp(&a.last_at));
     items
         .into_iter()

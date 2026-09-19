@@ -778,3 +778,83 @@ describe("术语一致性：写后校验一律叫「语义校验」（批④）"
     }
   });
 });
+
+// ---------- 会话保留期与清理的登记（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 18/22 条） ----------
+
+/**
+ * 清理界面的从属文案键（页内的说明 / 选项 / 提示 / 确认框；**不是**可配置项，故不进 SETTINGS_ITEMS，
+ * 但必须逐把进 SHELL_SETTING_KEYS——否则页体里的 t("settings.X") 会直接判红）。
+ */
+const CLEANUP_SHELL_KEYS = [
+  "sessionRetentionHint",
+  "cleanupNever",
+  "cleanupDays",
+  "cleanupNeedRetention",
+  "cleanupUnsavedFirst",
+  "cleanupNonePending",
+  "cleanupPreviewFailed",
+  "cleanupConfirmTitle",
+  "cleanupSaveConfirmTitle",
+  "cleanupConfirmDesc",
+  "cleanupConfirmListTitle",
+  "cleanupOrphanDesc", // → 只删索引外残留文件（会话一条不删）时的确认框说明
+  "cleanupConfirmOk",
+  "cleanupSaveSkip",
+  "cleanupSavedSkipped",
+  "cleanupDone",
+  "cleanupNeverRun",
+  "cleanupLastRun",
+  "cleanupLastFailed",
+  "cleanupFailed", // → 清理后「N 个会话未能清理」的警示
+  "cleanupOrphanExtra", // → 会话与残留数据文件同时要删时，确认框补的一句
+  "cleanupDoneOrphans", // → 同一情形的完成提示后缀
+];
+
+describe("设置项注册表：会话保留期与清理的登记（[docs/session-cleanup]）", () => {
+  it("保留期是 agent 页的页级保存字段：登记项 + 进 PAGE_FIELDS + narrow 档 + 不进即时生效清单", () => {
+    const item = SETTINGS_ITEMS.find((i) => i.id === "sessions.retention_days");
+    expect(item, "注册表缺 sessions.retention_days").toBeTruthy();
+    expect(item!.page, "保留期不在工作区与智能体页").toBe("agent");
+    expect(item!.width, "保留期下拉是窄档").toBe("narrow");
+    expect(PAGE_FIELDS.agent as string[], "保留期未进 agent 页字段（脏点永不亮）").toContain("sessions.retention_days");
+    // 走页级保存：若误登记成即时生效项，脏标记会永远显示「未保存」
+    expect(INSTANT_APPLY_FIELD_IDS).not.toContain("sessions.retention_days");
+  });
+
+  it("「立即清理」与「上次清理」用 app.* 前缀（无落盘字段）且都登记了宽度豁免", () => {
+    for (const id of ["app.cleanup_now", "app.cleanup_status"]) {
+      const item = SETTINGS_ITEMS.find((i) => i.id === id);
+      expect(item, `注册表缺 ${id}`).toBeTruthy();
+      expect(item!.page, `${id} 不在工作区与智能体页`).toBe("agent");
+      expect(
+        (PAGE_FIELDS.agent as string[]).includes(id),
+        `${id} 是 app.* 项（无落盘字段），不该进 PAGE_FIELDS`,
+      ).toBe(false);
+      expect(WIDTH_EXEMPT_ITEM_IDS, `${id} 未登记宽度豁免（无独立控件宽度）`).toContain(id);
+    }
+  });
+
+  it("三个新项都不标进阶（进阶项总数保持 10，页级折叠不牵动清理界面）", () => {
+    for (const id of ["sessions.retention_days", "app.cleanup_now", "app.cleanup_status"]) {
+      expect(SETTINGS_ITEMS.find((i) => i.id === id)?.advanced, `${id} 不该标进阶`).toBeFalsy();
+    }
+    expect(ADVANCED_ITEM_IDS.length).toBe(10);
+    expect(advancedCountByPage("agent"), "工作区与智能体页进阶项数不应因清理界面变化").toBe(0);
+  });
+
+  it("清理的从属文案键逐把登记进 SHELL_SETTING_KEYS（未登记即被引用闭包判红）", () => {
+    for (const key of CLEANUP_SHELL_KEYS) {
+      expect(SHELL_SETTING_KEYS, `${key} 未登记进 SHELL_SETTING_KEYS`).toContain(key);
+    }
+    // 三个项名键只作为「项」存在：同时进豁免清单会被「豁免与注册表不重叠」判红
+    for (const labelKey of ["sessionRetention", "cleanupNow", "cleanupStatus"]) {
+      expect(SHELL_SETTING_KEYS, `${labelKey} 已是设置项名，不得再进豁免清单`).not.toContain(labelKey);
+    }
+  });
+
+  it("清理界面可被搜索命中（「清理」「保留期」两个问法都能找到保留期项）", () => {
+    const retention = SETTINGS_ITEMS.find((i) => i.id === "sessions.retention_days")!;
+    expect(matchSettings("保留期", zhT).map((i) => i.id)).toContain(retention.id);
+    expect(matchSettings("清理", zhT).map((i) => i.id)).toContain("app.cleanup_now");
+  });
+});

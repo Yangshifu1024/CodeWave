@@ -158,6 +158,7 @@ mod tests {
             roots: vec!["/ws".into()],
             running: false,
             interrupted: None,
+            last_opened_at: None,
         }
     }
 

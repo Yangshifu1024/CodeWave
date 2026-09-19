@@ -421,12 +421,39 @@ pub(super) fn save_plan_file(ctx: &ToolCtx, plan_text: &str) -> Option<String> {
                 ctx.rt.as_ref(),
                 &format!("计划文件已落盘：{}", resolved.display()),
             );
+            register_plan_artifact(ctx, &resolved);
             Some(resolved.to_string_lossy().into_owned())
         }
         Err(e) => {
             crate::core::session_log::warn(ctx.rt.as_ref(), &format!("计划文件落盘失败：{e}"));
             None
         }
+    }
+}
+
+/// [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件归属登记——落盘成功后写进会话产物边车并标记
+/// 种类为 `plan`（清理时随会话连带删除；右栏「文件」面板不展示计划文件）。三条纪律同 create/edit 工具：
+/// 路径归一（`canonical_best_effort`）、任务运行态跳过（无产物消费方，避免边车泄漏）、
+/// 登记失败只记告警（绝不阻塞 ask 流程）。归属会话用既有的 `root_session_id ?? id` 口诀（子代理归属主会话）。
+fn register_plan_artifact(ctx: &ToolCtx, resolved: &std::path::Path) {
+    if ctx.rt.is_task_runtime {
+        return;
+    }
+    let owner = ctx
+        .rt
+        .root_session_id
+        .clone()
+        .unwrap_or_else(|| ctx.rt.id.clone());
+    let canonical = crate::tools::pathutil::canonical_best_effort(resolved)
+        .to_string_lossy()
+        .into_owned();
+    if let Err(e) = ctx.core.store.append_artifact_kind(
+        &owner,
+        &canonical,
+        crate::core::sessions::ArtifactOp::Create,
+        crate::core::sessions::ArtifactKind::Plan,
+    ) {
+        tracing::warn!("计划文件归属登记失败（{canonical}）：{e}");
     }
 }
 

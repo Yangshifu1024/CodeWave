@@ -14,6 +14,7 @@ fn meta(id: &str) -> SessionMeta {
         roots: vec!["/ws".into()],
         running: false,
         interrupted: None,
+        last_opened_at: None,
     }
 }
 
@@ -277,6 +278,7 @@ fn index_lru_and_orphan_discovery() {
                 roots: vec!["/ws".into()],
                 running: false,
                 interrupted: None,
+                last_opened_at: None,
             })
             .unwrap();
     }
@@ -541,6 +543,210 @@ fn legacy_index_without_mark_fields_still_loads() {
 
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：上次打开时间落盘后不被检查点抹掉；
+/// 缺席会话不得凭空造条目；旧索引（无该字段）仍可读。
+#[test]
+fn last_opened_at_survives_checkpoint_and_legacy_index_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("s1")).unwrap();
+    let t = Utc::now();
+    assert!(store.touch_session_open("s1", t).unwrap(), "首次必须写");
+    assert_eq!(
+        store.get("s1").unwrap().last_opened_at.as_deref(),
+        Some(t.to_rfc3339().as_str())
+    );
+    // 检查点（save_history）必须透传保留，否则「最近打开时间」每存一次就丢
+    store
+        .save_history(
+            "s1",
+            "t",
+            ".",
+            None,
+            None,
+            &["/ws".into()],
+            &[Message::user_text("x")],
+        )
+        .unwrap();
+    assert_eq!(
+        store.get("s1").unwrap().last_opened_at.as_deref(),
+        Some(t.to_rfc3339().as_str())
+    );
+
+    // 索引里没有的会话：不写、不造条目
+    assert!(!store.touch_session_open("ghost", Utc::now()).unwrap());
+    assert!(store.get("ghost").is_none());
+
+    // 旧索引（无 last_opened_at）可读，缺失即 None（serde default，不迁移）
+    let dir2 = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir2.path().join("sessions")).unwrap();
+    std::fs::write(
+        dir2.path().join("sessions/index.json"),
+        br#"{"version":1,"sessions":[{"id":"old-1","title":"t","workspace":".","created_at":"2026-01-01T00:00:00+00:00","updated_at":"2026-01-01T00:00:00+00:00"}]}"#,
+    )
+    .unwrap();
+    let store2 = SessionStore::new(dir2.path().to_path_buf());
+    let m = store2.get("old-1").expect("旧索引必须仍可读");
+    assert!(m.last_opened_at.is_none());
+    assert!(!dir2.path().join("sessions/index.json.corrupt").exists());
+}
+
+/// [docs/session-cleanup](../../../../../docs/session-cleanup.md) §3-24：10 分钟窗口内重复打开不写索引。
+#[test]
+fn touch_open_is_throttled_within_ten_minutes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("s1")).unwrap();
+    let t0 = Utc::now();
+    assert!(store.touch_session_open("s1", t0).unwrap());
+    let first = store.get("s1").unwrap().last_opened_at;
+
+    // 1 分钟后再打开：跳过写入（索引写次数不得增加、值不变）
+    let writes = store.index_write_count();
+    assert!(
+        !store
+            .touch_session_open("s1", t0 + chrono::Duration::minutes(1))
+            .unwrap()
+    );
+    assert_eq!(store.index_write_count(), writes, "节流窗口内不得写索引");
+    assert_eq!(store.get("s1").unwrap().last_opened_at, first);
+
+    // 正好 10 分钟：窗口边界应写
+    let t10 = t0 + chrono::Duration::minutes(10);
+    assert!(store.touch_session_open("s1", t10).unwrap());
+    assert_eq!(
+        store.get("s1").unwrap().last_opened_at.as_deref(),
+        Some(t10.to_rfc3339().as_str())
+    );
+
+    // 纯函数据口径（无记录 / 不可解析 / 时间落在未来 → 行为）
+    assert!(needs_open_touch(None, t10));
+    assert!(needs_open_touch(Some("not-a-time"), t10));
+    assert!(!needs_open_touch(
+        Some(&t10.to_rfc3339()),
+        t10 + chrono::Duration::seconds(599)
+    ));
+    assert!(needs_open_touch(
+        Some(&t10.to_rfc3339()),
+        t10 + chrono::Duration::seconds(600)
+    ));
+}
+
+/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：计划文件产物的登记/过滤/粘性。
+#[test]
+fn artifact_kind_plan_registered_filtered_and_sticky() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store
+        .append_artifact_kind("s1", "/ws/plan.md", ArtifactOp::Create, ArtifactKind::Plan)
+        .unwrap();
+    store
+        .append_artifact("s1", "/ws/a.md", ArtifactOp::Create)
+        .unwrap();
+
+    let all = store.load_artifacts("s1");
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        all.iter().find(|a| a.path == "/ws/plan.md").unwrap().kind,
+        ArtifactKind::Plan
+    );
+    assert_eq!(
+        all.iter().find(|a| a.path == "/ws/a.md").unwrap().kind,
+        ArtifactKind::File
+    );
+    // 右栏「文件」数据源只看普通产物
+    let files = store.load_file_artifacts("s1");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "/ws/a.md");
+
+    // Plan 粘性：后续普通产物登记不得把计划文件降级为 file
+    store
+        .append_artifact("s1", "/ws/plan.md", ArtifactOp::Edit)
+        .unwrap();
+    assert_eq!(
+        store
+            .load_artifacts("s1")
+            .iter()
+            .find(|a| a.path == "/ws/plan.md")
+            .unwrap()
+            .kind,
+        ArtifactKind::Plan
+    );
+    // wire 形态固定小写
+    let json = std::fs::read_to_string(dir.path().join("sessions/s1.artifacts.json")).unwrap();
+    assert!(json.contains("\"kind\": \"plan\""), "{json}");
+    assert!(json.contains("\"kind\": \"file\""), "{json}");
+}
+
+/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：批量删除索引行只写一次索引，
+/// 并清掉内存运行集合（否则迟到写入会带着 running 复活索引行）。
+#[test]
+fn remove_many_writes_index_once_and_clears_memory_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("a")).unwrap();
+    store.upsert_meta(meta("b")).unwrap();
+    store.upsert_meta(meta("c")).unwrap();
+    store.mark_running("a", true).unwrap();
+    store.mark_running("ghost", true).unwrap(); // 只在内存集合里（尚未入索引）
+
+    let before = store.index_write_count();
+    let removed = store
+        .remove_many(&["a".to_string(), "ghost".to_string()])
+        .unwrap();
+    assert_eq!(
+        removed,
+        vec!["a".to_string()],
+        "索引中不存在的 id 不计入已删结果"
+    );
+    assert_eq!(store.index_write_count(), before + 1, "整批只写一次索引");
+    assert_eq!(store.list().len(), 2);
+    assert!(
+        store.running_in_memory().is_empty(),
+        "内存运行集合也要清（防迟到检查点复活索引行）"
+    );
+
+    // 空列表：不产生任何索引写
+    let before = store.index_write_count();
+    assert!(store.remove_many(&[]).unwrap().is_empty());
+    assert_eq!(store.index_write_count(), before);
+}
+
+/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：索引可信判定——
+/// 文件缺失或内容损坏都不可信（清理据此拒绝扫索引外残留），能解析才可信；
+/// 而且「曾损坏未复原」（index.json.corrupt 遗留）同样是持久的不可信信号——
+/// 否则真实启动序列会把守卫顶掉：改名保全后紧接着写回的合法空索引看起来完全可信。
+#[test]
+fn index_is_trusted_requires_readable_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    assert!(!store.index_is_trusted(), "索引文件不存在 → 不可信");
+
+    store.upsert_meta(meta("a")).unwrap();
+    assert!(store.index_is_trusted(), "刚写过索引 → 可信");
+
+    std::fs::write(dir.path().join("sessions/index.json"), b"{ not json").unwrap();
+    assert!(!store.index_is_trusted(), "坏 JSON → 不可信");
+
+    // 曾损坏未复原（`index.json.corrupt` 还在）→ 仍不可信：真实启动序列会在改名保全后
+    // 立刻把一份合法空索引写回 index.json，只看这一份文件就会被顶掉。
+    store.load_index(); // 触发改名保全（损坏 → index.json.corrupt）
+    store.upsert_meta(meta("b")).unwrap(); // 写回可解析的索引
+    assert_eq!(store.load_index().sessions.len(), 1, "索引本身能解析");
+    assert!(
+        dir.path().join("sessions/index.json.corrupt").exists(),
+        "损坏备份已落盘"
+    );
+    assert!(
+        !store.index_is_trusted(),
+        "索引曾损坏未复原 → 不可信，哪怕 index.json 此刻可解析"
+    );
+
+    // 用户（或人工修复流程）移除保留证据后，索引重新变得可信：不是永久失能
+    std::fs::remove_file(dir.path().join("sessions/index.json.corrupt")).unwrap();
+    assert!(store.index_is_trusted(), "损坏备份移除后重新可信");
 }
 
 /// untitled 幽灵会话存量清理：sub_*/task_* 前缀条目连 gz 与边车一起删除，

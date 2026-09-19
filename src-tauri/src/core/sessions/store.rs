@@ -45,6 +45,11 @@ pub struct SessionMeta {
     /// 上次非正常收尾的中断标记（None = 无）；前端「已读/续跑」后经 clear_session_interrupt 清除
     #[serde(default)]
     pub interrupted: Option<InterruptInfo>,
+    /// 最近打开时间（RFC3339；None = 本版本尚未打开过）。加载会话时刷新（10 分钟节流），
+    /// 参与会话清理的「最近活动时间」判定 = max(updated_at, last_opened_at)；
+    /// 列表排序与行内时间仍用 updated_at（点开会话不会被顶到列表最前）。
+    #[serde(default)]
+    pub last_opened_at: Option<String>,
 }
 
 /// 中断标记（批1，需求共识 20/23）：进程被强杀或用户中断退出时留下的痕迹，供前端展示与续跑提示。
@@ -81,6 +86,23 @@ pub struct SessionArtifact {
     pub last_at: String,
     /// 累计写入次数
     pub count: u32,
+    /// 产物种类（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：普通产物只登记不删，
+    /// 计划文件（ask 落盘的中间产物）随会话一并清理且不进右栏「文件」列表；
+    /// serde default 向前兼容（旧边车无此字段 → `file`）
+    #[serde(default)]
+    pub kind: ArtifactKind,
+}
+
+/// 产物种类（wire 形态固定小写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ArtifactKind {
+    /// 普通产物（create/edit 工具写入的用户文件）
+    #[default]
+    #[serde(rename = "file")]
+    File,
+    /// 计划文件（ask 落盘到 `<工作区>/.codewave/tasks/plan-*.md`）
+    #[serde(rename = "plan")]
+    Plan,
 }
 
 /// 产物操作类型（首记操作区分 create/edit；wire 形态固定小写）。
@@ -114,6 +136,10 @@ pub struct SessionStore {
     /// 新建会话首次 run 尚未检查点时索引里没有条目，标记先记在这里，待其首次 upsert 时带上
     ///（否则该 run 崩溃后将无从标记）。进程消亡即消失，恢复由 running.marker 机制接管。
     running: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// 测试用：索引写次数（会话清理「整批只写一次索引」回归断言的观察点）。
+    /// 仅测试构建存在，不参与序列化也不影响生产路径。
+    #[cfg(test)]
+    index_writes: std::sync::atomic::AtomicUsize,
 }
 
 impl SessionStore {
@@ -124,17 +150,43 @@ impl SessionStore {
             index_lock: std::sync::Mutex::new(()),
             artifacts_lock: std::sync::Mutex::new(()),
             running: std::sync::Mutex::new(std::collections::HashSet::new()),
+            #[cfg(test)]
+            index_writes: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// 测试用：本 store 已写索引的次数。
+    #[cfg(test)]
+    pub fn index_write_count(&self) -> usize {
+        self.index_writes.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 索引文件路径：sessions/index.json。
     fn index_path(&self) -> PathBuf {
-        self.root.join("sessions").join("index.json")
+        self.sessions_dir().join("index.json")
     }
 
-    /// 会话历史文件路径：histories/<id>.json.gz。
-    fn history_path(&self, id: &str) -> PathBuf {
-        self.root.join("histories").join(format!("{id}.json.gz"))
+    /// 损坏索引的备份路径：sessions/index.json.corrupt。
+    ///
+    /// 由 `load_index()` 在解析失败时改名保全（M8：先备份再回默认，否则下次写会静默覆写），
+    /// 本身**不自动清理**——它同时是「索引曾损坏且未复原」这个持久信号，`index_is_trusted()` 会读它。
+    pub(crate) fn corrupt_index_backup_path(&self) -> PathBuf {
+        self.sessions_dir().join("index.json.corrupt")
+    }
+
+    /// 历史目录：<数据根>/histories（清理扫描索引外残留用）。
+    pub(crate) fn histories_dir(&self) -> PathBuf {
+        self.root.join("histories")
+    }
+
+    /// 会话边车/索引目录：<数据根>/sessions（清理扫描索引外残留用）。
+    pub(crate) fn sessions_dir(&self) -> PathBuf {
+        self.root.join("sessions")
+    }
+
+    /// 会话历史文件路径：histories/<id>.json.gz（清理按同一路径删除）。
+    pub(crate) fn history_path(&self, id: &str) -> PathBuf {
+        self.histories_dir().join(format!("{id}.json.gz"))
     }
 
     /// 读索引；缺失回默认；损坏先备份为 index.json.corrupt 保全证据再回默认（M8）。
@@ -147,11 +199,45 @@ impl SessionStore {
             Ok(idx) => idx,
             Err(e) => {
                 // M8：损坏索引先备份保全证据，再回默认（否则下次写会静默覆写）
-                let backup = self.root.join("sessions").join("index.json.corrupt");
+                let backup = self.corrupt_index_backup_path();
                 let _ = std::fs::rename(self.index_path(), &backup);
                 tracing::warn!("会话索引损坏，已备份到 {}：{e}", backup.display());
                 SessionIndex::default()
             }
+        }
+    }
+
+    /// 索引是否**可信**：`sessions/index.json` 存在、能成功解析，且**没有遗留的损坏备份**。
+    ///
+    /// 三种「不可信」：① 文件缺失（全新安装、被手工删掉）；② 解析失败（损坏）；
+    /// ③ `sessions/index.json.corrupt` 存在——索引曾损坏且尚未复原。此时 `load_index()`
+    /// 会返回**空索引**，而空索引与「用户真的没有会话」在返回值上无法区分——按空索引去清
+    /// 「索引外残留」会把全部历史文件当孤儿删掉，所以清理路径必须先问这个方法
+    ///（[docs/session-cleanup](../../../../docs/session-cleanup.md)：宁可不删也不误删）。
+    ///
+    /// 为什么 ③ 必须单独成立：真实启动序列里，损坏索引被 `load_index()` 改名成 `.corrupt` 之后，
+    /// 紧接着的既有写路径（启动清扫 `purge_non_session_entries()` 走 `mutate_index`）**必定**把
+    /// 一份合法的空索引写回同一路径。等到启动清理跑 `execute()` 时，「文件存在且能解析」已经恢复为真，
+    /// 于是守卫被同一轮启动序列顶掉，一份空索引就把用户的旧历史与边车当孤儿删光（判据还被偷换成
+    /// 文件修改时间，近期打开过、很久没写入的会话照样中招，而启动路径没有确认框可问）。
+    /// 所以「曾损坏」不能只看当下这一份文件，必须是**持久信号**：只要 `.corrupt` 还在，就不扫残留。
+    ///
+    /// 取舍（有意为之）：`.corrupt` 是保全证据、不被自动删除，因此索引损坏过的用户会长期停用
+    /// 「索引外残留」清理——代价只是陈旧孤儿文件不被回收，绝不误删任何东西；索引从未损坏的用户
+    /// 完全不受影响（判据 ③ 恒为假，与加这道条件之前的行为一致）。
+    /// 只读，不做任何修复动作（损坏备份仍在 `load_index` 里）。
+    pub fn index_is_trusted(&self) -> bool {
+        let backup = self.corrupt_index_backup_path();
+        if backup.exists() {
+            tracing::warn!(
+                "会话索引曾损坏且未复原（{} 存在），本次不扫索引外残留：宁可不删也不误删",
+                backup.display()
+            );
+            return false;
+        }
+        match std::fs::read(self.index_path()) {
+            Ok(bytes) => serde_json::from_slice::<SessionIndex>(&bytes).is_ok(),
+            Err(_) => false,
         }
     }
 
@@ -165,6 +251,9 @@ impl SessionStore {
         }
         let bytes = serde_json::to_vec_pretty(&idx)?;
         atomic_write(&self.index_path(), &bytes)?;
+        #[cfg(test)]
+        self.index_writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -193,11 +282,17 @@ impl SessionStore {
                 .unwrap_or_else(|| meta.created_at.clone());
             let running = existing.map(|s| s.running).unwrap_or(is_running);
             let interrupted = existing.and_then(|s| s.interrupted.clone());
+            // [docs/session-cleanup](../../../../docs/session-cleanup.md)：检查点不得抹掉已落盘的「最近打开时间」
+            //（与 created_at 同一处理：既有条目沿用索引现值，新条目取传入值）
+            let last_opened_at = existing
+                .and_then(|s| s.last_opened_at.clone())
+                .or_else(|| meta.last_opened_at.clone());
             idx.sessions.retain(|s| s.id != meta.id);
             let mut meta = meta.clone();
             meta.created_at = created_at;
             meta.running = running;
             meta.interrupted = interrupted;
+            meta.last_opened_at = last_opened_at;
             idx.sessions.push(meta);
         })
     }
@@ -439,6 +534,8 @@ impl SessionStore {
             // upsert_meta 以索引现值（新条目取内存 running 集合）为准，此处仅占位
             running: false,
             interrupted: None,
+            // 由 touch_session_open 独占维护，upsert_meta 以索引现值为准，此处仅占位
+            last_opened_at: None,
         })?;
         Ok(prepared.len())
     }
@@ -463,9 +560,9 @@ impl SessionStore {
     // 与主历史（save_history）的区别：不 upsert 会话索引（子代理不是会话，不得出现在
     // list_sessions）；目录按父会话分桶，随父会话级联删除。
 
-    /// 子代理历史目录：histories/subs/<parent>/。
-    fn sub_histories_dir(&self, parent: &str) -> PathBuf {
-        self.root.join("histories").join("subs").join(parent)
+    /// 子代理历史目录：histories/subs/<parent>/（清理按同一路径级联删除）。
+    pub(crate) fn sub_histories_dir(&self, parent: &str) -> PathBuf {
+        self.histories_dir().join("subs").join(parent)
     }
 
     /// 子代理历史文件路径：histories/subs/<parent>/<sub>.json.gz。
@@ -513,9 +610,9 @@ impl SessionStore {
 
     // ---------- 计划 todos 边车 ----------
 
-    /// todos 边车文件路径：sessions/<id>.todos.json。
-    fn todos_path(&self, id: &str) -> PathBuf {
-        self.root.join("sessions").join(format!("{id}.todos.json"))
+    /// todos 边车文件路径：sessions/<id>.todos.json（清理按同一路径删除）。
+    pub(crate) fn todos_path(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.todos.json"))
     }
 
     /// 持久化计划 todos（原子写）。
@@ -535,15 +632,26 @@ impl SessionStore {
 
     // ---------- 会话产物登记边车（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)） ----------
 
-    /// 产物边车文件路径：sessions/<id>.artifacts.json。
-    fn artifacts_path(&self, id: &str) -> PathBuf {
-        self.root
-            .join("sessions")
-            .join(format!("{id}.artifacts.json"))
+    /// 产物边车文件路径：sessions/<id>.artifacts.json（清理按同一路径删除）。
+    pub(crate) fn artifacts_path(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.artifacts.json"))
     }
 
-    /// 登记一次写入：按路径去重/合并（首记 create/edit；重复则累加 count 并刷新 last_*）。
+    /// 登记一次写入（普通产物；[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：
+    /// 按路径去重/合并（首记 create/edit；重复则累加 count 并刷新 last_*）。
     pub fn append_artifact(&self, id: &str, path: &str, op: ArtifactOp) -> anyhow::Result<()> {
+        self.append_artifact_kind(id, path, op, ArtifactKind::File)
+    }
+
+    /// 带种类的登记入口（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：计划文件传 `ArtifactKind::Plan`。
+    /// 合并时 `Plan` 是粘性的（已有 Plan 条目不会被普通产物的登记降级为 `file`）。
+    pub fn append_artifact_kind(
+        &self,
+        id: &str,
+        path: &str,
+        op: ArtifactOp,
+        kind: ArtifactKind,
+    ) -> anyhow::Result<()> {
         let _guard = self.artifacts_lock.lock().unwrap();
         let mut items = self.load_artifacts(id);
         let now = Utc::now().to_rfc3339();
@@ -551,6 +659,9 @@ impl SessionStore {
             a.last_op = op;
             a.last_at = now;
             a.count = a.count.saturating_add(1);
+            if kind == ArtifactKind::Plan {
+                a.kind = ArtifactKind::Plan;
+            }
         } else {
             items.push(SessionArtifact {
                 path: path.to_string(),
@@ -559,6 +670,7 @@ impl SessionStore {
                 first_at: now.clone(),
                 last_at: now,
                 count: 1,
+                kind,
             });
         }
         let bytes = serde_json::to_vec_pretty(&items)?;
@@ -572,6 +684,85 @@ impl SessionStore {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
+    }
+
+    /// 读**普通产物**列表：右栏「文件」面板的数据源（计划文件不进该列表，[docs/session-cleanup](../../../../docs/session-cleanup.md)）。
+    pub fn load_file_artifacts(&self, id: &str) -> Vec<SessionArtifact> {
+        self.load_artifacts(id)
+            .into_iter()
+            .filter(|a| a.kind == ArtifactKind::File)
+            .collect()
+    }
+
+    // ---------- 会话保留期清理的存储侧支持（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+
+    /// 进程内运行中会话 id 的快照（清理跳过用；索引标记另由 `SessionMeta::running` 给出）。
+    pub fn running_in_memory(&self) -> std::collections::HashSet<String> {
+        self.running.lock().unwrap().clone()
+    }
+
+    /// 刷新「最近打开时间」（加载会话时调用）：持索引锁；距上次刷新不足节流窗口时**不写**
+    ///（返回 false）；索引里没有这个会话则什么都不做（返回 false，不凭空造条目）。
+    pub fn touch_session_open(&self, id: &str, now: chrono::DateTime<Utc>) -> anyhow::Result<bool> {
+        let Some(meta) = self.get(id) else {
+            return Ok(false);
+        };
+        if !needs_open_touch(meta.last_opened_at.as_deref(), now) {
+            return Ok(false);
+        }
+        let at = now.to_rfc3339();
+        let mut hit = false;
+        self.mutate_index(|idx| {
+            if let Some(m) = idx.sessions.iter_mut().find(|m| m.id == id) {
+                m.last_opened_at = Some(at.clone());
+                hit = true;
+            }
+        })?;
+        Ok(hit)
+    }
+
+    /// 批量删除索引行（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3-17）：整批只写**一次**索引，
+    /// 返回真正被移除的 id（索引中没有的不计入）；同时把 id 从内存运行集合中移除，
+    /// 否则迟到的检查点会带着 `running` 把索引行“复活”。
+    ///
+    /// 索引写入失败返回 `Err` 而不是吞掉：此时文件已删、索引行还在，调用方必须把受影响的
+    /// 会话计入失败（下次清理会再次命中，重删文件视为成功——自愈）。
+    pub fn remove_many(&self, ids: &[String]) -> anyhow::Result<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        {
+            let mut set = self.running.lock().unwrap();
+            for id in ids {
+                set.remove(id);
+            }
+        }
+        let mut removed: Vec<String> = Vec::new();
+        self.mutate_index(|idx| {
+            let mut kept = Vec::with_capacity(idx.sessions.len());
+            for s in idx.sessions.drain(..) {
+                if ids.iter().any(|id| id == &s.id) {
+                    removed.push(s.id);
+                } else {
+                    kept.push(s);
+                }
+            }
+            idx.sessions = kept;
+        })?;
+        Ok(removed)
+    }
+}
+
+/// 「最近打开时间」的落盘节流窗口（秒）：同一会话 10 分钟内不重复写索引
+///（每次 `load_session` 都重写整份索引代价过高；精度损失对「天」级清理判定无影响）。
+pub const OPEN_TOUCH_THROTTLE_SECS: i64 = 600;
+
+/// 纯函数：是否需要刷新「最近打开时间」（无记录 / 记录不可解析 → 需要；
+/// 距上次刷新不足节流窗口（含时钟倒拨导致记录落在未来）→ 不需要）。
+pub fn needs_open_touch(last_opened_at: Option<&str>, now: chrono::DateTime<Utc>) -> bool {
+    match last_opened_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
+        Some(prev) => (now - prev.with_timezone(&Utc)).num_seconds() >= OPEN_TOUCH_THROTTLE_SECS,
+        None => true,
     }
 }
 

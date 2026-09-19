@@ -168,6 +168,83 @@ fn args_deserialize_camel_case_skip_analysis() {
     assert_eq!(args.lightweight, Some(true));
 }
 
+/// [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件落盘后登记归属（kind = plan）；
+/// 临时会话（工作区 = 全局数据目录）的**双层路径** `.codewave/.codewave/tasks/` 被正确解析；
+/// 右栏「文件」数据源不返回计划文件；会话清理时计划文件被连带删除。
+#[test]
+fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
+    let dd = tempfile::tempdir().unwrap();
+    let data_root = std::fs::canonicalize(dd.path()).unwrap();
+    // 临时会话：工作区根就是全局数据目录（既有的 workspace == data_dir 场景）
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: data_root.clone(),
+        extra: vec![],
+        data_dir: data_root.clone(),
+    };
+    let core = crate::core::agent::test_support::make_core(&roots);
+    let rt = core.get_or_create_session(
+        "temp-plan",
+        data_root.clone(),
+        None,
+        vec![data_root.to_string_lossy().into_owned()],
+        None,
+        vec![],
+    );
+    let ctx = ToolCtx {
+        core,
+        rt,
+        batch_id: "b".into(),
+        call_index: 0,
+        call_key: "b:0".into(),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    };
+
+    let path = save_plan_file(&ctx, "## 改动点").expect("落盘应成功");
+    // 双层路径：工作区根已是全局数据目录，又拼了一层 .codewave —— 从家目录看就是
+    // `~/.codewave/.codewave/tasks/plan-*.md`
+    let expected_dir = data_root
+        .join(crate::core::config::MANAGED_DIR_NAME)
+        .join("tasks");
+    assert!(
+        path.starts_with(expected_dir.to_string_lossy().as_ref()),
+        "临时会话计划文件应是数据目录下再套一层 .codewave（真实数据目录 ~/.codewave 时即双层路径），实际：{path}"
+    );
+
+    // 归属登记：计划文件进了边车且种类为 plan；右栏「文件」数据源不返回它
+    let items = ctx.core.store.load_artifacts("temp-plan");
+    assert_eq!(items.len(), 1, "计划文件必须登记归属");
+    assert_eq!(items[0].kind, crate::core::sessions::ArtifactKind::Plan);
+    assert_eq!(items[0].path, path);
+    assert!(ctx.core.store.load_file_artifacts("temp-plan").is_empty());
+
+    // 会话清理连带删除计划文件
+    let now = chrono::Utc::now().to_rfc3339();
+    let meta = crate::core::sessions::SessionMeta {
+        id: "temp-plan".into(),
+        title: "t".into(),
+        workspace: data_root.to_string_lossy().into_owned(),
+        model_id: None,
+        created_at: now.clone(),
+        updated_at: now,
+        message_count: 0,
+        project_id: None,
+        roots: vec![data_root.to_string_lossy().into_owned()],
+        running: false,
+        interrupted: None,
+        last_opened_at: None,
+    };
+    assert!(crate::core::sessions::cleanup::delete_session_files(
+        &ctx.core.store,
+        &data_root,
+        &meta
+    ));
+    assert!(
+        !std::path::Path::new(&path).exists(),
+        "计划文件应随会话清理删除：{path}"
+    );
+    assert!(!ctx.core.store.artifacts_path("temp-plan").exists());
+}
+
 #[test]
 fn args_deserialize_camel_case_switch_to_autoedit() {
     let args: Args = serde_json::from_value(json!({

@@ -102,4 +102,21 @@ describe("i18n 键集合契约", () => {
       expect(enKeys.has(key), `en 缺新键：${key}`).toBe(true);
     }
   });
+
+  it("会话保留期与清理的新键双侧对偶且数量写死（[docs/session-cleanup]）", () => {
+    const zhKeys = new Set(keyPaths(zh));
+    const enKeys = new Set(keyPaths(en));
+    // `settings.cleanup*` 是本批新增的一族（选项 / 禁用原因 / 确认框 / 完成提示 / 上次清理回显）：
+    // 两侧集合逐把相等且数量写死——半途改名或只补一侧都会被这条拦住。
+    const cleanup = (keys: Set<string>) => [...keys].filter((k) => k.startsWith("settings.cleanup")).sort();
+    expect(cleanup(zhKeys)).toEqual(cleanup(enKeys));
+    expect(cleanup(zhKeys)).toHaveLength(23);
+    // 保留期本身的项名与说明另算（不合 cleanup* 前缀）
+    for (const key of ["settings.sessionRetention", "settings.sessionRetentionHint"]) {
+      expect(zhKeys.has(key), `zh 缺新键：${key}`).toBe(true);
+      expect(enKeys.has(key), `en 缺新键：${key}`).toBe(true);
+    }
+    // 本批不得借 `settings.about*` 族（那一族的数量被上一用例写死为 15）
+    expect(cleanup(enKeys).some((k) => k.includes("about"))).toBe(false);
+  });
 });

@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, LspLanguage, LspServerStatus, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, LspLanguage, LspServerStatus, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -17,9 +17,21 @@ export const ipc = {
     invoke<{ deleted_sessions: number }>("delete_project", { projectId }),
 
   getConfig: () => invoke<ConfigState>("get_config"),
-  saveConfig: (config: ConfigState) => invoke<void>("save_config", { config }),
+  /** 保存整份配置。opts.skipCleanup = 本次跳过「按新保留期清理」这一步（用户在确认框里选了「暂不清理」）；
+   *  返回本次清理结果（被删会话 id 列表 + 成败条数），保留期未变或本次跳过时为 null —— 调用方必须拿到返回值。 */
+  saveConfig: (config: ConfigState, opts?: { skipCleanup?: boolean }) =>
+    invoke<CleanupOutcome | null>("save_config", { config, skipCleanup: opts?.skipCleanup ?? false }),
   // 当前配置解析出的代理 URL（null = 直连）：检查更新传参与设置页系统代理回显共用
   resolveProxy: () => invoke<string | null>("resolve_proxy"),
+
+  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）----------
+  // 三个命令都是会话数据的批量删除路径，调用方必须显式面对返回值（删了几条）
+  /** 预览：按给定保留期返回将删的会话条数与前几条标题（确认框文案数据源；days = null 时不会有候选） */
+  previewSessionCleanup: (days: number | null) => invoke<CleanupPreview>("preview_session_cleanup", { days }),
+  /** 执行清理（用**已保存**的保留期，不是未保存的草稿值）：返回本次被删会话 id 列表与成败条数 */
+  runSessionCleanup: () => invoke<CleanupOutcome>("run_session_cleanup"),
+  /** 上次清理记录（设置页只读行数据源；存后端，重启后仍在） */
+  getCleanupStatus: () => invoke<CleanupStatus>("get_cleanup_status"),
 
   // shell 探测（设置面板 Shell 下拉数据源）
   listAvailableShells: () => invoke<ShellInfo[]>("list_available_shells"),

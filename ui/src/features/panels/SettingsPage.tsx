@@ -18,11 +18,13 @@ import { ArrowLeftOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_LSP_SETTINGS, LSP_LANGUAGES, lspCommandOf, withLspCommand } from "../../ipc/types";
-import type { ConfigState, LspLanguage, LspServerStatus, ShellInfo, SkillMeta, ValidationSettings } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, LspLanguage, LspServerStatus, ShellInfo, SkillMeta, ValidationSettings } from "../../ipc/types";
+// 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
+import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
 import { clampNavWidth } from "../../utils/layout";
 import { respondExitRequest } from "../../utils/uiState";
-import { useActiveId } from "../../stores/sessions";
+import { useActiveId, useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
@@ -58,6 +60,35 @@ const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
 const SETTINGS_NAV_W = 280;
 /** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
 const SETTINGS_NAV_RATIO = 0.32;
+
+/**
+ * 会话保留期档位（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 1 条）：`null` = 不清理，
+ * 其余为天数。固定档位、不做自定义天数输入；本数组就是下拉的选项源。
+ */
+const RETENTION_OPTIONS: (number | null)[] = [null, 1, 3, 7, 14, 30];
+
+/** 保留期下拉里「不清理」这一档的 Select 取值（数值档用数字字符串，两者不同形便于回读） */
+const RETENTION_NEVER = "never";
+
+/**
+ * 「上次清理」时间的展示：本地化日期 + 时间。戳子解析不出来（后端记录被手改 / 旧格式）时**原样回显**
+ * ——只读行必须始终有内容可看，且不得因一条坏数据把整个设置页抛掉。
+ */
+function formatCleanupTime(raw: string): string {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+}
+
+/**
+ * 预览里「这次会动到的东西」总数 = 会话数 + 索引外残留文件数。
+ * 两者都为 0 才算没事可做（不弹确认框、不执行）：只看会话数会让「只有残留文件」的清理被静默跳过——
+ * 预览口径与执行口径必须一致（[docs/session-cleanup](../../../../docs/session-cleanup.md) §4）。
+ */
+function cleanupPendingCount(preview: CleanupPreview): number {
+  // 字段缺省兜底：老后端没有 orphan_count 时按 0 算，不因一个缺失字段让确认框永远弹不出来
+  return (preview.count ?? 0) + (preview.orphan_count ?? 0);
+}
 
 /** 搜索命中后的临时高亮时长（毫秒）：到点自动摘掉 .settings-item-hit */
 const HIT_HIGHLIGHT_MS = 1500;
@@ -273,7 +304,7 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = Object.fromEntries(
  *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */
 export default function SettingsPage() {
   const { t } = useTranslation();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const language = useUi((s) => s.language);
   const sessionId = useActiveId();
   // 窗口宽度：导航列宽按它收缩（复用工作区同一份显示宽度决议）
@@ -303,6 +334,19 @@ export default function SettingsPage() {
   const [redetecting, setRedetecting] = useState(false);
   /** 正在一键安装的语言（null = 空闲）：驱动行内「安装」按钮的 loading 与禁用 */
   const [installing, setInstalling] = useState<LspLanguage | null>(null);
+  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+  /** 上次清理记录（null = 未取到：只读行回退「还没有清理记录」）；进入设置页拉一次、每次清理后刷新 */
+  const [cleanupStatus, setCleanupStatus] = useState<CleanupStatus | null>(null);
+  /** 「立即清理」执行中：按钮转圈 + 防重复点击 */
+  const [cleaning, setCleaning] = useState(false);
+  /**
+   * 「这次确认的清理还会删掉几个索引外的残留数据文件」（预览口径：确认框里写的就是它）。
+   * 用 ref 而不是 state：这个数只在报完成提示时被读一次，不参与渲染，也不该让页面重渲染。
+   * 确认框与完成提示必须是同一个数——用户在确认框里看到「另有 3 个残留数据文件」并点了「清理」，
+   * 完成提示却少这一句，就会以为那几个文件没删（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 26 条）。
+   * 正常路径都是一次确认紧接一次完成提示；读取时顺手清零，避免陈旧值粘到下一条无关的完成提示上。
+   */
+  const confirmedOrphansRef = useRef(0);
 
   // ---------- 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)） ----------
   /** 搜索查询串。trim 后非空即「搜索态」：结果列表替掉左导航 tablist（两套列表不同时存在） */
@@ -425,9 +469,21 @@ export default function SettingsPage() {
       setSysProxy(await ipc.resolveProxy().catch(() => null));
       // LSP server 状态：失败静默降级为不显示徽标（设置面板不得因此报错）
       setLspStatus(await ipc.lspStatus().catch(() => null));
+      // 上次清理记录（只读行数据源）：同样失败静默 —— 只读信息缺失不该阻断设置页
+      setCleanupStatus(await ipc.getCleanupStatus().catch(() => null));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * 展示即算「用户已经看过这次清理的结果」：写下与启动轻提示共用的去重记录
+   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 14 条——两处说的是后端同一条记录）。
+   * 所以设置页一打开就读到状态、或本页执行完清理刷新出状态，下次启动都不再为同一件事提醒。
+   * 设置页只在打开时才挂载（AppShell 里 `{settingsOpen && <SettingsPage />}`），因此不会误呑启动提示。
+   */
+  useEffect(() => {
+    markCleanupNoticeSeen(cleanupStatus?.last_run_at);
+  }, [cleanupStatus?.last_run_at]);
 
   function patchDraft(patch: Partial<ConfigState>) {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -613,6 +669,164 @@ export default function SettingsPage() {
     }
   }
 
+  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+
+  /** 保留期下拉的草稿写入（"never" = 不清理 → null）；走页级保存，不是即时生效项。
+   *  展开原有 sessions 段：后端将来往这一段加字段时，不会因改一次下拉就把别的字段抹掉 */
+  function patchRetention(value: string) {
+    patchDraft({ sessions: { ...draft?.sessions, retention_days: value === RETENTION_NEVER ? null : Number(value) } });
+  }
+
+  /** 「上次清理」只读文案：时间 + 删除条数（+ 失败条数）；没有记录时说清「还没有」而不是留空 */
+  function cleanupStatusText(): string {
+    const at = cleanupStatus?.last_run_at ?? null;
+    if (!at) return t("settings.cleanupNeverRun");
+    const base = t("settings.cleanupLastRun", { time: formatCleanupTime(at), n: cleanupStatus?.last_deleted ?? 0 });
+    const failed = cleanupStatus?.last_failed ?? 0;
+    return failed > 0 ? `${base}${t("settings.cleanupLastFailed", { n: failed })}` : base;
+  }
+
+  /**
+   * 清理确认框内容（删除条数 + 前几条会话标题）：手动「立即清理」与「保存前确认」两条路径
+   * 共用同一份版式，避免两处各写一套说法（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/26 条）。
+   * 两种情形分开写：有会话要删时说的是「删 N 个会话（不可恢复）」+ 前几条标题；
+   * **只有残留文件**时（会话一条不删，要删的是索引外的历史 / 边车文件）另给一条说明——
+   * 那些会话早就不在列表里，写「删 N 个会话」用户认不出是谁，也不符合实际；
+   * **两者都有**时会话那句照旧，再补一句残留文件条数（否则那些文件会在用户不知情的情况下被删掉）。
+   */
+  function cleanupConfirmContent(preview: CleanupPreview) {
+    const orphans = preview.orphan_count ?? 0;
+    const onlyOrphans = (preview.count ?? 0) === 0 && orphans > 0;
+    // 会话与残留文件都要删时：只说「将删除 N 个会话」漏掉了残留文件，用户不知道这次还会动别的数据
+    const alsoOrphans = !onlyOrphans && orphans > 0;
+    return (
+      <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
+        <div>
+          {onlyOrphans
+            ? t("settings.cleanupOrphanDesc", { n: orphans })
+            : t("settings.cleanupConfirmDesc", { n: preview.count })}
+        </div>
+        {alsoOrphans && <div>{t("settings.cleanupOrphanExtra", { n: orphans })}</div>}
+        {preview.titles.length > 0 && (
+          <div>
+            <div className="dim">{t("settings.cleanupConfirmListTitle")}</div>
+            {preview.titles.map((title, idx) => (
+              <div key={`${idx}-${title}`} style={{ overflowWrap: "anywhere" }}>
+                {title}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /** 弹确认框并把「确认 / 取消」折成布尔值：true = 用户点了确认（清理），false = 取消。
+   *  onOk 与 onCancel 只会结算一次，不双应答 */
+  function confirmCleanup(preview: CleanupPreview, title: string, okText: string, cancelText: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      modal.confirm({
+        title,
+        content: cleanupConfirmContent(preview),
+        okText,
+        cancelText,
+        okButtonProps: { danger: true },
+        onOk: () => {
+          // 记下确认框里承诺的残留文件数：完成提示要复述同一个数（取消则不留值）
+          confirmedOrphansRef.current = preview.orphan_count ?? 0;
+          settle(true);
+        },
+        onCancel: () => {
+          confirmedOrphansRef.current = 0;
+          settle(false);
+        },
+      });
+    });
+  }
+
+  /**
+   * 清理失败的警示（手动与保存两条路径共用）：后端 `failed > 0` = 有会话没删干净（索引写失败 / 文件删不掉）。
+   * 不报出来时用户只看到「已清理 0 个会话，关闭 0 个标签页」，会以为什么都没发生
+   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 14 条）。
+   */
+  function warnCleanupFailed(outcome: CleanupOutcome) {
+    const failed = outcome.failed ?? 0;
+    if (failed > 0) message.warning(t("settings.cleanupFailed", { n: failed }));
+  }
+
+  /** 清理收尾（手动与保存两条路径共用）：关掉被删会话的 Tab → 刷新「上次清理」→ 报条数与关闭的标签页数 */
+  async function applyCleanupOutcome(outcome: CleanupOutcome) {
+    const closed = useSessions.getState().applyCleanup(outcome.ids);
+    setCleanupStatus(await ipc.getCleanupStatus().catch(() => null));
+    const done = t("settings.cleanupDone", { n: outcome.deleted, m: closed });
+    // 本次确认的清理若同时动了索引外的残留文件，完成提示要一并说出来（读完即清零：只报这一次）
+    const orphans = confirmedOrphansRef.current;
+    confirmedOrphansRef.current = 0;
+    message.success(orphans > 0 ? `${done}${t("settings.cleanupDoneOrphans", { n: orphans })}` : done);
+    warnCleanupFailed(outcome);
+  }
+
+  /**
+   * 手动「立即清理」：用**已保存**的保留期预览（不是草稿值）→ 确实有事可做（会话数 + 索引外残留文件数
+   * 之和 > 0）才弹确认框，两者都是 0 则给一条轻提示、不打断 → 执行 → 报结果
+   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 13/25/26 条）。
+   */
+  async function runCleanupNow() {
+    if (cleaning || cleanupBlock !== null || savedRetention === null) return;
+    setCleaning(true);
+    try {
+      const preview = await ipc.previewSessionCleanup(savedRetention);
+      if (cleanupPendingCount(preview) === 0) {
+        message.info(t("settings.cleanupNonePending"));
+        return;
+      }
+      const ok = await confirmCleanup(
+        preview,
+        t("settings.cleanupConfirmTitle"),
+        t("settings.cleanupConfirmOk"),
+        t("common.cancel"),
+      );
+      if (!ok) return;
+      await applyCleanupOutcome(await ipc.runSessionCleanup());
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setCleaning(false);
+    }
+  }
+
+  /**
+   * 保存前的清理确认（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/27 条）：
+   * 只在「保留期相对已保存值发生了变化」且新值不是「不清理」时才问，且预览里确实有事可做
+   * （会话数 + 索引外残留文件数之和 > 0；只有残留文件时同样要问）才弹框。
+   * 返回 true = 本次跳过清理（取消按钮已写明：配置照常保存，下次启动仍按新保留期清理）。
+   * 预览失败时同样按「本次不清理」处理并提示：宁可少删一次，也不在用户没确认的情况下删数据。
+   * 注：离开拦截的「保存并离开」复用本函数所在的 save()，因此那条路径同样会走这次确认（有意为之）。
+   */
+  async function confirmSaveCleanup(): Promise<boolean> {
+    const next = draftRetention;
+    if (next === null || next === savedRetention) return false;
+    const preview = await ipc.previewSessionCleanup(next).catch(() => undefined);
+    if (!preview) {
+      message.warning(t("settings.cleanupPreviewFailed"));
+      return true;
+    }
+    if (cleanupPendingCount(preview) === 0) return false;
+    const confirmed = await confirmCleanup(
+      preview,
+      t("settings.cleanupSaveConfirmTitle"),
+      t("settings.cleanupConfirmOk"),
+      t("settings.cleanupSaveSkip"),
+    );
+    return !confirmed; // 未点确认（取消 / 关闭确认框）= 本次跳过清理，配置照常保存
+  }
+
   /** 保存（全量提交语义不变）。返回是否真的落盘：离开拦截靠它判断能否执行「保存并离开」 */
   async function save(): Promise<boolean> {
     if (!draft) return false;
@@ -681,9 +895,23 @@ export default function SettingsPage() {
     }
     setSaving(true);
     try {
-      await useSettings.getState().save(draft);
+      // 保留期有变化且新值非「不清理」时先弹确认框（取消 = 本次跳过清理，配置照常落盘）
+      const skipCleanup = await confirmSaveCleanup();
+      const outcome = await useSettings.getState().save(draft, skipCleanup ? { skipCleanup: true } : undefined);
       // 保存成功不关闭页面（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
       message.success(t("common.saved"));
+      if (skipCleanup) message.info(t("settings.cleanupSavedSkipped"));
+      if (outcome) {
+        // 后端本次确实执行了清理：真删到会话才收尾 Tab 并报结果（applyCleanupOutcome 内含刷新与两条提示）；
+        // 只记了失败条数（deleted = 0）时只刷新只读行，但失败条数同样要报出来
+        // ——「一条都没删、还有 N 条失败」正是最容易被误解成「什么都没发生」的情形
+        if (outcome.deleted > 0) {
+          await applyCleanupOutcome(outcome);
+        } else {
+          setCleanupStatus(await ipc.getCleanupStatus().catch(() => null));
+          warnCleanupFailed(outcome);
+        }
+      }
       // 系统代理模式：保存即触发后端重探测（save_config 热重建 client），刷新回显
       if ((draft.proxy?.mode ?? "system") === "system") {
         void ipc.resolveProxy().then(setSysProxy).catch(() => null);
@@ -756,6 +984,17 @@ export default function SettingsPage() {
     return out;
   }, [draft, config, mcpDirty]);
   const anyDirty = PAGE_ORDER.some((k) => dirtyMap[k]);
+
+  // 保留期两态：draft = 下拉草稿值；config = 已保存值 —— 立即清理按钮与保存前确认都只认**已保存**值
+  const draftRetention = draft?.sessions?.retention_days ?? null;
+  const savedRetention = config?.sessions?.retention_days ?? null;
+  /** 保留期有未保存改动：立即清理按钮禁用（按钮用的是已保存保留期，先保存才轮得到新档位） */
+  const retentionDirty = draftRetention !== savedRetention;
+  /**
+   * 「立即清理」的禁用原因（null = 可点）。先判「不清理」：保留期为空时脏不脏都无从清理；
+   * 再判未保存改动：此时点它会按旧保留期删，与用户刚选的档位不是一回事。
+   */
+  const cleanupBlock = savedRetention === null ? "none" : retentionDirty ? "dirty" : null;
 
   // 聚合脏标记回写 store：关窗/退出时由 AppShell 的 ExitConfirm 读它决定先弹哪一层确认
   useEffect(() => {
@@ -1545,6 +1784,47 @@ export default function SettingsPage() {
                 value={draft.compact_timeout_seconds ?? 180}
                 onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
               />
+            </div>
+          </Form.Item>
+          {/* 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 18/25/26 条）：
+              下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
+          <Form.Item label={t("settings.sessionRetention")} tooltip={t("settings.sessionRetentionHint")}>
+            <div className="setting-anchor" data-setting-id="sessions.retention_days">
+              <Select
+                size="small"
+                className="w-narrow"
+                value={draftRetention === null ? RETENTION_NEVER : String(draftRetention)}
+                onChange={patchRetention}
+                options={RETENTION_OPTIONS.map((days) => ({
+                  label: days === null ? t("settings.cleanupNever") : t("settings.cleanupDays", { n: days }),
+                  value: days === null ? RETENTION_NEVER : String(days),
+                }))}
+              />
+            </div>
+          </Form.Item>
+          <Form.Item label={t("settings.cleanupNow")}>
+            {/* 禁用原因写在按钮右侧而不是 Tooltip：两条禁用条件（未选保留期 / 未保存）都能一眼看到 */}
+            <div
+              className="setting-anchor"
+              data-setting-id="app.cleanup_now"
+              style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
+            >
+              <Button size="small" loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
+                {t("settings.cleanupNow")}
+              </Button>
+              {cleanupBlock !== null && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {cleanupBlock === "none" ? t("settings.cleanupNeedRetention") : t("settings.cleanupUnsavedFirst")}
+                </Typography.Text>
+              )}
+            </div>
+          </Form.Item>
+          <Form.Item label={t("settings.cleanupStatus")}>
+            {/* 只读信息项（数据源 = get_cleanup_status）：**常驻渲染**，不因无记录而整行消失 */}
+            <div className="setting-anchor" data-setting-id="app.cleanup_status">
+              <span className="dim" style={{ fontSize: 12.5 }}>
+                {cleanupStatusText()}
+              </span>
             </div>
           </Form.Item>
         </Form>

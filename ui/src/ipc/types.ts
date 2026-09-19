@@ -145,6 +145,10 @@ export interface ConfigState {
   log: LogConfig;
   /** shell 选择（shell-selection-batch：可选 = 后端 serde default 向前兼容；null/缺省 = 自动探测） */
   shell?: ShellConfig;
+  /** 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）：`retention_days` = 保留天数（1/3/7/14/30），
+   *  `null` = 不清理（默认）。可选 = 后端 serde default 向前兼容（同 `shell?` 口径），读取请用
+   *  `config.sessions?.retention_days ?? null`——老配置里没有这一段。 */
+  sessions?: { retention_days: number | null };
 }
 
 /** [docs/session-logging-report](../../../docs/session-logging-report.md)：运行日志读取契约（全局滚动日志 / 会话日志） */
@@ -174,6 +178,9 @@ export interface SessionMeta {
   model_id: string | null;
   created_at: string;
   updated_at: string;
+  /** 最近打开时间（RFC3339；加载会话时由后端刷新，旧数据缺省 = null）。
+   *  只参与会话清理的「更早」判定（max(updated_at, last_opened_at)）；列表排序与行内时间仍用 updated_at。 */
+  last_opened_at?: string | null;
   message_count: number;
   /** 所属项目（null = 临时会话） */
   project_id: string | null;
@@ -194,6 +201,20 @@ export interface ProjectEntry {
   data_dir?: string | null;
   created_at: string;
 }
+
+// ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)） ----------
+
+/** 清理预览：按给定保留期算出将删除的会话条数 + 前几条标题，以及索引外的残留文件数
+ *  （保存前的确认框数据源；纯读，不删任何东西）。
+ *  `count` = 会话数；`orphan_count` = 本次会删掉的「索引外残留文件」数（会话列表里早已看不到的历史 / 边车文件）。
+ *  判定「有没有事可做」看两者之和：`count + orphan_count === 0` 才不打扰用户。 */
+export interface CleanupPreview { count: number; titles: string[]; orphan_count: number }
+
+/** 清理结果：被删会话 id 列表 + 成功/失败条数（单条失败不中断整批，失败的那条下次清理会再试） */
+export interface CleanupOutcome { ids: string[]; deleted: number; failed: number }
+
+/** 上次清理记录（存后端，重启后仍在；启动时的自动清理也计入） */
+export interface CleanupStatus { last_run_at: string | null; last_deleted: number; last_failed: number }
 
 // ---------- 高频 Channel 帧 ----------
 

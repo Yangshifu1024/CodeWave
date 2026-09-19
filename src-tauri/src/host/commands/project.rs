@@ -27,8 +27,15 @@ pub async fn get_config(core: Core<'_>) -> Result<ConfigState, String> {
 }
 
 /// 保存配置：掩码回填 → 落盘 → keyring 迁移 → 日志级别热切换 → 冷却清零。
+/// 会话保留期变化且未跳过时，保存后再跑一次会话清理并把结果回传
+///（[docs/session-cleanup](../../../../docs/session-cleanup.md)：前端先预览/确认，取消时传 skip_cleanup = true）。
+/// 返回 `None` = 本次没有触发清理（保留期未变 / 明确跳过 / 新保留期为「不清理」）。
 #[tauri::command]
-pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), String> {
+pub async fn save_config(
+    core: Core<'_>,
+    config: ConfigState,
+    skip_cleanup: Option<bool>,
+) -> Result<Option<crate::core::sessions::CleanupOutcome>, String> {
     let mut updated = config;
     // [docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)：落盘前校验自定义请求头（头名合法/非保留/不重复、值无换行）
     for p in &updated.providers {
@@ -39,6 +46,12 @@ pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), Stri
         let current = core.cfg.read().unwrap().clone();
         apply_page_save_shape(&mut updated, &current);
     }
+    // 保留期是否变化必须在覆盖内存配置**之前**比较（下面会写 core.cfg）
+    let cleanup_days = cleanup_due(
+        core.cfg.read().unwrap().sessions.retention_days,
+        updated.sessions.retention_days,
+        skip_cleanup,
+    );
     updated.save().map_err(err)?;
     // 明文 key 保存时直接迁入 keyring（不留明文窗口，[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）；失败保留明文并告警
     let (changed, warn) = crate::host::keyring::migrate(&mut updated);
@@ -57,7 +70,44 @@ pub async fn save_config(core: Core<'_>, config: ConfigState) -> Result<(), Stri
     // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：保存的 key 下次尝试即生效——残留的认证/瞬时冷却不得在用户修好配置后
     // 仍然 failover 到其他 key
     core.key_pool.reset_all();
-    Ok(())
+    let Some(days) = cleanup_days else {
+        return Ok(None);
+    };
+    // 清理要删文件（阻塞 IO）：放到阻塞线程上跑，不占住 async worker 让其它命令排队
+    //（与启动清理同一处理）。行为不变：仍然等出结果再返回。
+    // 清理自己炸掉时配置已经落盘——只记 warning 并按「本次不清理」回答，
+    // 不让前端把保存当失败（宁可不报清理结果，也不误报保存失败）。
+    let cleanup_core = core.inner().clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        super::session::execute_cleanup(&cleanup_core, days)
+    })
+    .await
+    {
+        Ok(outcome) => Ok(Some(outcome)),
+        Err(e) => {
+            tracing::warn!("会话保留期清理任务异常结束（配置已保存，本次不清理）：{e}");
+            Ok(None)
+        }
+    }
+}
+
+/// 保存配置后是否需要执行清理：保留期**确实变化**、未明确跳过、且新保留期是合法档位时
+/// 返回要用的天数（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/27 条）。
+/// 0 与其他白名单之外的怪值一律不触发（手上改配置/旧值都不该删数据）。
+/// 抽成纯函数是为了让判断本身可单测（命令体需要 Tauri State，测不到）。
+fn cleanup_due(
+    old_days: Option<u32>,
+    new_days: Option<u32>,
+    skip_cleanup: Option<bool>,
+) -> Option<u32> {
+    let new = new_days?;
+    if !crate::core::sessions::cleanup::is_valid_retention_days(new)
+        || skip_cleanup == Some(true)
+        || old_days == new_days
+    {
+        return None;
+    }
+    Some(new)
 }
 
 /// 只写字体偏好（界面字体 / 等宽字体）并**落盘**。
@@ -204,6 +254,46 @@ mod tests {
         apply_font_prefs(&mut cfg.ui, "", "");
         assert_eq!(cfg.ui.font_sans, "");
         assert_eq!(cfg.ui.font_mono, "");
+    }
+
+    /// [docs/session-cleanup](../../../../docs/session-cleanup.md)：保留期变化时触发清理；
+    /// 未变化 / 跳过 / 改成「不清理」/ 非法天数都不触发。
+    #[test]
+    fn cleanup_due_only_when_retention_changes() {
+        assert_eq!(
+            cleanup_due(None, Some(7), None),
+            Some(7),
+            "从「不清理」改成 7 天"
+        );
+        assert_eq!(
+            cleanup_due(Some(3), Some(1), None),
+            Some(1),
+            "收紧保留期也要清"
+        );
+        assert_eq!(cleanup_due(Some(7), Some(7), None), None, "没变不做事");
+        assert_eq!(cleanup_due(None, None, None), None);
+        assert_eq!(
+            cleanup_due(Some(7), None, None),
+            None,
+            "改成「不清理」不做事"
+        );
+        assert_eq!(
+            cleanup_due(None, Some(7), Some(true)),
+            None,
+            "用户选了「暂不清理」"
+        );
+        assert_eq!(cleanup_due(None, Some(7), Some(false)), Some(7));
+        assert_eq!(cleanup_due(None, Some(0), None), None, "非法天数不触发");
+        assert_eq!(
+            cleanup_due(None, Some(2), None),
+            None,
+            "白名单之外的档位（1/3/7/14/30）不触发"
+        );
+        assert_eq!(
+            cleanup_due(None, Some(30), None),
+            Some(30),
+            "合法档位照常触发"
+        );
     }
 
     /// 页级保存的形状修正（调用点同一函数）：字体按当前生效值护住，其他字段照常采用提交值。
