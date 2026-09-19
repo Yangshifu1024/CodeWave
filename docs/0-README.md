@@ -59,6 +59,8 @@
 - 2026-09-07 · [standard-workflow.md](./standard-workflow.md) — arch 技能内置化为标准工作流：分档路由（轻量直改/完整流水线）+ 常驻 WORKFLOW_SECTION 注入 + 尽量并行（S1∥S2、S6 额度内拉满、S7∥S8）+ 产物与批准门保留，$arch 移除
 - 2026-09-08 · [subagent-file-isolation.md](./subagent-file-isolation.md) — 子代理隔离与运行监督批次：文件写认领制（兄弟 runtime 写已认领路径 E_FILE_CLAIMED，主会话豁免）+ 取消级联（parent_cancel child_token）+ 子代理卡停止按钮（E_SUBAGENT_STOPPED → ask 询问重派）+ 派发失败重试硬化（E_ARGS alias/文案、BUSY 有界等待）+ 运行监督（重复失败纠偏/终止 + 流停滞看门狗 stall_timeout_seconds）+ 步数真实化（step_count 取代 history.len()）+ 主会话读预算（E_READ_TOO_BROAD 强制委派 explore）+ ask 多题分页提交修复
 
+- 2026-09-19 · [subagent-idle-watchdog-misfire.md](./subagent-idle-watchdog-misfire.md) — 缺陷修复：只读子代理被空转看门狗误杀（`batch_digest()` 把 `read`/`batch_read` 入参键写反 → 「首次读新文件即进展」信号从未生效，explore 第 14 步被硬终止、调研成果全丢）——进展信号改为按 `files` 数组解析（并保留顶层 `path` 兜底、补端到端回归）+ 只读角色策略 `IdlePolicy::NudgeOnly`（16 步纠偏、空转层不终止）+ `AgentDef.readonly` 与只读子代理强制排除 edit/create/delete
+
 ## 界面与交互
 
 - 2026-08-31 · [composer-toolbar-batch-report.md](./composer-toolbar-batch-report.md) — Composer 工具条重构（权限四档 + 会话级模型/力度 + 附件/$技能 + 供应商分组与视觉标签）

@@ -6,6 +6,11 @@
 //! <supervision-notice>，仍不收敛则终止 run，杜绝重复操作烧穿步数/token 预算。
 //! 空转看门狗（feed_batch）：连续多步只有重复读等零进展只读操作（全成功、参数互异，
 //! 失败/重复签名均捕捉不到）8 步纠偏、14 步终止；同文件分段连读 10 次专用纠偏。
+//! 只读 run（`IdlePolicy::NudgeOnly`，如 explore/reviewer/code-reviewer 子代理）在**空转层**放宽到
+//! READONLY_IDLE_NUDGE_AT 步纠偏、只纠偏不终止——只读调研天然是「大段只读步骤 + 偶尔产出」，
+//! 该层的预算天花板交给 max_steps（[docs/subagent-idle-watchdog-misfire]）。
+//! 注意 NudgeOnly 只守卫空转层：失败重复层（精确 3/5、宽松 6/10）、max_steps 与 MAX_TEXT_TURNS
+//! 强制汇报门对只读 run 照常生效，仍会终止本 run。
 //! 主会话/子代理/任务运行三路统一生效（共用 drive_agent），不加新事件键——纠偏消息进历史。
 
 use std::collections::{HashSet, VecDeque};
@@ -31,6 +36,23 @@ pub const IDLE_ESCALATE_AT: usize = 14;
 /// 同一文件连续分段读触发专用纠偏的次数（只纠偏不终止：大文件分段读可能是合法的，
 /// 终止仍只由 IDLE_ESCALATE_AT 驱动）。
 pub const SEGMENT_NUDGE_AT: usize = 10;
+/// 只读 run 的空转纠偏阈值：比通用 IDLE_NUDGE_AT 更宽（只读调研里「重读已读文件」很常见，
+/// 8 步就提示会持续噪声打断），且空转层**没有对应的终止阈值**——只纠偏不终止
+///（仅限空转层；失败重复层与步数/汇报门照常生效）。
+pub const READONLY_IDLE_NUDGE_AT: usize = 16;
+
+/// 空转看门狗处置策略（每 run 一份，由 `DriveParams.idle_policy` 决定）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum IdlePolicy {
+    /// 默认：IDLE_NUDGE_AT 步纠偏、IDLE_ESCALATE_AT 步硬终止
+    /// （主会话 / 任务运行 / 可写子代理，语义与引入只读策略前逐字一致）
+    #[default]
+    Stop,
+    /// 只读 run：空转层 READONLY_IDLE_NUDGE_AT 步纠偏一次、只纠偏不终止
+    ///（**仅空转层**；失败重复层与步数/汇报门不受本策略影响，照常终止）
+    NudgeOnly,
+}
+
 /// 只读工具名集合（进展判定用；core 层不依赖 tools 类型，按名称判读）。
 pub(crate) const READONLY_TOOLS: &[&str] = &[
     "read", "batch_read", "grep", "calculate", "list_files", "web_fetch", "render_html",
@@ -69,6 +91,8 @@ pub struct BatchDigest {
 /// 每 run 独立的监督状态机（drive_agent 局部变量，非线程安全）。
 #[derive(Default)]
 pub struct SupervisionState {
+    /// 空转看门狗策略（默认 Stop，保持既有行为）
+    policy: IdlePolicy,
     window: VecDeque<CallSig>,
     /// 已注入过纠偏的 key（同签名每次 run 只纠偏一次）
     nudged: HashSet<String>,
@@ -81,6 +105,15 @@ pub struct SupervisionState {
 }
 
 impl SupervisionState {
+    /// 按策略构造（[docs/subagent-idle-watchdog-misfire]）：只读 run 传 `NudgeOnly`；
+    /// 其余场景保持 `Default`（= `Stop`），行为逐字不变。
+    pub fn with_idle_policy(policy: IdlePolicy) -> Self {
+        Self {
+            policy,
+            ..Default::default()
+        }
+    }
+
     pub fn feed(&mut self, sig: CallSig) -> Verdict {
         self.window.push_back(sig.clone());
         while self.window.len() > WINDOW {
@@ -148,9 +181,11 @@ impl SupervisionState {
     }
 
     /// 空转看门狗：每步批次后喂一次摘要。进展信号（非只读工具/首次读新文件）清零全部
-    /// 空转计数；否则 idle_streak +1——达 IDLE_NUDGE_AT 纠偏一次、纠偏后累计
-    /// IDLE_ESCALATE_AT 终止。同文件连续分段读达 SEGMENT_NUDGE_AT 发专用纠偏
-    /// （不升级终止）。自动压缩后调用 `reset_idle()` 允许模型无惩罚重读重建上下文。
+    /// 空转计数；否则 idle_streak +1——达纠偏阈值纠偏一次、纠偏后累计到终止阈值则终止。
+    /// 阈值与「空转层是否终止」由 policy 决定：`Stop` = 8/14，`NudgeOnly` = 16 纠偏一次、
+    /// 空转层不终止（失败重复层与步数/汇报门不受 policy 影响）。
+    /// 同文件连续分段读达 SEGMENT_NUDGE_AT 发专用纠偏（不升级终止）。
+    /// 自动压缩后调用 `reset_idle()` 允许模型无惩罚重读重建上下文。
     pub fn feed_batch(&mut self, digest: &BatchDigest) -> Verdict {
         // 进展信号 1：批次内任何非只读工具
         if digest.has_non_readonly {
@@ -185,17 +220,28 @@ impl SupervisionState {
             }
         }
         self.idle_streak += 1;
-        if self.idle_streak >= IDLE_ESCALATE_AT && self.nudged.contains("idle") {
+        // 只读 run 的空转层只纠偏不终止（[docs/subagent-idle-watchdog-misfire]）：该层预算
+        // 天花板是 max_steps，不是「看起来像在空转」——硬终止对它属系统性误伤。
+        // 失败重复层与步数/汇报门不在本守卫范围，照常终止。
+        let stopping = self.policy == IdlePolicy::Stop;
+        if stopping && self.idle_streak >= IDLE_ESCALATE_AT && self.nudged.contains("idle") {
             return Verdict::Escalate(format!(
                 "监督介入：纠偏后仍连续 {} 步无实质进展（持续重复读取，无任何推进动作），本次 run 终止。已完成部分保留在历史中，请基于现状收尾。",
                 self.idle_streak
             ));
         }
-        if self.idle_streak >= IDLE_NUDGE_AT && self.nudged.insert("idle".into()) {
-            return Verdict::Nudge(
+        let nudge_at = if stopping {
+            IDLE_NUDGE_AT
+        } else {
+            READONLY_IDLE_NUDGE_AT
+        };
+        if self.idle_streak >= nudge_at && self.nudged.insert("idle".into()) {
+            let text = if stopping {
                 "<supervision-notice>检测到连续多步未产生实质进展（仅重复读取已读过的内容，无写入/提问/新信息收集）。请立即停止重复读取：① 用一两句话输出当前已知结论与下一步计划；② 若需要用户决策，用 ask 工具提问确认；③ 若已可行动，直接执行下一步（写文件/修改）。继续空读将导致本 run 被终止。</supervision-notice>"
-                    .into(),
-            );
+            } else {
+                "<supervision-notice>检测到连续多步仅重复读取已读过的内容。只读角色没有写工具，调研期反复精读同一批文件属正常节奏，可忽略本提示；若确实在反复空转，建议先用一两句话小结当前已知结论与剩余待查项，或直接输出最终汇报结束本 run。本提示不会终止本 run（空转层不终止；步数预算与失败重复、汇报门仍照常生效）。</supervision-notice>"
+            };
+            return Verdict::Nudge(text.into());
         }
         Verdict::None
     }
@@ -467,5 +513,70 @@ mod tests {
             assert!(matches!(s.feed_batch(&idle_step(&["a.ts"])), Verdict::None));
         }
         assert!(matches!(s.feed_batch(&idle_step(&["a.ts"])), Verdict::Nudge(_)));
+    }
+
+    // ===== 只读 run 策略（IdlePolicy::NudgeOnly，[docs/subagent-idle-watchdog-misfire]）=====
+
+    #[test]
+    fn readonly_policy_never_escalates() {
+        // 100 步纯空转：只允许一次纠偏，空转层永不终止（旧行为会在第 14 步杀掉 run；
+        // 失败重复层与步数/汇报门不属本用例范围，它们仍会终止）
+        let mut s = SupervisionState::with_idle_policy(IdlePolicy::NudgeOnly);
+        let mut nudges = 0;
+        for _ in 0..100 {
+            match s.feed_batch(&idle_step(&[])) {
+                Verdict::Nudge(_) => nudges += 1,
+                Verdict::Escalate(t) => panic!("只读 run 不得终止：{t}"),
+                Verdict::None => {}
+            }
+        }
+        assert_eq!(nudges, 1, "只读 run 的纠偏同一 run 只发一次");
+    }
+
+    #[test]
+    fn readonly_policy_nudges_at_sixteen() {
+        let mut s = SupervisionState::with_idle_policy(IdlePolicy::NudgeOnly);
+        for _ in 0..READONLY_IDLE_NUDGE_AT - 1 {
+            assert!(matches!(s.feed_batch(&idle_step(&[])), Verdict::None));
+        }
+        // 第 16 步纠偏，且文案不再威胁终止（只读 run 已无终止）
+        assert!(matches!(
+            s.feed_batch(&idle_step(&[])),
+            Verdict::Nudge(text) if !text.contains("被终止")
+        ));
+    }
+
+    #[test]
+    fn default_policy_is_stop_and_still_escalates_at_fourteen() {
+        // 策略默认值 = Stop：主会话/任务运行/可写子代理的空转语义逐字不变
+        assert_eq!(IdlePolicy::default(), IdlePolicy::Stop);
+        let mut s = SupervisionState::default();
+        for _ in 0..IDLE_NUDGE_AT {
+            let _ = s.feed_batch(&idle_step(&[]));
+        }
+        for _ in (IDLE_NUDGE_AT + 1)..IDLE_ESCALATE_AT {
+            assert!(matches!(s.feed_batch(&idle_step(&[])), Verdict::None));
+        }
+        assert!(matches!(
+            s.feed_batch(&idle_step(&[])),
+            Verdict::Escalate(text) if text.contains("本次 run 终止")
+        ));
+    }
+
+    #[test]
+    fn readonly_policy_keeps_progress_signals() {
+        // 只读策略只改「无进展时怎么处置」，进展信号语义不变：非只读工具仍清零计数
+        let mut s = SupervisionState::with_idle_policy(IdlePolicy::NudgeOnly);
+        for _ in 0..READONLY_IDLE_NUDGE_AT - 1 {
+            let _ = s.feed_batch(&idle_step(&[]));
+        }
+        let mut d = BatchDigest::default();
+        d.has_non_readonly = true;
+        assert!(matches!(s.feed_batch(&d), Verdict::None));
+        // 清零后需重新累计满阈值才纠偏
+        for _ in 0..READONLY_IDLE_NUDGE_AT - 1 {
+            assert!(matches!(s.feed_batch(&idle_step(&[])), Verdict::None));
+        }
+        assert!(matches!(s.feed_batch(&idle_step(&[])), Verdict::Nudge(_)));
     }
 }

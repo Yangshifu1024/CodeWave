@@ -60,7 +60,28 @@ S6 已写明任务包文件范围互斥为硬约束、共用文件不进任何�
   模型预首 token 慢）无活动 → 取消本次尝试的 child token，按可重试 Server 错误走既有退避
   重试（预算 6 次，耗尽才终止 run）；用户取消与停滞同帧就绪时按用户取消收尾，不误报。
 - **可见性**：纠偏消息进历史（主会话聊天可见、子代理经 sub:step 采样）+ session_log 记录；
-  不加新事件键（27 键契约不动）。
+  不加新事件键（28 键契约不动）。
+
+### 空转看门狗（`feed_batch`；补文档 2026-09-19）
+
+- **进展信号**（`BatchDigest`，由 `core/agent/drive.rs` 的 `batch_digest()` 从本批调用翻译而来）：
+  ① 批次内含**非只读工具**（按 `supervise.rs` 的 `READONLY_TOOLS` 名单判名：read / batch_read / grep /
+  calculate / list_files / web_fetch / render_html）；② `read` / `batch_read` 读到本 run **首次**的文件
+  （文件级去重）。任一命中即清零全部空转计数。
+- **`IdlePolicy::Stop`（默认）**：连续无进展 8 步注入 `<supervision-notice>` 纠偏（同一 run 一次）；
+  纠偏后累计到 14 步硬终止（`Err` → 主会话 run:error、子代理 `E_SUBAGENT`），并注入
+  `<supervision-escalated>` 引导下一 run 先 ask 询问是否继续。
+- **`IdlePolicy::NudgeOnly`（只读 run）**：16 步纠偏一次、**空转层永不终止**（失败重复层 3/5 与 6/10、
+  `max_steps` 与强制汇报门对只读 run 仍照常生效）；文案明示「只读角色没有写工具…
+  本提示不会终止本 run」。空转层不靠终止收尾，预算天花板交给 `max_steps`。
+- **同文件连续分段读**：同一文件连续分段读达 10 次 → 专用纠偏（只纠偏、不参与终止判定）。
+- **只读角色策略**：`AgentDef.readonly`（`agents/mod.rs`）标记 `explore` / `reviewer` / `code-reviewer`；
+  `tools/subagent.rs` 据此置 `DriveParams.idle_policy`，并为这些角色额外排除写工具
+  `edit`/`create`/`delete`（保留 `command`，交由 fence 把关）。主会话 / 任务运行 / 可写子代理一律 `Stop`。
+- **压缩后免惩罚重读**：自动压缩成功即调 `reset_idle()`——空转计数清零 + 已读文件集合清空
+  （重读按「首次读」计），压缩丢细节后的重建上下文不计空转。
+
+> 该机制的键位缺陷（只读 run 被误杀）与只读策略详见 [subagent-idle-watchdog-misfire](./subagent-idle-watchdog-misfire.md)。
 
 ## 五、子代理步数显示失真（120/60）
 
