@@ -1099,7 +1099,15 @@ mod tests {
     fn uri_and_path_keys_match_for_real_files() {
         // 真实存在的文件：两侧都能 canonicalize，结论必须一致（含中文目录）
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("中文 目录");
+        // 先把临时目录解析成真实路径：`/var` → `/private/var` 这类符号链接会让「同一条路径的
+        // 两种大小写写法」落不到同一个键——大写写法在大小写敏感的卷上 canonicalize 失败、留在
+        // `/VAR/…`，而文件侧解析成功、带上了 `/private` 前缀。Windows 保持原样（本就没有这层链接）。
+        let base = if cfg!(windows) {
+            tmp.path().to_path_buf()
+        } else {
+            std::fs::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf())
+        };
+        let dir = base.join("中文 目录");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("x.ts");
         std::fs::write(&file, "x").unwrap();
