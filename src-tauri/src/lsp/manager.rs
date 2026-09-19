@@ -9,6 +9,7 @@ use super::client::LspClient;
 use super::diagnostics::{self, DedupBrake};
 use super::discovery::{self, Discoverer, ServerResolution};
 use super::pool::{AcquireError, LspPool};
+use super::sdk;
 use super::server_spec;
 use super::workspace;
 use super::{
@@ -144,7 +145,7 @@ impl LspManager {
         if !evidence.ready_for(current.is_empty()) {
             // 同一 server 实例**首次**降级报一条 warn：含语言 / server 名 / 就绪证据标签。
             // 「功能哑火且查不出原因」是最难定位的故障形态，这条 warn 是它唯一的可观测点。
-            // 注意：**不**改 `ServerStatus` 字段（那是前后端契约）；后续降级降回 debug 不刷屏。
+            // 注意：**不**改 `ServerStatus` 字段（前后端契约，只允许纯追加新字段）；后续降级降回 debug 不刷屏。
             if client.note_degraded_once() {
                 tracing::warn!(
                     lang = lang.id(),
@@ -321,6 +322,8 @@ impl LspManager {
                     command: None,
                     docs_url: Some(spec.install.docs_url.to_string()),
                     prerequisite: spec.install.prerequisite.clone(),
+                    // 未启用态没有「一键安装」一说（动作是启用），故不探测前置命令
+                    requires: None,
                 })
             } else if !res.found {
                 res.install.clone()
@@ -336,6 +339,8 @@ impl LspManager {
                 version,
                 detail: res.detail.clone(),
                 install,
+                // SDK 探测不启进程（纯文件存在性检查），故每语言都可同步做
+                sdk: sdk::probe(lang, &v.lsp, &disc),
             });
         }
         out

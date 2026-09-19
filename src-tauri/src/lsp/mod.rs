@@ -18,6 +18,7 @@ pub mod install;
 pub mod manager;
 pub mod pool;
 pub mod protocol;
+pub mod sdk;
 pub mod server_spec;
 pub mod workspace;
 
@@ -283,6 +284,41 @@ pub struct InstallHint {
     pub docs_url: Option<String>,
     /// 前置条件（如「需 JDK 21+」）
     pub prerequisite: Option<String>,
+    /// 一键安装所需的前置命令探测（`installable` 才有值）
+    #[serde(default)]
+    pub requires: Option<InstallRequirement>,
+}
+
+/// 一键安装的前置命令（如 TS/Python 依赖的 `npm`）。
+///
+/// 为什么要单独探测：安装命令写死为 `npm i -g ...`，而机器上没装 Node.js 时用户只会在点击后
+/// 拿到一句含糊的「未找到 npm，无法执行安装」；有了本字段，设置页能在点击前就提示「先装 Node.js」。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallRequirement {
+    /// 可执行名（`npm` / `go` / `rustup`）
+    pub command: String,
+    /// 展示名（如 `Node.js`）：与 [`SdkStatus::name`] 分开——Python 行缺的是 Node.js，
+    /// 不能拿「Python」充数。
+    #[serde(default)]
+    pub name: String,
+    /// 当前能否解析到（生效 PATH + 语言约定目录）
+    pub ready: bool,
+    /// 缺失时的官方下载地址（如 Node.js 下载页）
+    pub docs_url: Option<String>,
+}
+
+/// 语言工具链（SDK）就绪情况（[`ServerStatus::sdk`] 的数据源）。
+///
+/// 与「server 是否找到」分开表达：前者是语言本身（Go 工具链 / JDK / Node.js），后者是语言服务器
+/// （gopls / jdtls / typescript-language-server）——两件事的解决方式完全不同，不能混成一句「未找到」。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SdkStatus {
+    /// 是否已就绪
+    pub ready: bool,
+    /// 展示名（如 `Node.js` / `JDK 21+`）
+    pub name: String,
+    /// 人类可读补充（找到的可执行文件路径，或没找到的原因）
+    pub detail: String,
 }
 
 /// 单语言 server 状态（设置页展示 + `lsp:server_missing` 事件判定）。
@@ -294,7 +330,8 @@ pub struct ServerStatus {
     pub enabled: bool,
     /// 是否找到可用 server
     pub found: bool,
-    /// 来源：`config` | `project` | `path` | `fresh_path` | `extra_root` | `npx` | `heuristic` | `""`
+    /// 来源：`config` | `project` | `fresh_path` | `lang_bin` | `path` | `extra_root` | `npx`
+    /// | `heuristic` | `""`
     pub source: String,
     /// 解析出的启动命令（展示用，含参数）
     pub command: String,
@@ -304,4 +341,7 @@ pub struct ServerStatus {
     pub detail: String,
     /// 只有在「未启用」或「未找到」时才有值
     pub install: Option<InstallHint>,
+    /// 该语言的工具链（SDK）是否就绪（与 server 是否找到分开表达）
+    #[serde(default)]
+    pub sdk: SdkStatus,
 }

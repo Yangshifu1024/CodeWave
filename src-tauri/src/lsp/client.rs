@@ -334,7 +334,7 @@ impl Inner {
     }
 
     /// 首次降级（就绪证据不足）报一次 warn：同实例只报一次，绝不刷屏。
-    /// **不**改 `ServerStatus` 字段（那是前后端契约）。
+    /// **不**改 `ServerStatus` 字段（前后端契约，只允许纯追加新字段）。
     fn note_degraded_once(&self) -> bool {
         !self.degraded_warned.swap(true, Ordering::SeqCst)
     }
@@ -610,7 +610,7 @@ impl LspClient {
 
     /// 该实例是否**首次**因「就绪证据不足」降级（`true` = 首次，调用方可据此报一条 warn）。
     ///
-    /// 同一实例只返回一次 `true`：不刷屏，也不动 `ServerStatus` 字段（那是前后端契约）。
+    /// 同一实例只返回一次 `true`：不刷屏，也不动 `ServerStatus` 字段（前后端契约，只允许纯追加）。
     pub fn note_degraded_once(&self) -> bool {
         self.inner.note_degraded_once()
     }
