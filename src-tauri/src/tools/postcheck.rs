@@ -54,7 +54,11 @@ pub struct CheckResult {
 
 impl CheckResult {
     /// 未执行的跳过结果（`ran=false`、`output` 可携带如实原因）。
-    pub fn skipped(reason: SkipReason, command: impl Into<String>, output: impl Into<String>) -> Self {
+    pub fn skipped(
+        reason: SkipReason,
+        command: impl Into<String>,
+        output: impl Into<String>,
+    ) -> Self {
         CheckResult {
             ran: false,
             ok: false,
@@ -311,7 +315,10 @@ mod tests {
             "eslint 'ui/src/x.ts'"
         );
         // 无占位符：原样
-        assert_eq!(substitute_file("cargo check", "x.rs", &Shell::Sh), "cargo check");
+        assert_eq!(
+            substitute_file("cargo check", "x.rs", &Shell::Sh),
+            "cargo check"
+        );
         // 防注入：路径里的 shell 元字符被引号封住，不会成为命令分隔符
         assert_eq!(
             substitute_file("eslint {file}", "a; rm -rf ~", &Shell::Sh),
@@ -414,16 +421,13 @@ mod tests {
     #[tokio::test]
     async fn multibyte_output_is_not_corrupted() {
         let (ctx, _ws, _dd) = project_ctx("pc-utf8");
-        let r = run_command(
-            &ctx,
-            "printf '前缀-你好世界-后缀'",
-            None,
-            10,
-            3000,
-        )
-        .await;
+        let r = run_command(&ctx, "printf '前缀-你好世界-后缀'", None, 10, 3000).await;
         assert!(r.output.contains("你好世界"), "{:?}", r.output);
-        assert!(!r.output.contains('\u{FFFD}'), "不得出现替换符：{:?}", r.output);
+        assert!(
+            !r.output.contains('\u{FFFD}'),
+            "不得出现替换符：{:?}",
+            r.output
+        );
     }
 
     /// §4.3 超时：终止整个进程组，如实带回已有部分输出，skipped=timeout。

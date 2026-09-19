@@ -41,7 +41,6 @@ import {
   PAGE_LABEL_KEY,
   PAGE_ORDER,
   SETTINGS_ADVANCED_PREF_KEY,
-  SETTINGS_ITEMS,
   advancedCountByPage,
   matchSettings,
   normalizePageKey,

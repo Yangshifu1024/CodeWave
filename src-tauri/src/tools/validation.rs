@@ -11,8 +11,8 @@
 //! 纪律：**没真的跑过，文案里绝不出现「通过」**；多文件批次逐文件成条，
 //! 绝不因为批里某个文件跑过就给整批打「通过」。
 
-use super::postcheck::{self, CheckResult, SkipReason};
 use super::ToolCtx;
+use super::postcheck::{self, CheckResult, SkipReason};
 use crate::core::config::PostWriteCheckSettings;
 use std::path::{Path, PathBuf};
 
@@ -240,7 +240,8 @@ mod tests {
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
         };
         let core = crate::core::agent::test_support::make_core(&roots);
-        let rt = core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
+        let rt =
+            core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
         let ctx = ToolCtx {
             core: core.clone(),
             rt,
@@ -270,9 +271,10 @@ mod tests {
         )
         .await;
         assert_eq!(out.len(), 2);
-        assert!(out
-            .iter()
-            .all(|c| c.check.skipped == Some(SkipReason::NoProject)));
+        assert!(
+            out.iter()
+                .all(|c| c.check.skipped == Some(SkipReason::NoProject))
+        );
 
         // 无命令：json 内置解析照样给结论（不依赖项目）
         let off = PostWriteCheckSettings::default();

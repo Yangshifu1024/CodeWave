@@ -128,8 +128,8 @@ impl Tool for CreateTool {
                 let mut out =
                     ToolOutcome::ok(json!({ "path": args.path, "bytes": args.content.len() }));
                 if let Some(first) = checks.into_iter().next() {
-                    out.data["check"] = serde_json::to_value(&first.check)
-                        .unwrap_or(serde_json::Value::Null);
+                    out.data["check"] =
+                        serde_json::to_value(&first.check).unwrap_or(serde_json::Value::Null);
                 }
                 out
             }
@@ -313,7 +313,11 @@ mod tests {
         assert_eq!(out.data["check"]["ran"], json!(false));
         assert_eq!(out.data["check"]["ok"], json!(false));
         assert_eq!(out.data["check"]["skipped"], json!("disabled"));
-        assert!(out.warnings.is_empty(), "检查不再走 warnings：{:?}", out.warnings);
+        assert!(
+            out.warnings.is_empty(),
+            "检查不再走 warnings：{:?}",
+            out.warnings
+        );
 
         // JSON 走内置解析：坏 JSON → ok=false、output 带错误；结论同样在 data
         let out = CreateTool
