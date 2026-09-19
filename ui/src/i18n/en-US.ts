@@ -37,6 +37,9 @@ export default {
     diff: "Changes",
     tasks: "Tasks",
     stats: "Stats",
+    // Startup auto-cleanup notice (docs/session-cleanup.md): the backend already cleaned up once at launch,
+    // so the toast appears only when something was actually deleted; it lives in the app shell startup flow
+    cleanupAutoDone: "Cleaned up {{n}} session(s) by the retention period",
   },
   // The `about` segment moved into settings.about* (batch ④): the registry's reference closure only
   // scans the settings.* prefix, so only after the move are these keys guarded by the contract test.
@@ -125,6 +128,37 @@ export default {
     shellLimited: "(limited support)", shellDetectFailed: "Shell detection failed; only the auto option is shown",
     shellNotDetected: "The selected shell was not detected; execution will fall back to the auto-detected shell",
     shellNoPath: "This shell has no fixed executable path (e.g. WSL distros)",
+    // Session retention and cleanup (docs/session-cleanup.md): dropdown / action button / read-only status row
+    sessionRetention: "Session retention",
+    sessionRetentionHint: "Sessions older than this are cleaned up automatically (once at startup and once when settings are saved); last activity = last modified or last opened. Off by default.",
+    cleanupNever: "Never",
+    cleanupDays: "{{n}} days",
+    cleanupNow: "Clean up now",
+    cleanupStatus: "Last cleanup",
+    cleanupNeedRetention: "Choose a retention period first",
+    cleanupUnsavedFirst: "Save your changes first",
+    cleanupNonePending: "Nothing to clean up",
+    cleanupPreviewFailed: "Cleanup preview failed; nothing was cleaned up (settings saved)",
+    cleanupConfirmTitle: "Clean up now?",
+    cleanupSaveConfirmTitle: "Confirm cleanup before saving",
+    cleanupConfirmDesc: "{{n}} session(s) will be deleted; this cannot be undone.",
+    // Confirm-dialog text when only index-orphan files are left (no session is deleted): those sessions are
+    // long gone from the list, so "N sessions will be deleted" would be both untrue and unverifiable
+    cleanupOrphanDesc: "{{n}} leftover data file(s) will be cleaned up (those sessions are no longer listed).",
+    cleanupConfirmListTitle: "Including:",
+    cleanupConfirmOk: "Clean up",
+    cleanupSaveSkip: "Skip this time (cleanup still runs on next launch)",
+    cleanupSavedSkipped: "Settings saved without cleanup (the new retention period still applies on next launch)",
+    cleanupDone: "Cleaned up {{n}} session(s) and closed {{m}} tab(s)",
+    // Warning shown when some sessions could not be cleaned up (files in use / index write failure):
+    // reporting only "cleaned up 0 session(s)" makes it look like nothing happened
+    cleanupFailed: "{{n}} session(s) could not be cleaned up (files may be in use; try again later)",
+    // Extra line when both sessions and leftover data files are removed (confirm dialog + completion notice)
+    cleanupOrphanExtra: "Plus {{n}} leftover data file(s) (those sessions are no longer listed).",
+    cleanupDoneOrphans: " (plus {{n}} leftover data file(s))",
+    cleanupNeverRun: "No cleanup yet",
+    cleanupLastRun: "{{time}} · {{n}} session(s) deleted",
+    cleanupLastFailed: " ({{n}} failed)",
     logLevelHint: "Level of global diagnostic logs under ~/.codewave/logs; applies immediately on save (RUST_LOG env var takes precedence when set)",
     sessionVerboseHint: "Log full LLM request/response text into the session log file (size- and privacy-sensitive; enable only for troubleshooting)",
     updates: "Updates",

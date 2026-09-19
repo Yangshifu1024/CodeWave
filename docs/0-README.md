@@ -44,6 +44,7 @@
 - 2026-09-04 · [macos-notify-use-default-dialog-fix.md](./macos-notify-use-default-dialog-fix.md) — 缺陷修复：macOS 首次通知弹「Choose Application」系统对话框（mac-notification-sys 内部 Once 消费 + 主动 set_application）
 - 2026-09-08 · [windows-toast-aumid.md](./windows-toast-aumid.md) — 缺陷修复：Windows 通知显示 PowerShell 图标/标题且点击不回跳（AUMID 借用 POWERSHELL_APP_ID 之故）——NSIS 钩子 + WiX 片段在安装时写 AppUserModelId 注册表键，运行时只读检测 + 回退链，依赖升级 tauri-winrt-notification 0.8.1
 - 2026-09-16 · [reasoning-content-passthrough.md](./reasoning-content-passthrough.md) — 缺陷修复：thinking 上游要求历史 assistant 回传 `reasoning_content`（缺失即 400，DeepSeek 系经中转）——出站映射按内容块顺序拼接思考块上 wire + 落盘保留思考（`sanitize_for_save`）/ 8MB 回退改「剥图留思考」（`sanitize_keep_thinking`）+ 400 文案分类（Rejected/Demanded/Unrelated）与会话级粘性标记（拒收型端点一次命中即停发、Demanded 复位自愈、子代理继承），空守卫与 anthropic/openai_responses 边界不变，前端零改动
+- 2026-09-19 · [session-cleanup.md](./session-cleanup.md) — 会话保留期与清理（**已实施**：后端 864 例 + 集成 17 例、前端 72 文件 714 例、构建通过；两轮审查各修一个 🔴——索引不可读时的残留误删、以及索引损坏重建后守卫被顶掉）：设置页「工作区与智能体」新增保留期配置（默认不清理 / 1/3/7/14/30 天）+ 手动「立即清理」与「上次清理」只读展示；按最近活动时间（`updated_at` 与新增的「最近打开时间」取较新者、精确 N×24 小时）清理会话索引行/历史/边车/子代理过程历史/该会话日志/该会话产生的计划文件，并回收索引外残留；触发点为启动时（异步、不阻塞窗口）+ 保存设置时（先弹条数与前几条标题的确认，取消则仅本次跳过）；计划文件落盘登记归属（产物边车加「种类」标记，右栏文件列表过滤）；清理记录持久化（上次清理时间与条数）；不新增前端事件、不做回收站、默认不清理；第 2 版补充：最近打开时间节流落盘、保留期为不清理时按钮禁用、执行期间转圈与完成提示、“保存并离开”同样先确认、并顺手补上启动恢复的「列表不可信」守卫（会话列表加载失败时不剔除 Tab）
 
 ## 编排与工作流
 

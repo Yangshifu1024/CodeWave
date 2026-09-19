@@ -72,6 +72,11 @@ pub async fn load_session(
     workspace: String,
 ) -> Result<Vec<Message>, String> {
     let msgs = core.store.load_history(&session_id).map_err(err)?;
+    // [docs/session-cleanup](../../../../docs/session-cleanup.md)：打开即刷新「最近打开时间」（10 分钟节流，
+    // 避免每次打开都重写整份索引；失败只记告警，绝不影响打开会话）
+    if let Err(e) = core.store.touch_session_open(&session_id, chrono::Utc::now()) {
+        tracing::warn!("会话 {session_id} 最近打开时间落盘失败：{e}");
+    }
     // 项目快照加载：project_id/roots 以 meta 为准（legacy 免目录会话自然回退单根）
     let (pid, roots, project_dir, meta_title) = match core.store.get(&session_id) {
         Some(meta) => {
@@ -355,3 +360,108 @@ pub async fn stop_subagent(
 }
 
 // ---------- Run 日志（[docs/session-logging-report](../../../../docs/session-logging-report.md)；校验与读取在 core/logging，host 只转调）----------
+
+// ---------- 会话保留期清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)）----------
+
+/// 预览清理：返回将删除的会话条数与前几条标题，外加索引外残留项数（保存前的确认框内容）。
+/// `days` 缺省时用已保存的保留期；保留期为「不清理」时报错（前端按钮同样禁用）。
+/// 配置里的档位非法（白名单之外，手改配置/旧值）时返回**空预览**并记 warn：一律不清理。
+#[tauri::command]
+pub async fn preview_session_cleanup(
+    core: Core<'_>,
+    days: Option<u32>,
+) -> Result<crate::core::sessions::CleanupPreview, String> {
+    let Some(days) = resolve_retention(&core, days)? else {
+        return Ok(crate::core::sessions::CleanupPreview::default());
+    };
+    Ok(crate::core::sessions::cleanup::preview_all(
+        &core.store,
+        &core.store.load_index().sessions,
+        chrono::Utc::now(),
+        days,
+        &running_ids(&core),
+    ))
+}
+
+/// 立即清理：用**已保存的**保留期跑一次，返回被删会话 id 列表（前端据此关标签页并刷新列表）。
+/// 配置里的档位非法时什么都不删（返回空结果，已记 warn）。
+#[tauri::command]
+pub async fn run_session_cleanup(
+    core: Core<'_>,
+) -> Result<crate::core::sessions::CleanupOutcome, String> {
+    let Some(days) = resolve_retention(&core, None)? else {
+        return Ok(crate::core::sessions::CleanupOutcome::default());
+    };
+    Ok(execute_cleanup(&core, days))
+}
+
+/// 上次清理状态（存在后端，重启后仍在；启动时的自动清理也计入）。
+#[tauri::command]
+pub async fn get_cleanup_status(
+    core: Core<'_>,
+) -> Result<crate::core::sessions::CleanupStatus, String> {
+    Ok(crate::core::sessions::cleanup::read_status(&core.data_dir))
+}
+
+/// 解析本次清理要用的保留期：显式天数优先（设置页的草稿值），否则取已保存配置。
+/// - `Ok(Some(days))`：合法档位（1/3/7/14/30），照常清理；
+/// - `Ok(None)`：配置里的值不是合法档位（白名单之外，含 0）——一律不清理，已记 warn；
+/// - `Err`：当前是「不清理」（未设置）——报错，前端按钮同样禁用。
+fn resolve_retention(
+    core: &crate::core::agent::AgentCore,
+    days: Option<u32>,
+) -> Result<Option<u32>, String> {
+    use crate::core::sessions::cleanup::RetentionChoice;
+    let saved = core.cfg.read().unwrap().sessions.retention_days;
+    match crate::core::sessions::cleanup::resolve_retention(days, saved) {
+        RetentionChoice::Run(d) => Ok(Some(d)),
+        RetentionChoice::Invalid(_) => Ok(None),
+        RetentionChoice::Skip => Err("未设置会话保留期（当前为「不清理」）".into()),
+    }
+}
+
+/// 运行中的会话 id：索引标记 ∪ 进程内运行集合（core 存储侧）∪ 会话运行态（运行时注册表）。
+/// 宁可不删也不误删——运行中的会话被删后，迟到写入会把索引行“复活”。
+fn running_ids(core: &crate::core::agent::AgentCore) -> std::collections::HashSet<String> {
+    use std::sync::atomic::Ordering;
+    let mut set = crate::core::sessions::cleanup::running_set(&core.store);
+    for e in core.sessions.iter() {
+        if e.value().running.load(Ordering::SeqCst) {
+            set.insert(e.key().clone());
+        }
+    }
+    set
+}
+
+/// 执行一次清理：同步挑候选 → 删文件 → 一次性写索引 → 扫索引外残留 → 写状态文件；
+/// 随后把被删会话的运行时对象从内存注册表移除（复用 delete_session 的收尾方式：先标 zombie，
+/// 让迟到的检查点/日志写入无法复活已删除会话）。
+/// 「立即清理」命令与保存配置（保留期变化）共用。
+pub(crate) fn execute_cleanup(
+    core: &crate::core::agent::AgentCore,
+    days: u32,
+) -> crate::core::sessions::CleanupOutcome {
+    use std::sync::atomic::Ordering;
+    let running = running_ids(core);
+    let candidates = crate::core::sessions::cleanup::select_expired(
+        &core.store.load_index().sessions,
+        chrono::Utc::now(),
+        days,
+        &running,
+    );
+    // 先标 zombie（在删文件之前）：候选会话的运行时若还在内存里，任何在途写入都不得让它复活
+    for m in &candidates {
+        if let Some(rt) = core.session(&m.id) {
+            rt.zombie.store(true, Ordering::SeqCst);
+        }
+    }
+    let outcome =
+        crate::core::sessions::cleanup::execute(&core.store, &core.data_dir, days, &candidates);
+    for id in &outcome.ids {
+        if let Some(rt) = core.session(id) {
+            rt.zombie.store(true, Ordering::SeqCst);
+        }
+        core.sessions.remove(id);
+    }
+    outcome
+}

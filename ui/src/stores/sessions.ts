@@ -55,6 +55,15 @@ interface SessionsState {
   tabs: Tab[];
   activeKey: string | null;
   sessions: SessionMeta[];
+  /** 上一次 refresh 是否失败（true = 当前 sessions 不可信，未必等于后端的真实列表）。
+   *  只有一个消费方：restoreTabs 的「列表不可信」守卫——不可信时不按「未知即已删」剔除 Tab。
+   *  刷新成功即复位；不写盘、不进快照。 */
+  sessionsLoadFailed: boolean;
+  /** 上一次 loadProjects 是否失败（true = 当前 projects 不可信）。
+   *  与 sessionsLoadFailed 同一口径、同一个消费方（restoreTabs）：两份列表都可信才做失效引用剔除——
+   *  项目列表此前是「失败即置空数组」，一次 IPC 抖动会连快照里带项目的 Tab 一起剔光。
+   *  加载成功即复位；不写盘、不进快照。 */
+  projectsLoadFailed: boolean;
   projects: ProjectEntry[];
   loading: boolean;
   /** [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：会话结束未读点（用户离开时 run done/error 置位）。仅内存态，不持久化 */
@@ -68,6 +77,8 @@ interface SessionsState {
   refresh(): Promise<void>;
   loadProjects(): Promise<void>;
   /** 重启恢复（会话保存与恢复优化 · 批1）：按 ui-state 重建 Tab 骨架；会话已删/项目已删的引用静默剔除。
+   *  「会话列表不可信」守卫（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 28 条）：
+   *  上一次 refresh 失败时跳过会话维度的剔除，不因一次 IPC 抖动清空工作现场。
    *  返回保留下来的 sessionId（顺序同 Tab 条），活跃 Tab 失效时回落邻位（同项目优先） */
   restoreTabs(input: {
     tabs: RestoredTab[];
@@ -90,6 +101,10 @@ interface SessionsState {
   /** 落实关 Tab 确认结果：discard = 丢弃未发送内容；keep = 搬进驻留表（重开该会话时回填） */
   resolveCloseTab(key: string, choice: "discard" | "keep"): void;
   removeSession(meta: SessionMeta): Promise<void>;
+  /** 应用清理结果（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 15 条）：把被清理掉的会话从前端
+   *  现场收干净——丢弃驻留内容 → 清运行态 → 关 Tab（活跃 Tab 被关则回落）→ 刷新会话列表；
+   *  返回被关闭的 Tab 数（设置页据此报「关闭 M 个标签页」） */
+  applyCleanup(ids: string[]): number;
   rename(meta: SessionMeta, title: string): Promise<void>;
   /** 后端自动命名落地（session:title 事件）：同步会话列表 meta 与已开 Tab 的标题 */
   applyTitle(sessionId: string, title: string): void;
@@ -141,6 +156,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
   sessions: [],
   projects: [],
   loading: false,
+  sessionsLoadFailed: false,
+  projectsLoadFailed: false,
   explorerOpen: localStorage.getItem("ws_explorer_open") !== "0",
   unread: {},
 
@@ -160,17 +177,33 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
 
   async refresh() {
-    set({ sessions: await ipc.listSessions().catch(() => []) });
+    // 失败不置空列表：旧写法 `.catch(() => [])` 把列表容错成空数组，restoreTabs 随即把快照里的 Tab
+    // 全当失效引用剔除（一次 IPC 抖动 = 工作现场被清空）。现在只标记「列表不可信」，
+    // 保留上一份列表给左栏与恢复判定用；下次刷新成功即复位。调用方行为不变（不抛错、不感知）。
+    try {
+      const list = await ipc.listSessions();
+      set({ sessions: list, sessionsLoadFailed: false });
+    } catch {
+      set({ sessionsLoadFailed: true });
+    }
   },
 
   restoreTabs(input) {
-    const known = new Set(get().sessions.map((s) => s.id));
-    const projIds = new Set(get().projects.map((p) => p.id));
+    const { sessions, projects, sessionsLoadFailed, projectsLoadFailed } = get();
+    // 两份列表都可信才做失效引用剔除（会话维度、项目维度同一条件）：refresh / loadProjects 失败时，
+    // 手里这份列表可能是旧的或压根没加载过，按「未知即已删」整表剔除会把用户的 Tab 全清掉。
+    // 会话列表守卫见 [docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 28 条；项目列表此前是
+    // 失败置空数组（loadProjects 的 .catch(() => [])），一次 IPC 抖动会连项目 Tab 一起剔光，本次一并收口。
+    // 列表真的为空（用户确实没有会话 / 项目）而两次加载都成功时，trusted 仍为 true，照旧剔除。
+    const trusted = !sessionsLoadFailed && !projectsLoadFailed;
+    const known = new Set(sessions.map((s) => s.id));
+    const projIds = new Set(projects.map((p) => p.id));
     const kept: Tab[] = [];
     for (const raw of input.tabs) {
       // 失效引用静默剔除：会话不在 listSessions 结果里（已删）或所属项目已删 ⇒ 丢弃该项，不报错
-      if (!raw?.key || !known.has(raw.key)) continue;
-      if (raw.projectId && !projIds.has(raw.projectId)) continue;
+      if (!raw?.key) continue;
+      if (trusted && !known.has(raw.key)) continue;
+      if (trusted && raw.projectId && !projIds.has(raw.projectId)) continue;
       kept.push({
         key: raw.key,
         sessionId: raw.key,
@@ -193,10 +226,12 @@ export const useSessions = create<SessionsState>((set, get) => ({
       const near = srcIdx >= 0 ? nearestTab(kept, srcIdx) : null;
       activeKey = (sameProject ?? near ?? kept[0]).key;
     }
-    // 未读集合恢复上次快照（不是启动全标未读）；只保留仍存在的会话
+    // 未读集合恢复上次快照（不是启动全标未读）；列表可信时只保留仍存在的会话（不可信时照旧保留）
     const unread: Record<string, boolean> = {};
     for (const [id, flag] of Object.entries(input.unread ?? {})) {
-      if (flag && known.has(id)) unread[id] = true;
+      if (!flag) continue;
+      if (trusted && !known.has(id)) continue;
+      unread[id] = true;
     }
     set({ tabs: kept, activeKey, unread });
     return kept.map((t) => t.key);
@@ -215,7 +250,16 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
 
   async loadProjects() {
-    set({ projects: await ipc.listProjects().catch(() => []) });
+    // 与 refresh() 同一口径：失败不置空列表。旧写法 `.catch(() => [])` 把项目列表容错成空数组，
+    // restoreTabs 随即把快照里带项目的 Tab 全当失效引用剔除（一次 IPC 抖动 = 项目 Tab 全没）；
+    // 现在只标记「列表不可信」，保留上一份列表给左栏与恢复判定用，加载成功即复位。
+    // 调用方行为不变（不抛错、不感知）。
+    try {
+      const list = await ipc.listProjects();
+      set({ projects: list, projectsLoadFailed: false });
+    } catch {
+      set({ projectsLoadFailed: true });
+    }
   },
 
   async addProject(entry) {
@@ -367,6 +411,31 @@ export const useSessions = create<SessionsState>((set, get) => ({
     dropTabContent(meta.id);
     get().closeTab(meta.id, { force: true });
     await get().refresh();
+  },
+
+  applyCleanup(ids) {
+    if (!ids.length) return 0;
+    // 顺序纪律照抄 deleteProject/removeSession：一切枚举都必须在 refresh() **之前**——
+    // 刷新后这些会话已不在列表里，就无从知道该清谁。
+    // 1) 逐个会话先丢弃驻留内容（关 Tab 时选「保留」而寄存的草稿/队列/面板）：不清则快照照旧写盘，
+    //    下次启动又搬回驻留表，已删会话的草稿永久复现（审查 E14）；2) 紧接着清运行态，迟到的检查点
+    //    写入不会把已删会话「复活」在前端（未开 Tab 的会话也照样清一道，删不存在的桶是空操作）
+    const closed = get().tabs.filter((t) => ids.includes(t.key)).map((t) => t.key);
+    for (const id of ids) {
+      dropTabContent(id);
+      useRun.getState().dispose(id);
+    }
+    // 3) 关 Tab：活跃 Tab 被关掉时沿用 deleteProject 的回落写法（落到剩下的第一个 Tab，都不剩则空态）
+    set((s) => {
+      const tabs = s.tabs.filter((t) => !ids.includes(t.key));
+      const activeKey =
+        s.activeKey && closed.includes(s.activeKey) ? (tabs[0]?.key ?? null) : s.activeKey;
+      return { tabs, activeKey };
+    });
+    // 4) 最后刷新列表：被删条目从左栏消失。本动作按契约同步返回关闭数，故 refresh 不 await
+    //    （refresh 自身不抛错：失败只标记「列表不可信」，不会浮出未处理的 rejection）
+    void get().refresh();
+    return closed.length;
   },
 
   async rename(meta, title) {

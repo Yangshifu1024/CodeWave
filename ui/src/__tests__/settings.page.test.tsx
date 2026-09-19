@@ -125,6 +125,8 @@ import { useUi } from "../stores/ui";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
 import { PAGE_GROUPS, PAGE_ORDER, SETTINGS_ITEMS, type PageKey } from "../features/panels/settingsRegistry";
+// 清理提示的去重记录键（与启动轻提示共用一处口径；键名本身就是契约）
+import { CLEANUP_NOTICE_SEEN_KEY } from "../utils/cleanupNotice";
 
 /** 当前 IPC mock（用例覆盖实现后再复位） */
 async function invokeMock() {
@@ -1562,5 +1564,408 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
       }
     }
     expect(missing, `缺锚点：${missing.join("、")}`).toEqual([]);
+  });
+});
+
+// ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 12/13/25/26/27 条） ----------
+// 两条清理路径（手动「立即清理」与保存时自动清理）都必须：只认已保存的保留期、删前有预览与确认、
+// 删后用返回的 id 收尾 Tab（关闭数回显在提示里）、并刷新「上次清理」只读行。
+describe("设置页：会话保留期与清理", () => {
+  /** 清理命令的调用记录（每个用例开头的 mockCleanupIpc 会先复位）；status = 读「上次清理」的次数 */
+  const calls = { preview: [] as (number | null)[], run: 0, save: [] as any[], status: 0 };
+
+  /** 带保留期的配置（fixtureConfig 没有 sessions 段 = 旧配置同形，这里显式补上） */
+  function configWithRetention(days: number | null) {
+    return { ...fixtureConfig, sessions: { retention_days: days } };
+  }
+
+  /**
+   * 清理链路的 IPC mock：get_config 带保留期（**必须在 mountWithSession 之前装上**：
+   *  App 启动时就拉配置）；预览 / 执行两个命令按用例给值；
+   * save_config 记录入参并模拟后端语义（本次跳过清理 → 返回 null，否则返回配置里的清理结果）；
+   * 「上次清理」状态只在真的清理过之后才回记录（跑之前的空态也是只读行契约的一部分）。
+   */
+  async function mockCleanupIpc(opts: {
+    retention: number | null;
+    preview?: { count: number; titles: string[]; orphan_count?: number };
+    outcome?: { ids: string[]; deleted: number; failed: number };
+    status?: { last_run_at: string | null; last_deleted: number; last_failed: number };
+    /** true = 一撕开就读到清理记录（模拟「启动时已清理过」）；默认只在本页真的清理后才回记录 */
+    statusAtMount?: boolean;
+  }) {
+    const emptyStatus = { last_run_at: null, last_deleted: 0, last_failed: 0 };
+    calls.preview.length = 0;
+    calls.save.length = 0;
+    calls.run = 0;
+    calls.status = 0;
+    const invoke = await invokeMock();
+    invoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "get_config") return configWithRetention(opts.retention);
+      if (cmd === "preview_session_cleanup") {
+        calls.preview.push(args?.days ?? null);
+        return opts.preview ?? { count: 0, titles: [], orphan_count: 0 };
+      }
+      if (cmd === "run_session_cleanup") {
+        calls.run += 1;
+        return opts.outcome ?? { ids: [], deleted: 0, failed: 0 };
+      }
+      if (cmd === "get_cleanup_status") {
+        calls.status += 1;
+        const cleaned = opts.statusAtMount || calls.run > 0 || calls.save.some((a) => !a?.skipCleanup);
+        return cleaned ? opts.status ?? emptyStatus : emptyStatus;
+      }
+      if (cmd === "save_config") {
+        calls.save.push(args);
+        return args?.skipCleanup ? null : opts.outcome ?? null;
+      }
+      return baseInvoke(cmd, args);
+    });
+  }
+
+  /** 保留期下拉（按 Form.Item 标签定位，避免抓到本页的 Shell 下拉） */
+  function retentionSelect(): HTMLElement {
+    return controlByLabel("会话保留期").querySelector(".ant-select") as HTMLElement;
+  }
+
+  /** 当前下拉里的档位文本（含已收起但仍在 DOM 里的下拉） */
+  function retentionOptionTexts(): string[] {
+    return Array.from(document.querySelectorAll(".ant-select-item-option")).map((o) => (o.textContent ?? "").trim());
+  }
+
+  /** 选一个档位：展开（首次会等下拉渲染）→ 按文本点选项（选完自动收起，下次 mouseDown 又是「展开」） */
+  async function pickRetention(text: string) {
+    fireEvent.mouseDown(retentionSelect());
+    const option = await waitFor(() => {
+      const el = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+        (o) => (o.textContent ?? "").trim() === text,
+      ) as HTMLElement | undefined;
+      expect(el, `保留期选项缺失：${text}`).toBeTruthy();
+      return el!;
+    }, { timeout: 3000 });
+    fireEvent.click(option);
+  }
+
+  /** 「上次清理」只读行（注册表锚点；常驻渲染） */
+  function cleanupStatusRow(): HTMLElement {
+    return document.querySelector('[data-setting-id="app.cleanup_status"]') as HTMLElement;
+  }
+
+  it("保留期下拉：默认「不清理」、六个档位齐备；选中后亮该页脏点、选回不清理即熄灭", async () => {
+    await mockCleanupIpc({ retention: null });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    expect(retentionSelect().textContent).toContain("不清理");
+    // 一次展开既断言档位又顺手选中「7 天」：之后 mouseDown 就是「展开」而不是「收起」
+    fireEvent.mouseDown(retentionSelect());
+    await waitFor(() => expect(document.querySelector(".ant-select-item-option")).toBeTruthy(), { timeout: 3000 });
+    expect(retentionOptionTexts()).toEqual(["不清理", "1 天", "3 天", "7 天", "14 天", "30 天"]);
+    fireEvent.click(
+      Array.from(document.querySelectorAll(".ant-select-item-option")).find((o) => (o.textContent ?? "").trim() === "7 天") as HTMLElement,
+    );
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+    expect(navDotCount()).toBe(1);
+
+    await pickRetention("不清理");
+    await waitFor(() => expect(navDotCount()).toBe(0));
+  });
+
+  it("「立即清理」禁用条件①：保留期为「不清理」时禁用，并注明先选择保留期", async () => {
+    await mockCleanupIpc({ retention: null });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    expect(buttonByText("立即清理").disabled).toBe(true);
+    expect(controlByLabel("立即清理").textContent).toContain("先选择保留期");
+    expect(calls.preview).toEqual([]); // 禁用态不可能发出预览
+  });
+
+  it("「立即清理」禁用条件②：保留期有未保存改动时禁用，并提示保存", async () => {
+    await mockCleanupIpc({ retention: 7 });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    expect(buttonByText("立即清理").disabled).toBe(false);
+    await pickRetention("30 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+    expect(buttonByText("立即清理").disabled).toBe(true);
+    expect(controlByLabel("立即清理").textContent).toContain("有未保存的改动，先保存");
+
+    // 改回已保存值 → 恢复可点
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDotCount()).toBe(0));
+    expect(buttonByText("立即清理").disabled).toBe(false);
+  });
+
+  it("保存前确认框（确认）：预览有会话 → 确认后正常保存（不带 skipCleanup），并按返回结果关 Tab 与提示", async () => {
+    await mockCleanupIpc({
+      retention: null,
+      preview: { count: 2, titles: ["三天前的会话", "十天前的会话"] },
+      outcome: { ids: ["new-1"], deleted: 1, failed: 0 },
+      status: { last_run_at: "2026-09-19T08:00:00Z", last_deleted: 1, last_failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+    expect(document.body.textContent ?? "").toContain("将删除 2 个会话");
+    expect(document.body.textContent ?? "").toContain("三天前的会话");
+    expect(calls.preview).toEqual([7]); // 预览用的是草稿里的新保留期
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    expect(calls.save[0].skipCleanup).toBe(false);
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已清理 1 个会话，关闭 1 个标签页"));
+    await waitFor(() => expect(cleanupStatusRow().textContent ?? "").toContain("删除 1 个会话"));
+  });
+
+  it("保存前确认框（取消）：配置照常保存但带 skipCleanup: true，并提示本次不清理", async () => {
+    await mockCleanupIpc({ retention: null, preview: { count: 3, titles: ["旧会话"] } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    await pickRetention("1 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+    fireEvent.click(buttonByText("暂不清理（下次启动仍会清理）"));
+
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    expect(calls.save[0].skipCleanup).toBe(true);
+    expect(calls.run).toBe(0); // 取消 = 本次不执行清理命令
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("设置已保存，本次不清理"));
+    // 保存本身成功：脏点清空
+    await waitFor(() => expect(navDotCount()).toBe(0));
+  });
+
+  it("保留期未变时不弹确认框（不打扰）", async () => {
+    await mockCleanupIpc({ retention: 7, preview: { count: 5, titles: ["旧会话"] } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    // 改别的字段（关闭压缩超时可改可不改，这里用自定义提示词）制造未保存改动，再保存
+    fireEvent.change(promptArea(), { target: { value: "只用中文" } });
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    expect(calls.preview).toEqual([]); // 保留期没变 → 连预览都不发
+    expect(document.body.textContent ?? "").not.toContain("保存前确认清理");
+  });
+
+  it("手动「立即清理」：预览 0 条只给轻提示，不弹确认框也不执行", async () => {
+    await mockCleanupIpc({ retention: 7, preview: { count: 0, titles: [], orphan_count: 0 } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("没有需要清理的会话"));
+    expect(document.body.textContent ?? "").not.toContain("确认立即清理");
+    expect(calls.preview).toEqual([7]); // 用**已保存**的保留期（当前页无未保存改动）
+    expect(calls.run).toBe(0);
+  });
+
+  it("手动「立即清理」：确认后执行，关闭被删会话的 Tab 并刷新「上次清理」行", async () => {
+    await mockCleanupIpc({
+      retention: 7,
+      preview: { count: 2, titles: ["三天前的会话", "十天前的会话"] },
+      outcome: { ids: ["new-1"], deleted: 1, failed: 0 },
+      status: { last_run_at: "2026-09-19T08:00:00Z", last_deleted: 1, last_failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    expect(cleanupStatusRow().textContent ?? "").toContain("还没有清理记录");
+
+    fireEvent.click(buttonByText("立即清理"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("确认立即清理？"));
+    expect(document.body.textContent ?? "").toContain("三天前的会话");
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.run).toBe(1));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已清理 1 个会话，关闭 1 个标签页"));
+    await waitFor(() => expect(cleanupStatusRow().textContent ?? "").toContain("删除 1 个会话"));
+  });
+
+  it("只有残留数据文件（count = 0、orphan_count > 0）：手动「立即清理」也要弹确认框，正文说的是残留文件而非删会话", async () => {
+    await mockCleanupIpc({
+      retention: 7,
+      preview: { count: 0, titles: [], orphan_count: 3 },
+      outcome: { ids: [], deleted: 0, failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理"));
+    // 预览口径与执行口径对齐：会话 0 条、残留文件 3 个一样要问——只看会话数会把这一种清理静默跳过
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("确认立即清理？"));
+    const dialog = document.body.textContent ?? "";
+    expect(dialog).toContain("将清理 3 个残留数据文件");
+    expect(dialog).not.toContain("将删除 0 个会话");
+    expect(calls.preview).toEqual([7]);
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.run).toBe(1));
+  });
+
+  it("只有残留数据文件：保存前的确认框同样弹（两条路径同一口径），确认后照常保存", async () => {
+    await mockCleanupIpc({
+      retention: null,
+      preview: { count: 0, titles: [], orphan_count: 2 },
+      outcome: { ids: [], deleted: 0, failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+    expect(document.body.textContent ?? "").toContain("将清理 2 个残留数据文件");
+    expect(calls.preview).toEqual([7]);
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    expect(calls.save[0].skipCleanup).toBe(false);
+  });
+
+  it("清理有失败条数：成功提示之外补一条含条数的警示，只读行同样记下失败数", async () => {
+    await mockCleanupIpc({
+      retention: 7,
+      preview: { count: 2, titles: ["三天前的会话", "十天前的会话"] },
+      outcome: { ids: ["new-1"], deleted: 1, failed: 2 },
+      status: { last_run_at: "2026-09-19T08:00:00Z", last_deleted: 1, last_failed: 2 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("确认立即清理？"));
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.run).toBe(1));
+
+    // 两条提示并存：成功（删了几条、关了几个标签页）+ 失败（几条没删掉）——
+    // 只报成功会让用户以为全部清完了，没删掉的会话从此无人过问（披露不足）
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已清理 1 个会话，关闭 1 个标签页"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("2 个会话未能清理"));
+    // 只读行的失败口径与即时警示一致
+    await waitFor(() => expect(cleanupStatusRow().textContent ?? "").toContain("（2 个失败）"));
+  });
+
+  it("保存触发的清理只记了失败条数（deleted = 0）：同样报警示，不报「已清理 0 个会话」", async () => {
+    await mockCleanupIpc({
+      retention: null,
+      preview: { count: 1, titles: ["旧会话"] },
+      outcome: { ids: [], deleted: 0, failed: 2 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+
+    // 这一路径原本一条提示都没有（只刷新只读行）→ 用户看不到任何痕迹
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("2 个会话未能清理"));
+    expect(document.body.textContent ?? "").not.toContain("已清理 0 个会话");
+  });
+
+  it("会话与残留数据文件都要删：确认框补一句残留条数，完成提示也带上同一个数", async () => {
+    await mockCleanupIpc({
+      retention: 7,
+      preview: { count: 2, titles: ["三天前的会话"], orphan_count: 3 },
+      outcome: { ids: ["new-1"], deleted: 1, failed: 0 },
+      status: { last_run_at: "2026-09-19T08:00:00Z", last_deleted: 1, last_failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("确认立即清理？"));
+    // 会话那句照旧，另补残留文件那句；「只有残留文件」的专用说明不得在此时出现（会让人以为不删会话）
+    expect(document.body.textContent ?? "").toContain("将删除 2 个会话");
+    expect(document.body.textContent ?? "").toContain("另有 3 个残留数据文件");
+    expect(document.body.textContent ?? "").not.toContain("将清理 3 个残留数据文件");
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.run).toBe(1));
+    // 完成提示按整串断言（确认框关掉后其正文可能仍在 DOM 里，单断「另有 3 个…」分不清是谁说的）
+    await waitFor(() =>
+      expect(document.body.textContent ?? "").toContain("已清理 1 个会话，关闭 1 个标签页（另有 3 个残留数据文件）"),
+    );
+  });
+
+  it("保存前的确认框同样补残留条数：确认后完成提示带同一句（两条路径一份版式）", async () => {
+    await mockCleanupIpc({
+      retention: null,
+      preview: { count: 1, titles: ["旧会话"], orphan_count: 2 },
+      outcome: { ids: ["new-1"], deleted: 1, failed: 0 },
+      status: { last_run_at: "2026-09-19T08:00:00Z", last_deleted: 1, last_failed: 0 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+    expect(document.body.textContent ?? "").toContain("另有 2 个残留数据文件");
+
+    fireEvent.click(buttonByText("清理"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    await waitFor(() =>
+      expect(document.body.textContent ?? "").toContain("已清理 1 个会话，关闭 1 个标签页（另有 2 个残留数据文件）"),
+    );
+  });
+
+  it("看过「上次清理」结果就写下已提示记录：下次启动不再为同一件事提醒", async () => {
+    const runAt = "2026-09-19T08:00:00Z";
+    await mockCleanupIpc({
+      retention: 7,
+      status: { last_run_at: runAt, last_deleted: 1, last_failed: 0 },
+      statusAtMount: true,
+    });
+    await mountWithSession();
+    // AppShell 启动链路自己也读过一次这条记录（并把去重记录写了）：先等它读完、再把记录抹掉，
+    // 后面断言的写入就只可能来自设置页（两道写入共用一把键，不隔离就分不清是谁写的）
+    await waitFor(() => expect(calls.status).toBeGreaterThan(0));
+    localStorage.removeItem(CLEANUP_NOTICE_SEEN_KEY);
+
+    await openPage("工作区与智能体");
+    await waitFor(() => expect(cleanupStatusRow().textContent ?? "").toContain("删除 1 个会话"));
+    expect(localStorage.getItem(CLEANUP_NOTICE_SEEN_KEY)).toBe(runAt);
+  });
+
+  it("没有清理记录时不写「已提示」记录（没有可提示的内容）", async () => {
+    await mockCleanupIpc({ retention: 7 });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    expect(cleanupStatusRow().textContent ?? "").toContain("还没有清理记录");
+    expect(localStorage.getItem(CLEANUP_NOTICE_SEEN_KEY)).toBeNull();
+  });
+
+  it("「保存并离开」复用同一条保存路径：保留期有改动时同样先弹清理确认，取消则照常离开", async () => {
+    await mockCleanupIpc({ retention: null, preview: { count: 1, titles: ["旧会话"] } });
+    await mountWithSession();
+    await openSettings();
+    clickNavTab("工作区与智能体");
+    await waitFor(() => expect(activeNavTabText()).toBe("工作区与智能体"));
+    await pickRetention("7 天");
+    await waitFor(() => expect(navDot("agent")).toBe(true));
+
+    fireEvent.click(buttonByText("返回工作区"));
+    await waitFor(() => expect(confirmPending()).toBe(true));
+    fireEvent.click(buttonByText("保存并离开"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("保存前确认清理"));
+
+    fireEvent.click(buttonByText("暂不清理（下次启动仍会清理）"));
+    await waitFor(() => expect(calls.save.length).toBe(1));
+    expect(calls.save[0].skipCleanup).toBe(true);
+    // 离开照常进行（取消只影响清理，不影响保存与离开）
+    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
   });
 });

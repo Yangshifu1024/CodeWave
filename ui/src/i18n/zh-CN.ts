@@ -37,6 +37,9 @@ export default {
     diff: "变更",
     tasks: "任务",
     stats: "统计",
+    // 启动自动清理的轻提示（[docs/session-cleanup](../../../docs/session-cleanup.md)）：应用启动时后端已按保留期清理一次，
+    // 确有删除才提示，挂在外壳的启动流程里（AppShell），故放应用级共享段 app.*
+    cleanupAutoDone: "已按保留期清理 {{n}} 个会话",
   },
   // `about` 段已随批④ 整体迁入 settings.about*（理由：注册表引用闭包只扫 settings.* 前缀，
   // 迁入后这些键才受契约测试守护）——[docs/settings-terminology](../../../docs/settings-terminology.md)
@@ -123,6 +126,36 @@ export default {
     shellLimited: "（有限支持）", shellDetectFailed: "Shell 探测失败，仅显示自动选项",
     shellNotDetected: "所选 shell 未检测到，执行时将回退到自动探测的 shell",
     shellNoPath: "该 shell 无固定可执行文件路径（如 WSL 发行版）",
+    // 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）：下拉 / 动作按钮 / 只读状态行
+    sessionRetention: "会话保留期",
+    sessionRetentionHint: "超过该天数的会话会被自动清理（启动时与保存设置时各执行一次）；最近活动时间 = 最后修改或最后打开时间。默认不清理。",
+    cleanupNever: "不清理",
+    cleanupDays: "{{n}} 天",
+    cleanupNow: "立即清理",
+    cleanupStatus: "上次清理",
+    cleanupNeedRetention: "先选择保留期",
+    cleanupUnsavedFirst: "有未保存的改动，先保存",
+    cleanupNonePending: "没有需要清理的会话",
+    cleanupPreviewFailed: "清理预览失败，本次不清理（设置已保存）",
+    cleanupConfirmTitle: "确认立即清理？",
+    cleanupSaveConfirmTitle: "保存前确认清理",
+    cleanupConfirmDesc: "将删除 {{n}} 个会话，此操作不可恢复。",
+    // 只有索引外残留文件（会话一条不删）时的确认框说明：这些会话早就不在列表里，写「删 N 个会话」不实也不可验
+    cleanupOrphanDesc: "将清理 {{n}} 个残留数据文件（这些会话已不在列表中）。",
+    cleanupConfirmListTitle: "包含：",
+    cleanupConfirmOk: "清理",
+    cleanupSaveSkip: "暂不清理（下次启动仍会清理）",
+    cleanupSavedSkipped: "设置已保存，本次不清理（下次启动仍会按新保留期清理）",
+    cleanupDone: "已清理 {{n}} 个会话，关闭 {{m}} 个标签页",
+    // 有失败条数时的即时警示（手动「立即清理」与保存触发的清理共用）：只说「已清理 0 个会话」
+    // 会让用户以为什么都没发生，没删掉的必须报出来
+    cleanupFailed: "{{n}} 个会话未能清理（文件可能被占用，稍后可再试一次）",
+    // 会话与残留数据文件同时要删时的补充说明（确认框说明 + 完成提示各一句）
+    cleanupOrphanExtra: "另有 {{n}} 个残留数据文件（这些会话已不在列表中）。",
+    cleanupDoneOrphans: "（另有 {{n}} 个残留数据文件）",
+    cleanupNeverRun: "还没有清理记录",
+    cleanupLastRun: "{{time}} · 删除 {{n}} 个会话",
+    cleanupLastFailed: "（{{n}} 个失败）",
     logLevelHint: "写入 ~/.codewave/logs 的全局诊断日志级别，保存后即时生效（RUST_LOG 环境变量存在时以其为准）",
     sessionVerboseHint: "开启后每次 LLM 请求/响应全文写入会话日志文件（体积与隐私敏感，仅排障时开启）",
     updates: "更新",

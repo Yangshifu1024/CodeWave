@@ -120,6 +120,41 @@ pub fn run() {
             if let Err(e) = core::sessions::interrupt::create_marker(&data_dir) {
                 tracing::warn!("运行标记写入失败（本次崩溃检测退化）：{e}");
             }
+            // 会话保留期清理（[docs/session-cleanup](../../docs/session-cleanup.md)）：保留期为「不清理」时什么都不做。
+            // 先**同步**挑候选（只读索引——避免前端恢复 Tab 先刷新「最近打开时间」导致结果随机），
+            // 再用 tauri::async_runtime 异步执行删除：绝不阻塞启动，失败只记告警。
+            // 档位只认白名单（1/3/7/14/30）：手改配置写进去的怪值一律不清理（resolve_retention 已记 warn）。
+            match core::sessions::cleanup::resolve_retention(None, cfg.sessions.retention_days) {
+                core::sessions::cleanup::RetentionChoice::Run(days) => {
+                    let cleanup_store = store.clone();
+                    let cleanup_data = data_dir.clone();
+                    let running = core::sessions::cleanup::running_set(&store);
+                    let candidates = core::sessions::cleanup::select_expired(
+                        &store.load_index().sessions,
+                        chrono::Utc::now(),
+                        days,
+                        &running,
+                    );
+                    tracing::info!(
+                        "启动会话保留期清理已排队（保留 {days} 天，候选 {} 个）",
+                        candidates.len()
+                    );
+                    tauri::async_runtime::spawn(async move {
+                        // 文件 IO 放到阻塞线程，不占 async worker
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            core::sessions::cleanup::execute(
+                                &cleanup_store,
+                                &cleanup_data,
+                                days,
+                                &candidates,
+                            );
+                        })
+                        .await;
+                    });
+                }
+                // 未设置（不清理）或档位非法：启动时不碰任何会话数据
+                _ => {}
+            }
             // 事件汇：TauriSink 外包一层中断观察——run 收尾（成功/失败/取消）把索引 running 落回 false
             let tauri_sink: Arc<dyn core::agent::EventSink> =
                 Arc::new(TauriSink::new(handle, channels.clone()));
@@ -387,6 +422,9 @@ pub fn run() {
             host::commands::list_running_sessions,
             host::commands::resolve_exit_request,
             host::commands::clear_session_interrupt,
+            host::commands::preview_session_cleanup,
+            host::commands::run_session_cleanup,
+            host::commands::get_cleanup_status,
             host::notify::notify_system,
         ])
         .build(tauri::generate_context!())

@@ -503,6 +503,15 @@ pub struct ShellConfig {
     pub selection: Option<String>,
 }
 
+/// 会话保留期设置（[docs/session-cleanup](../../../docs/session-cleanup.md)）：超过保留期且不在运行中的会话
+/// 会被清理（历史 / 边车 / 会话日志 / 计划文件）。默认不清理——删除不可恢复，默认值必须保守。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSettings {
+    /// 保留天数（None = 不清理；设置页档位 1/3/7/14/30）；wire 名 `sessions.retention_days`
+    pub retention_days: Option<u32>,
+}
+
 /// 全局配置状态（config.json 的根结构；所有新字段必须 serde default 向前兼容）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -539,6 +548,8 @@ pub struct ConfigState {
     pub log: LogConfig,
     /// shell 选择设置（[docs/shell-selection](../../../docs/shell-selection.md)）
     pub shell: ShellConfig,
+    /// 会话保留期设置（[docs/session-cleanup](../../../docs/session-cleanup.md)）
+    pub sessions: SessionSettings,
 }
 
 impl Default for ConfigState {
@@ -559,6 +570,7 @@ impl Default for ConfigState {
             disabled_skills: Vec::new(),
             log: LogConfig::default(),
             shell: ShellConfig::default(),
+            sessions: SessionSettings::default(),
         }
     }
 }
@@ -786,6 +798,31 @@ mod tests {
         let null_sel: ConfigState =
             serde_json::from_str(r#"{"shell":{"selection":null}}"#).unwrap();
         assert_eq!(null_sel.shell.selection, None);
+    }
+
+    /// 会话保留期（[docs/session-cleanup](../../../docs/session-cleanup.md)）：默认不清理；
+    /// 旧配置缺 `sessions` 键可读；显式值 roundtrip 且 wire 形态为 `sessions.retention_days`。
+    #[test]
+    fn session_settings_default_and_legacy_compat() {
+        let cfg = ConfigState::default();
+        assert_eq!(cfg.sessions.retention_days, None, "默认必须是「不清理」");
+
+        // 旧配置（无 sessions 键）→ 透明取默认（零迁移成本）
+        let old: ConfigState = serde_json::from_str(r#"{"schema_version":1}"#).unwrap();
+        assert_eq!(old.sessions.retention_days, None);
+
+        // 显式值：反序列化读回一致，且序列化形态是前端契约的嵌套键
+        let with_days: ConfigState =
+            serde_json::from_str(r#"{"schema_version":2,"sessions":{"retention_days":7}}"#)
+                .unwrap();
+        assert_eq!(with_days.sessions.retention_days, Some(7));
+        let v = serde_json::to_value(&with_days).unwrap();
+        assert_eq!(v["sessions"]["retention_days"], serde_json::json!(7));
+
+        // null 与 None 等价（前端「不清理」可能传 null）
+        let null_days: ConfigState =
+            serde_json::from_str(r#"{"sessions":{"retention_days":null}}"#).unwrap();
+        assert_eq!(null_days.sessions.retention_days, None);
     }
 
     #[test]

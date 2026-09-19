@@ -112,7 +112,9 @@ fn project_file(dir: &Path) -> PathBuf {
 }
 
 /// id 白名单：非空、不含路径分隔符与点、首尾无空白（防目录穿越）。
-fn valid_id(id: &str) -> bool {
+/// 会话保留期清理删文件前也走这一条（[docs/session-cleanup](../../../docs/session-cleanup.md)：
+/// 会话编号同样要拿去拼 `histories/<id>.json.gz` 等路径）。
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && !id.contains(['/', '\\', '.']) && id == id.trim()
 }
 

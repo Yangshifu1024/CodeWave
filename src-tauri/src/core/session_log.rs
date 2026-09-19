@@ -34,6 +34,17 @@ pub fn file_for(rt: &SessionRuntime) -> Option<PathBuf> {
     dir_for(rt).map(|d| d.join(format!("{}.log", rt.id)))
 }
 
+/// 按「会话 id + 归属」解析会话日志路径（无 runtime 的场景，如保留期清理）：
+/// 项目会话 → 项目数据目录 `logs/<id>.log`；临时会话 → 全局数据目录 `logs/<id>.log`。
+/// 项目已删除时经 `projects::data_dir_by_id` 回落 `projects/<id>/logs/`（即解析到不存在的路径，
+/// 调用方按「不存在 = 无需删」处理）。
+pub fn path_for(data_dir: &Path, project_id: Option<&str>, session_id: &str) -> PathBuf {
+    match project_id {
+        Some(pid) => crate::core::projects::session_log_path(data_dir, pid, session_id),
+        None => data_dir.join("logs").join(format!("{session_id}.log")),
+    }
+}
+
 /// 确保目录存在；成功后记入 DIRS_OK 缓存，失败返回 false（调用方放弃本次写）。
 fn ensure_dir(dir: &Path) -> bool {
     if let Ok(set) = DIRS_OK.lock() {

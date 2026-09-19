@@ -7,9 +7,12 @@ import { useRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
+import { i18n } from "../../i18n";
 import { bindEvents } from "../../ipc/events";
 import { ipc } from "../../ipc/client";
 import { checkForUpdates, useStartupUpdateCheck } from "../../utils/updateCheck";
+// 清理提示的去重口径与设置页"上次清理"只读行共用一份（详见 utils/cleanupNotice.ts）
+import { markCleanupNoticeSeen, pendingCleanupNotice } from "../../utils/cleanupNotice";
 import {
   applyUiStateToStores,
   initUiStatePersistence,
@@ -304,6 +307,25 @@ export default function AppShell() {
       initUiStatePersistence();
       // 只急切加载活跃 Tab；其余保持骨架（loaded=false），首次激活时由 sessions.activate 惰性加载
       if (restoredKey) useSessions.getState().activate(restoredKey);
+
+      // 启动自动清理提示（会话保留期与清理，[docs/session-cleanup](../../../../docs/session-cleanup.md)）：
+      // 后端在应用启动时已按保存的保留期清理过一次，结果写在状态文件里；这里只读一次，不再触发任何清理。
+      // 位置在 hydrate 之后（上面的顺序约束——绑定 → 配置 → 两份列表 → 恢复——一律不动）。
+      // 去重与设置页共用 utils/cleanupNotice：用户在设置页看过这次结果后，下次启动不再为同一件事提醒
+      // （两处各写一套判定就会出现「设置页看过了，下次启动还提醒」）。
+      // 读状态失败一律静默：启动链路的其它步骤不受影响。
+      void ipc
+        .getCleanupStatus()
+        .then((status) => {
+          if (cancelled) return;
+          const at = pendingCleanupNotice(status?.last_run_at);
+          if (!at) return; // 还没清理过 / 这一次已经提示过：都不打扰用户
+          markCleanupNoticeSeen(at); // 记录先写、提示后出
+          if ((status.last_deleted ?? 0) > 0) {
+            useUi.getState().toast(i18n.t("app.cleanupAutoDone", { n: status.last_deleted }));
+          }
+        })
+        .catch(() => null);
     })();
     return () => {
       cancelled = true;
