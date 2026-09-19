@@ -31,6 +31,8 @@ import {
 
 export type {
   ComposerDraft,
+  LspGuideState,
+  LspHint,
   PendingImage,
   QueueItem,
   SubStream,
@@ -40,12 +42,17 @@ export type {
   ToolView,
   UiItem,
 } from "./run.types";
-import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
+// lspHintKey 是运行时代码（去重键），必须走值导入而非 type 导入
+export { lspHintKey } from "./run.types";
+import type { ComposerDraft, LspGuideState, LspHint, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
+import { lspHintKey } from "./run.types";
 
-/** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 28 键事件面（唯一注册点）。 */export interface RunStore {
+  /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 29 键事件面（唯一注册点）。 */export interface RunStore {
   tabs: Record<string, TabRunState>;
   /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
   drafts: Record<string, ComposerDraft>;
+  /** LSP 引导卡平行分桶（key 同 tabs；理由同 drafts —— 环境事件不应重建 TabRunState 引用） */
+  lspGuide: Record<string, LspGuideState>;
   st(sessionId: string | null): TabRunState;
   initTab(sessionId: string): void;
   dispose(sessionId: string): void;
@@ -72,6 +79,8 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   setDraftImages(v: PendingImage[] | ((prev: PendingImage[]) => PendingImage[]), sessionId?: string): void;
   /** 发送接受后清空对应 Tab 草稿（文本 + 附件一并）；缺省为当前活跃 Tab */
   clearDraft(sessionId?: string): void;
+  /** LSP 引导卡「忽略」：移除卡片并登记去重键（同会话内同 (language, project_id) 不再弹）；缺省为当前活跃 Tab */
+  dismissLspHint(hintKey: string, sessionId?: string | null): void;
   onToolResult(sessionId: string, p: ToolResultEvent, ok: boolean): void;
   restoreFromMessages(sessionId: string, msgs: Message[]): void;
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
@@ -85,6 +94,7 @@ export const useRun = create<RunStore>()(
   immer((set, get) => ({
     tabs: {},
     drafts: {},
+    lspGuide: {},
 
     // 仅供动作内部使用（返回可变引用生效前的快照；组件读取请用 useActiveRun）
     st(sessionId) {
@@ -105,10 +115,11 @@ export const useRun = create<RunStore>()(
     },
 
     dispose(sessionId) {
-      // Tab 关闭时删除状态桶（连同完整转录与 git 缓存），长时间运行也能约束内存；草稿平行桶一并丢弃
+      // Tab 关闭时删除状态桶（连同完整转录与 git 缓存），长时间运行也能约束内存；草稿与 LSP 引导卡平行桶一并丢弃
       set((s) => {
         delete s.tabs[sessionId];
         delete s.drafts[sessionId];
+        delete s.lspGuide[sessionId];
       });
     },
 
@@ -317,6 +328,17 @@ export const useRun = create<RunStore>()(
         if (!d) return;
         d.text = "";
         d.images = [];
+      });
+    },
+
+    /** LSP 引导卡「忽略」（及安装/启用成功后自收）：移除卡片 + 登记去重键，同 (language, project_id) 本会话内不再弹。 */
+    dismissLspHint(hintKey, sessionId) {
+      set((s) => {
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const g = s.lspGuide[key];
+        if (!g) return;
+        g.hints = g.hints.filter((h) => lspHintKey(h.language, h.projectId) !== hintKey);
+        if (!g.dismissed.includes(hintKey)) g.dismissed.push(hintKey);
       });
     },
 
@@ -534,4 +556,11 @@ export function useContextPct(): number {
 // 供契约测试等非 React 场景使用
 export function activeRunOf(state: RunStore, activeKey: string | null): TabRunState {
   return state.tabs[activeKey ?? ""] ?? BLANK;
+}
+
+/** 活跃 Tab 的 LSP 引导卡（无桶时回退共享空数组）。平行分桶：环境事件不重建 tabs[key] 引用。 */
+const NO_LSP_HINTS: LspHint[] = [];
+export function useLspHints(): LspHint[] {
+  const activeKey = useSessions((s) => s.activeKey);
+  return useRun((s) => s.lspGuide[activeKey ?? ""]?.hints ?? NO_LSP_HINTS);
 }

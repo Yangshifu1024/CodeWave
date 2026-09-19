@@ -319,6 +319,8 @@ pub struct AgentCore {
     pub key_pool: crate::provider::keys::KeyPool,
     /// MCP 客户端管理器
     pub mcp: std::sync::Arc<crate::mcp::McpManager>,
+    /// LSP 语义校验管理器（项目级常驻 server 池；tools/validation.rs 与 host 的 lsp_* 命令消费）
+    pub lsp: std::sync::Arc<crate::lsp::LspManager>,
     /// token 统计收集器
     pub stats: std::sync::Arc<crate::core::stats::StatsCollector>,
     /// 计划任务表（P2-G）
@@ -348,6 +350,7 @@ impl AgentCore {
             skills: crate::skills::SkillIndex::new(),
             key_pool: crate::provider::keys::KeyPool::default(),
             mcp: std::sync::Arc::new(crate::mcp::McpManager::default()),
+            lsp: std::sync::Arc::new(crate::lsp::LspManager::new()),
             stats: std::sync::Arc::new(crate::core::stats::StatsCollector::new(data_dir.clone())),
             tasks: std::sync::Arc::new(crate::core::scheduler::TaskTable::new(data_dir.clone())),
             subs: DashMap::new(),

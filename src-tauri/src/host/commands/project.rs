@@ -134,6 +134,8 @@ pub async fn delete_project(
         let _ = core.store.remove(&sid);
         n += 1;
     }
+    // LSP：关掉该项目的全部 server 实例（项目删除会级联删会话，绝不留孤儿 server）
+    core.lsp.shutdown_project(&project_id).await;
     Ok(serde_json::json!({ "deleted_sessions": n }))
 }
 

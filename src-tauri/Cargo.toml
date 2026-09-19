@@ -69,6 +69,15 @@ dom_smoothie = "0.18.0"
 tokio-cron-scheduler = "0.15.1"
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
 cron = "0.17.0"
+# Language Server Protocol 类型（docs/lsp-post-write-diagnostics）：只做 wire 类型与能力/诊断结构的
+# 序列化落点，framing 与进程管理都是自实现（分片安全见 lsp/protocol.rs）
+lsp-types = "0.97"
+
+# 假 LSP server（仅测试用：集成测试经 CARGO_BIN_EXE_codewave-fake-lsp 启动；生产构建可分发
+# 但不被任何运行期路径引用）
+[[bin]]
+name = "codewave-fake-lsp"
+path = "src/bin/codewave-fake-lsp.rs"
 
 [dev-dependencies]
 tempfile = "3"

@@ -5,7 +5,8 @@ import {
 import { DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import type { ConfigState, ShellInfo, SkillMeta } from "../../ipc/types";
+import { DEFAULT_LSP_SETTINGS, LSP_LANGUAGES, lspCommandOf, withLspCommand } from "../../ipc/types";
+import type { ConfigState, LspLanguage, LspServerStatus, ShellInfo, SkillMeta, ValidationSettings } from "../../ipc/types";
 import { originLabel } from "../../utils/skills";
 import { useActiveId } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
@@ -89,6 +90,16 @@ function resolveShellDisplay(selection: string | null | undefined, shells: Shell
   return { kind: "path", text: current.path };
 }
 
+/** 语言 → i18n 展示名（行序与后端 `Lang::all()` 一致：typescript、rust、python、go、java、dart） */
+const LANG_LABEL_KEY: Record<LspLanguage, string> = {
+  typescript: "settings.validationLangTypescript",
+  rust: "settings.validationLangRust",
+  python: "settings.validationLangPython",
+  go: "settings.validationLangGo",
+  java: "settings.validationLangJava",
+  dart: "settings.validationLangDart",
+};
+
 /** 设置弹窗：五页签（通用 / 外观 / 供应商 / 安全 / MCP / 技能）。draft 只改内存、「保存」一次性提交；
  *  供应商校验失败报错并跳转页签不落盘；MCP 支持结构化条目与原文本兜底双模式。 */
 export default function SettingsModal() {
@@ -114,6 +125,9 @@ export default function SettingsModal() {
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
   const [sysProxy, setSysProxy] = useState<string | null | undefined>(undefined);
+  // LSP server 状态（lsp_status）：null = 未取到（探测失败/旧后端）→ 不显示状态徽标，面板不报错
+  const [lspStatus, setLspStatus] = useState<LspServerStatus[] | null>(null);
+  const [redetecting, setRedetecting] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -133,12 +147,64 @@ export default function SettingsModal() {
       setShells(await ipc.listAvailableShells().catch(() => null));
       // 系统代理探测回显：失败不阻塞（null = 未检测到提示）
       setSysProxy(await ipc.resolveProxy().catch(() => null));
+      // LSP server 状态：失败静默降级为不显示徽标（设置面板不得因此报错）
+      setLspStatus(await ipc.lspStatus().catch(() => null));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function patchDraft(patch: Partial<ConfigState>) {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  /** validation 段局部更新（开关 / LSP 配置） */
+  function patchValidation(patch: Partial<ValidationSettings>) {
+    if (!draft) return;
+    patchDraft({ validation: { ...draft.validation, ...patch } });
+  }
+
+  /** LSP 全局配置局部更新（预算 / 发现 / 命令覆盖；缺字段时以 DEFAULT_LSP_SETTINGS 为基准） */
+  function patchLsp(next: typeof DEFAULT_LSP_SETTINGS) {
+    patchValidation({ lsp: next });
+  }
+
+  /** 语言开关三态读写（显式分支而非动态键：java 缺省 false、dart 缺省 true，与后端 serde default 同源） */
+  function langSwitchOf(lang: LspLanguage): { checked: boolean; onChange: (v: boolean) => void } {
+    if (!draft) return { checked: false, onChange: () => {} };
+    const v = draft.validation;
+    switch (lang) {
+      case "typescript": return { checked: v.typescript, onChange: (b) => patchValidation({ typescript: b }) };
+      case "rust": return { checked: v.rust, onChange: (b) => patchValidation({ rust: b }) };
+      case "python": return { checked: v.python, onChange: (b) => patchValidation({ python: b }) };
+      case "go": return { checked: v.go, onChange: (b) => patchValidation({ go: b }) };
+      case "java": return { checked: v.java ?? false, onChange: (b) => patchValidation({ java: b }) };
+      case "dart": return { checked: v.dart ?? true, onChange: (b) => patchValidation({ dart: b }) };
+    }
+  }
+
+  /** 状态徽标三态：未启用 = 已关闭；启用且找到 = 已找到（带版本）；启用但未探测到 = 未找到（警示色）；
+   *  状态未取到（null）→ 不渲染徽标。 */
+  function lspBadge(lang: LspLanguage): { text: string; warn: boolean } | null {
+    const st = lspStatus?.find((s) => s.language === lang);
+    if (!st) return null;
+    if (!st.enabled) return { text: t("settings.lspDisabled"), warn: false };
+    if (st.found) {
+      return { text: st.version ? t("settings.lspFoundVersion", { version: st.version }) : t("settings.lspFound"), warn: false };
+    }
+    return { text: t("settings.lspMissing"), warn: true };
+  }
+
+  /** 重新探测（lsp_redetect）：清 PATH 与探测缓存后重查，刷新本页徽标。 */
+  async function redetect() {
+    setRedetecting(true);
+    try {
+      setLspStatus(await ipc.lspRedetect());
+      message.success(t("settings.lspRedetected"));
+    } catch (e) {
+      message.error(`${t("settings.lspRedetectFailed")}：${String(e).replace(/^Error[:\s]*/i, "")}`);
+    } finally {
+      setRedetecting(false);
+    }
   }
 
   function toggleSkill(name: string, disabled: boolean) {
@@ -224,6 +290,24 @@ export default function SettingsModal() {
         .map((h) => ({ name: h.name.trim(), value: h.value.trim() }))
         .filter((h) => h.name !== "");
     });
+    // LSP 配置落盘前归一化：命令覆盖 / JDK 路径 trim，额外 SDK 根丢空行（编辑期间保留空行以便连续录入）
+    if (draft.validation.lsp) {
+      const lsp = draft.validation.lsp;
+      const c = lsp.commands;
+      draft.validation.lsp = {
+        ...lsp,
+        java_home: lsp.java_home.trim(),
+        extra_roots: lsp.extra_roots.map((r) => r.trim()).filter((r) => r !== ""),
+        commands: {
+          typescript: c.typescript.trim(),
+          rust: c.rust.trim(),
+          python: c.python.trim(),
+          go: c.go.trim(),
+          java: c.java.trim(),
+          dart: c.dart.trim(),
+        },
+      };
+    }
     setSaving(true);
     try {
       await useSettings.getState().save(draft);
@@ -282,6 +366,8 @@ export default function SettingsModal() {
   const proxyMode = draft?.proxy?.mode ?? "system";
   const proxyUrl = draft?.proxy?.url ?? "";
   const proxyUrlInvalid = proxyMode === "manual" && proxyUrl.trim() !== "" && !PROXY_URL_RE.test(proxyUrl.trim());
+  // LSP 配置视图态：旧配置缺 lsp 段时以 DEFAULT_LSP_SETTINGS（后端默认）为基准回显
+  const lspCfg = draft?.validation.lsp ?? DEFAULT_LSP_SETTINGS;
 
   function patchProxyMode(mode: "none" | "system" | "manual") {
     // 切模式保留已填地址：来回切换不丢草稿
@@ -517,25 +603,161 @@ export default function SettingsModal() {
             <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
           </Form.Item>
           <Divider>{t("settings.validation")}</Divider>
+          <div className="hint" style={{ marginBottom: 10 }}>{t("settings.validationHint")}</div>
           <Form.Item style={{ marginBottom: 0 }}>
-            <div className="validation-grid">
-              {([
-                ["Python", "python"],
-                ["Rust", "rust"],
-                ["TypeScript / JS / Vue", "typescript"],
-                ["Go", "go"],
-                ["JSON", "json"],
-              ] as const).map(([label, key]) => (
-                <span className="validation-item" key={key}>
-                  <span className="validation-label">{label}</span>
-                  <Switch
-                    size="small"
-                    checked={draft.validation[key]}
-                    onChange={(v) => patchDraft({ validation: { ...draft.validation, [key]: v } })}
-                  />
-                </span>
-              ))}
+            {/* 六语言各一行：语言名 | 开关 | 命令覆盖 | 状态徽标（行序与后端 Lang::all() 同源；JSON 走内置解析，只给开关） */}
+            <div className="validation-rows">
+              {LSP_LANGUAGES.map((lang) => {
+                const sw = langSwitchOf(lang);
+                const badge = lspBadge(lang);
+                return (
+                  <div className="validation-row" data-lang={lang} key={lang}>
+                    <span className="validation-label">{t(LANG_LABEL_KEY[lang])}</span>
+                    <Switch size="small" checked={sw.checked} aria-label={t(LANG_LABEL_KEY[lang])} onChange={sw.onChange} />
+                    <Input
+                      size="small"
+                      placeholder={t("settings.lspCommandPh")}
+                      value={lspCommandOf(lspCfg, lang)}
+                      onChange={(e) => patchLsp(withLspCommand(lspCfg, lang, e.target.value))}
+                    />
+                    <span className={`validation-status${badge?.warn ? " warn" : ""}`}>{badge?.text ?? ""}</span>
+                  </div>
+                );
+              })}
+              <div className="validation-row" data-lang="json">
+                <span className="validation-label">{t("settings.validationLangJson")}</span>
+                <Switch size="small" checked={draft.validation.json} onChange={(v) => patchValidation({ json: v })} />
+                <span />
+                <span className="validation-status" />
+              </div>
             </div>
+            {/* Java 代价提示：jdtls 首次启动会解析依赖树（可能数分钟、GB 级内存） */}
+            <div className="hint" style={{ marginTop: 8 }} data-testid="lsp-java-cost">
+              {t("settings.lspJavaCost")}
+            </div>
+          </Form.Item>
+
+          <Divider plain>{t("settings.lspBudget")}</Divider>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(220px, 1fr))", gap: "0 20px" }}>
+            <Form.Item label={t("settings.lspSyncWindow")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={0}
+                max={60000}
+                step={100}
+                value={lspCfg.sync_window_ms}
+                onChange={(v) => patchLsp({ ...lspCfg, sync_window_ms: v ?? DEFAULT_LSP_SETTINGS.sync_window_ms })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspMaxDiagnostics")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={1}
+                max={200}
+                value={lspCfg.max_diagnostics}
+                onChange={(v) => patchLsp({ ...lspCfg, max_diagnostics: v ?? DEFAULT_LSP_SETTINGS.max_diagnostics })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspMaxChars")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={200}
+                max={100000}
+                step={200}
+                value={lspCfg.max_chars}
+                onChange={(v) => patchLsp({ ...lspCfg, max_chars: v ?? DEFAULT_LSP_SETTINGS.max_chars })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspIdleTtl")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={0}
+                max={86400000}
+                step={60000}
+                value={lspCfg.idle_ttl_ms}
+                onChange={(v) => patchLsp({ ...lspCfg, idle_ttl_ms: v ?? DEFAULT_LSP_SETTINGS.idle_ttl_ms })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspMaxServers")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={1}
+                max={32}
+                value={lspCfg.max_servers}
+                onChange={(v) => patchLsp({ ...lspCfg, max_servers: v ?? DEFAULT_LSP_SETTINGS.max_servers })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspMaxFileBytes")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={1024}
+                max={104857600}
+                step={1024}
+                value={lspCfg.max_file_bytes}
+                onChange={(v) => patchLsp({ ...lspCfg, max_file_bytes: v ?? DEFAULT_LSP_SETTINGS.max_file_bytes })}
+              />
+            </Form.Item>
+            <Form.Item label={t("settings.lspDedupeLimit")}>
+              <InputNumber
+                size="small"
+                style={{ width: 180 }}
+                min={0}
+                max={10}
+                value={lspCfg.dedupe_limit}
+                onChange={(v) => patchLsp({ ...lspCfg, dedupe_limit: v ?? DEFAULT_LSP_SETTINGS.dedupe_limit })}
+              />
+            </Form.Item>
+          </div>
+
+          <Divider plain>{t("settings.lspDiscovery")}</Divider>
+          <Form.Item label={t("settings.lspExtraRoots")} extra={t("settings.lspExtraRootsHint")}>
+            <div className="lsp-roots">
+              {lspCfg.extra_roots.map((root, i) => (
+                <div className="lsp-root-row" key={i}>
+                  <Input
+                    size="small"
+                    value={root}
+                    aria-label={t("settings.lspExtraRoots")}
+                    onChange={(e) =>
+                      patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.map((r, j) => (j === i ? e.target.value : r)) })
+                    }
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    aria-label={t("sessions.delete")}
+                    icon={<DeleteOutlined />}
+                    onClick={() => patchLsp({ ...lspCfg, extra_roots: lspCfg.extra_roots.filter((_, j) => j !== i) })}
+                  />
+                </div>
+              ))}
+              <div>
+                <Button size="small" onClick={() => patchLsp({ ...lspCfg, extra_roots: [...lspCfg.extra_roots, ""] })}>
+                  {t("settings.lspAddRoot")}
+                </Button>
+              </div>
+            </div>
+          </Form.Item>
+          <Form.Item label={t("settings.lspJavaHome")} extra={t("settings.lspJavaHomeHint")}>
+            <Input
+              size="small"
+              style={{ width: 360 }}
+              value={lspCfg.java_home}
+              placeholder={t("settings.lspCommandPh")}
+              onChange={(e) => patchLsp({ ...lspCfg, java_home: e.target.value })}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button size="small" loading={redetecting} onClick={() => void redetect()}>
+              {t("settings.lspRedetect")}
+            </Button>
           </Form.Item>
         </Form>
       ),

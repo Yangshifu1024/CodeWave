@@ -773,6 +773,24 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .validation-grid { display: grid; grid-template-columns: repeat(3, auto); gap: 10px 24px; }
 .validation-item { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
 .validation-item .validation-label { white-space: nowrap; }
+/* 语义校验（LSP）行：语言名 | 开关 | 命令覆盖 | 状态徽标（中性色：墨色强调，徽标只在「未找到」用警示橙） */
+.validation-rows { display: flex; flex-direction: column; gap: 6px; }
+.validation-row { display: grid; grid-template-columns: 150px auto minmax(200px, 320px) auto; align-items: center; gap: 10px; font-size: 13px; }
+.validation-row .validation-label { white-space: nowrap; }
+.validation-row .validation-status { color: var(--ws-dim); font-size: 12px; white-space: nowrap; }
+.validation-row .validation-status.warn { color: var(--ws-warn); }
+/* 发现区的额外 SDK 根目录行（输入框 + 删除按钮） */
+.lsp-roots { display: flex; flex-direction: column; gap: 6px; }
+.lsp-root-row { display: flex; align-items: center; gap: 8px; }
+.lsp-root-row .ant-input { flex: 1; min-width: 0; }
+.lsp-budget-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 8px 20px; }
+.lsp-budget-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.lsp-budget-item .validation-label { white-space: nowrap; }
+/* 聊天内嵌 LSP 引导卡：与错误引导行同宽度的块，不参与消息锚点 */
+.lsp-guide-cards { display: flex; flex-direction: column; }
+.lsp-guide-card .lsp-guide-body { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.lsp-guide-card .lsp-guide-reason { color: var(--ws-text-2); }
+.lsp-guide-card .lsp-guide-cmd { font-family: var(--ws-font-mono); font-size: 12px; color: var(--ws-dim); word-break: break-all; }
 .hint { color: var(--ws-dim); font-size: 12px; }
 /* 外观页签字体预览（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）：两行分别以 sans/mono 槽渲染同一段文本 */
 .font-preview { display: flex; flex-direction: column; gap: 4px; }
