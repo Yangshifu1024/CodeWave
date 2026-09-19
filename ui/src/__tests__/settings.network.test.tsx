@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：否则 App.useApp() message 是空壳
 import "../i18n"; // Component mounted standalone must init i18next explicitly
-import SettingsModal from "../features/panels/SettingsModal";
+import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import type { ConfigState } from "../ipc/types";
@@ -87,7 +87,7 @@ async function openNetworkTab(config: ConfigState = makeConfig()) {
   useUi.setState({ settingsOpen: true, settingsTab: "network" });
   render(
     <AntApp>
-      <SettingsModal />
+      <SettingsPage />
     </AntApp>,
   );
   await waitFor(() => expect(screen.getByText("代理模式")).toBeTruthy());
@@ -111,7 +111,7 @@ async function proxyInput(): Promise<HTMLInputElement> {
   });
 }
 
-describe("SettingsModal network tab：代理模式", () => {
+describe("设置页网络页签：代理模式", () => {
   it("proxy=null（从未配置）默认选中「系统代理」，显示探测回显", async () => {
     await openNetworkTab();
     expect(cardByTitle("系统代理").className).toContain("active");

@@ -761,8 +761,74 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .bar-col .lbl { font-size: 9px; color: var(--ws-dim); transform: rotate(-45deg); white-space: nowrap; }
 .stats-summary { margin-top: 10px; font-size: 12px; }
 
-/* ---------- SettingsModal ---------- */
-.settings-body { display: flex; gap: 16px; }
+/* ---------- 设置全屏页（SettingsPage，[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)） ---------- */
+/* 覆盖层：绝对定位贴在内层 Layout（position:relative）上，盖住工作区但不卸载它。
+   z-index 20 = 高于分隔条（6）/下拉（10xx 是 antd 层，Modal 仍在覆盖层之上）；
+   尺寸全部走 --ws-* token，不硬编码颜色。 */
+.settings-shell {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; min-width: 0; background: var(--ws-bg-main);
+}
+/* 左导航列：宽 280 基准（由 clampNavWidth 在 180..480 内随窗口收缩） */
+.settings-nav {
+  flex: none; min-width: 180px; max-width: 480px;
+  display: flex; flex-direction: column;
+  padding: 8px; border-right: 1px solid var(--ws-border);
+  background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
+}
+.settings-nav-head { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; padding: 2px 2px 8px; }
+.settings-nav .ant-tabs { flex: 1; min-height: 0; }
+.settings-nav .ant-tabs-nav { margin: 0; }
+/* 行高 28px + 选中态仅换背景（复用工作区左栏度量；强调色只用于边框/圆点这类前景用法） */
+.settings-nav .ant-tabs-tab {
+  height: 28px; padding: 0 8px; margin: 0 0 2px !important;
+  border-radius: 6px; justify-content: flex-start;
+}
+.settings-nav .ant-tabs-tab .ant-tabs-tab-btn { line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
+.settings-nav .ant-tabs-tab-active { background: var(--ws-hover); }
+.settings-nav .ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--ws-text-1) !important; }
+/* tabPlacement="start" 的左侧墨条与「选中态仅换背景」相冲，隐掉 */
+.settings-nav .ant-tabs-ink-bar { display: none; }
+.settings-nav-label { display: inline-flex; align-items: center; gap: 6px; }
+/* 页体渲染在右列（两列式布局）：导航列内那个**空的** content-holder 不占位。
+   作用域限定在 .settings-nav 内（Tabs 只消费 key/label，pane 从不由它渲染本页内容），
+   与「工作区禁用 display:none」的硬约束无关：工作区里没有任何 .ant-tabs-content-holder。 */
+.settings-nav .ant-tabs-content-holder { display: none; }
+
+/* 右内容列：操作条常驻可点（窄窗换行），页体自己滚 */
+.settings-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.settings-actions {
+  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--ws-border); background: var(--ws-bg-main);
+}
+.settings-actions-title {
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.settings-actions-buttons { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+.settings-pane { flex: 1; min-height: 0; overflow: auto; }
+/* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点） */
+.settings-pane-body { min-width: 480px; padding: 14px 16px 24px; }
+
+/* 脏圆点：导航项与操作条共用；只换前景色，不当背景块用 */
+.settings-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); flex: none; display: inline-block; }
+/* 「即时生效」标注：不进脏标记的项旁标一下，避免用户找不到保存入口 */
+.settings-instant { margin-left: 6px; font-size: 11.5px; color: var(--ws-dim); }
+
+/* 工作区让位：只隐可见性、不卸载、不 display:none
+   （display:none 会让 ResizeObserver 测到 0 尺寸、滚动容器错乱，进而干扰运行中会话） */
+.workspace-covered { visibility: hidden; pointer-events: none; }
+
+/* 运行中指示（设置页导航顶部：脉冲点 + 数量；数量为 0 时不渲染，点即返回工作区） */
+.run-indicator {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  font-size: 11.5px; color: var(--ws-text-2); background: transparent;
+  border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
+}
+.run-indicator:hover { background: var(--ws-hover); color: var(--ws-text-1); }
+.run-indicator .run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); animation: pulse 1.2s infinite; }
+
+/* ---------- 设置页内各页共用（原 SettingsModal 段） ---------- */
 .mcp-pane { display: flex; flex-direction: column; gap: 10px; }
 .mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: 12px; }
 .mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

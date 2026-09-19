@@ -140,6 +140,14 @@ export default {
     skillsHint: "目录：项目 .codewave/skills/ > 用户 ~/.codewave/skills/、~/.agents/skills/ 与 ~/.claude/skills/ > 工作区 .agents/skills/、.claude/skills/ > 内置",
     reloadSkills: "重新加载", skillsReloaded: "已重新加载，共 {{n}} 个技能", skillsReloadFailed: "重新加载失败",
     deleteSkill: "删除技能", deleteSkillConfirm: "删除技能「{{name}}」？将同时删除其文件，不可恢复", deleteSkillSuccess: "已删除技能：{{name}}", deleteSkillFailed: "删除失败",
+    // 全屏设置页容器（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)）
+    backToWorkspace: "返回工作区",
+    runningCount: "{{n}} 个会话运行中", runningHint: "打开设置期间会话照常运行；点此返回工作区",
+    dirtyHint: "有未保存的改动", instantApply: "即时生效",
+    cancelHint: "放弃未保存改动并返回工作区",
+    leaveTitle: "有未保存的设置改动",
+    leaveDesc: "离开前请选择如何处理这些改动；取消按钮会直接放弃全部未保存改动。",
+    leaveSave: "保存并离开", leaveDiscard: "放弃改动", leaveStay: "留在原地",
   },
   chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件" },
   // LSP 语义校验引导卡（`lsp:server_missing` 三景：可一键安装 / 需手动安装 / 默认关闭需确认）

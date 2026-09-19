@@ -20,7 +20,7 @@ import {
 import ChatMessages from "../chat/ChatMessages";
 import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
-import SettingsModal from "../panels/SettingsModal";
+import SettingsPage from "../panels/SettingsPage";
 import AboutModal from "../panels/AboutModal";
 import UpdateModal from "../panels/UpdateModal";
 import TaskCenterPanel from "../panels/TaskCenterPanel";
@@ -202,6 +202,10 @@ function CloseTabConfirm() {
 function ExitConfirm() {
   const { t } = useTranslation();
   const request = useUi((s) => s.exitRequest);
+  // 设置页有未保存改动时，设置侧的三选弹框先接管（同一份文案/行为，第四条路径；处置完 save/discard 后
+  // 脏标记清零，本弹框自然接管运行中会话的确认）——[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)
+  const settingsDirty = useUi((s) => s.settingsDirty);
+  const settingsOpen = useUi((s) => s.settingsOpen);
   const answer = (action: "wait" | "abort" | "cancel") => {
     void respondExitRequest(action).finally(() => {
       // 应答完成（或通道已关而失败）后再清 store：respondExitRequest 只回后端、不动 store，
@@ -211,7 +215,7 @@ function ExitConfirm() {
   };
   return (
     <Modal
-      open={!!request}
+      open={!!request && !(settingsOpen && settingsDirty)}
       title={t("exitApp.title")}
       closable={false}
       // antd 6 废弃了 maskClosable，等价写法是 mask.closable；两个弹窗都不得被遮罩/Esc 绕过
@@ -333,7 +337,7 @@ export default function AppShell() {
 
   // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项
   // （关于 / 设置 / 检查更新）经 menu:action 路由至此；三项均打开应用内界面
-  // （AboutModal / SettingsModal / 更新检查弹窗）。检查更新走共享流程
+  // （AboutModal / SettingsPage / 更新检查弹窗）。检查更新走共享流程
   // utils/updateCheck（check → 弹窗展示发布说明 → 下载安装 → 重启；Windows/Linux 从「关于」弹框触发）。
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -370,9 +374,14 @@ export default function AppShell() {
       if (e.isComposing || e.defaultPrevented) return;
       const mod = e.metaKey || e.ctrlKey;
       if (e.key === "Escape") {
-        // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行
+        // 设置页打开时不在此处置：Esc 归设置页（先关页内浮层，否则走「返回工作区」拦截），
+        // 事件目标可能是 body 而不在 .settings-shell 内，光靠下面的 closest 白名单会漏掉
+        // （[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）。
+        // 任何情况下都不得因设置页而停止运行中会话。
+        if (useUi.getState().settingsOpen) return;
+        // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行（.settings-shell 同列：全屏页里也归自己处置）
         const target = e.target as HTMLElement | null;
-        if (target?.closest(".ant-modal, .ant-drawer, .ant-popover, .ant-select-dropdown, .ant-input, textarea, input")) return;
+        if (target?.closest(".settings-shell, .ant-modal, .ant-drawer, .ant-popover, .ant-select-dropdown, .ant-input, textarea, input")) return;
         const st = useRun.getState();
         const key = useSessions.getState().activeKey ?? "";
         if (st.tabs[key]?.running) void st.cancel();
@@ -419,6 +428,8 @@ export default function AppShell() {
             docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
             -zero-width 修饰类裁切子内容，内容恒挂载、折叠动画平滑 */}
         <Sider
+          className={settingsOpen ? "workspace-covered" : undefined}
+          aria-hidden={settingsOpen || undefined}
           width={explorerOpen ? navWidth : SIDER_W_CLOSED}
           style={{
             background: "var(--ws-bg-nav)",
@@ -433,7 +444,11 @@ export default function AppShell() {
             <SiderFooter />
           </div>
         </Sider>
-        <Content style={{ height: "100%", display: "flex", background: "var(--ws-bg-main)" }}>
+        <Content
+          className={settingsOpen ? "workspace-covered" : undefined}
+          aria-hidden={settingsOpen || undefined}
+          style={{ height: "100%", display: "flex", background: "var(--ws-bg-main)" }}
+        >
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
             <InterruptBanner />
             <ChatMessages />
@@ -443,7 +458,9 @@ export default function AppShell() {
           <RightBar />
         </Content>
 
-        {/* 栏宽分隔条（绝对定位在栏边界；折叠态不渲染 = 拖动不抢折叠入口） */}
+        {/* 栏宽分隔条（绝对定位在栏边界；折叠态不渲染 = 拖动不抢折叠入口）。
+            设置页打开时 covered：z-index 比覆盖层低只挡得住指针，键盘焦点照旧能落到分隔条上
+            （Tab 序残留 + ←/→ 静默改栏宽），所以同步加 .workspace-covered 与 tabIndex=-1。 */}
         {explorerOpen && (
           <ResizeHandle
             side="nav"
@@ -453,6 +470,7 @@ export default function AppShell() {
             offset={navWidth}
             label={t("app.resizeLeft")}
             disabled={navWidth < storedNavWidth}
+            covered={settingsOpen}
             onWidth={setNavWidth}
             onReset={() => setNavWidth(NAV_W_DEFAULT)}
           />
@@ -466,13 +484,18 @@ export default function AppShell() {
             offset={rightBarWidth}
             label={t("app.resizeRight")}
             disabled={rightBarWidth < storedRightBarWidth}
+            covered={settingsOpen}
             onWidth={setRightBarWidth}
             onReset={() => setRightBarWidth(RB_W_DEFAULT)}
           />
         )}
+
+        {/* 设置全屏页（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）：覆盖式贴在内层 Layout 上。
+            工作区（Sider/Content/ChatMessages/Composer/RightBar）全程挂载，只是 .workspace-covered 隐藏可见性——
+            绝不用 display:none（ResizeObserver 会测到 0 尺寸、滚动容器错乱，从而影响运行中任务）。 */}
+        {settingsOpen && <SettingsPage />}
       </Layout>
 
-      {settingsOpen && <SettingsModal />}
       {aboutOpen && <AboutModal />}
       {/* 自动更新弹窗：常驻挂载（可见性取自 store 的 modalOpen），phase 驱动标题/正文/页脚 */}
       <UpdateModal />

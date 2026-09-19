@@ -1,17 +1,29 @@
-import { useEffect, useState } from "react";
+// 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）：
+// 从 SettingsModal 迁入——去掉 Modal 外壳与 footer，改为绝对定位贴在内层 Layout 上的全屏页；
+// 7 页签、draft/save 全量提交语义不变。
+// 本文件承担三件事：
+//   1. 容器：左导航列（返回工作区 + 运行中指示 + 7 页导航）+ 右内容列（操作条 + 页体）；
+//   2. 逐页脏标记（draft 与已保存配置的差集，即时生效项不打点）；
+//   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）。
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tabs, Typography,
+  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tabs, Tooltip, Typography,
 } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_LSP_SETTINGS, LSP_LANGUAGES, lspCommandOf, withLspCommand } from "../../ipc/types";
 import type { ConfigState, LspLanguage, LspServerStatus, ShellInfo, SkillMeta, ValidationSettings } from "../../ipc/types";
 import { originLabel } from "../../utils/skills";
+import { clampNavWidth } from "../../utils/layout";
+import { respondExitRequest } from "../../utils/uiState";
 import { useActiveId } from "../../stores/sessions";
+import { useRun } from "../../stores/run";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { checkForUpdates, useAutoUpdateSetting } from "../../utils/updateCheck";
+import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 
@@ -19,6 +31,111 @@ const { TextArea } = Input;
 
 /** 自定义代理地址前缀白名单（与后端 reqwest 支持一致；保存校验用） */
 const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
+
+/** 设置页 7 个分区（本批沿用既有归属；8 页重划 / 注册表 / 自建导航都是后续批次） */
+type PageKey = "general" | "appearance" | "providers" | "security" | "network" | "mcp" | "skills";
+
+const PAGE_ORDER: PageKey[] = ["general", "appearance", "providers", "security", "network", "mcp", "skills"];
+
+/** 左导航列基准宽（= 工作区左栏默认宽 280，复用同一套栏宽度量） */
+const SETTINGS_NAV_W = 280;
+/** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
+const SETTINGS_NAV_RATIO = 0.32;
+
+/**
+ * 逐页脏判定的比较片段：只取该页真正写进 draft 的配置键。
+ * 即时生效项（界面语言 ui.language、自动更新开关）刻意**不**纳入——它们改完立即生效，不该亮脏点（
+ * 界面语言同时写 useUi 与 draft.ui.language，纳入就会永远显示未保存）；
+ * 外观页的字体/主题走 localStorage（FontSettings），配置侧只有 font_size/accent，本批没有编辑入口。
+ * MCP 不在 config 里（独立 mcp.json），脏判定在组件内单独算。
+ */
+function pageSlice(c: ConfigState, key: PageKey): unknown {
+  switch (key) {
+    case "general":
+      return {
+        ai_language: c.ui.ai_language ?? null,
+        compact_threshold: c.compact_threshold,
+        compact_timeout_seconds: c.compact_timeout_seconds,
+        custom_prompt: c.custom_prompt,
+        log: c.log,
+        shell: c.shell,
+      };
+    case "appearance":
+      return { font_size: c.ui.font_size, accent: c.ui.accent };
+    case "providers":
+      return { providers: c.providers, active_model_id: c.active_model_id };
+    case "security":
+      // validation 段的缺省语义与后端 serde default 对齐：java 缺省 false、dart 缺省 true、
+      // lsp 缺省 = DEFAULT_LSP_SETTINGS（后端 `LspSettings::default()` 的同形镜像）。
+      // 不折缺省时：把 java 开关打开又关掉、或点开任意 LSP 字段后改回原样，都会永远显示未保存。
+      return {
+        approval: c.approval,
+        validation: {
+          ...c.validation,
+          java: c.validation.java ?? false,
+          dart: c.validation.dart ?? true,
+          lsp: c.validation.lsp ?? DEFAULT_LSP_SETTINGS,
+        },
+      };
+    case "network":
+      // proxy = null 等价于 ProxyConfig::default()（mode = system，[docs/network-proxy-settings]）：
+      // 折成默认对象再比，否则打开设置后点一下本来就处于选中态的「系统代理」卡片就凭空染脏。
+      return { proxy: c.proxy ?? { mode: "system", url: "" }, network: c.network };
+    case "skills":
+      return { disabled_skills: c.disabled_skills };
+    case "mcp":
+      return null;
+  }
+}
+
+/**
+ * 脏比较归一：把「空值三态」（`null` / `undefined` / `""` / 纯空白串）折叠成同一形态，字符串顺带 trim
+ * ——保存路径本身就会 trim 大部分自由文本字段（见 `save()`：代理地址 / 自定义请求头 / JDK 路径 /
+ * 命令覆盖 / 额外 SDK 根）。递归处理对象与数组，对象键排序保证键序不影响比较。
+ *
+ * 不归一时：把「自定义提示词」的文字删空后 draft 是 `""`、存量配置是 `null`，两侧永远不等 →
+ * 脏点常亮、「返回工作区」误弹三选、点「保存并离开」还会把 `custom_prompt: ""` 落盘。
+ * 数组里归一后为空的条目直接丢弃、全空对象视作空值（保存路径同样会丢：空 root / 空 key / 空请求头都不落盘）
+ * ——所以「点一下添加按钮又什么都没填」不会被判成未保存改动。
+ */
+function normalizeForCompare(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeForCompare).filter((v) => v !== null);
+  }
+  if (typeof value === "object") {
+    const src = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(src).sort()) out[key] = normalizeForCompare(src[key]);
+    // 全空对象视作空值（再被数组丢弃）：典型是「加一行自定义请求头」但没填任何东西
+    // ——save() 也会把无名行丢掉，此时不该算改过。
+    return Object.values(out).every((v) => v === null) ? null : out;
+  }
+  return value;
+}
+
+/** 两段配置片段是否等价（先按空值三态归一，再比 JSON；键序无关） */
+function sameSlice(a: unknown, b: unknown): boolean {
+  return JSON.stringify(normalizeForCompare(a)) === JSON.stringify(normalizeForCompare(b));
+}
+
+/** 离开拦截意图：切页（带目标页）或「返回工作区」/页内 Esc；关窗退出由 ui.exitRequest 驱动 */
+type LeaveIntent = { kind: "tab"; tab: string } | { kind: "leave" };
+
+/**
+ * 页内 Esc 前的浮层探测：Select/Dropdown/Popover/Drawer 展开时，Esc 先归组件库（先关浮层，不平级返回）。
+ * Drawer 也算浮层：子代理过程抽屉是 Portal 到 body 的 drawer，漏掉它会与设置页的 Esc 双响应
+ * （同一按 Esc 既关抽屉又返回工作区）。
+ */
+function overlayOpen(): boolean {
+  return !!document.querySelector(
+    ".ant-select-dropdown:not(.ant-select-dropdown-hidden), .ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden), .ant-drawer:not(.ant-drawer-hidden)",
+  );
+}
 
 // MCP 条目结构化视图（文件形态 {"mcpServers":{name:cfg}} 的前端呈现）
 interface McpEntry {
@@ -100,13 +217,15 @@ const LANG_LABEL_KEY: Record<LspLanguage, string> = {
   dart: "settings.validationLangDart",
 };
 
-/** 设置弹窗：五页签（通用 / 外观 / 供应商 / 安全 / MCP / 技能）。draft 只改内存、「保存」一次性提交；
- *  供应商校验失败报错并跳转页签不落盘；MCP 支持结构化条目与原文本兜底双模式。 */
-export default function SettingsModal() {
+/** 设置页：7 个分区（通用 / 外观 / 供应商 / 安全 / 网络 / MCP / 技能）。draft 只改内存、「保存」一次性提交；
+ *  供应商校验失败报错并跳转页签不落盘；MCP 支持结构化条目与原文本兜底双模式。
+ *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */export default function SettingsPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const language = useUi((s) => s.language);
   const sessionId = useActiveId();
+  // 窗口宽度：导航列宽按它收缩（复用工作区同一份显示宽度决议）
+  const { windowWidth } = useDisplayWidths();
 
   const [draft, setDraft] = useState<ConfigState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -114,13 +233,15 @@ export default function SettingsModal() {
   // 技能区异步操作 loading：reloadSkills 全局、删除按行（Popconfirm 确认按钮 loading）
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
-  // 受控页签：上收到 useUi（[docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)），外部可指定页签打开弹窗；
+  // 受控页签：上收到 useUi（[docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)），外部可指定页签打开设置页；
   // 下方保存校验跳页也走同一 store 状态（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）
   const tab = useUi((s) => s.settingsTab);
   const setTab = (t: string) => useUi.setState({ settingsTab: t });
   // MCP：结构化条目；null = 原 JSON 解析失败，回退 textarea 模式避免丢配置
   const [mcpEntries, setMcpEntries] = useState<McpEntry[] | null>(null);
   const [mcpRaw, setMcpRaw] = useState("");
+  /** 打开时的 MCP 文本基线（已归一化），用于逐页脏判定与「放弃改动」回退 */
+  const [mcpOriginal, setMcpOriginal] = useState("");
   // shell 探测：null = 探测失败（仅显示「自动」+ 失败提示），[] = 探测成功但无可用项
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
@@ -138,8 +259,11 @@ export default function SettingsModal() {
       setDraft(cloned);
       const raw = await ipc.getMcpConfig().catch(() => "");
       const parsed = parseMcpEntries(raw);
+      // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
+      const normalized = parsed ? serializeMcpEntries(parsed) : raw;
       setMcpEntries(parsed ?? []);
-      setMcpRaw(parsed ? serializeMcpEntries(parsed) : raw);
+      setMcpRaw(normalized);
+      setMcpOriginal(normalized);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
       const st = await ipc.mcpStatus().catch(() => []);
       useUi.setState({ mcpStatus: st });
@@ -247,15 +371,16 @@ export default function SettingsModal() {
     }
   }
 
-  async function save() {
-    if (!draft) return;
+  /** 保存（全量提交语义不变）。返回是否真的落盘：离开拦截靠它判断能否执行「保存并离开」 */
+  async function save(): Promise<boolean> {
+    if (!draft) return false;
     // 代理地址校验（网络页签）：仅自定义模式且非空时校验前缀白名单，非法跳转页签不落盘
     if (draft.proxy?.mode === "manual") {
       draft.proxy.url = draft.proxy.url.trim();
       if (draft.proxy.url !== "" && !PROXY_URL_RE.test(draft.proxy.url)) {
         message.error(t("settings.proxyUrlInvalid"));
         setTab("network");
-        return;
+        return false;
       }
     }
     // 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：无效时逐项报错、跳转供应商页签、不落盘
@@ -275,7 +400,7 @@ export default function SettingsModal() {
     if (problems.length > 0) {
       message.error(`${t("settings.vSaveBlocked")}${problems.join(t("settings.vProblemSep"))}`);
       setTab("providers");
-      return;
+      return false;
     }
     const first = draft.providers.flatMap((p) => p.models)[0];
     // 活跃模型兜底：未设置取第一个模型；悬空（模型已删除）回退第一个
@@ -317,8 +442,10 @@ export default function SettingsModal() {
       if ((draft.proxy?.mode ?? "system") === "system") {
         void ipc.resolveProxy().then(setSysProxy).catch(() => null);
       }
+      return true;
     } catch (e) {
       message.error(String(e));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -374,13 +501,144 @@ export default function SettingsModal() {
     patchDraft({ proxy: { mode, url: draft?.proxy?.url ?? "" } });
   }
 
-  const items = [
+  // ---------- 逐页脏标记与离开拦截（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)） ----------
+  const config = useSettings((s) => s.config);
+  // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集
+  const mcpSerialized = mcpEntries !== null ? serializeMcpEntries(mcpEntries) : mcpRaw;
+  const dirtyMap = useMemo(() => {
+    const out: Record<PageKey, boolean> = {
+      general: false, appearance: false, providers: false, security: false, network: false, mcp: false, skills: false,
+    };
+    for (const key of PAGE_ORDER) {
+      if (key === "mcp") {
+        out.mcp = mcpSerialized !== mcpOriginal;
+        continue;
+      }
+      out[key] = !!draft && !!config && !sameSlice(pageSlice(draft, key), pageSlice(config, key));
+    }
+    return out;
+  }, [draft, config, mcpSerialized, mcpOriginal]);
+  const anyDirty = PAGE_ORDER.some((k) => dirtyMap[k]);
+
+  // 聚合脏标记回写 store：关窗/退出时由 AppShell 的 ExitConfirm 读它决定先弹哪一层确认
+  useEffect(() => {
+    useUi.getState().setSettingsDirty(anyDirty);
+  }, [anyDirty]);
+  useEffect(() => () => {
+    useUi.getState().setSettingsDirty(false);
+  }, []);
+
+  // 运行中会话数（点指示即返回工作区）：打开设置不影响运行，指示只是让用户知道后台还在跑
+  const runningCount = useRun((s) => Object.values(s.tabs).filter((x) => x.running).length);
+  const exitRequest = useUi((s) => s.exitRequest);
+  const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
+  // 关窗/退出路径：设置页打开 + 有未保存改动 + 后端已下发退出请求 → 设置侧先处置
+  const exitPending = anyDirty && !!exitRequest;
+  const confirmOpen = leaveIntent !== null || exitPending;
+
+  /** 关闭设置页（调用方须先处置未保存改动） */
+  function closeShell() {
+    useUi.setState({ settingsOpen: false, settingsDirty: false });
+  }
+
+  /** 放弃全部未保存改动：draft 与 MCP 都回到打开时的基线 */
+  function discardDraft() {
+    if (config) setDraft(JSON.parse(JSON.stringify(config)));
+    const parsed = parseMcpEntries(mcpOriginal);
+    setMcpEntries(parsed ?? []);
+    setMcpRaw(parsed ? serializeMcpEntries(parsed) : mcpOriginal);
+  }
+
+  /** 顶部「取消」= 放弃全部未保存改动并返回工作区（不再二次确认） */
+  function cancelAll() {
+    discardDraft();
+    closeShell();
+  }
+
+  /** 切页：脏改动存在时先走三选拦截（保存并离开 → 落盘后跳页；放弃 → 回基线后跳页；留在原地 → 停在本页） */
+  function onTabChange(next: string) {
+    if (next === tab) return;
+    if (!anyDirty) {
+      setTab(next);
+      return;
+    }
+    setLeaveIntent({ kind: "tab", tab: next });
+  }
+
+  /** 返回工作区（返回按钮 / 运行中指示 / 页内 Esc 共用）：脏改动存在时先走同一份三选拦截 */
+  function requestClose() {
+    if (!anyDirty) {
+      closeShell();
+      return;
+    }
+    setLeaveIntent({ kind: "leave" });
+  }
+
+  /** 三选处置：切页 / 返回工作区 / 页内 Esc / 关窗退出四条路径共用这一份行为与文案 */
+  async function answerLeave(action: "save" | "discard" | "stay") {
+    const intent = leaveIntent;
+    if (action === "stay") {
+      setLeaveIntent(null);
+      // 「留在原地」= 取消本次离开意图（切页/返回），**并且**取消这次退出（关窗路径）。
+      // 两条并存时必须都处置：用户先点了切页/返回（intent）再关窗（exitPending）时，只清 intent
+      // 而不回后端应答，后端就一直等在 ExitRequested 上（只有 2s 看门狗兜底）→ 应用退不出去。
+      if (exitPending) {
+        void respondExitRequest("cancel").finally(() => useUi.setState({ exitRequest: null }));
+      }
+      return;
+    }
+    if (action === "save") {
+      const ok = await save();
+      // 校验不通过：留在设置页（错误提示由 save 内部给出），不执行离开动作
+      if (!ok) {
+        setLeaveIntent(null);
+        return;
+      }
+    } else {
+      discardDraft();
+    }
+    setLeaveIntent(null);
+    if (intent?.kind === "tab") {
+      setTab(intent.tab);
+      return;
+    }
+    if (intent) closeShell();
+    // 关窗路径：设置侧已处置（脏标记已清零）→ 舞台交回 AppShell 的运行中会话确认
+  }
+
+  // 页内 Esc：捕获阶段注册并 preventDefault，抢在 AppShell 的全局 Esc（停止运行中会话）之前收口；
+  // 浮层（Select/Dropdown/Popconfirm）或三选弹框开着时让位给组件库，不平级返回。
+  const escRef = useRef<{ blocked: boolean; close: () => void }>({ blocked: false, close: () => {} });
+  useEffect(() => {
+    escRef.current = { blocked: confirmOpen, close: requestClose };
+  });
+  useEffect(() => {
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (escRef.current.blocked || overlayOpen()) return;
+      e.preventDefault();
+      escRef.current.close();
+    };
+    window.addEventListener("keydown", onKeydown, true);
+    return () => window.removeEventListener("keydown", onKeydown, true);
+  }, []);
+
+  // 可达性：设置页是全屏 dialog，打开时把焦点交给导航首项（「返回工作区」）。
+  // 刻意**不**引入焦点陷阱库（本批范围是容器化）：只保证键盘用户不必先穿过整个工作区。
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    shellRef.current?.querySelector<HTMLButtonElement>(".settings-nav-head button")?.focus();
+  }, []);
+
+  /** 7 页清单：导航项与页体同源（导航只消费 key/labelKey，页体按当前页渲染到右列） */
+  const pages: { key: PageKey; labelKey: string; body: ReactNode }[] = [
     {
       key: "general",
-      label: t("settings.general"),
-      children: (
+      labelKey: "settings.general",
+      body: (
         <Form layout="vertical">
           <Form.Item label={t("settings.language")}>
+            {/* 即时生效：改完立即写 useUi.setLanguage，因此不进 draft 脏标记（也就不会亮脏点） */}
             <Select
               size="small"
               style={{ width: 160 }}
@@ -394,6 +652,7 @@ export default function SettingsModal() {
                 { label: "English", value: "en-US" },
               ]}
             />
+            <span className="settings-instant">{t("settings.instantApply")}</span>
           </Form.Item>
           {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
               经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
@@ -495,7 +754,11 @@ export default function SettingsModal() {
             <TextArea
               rows={4}
               value={draft?.custom_prompt ?? ""}
-              onChange={(e) => patchDraft({ custom_prompt: e.target.value })}
+              // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
+              onChange={(e) => {
+                const v = e.target.value;
+                patchDraft({ custom_prompt: v.trim() === "" ? null : v });
+              }}
             />
           </Form.Item>
           <Form.Item label={t("settings.logLevel")} tooltip={t("settings.logLevelHint")}>
@@ -516,6 +779,8 @@ export default function SettingsModal() {
                 aria-label={t("settings.autoUpdateCheckbox")}
               />
               <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
+              {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft */}
+              <span className="settings-instant">{t("settings.instantApply")}</span>
               <Button
                 size="small"
                 loading={updateChecking}
@@ -541,18 +806,18 @@ export default function SettingsModal() {
     },
     {
       key: "appearance",
-      label: t("settings.appearance"),
-      children: <AppearanceSettings />,
+      labelKey: "settings.appearance",
+      body: <AppearanceSettings />,
     },
     {
       key: "providers",
-      label: t("settings.providers"),
-      children: draft && <ProvidersPanel draft={draft} patchDraft={patchDraft} />,
+      labelKey: "settings.providers",
+      body: draft && <ProvidersPanel draft={draft} patchDraft={patchDraft} />,
     },
     {
       key: "security",
-      label: t("settings.security"),
-      children: draft && (
+      labelKey: "settings.security",
+      body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.approvalEnabled")}>
             <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
@@ -764,8 +1029,8 @@ export default function SettingsModal() {
     },
     {
       key: "network",
-      label: t("settings.network"),
-      children: draft && (
+      labelKey: "settings.network",
+      body: draft && (
         <Form layout="vertical">
           <Form.Item label={t("settings.proxyMode")}>
             {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
@@ -816,8 +1081,8 @@ export default function SettingsModal() {
     },
     {
       key: "mcp",
-      label: t("settings.mcp"),
-      children: mcpEntries === null ? (
+      labelKey: "settings.mcp",
+      body: mcpEntries === null ? (
         // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
         <div className="mcp-pane">
           <div className="hint">{t("settings.mcpRawHint")}</div>
@@ -903,8 +1168,8 @@ export default function SettingsModal() {
     },
     {
       key: "skills",
-      label: t("settings.skills"),
-      children: (
+      labelKey: "settings.skills",
+      body: (
         <div>
           <div className="skills-toolbar">
             <div className="hint">{t("settings.skillsHint")}</div>
@@ -958,22 +1223,101 @@ export default function SettingsModal() {
     },
   ];
 
+  const activePage = pages.find((p) => p.key === tab) ?? pages[0];
+  // 窄窗导航列宽：基准 280，随窗口宽度收缩，由 clampNavWidth 夹在 180..480 内
+  const navWidth = clampNavWidth(Math.min(SETTINGS_NAV_W, Math.round(windowWidth * SETTINGS_NAV_RATIO)));
+
   return (
-    <Modal
-      open
-      onCancel={() => useUi.setState({ settingsOpen: false })}
-      width={880}
-      title={t("settings.title")}
-      footer={
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <Button onClick={() => useUi.setState({ settingsOpen: false })}>{t("settings.cancel")}</Button>
-          <Button type="primary" loading={saving} onClick={() => void save()}>
-            {t("settings.save")}
-          </Button>
-        </div>
-      }
+    // 全屏 dialog 语义（焦点在打开时移到导航首项，见上方 focus effect）
+    <div
+      ref={shellRef}
+      className="settings-shell"
+      data-testid="settings-page"
+      data-confirm-open={confirmOpen ? "1" : "0"}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("settings.title")}
     >
-      {draft && <Tabs tabPlacement="start" activeKey={tab} onChange={setTab} items={items} style={{ minHeight: 480 }} />}
-    </Modal>
+      {/* 左导航列：返回工作区 + 运行中指示 + 7 页导航。
+          导航仍由 antd Tabs 提供（自建导航是后续批次），但它只消费 key/label——页体渲染在右列，
+          这是「二列式全屏页」的布局要求（Tabs 自身无法把 nav 与 pane 拆到两列）。 */}
+      <nav className="settings-nav" style={{ width: navWidth }}>
+        <div className="settings-nav-head">
+          <Button
+            type="text"
+            size="small"
+            icon={<ArrowLeftOutlined />}
+            aria-label={t("settings.backToWorkspace")}
+            onClick={requestClose}
+          >
+            {t("settings.backToWorkspace")}
+          </Button>
+          {/* 运行中指示：数量为 0 时不渲染；点即返回工作区（会话继续跑，不受设置页影响） */}
+          {runningCount > 0 && (
+            <button type="button" className="run-indicator" title={t("settings.runningHint")} onClick={requestClose}>
+              <span className="run-dot" aria-hidden />
+              <span>{t("settings.runningCount", { n: runningCount })}</span>
+            </button>
+          )}
+        </div>
+        <Tabs
+          tabPlacement="start"
+          activeKey={tab}
+          onChange={onTabChange}
+          items={pages.map((p) => ({
+            key: p.key,
+            label: (
+              <span className="settings-nav-label">
+                {t(p.labelKey)}
+                {dirtyMap[p.key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
+              </span>
+            ),
+          }))}
+        />
+      </nav>
+
+      <div className="settings-content">
+        <div className="settings-actions">
+          <span className="settings-actions-title">
+            {t("settings.title")} · {activePage ? t(activePage.labelKey) : ""}
+          </span>
+          {anyDirty && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
+          <div className="settings-actions-buttons">
+            <Tooltip title={t("settings.cancelHint")}>
+              <Button onClick={cancelAll}>{t("settings.cancel")}</Button>
+            </Tooltip>
+            <Button type="primary" loading={saving} onClick={() => void save()}>
+              {t("settings.save")}
+            </Button>
+          </div>
+        </div>
+        <div className="settings-pane">
+          <div className="settings-pane-body">{activePage ? activePage.body : null}</div>
+        </div>
+      </div>
+
+      {/* 三选拦截：切页 / 返回工作区 / 页内 Esc（leaveIntent）与关窗退出（exitPending）共用这份文案与行为。
+          Esc 走 antd Modal 默认行为 → onCancel = 留在原地（浮层优先，不平级返回）。 */}
+      <Modal
+        open={confirmOpen}
+        title={t("settings.leaveTitle")}
+        closable={false}
+        mask={{ closable: false }}
+        onCancel={() => void answerLeave("stay")}
+        footer={[
+          <Button key="stay" onClick={() => void answerLeave("stay")}>
+            {t("settings.leaveStay")}
+          </Button>,
+          <Button key="discard" danger onClick={() => void answerLeave("discard")}>
+            {t("settings.leaveDiscard")}
+          </Button>,
+          <Button key="save" type="primary" onClick={() => void answerLeave("save")}>
+            {t("settings.leaveSave")}
+          </Button>,
+        ]}
+      >
+        <div>{t("settings.leaveDesc")}</div>
+      </Modal>
+    </div>
   );
 }

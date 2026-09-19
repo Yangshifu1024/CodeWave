@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：否则 App.useApp() message 是空壳
 import "../i18n"; // Component mounted standalone must init i18next explicitly
-import SettingsModal from "../features/panels/SettingsModal";
+import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { DEFAULT_LSP_SETTINGS } from "../ipc/types";
@@ -139,13 +139,13 @@ async function openSecurityTab(config: ConfigState = makeConfig()) {
   useUi.setState({ settingsOpen: true, settingsTab: "security" });
   render(
     <AntApp>
-      <SettingsModal />
+      <SettingsPage />
     </AntApp>,
   );
   await waitFor(() => expect(document.querySelector('.validation-row[data-lang="typescript"]')).toBeTruthy());
 }
 
-describe("SettingsModal 安全页签：LSP 语义校验", () => {
+describe("设置页安全页签：LSP 语义校验", () => {
   it("六语言按后端行序渲染（typescript→dart），JSON 另起一行；java 默认关闭", async () => {
     await openSecurityTab();
     const langs = Array.from(document.querySelectorAll(".validation-row")).map((el) => (el as HTMLElement).dataset.lang);

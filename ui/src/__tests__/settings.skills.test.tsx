@@ -1,10 +1,10 @@
-// SettingsModal 技能页签：来源短标签 + 重新加载（reload_skills 清缓存重扫）+ 托管技能删除（delete_skill + Popconfirm）。
+// 设置页技能页签：来源短标签 + 重新加载（reload_skills 清缓存重扫）+ 托管技能删除（delete_skill + Popconfirm）。
 // 挂载方式与 shell.settings.test.tsx 同源（standalone + useUi 控制开关），两字按钮按去空白文本匹配。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：es/app 子路径会产生另一个 context
 import "../i18n";
-import SettingsModal from "../features/panels/SettingsModal";
+import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import type { ConfigState } from "../ipc/types";
@@ -85,13 +85,13 @@ async function openSkillsTab() {
   useUi.setState({ settingsOpen: true, settingsTab: "skills" });
   render(
     <AntApp>
-      <SettingsModal />
+      <SettingsPage />
     </AntApp>,
   );
   await waitFor(() => expect(screen.getByText("demo")).toBeTruthy());
 }
 
-describe("SettingsModal 技能页签", () => {
+describe("设置页技能页签", () => {
   it("每行渲染来源短标签：内置显示「内置」，目录形态取技能目录名并悬浮完整 origin", async () => {
     await openSkillsTab();
     // 内置：显示「内置」标签

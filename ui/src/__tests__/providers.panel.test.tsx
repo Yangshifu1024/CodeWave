@@ -1,5 +1,5 @@
 // ProvidersPanel interaction tests ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md)): full add-provider flow + active_model_id fallback when deleting models/providers.
-// Panel mounted standalone (no AppShell): the draft mirrors SettingsModal's patchDraft merge semantics with local useState.
+// Panel mounted standalone (no AppShell): the draft mirrors SettingsPage's patchDraft merge semantics with local useState.
 import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { useState } from "react";

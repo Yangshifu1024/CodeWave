@@ -29,8 +29,13 @@ interface UiState {
   /** 主题偏好档位（设置 → 外观选择；localStorage 持久化，即时生效） */
   theme: ThemePref;
   settingsOpen: boolean;
-  /** 设置弹窗当前页签（通用/外观/供应商/安全/mcp/技能）：提升进 store 以便外部调用方（认证错误引导等）指定页签打开（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)） */
+  /** 设置页当前页签（通用/外观/供应商/安全/网络/MCP/技能）：提升进 store 以便外部调用方（认证错误引导等）指定页签打开（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；
+   *  深链语义见 showSettings（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)） */
   settingsTab: string;
+  /** 设置页是否存在未保存改动（全页聚合；SettingsPage 同步）：退出拦截链（ExitConfirm）读它决定
+   *  先弹设置三选还是直接弹运行中会话选择。住 store 是因为两处渲染点分属 SettingsPage 与 AppShell */
+  settingsDirty: boolean;
+  setSettingsDirty(dirty: boolean): void;
   /** 退出拦截请求（后端 app:exit_requested 下发运行中会话列表）：AppShell 消费后弹三选项或直接放行；null = 无待处理退出请求。
    *  放在 ui store 是因为事件 handler 与弹窗分处两层（runHandlers 注册、AppShell 渲染），store 是二者唯一交点 */
   exitRequest: { running: string[] } | null;
@@ -68,7 +73,11 @@ interface UiState {
   setRbTab(tab: string): void;
   /** 打开「变更」：确保右栏展开并落在变更页签 */
   showChanges(): void;
-  /** 打开设置弹窗，可指定落地页签（默认「通用」） */
+  /** 打开设置页。
+   *  - 带 tab：跳到该页（错误卡「打开模型设置」→ providers、LSP 引导卡 → 所在页，深链语义不变）
+   *  - 不带 tab：保持当前页不重置（**有意变更**：[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)；
+   *    旧实现是「无参一律回 general」。设置从弹窗改为常驻全屏页后，重复点入口/菜单项不应把用户甩回第一页）
+   *  两条路径在存在未保存改动时的拦截由 SettingsPage 承担（本动作只动开关与页签） */
   showSettings(tab?: string): void;
   /** 空态引导：ProjectNav 监听此标志打开新建项目弹框（用完即复位） */
   createProjectRequested: boolean;
@@ -91,6 +100,10 @@ export const useUi = create<UiState>((set, get) => ({
   theme: readStoredTheme(),
   settingsOpen: false,
   settingsTab: "general",
+  settingsDirty: false,
+  setSettingsDirty(dirty) {
+    if (get().settingsDirty !== dirty) set({ settingsDirty: dirty });
+  },
   exitRequest: null,
   closeTabRequest: null,
   setCloseTabRequest(key) {
@@ -141,7 +154,8 @@ export const useUi = create<UiState>((set, get) => ({
     set({ rbTab: "changes" });
   },
   showSettings(tab?: string) {
-    set({ settingsOpen: true, settingsTab: tab ?? "general" });
+    // 无参 = 保持当前页（旧实现回 general，见接口注释里的「有意变更」说明）
+    set(tab ? { settingsOpen: true, settingsTab: tab } : { settingsOpen: true });
   },
   createProjectRequested: false,
   mcpStatus: [],

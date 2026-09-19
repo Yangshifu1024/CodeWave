@@ -20,6 +20,10 @@ interface Props {
   label: string;
   /** 当前显示宽度已被窗口夹小：拖拽/键盘会写坏记忆值，此时只留双击复位 */
   disabled?: boolean;
+  /** 被全屏覆盖层盖住（设置页打开）：不可达——不进 Tab 序、对辅助技术隐藏。
+   *  `.settings-shell` 的 z-index 只挡指针，挡不住键盘焦点，所以必须显式把它们踢出焦点环
+   *  （[docs/settings-fullscreen-shell]）。 */
+  covered?: boolean;
   onWidth: (width: number) => void;
   onReset: () => void;
 }
@@ -38,6 +42,7 @@ export default function ResizeHandle({
   offset,
   label,
   disabled = false,
+  covered = false,
   onWidth,
   onReset,
 }: Props) {
@@ -63,16 +68,17 @@ export default function ResizeHandle({
 
   return (
     <div
-      className={`rb-resize-handle resize-${side}${disabled ? " is-disabled" : ""}`}
+      className={`rb-resize-handle resize-${side}${disabled ? " is-disabled" : ""}${covered ? " workspace-covered" : ""}`}
       style={side === "nav" ? { left: `${offset}px` } : { right: `${offset}px` }}
       role="separator"
       aria-orientation="vertical"
       aria-label={label}
       aria-disabled={disabled || undefined}
+      aria-hidden={covered || undefined}
       aria-valuenow={width}
       aria-valuemin={min}
       aria-valuemax={max}
-      tabIndex={0}
+      tabIndex={covered ? -1 : 0}
       onPointerDown={(e) => {
         if (disabled || e.button !== 0) return;
         drag.current = { startX: e.clientX, startWidth: width };
