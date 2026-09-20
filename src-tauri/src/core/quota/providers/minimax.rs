@@ -6,7 +6,7 @@
 //! 中国响应里是「已用」（与上游实现一致，勿按字段名直觉修改）。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
-use super::{number, text};
+use super::{FetchFailure, number, text};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -64,7 +64,7 @@ pub(crate) async fn fetch(
     endpoint: Endpoint,
     key: &str,
     client: &reqwest::Client,
-) -> Result<Vec<QuotaEntry>, String> {
+) -> Result<Vec<QuotaEntry>, FetchFailure> {
     let body = fetch_json(
         client,
         endpoint.url(),
@@ -73,7 +73,7 @@ pub(crate) async fn fetch(
         endpoint.label(),
     )
     .await?;
-    parse_usage(&body, endpoint, Utc::now())
+    parse_usage(&body, endpoint, Utc::now()).map_err(FetchFailure::message)
 }
 
 fn model_name(model: &Value) -> String {
@@ -142,6 +142,7 @@ fn build_entries(model: &Value, endpoint: Endpoint, now: DateTime<Utc>) -> Vec<Q
             None,
             100.0 - remaining_percent,
             resets_at,
+            None,
         ));
     }
     entries

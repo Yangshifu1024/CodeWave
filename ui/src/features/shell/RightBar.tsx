@@ -30,10 +30,10 @@ import SkillDetailModal from "./SkillDetailModal";
 import { useDisplayWidths } from "./useDisplayWidths";
 
 /**
- * 信息页签：项目目录 / 订阅额度 / 技能 / 当前计划。
+ * 信息页签：项目目录 / 额度与余额 / 技能 / 当前计划。
  * - 项目目录行：文件管理器按钮（Windows 自动识别 Files）+ 「在编辑器中打开」下拉；
  *   数据目录行已移除（`open_data_dir` 能力保留给「关于」弹框）；
- * - 订阅额度：顶替原「会话」段（开始时间信息已删）；
+ * - 额度与余额：顶替原「会话」段（开始时间信息已删）；行集合 = CodeWave 供应商配置，与凭证链无关；
  * - 技能 / 当前计划：antd Collapse，默认展开，折叠态记 localStorage（全局一份）。
  *
  * [docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)
@@ -114,16 +114,17 @@ function InfoPanel({ visible }: { visible: boolean }) {
         )}
       </div>
 
-      {/* 订阅额度段（顶替原「会话」段） */}
+      {/* 额度与余额段（顶替原「会话」段） */}
       <QuotaSection visible={visible} />
 
       {/* 技能 / 当前计划：antd Collapse（ghost），默认全展开；折叠态写 localStorage（全局一份）。
-          expandIconPosition="end"：标题文字与「项目目录 / 订阅额度」左对齐，箭头落在行末；
+          expandIconPlacement="end"：标题文字与「项目目录 / 额度与余额」左对齐，箭头落在行末
+          （antd 6.6 起 expandIconPosition 已弃用，勿回退）；
           标题字号/颜色由 app.css 的 .rb-collapse .ant-collapse-title 统一为 11px + dim。 */}
       <Collapse
         className="rb-collapse"
         ghost
-        expandIconPosition="end"
+        expandIconPlacement="end"
         activeKey={openSections}
         onChange={(keys) => {
           const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);

@@ -148,9 +148,10 @@ export const ipc = {
   listEditors: () => invoke<EditorInfo[]>("list_editors"),
   openInEditor: (editorId: string, path: string) => invoke<void>("open_in_editor", { editorId, path }),
 
-  // 订阅额度：只返回检测到凭证的提供商；activeBaseUrl 命中的那家置顶
-  quotaSnapshots: (activeBaseUrl?: string | null) =>
-    invoke<QuotaSnapshot[]>("quota_snapshots", { activeBaseUrl: activeBaseUrl ?? null }),
+  // 额度快照：行集合 = CodeWave 供应商配置（后端按「可查询类在前 + 配置顺序、unsupported 殿后」排好序）；
+  // activeProviderId = 当前会话生效模型所属供应商 uuid，仅用于后端标注「当前」
+  quotaSnapshots: (activeProviderId?: string | null) =>
+    invoke<QuotaSnapshot[]>("quota_snapshots", { activeProviderId: activeProviderId ?? null }),
 
   // 系统通知点击回跳（tauri-plugin-notification 桌面端无点击回调，后端按平台原生直驱；失败回退插件路径）
   notifySystem: (sessionId: string, title: string, body: string) =>

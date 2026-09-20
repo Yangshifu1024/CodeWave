@@ -44,9 +44,17 @@ export function writeCollapsedSections(sections: Set<CollapsibleSection>): void 
   writeIdSet(COLLAPSED_SECTIONS_KEY, sections);
 }
 
-/** 已展开的额度提供商集合（缺省空集 = 全部收起为一行摘要）。 */
-export function readExpandedQuotaProviders(): Set<string> {
-  return readIdSet(EXPANDED_QUOTA_KEY);
+/**
+ * 已展开的额度提供商集合（缺省空集 = 全部收起为一行摘要）。
+ * `validIds` = 当前快照里的供应商 id 集合：旧版本写入的 kind 串（如 `opencode-go`）在这层被过滤掉，
+ * **不回写** localStorage（只有用户操作行时才写），避免把用户偏好换成脏值。
+ */
+export function readExpandedQuotaProviders(validIds?: Set<string>): Set<string> {
+  const all = readIdSet(EXPANDED_QUOTA_KEY);
+  if (!validIds) return all;
+  const out = new Set<string>();
+  for (const id of all) if (validIds.has(id)) out.add(id);
+  return out;
 }
 
 /** 写回额度提供商的展开集合。 */

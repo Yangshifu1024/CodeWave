@@ -321,7 +321,7 @@ export interface SubagentEvent {
   ended?: "report" | "budget" | "no_report";
 }
 
-// ---------- 订阅额度 / 打开器（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）----------
+// ---------- 额度与余额 / 打开器（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）----------
 
 /** 已检测到的编辑器（后端候选表顺序：VS Code → Cursor → Windsurf → Zed → Sublime Text → Notepad++ → JetBrains 组） */
 export interface EditorInfo {
@@ -343,21 +343,38 @@ export interface QuotaEntry {
   value_text: string | null;
   /** 重置时间（RFC3339） */
   resets_at: string | null;
+  /** 窗口级状态（后端原样透传：ok / rate-limited / exceeded / …）；null = 无状态信息，未知值前端原样显示 */
+  status: string | null;
 }
 
-/** 提供商快照状态：invalid = 凭证形态不可用（重试无用）；未配置凭证的提供商不会出现在列表里 */
-export type QuotaStatus = "ok" | "invalid" | "error";
+/**
+ * 一家供应商的快照状态（行集合 = CodeWave 供应商配置，见 [docs/quota-from-provider-config](../../../docs/quota-from-provider-config.md)）：
+ * - ok：查到了额度；error：查询失败（可重试）；invalid：密钥读取失败（重试无用）；
+ * - rejected：查询被拒（401/403/404 且该家**从未成功过**，密钥或套餐被拒，重试无用）——这条定义决定了
+ *   它的 `last_ok_at` 恒为 null；反过来「曾成功过的 401/403/404」一律归 `error`，历史成功记录就是两者的分界；
+ * - no_key：未配置密钥；unsupported：不支持额度查询（reason 给出原因：no_adapter / empty_base_url）。
+ */
+export type QuotaStatus = "ok" | "error" | "invalid" | "rejected" | "no_key" | "unsupported";
 
-/** 一家提供商的额度快照 */
+/** 一家供应商的额度快照 */
 export interface QuotaSnapshot {
+  /** CodeWave 供应商 uuid（与 config.providers[].id 同源） */
   provider_id: string;
+  /** 后端给的 provider.name（空则已回落主机名） */
   display_name: string;
   status: QuotaStatus;
+  /** 状态补充说明：unsupported 时为 "no_adapter" | "empty_base_url"，其余状态为 null */
+  reason: string | null;
   entries: QuotaEntry[];
   error: string | null;
-  /** 凭证来源（env:NAME / opencode.jsonc / opencode.json / auth.json）——悬浮排障用 */
-  credential_source: string | null;
+  /** 密钥来源："keyring"（系统钥匙串）|"config"（配置文件）；null = 未知，不显示 */
+  key_source: string | null;
   fetched_at: string;
+  /**
+   * 该供应商**上次成功查询**的时刻（RFC3339 秒）：`ok` 行 = 本次成功时间（= `fetched_at`），
+   * 其它状态 = `~/.codewave/quota.json` 里持久化的上次成功时间；从未成功过为 null。
+   */
+  last_ok_at: string | null;
 }
 
 // ---------- 写入后检查命令（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)） ----------

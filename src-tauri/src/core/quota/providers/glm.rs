@@ -6,6 +6,7 @@
 //! `type`/`unit`/`percentage`（已用）/`nextResetTime`（毫秒时间戳）。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
+use super::FetchFailure;
 use chrono::{DateTime, SecondsFormat};
 use serde_json::Value;
 
@@ -35,9 +36,9 @@ pub(crate) async fn fetch(
     flavor: Flavor,
     key: &str,
     client: &reqwest::Client,
-) -> Result<Vec<QuotaEntry>, String> {
+) -> Result<Vec<QuotaEntry>, FetchFailure> {
     let body = fetch_json(client, flavor.url(), key, AuthStyle::Raw, flavor.label()).await?;
-    parse_limits(&body, flavor)
+    parse_limits(&body, flavor).map_err(FetchFailure::message)
 }
 
 /// 解析 limits 数组：TOKENS_LIMIT 的 unit 3/6 → 5 小时/每周；TIME_LIMIT → MCP 时长限制。
@@ -94,7 +95,7 @@ pub(crate) fn parse_limits(body: &Value, flavor: Flavor) -> Result<Vec<QuotaEntr
             .filter(|ms| *ms > 0.0)
             .and_then(|ms| DateTime::from_timestamp_millis(ms as i64))
             .map(|d| d.to_rfc3339_opts(SecondsFormat::Secs, true));
-        entries.push(QuotaEntry::percent(key, None, percentage, resets_at));
+        entries.push(QuotaEntry::percent(key, None, percentage, resets_at, None));
     }
 
     if entries.is_empty() {
