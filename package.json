@@ -7,6 +7,7 @@
     "dev": "pnpm --dir ui dev",
     "build": "pnpm --dir ui build",
     "test": "pnpm --dir ui test",
+    "prepr": "node scripts/pre-pr.mjs",
     "bump": "node scripts/bump-version.mjs",
     "tauri": "tauri"
   },

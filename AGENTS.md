@@ -30,14 +30,15 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **768 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空，原 17 条集成用例随之移除；个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过（2026-09-19 复测：两轮一漏一过）；以本地最新全绿为准） |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **702 passed / 71 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **775 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过（2026-09-19 复测：两轮一漏一过）；以本地最新全绿为准）；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **732 passed / 71 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
 | 版本升级 | `pnpm bump <x.y.z>` | 统一改 4 处版本号 + 刷新两个锁文件；完整发版流程（门禁 → commit → 确认后推 tag）见 `.agents/skills/codewave-release/SKILL.md` 与 [docs/version-bump-and-release](./docs/version-bump-and-release.md) |
-
+| 开 PR 前本地门禁 | `pnpm prepr` | **开 PR 前必须跑完**：逐条覆盖 CI 的两个 workflow（`cargo fmt --check` / `cargo clippy`（软）/ `cargo test --workspace` / `pnpm --dir ui run lint` / `ui test` / `ui build` / `node --test scripts/**` / `pnpm install --frozen-lockfile`）；硬步骤失败即停并给出失败清单，见 [docs/pre-pr-local-gate](./docs/pre-pr-local-gate.md) |
 - 改后端 → `cargo test`；改前端 → `pnpm --dir ui test` + `build`；两边都动 → 两者都要过才算完成
+- **开 PR 前必须本地跑完 CI 全部检查**（`pnpm prepr`：fmt / clippy / eslint / 前后端测试 / 构建 / 脚本测试 / 锁定文件）——CI 只是复核，不是第一道防线；lint 与格式类问题绝不该由 CI 首次发现。本地只覆盖当前平台，三平台矩阵差异仍以 CI 为准
 - **单实例互斥**：`tauri dev` 与打包版同 bundle id 不能同时跑；GUI 验证前先确认没有 dev 实例在运行
 - **界面改动不做 GUI 自动点验**：完成后交付分步手动验证清单，由用户手动验证
 
