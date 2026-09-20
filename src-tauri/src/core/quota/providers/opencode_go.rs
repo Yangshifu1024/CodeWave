@@ -52,7 +52,9 @@ pub(crate) fn parse_usage(body: &Value) -> Result<Vec<QuotaEntry>, String> {
             .get("status")
             .and_then(Value::as_str)
             .map(str::to_string);
-        entries.push(QuotaEntry::percent(window, None, percent, resets_at, status));
+        entries.push(QuotaEntry::percent(
+            window, None, percent, resets_at, status,
+        ));
     }
 
     if entries.is_empty() {
