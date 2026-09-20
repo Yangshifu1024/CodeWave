@@ -7,6 +7,8 @@
 //      与开源许可证（复用 ipc.openUrl 打开仓库 LICENSE）——两个都零后端改动。
 // 版本号仍是懒加载（失败降级 ?.?.?）：本页被渲染时才拉一次（离开本页即卸载、再进入重新拉取），
 // 不在应用启动时拉取。
+// 版式（2026-09-20 调整）：「检查更新」按钮从「更新」行移至**版本号右侧**——版本与更新检查是同一件事
+// （看版本 / 查新版），同行更顺；「更新」行只留自动更新开关 + 「即时生效」提示。
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Button, Form, Switch } from "antd";
@@ -100,9 +102,20 @@ export function AboutSettings() {
 
       <Form layout="vertical">
         {/* 只读身份与入口：标签行 + extra 说明（不依赖悬停）+ 行内值 / 按钮，与其余 7 页同版式 */}
+        {/* 版本号 + 手动检查更新同占一行：两个锚点是**兄弟**而非嵌套——批③ 的搜索定位按 data-setting-id
+            打 .settings-item-hit，嵌套会让外层高亮框套住整行（高亮范围与命中项不一致）。
+            复用 .settings-update-row 的通用 flex 行样式，不新造版式类。 */}
         <Form.Item label={t("settings.aboutVersion")} extra={t("settings.aboutVersionHint")}>
-          <div className="setting-anchor" data-setting-id="app.version">
-            <span className="about-version">{version ?? "…"}</span>
+          <div className="settings-update-row">
+            <div className="setting-anchor" data-setting-id="app.version">
+              <span className="about-version">{version ?? "…"}</span>
+            </div>
+            {/* 检查更新是 Windows/Linux 的唯一更新入口（macOS 另有应用菜单项）；loading 态跨到弹窗接管 */}
+            <div className="setting-anchor" data-setting-id="app.check_updates">
+              <Button size="small" icon={<CloudDownloadOutlined />} loading={checking} onClick={() => void runUpdateCheck()}>
+                {t("settings.checkForUpdates")}
+              </Button>
+            </div>
           </div>
         </Form.Item>
         {entryRow(
@@ -140,7 +153,8 @@ export function AboutSettings() {
         <Form.Item label={t("settings.updates")} extra={t("settings.updatesHint")}>
           <div className="settings-update-row">
             {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记。
-                两个锚点（data-setting-id）供批③ 搜索定位：两者都是整行控件，不参与宽度三档 */}
+                锚点（data-setting-id）供批③ 搜索定位：整行控件，不参与宽度三档。
+                手动「检查更新」按钮已上移到版本号一行（同一 flex 行样式）。 */}
             <div className="setting-anchor" data-setting-id="ui.auto_update">
               <Switch
                 size="small"
@@ -151,11 +165,6 @@ export function AboutSettings() {
             </div>
             <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
             <span className="settings-instant">{t("settings.instantApply")}</span>
-            <div className="setting-anchor" data-setting-id="app.check_updates">
-              <Button size="small" icon={<CloudDownloadOutlined />} loading={checking} onClick={() => void runUpdateCheck()}>
-                {t("settings.checkForUpdates")}
-              </Button>
-            </div>
           </div>
         </Form.Item>
         {actionError && <div className="about-error">{actionError}</div>}

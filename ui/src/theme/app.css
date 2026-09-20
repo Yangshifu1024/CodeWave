@@ -939,9 +939,12 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .about-slogan { font-size: 12.5px; color: var(--ws-text-2); margin: 8px 0 4px; max-width: 240px; }
 .about-error { margin-top: 10px; font-size: 11.5px; color: var(--ws-err); word-break: break-all; }
 
-/* 设置 → 关于 → 更新：开关 + 文案 + 手动检查按钮同一行 */
+/* 设置 → 关于 → 更新：开关 + 文案同一行；版本号行（版本串 + 检查更新按钮）复用同一 flex 行样式 */
 .settings-update-row { display: flex; align-items: center; gap: 8px; }
 .settings-update-row .settings-update-label { font-size: 12.5px; color: var(--ws-text-2); margin-right: auto; }
+/* 版本串的 2px 上边距是为「单独成行」对齐标签留下的；进 flex 行后被垂直居中接管，
+   留着会让文本比同行按钮低 2px（按钮已移到本行，2026-09-20） */
+.settings-update-row .about-version { margin-top: 0; }
 
 /* ---------- 自动更新弹窗（UpdateModal） ---------- */
 .updater-body { display: flex; flex-direction: column; gap: 8px; }
