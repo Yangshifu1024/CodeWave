@@ -9,5 +9,15 @@
 //!    重建路线（把整份读成内存模型再重新序列化）会丢掉模型没覆盖到的内容——图表、数据透视表、
 //!    迷你图、切片器都会凭空消失，这是格式决定的，不是实现好坏的差异。
 
+pub mod backup;
+pub mod edit;
+pub mod patch;
 pub mod read;
+pub mod sheet_edit;
+pub mod workbook;
+pub mod write;
 pub mod xlsx;
+pub mod xml_util;
+
+#[cfg(test)]
+mod faithful_spike;
