@@ -110,6 +110,16 @@ pub fn run() {
             core::logging::prune_expired_logs();
             let client = provider::proxy::build_client(&cfg);
             let data_dir = crate::core::config::data_dir();
+            // quota.json 启动期自愈（[docs/quota-from-provider-config](../../docs/quota-from-provider-config.md)）：
+            // 与登录清理 / 幽灵会话清扫同类的一次性维护，同步跑即可（单文件、个位数条目、微秒级，
+            // 无需 spawn_blocking）；放在启动期而非额度刷新时，是因为此时没有并发刷新，
+            // 能与 state::commit 共用同一把进程内互斥而不抢锁。产物 `quota.json.corrupt` 可被覆盖、
+            // **只作证据**（不参与任何判据、不自动清理）；供应商「曾成功过」的唯一持久载体仍是 quota.json。
+            // 健康文件不写盘也不记日志。
+            let healed = core::quota::state::heal(&data_dir);
+            if healed != core::quota::state::HealOutcome::default() {
+                tracing::warn!("quota.json 启动自愈：{healed:?}");
+            }
             let store = Arc::new(SessionStore::new(data_dir.clone()));
             // 存量修复：checkpoint 曾把 sub_*/task_* 运行写进主索引（untitled 幽灵会话）——启动时清扫
             store.purge_non_session_entries();
