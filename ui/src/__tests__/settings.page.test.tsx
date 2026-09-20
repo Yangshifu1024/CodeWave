@@ -818,6 +818,29 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
     expect(document.body.textContent ?? "").toContain("CodeWave");
   });
 
+  it("版式：「检查更新」按钮跟在版本号后（同一 flex 行，兄弟锚点非嵌套）", async () => {
+    await mountWithSession();
+    await openPage("关于");
+
+    await waitFor(() => expect(document.querySelector(".about-version")?.textContent).toBe("0.2.0"));
+    const versionAnchor = document.querySelector('[data-setting-id="app.version"]')!;
+    const checkAnchor = document.querySelector('[data-setting-id="app.check_updates"]')!;
+    expect(versionAnchor).toBeTruthy();
+    expect(checkAnchor).toBeTruthy();
+    // 两者同属版本行的 flex 行，且按钮锚点在版本锚点之后（DOM 顺序 = 视觉顺序）
+    const row = versionAnchor.parentElement!;
+    expect(row.className).toContain("settings-update-row");
+    expect(row).toBe(checkAnchor.parentElement);
+    expect(Array.from(row.children)).toEqual([versionAnchor, checkAnchor]);
+    // 兄弟而非嵌套：嵌套会让外层高亮框套住整行（搜索定位的范围与命中项不一致）
+    expect(versionAnchor.contains(checkAnchor)).toBe(false);
+    expect((checkAnchor.querySelector("button")?.textContent ?? "").replace(/\s/g, "").includes("检查更新")).toBe(true);
+    // 「更新」行只剩自动更新开关（按钮不再在该行），即时生效提示保留
+    const updatesAnchor = document.querySelector('[data-setting-id="ui.auto_update"]')!;
+    expect(updatesAnchor.parentElement?.querySelector('[data-setting-id="app.check_updates"]')).toBeNull();
+    expect(document.querySelector('[data-testid="settings-page"] .settings-instant')).toBeTruthy();
+  });
+
   it("数据目录 / 日志目录 / 代码仓库 / 许可证四个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
     await mountWithSession();
     await openPage("关于");
