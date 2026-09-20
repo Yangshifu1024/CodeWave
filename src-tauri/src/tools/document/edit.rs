@@ -61,13 +61,15 @@ impl Edit {
                 self.sheet, self.cell
             ));
         }
-        Ok(match (&self.text, self.number, &self.formula, self.boolean) {
-            (Some(t), ..) => CellValue::Text(t.clone()),
-            (_, Some(n), ..) => CellValue::Number(n),
-            (_, _, Some(f), _) => CellValue::Formula(f.clone()),
-            (_, _, _, Some(b)) => CellValue::Bool(b),
-            _ => unreachable!("上面已保证恰好一个"),
-        })
+        Ok(
+            match (&self.text, self.number, &self.formula, self.boolean) {
+                (Some(t), ..) => CellValue::Text(t.clone()),
+                (_, Some(n), ..) => CellValue::Number(n),
+                (_, _, Some(f), _) => CellValue::Formula(f.clone()),
+                (_, _, _, Some(b)) => CellValue::Bool(b),
+                _ => unreachable!("上面已保证恰好一个"),
+            },
+        )
     }
 
     /// 新值的人类可读描述（审批卡片与结果回执用）。
@@ -132,9 +134,7 @@ fn check_edits(kind: Kind, args: &Args) -> Result<(), String> {
     match kind {
         Kind::Sheet => {
             if !args.text_edits.is_empty() {
-                return Err(
-                    "textEdits 只用于 Word 文档；表格请用 edits 按单元格修改。".to_string(),
-                );
+                return Err("textEdits 只用于 Word 文档；表格请用 edits 按单元格修改。".to_string());
             }
             if args.edits.is_empty() {
                 return Err("edits 不能为空".to_string());
@@ -148,9 +148,7 @@ fn check_edits(kind: Kind, args: &Args) -> Result<(), String> {
         }
         Kind::Word => {
             if !args.edits.is_empty() {
-                return Err(
-                    "edits 只用于表格；Word 文档请用 textEdits 做文字替换。".to_string(),
-                );
+                return Err("edits 只用于表格；Word 文档请用 textEdits 做文字替换。".to_string());
             }
             if args.text_edits.is_empty() {
                 return Err("textEdits 不能为空".to_string());
@@ -167,24 +165,17 @@ fn check_edits(kind: Kind, args: &Args) -> Result<(), String> {
 }
 
 /// Word 文档的修改：只改正文里的文字，其余内部文件与非文字节点全部保留。
-fn run_word(
-    ctx: &ToolCtx,
-    args: &Args,
-    resolved: &std::path::Path,
-) -> ToolOutcome {
+fn run_word(ctx: &ToolCtx, args: &Args, resolved: &std::path::Path) -> ToolOutcome {
     if let Err(e) = super::edit_word::preview(
         &match super::patch::read_entry(resolved, super::docx::DOCUMENT_ENTRY) {
             Ok(Some(bytes)) => match String::from_utf8(bytes) {
                 Ok(s) => s,
                 Err(_) => {
-                    return ToolOutcome::err("E_PARSE", format!("{} 的正文无法解析", args.path))
+                    return ToolOutcome::err("E_PARSE", format!("{} 的正文无法解析", args.path));
                 }
             },
             Ok(None) => {
-                return ToolOutcome::err(
-                    "E_PARSE",
-                    format!("{} 里找不到正文内容", args.path),
-                )
+                return ToolOutcome::err("E_PARSE", format!("{} 里找不到正文内容", args.path));
             }
             Err(e) => return ToolOutcome::err("E_PARSE", e),
         },
@@ -199,15 +190,14 @@ fn run_word(
             Ok(s) => s,
             Err(_) => return ToolOutcome::err("E_PARSE", format!("{} 的正文无法解析", args.path)),
         },
-        Ok(None) => {
-            return ToolOutcome::err("E_PARSE", format!("{} 里找不到正文内容", args.path))
-        }
+        Ok(None) => return ToolOutcome::err("E_PARSE", format!("{} 里找不到正文内容", args.path)),
         Err(e) => return ToolOutcome::err("E_PARSE", e),
     };
-    let (patched_xml, applied) = match super::edit_word::apply_text_edits(&document_xml, &args.text_edits) {
-        Ok(v) => v,
-        Err(e) => return ToolOutcome::err("E_EDIT_FAILED", e),
-    };
+    let (patched_xml, applied) =
+        match super::edit_word::apply_text_edits(&document_xml, &args.text_edits) {
+            Ok(v) => v,
+            Err(e) => return ToolOutcome::err("E_EDIT_FAILED", e),
+        };
 
     let work = match tempfile::tempdir() {
         Ok(w) => w,
@@ -279,8 +269,6 @@ fn finish_write(
         .push("本次改动已保留原件备份；如需回退请告知。".to_string());
     out
 }
-
-
 
 /// 一处已完成定位的修改，供审批卡片与执行共用（避免两处逻辑漂移）。
 #[derive(Debug, Clone)]
@@ -372,7 +360,10 @@ fn load(roots: &pathutil::WriteRoots, raw_path: &str, edits: &[Edit]) -> Result<
 /// 试运行：在内存里把全部修改应用一遍，返回（改动清单、每个工作表文件的新内容）。
 ///
 /// 审批卡片与真正执行都走这里——两处共用同一套逻辑，避免「卡片上显示的」与「实际改的」不一致。
-fn plan(loaded: &Loaded, edits: &[Edit]) -> Result<(Vec<Planned>, BTreeMap<String, String>), String> {
+fn plan(
+    loaded: &Loaded,
+    edits: &[Edit],
+) -> Result<(Vec<Planned>, BTreeMap<String, String>), String> {
     let mut planned = Vec::new();
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for e in edits {
@@ -505,8 +496,8 @@ impl Tool for EditDocumentTool {
             Kind::Word => {
                 let roots = ctx.write_roots();
                 let resolved = pathutil::resolve_read(&roots, &args.path).ok()?;
-                let xml = super::patch::read_entry(&resolved, super::docx::DOCUMENT_ENTRY)
-                    .ok()??;
+                let xml =
+                    super::patch::read_entry(&resolved, super::docx::DOCUMENT_ENTRY).ok()??;
                 let xml = String::from_utf8(xml).ok()?;
                 let applied = super::edit_word::preview(&xml, &args.text_edits).ok()?;
                 Some(super::edit_word::render_plan(&args.path, &applied))
@@ -534,14 +525,14 @@ impl Tool for EditDocumentTool {
                         "{} 不是支持修改的格式（只支持 .xlsx/.xlsm/.docx）。旧格式请先用对应软件另存为新格式。",
                         args.path
                     ),
-                )
+                );
             }
         };
         if let Err(e) = check_edits(kind, &args) {
             return ToolOutcome::err("E_ARGS", e);
         }
         if kind == Kind::Word {
-            if !matches!(ctx.rt.root_session_id, Some(_))
+            if ctx.rt.root_session_id.is_none()
                 && let Err(conflicts) =
                     crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
             {
@@ -550,7 +541,7 @@ impl Tool for EditDocumentTool {
                     crate::tools::claims::denial_message(&conflicts),
                 );
             }
-            return run_word(&ctx, &args, &resolved);
+            return run_word(ctx, &args, &resolved);
         }
 
         let roots = ctx.write_roots();
@@ -560,7 +551,7 @@ impl Tool for EditDocumentTool {
         };
 
         // 子代理并发写同一文件时拒绝（与其它写工具一致）
-        if !matches!(ctx.rt.root_session_id, Some(_))
+        if ctx.rt.root_session_id.is_none()
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&loaded.path))
         {

@@ -43,7 +43,13 @@ fn safe_basename(src: &Path) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "document".to_string());
     raw.chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

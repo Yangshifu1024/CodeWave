@@ -143,7 +143,8 @@ pub fn parse_shared_strings(xml: &str) -> Vec<String> {
                 if !matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
                     continue;
                 }
-                let Some((t_gt, t_self_closing)) = super::xml_util::start_tag_end(body, t_at) else {
+                let Some((t_gt, t_self_closing)) = super::xml_util::start_tag_end(body, t_at)
+                else {
                     break;
                 };
                 if t_self_closing {
@@ -181,7 +182,10 @@ mod tests {
         assert_eq!(sheets[0].name, "月度汇总");
         assert_eq!(sheets[0].entry, "xl/worksheets/sheet1.xml");
         assert_eq!(sheets[1].name, "明细");
-        assert_eq!(sheets[1].entry, "xl/worksheets/sheet7.xml", "绝对写法也要归一");
+        assert_eq!(
+            sheets[1].entry, "xl/worksheets/sheet7.xml",
+            "绝对写法也要归一"
+        );
         assert_eq!(sheets[1].sheet_id, Some(2));
     }
 
@@ -204,9 +208,18 @@ mod tests {
 
     #[test]
     fn relative_and_dotdot_targets_normalize() {
-        assert_eq!(normalize_target("worksheets/sheet1.xml"), "xl/worksheets/sheet1.xml");
-        assert_eq!(normalize_target("/xl/worksheets/s.xml"), "xl/worksheets/s.xml");
-        assert_eq!(normalize_target("./worksheets/s.xml"), "xl/worksheets/s.xml");
+        assert_eq!(
+            normalize_target("worksheets/sheet1.xml"),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            normalize_target("/xl/worksheets/s.xml"),
+            "xl/worksheets/s.xml"
+        );
+        assert_eq!(
+            normalize_target("./worksheets/s.xml"),
+            "xl/worksheets/s.xml"
+        );
         assert_eq!(
             normalize_target("worksheets/../worksheets/s.xml"),
             "xl/worksheets/s.xml"

@@ -43,10 +43,8 @@ pub fn apply_text_edits(
         if e.find.is_empty() {
             return Err("要查找的文字不能为空".to_string());
         }
-        let (next, count) =
-            docx::replace_text(&current, &e.find, &e.replace, e.all).map_err(|err| {
-                format!("替换「{}」失败：{err}", e.find)
-            })?;
+        let (next, count) = docx::replace_text(&current, &e.find, &e.replace, e.all)
+            .map_err(|err| format!("替换「{}」失败：{err}", e.find))?;
         applied.push(Applied {
             find: e.find.clone(),
             replace: e.replace.clone(),
@@ -98,7 +96,6 @@ mod tests {
     use super::*;
 
     const DOC: &str = r#"<w:document xmlns:w="http://x"><w:body><w:p><w:r><w:t>请在下周</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>一</w:t></w:r><w:r><w:t>之前提交报告</w:t></w:r></w:p><w:p><w:r><w:t>备注：请在下周确认预算</w:t></w:r></w:p></w:body></w:document>"#;
-
 
     /// 把文档 XML 解析成可读文本（断言用）。
     /// 不能直接对原始 XML 做字符串匹配：一句连续的话往往分布在多个片段里。
@@ -233,7 +230,11 @@ mod tests {
             replace: "x".into(),
             all: false,
         }];
-        assert!(apply_text_edits(DOC, &edits).unwrap_err().contains("不能为空"));
+        assert!(
+            apply_text_edits(DOC, &edits)
+                .unwrap_err()
+                .contains("不能为空")
+        );
     }
 
     #[test]

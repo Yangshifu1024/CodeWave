@@ -85,10 +85,7 @@ pub fn resolve_pages(range: Option<PageRange>, total: usize) -> Result<Vec<usize
     };
     let last = range.last.unwrap_or(total).min(total);
     if range.first > total {
-        return Err(format!(
-            "指定的起始页 {} 超出了总页数 {total}",
-            range.first
-        ));
+        return Err(format!("指定的起始页 {} 超出了总页数 {total}", range.first));
     }
     let count = last.saturating_sub(range.first) + 1;
     if count > MAX_PAGES_PER_CALL {
@@ -104,9 +101,8 @@ pub fn resolve_pages(range: Option<PageRange>, total: usize) -> Result<Vec<usize
 /// 提取库的崩溃只影响这一处调用，不会带走调用方。
 pub fn extract_pages(bytes: &[u8]) -> Result<Vec<String>, String> {
     let owned = bytes.to_vec();
-    let outcome = std::panic::catch_unwind(move || {
-        pdf_extract::extract_text_from_mem_by_pages(&owned)
-    });
+    let outcome =
+        std::panic::catch_unwind(move || pdf_extract::extract_text_from_mem_by_pages(&owned));
     match outcome {
         Ok(Ok(pages)) => Ok(pages),
         Ok(Err(e)) => Err(format!(

@@ -8,8 +8,8 @@
 //! 「改动面最小」：内联字符串只落在工作表这一个内部文件里，共享字符串表则要额外维护
 //! `count` / `uniqueCount` 两个计数，任何一处算错都会让文件出问题。
 
-use super::xml_util::{attr_of, escape_text, extract_tag, split_attrs, unescape};
 use super::xlsx::{self, col_to_index, index_to_col};
+use super::xml_util::{attr_of, escape_text, extract_tag, split_attrs, unescape};
 
 /// 要写入单元格的值。
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +97,11 @@ fn find_cell(xml: &str, from: usize, to: usize, coord: &str) -> Option<CellSpan>
         }
         let (gt_rel, self_closing) = start_tag_inner(xml, at)?;
         // 自闭合时要排除 `/>` 里的 `/`，否则它会被当成一个属性带进重建结果
-        let tag_end = if self_closing { at + gt_rel - 1 } else { at + gt_rel };
+        let tag_end = if self_closing {
+            at + gt_rel - 1
+        } else {
+            at + gt_rel
+        };
         let tag_inner = xml[at + 2..tag_end].to_string();
         let attrs = split_attrs(&tag_inner);
         if attr_of(&attrs, "r") == Some(target.as_str()) {
@@ -139,7 +143,11 @@ fn build_cell(coord: &str, original_attrs: &[(String, String)], value: &CellValu
     }
     // 坐标排在首位（与 Excel 的书写习惯一致）
     let coord_attr = format!("r=\"{}\"", coord.to_ascii_uppercase());
-    let others: Vec<String> = parts.iter().filter(|p| !p.starts_with("r=")).cloned().collect();
+    let others: Vec<String> = parts
+        .iter()
+        .filter(|p| !p.starts_with("r="))
+        .cloned()
+        .collect();
     let mut attr_text = coord_attr;
     for p in others {
         attr_text.push(' ');
@@ -167,8 +175,14 @@ fn build_cell(coord: &str, original_attrs: &[(String, String)], value: &CellValu
 
 /// 坐标 `B3` 拆成（列号, 行号）；非法返回 None。
 fn split_coord(coord: &str) -> Option<(u32, u32)> {
-    let letters: String = coord.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    let digits: String = coord.chars().skip_while(|c| c.is_ascii_alphabetic()).collect();
+    let letters: String = coord
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let digits: String = coord
+        .chars()
+        .skip_while(|c| c.is_ascii_alphabetic())
+        .collect();
     let col = col_to_index(&letters)?;
     let row: u32 = digits.parse().ok()?;
     if row == 0 {
@@ -209,7 +223,11 @@ fn locate_row(xml: &str, from: usize, to: usize, row_num: u32) -> Result<RowScan
             continue;
         }
         let (gt_rel, self_closing) = start_tag_inner_row(xml, at);
-        let inner_end = if self_closing { at + gt_rel - 1 } else { at + gt_rel };
+        let inner_end = if self_closing {
+            at + gt_rel - 1
+        } else {
+            at + gt_rel
+        };
         let attrs = xml[at + 4..inner_end].to_string();
         let parsed = split_attrs(&attrs);
         let this_num = attr_of(&parsed, "r").and_then(|s| s.parse::<u32>().ok());
@@ -239,6 +257,9 @@ fn locate_row(xml: &str, from: usize, to: usize, row_num: u32) -> Result<RowScan
 }
 
 /// 往既有行里插入一个单元格：自闭合行就地展开，其余按列号升序插到第一个更大的单元格之前。
+/// 参数多是这段 XML 改写本身的需要（行区间、行属性、目标列、新单元格、行号各自独立），
+/// 合成结构体反而会把调用点变得不清楚。
+#[allow(clippy::too_many_arguments)]
 fn insert_cell_into_row(
     xml: &str,
     row_start: usize,
@@ -272,7 +293,11 @@ fn insert_cell_into_row(
         }
         let (gt_rel, cell_self_closing) = start_tag_inner(xml, at)
             .ok_or_else(|| format!("第 {row_num} 行的单元格列表结构异常，已中止修改"))?;
-        let tag_end = if cell_self_closing { at + gt_rel - 1 } else { at + gt_rel };
+        let tag_end = if cell_self_closing {
+            at + gt_rel - 1
+        } else {
+            at + gt_rel
+        };
         let attrs = split_attrs(&xml[at + 2..tag_end]);
         let existing_col = attr_of(&attrs, "r")
             .and_then(split_coord)
@@ -446,7 +471,10 @@ pub fn peek_cell(xml: &str, coord: &str, shared_strings: Option<&[String]>) -> O
 
 /// 列字母转列号（对外暴露，供工作簿层判断行列范围）。
 pub fn col_letters(coord: &str) -> Option<u32> {
-    let letters: String = coord.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let letters: String = coord
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
     col_to_index(&letters)
 }
 
@@ -532,7 +560,10 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1" s="7"/><c r="B1"><v>1</v></c></row></sheetData></worksheet>"#;
         let out = set_cell(xml, "A1", &CellValue::Number(3.0)).unwrap();
         assert!(out.contains(r#"<c r="A1" s="7"><v>3</v></c>"#), "{out}");
-        assert!(out.contains(r#"<c r="B1"><v>1</v></c>"#), "邻居不受影响：{out}");
+        assert!(
+            out.contains(r#"<c r="B1"><v>1</v></c>"#),
+            "邻居不受影响：{out}"
+        );
     }
 
     #[test]
@@ -559,7 +590,9 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="1" spans="1:1"/></sheetData></worksheet>"#;
         let out = set_cell(xml, "A1", &CellValue::Text("新".into())).unwrap();
         assert!(
-            out.contains(r#"<row r="1" spans="1:1"><c r="A1" t="inlineStr"><is><t>新</t></is></c></row>"#),
+            out.contains(
+                r#"<row r="1" spans="1:1"><c r="A1" t="inlineStr"><is><t>新</t></is></c></row>"#
+            ),
             "{out}"
         );
     }
@@ -630,7 +663,10 @@ mod tests {
         assert_eq!(peek_cell(SHEET, "B2", None).as_deref(), Some("=SUM(C1:C1)"));
         // 共享字符串：给了表就解出文字，没给就给出可读的占位
         let shared = vec!["月份".to_string(), "金额".to_string(), "1月".to_string()];
-        assert_eq!(peek_cell(SHEET, "A1", Some(&shared)).as_deref(), Some("月份"));
+        assert_eq!(
+            peek_cell(SHEET, "A1", Some(&shared)).as_deref(),
+            Some("月份")
+        );
         assert_eq!(
             peek_cell(SHEET, "A1", None).as_deref(),
             Some("（共享字符串 #0）")
@@ -670,9 +706,11 @@ mod tests {
 
     #[test]
     fn malformed_sheet_is_reported_not_guessed() {
-        assert!(set_cell("<worksheet/>", "A1", &CellValue::Number(1.0))
-            .unwrap_err()
-            .contains("sheetData"));
+        assert!(
+            set_cell("<worksheet/>", "A1", &CellValue::Number(1.0))
+                .unwrap_err()
+                .contains("sheetData")
+        );
     }
 
     /// 回归：目标不存在且单元格很多时，扫描游标必须始终前进。

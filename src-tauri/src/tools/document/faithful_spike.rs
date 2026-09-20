@@ -71,9 +71,12 @@ fn run_case(dir: &Path, file: &str, sheet_entry: &str, coord: &str) -> Option<Ca
     eprintln!("   [读工作表] {ms_read}ms，{} 字节", xml.len());
 
     let t1 = std::time::Instant::now();
-    let edited =
-        sheet_edit::set_cell(&xml, coord, &sheet_edit::CellValue::Text("patch-验证值".into()))
-            .ok()?;
+    let edited = sheet_edit::set_cell(
+        &xml,
+        coord,
+        &sheet_edit::CellValue::Text("patch-验证值".into()),
+    )
+    .ok()?;
     let ms_edit = t1.elapsed().as_millis();
     eprintln!("   [改单元格] {ms_edit}ms，变成 {} 字节", edited.len());
 
@@ -88,7 +91,10 @@ fn run_case(dir: &Path, file: &str, sheet_entry: &str, coord: &str) -> Option<Ca
     )
     .ok()?;
     let ms_pack = t2.elapsed().as_millis();
-    eprintln!("   [重打包] {ms_pack}ms，条目 {} 搬运 {}", report.entries_total, report.copied);
+    eprintln!(
+        "   [重打包] {ms_pack}ms，条目 {} 搬运 {}",
+        report.entries_total, report.copied
+    );
 
     let t3 = std::time::Instant::now();
     let before = raw_entries(&src);
@@ -161,7 +167,9 @@ fn byte_patch_preserves_every_other_part() {
         if !dir.join(file).exists() {
             continue;
         }
-        let size = std::fs::metadata(dir.join(file)).map(|m| m.len()).unwrap_or(0);
+        let size = std::fs::metadata(dir.join(file))
+            .map(|m| m.len())
+            .unwrap_or(0);
         eprintln!("→ 开始处理 {file}（{size} 字节）");
         // 统一用 A1：有些文件里第 1 行整行为空，这条也会顺带验证「新建空行」这条路
         match run_case(&dir, file, "xl/worksheets/sheet1.xml", "A1") {

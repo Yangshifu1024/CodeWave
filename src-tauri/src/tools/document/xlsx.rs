@@ -131,7 +131,11 @@ mod tests {
         assert_eq!(col_to_index("d"), Some(4), "小写也接受");
         assert_eq!(col_to_index(""), None);
         assert_eq!(col_to_index("A1"), None, "混入数字即非法");
-        assert_eq!(col_to_index("XFD"), Some(16384), "最大列（XFD 是 Excel 第 16384 列）");
+        assert_eq!(
+            col_to_index("XFD"),
+            Some(16384),
+            "最大列（XFD 是 Excel 第 16384 列）"
+        );
         assert_eq!(col_to_index("XFE"), None, "越界（XFE = 16385）");
 
         for n in [1u32, 4, 26, 27, 52, 703, 16_384] {

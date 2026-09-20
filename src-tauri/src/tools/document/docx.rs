@@ -52,12 +52,11 @@ fn heading_level(p_pr: &str) -> Option<u32> {
 fn paragraph_text(para: &str) -> String {
     let mut out = String::new();
     find_tag_starts(para, 0, para.len(), "w:t", |at| {
-        if let Some((gt, self_closing)) = start_tag_end(para, at) {
-            if !self_closing
-                && let Some(end) = para[at + gt..].find("</w:t>").map(|e| at + gt + e)
-            {
-                out.push_str(&unescape(&para[at + gt + 1..end]));
-            }
+        if let Some((gt, self_closing)) = start_tag_end(para, at)
+            && !self_closing
+            && let Some(end) = para[at + gt..].find("</w:t>").map(|e| at + gt + e)
+        {
+            out.push_str(&unescape(&para[at + gt + 1..end]));
         }
         false
     });
@@ -233,11 +232,12 @@ pub fn replace_in_paragraph(para: &str, needle: &str, replacement: &str) -> Opti
         concat.push_str(&para[r.text_start..r.text_end]);
     }
     let hit = concat.find(&escaped).or_else(|| concat.find(needle))?;
-    let hit_end = hit + if concat[hit..].starts_with(&escaped) {
-        escaped.len()
-    } else {
-        needle.len()
-    };
+    let hit_end = hit
+        + if concat[hit..].starts_with(&escaped) {
+            escaped.len()
+        } else {
+            needle.len()
+        };
 
     // 定位命中的片段区间，以及在各片段内的偏移
     let mut spans = Vec::new();
@@ -286,7 +286,10 @@ pub fn count_occurrences(document_xml: &str, needle: &str) -> usize {
     let mut total = 0usize;
     for block in paragraphs_xml(document_xml) {
         let text = paragraph_text(&block);
-        total += text.matches(needle).count().max(text.matches(&escaped).count());
+        total += text
+            .matches(needle)
+            .count()
+            .max(text.matches(&escaped).count());
     }
     total
 }
@@ -319,7 +322,10 @@ fn paragraphs_xml(document_xml: &str) -> Vec<String> {
             cursor = at + gt + 1;
             continue;
         }
-        let Some(end) = document_xml[at + gt..to].find("</w:p>").map(|e| at + gt + e + 6) else {
+        let Some(end) = document_xml[at + gt..to]
+            .find("</w:p>")
+            .map(|e| at + gt + e + 6)
+        else {
             break;
         };
         out.push(document_xml[at..end].to_string());
@@ -358,17 +364,13 @@ pub fn replace_text(
     for para in paras {
         let mut current = para.clone();
         let mut changed_here = 0usize;
-        loop {
-            if let Some(updated) = replace_in_paragraph(&current, needle, replacement) {
-                if updated == current {
-                    break;
-                }
-                current = updated;
-                changed_here += 1;
-                if !replace_all {
-                    break;
-                }
-            } else {
+        while let Some(updated) = replace_in_paragraph(&current, needle, replacement) {
+            if updated == current {
+                break;
+            }
+            current = updated;
+            changed_here += 1;
+            if !replace_all {
                 break;
             }
         }
@@ -483,7 +485,11 @@ mod tests {
 
     #[test]
     fn empty_needle_is_refused() {
-        assert!(replace_text(DOC, "", "x", true).unwrap_err().contains("不能为空"));
+        assert!(
+            replace_text(DOC, "", "x", true)
+                .unwrap_err()
+                .contains("不能为空")
+        );
     }
 
     #[test]

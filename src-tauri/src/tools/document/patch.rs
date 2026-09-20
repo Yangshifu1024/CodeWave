@@ -157,7 +157,11 @@ mod tests {
         let dst = dir.path().join("b.zip");
         make_zip(
             &src,
-            &[("keep.txt", "原始内容"), ("change.txt", "旧内容"), ("last.bin", "尾巴")],
+            &[
+                ("keep.txt", "原始内容"),
+                ("change.txt", "旧内容"),
+                ("last.bin", "尾巴"),
+            ],
         );
 
         let rep = vec![Replacement {

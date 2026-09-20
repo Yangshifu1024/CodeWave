@@ -192,7 +192,8 @@ mod tests {
         assert_eq!(rows.len(), 2, "应有 2 行：{rows:?}");
         for row in &rows {
             assert_eq!(row.len(), 3, "每行都应补齐成 3 列：{rows:?}");
-        }    }
+        }
+    }
 
     #[test]
     fn empty_document_is_refused() {
@@ -260,7 +261,9 @@ mod tests {
 
         // 除了正文，其余内部文件必须逐字节不变（样式表、内容类型声明等）
         let entry = |p: &std::path::Path, name: &str| -> Vec<u8> {
-            super::super::patch::read_entry(p, name).unwrap().unwrap_or_default()
+            super::super::patch::read_entry(p, name)
+                .unwrap()
+                .unwrap_or_default()
         };
         for name in [
             "[Content_Types].xml",
@@ -292,11 +295,8 @@ mod tests {
         .unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut xml = String::new();
-        std::io::Read::read_to_string(
-            &mut zip.by_name("word/document.xml").unwrap(),
-            &mut xml,
-        )
-        .unwrap();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml)
+            .unwrap();
 
         let blocks = super::super::docx::parse_blocks(&xml);
         let text = super::super::docx::render_blocks(&blocks);

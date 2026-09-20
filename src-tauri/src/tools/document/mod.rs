@@ -10,8 +10,8 @@
 //!    迷你图、切片器都会凭空消失，这是格式决定的，不是实现好坏的差异。
 
 pub mod backup;
-pub mod edit;
 pub mod docx;
+pub mod edit;
 pub mod edit_word;
 pub mod patch;
 pub mod pdf;

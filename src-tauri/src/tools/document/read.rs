@@ -1,8 +1,12 @@
-//! `read_document` 工具：按扩展名分派，读取 Office 与 PDF 的内容。
+//! ```read_document``` 工具：按扩展名分派，读取 Office 与 PDF 的内容。
 //!
-//! 本批次只落地表格（`.xlsx` / `.xlsm`）；其余类型返回带原因的 `E_UNSUPPORTED`，
-//! 而不是让模型拿到乱码或空白。旧格式（`.xls` / `.doc`）一律引导用户另存为新格式——
-//! 它们与新版是两套完全不同的二进制格式，纯 Rust 没有可用方案。
+//! 已支持：表格（`.xlsx` / `.xlsm`）、文档（`.docx`）、PDF（`.pdf`）；
+//! 其余类型返回带原因的 `E_UNSUPPORTED`，而不是让模型拿到乱码或空白。旧格式
+//! （`.xls` / `.doc`）一律引导使用者另存为新格式——它们与新版是两套完全不同的
+//! 二进制格式，纯 Rust 没有可用方案。
+//!
+//! 表格与文档都靠自研解包（[`super::patch`]）读原始 XML，因此图表、批注这些本工具
+//! 不解析的内容也不会因为「读一次」而受损——读取全程不写文件。
 
 use crate::tools::pathutil;
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
@@ -160,7 +164,7 @@ fn region_of(ws: &Worksheet, args: &Args) -> ToolOutcome {
                 return ToolOutcome::err(
                     "E_ARGS",
                     format!("区域地址无法解析：{raw}（示例：A1:D50，或单格 B3）"),
-                )
+                );
             }
         },
         None => xlsx::Region {
@@ -202,8 +206,11 @@ fn read_xlsx(args: &Args, path: &Path) -> ToolOutcome {
         Err(e) => {
             return ToolOutcome::err(
                 "E_PARSE",
-                format!("无法解析表格 {}：{e}。文件可能损坏，或含有本应用尚未支持的表格特性。", args.path),
-            )
+                format!(
+                    "无法解析表格 {}：{e}。文件可能损坏，或含有本应用尚未支持的表格特性。",
+                    args.path
+                ),
+            );
         }
     };
     if book.sheet_collection().is_empty() {
@@ -214,11 +221,7 @@ fn read_xlsx(args: &Args, path: &Path) -> ToolOutcome {
         Some(name) => match book.sheet_by_name(name) {
             Ok(ws) => region_of(ws, args),
             Err(_) => {
-                let names: Vec<&str> = book
-                    .sheet_collection()
-                    .iter()
-                    .map(|s| s.name())
-                    .collect();
+                let names: Vec<&str> = book.sheet_collection().iter().map(|s| s.name()).collect();
                 ToolOutcome::err(
                     "E_ARGS",
                     format!(
@@ -243,14 +246,14 @@ fn read_docx(args: &Args, path: &Path) -> ToolOutcome {
                 return ToolOutcome::err(
                     "E_PARSE",
                     format!("{} 的正文内容无法解析（文件可能已损坏）", args.path),
-                )
+                );
             }
         },
         Ok(None) => {
             return ToolOutcome::err(
                 "E_PARSE",
                 format!("{} 里找不到正文内容，可能不是有效的 Word 文档", args.path),
-            )
+            );
         }
         Err(e) => return ToolOutcome::err("E_PARSE", e),
     };
@@ -259,10 +262,7 @@ fn read_docx(args: &Args, path: &Path) -> ToolOutcome {
     let full = docx::render_blocks(&blocks);
     let total_chars = full.chars().count();
     let (text, truncated) = if total_chars > MAX_TEXT_CHARS {
-        (
-            full.chars().take(MAX_TEXT_CHARS).collect::<String>(),
-            true,
-        )
+        (full.chars().take(MAX_TEXT_CHARS).collect::<String>(), true)
     } else {
         (full, false)
     };
@@ -308,10 +308,7 @@ fn read_pdf(args: &Args, path: &Path) -> ToolOutcome {
         Err(e) => return ToolOutcome::err("E_PDF", e),
     };
     if pages.is_empty() {
-        return ToolOutcome::err(
-            "E_PDF",
-            format!("{} 里没有任何页面", args.path),
-        );
+        return ToolOutcome::err("E_PDF", format!("{} 里没有任何页面", args.path));
     }
 
     // 扫描件：页面本身是图片、没有文字层——说清楚，而不是返回一片空白
@@ -331,10 +328,8 @@ fn read_pdf(args: &Args, path: &Path) -> ToolOutcome {
             None => {
                 return ToolOutcome::err(
                     "E_ARGS",
-                    format!(
-                        "页码写法无法识别：{raw}（示例：pages=3、1-10、5-）"
-                    ),
-                )
+                    format!("页码写法无法识别：{raw}（示例：pages=3、1-10、5-）"),
+                );
             }
         },
         None => None,
@@ -408,73 +403,92 @@ impl Tool for ReadDocumentTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
-        let meta = match std::fs::metadata(&resolved) {
-            Ok(m) => m,
-            Err(e) => return ToolOutcome::err("E_NOT_FOUND", format!("{}: {e}", args.path)),
-        };
-        if !meta.is_file() {
-            return ToolOutcome::err("E_ARGS", format!("{} 不是常规文件", args.path));
-        }
-        if meta.len() > MAX_FILE_BYTES {
-            return ToolOutcome::err(
-                "E_TOO_LARGE",
-                format!(
-                    "{} 为 {}MB，超过读取上限 {}MB",
-                    args.path,
-                    meta.len() / 1024 / 1024,
-                    MAX_FILE_BYTES / 1024 / 1024
-                ),
-            );
-        }
-        match kind_of(&resolved) {
-            DocKind::Xlsx => read_xlsx(&args, &resolved),
-            DocKind::XlsLegacy => ToolOutcome::err(
-                "E_UNSUPPORTED",
-                format!(
-                    "{} 是 2003 格式的 .xls，本应用不支持读取。请先用 Excel 或 WPS 把它另存为 .xlsx 再试。",
-                    args.path
-                ),
-            ),
-            DocKind::DocLegacy => ToolOutcome::err(
-                "E_UNSUPPORTED",
-                format!(
-                    "{} 是 2003 格式的 .doc，本应用不支持读取。请先另存为 .docx 再试。",
-                    args.path
-                ),
-            ),
-            DocKind::Docx => {
-                if args.sheet.is_some() || args.range.is_some() {
-                    return ToolOutcome::err(
-                        "E_ARGS",
-                        "sheet / range 只对表格有效；读取 Word 文档不需要这两个参数",
-                    );
-                }
-                read_docx(&args, &resolved)
-            }
-            DocKind::Pptx => ToolOutcome::err(
-                "E_UNSUPPORTED",
-                "演示文稿（.pptx）不在本期支持范围内。",
-            ),
-            DocKind::Pdf => {
-                if args.sheet.is_some() || args.range.is_some() {
-                    return ToolOutcome::err(
-                        "E_ARGS",
-                        "sheet / range 只对表格有效；读取 PDF 请用 pages 指定页码",
-                    );
-                }
-                read_pdf(&args, &resolved)
-            }
-            DocKind::Other => ToolOutcome::err(
-                "E_UNSUPPORTED",
-                format!(
-                    "{} 不是受支持的文档类型。本工具支持：.xlsx / .xlsm。文本文件请用 read。",
-                    args.path
-                ),
-            ),
-        }
+        read_for_preview(
+            &args.path,
+            &resolved,
+            args.sheet.as_deref(),
+            args.range.as_deref(),
+            args.preview_rows,
+            args.pages.as_deref(),
+        )
     }
 }
 
+/// 预览通道入口：host 命令（界面预览）复用工具实现，避免出现第二套解析逻辑——
+/// 界面上看到的表格数据必须与模型读到的是同一份，否则两边会对不上。
+/// 调用方负责路径校验（`pathutil::resolve_read`）；本函数只管体积上限与按扩展名分派。
+pub fn read_for_preview(
+    path_arg: &str,
+    resolved: &Path,
+    sheet: Option<&str>,
+    range: Option<&str>,
+    preview_rows: Option<u32>,
+    pages: Option<&str>,
+) -> ToolOutcome {
+    let args = Args {
+        path: path_arg.to_string(),
+        sheet: sheet.map(str::to_string),
+        range: range.map(str::to_string),
+        preview_rows,
+        pages: pages.map(str::to_string),
+    };
+    let meta = match std::fs::metadata(resolved) {
+        Ok(m) => m,
+        Err(e) => return ToolOutcome::err("E_NOT_FOUND", format!("{path_arg}: {e}")),
+    };
+    if !meta.is_file() {
+        return ToolOutcome::err("E_ARGS", format!("{path_arg} 不是常规文件"));
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return ToolOutcome::err(
+            "E_TOO_LARGE",
+            format!(
+                "{} 为 {}MB，超过读取上限 {}MB",
+                path_arg,
+                meta.len() / 1024 / 1024,
+                MAX_FILE_BYTES / 1024 / 1024
+            ),
+        );
+    }
+    match kind_of(resolved) {
+        DocKind::Xlsx => read_xlsx(&args, resolved),
+        DocKind::XlsLegacy => ToolOutcome::err(
+            "E_UNSUPPORTED",
+            format!(
+                "{path_arg} 是 2003 格式的 .xls，本应用不支持读取。请先用 Excel 或 WPS 把它另存为 .xlsx 再试。"
+            ),
+        ),
+        DocKind::DocLegacy => ToolOutcome::err(
+            "E_UNSUPPORTED",
+            format!("{path_arg} 是 2003 格式的 .doc，本应用不支持读取。请先另存为 .docx 再试。"),
+        ),
+        DocKind::Docx => {
+            if args.sheet.is_some() || args.range.is_some() {
+                return ToolOutcome::err(
+                    "E_ARGS",
+                    "sheet / range 只对表格有效；读取 Word 文档不需要这两个参数",
+                );
+            }
+            read_docx(&args, resolved)
+        }
+        DocKind::Pptx => ToolOutcome::err("E_UNSUPPORTED", "演示文稿（.pptx）不在本期支持范围内。"),
+        DocKind::Pdf => {
+            if args.sheet.is_some() || args.range.is_some() {
+                return ToolOutcome::err(
+                    "E_ARGS",
+                    "sheet / range 只对表格有效；读取 PDF 请用 pages 指定页码",
+                );
+            }
+            read_pdf(&args, resolved)
+        }
+        DocKind::Other => ToolOutcome::err(
+            "E_UNSUPPORTED",
+            format!(
+                "{path_arg} 不是受支持的文档类型。本工具支持：.xlsx / .xlsm（表格）、.docx（文档）、.pdf（PDF）。文本文件请用 read。"
+            ),
+        ),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,8 +504,7 @@ mod tests {
             let data = [["月份", "金额"], ["1月", "120"], ["2月", "150"]];
             for (r, row) in data.iter().enumerate() {
                 for (c, v) in row.iter().enumerate() {
-                    ws.cell_mut(((c + 1) as u32, (r + 1) as u32))
-                        .set_value(*v);
+                    ws.cell_mut(((c + 1) as u32, (r + 1) as u32)).set_value(*v);
                 }
             }
         }
@@ -641,9 +654,7 @@ mod tests {
             ("note.txt", "请用 read"),
         ] {
             std::fs::write(ws.path().join(name), b"x").unwrap();
-            let out = ReadDocumentTool
-                .run(&ctx, json!({"path": name}))
-                .await;
+            let out = ReadDocumentTool.run(&ctx, json!({"path": name})).await;
             assert!(!out.ok, "{name} 不应被接受：{out:?}");
             let e = out.error.unwrap();
             assert_eq!(e.code, "E_UNSUPPORTED", "{name}: {e:?}");

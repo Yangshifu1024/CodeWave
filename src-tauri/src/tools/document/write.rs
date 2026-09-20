@@ -83,10 +83,7 @@ fn write_word(
     spec: &super::write_word::DocxSpec,
 ) -> ToolOutcome {
     if !args.sheets.is_empty() {
-        return ToolOutcome::err(
-            "E_ARGS",
-            "sheets 只用于表格；Word 文档请用 docx 字段。",
-        );
+        return ToolOutcome::err("E_ARGS", "sheets 只用于表格；Word 文档请用 docx 字段。");
     }
     let bytes = match super::write_word::generate(spec) {
         Ok(b) => b,
@@ -175,7 +172,12 @@ fn fill_sheet(ws: &mut Worksheet, spec: &SheetSpec) -> Result<(), String> {
     let mut row_idx = 1u32;
     if !spec.header.is_empty() {
         for (i, h) in spec.header.iter().enumerate() {
-            apply_cell(ws, ((i + 1) as u32, row_idx), &Value::String(h.clone()), true);
+            apply_cell(
+                ws,
+                ((i + 1) as u32, row_idx),
+                &Value::String(h.clone()),
+                true,
+            );
         }
         row_idx += 1;
     }
@@ -286,7 +288,7 @@ impl Tool for WriteDocumentTool {
                         "{} 不是支持生成的文件类型（只支持 .xlsx 与 .docx）",
                         args.path
                     ),
-                )
+                );
             }
         };
         if kind == Kind::Sheet {
@@ -296,11 +298,17 @@ impl Tool for WriteDocumentTool {
             if args.sheets.len() > MAX_SHEETS {
                 return ToolOutcome::err(
                     "E_ARGS",
-                    format!("一次最多生成 {MAX_SHEETS} 个工作表，本次给了 {}", args.sheets.len()),
+                    format!(
+                        "一次最多生成 {MAX_SHEETS} 个工作表，本次给了 {}",
+                        args.sheets.len()
+                    ),
                 );
             }
-            let total_rows: usize =
-                args.sheets.iter().map(|s| s.rows.len() + s.header.len()).sum();
+            let total_rows: usize = args
+                .sheets
+                .iter()
+                .map(|s| s.rows.len() + s.header.len())
+                .sum();
             if total_rows > MAX_TOTAL_ROWS {
                 return ToolOutcome::err(
                     "E_ARGS",
@@ -326,7 +334,7 @@ impl Tool for WriteDocumentTool {
             );
         }
 
-        if !matches!(ctx.rt.root_session_id, Some(_))
+        if ctx.rt.root_session_id.is_none()
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
         {
@@ -338,7 +346,7 @@ impl Tool for WriteDocumentTool {
 
         if kind == Kind::Word {
             let spec = args.docx.as_ref().expect("上面已校验过");
-            return write_word(&ctx, &args, &resolved, spec);
+            return write_word(ctx, &args, &resolved, spec);
         }
 
         let mut book = umya_spreadsheet::new_file();
@@ -350,18 +358,12 @@ impl Tool for WriteDocumentTool {
                 return ToolOutcome::err("E_ARGS", "工作表名不能为空");
             }
             if used_names.iter().any(|n| n == &spec.name) {
-                return ToolOutcome::err(
-                    "E_ARGS",
-                    format!("工作表名「{}」重复了", spec.name),
-                );
+                return ToolOutcome::err("E_ARGS", format!("工作表名「{}」重复了", spec.name));
             }
             if spec.name.chars().count() > 31 {
                 return ToolOutcome::err(
                     "E_ARGS",
-                    format!(
-                        "工作表名「{}」超过 31 个字符（Excel 的限制）",
-                        spec.name
-                    ),
+                    format!("工作表名「{}」超过 31 个字符（Excel 的限制）", spec.name),
                 );
             }
             let ws = match book.new_sheet(spec.name.clone()) {
@@ -370,7 +372,7 @@ impl Tool for WriteDocumentTool {
                     return ToolOutcome::err(
                         "E_ARGS",
                         format!("创建工作表「{}」失败：{e}", spec.name),
-                    )
+                    );
                 }
             };
             if let Err(e) = fill_sheet(ws, spec) {
@@ -498,7 +500,10 @@ mod tests {
         assert_eq!(sheet.value("A2"), "1月");
         assert_eq!(sheet.value("B2"), "120");
         // 派生值必须是真公式，而不是焊死的数字
-        let formula = sheet.cell("B4").map(|c| c.formula().to_string()).unwrap_or_default();
+        let formula = sheet
+            .cell("B4")
+            .map(|c| c.formula().to_string())
+            .unwrap_or_default();
         assert!(
             formula.contains("SUM(B2:B3)"),
             "汇总必须是公式，而不是焊死的数字：{formula:?}"
