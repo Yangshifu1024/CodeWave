@@ -14,6 +14,7 @@ pub mod edit;
 pub mod docx;
 pub mod edit_word;
 pub mod patch;
+pub mod pdf;
 pub mod read;
 pub mod sheet_edit;
 pub mod workbook;

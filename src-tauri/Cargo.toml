@@ -83,6 +83,9 @@ umya-spreadsheet = "3"
 docx-rs = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
+# PDF 文字提取。这个包有已知的崩溃记录（畸形文件会 panic），所以调用处必须做崩溃隔离，
+# 见 tools/document/pdf.rs：绝不能让它的 panic 传到命令线程上。
+pdf-extract = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use umya_spreadsheet::{Workbook, Worksheet};
 
-use super::{docx, patch, xlsx};
+use super::{docx, patch, pdf, xlsx};
 
 /// 读取上限（共识值：读与预览 200MB）。**实测后可能下调**——这是一条先按计划写死、
 /// 待真实文件验证的数值，不是已经验证过的安全值。
@@ -42,6 +42,9 @@ struct Args {
     /// 摘要模式每张表的预览行数。
     #[serde(default)]
     preview_rows: Option<u32>,
+    /// PDF 页码（如 "1-10"）。
+    #[serde(default)]
+    pages: Option<String>,
 }
 
 /// 按扩展名判定的文件类别。
@@ -57,6 +60,8 @@ enum DocKind {
     DocLegacy,
     /// 演示文稿。
     Pptx,
+    /// PDF。
+    Pdf,
     /// 不在支持范围内的其它类型。
     Other,
 }
@@ -73,6 +78,7 @@ fn kind_of(path: &Path) -> DocKind {
         Some("docx") => DocKind::Docx,
         Some("doc") => DocKind::DocLegacy,
         Some("pptx") => DocKind::Pptx,
+        Some("pdf") => DocKind::Pdf,
         _ => DocKind::Other,
     }
 }
@@ -291,6 +297,75 @@ fn read_docx(args: &Args, path: &Path) -> ToolOutcome {
     }))
 }
 
+/// 读取 PDF：逐页提取文字（含崩溃隔离），并识别扫描件。
+fn read_pdf(args: &Args, path: &Path) -> ToolOutcome {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return ToolOutcome::err("E_IO", format!("{}: {e}", args.path)),
+    };
+    let pages = match pdf::extract_pages(&bytes) {
+        Ok(p) => p,
+        Err(e) => return ToolOutcome::err("E_PDF", e),
+    };
+    if pages.is_empty() {
+        return ToolOutcome::err(
+            "E_PDF",
+            format!("{} 里没有任何页面", args.path),
+        );
+    }
+
+    // 扫描件：页面本身是图片、没有文字层——说清楚，而不是返回一片空白
+    if pdf::looks_scanned(&pages) {
+        return ToolOutcome::ok(json!({
+            "file": args.path,
+            "pages": pages.len(),
+            "scanned": true,
+            "text": "",
+            "hint": "这份 PDF 看上去是扫描件：页面是图片、没有文字层，所以提取不到文字。需要内容的话，可以告诉使用者用带文字识别的工具先转一遗。",
+        }));
+    }
+
+    let range = match &args.pages {
+        Some(raw) => match pdf::parse_pages(raw) {
+            Some(r) => Some(r),
+            None => {
+                return ToolOutcome::err(
+                    "E_ARGS",
+                    format!(
+                        "页码写法无法识别：{raw}（示例：pages=3、1-10、5-）"
+                    ),
+                )
+            }
+        },
+        None => None,
+    };
+    let wanted = match pdf::resolve_pages(range, pages.len()) {
+        Ok(v) => v,
+        Err(e) => return ToolOutcome::err("E_ARGS", e),
+    };
+
+    let mut text = String::new();
+    for n in &wanted {
+        let body = pages.get(n - 1).map(|s| s.trim()).unwrap_or("");
+        text.push_str(&format!("--- 第 {n} 页 ---\n"));
+        if body.is_empty() {
+            text.push_str("（这一页没有可提取的文字）\n");
+        } else {
+            text.push_str(body);
+            text.push('\n');
+        }
+    }
+
+    ToolOutcome::ok(json!({
+        "file": args.path,
+        "pages": pages.len(),
+        "returned": wanted.len(),
+        "scanned": false,
+        "text": text,
+        "hint": "如果内容看起来不对（中文乱码或缺失），可能是这份 PDF 的字体没有内嵌字形对照表，请如实告诉使用者。",
+    }))
+}
+
 /// `read_document` 工具：读取 Office 文档与 PDF 的内容。
 pub struct ReadDocumentTool;
 
@@ -301,7 +376,7 @@ impl Tool for ReadDocumentTool {
     }
 
     fn description(&self) -> &'static str {
-        "读取表格、文档与 PDF 的内容。表格（.xlsx/.xlsm）：不传 sheet 时返回结构摘要（工作表名、行列数、表头与前几行）；传了 sheet 再按 range 取具体区域——大表必须分次取，单次上限 200 行 / 64 列 / 20000 格。旧格式（.xls/.doc）不支持，需先另存为新格式。"
+        "读取表格、文档与 PDF 的内容。表格（.xlsx/.xlsm）：不传 sheet 时返回结构摘要（工作表名、行列数、表头与前几行）；传了 sheet 再按 range 取具体区域——大表必须分次取，单次上限 200 行 / 64 列 / 20000 格。PDF：按页提取文字，用 pages 指定页码（超过 10 页必须指定，单次上限 20 页）；扫描件提取不到文字，会明确告知。旧格式（.xls/.doc）不支持，需先另存为新格式。"
     }
 
     fn schema(&self) -> &'static str {
@@ -313,7 +388,8 @@ impl Tool for ReadDocumentTool {
     "path": {"type": "string", "description": "工作区相对路径"},
     "sheet": {"type": "string", "description": "工作表名；不传则返回结构摘要"},
     "range": {"type": "string", "description": "单元格区域，如 A1:D50；仅在与 sheet 同用时生效"},
-    "previewRows": {"type": "integer", "description": "摘要模式下每张表的预览行数（默认 5，上限 50）"}
+    "previewRows": {"type": "integer", "description": "摘要模式下每张表的预览行数（默认 5，上限 50）"},
+    "pages": {"type": "string", "description": "PDF 页码，如 3、1-10、5-；超过 10 页的 PDF 必须指定"}
   }
 }"#
     }
@@ -379,6 +455,15 @@ impl Tool for ReadDocumentTool {
                 "E_UNSUPPORTED",
                 "演示文稿（.pptx）不在本期支持范围内。",
             ),
+            DocKind::Pdf => {
+                if args.sheet.is_some() || args.range.is_some() {
+                    return ToolOutcome::err(
+                        "E_ARGS",
+                        "sheet / range 只对表格有效；读取 PDF 请用 pages 指定页码",
+                    );
+                }
+                read_pdf(&args, &resolved)
+            }
             DocKind::Other => ToolOutcome::err(
                 "E_UNSUPPORTED",
                 format!(
