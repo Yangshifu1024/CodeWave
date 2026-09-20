@@ -290,6 +290,10 @@ export default {
     modeSwitched: "已切换权限模式：{{label}}",
     modelSwitched: "已切换模型：{{label}}",
     vision: "视觉",
+    // Composer 工具条：上下文占用百分比分档 + 阈值/命中率小字标签
+    contextThreshold: "阈",
+    cacheHit: "命中",
+    ctxTitle: "上下文占用 · 自动压缩阈值 · 缓存命中率",
     other: "其他",
     noModel: "未配置模型",
     goSettings: "前往设置添加模型",

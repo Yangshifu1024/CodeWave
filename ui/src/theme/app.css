@@ -331,8 +331,18 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
 .composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
-/* 上下文用量小字（压缩图标与模型菜单之间） */
+/* 上下文用量小字（压缩图标与模型菜单之间）：百分比按占用分档着色，命中率按缓存实效四档着色 */
 .composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); white-space: nowrap; margin: 0 2px; }
+/* 上下文占用档：够阈值 = 红（危险）/ 阈值 70% 以上 = 橙（需注意）/ 以下 = 默认（中性墨） */
+.composer-toolbar .ctx-label .ctx-pct { color: var(--ws-accent); }
+.composer-toolbar .ctx-label .ctx-pct.warn { color: var(--ws-warn); }
+.composer-toolbar .ctx-label .ctx-pct.danger { color: var(--ws-err); }
+/* 命中率档（四档）：≥99% 绿 / 95–99% 黄（中性墨，色板无独立黄色 token）/ 90–95% 橙 / <90% 红 */
+.composer-toolbar .ctx-label .ctx-hit { color: var(--ws-accent); }
+.composer-toolbar .ctx-label .ctx-hit.ok { color: var(--ws-ok); }
+.composer-toolbar .ctx-label .ctx-hit.yellow { color: var(--ws-accent); }
+.composer-toolbar .ctx-label .ctx-hit.warn { color: var(--ws-warn); }
+.composer-toolbar .ctx-label .ctx-hit.danger { color: var(--ws-err); }
 .composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }

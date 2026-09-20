@@ -148,4 +148,17 @@ export interface TabRunState {
   lastDoneRunId: string | null;
   /** 压缩进行中（run:compacting 与 run:compacted/failed 之间）：CompactButton loading + notice 去重 */
   compacting: boolean;
+  /** 会话级用量累加（usage 帧此前被丢弃，工具条「命中」显示的唯一数据源）。
+   *  缓存命中率 = cacheRead / (cacheRead + input)（两种协议下缓存读 token 都已从 input 中扣除）。
+   *  可选：仅 runtime 新建的桶（blank()）必定有值，测试夹具的历史字面量可缺省——
+   *  消费方（applyUsageFrame / cacheHitRate / Composer）均已做缺省处理。 */
+  usage?: UsageTotals;
+}
+
+/** 会话级 usage 累加值（命中率派生源；跨帧累加，Tab 关闭即丢弃、不持久化）。 */
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }

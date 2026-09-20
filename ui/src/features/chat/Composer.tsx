@@ -13,7 +13,8 @@ import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import type { ApprovalMode, EffortLevel } from "../../ipc/types";
-import { findModel } from "../../utils/models";
+import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
+import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
 import CompactButton from "./ContextInfoBar";
 import AskPanel from "../tools/AskPanel";
 import QueuePanel from "./QueuePanel";
@@ -40,8 +41,15 @@ export default function Composer() {
   const runningSubs = active.subs.filter((s) => s.status === "running");
   const tab = useActiveTab();
   const contextPct = useContextPct();
+  const compactThreshold = useSettings((s) => s.config?.compact_threshold ?? 0.6);
   const config = useSettings((s) => s.config);
   const prefs = tab?.prefs ?? { approval_mode: "auto_edit" as ApprovalMode, model_id: null, reasoning_effort: null };
+  // 会话级缓存命中率：分母口径随**生效模型的协议**（[docs/prompt-caching-hardening](../../../../docs/prompt-caching-hardening.md)）——
+  // anthropic 的 input 不含缓存、openai 的 input 已含 cached_tokens；语义解析不到（未配置模型 / 供应商已删）时
+  // 不显示命中段：宁可缺省也不猜口径。分子与分母同源，title 复用同一分母
+  const cacheSem = cacheSemanticsOf(config, prefs.model_id);
+  const cacheHit = cacheSem ? cacheHitRate(active, cacheSem) : null;
+  const hitDenom = cacheSem && active.usage ? cacheDenominator(active.usage, cacheSem) : 0;
   const updatePrefs = useSessions((s) => s.updatePrefs);
   // [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)：ask/审批弹出时提问卡覆盖整个输入区（zcode 式：ask 面板是唯一底部输入），
   // Composer 本体与队列面板暂不渲染、回答后原样恢复；草稿存 run store 每 Tab 桶，子树卸载不丢
@@ -299,10 +307,9 @@ export default function Composer() {
     }
   }
 
-  // 上下文明细文本（工具条）：有明细时显示百分比 + 用量/窗口；否则显示 —（尚无 run）
-  const ctxLabel = active.breakdown
-    ? `${contextPct}%（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k）`
-    : "—";
+  // 上下文占用百分比（工具条）：有明细时显示百分比 + 用量/窗口 + 自动压缩阈值；否则显示 —（尚无 run）。
+  // 分档（相对阈值）与阈值段渲染统一在下方 contextLabel；命中率为独立段（缓存是否生效）。
+  const thresholdPct = Math.round(compactThreshold * 100);
 
   // 发送按钮三态：空闲有输入 = 发送；运行中无输入 = 停止；运行中有输入 = 提交（入队）
   const hasDraft = !!text.trim();
@@ -322,6 +329,24 @@ export default function Composer() {
   }, [askActive]);
 
   const menuStyle = { maxHeight: 320, overflowY: "auto", maxWidth: menuWidth || undefined } as const;
+
+  // ---------- 工具条上下文/命中率显示 ----------
+
+  // 阈值合法性（与后端 clamp(0.05,0.95) 同域）：非法时不显示阈值段，且百分比保持中性色（不臆测风险）
+  const thresholdValid = Number.isFinite(compactThreshold) && compactThreshold > 0 && compactThreshold <= 1;
+  const ctxTier = thresholdValid && active.breakdown ? contextTier(active.breakdown.ratio, compactThreshold) : "low";
+  const hitTier = cacheHit != null ? hitRateTier(cacheHit) : null;
+  const ctxPctClass = ctxTier === "high" ? "ctx-pct danger" : ctxTier === "medium" ? "ctx-pct warn" : "ctx-pct";
+  const ctxHitClass = hitTier
+    ? `ctx-hit ${hitTier === "ok" ? "ok" : hitTier === "yellow" ? "yellow" : hitTier === "warn" ? "warn" : "danger"}`
+    : "ctx-hit";
+  const hitPct = cacheHit != null ? `${Math.round(cacheHit * 100)}%` : "";
+  // 悬浮说明：占用/阈值/命中率三项口径（title 是窄窗口截断时的全量信息兜底）
+  const ctxTitle = active.breakdown
+    ? `${t("composer.ctxTitle")}\n${t("app.context")}: ${contextPct}%（${active.breakdown.total_tokens} / ${active.breakdown.context_window} tokens）`
+      + (thresholdValid ? `\n${t("settings.compactThreshold")}: ${thresholdPct}%` : "")
+      + (cacheHit != null ? `\n${t("composer.cacheHit")}: ${hitPct}（${active.usage?.cacheRead ?? 0} / ${hitDenom}）` : "")
+    : t("app.context");
 
   // ---------- 下拉菜单 ----------
 
@@ -670,14 +695,31 @@ export default function Composer() {
             </div>
             <div className="toolbar-right">
               <CompactButton />
-              <span className="ctx-label" title={t("app.context")}>{t("app.context")} {ctxLabel}</span>
+              <span className="ctx-label" title={ctxTitle}>
+                {active.breakdown ? (
+                  <>
+                    {t("app.context")}{" "}
+                    <span className={ctxPctClass}>{contextPct}%</span>
+                    {`（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
+                    {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
+                    {"）"}
+                    {cacheHit != null && <span className={ctxHitClass}>{` · ${t("composer.cacheHit")} ${hitPct}`}</span>}
+                  </>
+                ) : (
+                  <>{t("app.context")} —</>
+                )}
+              </span>
               <Dropdown menu={modelMenu} trigger={["click"]}>
                 <Button
                   type="text"
                   aria-label={t("app.model")}
-                  title={effectiveModel ? `${effectiveModel.providerName} · ${effectiveModel.model}` : t("composer.goSettings")}
+                  title={effectiveModel ? `${effectiveModel.providerName} / ${effectiveModel.model}` : t("composer.goSettings")}
                 >
-                  <span className="tb-label">{effectiveModel?.model ?? t("composer.noModel")}</span>
+                  <span className="tb-label">
+                    {effectiveModel
+                      ? (effectiveModel.providerName ? `${effectiveModel.providerName} / ${effectiveModel.model}` : effectiveModel.model)
+                      : t("composer.noModel")}
+                  </span>
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>

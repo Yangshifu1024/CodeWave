@@ -295,6 +295,10 @@ export default {
     modeSwitched: "Approval mode switched: {{label}}",
     modelSwitched: "Model switched: {{label}}",
     vision: "Vision",
+    // Composer toolbar: context usage tiering + threshold/hit-rate micro-labels
+    contextThreshold: "thr",
+    cacheHit: "hit",
+    ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
     other: "Other",
     noModel: "No model configured",
     goSettings: "Add a model in Settings",

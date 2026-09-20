@@ -108,7 +108,8 @@ beforeAll(() => {
 import App from "../App";
 import { useUi } from "../stores/ui";
 import { useSessions } from "../stores/sessions";
-import { applyFrameToTab } from "../stores/runFrames";
+import { applyFrameToTab, blank } from "../stores/runFrames";
+import { useSettings } from "../stores/settings";
 import { useRun } from "../stores/run";
 
 async function mountApp() {
@@ -533,6 +534,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(text).toContain("自动编辑"); // current permission mode
     expect(text).toContain("上下文 "); // context label always visible (restored per user request)
     expect(text).toContain("test-model"); // model wire id always visible (docs/provider-management-refactor: wire id is the display name)
+    expect(text).toContain("Test Provider / test-model"); // 模型区新增供应商名（providerName / model）
     expect(text).toContain("默认"); // default effort tier
     // Compact icon button exists with a semantic label (formerly a standalone button, now iconified)
     const compactBtn = toolbar?.querySelector('button[aria-label="压缩上下文"]');
@@ -563,6 +565,76 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(idleBeams()).toBe(0);
     fireEvent.blur(beamTa);
     expect(idleBeams()).toBe(3);
+  });
+
+  it("上下文区：阈值 + 命中率显示（分母按协议），百分比按阈值分档着色", async () => {
+    seedTab();
+    // 占用 60% = 恰好达阈值（0.6）→ 危险档；命中率 500/1000 = 50% → 四档最低档（danger）。
+    // fixture 供应商 api_format = openai_chat → openai 语义（分母 = input）：旧统一公式会算成 33%
+    useRun.setState((s) => {
+      s.tabs = { s1: blank() };
+      s.tabs["s1"].breakdown = {
+        system_tokens: 1000, history_tokens: 2000, tool_results_tokens: 500,
+        tool_schema_tokens: 500, total_tokens: 76800, context_window: 128000, ratio: 0.6,
+      };
+      s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 500, cacheWrite: 0 };
+    });
+    await mountApp();
+    const label = document.querySelector(".ctx-label")!;
+    expect(label.textContent).toContain("上下文 60%");
+    expect(label.textContent).toContain("阈 60%"); // compact_threshold 0.6（fixture config）
+    expect(label.textContent).toContain("命中 50%"); // 分母 = input（openai 语义）
+    expect(label.querySelector(".ctx-pct")?.className).toContain("danger"); // ratio(=阈值) 转红
+    expect(label.querySelector(".ctx-hit")?.className).toContain("danger"); // 50% < 90%
+    expect((label.getAttribute("title") ?? "")).toContain("缓存命中率");
+    expect((label.getAttribute("title") ?? "")).toContain("500 / 1000"); // title 的分子/分母与显示值同源
+    // 命中率档位跟随数据：全部命中 → ≥99% → ok（绿）
+    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 1000, cacheWrite: 0 }; });
+    await waitFor(() => expect(document.querySelector(".ctx-label .ctx-hit")?.className).toContain("ok"));
+    // 同一份用量换成 anthropic 语义（input 不含缓存）→ 分母变 input+read+write：1400/2000 = 70%
+    const openaiCfg = useSettings.getState().config!;
+    useSettings.setState({
+      config: {
+        ...openaiCfg,
+        providers: openaiCfg.providers.map((p) => ({ ...p, api_format: "anthropic_messages" as const })),
+      },
+    });
+    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 1000, cacheWrite: 2000 }; });
+    await waitFor(() => expect(document.querySelector(".ctx-label")?.textContent).toContain("命中 25%"));
+    useSettings.setState({ config: openaiCfg });
+    // 清空运行态：其余用例不应看到阈值/命中段
+    useRun.setState((s) => { s.tabs = {}; });
+  });
+
+  it("上下文区无 breakdown 时保持「—」且不渲染阈值/命中段", async () => {
+    seedTab();
+    await mountApp();
+    const label = document.querySelector(".ctx-label")!;
+    expect(label.textContent?.trim()).toBe("上下文 —");
+    expect(label.querySelector(".ctx-pct")).toBeFalsy();
+    expect(label.textContent).not.toContain("命中");
+  });
+
+  it("上下文区：生效模型语义解析不到时不显示命中段（不猜口径）", async () => {
+    seedTab();
+    // 有用量数据且能解析语义时命中段正常显示
+    useRun.setState((s) => {
+      s.tabs = { s1: blank() };
+      s.tabs["s1"].breakdown = {
+        system_tokens: 1, history_tokens: 1, tool_results_tokens: 0,
+        tool_schema_tokens: 1, total_tokens: 100, context_window: 128000, ratio: 0.001,
+      };
+      s.tabs["s1"].usage = { input: 1000, output: 0, cacheRead: 900, cacheWrite: 0 };
+    });
+    await mountApp();
+    expect(document.querySelector(".ctx-label")?.textContent).toContain("命中 90%");
+    // active_model_id 指向不存在的模型 → cacheSemanticsOf 返回 null → 命中段缺省（占用段照常）
+    const cfg = useSettings.getState().config!;
+    useSettings.setState({ config: { ...cfg, active_model_id: "missing-model" } });
+    await waitFor(() => expect(document.querySelector(".ctx-label")?.textContent).not.toContain("命中"));
+    expect(document.querySelector(".ctx-label .ctx-pct")).toBeTruthy();
+    useSettings.setState({ config: cfg });
+    useRun.setState((s) => { s.tabs = {}; });
   });
 
   it("发送按钮三态：运行中无输入=停止，输入后=提交，清空复归停止", async () => {
