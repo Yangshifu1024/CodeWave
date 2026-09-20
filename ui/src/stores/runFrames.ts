@@ -2,12 +2,14 @@
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：帧到达顺序 = timeline 顺序；所有函数就地变异
 // 传入的 immer 草稿且无返回值（工厂 helper 除外）。
 import type { Frame, Message } from "../ipc/types";
+import { cacheDenominator, type CacheSemantics } from "../utils/models";
 import type {
   AssistantItem,
   TabRunState,
   TimelineSeg,
   ToolView,
   UiItem,
+  UsageTotals,
 } from "./run.types";
 
 /** Tab 运行态初值工厂 */
@@ -30,6 +32,7 @@ export function blank(): TabRunState {
     draftFromQueue: null,
     lastDoneRunId: null,
     compacting: false,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
 }
 export const BLANK: TabRunState = blank();
@@ -189,6 +192,12 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     applyFrameToSub(t, frame.sub_id, frame.frame);
     return;
   }
+  // usage 帧：只进会话级累加器，不进转录。必须放在 !t.running 早退之前——
+  // 本轮最后一条 usage 帧常在 run 收尾之后才到达，否则命中率会漏掉最新一轮。
+  if (frame.type === "usage") {
+    applyUsageFrame(t, frame);
+    return;
+  }
   if (!t.running) return; // review C1：运行结束后的迟到帧不得重建流式项（幽灵等待指示）
   if (frame.type === "delta_text" || frame.type === "delta_thinking") {
     if (frame.gen < t.streamGen) return; // review C2：run:retry 清场后，丢弃旧尝试的半帧
@@ -204,7 +213,58 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     if (frame.name && tool.tool === "?") tool.tool = frame.name;
     tool.progressTail = frame.chunk;
   }
-  // usage 帧不进转录
+}
+
+/** usage 帧载荷（ipc/types.ts 的 Frame usage 形状：snake_case，与后端 dto 一致）。 */
+export interface UsageFramePayload {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
+/** usage 帧累加（纯函数，就地变异草稿）：字段缺失按 0 计，帧重放/乱序无害。
+ *  只接受帧的 snake_case 字段（cache_read / cache_write），与 Frame 契约一致。 */
+export function applyUsageFrame(t: TabRunState, u: UsageFramePayload | undefined) {
+  if (!t.usage) t.usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  t.usage.input += u?.input ?? 0;
+  t.usage.output += u?.output ?? 0;
+  t.usage.cacheRead += u?.cache_read ?? 0;
+  t.usage.cacheWrite += u?.cache_write ?? 0;
+}
+
+/** 会话级缓存命中率（0–1），分母按协议语义取（`utils/models.ts::cacheDenominator`）。
+ *  无任何用量数据时为 null（显示端据此隐藏「命中」段）——注意 (0,0) 返回 null 而非 0：
+ *  没有数据与「有数据但一次都没命中」必须区分。
+ *  usage 可选（缺省视为无数据）：兼容既有测试夹具的 TabRunState 字面量。 */
+export function cacheHitRate(
+  t: { usage?: UsageTotals } | null | undefined,
+  sem: CacheSemantics,
+): number | null {
+  const u = t?.usage;
+  if (!u) return null;
+  const denom = cacheDenominator(u, sem);
+  return denom > 0 ? u.cacheRead / denom : null;
+}
+
+/** 工具条上下文占用档（相对自动压缩阈值）：high = 已达阈值（红）/ medium = 阈值 70% 以上（橙）/ low = 默认。 */
+export type ContextTier = "low" | "medium" | "high";
+
+/** 上下文占用分档：判定用原始 ratio（不用展示值），避免「显示 60% 却不显红」。 */
+export function contextTier(ratio: number, threshold: number): ContextTier {
+  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) return "low";
+  if (ratio >= threshold) return "high";
+  if (ratio >= threshold * 0.7) return "medium";
+  return "low";
+}
+
+/** 缓存命中率四档着色：ok ≥99% / yellow 95–99% / warn 90–95% / danger <90%。 */
+export type HitTier = "ok" | "yellow" | "warn" | "danger";
+export function hitRateTier(rate: number): HitTier {
+  if (rate >= 0.99) return "ok";
+  if (rate >= 0.95) return "yellow";
+  if (rate >= 0.9) return "warn";
+  return "danger";
 }
 
 /** 子代理帧归一（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：镜像主流水线——delta 追加 timeline，tool_progress 落工具锚点。

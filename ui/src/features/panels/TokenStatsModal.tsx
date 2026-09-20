@@ -5,6 +5,7 @@ import { ipc } from "../../ipc/client";
 import type { DailyStats, ModelAgg } from "../../ipc/types";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
+import { cacheDenominator, cacheSemanticsOfFormat, type CacheSemantics } from "../../utils/models";
 
 /** token 数缩写：M/k 分级缩写，便于柱状图标签与摘要展示。 */
 function fmt(n: number): string {
@@ -16,24 +17,18 @@ function fmt(n: number): string {
 /**
  * 计费语义（[docs/prompt-caching-hardening]）：anthropic_messages 的 usage.input 不含缓存部分
  * （真输入 = input + cache_read + cache_write）；openai_chat / openai_responses 的 input 已包含
- * cached_tokens（cache_read 是 input 的子集）。两套口径下「总量 / 命中率」公式不同，必须按模型协议区分。
+ * cached_tokens（cache_read 是 input 的子集）。两套口径下「总量 / 命中率」公式不同，必须按协议区分。
+ *
+ * 公式本身**不在本文件定义**：语义判定与命中率分母来自 `utils/models.ts`
+ * （`cacheSemanticsOfFormat` / `cacheDenominator`），与 Composer 工具条的命中率同源——
+ * 两处各写一份必然漂移。这里只保留 stats 侧特有的「总量」口径。
  */
-type Sem = "anthropic" | "openai";
-
-function semOf(apiFormat: string | undefined): Sem {
-  return apiFormat === "anthropic_messages" ? "anthropic" : "openai";
-}
 
 /** 计费 token 总量：anthropic 四维相加；openai 的 input 已含缓存命中，只加 output。 */
-function trueTotal(a: ModelAgg, sem: Sem): number {
+function trueTotal(a: ModelAgg, sem: CacheSemantics): number {
   return sem === "anthropic"
     ? a.input + a.output + a.cache_read + a.cache_write
     : a.input + a.output;
-}
-
-/** 缓存命中率分母：anthropic = input + cache_read + cache_write；openai = input。 */
-function hitDenominator(a: ModelAgg, sem: Sem): number {
-  return sem === "anthropic" ? a.input + a.cache_read + a.cache_write : a.input;
 }
 
 /** 任务/统计弹窗：近 30 天 token 消耗柱状图 + 汇总（总量/run 数/最常用模型/缓存命中率）+ 按来源拆分。 */
@@ -48,9 +43,9 @@ export default function TokenStatsModal() {
 
   // model_id → 计费语义（provider 级 api_format；历史已删模型查不到，其量不参与命中率计算）
   const sems = useMemo(() => {
-    const map: Record<string, Sem> = {};
+    const map: Record<string, CacheSemantics> = {};
     for (const p of config?.providers ?? []) {
-      const sem = semOf(p.api_format);
+      const sem = cacheSemanticsOfFormat(p.api_format);
       for (const m of p.models) map[m.id] = sem;
     }
     return map;
@@ -113,7 +108,7 @@ export default function TokenStatsModal() {
       known = true;
       num += v.cache_read;
       write += v.cache_write;
-      den += hitDenominator(v, sem);
+      den += cacheDenominator({ input: v.input, cacheRead: v.cache_read, cacheWrite: v.cache_write }, sem);
     }
     if (!known || den === 0) return null;
     return { rate: num / den, read: num, write };

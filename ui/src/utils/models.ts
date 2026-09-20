@@ -40,3 +40,39 @@ export function activeProviderIdOf(
   const target = modelId ?? config?.active_model_id ?? null;
   return findModel(config, target)?.providerId ?? null;
 }
+
+/**
+ * 缓存计费语义（[docs/prompt-caching-hardening](../../../docs/prompt-caching-hardening.md)）：
+ * `anthropic_messages` 的 `usage.input` **不含**缓存部分（真输入 = input + cache_read + cache_write）；
+ * `openai_chat` / `openai_responses` 的 `input` **已包含** `cached_tokens`（cache_read 是 input 的子集）。
+ * 两套口径的「命中率分母」不同，必须按协议区分——混淆会让 openai 系命中率系统性偏低。
+ */
+export type CacheSemantics = "anthropic" | "openai";
+
+/** 协议 → 缓存语义（**分母口径的唯一事实源**：Composer 工具条与统计弹窗共用，勿在第二处重写公式）。 */
+export function cacheSemanticsOfFormat(apiFormat: string | null | undefined): CacheSemantics {
+  return apiFormat === "anthropic_messages" ? "anthropic" : "openai";
+}
+
+/** 生效模型（会话覆盖优先，语义同 `activeProviderIdOf`）所属 provider 的缓存语义。
+ *  模型或 provider 解析不到时返回 null——调用方据此**不显示命中率**，宁可缺省也不猜口径。 */
+export function cacheSemanticsOf(
+  config: ConfigState | null | undefined,
+  modelId: string | null | undefined,
+): CacheSemantics | null {
+  const target = modelId ?? config?.active_model_id ?? null;
+  const model = findModel(config, target);
+  if (!model) return null;
+  const provider = config?.providers.find((p) => p.id === model.providerId);
+  return provider ? cacheSemanticsOfFormat(provider.api_format) : null;
+}
+
+/** 命中率分母（按语义）：anthropic = input + cache_read + cache_write；openai = input。 */
+export function cacheDenominator(
+  counters: { input: number; cacheRead: number; cacheWrite: number },
+  sem: CacheSemantics,
+): number {
+  return sem === "anthropic"
+    ? counters.input + counters.cacheRead + counters.cacheWrite
+    : counters.input;
+}

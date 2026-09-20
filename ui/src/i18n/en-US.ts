@@ -65,6 +65,8 @@ export default {
     keyHint: "Tab / arrow keys to select, Enter to confirm (click the card first)",
     keyHintMulti: "Tab / arrow keys to select, Space to toggle; Enter = next question / submit",
     keyHintSingle: "Single choice: click or number key to pick; options are mutually exclusive; Enter = submit",
+    /* Defect fix: Enter now submits from the note input too — say so, otherwise users assume mouse-only */
+    noteHint: "Enter = next / submit; Shift + Enter for a new line",
     planTitle: "Plan", copyPlan: "Copy full plan", viewFullPlan: "View full plan", proceedPlan: "Proceed with the plan above?",
     prevPage: "Previous question", nextPage: "Next question",
     recommended: "Recommended",
@@ -295,6 +297,10 @@ export default {
     modeSwitched: "Approval mode switched: {{label}}",
     modelSwitched: "Model switched: {{label}}",
     vision: "Vision",
+    // Composer toolbar: context usage tiering + threshold/hit-rate micro-labels
+    contextThreshold: "thr",
+    cacheHit: "hit",
+    ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
     other: "Other",
     noModel: "No model configured",
     goSettings: "Add a model in Settings",
