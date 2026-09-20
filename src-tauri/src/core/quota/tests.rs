@@ -7,9 +7,9 @@ use super::opencode_paths::{
     resolve_env_template, strip_jsonc,
 };
 use super::providers::{deepseek, glm, kimi, minimax, opencode_go};
-use super::{ALL, ProviderKind, QuotaStatus, host_of, order_for, sanitize};
+use super::{ALL, AuthStyle, ProviderKind, QuotaStatus, fetch_json, host_of, order_for, sanitize};
 use chrono::{DateTime, Utc};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -198,23 +198,53 @@ fn runtime_path_candidates_include_opencode_dirs() {
 }
 
 #[test]
-fn opencode_go_parses_percent_windows_and_skips_broken_ones() {
+fn opencode_go_keeps_windows_whose_status_is_not_ok() {
+    // 实调样例（2026-09-20）：weekly 用满 → status "rate-limited"；
+    // status 不再作过滤条件，否则「本周剩余 0%」会整窗静默消失。
     let body = json!({
         "usage": {
             "rolling": { "status": "ok", "percent": 12.5, "resetsAt": "2026-09-18T20:00:00Z" },
-            "weekly": { "status": "error", "percent": 50.0, "resetsAt": "2026-09-20T00:00:00Z" },
+            "weekly": { "status": "rate-limited", "percent": 100, "resetsAt": "2026-09-21T00:00:00Z" },
             "monthly": { "status": "ok", "percent": 140.0, "resetsAt": "2026-10-01T00:00:00Z" }
         }
     });
     let entries = opencode_go::parse_usage(&body).unwrap();
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
-    assert_eq!(keys, vec!["rolling", "monthly"]);
+    assert_eq!(keys, vec!["rolling", "weekly", "monthly"]);
     assert_eq!(entries[0].remaining_percent, Some(87.5));
     assert_eq!(entries[0].used_percent, Some(12.5));
-    // 越界百分比收敛到 0-100
+    // 被限流的周窗口：剩余 0% + 重置时间照常带出
+    assert_eq!(entries[1].used_percent, Some(100.0));
     assert_eq!(entries[1].remaining_percent, Some(0.0));
+    assert_eq!(
+        entries[1].resets_at.as_deref(),
+        Some("2026-09-21T00:00:00Z")
+    );
+    // 越界百分比收敛到 0-100
+    assert_eq!(entries[2].remaining_percent, Some(0.0));
+}
+
+#[test]
+fn opencode_go_accepts_numeric_string_percent_and_skips_unusable_windows() {
+    let body = json!({
+        "usage": {
+            "rolling": { "status": "ok", "percent": "31" },
+            "weekly": { "status": "rate-limited" },
+            "monthly": { "status": "ok", "percent": null }
+        }
+    });
+    let entries = opencode_go::parse_usage(&body).unwrap();
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(keys, vec!["rolling"]);
+    assert_eq!(entries[0].used_percent, Some(31.0));
+    // 没有 resetsAt 不算异常，只是没有重置倒计时
+    assert_eq!(entries[0].resets_at, None);
     // 全不可用 → 明确报错，而不是返回空列表
     assert!(opencode_go::parse_usage(&json!({ "usage": {} })).is_err());
+    assert!(
+        opencode_go::parse_usage(&json!({ "usage": { "weekly": { "status": "rate-limited" } } }))
+            .is_err()
+    );
     assert!(opencode_go::parse_usage(&json!({})).is_err());
 }
 
@@ -467,6 +497,8 @@ fn quota_status_wire_names_are_snake_case() {
 /// 真实接口探针（默认不跑）：`cargo test --lib -- --ignored live_probe`。
 /// 用本机 opencode 凭证实调一次官方 usage 接口，用于校对字段漂移；
 /// 凭证只用于请求头，不外传、不落盘、不进日志。
+/// 打印逐窗口原始形态（`status` 字面量会随上游变，例如用满时是 `rate-limited`）——
+/// 响应体里只有额度数字与重置时间，不含凭证。
 #[tokio::test]
 #[ignore = "真实网络请求：需本机 OpenCode Go 凭证，手动运行 cargo test --lib -- --ignored live_probe"]
 async fn live_probe_opencode_go_usage() {
@@ -476,9 +508,27 @@ async fn live_probe_opencode_go_usage() {
     };
     let cfg = crate::core::config::ConfigState::default();
     let client = crate::provider::proxy::build_client(&cfg);
-    let entries = opencode_go::fetch(&key, &client)
-        .await
-        .unwrap_or_else(|e| panic!("OpenCode Go 实调失败（凭证来源 {source}）：{e}"));
+    let body = fetch_json(
+        &client,
+        opencode_go::URL,
+        &key,
+        AuthStyle::Bearer,
+        "OpenCode Go API",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("OpenCode Go 实调失败（凭证来源 {source}）：{e}"));
+
+    let usage = body.get("usage").cloned().unwrap_or(Value::Null);
+    for window in ["rolling", "weekly", "monthly"] {
+        let shape = usage
+            .get(window)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "<缺失>".to_string());
+        println!("原始窗口 {window}: {shape}");
+    }
+
+    let entries = opencode_go::parse_usage(&body)
+        .unwrap_or_else(|e| panic!("原始响应解析失败（凭证来源 {source}）：{e}"));
     assert!(!entries.is_empty(), "实调返回空窗口列表");
     for entry in &entries {
         assert!(

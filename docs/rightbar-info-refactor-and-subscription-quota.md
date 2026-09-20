@@ -100,7 +100,31 @@
 
 修完 CI 三平台（macos-14 / ubuntu-24.04 / windows-2022）与 `Rust lint` 全部转绿。
 
-## 8. 提交建议
+## 8. 后续修复：周额度窗口被整窗丢弃（2026-09-20）
+
+**现象**：右栏额度段展开后只显示「近 5 小时 / 本月」，**周剩余整档消失**（用户报）。
+
+**根因**（`providers/opencode_go.rs::parse_usage`）：解析要求 `status == "ok"` 才收窗口，否则 `continue`——不报错、不留痕。而上游在窗口用满时给的是 `rate-limited`，同一时刻实调响应为：
+
+```json
+{"usage":{
+  "rolling":{"status":"ok","percent":0,"resetsAt":"2026-09-20T08:59:59.561Z"},
+  "weekly":{"status":"rate-limited","percent":100,"resetsAt":"2026-09-21T00:00:00.000Z"},
+  "monthly":{"status":"ok","percent":50,"resetsAt":"2026-10-14T13:54:24.000Z"}}}
+```
+
+即 weekly 已用满（上限恰好是月额度的 50%，与 monthly 50% 相互印证）→「本周剩余 0%」这一最该被看到的一档反而被整窗过滤掉。前端无过滤（`QuotaSection` 逐条渲染 `entries`），问题只出在这一处。
+
+**修复**：展示条件收敛为「窗口存在 + `percent` 可用」（percent 复用 `providers::number`，数字与数字字符串都收），**`status` 降级为纯诊断信息、不再参与过滤**；只有窗口缺失或 percent 无法解析才跳过该窗口，全部不可用仍返回 Err（不伪造数值）。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| `cargo test`（src-tauri） | **769 passed / 0 failed / 3 ignored**（原 `opencode_go_parses_percent_windows_and_skips_broken_ones` 拆为「status 非 ok 仍展示」+「数字字符串 percent / 缺 percent 跳过」两例） |
+| `cargo test --lib -- --ignored live_probe --nocapture` | 实调确认三窗口齐出：`rolling 剩余 100% / weekly 剩余 0% / monthly 剩余 50%`，weekly 重置时间照常带出 |
+
+## 9. 提交建议
 
 ```
 feat(rightbar): info panel refactor with subscription quota and resizable sidebars

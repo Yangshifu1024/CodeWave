@@ -1,8 +1,13 @@
 //! OpenCode Go：官方额度接口 `GET https://opencode.ai/zen/go/v1/usage`（Bearer）。
 //! 响应形如 `{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"…"},…}}`，
 //! `percent` 是「已用」百分比。
+//!
+//! `status` 不止 `ok`：窗口用满时上游给的是 **`rate-limited`**（本机实调样例：
+//! `{"weekly":{"status":"rate-limited","percent":100,"resetsAt":"…"}}`），
+//! 所以它只作诊断信息，**绝不作为过滤条件**（见 `parse_usage`）。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
+use super::number;
 use serde_json::Value;
 
 pub(crate) const URL: &str = "https://opencode.ai/zen/go/v1/usage";
@@ -15,7 +20,11 @@ pub(crate) async fn fetch(key: &str, client: &reqwest::Client) -> Result<Vec<Quo
     parse_usage(&body)
 }
 
-/// 解析官方 usage 响应：单窗口形态异常只跳过该窗口，全部不可用才判失败。
+/// 解析官方 usage 响应：展示条件只有「窗口存在 + `percent` 可用」，`status` 只作诊断、
+/// **不参与过滤**。反例（本机实调 2026-09-20）：weekly 用满 →
+/// `status: "rate-limited", percent: 100`；按 `status == "ok"` 整窗过滤会让
+/// 「本周剩余 0%」——最该被看到的一档——静默消失。
+/// `percent` 缺失/非数字（数字字符串仍接受）才跳过该窗口；全部不可用才判失败。
 pub(crate) fn parse_usage(body: &Value) -> Result<Vec<QuotaEntry>, String> {
     let usage = body
         .get("usage")
@@ -27,10 +36,7 @@ pub(crate) fn parse_usage(body: &Value) -> Result<Vec<QuotaEntry>, String> {
         let Some(entry) = usage.get(window) else {
             continue;
         };
-        if entry.get("status").and_then(Value::as_str) != Some("ok") {
-            continue;
-        }
-        let Some(percent) = entry.get("percent").and_then(Value::as_f64) else {
+        let Some(percent) = number(entry, "percent") else {
             continue;
         };
         let resets_at = entry
