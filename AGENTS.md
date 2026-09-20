@@ -19,7 +19,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - **本地优先**：数据、配置、会话均在本地 `~/.codewave`；API key 入系统钥匙串，不落明文
 - **纯 Rust 后端，零框架耦合**：`core/` 不依赖 tauri；只有 `lib.rs` 与 `host/` 允许 `use tauri::*`；IPC 命令只做校验 + 转调 core
 - **数据目录 `.codewave`**：路径约定随 2026-09-13 品牌改名定稿（原 `.wavestudio`，无自动迁移），勿再建议改名
-- **项目单目录 + 数据随项目走**：项目 = 名称 + 单一主目录；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/oss-prep-batch](./docs/oss-prep-batch.md)：legacy 目录回退已移除）
+- **项目 = 名称 + 单一主目录**；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/oss-prep-batch](./docs/oss-prep-batch.md)：legacy 目录回退已移除）；`ProjectEntry.allowed_dirs`（serde default）记用户「始终允许」的项目外目录，会话创建/恢复时并入 `extra_roots`
+- **文件入口统一为「原地引用」**：附件按钮与拖入窗口拿到的都是**真实路径**，非图片文件只在输入框插一行 `@路径`（不复制副本、不占上下文）；图片因要上 wire 才读成 base64；网页内 `<input type=file>` 拿不到路径，故附件按钮走原生选择框（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）
 - **会话语义**：项目会话（必须选项目，快照固化主目录）或临时会话（免目录，工作区 = 全局数据目录，写入仍走 fence 审批）；命令 cwd = 项目数据目录下的 temps/（临时会话 = 全局数据目录）
 - **删除项目** = 级联删除其下会话 + 托管目录（确认弹框列明影响）；用户代码目录永不动
 - **界面风格**：自绘标题栏（[docs/custom-font-and-titlebar](./docs/custom-font-and-titlebar.md)：tauri-plugin-decoration v3，顶栏即标题栏；窗口 `visible:false` 起动，激活失败回退原生框）；主题跟随系统；**强调色 = 中性墨色**（`colorPrimary` 亮 `#1f1f1f`/暗 `#424242`，[docs/ask-ink-accent-and-composer-cover](./docs/ask-ink-accent-and-composer-cover.md)——勿再引入默认蓝或彩色 accent；色彩强度映射风险等级：无彩色=默认、橙=需注意、红=危险）；字体走 `--ws-font-sans/--ws-font-mono` 双槽 token（用户偏好由 `ui/src/utils/fonts.ts` 管理，勿再硬编码字体链）；组件样式一律 antd 组件库接管（`--ws-*` token 由 `ui/src/theme/bridge.tsx` 桥接），不手搓皮肤/自绘调色板
@@ -30,8 +31,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **775 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；既有 flaky `provider::tests_integration::midstream_disconnect_maps_to_network` 默认并行下偶发失败、单跑即过（2026-09-19 复测：两轮一漏一过）；以本地最新全绿为准）；CI 用 `cargo test --workspace` |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **781 passed / 72 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **912 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **793 passed / 74 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
@@ -51,7 +52,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 | `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、quota（订阅额度：凭证链 + 7 家适配器）、openers（文件管理器与编辑器探测/打开）、scheduler、sessions、stats | 不依赖 tauri |
 | `host/` | commands（全部 IPC 命令）、events（EventSink）、keyring | 除 `lib.rs` 外唯一允许 `use tauri::*`；命令只校验 + 转调 core |
 | `provider/` | LLM 供应商层：anthropic / openai_chat / openai_responses 三协议 + dto / keys / proxy / retry / sse | 协议差异不出本层 |
-| `tools/` | 工具实现（ToolKind 分 ReadOnly / FileWrite / Network / Interactive） | 纯函数化 |
+| `tools/` | 工具实现（ToolKind 分 ReadOnly / FileWrite / Network / Interactive）；`tools/document/` = Office 与 PDF 的读/生成/保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)） | 纯函数化 |
 | `agents/` | 内置子代理角色注册表（explore/backend-dev/frontend-dev/app-dev/reviewer/product-manager/code-reviewer/tester/title 定义 + 别名归一查找），被 `tools/subagent` 注入消费；title 例外——仅供 `core/title.rs` 自动命名消费（[docs/session-auto-title](./docs/session-auto-title.md)），不进 subagent 角色枚举 | 纯数据不依赖 tauri；编排角色已内置为标准工作流常驻提示（[docs/standard-workflow](./docs/standard-workflow.md)），不是本表角色 |
 | `safety/` | approval 审批门（默认无限等待用户应答；`auto_confirm` 勾选后 5 分钟自动确认推荐选项，[docs/session-nav-row-states](./docs/session-nav-row-states.md)）、fence 命令安全围栏（L1 黑名单 → L2 AST → L3 高危模式） | |
 | `git/` | git2 只读集成（status / diff / log） | 只读，不提供写操作 |
@@ -67,6 +68,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 ## 契约锚点（改前必读）
 
 - **事件面 29 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（`lsp:server_missing` 已随 LSP 机制删除，见 [docs/post-write-check-plan](./docs/post-write-check-plan.md)）
+- **文档工具与保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）**：`read_document` / `write_document` / `edit_document` 三个工具按扩展名分派表格、Word、PDF；保真修改一律走「解开压缩包 → 只替换目标内部文件 → 其余原样搬运重打包」，**绝不整份解析重建**（重建会丢图表、数据透视表、迷你图）；`read` 拒收二进制文档（按扩展名 + NUL 字节内容探测）并点名该用哪个工具；界面预览复用 `read_document` 的实现（`read_for_preview`），不给预览单写一套解析；最低 Rust 版本 **1.98**
 - **SessionMeta `project_id + roots` 快照**是 @ 提及 / git 聚合的唯一数据源，勿绕过回查注册表（左栏文件树已随 [docs/workspace-explorer-removal-and-chat-scrollbar](./docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除）
 - `create_session(project_id?, workspace?)` 双形态；`delete_project` 级联删除（先取消运行中会话）
 - **anthropic SSE 流内绝不调 `parser.finish()`**（由分片撕裂集成测试守护）
