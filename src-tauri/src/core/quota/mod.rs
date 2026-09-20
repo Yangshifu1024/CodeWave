@@ -511,13 +511,14 @@ pub(crate) async fn fetch_json(
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| FetchFailure::message(format!("{label}：{}", sanitize(&e.to_string(), key))))?;
+        .map_err(|e| {
+            FetchFailure::message(format!("{label}：{}", sanitize(&e.to_string(), key)))
+        })?;
 
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| FetchFailure::message(format!("{label}：{}", sanitize(&e.to_string(), key))))?;
+    let body = response.text().await.map_err(|e| {
+        FetchFailure::message(format!("{label}：{}", sanitize(&e.to_string(), key)))
+    })?;
     if !status.is_success() {
         return Err(FetchFailure {
             status: Some(status.as_u16()),

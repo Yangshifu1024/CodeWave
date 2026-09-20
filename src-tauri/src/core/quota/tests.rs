@@ -166,7 +166,12 @@ fn host_of_handles_ports_userinfo_and_missing_scheme() {
 #[test]
 fn display_name_falls_back_to_base_url_host_then_id() {
     assert_eq!(
-        display_name(&provider("p1", "  My Kimi  ", "https://api.kimi.com/x", &[])),
+        display_name(&provider(
+            "p1",
+            "  My Kimi  ",
+            "https://api.kimi.com/x",
+            &[]
+        )),
         "My Kimi"
     );
     assert_eq!(
@@ -183,7 +188,12 @@ async fn unsupported_rows_never_send_requests_and_sort_last() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = config(vec![
         provider("p-empty", "空端点", "", &["sk-empty"]),
-        provider("p-ok", "DeepSeek", "https://api.deepseek.com/v1", &["sk-ok"]),
+        provider(
+            "p-ok",
+            "DeepSeek",
+            "https://api.deepseek.com/v1",
+            &["sk-ok"],
+        ),
         provider(
             "p-gateway",
             "中转",
@@ -259,7 +269,10 @@ fn failure_classification_splits_rejected_from_error() {
     }
     // 其它 HTTP 失败与无响应失败（超时/连接失败/解析失败）一律 error
     for status in [Some(429u16), Some(500), Some(502), Some(200), None] {
-        assert_eq!(classify_failure(&failure(status), false), QuotaStatus::Error);
+        assert_eq!(
+            classify_failure(&failure(status), false),
+            QuotaStatus::Error
+        );
         assert_eq!(classify_failure(&failure(status), true), QuotaStatus::Error);
     }
 }
@@ -281,8 +294,7 @@ async fn rejected_first_time_then_error_after_a_success() {
     let saved = QuotaState::load(dir.path());
     assert!(saved.has_succeeded("p-ds"));
     assert_eq!(
-        saved.verified[0].last_ok_at,
-        first[0].fetched_at,
+        saved.verified[0].last_ok_at, first[0].fetched_at,
         "last_ok_at 应等于成功那次快照的时刻"
     );
 
@@ -290,7 +302,10 @@ async fn rejected_first_time_then_error_after_a_success() {
     let denied = FakeFetcher::new(vec![("sk-ds", Err(failure(Some(401))))]);
     let second = snapshots_with(&cfg, None, dir.path(), &denied.fetcher()).await;
     assert_eq!(second[0].status, QuotaStatus::Error);
-    assert_eq!(second[0].error.as_deref(), Some("测试取数失败（status=Some(401)）"));
+    assert_eq!(
+        second[0].error.as_deref(),
+        Some("测试取数失败（status=Some(401)）")
+    );
 }
 
 #[tokio::test]
@@ -314,10 +329,30 @@ async fn error_causes_are_reported_without_leaking_keys() {
     let dir = tempfile::tempdir().unwrap();
     let secret = "sk-secret-abcdefgh12345678";
     let cfg = config(vec![
-        provider("p-timeout", "超时家", "https://api.deepseek.com/v1", &[secret]),
-        provider("p-5xx", "5xx 家", "https://api.kimi.com/coding/v1", &["sk-50000000000"]),
-        provider("p-429", "限流家", "https://bigmodel.cn/api", &["sk-42900000000"]),
-        provider("p-parse", "解析家", "https://api.z.ai/api", &["sk-parse0000000"]),
+        provider(
+            "p-timeout",
+            "超时家",
+            "https://api.deepseek.com/v1",
+            &[secret],
+        ),
+        provider(
+            "p-5xx",
+            "5xx 家",
+            "https://api.kimi.com/coding/v1",
+            &["sk-50000000000"],
+        ),
+        provider(
+            "p-429",
+            "限流家",
+            "https://bigmodel.cn/api",
+            &["sk-42900000000"],
+        ),
+        provider(
+            "p-parse",
+            "解析家",
+            "https://api.z.ai/api",
+            &["sk-parse0000000"],
+        ),
     ]);
     let fake = FakeFetcher::new(vec![
         // 真实路径里超时/连接失败的 message 由 `fetch_json` 用本次密钥脱敏（`sanitize(e, key)`）；
@@ -371,7 +406,10 @@ async fn active_provider_is_pinned_first_and_missing_id_keeps_config_order() {
     let plain = snapshots_with(&cfg, None, dir.path(), &fake.fetcher()).await;
     assert_eq!(ids(&plain), vec!["p-ok1", "p-nokey", "p-ok2", "p-empty"]);
     let not_found = snapshots_with(&cfg, Some("p-nonexistent"), dir.path(), &fake.fetcher()).await;
-    assert_eq!(ids(&not_found), vec!["p-ok1", "p-nokey", "p-ok2", "p-empty"]);
+    assert_eq!(
+        ids(&not_found),
+        vec!["p-ok1", "p-nokey", "p-ok2", "p-empty"]
+    );
 }
 
 #[tokio::test]
@@ -454,7 +492,11 @@ async fn ok_row_carries_this_round_success_time_not_the_old_one() {
         Some(out[0].fetched_at.as_str()),
         "ok 行带的是本次成功时间"
     );
-    assert_ne!(out[0].last_ok_at.as_deref(), Some(stale), "ok 行不得回显上一次的时间");
+    assert_ne!(
+        out[0].last_ok_at.as_deref(),
+        Some(stale),
+        "ok 行不得回显上一次的时间"
+    );
     // 落盘被同一批刷新覆盖
     assert_eq!(
         QuotaState::load(dir.path()).verified[0].last_ok_at,
@@ -492,7 +534,10 @@ async fn denied_row_after_a_success_carries_historical_last_ok_at() {
         Some(stale),
         "失败行必须带出历史的上次成功时间"
     );
-    assert_ne!(out[0].last_ok_at.as_deref(), Some(out[0].fetched_at.as_str()));
+    assert_ne!(
+        out[0].last_ok_at.as_deref(),
+        Some(out[0].fetched_at.as_str())
+    );
 }
 
 #[tokio::test]
@@ -966,8 +1011,7 @@ fn minimax_prefers_wildcard_model_and_reports_api_errors() {
             { "model_name": "minimax-m*", "remains_time": 1000, "current_interval_total_count": 100, "current_interval_usage_count": 90 }
         ]
     });
-    let entries =
-        minimax::parse_usage(&payload, minimax::Endpoint::International, now()).unwrap();
+    let entries = minimax::parse_usage(&payload, minimax::Endpoint::International, now()).unwrap();
     assert_eq!(entries[0].remaining_percent, Some(90.0));
 
     let err = minimax::parse_usage(
