@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
-import type { Breakdown, Message, ToolResultEvent } from "../ipc/types";
+import type { Breakdown, Message, ToolResultEvent, ToolStartEvent } from "../ipc/types";
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
@@ -14,11 +14,14 @@ import {
   BLANK,
   appendDelta,
   applyFrameToTab,
+  applyToolStart,
   blank,
   currentAssistantIm,
   ensureToolAnchorIm,
+  findToolViewInItems,
   messagesToSubStream,
   scanToolResults,
+  updateToolFromStart,
 } from "./runFrames";
 import {
   askHandlers,
@@ -42,7 +45,7 @@ export type {
 } from "./run.types";
 import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
 
-  /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 28 键事件面（唯一注册点）。 */export interface RunStore {
+  /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 29 键事件面（唯一注册点）。 */export interface RunStore {
   tabs: Record<string, TabRunState>;
   /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
   drafts: Record<string, ComposerDraft>;
@@ -73,6 +76,8 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   /** 发送接受后清空对应 Tab 草稿（文本 + 附件一并）；缺省为当前活跃 Tab */
   clearDraft(sessionId?: string): void;
   onToolResult(sessionId: string, p: ToolResultEvent, ok: boolean): void;
+  /** 工具开始（tool:start）：建/翻工具卡（waiting → running）；运行已结束的迟到开始事件一律丢弃 */
+  onToolStart(sessionId: string, p: ToolStartEvent): void;
   restoreFromMessages(sessionId: string, msgs: Message[]): void;
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
   openSubDrawer(sessionId: string | null, subId: string): Promise<void>;
@@ -346,8 +351,9 @@ export const useRun = create<RunStore>()(
         if (ok && (p.tool === "create" || p.tool === "edit")) {
           t.writeTick += 1;
         }
-        const a = currentAssistantIm(t);
-        const tool = ensureToolAnchorIm(a, p.call_key);
+        // 先查后建：工具卡锚点可能落在更早的 assistant 项（跑批期间 notice 插队会另建末项），
+        // 只查末项会另建第二张卡、旧卡永久 running。命中即原地落定，不白建流式项
+        const tool = findToolViewInItems(t.items, p.call_key) ?? ensureToolAnchorIm(currentAssistantIm(t), p.call_key);
         tool.tool = p.tool;
         tool.status = ok ? "ok" : "error";
         tool.outcome = p.outcome as any;
@@ -355,6 +361,29 @@ export const useRun = create<RunStore>()(
         tool.durationMs = p.duration_ms;
         // 同上：落定即清进度尾部（主会话与子代理流两处同步）
         tool.progressTail = "";
+      });
+    },
+
+    onToolStart(sessionId, p) {
+      set((s) => {
+        const t = s.tabs[sessionId];
+        // 子代理内部的工具开始（session = sub_id，无对应 Tab）→ 路由进所属会话的子代理流（与 onToolResult 同构）
+        if (!t) {
+          const owner = Object.values(s.tabs).find((tb) => tb.subStreams[sessionId]);
+          const st = owner?.subStreams[sessionId];
+          // 流已收尾（done/error）：迟到的开始事件不得再把卡翻回在途
+          if (!owner || !st || st.status !== "running") return;
+          applyToolStart(st, p);
+          return;
+        }
+        // run 已结束的迟到开始事件不得再造出会永久转圈的卡（同 review C1 的幽灵指示守卫）
+        if (!t.running) return;
+        // 与 onToolResult / tool_progress 同一守卫：先跨 assistant 项找已有卡。
+        // 否则 waiting→running 两相之间插入 notice（run:inject / sub:error）时，running 相会落到新项，
+        // 为同一次调用建出第二张卡（旧卡永久 running，结果事件只翻中第一张）
+        const hit = findToolViewInItems(t.items, p.call_key);
+        if (hit) updateToolFromStart(hit, p);
+        else applyToolStart(currentAssistantIm(t), p);
       });
     },
 
@@ -417,6 +446,7 @@ export const useRun = create<RunStore>()(
                 restoredStreams[key] = { timeline: [], toolsMap: {}, status: "done", gen: 0, loaded: false };
               } else {
                 timeline.push({ kind: "tool", callKey });
+                // 本次未处理：主会话历史恢复把无结果调用呈现为已使用，与子代理流的「已中断」语义不一致，留待后续
                 toolsMap[callKey] = {
                   callKey,
                   tool: (c as any).name,
@@ -462,7 +492,9 @@ export const useRun = create<RunStore>()(
           const stream = t?.subStreams[subId];
           if (!t || !stream || stream.loaded) return;
           if (stream.timeline.length === 0 && msgs.length > 0) {
-            const mapped = messagesToSubStream(msgs);
+            // 流所属会话已不在运行 → 无结果调用落「已中断」（运行中拉回的历史留给实时事件回填）
+            const settleRunning = !get().tabs[sid]?.running;
+            const mapped = messagesToSubStream(msgs, settleRunning);
             stream.timeline = mapped.timeline as any;
             stream.toolsMap = mapped.toolsMap as any;
           }

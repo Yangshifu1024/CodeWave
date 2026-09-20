@@ -7,6 +7,7 @@ import type {
   TabRunState,
   TimelineSeg,
   ToolView,
+  UiItem,
 } from "./run.types";
 
 /** Tab 运行态初值工厂 */
@@ -109,6 +110,77 @@ export function ensureToolAnchorIm(
   return created;
 }
 
+/** 在 items 里按 callKey 找工具卡（跨**所有** assistant 项，不只末项）：跑批期间 run:inject / notice 会给 items
+ *  末尾 push 一条通知，下一帧 delta 让 currentAssistantIm 另建 assistant 项，而工具卡锚点留在更早的项里；
+ *  工具结果必须命中原卡而非另建一张（否则旧卡永久 running）。 */
+export function findToolViewInItems(items: UiItem[], callKey: string): ToolView | undefined {
+  for (const it of items) {
+    if (it.kind !== "assistant") continue;
+    const hit = it.toolsMap[callKey];
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** tool:start 事件的有效载荷（前端消费子集；形状见 ipc/types.ts 的 ToolStartEvent） */
+type ToolStartPayload = { call_key: string; tool: string; args_preview?: string; phase: string };
+
+/** 工具开始事件的状态迁移（tool 由调用方定位后传入）。迟到守卫：卡已落定（ok/error）只做 argsPreview
+ *  空值回填、不得翻回运行态——否则已完成的卡会永久转圈；否则按 phase 翻相（waiting = 审批/范围确认等待中）。
+ *
+ *  独立成函数的原因：定位 tool 的容器有两种来源——子代理流是稳定容器（直接按 toolsMap 查），主会话则必须
+ *  跨 assistant 项查找（见 findToolViewInItems）。若把定位写死在这里，主会话在 waiting→running 之间插入
+ *  notice（run:inject / sub:error）时会落到新项、为同一次调用再建一张卡。 */
+export function updateToolFromStart(tool: ToolView, p: ToolStartPayload) {
+  if (tool.status === "ok" || tool.status === "error") {
+    if (!tool.argsPreview && p.args_preview) tool.argsPreview = p.args_preview;
+    return;
+  }
+  tool.status = p.phase === "waiting" ? "waiting" : "running";
+  if (p.tool && tool.tool === "?") tool.tool = p.tool;
+  if (!tool.argsPreview && p.args_preview) tool.argsPreview = p.args_preview;
+}
+
+/** 工具开始事件（tool:start）在**指定容器内**落卡（缺卡则建锚点）：同一 call_key 可能先 waiting 后 running
+ *  （写工具在审批/范围确认门期间 waiting）；只读工具只收一次 running。
+ *  容器已稳定时用它（子代理流）；主会话请先 findToolViewInItems 跨项命中、未命中再调本函数。 */
+export function applyToolStart(
+  a: { timeline: TimelineSeg[]; toolsMap: Record<string, ToolView> },
+  p: ToolStartPayload,
+) {
+  updateToolFromStart(a.toolsMap[p.call_key] ?? ensureToolAnchorIm(a, p.call_key), p);
+}
+
+/** 「已中断」落定形态：空 message 的 E_INTERRUPTED（渲染层据此走中性样式、显示「已中断」且省略错误行）。 */
+function markInterrupted(tool: ToolView) {
+  tool.status = "error";
+  tool.outcome = { ok: false, data: null, error: { code: "E_INTERRUPTED", message: "" } };
+  tool.progressTail = "";
+}
+
+/** 收尾一个 toolsMap 里仍在途（running / waiting）的工具卡；已落定（ok/error）的一律不动。 */
+export function settleRunningTools(map: Record<string, ToolView>) {
+  for (const tool of Object.values(map)) {
+    if (tool.status === "running" || tool.status === "waiting") markInterrupted(tool);
+  }
+}
+
+/** 收尾 Tab 内在途工具卡：有 subId 只扫该子代理流（子代理结束时主会话可能仍在跑，不得误伤主会话在途工具）；
+ *  无 subId 扫全 Tab（所有 assistant 项 toolsMap + 所有 subStreams[*].toolsMap）。
+ *  关键：不可并入 closeStreamingAssistantItems——那个函数在运行中也会被 currentAssistantIm 调用（新建流式项前
+ *  收尾遗留流式项），合并会把在途工具误标「已中断」。 */
+export function closeRunningTools(t: TabRunState, subId?: string) {
+  if (subId) {
+    const st = t.subStreams[subId];
+    if (st) settleRunningTools(st.toolsMap);
+    return;
+  }
+  for (const it of t.items) {
+    if (it.kind === "assistant") settleRunningTools(it.toolsMap);
+  }
+  for (const st of Object.values(t.subStreams)) settleRunningTools(st.toolsMap);
+}
+
 /** 将一个 Channel 帧归一到 Tab 状态（就地变异草稿；帧到达顺序 = timeline 顺序）。
  *  导出以便测试驱动真实帧序列（[docs/thinking-interleave-report](../../../docs/thinking-interleave-report.md) 契约：delta_text / delta_thinking / tool_progress）。 */
 export function applyFrameToTab(t: TabRunState, frame: Frame) {
@@ -125,8 +197,9 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     appendDelta(currentAssistantIm(t).timeline, frame.type === "delta_text" ? "text" : "thinking", frame.text || "");
   } else if (frame.type === "tool_progress") {
     const callKey = `${frame.batch}:${frame.index}`;
-    const a = currentAssistantIm(t);
-    const tool = ensureToolAnchorIm(a, callKey);
+    // 先跨 assistant 项找已有卡：跑批期间 notice 插队会另建末项，若此处只查末项就会为同一次调用再建一张卡
+    // （旧卡停在 running，直到 run 收尾才被标「已中断」）
+    const tool = findToolViewInItems(t.items, callKey) ?? ensureToolAnchorIm(currentAssistantIm(t), callKey);
     // 帧携带工具名时回填运行中占位卡（幂等守卫：迟到帧不得覆盖 tool:result 已回填的真名）
     if (frame.name && tool.tool === "?") tool.tool = frame.name;
     tool.progressTail = frame.chunk;
@@ -181,8 +254,10 @@ function safeArgsPreview(args: any): string | undefined {
 }
 
 /** 历史 Message[] → 子代理过程流（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：assistant 的 text/thinking 按序进 timeline，
- *  tool_use 落工具卡锚点并回填配对的 tool_result；user 任务消息不进流（抽屉头部单独展示 sub.task）。 */
-export function messagesToSubStream(msgs: Message[]): { timeline: TimelineSeg[]; toolsMap: Record<string, ToolView> } {
+ *  tool_use 落工具卡锚点并回填配对的 tool_result；user 任务消息不进流（抽屉头部单独展示 sub.task）。
+ *  settleRunning=true（流所属会话已结束）时，缺配对结果的调用落定「已中断」（与 settleRunningTools 同形）；
+ *  默认 false 保持既有行为（留 running，等实时事件回填）。 */
+export function messagesToSubStream(msgs: Message[], settleRunning = false): { timeline: TimelineSeg[]; toolsMap: Record<string, ToolView> } {
   const results = scanToolResults(msgs);
   const timeline: TimelineSeg[] = [];
   const toolsMap: Record<string, ToolView> = {};
@@ -205,6 +280,9 @@ export function messagesToSubStream(msgs: Message[]): { timeline: TimelineSeg[];
             tool.outcome = { ok: !r.is_error, data: { tail: r.content } } as any;
           }
           tool.argsPreview = safeArgsPreview((c as any).args);
+        } else if (settleRunning) {
+          // 无配对结果且流已收尾：落定「已中断」（运行中被掐断的调用不会有结果事件）
+          markInterrupted(tool);
         }
         timeline.push({ kind: "tool", callKey });
         toolsMap[callKey] = tool;

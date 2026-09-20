@@ -664,7 +664,10 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(reset.key, reset.params)": "重置倒计时文案的键与参数由 countdown() 组装",
     "t(updated.key, updated.params)": "额度更新时间文案的键与参数由相对时间计算组装",
   },
-  "tools/ToolCallCard.tsx": { "t(key)": "工具动词键由 VERBS[tool.tool] 派生" },
+  "tools/ToolCallCard.tsx": {
+    "t(key)": "工具动词键由 VERBS[tool.tool] 派生",
+    "t(neutralErrKey)": "中性错误码（E_INTERRUPTED / E_ASK_*）→ 文案键由 NEUTRAL_ERR_KEYS 表派生（三键已由 i18n 键集合用例断言）",
+  },
 };
 
 describe("features 全目录：不得跨段借键（批④ 返工 · 守门②扩面）", () => {

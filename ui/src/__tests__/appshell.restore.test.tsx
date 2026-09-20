@@ -53,7 +53,7 @@ const h = vi.hoisted(() => {
   ];
   /** 每次调用现读的桩值：uiState = get_ui_state 返回的快照，sessions = list_sessions 返回的会话列表 */
   const state = { uiState: null as unknown, sessions: [] as any[] };
-  /** listen 捕获表：事件名 → 回调数组（bindEvents 的 27 键与 AppShell 直连的 notify:activate / menu:action 共用） */
+  /** listen 捕获表：事件名 → 回调数组（bindEvents 的 29 键与 AppShell 直连的 notify:activate / menu:action 共用） */
   const listeners = new Map<string, ((e: any) => void)[]>();
   const fn = (impl: (...args: any[]) => any = async () => null) => vi.fn(impl);
   const ipcMethods: Record<string, any> = {

@@ -267,6 +267,26 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect(tabOf(session).subStreams.sub_1.timeline[0]).toMatchObject({ text: "过程" });
   });
 
+  it("sub:done 只收尾该子流在途工具卡，不误伤主会话在途卡", () => {
+    const h = handlers();
+    h["sub:spawn"]({ session, sub_id: "sub_1", role: "explore", description: "d", max_steps: 5 });
+    // 子流内两个在途卡（一 running 一 waiting）；session = sub_id 路由进子流
+    h["tool:start"]({ session: "sub_1", call_key: "s1:0", tool: "read", args_preview: "{}", phase: "running" });
+    h["tool:start"]({ session: "sub_1", call_key: "s1:1", tool: "edit", args_preview: "{}", phase: "waiting" });
+    // 主会话在途卡（子代理结束时主会话可能仍在跑）
+    h["tool:start"]({ session, call_key: "m1:0", tool: "command", args_preview: "{}", phase: "running" });
+
+    h["sub:done"]({ session, sub_id: "sub_1" });
+
+    const t = tabOf(session);
+    for (const k of ["s1:0", "s1:1"]) {
+      expect(t.subStreams.sub_1.toolsMap[k].status).toBe("error");
+      expect(t.subStreams.sub_1.toolsMap[k].outcome.error.code).toBe("E_INTERRUPTED");
+    }
+    const a = t.items.find((i) => i.kind === "assistant") as any;
+    expect(a.toolsMap["m1:0"].status).toBe("running"); // 主会话卡不受子代理收尾影响
+  });
+
   it("冻结态 produce 路径：同类 delta 连帧合并 + 主流水同步无恙（P4-3 回归：排除 immer 冻结抛错致 set 回滚）", () => {
     const h = handlers();
     h["sub:spawn"]({ session, sub_id: "sub_fz", role: "explore", description: "d", max_steps: 5 });

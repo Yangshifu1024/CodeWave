@@ -32,7 +32,7 @@ pub struct BatchOutcome {
 pub async fn execute_batch(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
-    calls: Vec<NormalizedCall>,
+    mut calls: Vec<NormalizedCall>,
     effective_excludes: &[String],
     effective_exclude_mcp: bool,
     main_session: bool,
@@ -41,6 +41,14 @@ pub async fn execute_batch(
 ) -> BatchOutcome {
     let batch_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
     let sink = core.sink.clone();
+
+    // provider 侧下标（anthropic 的 content_block_start 内容块下标，会被 thinking / text 块顶偏）
+    // 不得泄漏到前端 key：此处收敛为批内位置，使进度帧 index、`tool:start` / `tool:result` 的
+    // call_key、ToolCtx.call_index / call_key（command 工具进度帧据此续接）全部同源——
+    // 否则同一张卡在两条通道上拿到两个 key，前端会建出两张卡（运行中一张永久转圈 + 结果一张）。
+    for (i, c) in calls.iter_mut().enumerate() {
+        c.index = i;
+    }
 
     // (1) Interactive 工具必须独占批次
     let has_interactive = calls
@@ -368,7 +376,8 @@ async fn run_tool(
 ) -> (ToolOutcome, Vec<Content>, u128) {
     // MCP 工具分发：mcp__<server>__<tool>
     if call.name.starts_with("mcp__") {
-        emit_tool_start(core, rt, call, batch_id, index);
+        // MCP 分支无审批 / 范围门：取消 token 一旦置位即退，直接进 running 相
+        emit_tool_start(core, rt, call, batch_id, index, "running");
         let started = Instant::now();
         let args = call.args.clone();
         let data_dir = rt.data_dir.clone();
@@ -422,11 +431,68 @@ async fn run_tool(
         cancel,
     };
     // ConfirmEach（先确认后变更）：FileWrite 工具执行前必经审批（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）。
+    let needs_write_approval = ctx.approval_mode() == crate::core::prefs::ApprovalMode::ConfirmEach
+        && tool.kind() == ToolKind::FileWrite;
+    // G3 范围门（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）：批准后新增的计划外步骤，首次写入前弹范围确认。
+    // 覆盖两条写通道（R2 评审修复）：FileWrite 工具；携带写目标的 command 工具。
+    // 后者用专门的「写目标探针」策略（confirm_inside_writes=true），与执行档判定解耦：
+    // 批准后会话已切 AutoEdit，其执行档 fence 会把范围内写重定向判为 Allow；若无探针，
+    // shell 重定向可完全绕过确认。纯只读命令探针得 Allow，不打扰。
+    // 批准 = 本会话放行（后续新增静默纳入）；拒绝 = 保留标记，下次写入再问。基线缺失（异常路径）不阻塞。
+    //
+    // 封成闭包而非提前求值：门 1 的审批是 await，同批并发写可能在该窗口改动 scope_expanded /
+    // approved_plan，提前求值会让安全门 fail-open（等一次审批的工夫把 G3 条件判成 false）。
+    // 「发 waiting 相」与「门本体」两处各调用一次，既是单一真相（共用同一份表达式），又不改变求值时点。
+    let g3_gate = |ctx: &ToolCtx| -> bool {
+        let g3_applies = match tool.kind() {
+            ToolKind::FileWrite => true,
+            ToolKind::Network => false,
+            _ => {
+                // command 工具：检测到写目标才需要确认
+                if call.name == "command" {
+                    if let Some(cmd) = call.args["command"].as_str() {
+                        let probe = crate::safety::fence::FencePolicy {
+                            approval_enabled: true,
+                            confirm_outside_create: ctx.confirm_outside_create(),
+                            confirm_inside_writes: true,
+                            plan_readonly: false,
+                        };
+                        matches!(
+                            crate::safety::fence::check_command_policy(
+                                cmd,
+                                &ctx.rt.workspace,
+                                &ctx.write_roots(),
+                                probe,
+                            ),
+                            crate::safety::fence::Verdict::Confirm(_)
+                        )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        };
+        g3_applies
+            && ctx
+                .rt
+                .scope_expanded
+                .load(std::sync::atomic::Ordering::SeqCst)
+            && !ctx
+                .rt
+                .scope_allowed
+                .load(std::sync::atomic::Ordering::SeqCst)
+            && ctx.rt.approved_plan.lock().unwrap().is_some()
+    };
+    // 门之前：本次调用若还要等确认（写入审批 / 计划外步骤范围确认），先把卡片建出来——
+    // 否则审批弹框期间界面上什么都没有（用户看不到这次调用与它的参数）。
+    if needs_write_approval || g3_gate(&ctx) {
+        emit_tool_start(core, rt, call, batch_id, index, "waiting");
+    }
     // detail 优先用工具的语义化预览（edit/create 的变更 diff，[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 3）；
     // 无预览能力的工具（如 delete）回退为入参 JSON 展示。
-    if ctx.approval_mode() == crate::core::prefs::ApprovalMode::ConfirmEach
-        && tool.kind() == ToolKind::FileWrite
-    {
+    if needs_write_approval {
         let detail = tool
             .approval_detail(&ctx, &call.args)
             .await
@@ -452,53 +518,7 @@ async fn run_tool(
             );
         }
     }
-    // G3 范围门（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）：批准后新增的计划外步骤，首次写入前弹范围确认。
-    // 覆盖两条写通道（R2 评审修复）：FileWrite 工具；携带写目标的 command 工具。
-    // 后者用专门的「写目标探针」策略（confirm_inside_writes=true），与执行档判定解耦：
-    // 批准后会话已切 AutoEdit，其执行档 fence 会把范围内写重定向判为 Allow；若无探针，
-    // shell 重定向可完全绕过确认。纯只读命令探针得 Allow，不打扰。
-    // 批准 = 本会话放行（后续新增静默纳入）；拒绝 = 保留标记，下次写入再问。基线缺失（异常路径）不阻塞。
-    let g3_applies = match tool.kind() {
-        ToolKind::FileWrite => true,
-        ToolKind::Network => false,
-        _ => {
-            // command 工具：检测到写目标才需要确认
-            if call.name == "command" {
-                if let Some(cmd) = call.args["command"].as_str() {
-                    let probe = crate::safety::fence::FencePolicy {
-                        approval_enabled: true,
-                        confirm_outside_create: ctx.confirm_outside_create(),
-                        confirm_inside_writes: true,
-                        plan_readonly: false,
-                    };
-                    matches!(
-                        crate::safety::fence::check_command_policy(
-                            cmd,
-                            &ctx.rt.workspace,
-                            &ctx.write_roots(),
-                            probe,
-                        ),
-                        crate::safety::fence::Verdict::Confirm(_)
-                    )
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-    };
-    if g3_applies
-        && ctx
-            .rt
-            .scope_expanded
-            .load(std::sync::atomic::Ordering::SeqCst)
-        && !ctx
-            .rt
-            .scope_allowed
-            .load(std::sync::atomic::Ordering::SeqCst)
-        && ctx.rt.approved_plan.lock().unwrap().is_some()
-    {
+    if g3_gate(&ctx) {
         let new_titles: Vec<String> = {
             let approved = ctx.rt.approved_plan.lock().unwrap();
             let todos = ctx.rt.todos.lock().unwrap();
@@ -553,8 +573,8 @@ async fn run_tool(
             }
         }
     }
-    // 真正要执行了（审批 / 计划门已在上面放行）：先发「开始」帧，让前端立刻建运行中卡片
-    emit_tool_start(core, rt, call, batch_id, index);
+    // 门全部通过、真正要执行了：发 running 相，让前端把「等待确认」翻成「正在运行」
+    emit_tool_start(core, rt, call, batch_id, index, "running");
     let warnings = collect_unknown_fields(&call.args, tool.schema());
     let started = Instant::now();
 
@@ -612,28 +632,51 @@ fn model_content(
     }
 }
 
-/// 向前端发一条「工具开始执行」的进度帧（chunk 空、带真工具名）。
+/// 入参 JSON 预览串（`tool:start` 与 `tool:result` / `tool:error` 共用，行为逐字节一致）。
+/// H3 修复：截断必须保持 JSON 可解析（此前硬切 2000 字符会悄悄打断前端 diff）。
+fn args_preview_json(args: &serde_json::Value) -> String {
+    let s = serde_json::to_string(args).unwrap_or_default();
+    if s.len() <= 200_000 {
+        s
+    } else {
+        serde_json::json!({ "_args_truncated": true, "hint": "参数过大，前端不展示 diff" })
+            .to_string()
+    }
+}
+
+/// 向前端发一条 `tool:start` 事件：前端建工具卡的**唯一来源**，`phase` 区分「等确认」与「已开始执行」。
 ///
-/// 为什么需要：前端建「运行中」工具卡的**唯一实时来源**就是 `tool_progress` 帧，而此前只有 `command`
+/// 为什么需要：前端建「运行中」工具卡的唯一实时来源此前是 `tool_progress` 帧，而只有 `command`
 /// 工具在输出累计 ≥2KB 时才会发帧——于是读文件 / 搜索 / 改文件 / 计划 / 子代理这类调用
 /// 在整个执行期间界面上什么都没有，卡片只会在 `tool:result` 到达（即调用结束）时才冒出来
-/// （用户报「工具调用有时在调用结束后才显示」）。这里让每次调用在真正执行前先发一帧，
-/// 前端 `ensureToolAnchorIm` 立刻建卡、`name` 回填标题（空 chunk 不污染进度尾部）。
+/// （用户报「工具调用有时在调用结束后才显示」）。现在由本事件承担建卡，前端立刻按 `tool` 建卡。
+///
+/// 与 `tool:result` / `tool:error` 的关系（同一张卡绝不能有第二个 key）：
+/// - `call_key` = `<batch_id>:<批内位置>`，批内位置在 `execute_batch` 入口由 provider 侧下标收敛而来，
+///   与结果事件的 `call_key`、`ToolCtx.call_key`、command 工具进度帧的 index 全部同源；
+/// - `phase = "waiting"` 在审批 / 范围确认门之前发出——弹框期间界面上已经有卡片与参数；
+///   `phase = "running"` 在门全部通过、真正要执行时发出，把同一张卡从「等待确认」翻成「正在运行」；
+/// - `args_preview` 让运行中即可看到入参（前端 diff 预览的数据源）。
 fn emit_tool_start(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
     call: &NormalizedCall,
     batch_id: &str,
     index: usize,
+    phase: &str,
 ) {
-    core.sink.channel_frame(
+    core.sink.emit(
         &rt.id,
-        &crate::core::agent::Frame::ToolProgress {
-            batch: batch_id.to_string(),
-            index,
-            chunk: String::new(),
-            name: call.name.clone(),
-        },
+        "tool:start",
+        serde_json::json!({
+            "session": rt.id,
+            "batch_id": batch_id,
+            "call_index": index,
+            "call_key": format!("{batch_id}:{index}"),
+            "tool": call.name,
+            "args_preview": args_preview_json(&call.args),
+            "phase": phase,
+        }),
     );
 }
 
@@ -677,16 +720,7 @@ fn emit_result(
             err.message
         );
     }
-    // H3 修复：截断必须保持 JSON 可解析（此前硬切 2000 字符会悄悄打断前端 diff）
-    let args_preview: String = {
-        let s = serde_json::to_string(&call.args).unwrap_or_default();
-        if s.len() <= 200_000 {
-            s
-        } else {
-            serde_json::json!({ "_args_truncated": true, "hint": "参数过大，前端不展示 diff" })
-                .to_string()
-        }
-    };
+    let args_preview = args_preview_json(&call.args);
     sink.emit(
         &rt.id,
         event,
@@ -807,9 +841,35 @@ mod tests {
             };
             self.0.lock().unwrap().push(tag);
         }
-        fn emit(&self, _s: &crate::core::types::SessionId, e: &str, _p: serde_json::Value) {
-            self.0.lock().unwrap().push(format!("event:{e}"));
+        fn emit(&self, _s: &crate::core::types::SessionId, e: &str, p: serde_json::Value) {
+            let mut entries = self.0.lock().unwrap();
+            entries.push(format!("event:{e}"));
+            // 加性扩展（既有精确断言不变）：把事件载荷里的调用点信息也记下来。
+            // payload 缺字段用 `-` 占位（tool:result / tool:error 没有 phase）。
+            entries.push(format!(
+                "eventdetail:{e}:{}:{}",
+                p["call_key"].as_str().unwrap_or("-"),
+                p["phase"].as_str().unwrap_or("-")
+            ));
+            entries.push(format!(
+                "eventargs:{e}:{}",
+                p["args_preview"].as_str().unwrap_or("-")
+            ));
         }
+    }
+
+    /// 从 `eventdetail:<event>:<call_key>:<phase>` 条目解析 (call_key, phase) 列表；
+    /// call_key 形如 `<batch_id>:<批内位置>`（batch_id 无冒号，rsplit 安全）。
+    fn event_details(entries: &[String], event: &str) -> Vec<(String, String)> {
+        let prefix = format!("eventdetail:{event}:");
+        entries
+            .iter()
+            .filter_map(|e| {
+                let rest = e.strip_prefix(&prefix)?;
+                let (key, phase) = rest.rsplit_once(':')?;
+                Some((key.to_string(), phase.to_string()))
+            })
+            .collect()
     }
 
     /// 带记录事件汇的测试核心 + 已切 AutoEdit 的 runtime。
@@ -856,9 +916,10 @@ mod tests {
     }
 
     /// 回归（用户报「工具调用有时在调用结束后才显示」）：**非 command 工具**也必须能实时建卡——
-    /// 执行前先发一条空 chunk 的「开始」帧，且它必须早于结果事件。
+    /// 执行前先发一条 `tool:start` 事件（running 相），且它必须早于结果事件。
+    /// （原断言的空 chunk `tool_progress` 起始帧已移除：建卡职责改由本事件承担。）
     #[tokio::test]
-    async fn non_command_tool_emits_start_frame_before_result() {
+    async fn non_command_tool_emits_start_event_before_result() {
         let (core, rt, log) = recording_core("tstart");
         let call = NormalizedCall {
             id: "c1".into(),
@@ -883,13 +944,463 @@ mod tests {
         let entries = log.lock().unwrap().clone();
         let start = entries
             .iter()
-            .position(|e| e == "frame:tool_progress:calculate:empty")
-            .unwrap_or_else(|| panic!("缺「开始」帧：{entries:?}"));
+            .position(|e| e.starts_with("eventdetail:tool:start:") && e.ends_with(":running"))
+            .unwrap_or_else(|| panic!("缺 tool:start（running 相）事件：{entries:?}"));
         let result = entries
             .iter()
             .position(|e| e == "event:tool:result")
             .unwrap_or_else(|| panic!("缺结果事件：{entries:?}"));
-        assert!(start < result, "开始帧必须早于结果事件：{entries:?}");
+        assert!(start < result, "tool:start 必须早于结果事件：{entries:?}");
+    }
+
+    /// 核心回归（工具卡重复且卡死）：同一张卡的两条通道必须共用同一个 `call_key`。
+    /// 故意把 `NormalizedCall.index` 设为 5 / 9（模拟 anthropic 的 `content_block_start`
+    /// 内容块下标被 thinking / text 顶偏），断言 `execute_batch` 入口已把它收敛为批内位置：
+    /// `tool:start` 与 `tool:result` 的 call_key 逐一相等，且 provider 侧下标不出现在任何 key 上。
+    #[tokio::test]
+    async fn start_event_and_result_share_same_call_key() {
+        let (core, rt, log) = recording_core("tkey");
+        let mk = |id: &str, expr: &str, index: usize| NormalizedCall {
+            id: id.into(),
+            name: "calculate".into(),
+            args: serde_json::json!({ "expression": expr }),
+            index,
+        };
+        // 走真实批次入口：call_key 的收敛点就在 execute_batch 开头
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![mk("c1", "1+1", 5), mk("c2", "2+2", 9)],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert_eq!(out.results.len(), 2, "批次必有结果");
+
+        let entries = log.lock().unwrap().clone();
+        let starts = event_details(&entries, "tool:start");
+        let results = event_details(&entries, "tool:result");
+        assert_eq!(starts.len(), 2, "两个调用各一条 tool:start：{entries:?}");
+        assert_eq!(results.len(), 2, "两个调用各一条 tool:result：{entries:?}");
+        assert!(
+            starts.iter().all(|(_, phase)| phase.as_str() == "running"),
+            "无门批次的两条 tool:start 都是 running 相：{starts:?}"
+        );
+        let batch = starts[0]
+            .0
+            .rsplit_once(':')
+            .map(|(b, _)| b.to_string())
+            .expect("call_key 形如 <batch_id>:<批内位置>");
+        let (key0, key1) = (format!("{batch}:0"), format!("{batch}:1"));
+        let mut start_keys: Vec<&str> = starts.iter().map(|(k, _)| k.as_str()).collect();
+        let mut result_keys: Vec<&str> = results.iter().map(|(k, _)| k.as_str()).collect();
+        start_keys.sort();
+        result_keys.sort();
+        assert_eq!(
+            start_keys,
+            vec![key0.as_str(), key1.as_str()],
+            "call_key 必须是批内位置 0 / 1：{entries:?}"
+        );
+        assert_eq!(
+            start_keys, result_keys,
+            "同一张卡的两条通道必须逐一共用同一 call_key：{entries:?}"
+        );
+        // provider 侧下标（5 / 9）不得泄漏
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.contains(&format!("{batch}:5")) || e.contains(&format!("{batch}:9"))),
+            "provider 侧下标不得出现在前端 key 上：{entries:?}"
+        );
+    }
+
+    /// ConfirmEach 档下审批弹框期间界面上必须有卡片与参数：写工具门之前先发 waiting 相、放行后再发
+    /// running 相；同批只读工具没有门，只发 running。
+    #[tokio::test]
+    async fn start_event_phase_is_waiting_when_confirm_required() {
+        let (core, rt, log) = recording_core("twait");
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::ConfirmEach,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        // 写工具指向 workspace 内的真实文件（edit 要求文件存在）
+        let target = rt.workspace.join("wait_target.txt");
+        std::fs::write(&target, b"hello\n").unwrap();
+        let edit = NormalizedCall {
+            id: "c1".into(),
+            name: "edit".into(),
+            args: serde_json::json!({
+                "files": [{
+                    "path": target.to_string_lossy(),
+                    "changes": [{ "oldText": "hello", "newText": "X" }],
+                }]
+            }),
+            index: 0,
+        };
+        let calc = NormalizedCall {
+            id: "c2".into(),
+            name: "calculate".into(),
+            args: serde_json::json!({ "expression": "1+1" }),
+            index: 1,
+        };
+        // 审批门无人应答即永久等待（auto_confirm 默认 false）：另起任务轮询 asks 表，出现即批准，
+        // 否则用例会在审批门上永久挂起
+        let rt_answer = rt.clone();
+        let answerer = tokio::spawn(async move {
+            for _ in 0..1000 {
+                let id = rt_answer.asks.lock().unwrap().keys().next().cloned();
+                if let Some(id) = id {
+                    return rt_answer.resolve_ask(&id, serde_json::json!({ "approved": true }));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            false
+        });
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![edit, calc],
+                &[],
+                false,
+                false, // 非主会话：跳过 plan 纪律硬门，本用例专测审批门两相
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("审批被应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        assert_eq!(out.results.len(), 2, "批次必有结果");
+
+        let entries = log.lock().unwrap().clone();
+        let waiting = entries
+            .iter()
+            .position(|e| e.starts_with("eventdetail:tool:start:") && e.ends_with(":waiting"))
+            .unwrap_or_else(|| panic!("写工具在审批门之前必须发 waiting 相：{entries:?}"));
+        let write_key = entries[waiting]
+            .strip_prefix("eventdetail:tool:start:")
+            .and_then(|r| r.rsplit_once(':'))
+            .map(|(k, _)| k.to_string())
+            .expect("waiting 条目形如 eventdetail:tool:start:<call_key>:waiting");
+        let running = entries
+            .iter()
+            .position(|e| e == &format!("eventdetail:tool:start:{write_key}:running"))
+            .unwrap_or_else(|| panic!("放行后必须发 running 相：{entries:?}"));
+        assert!(waiting < running, "waiting 必须先于 running：{entries:?}");
+        // 只读工具无门：只有 running
+        let starts = event_details(&entries, "tool:start");
+        let read_keys: Vec<String> = starts
+            .iter()
+            .filter(|(k, _)| *k != write_key)
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(
+            read_keys.len(),
+            1,
+            "同批只读工具也应发一条 tool:start：{entries:?}"
+        );
+        let read_key = &read_keys[0];
+        assert!(
+            entries.contains(&format!("eventdetail:tool:start:{read_key}:running")),
+            "只读工具应发 running 相：{entries:?}"
+        );
+        assert!(
+            !entries.contains(&format!("eventdetail:tool:start:{read_key}:waiting")),
+            "只读工具不经审批门，不应有 waiting 相：{entries:?}"
+        );
+        // 审批放行后写入真实发生（两相语义与真实执行路径一致）
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "X\n");
+    }
+
+    /// 反向回归（拒绝路径不得留下「正在运行」的假象）：审批被**拒绝**时只发 waiting 相，
+    /// 绝不能再发同 key 的 running 相——否则同一张卡会永远转圈，且结果到达前界面谎称已在执行。
+    #[tokio::test]
+    async fn gate_denied_start_event_never_reaches_running() {
+        let (core, rt, log) = recording_core("tdeny");
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::ConfirmEach,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        // 写工具指向 workspace 内的真实文件（edit 要求文件存在）；拒绝后它必须原封不动
+        let target = rt.workspace.join("deny_target.txt");
+        std::fs::write(&target, b"hello\n").unwrap();
+        let edit = NormalizedCall {
+            id: "c1".into(),
+            name: "edit".into(),
+            args: serde_json::json!({
+                "files": [{
+                    "path": target.to_string_lossy(),
+                    "changes": [{ "oldText": "hello", "newText": "X" }],
+                }]
+            }),
+            index: 0,
+        };
+        // 审批门无人应答即永久等待（auto_confirm 默认 false）：另起任务轮询 asks 表，出现即**拒绝**
+        // （拒绝应答形状由 safety/approval.rs 的 `v["approved"].as_bool()` 决定：`{"approved": false}`）
+        let rt_answer = rt.clone();
+        let answerer = tokio::spawn(async move {
+            for _ in 0..1000 {
+                let id = rt_answer.asks.lock().unwrap().keys().next().cloned();
+                if let Some(id) = id {
+                    return rt_answer.resolve_ask(&id, serde_json::json!({ "approved": false }));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            false
+        });
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![edit],
+                &[],
+                false,
+                false, // 非主会话：跳过 plan 纪律硬门，本用例专测审批拒绝路径
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("拒绝应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        assert_eq!(out.results.len(), 1, "批次必有结果");
+
+        let entries = log.lock().unwrap().clone();
+        let starts = event_details(&entries, "tool:start");
+        assert_eq!(
+            starts.len(),
+            1,
+            "被拒绝的调用只应有 waiting 相一条 tool:start：{entries:?}"
+        );
+        let (deny_key, phase) = &starts[0];
+        assert_eq!(
+            phase.as_str(),
+            "waiting",
+            "门之前必须是 waiting 相：{entries:?}"
+        );
+        assert!(
+            !entries.contains(&format!("eventdetail:tool:start:{deny_key}:running")),
+            "门被拒绝绝不能补发 running 相（否则卡片永远转圈）：{entries:?}"
+        );
+        // 结果通道：拒绝落为 tool:error / E_APPROVAL_DENIED
+        assert_eq!(
+            event_details(&entries, "tool:error").len(),
+            1,
+            "拒绝必须发 tool:error：{entries:?}"
+        );
+        assert!(
+            event_details(&entries, "tool:result").is_empty(),
+            "拒绝不得发成功结果：{entries:?}"
+        );
+        let errs: Vec<String> = out
+            .results
+            .iter()
+            .filter_map(|c| match c {
+                crate::core::types::Content::ToolResult {
+                    content,
+                    is_error: true,
+                    ..
+                } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errs.len(), 1, "拒绝必须落为错误结果：{errs:?}");
+        assert!(
+            errs[0].contains("E_APPROVAL_DENIED"),
+            "拒绝的错误码必须是 E_APPROVAL_DENIED：{errs:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "hello\n",
+            "审批被拒绝时写入不得发生"
+        );
+    }
+
+    /// 反向回归（批层硬门不建卡）：被 exclude_tools 硬门在 spawn 前拒绝的调用只有结果事件，
+    /// 一条 `tool:start` 都不许发——工具从未开始执行，前端不该为它建卡。
+    #[tokio::test]
+    async fn batch_level_rejection_emits_no_start_event() {
+        let (core, rt, log) = recording_core("tblock");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "edit".into(),
+            args: serde_json::json!({
+                "files": [{
+                    "path": "blocked.txt",
+                    "changes": [{ "oldText": "a", "newText": "b" }],
+                }]
+            }),
+            index: 0,
+        };
+        // 排除集 = plan 档参数（与模型工具列表同源）：批层硬门在 spawn 前拒绝
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![call],
+            &["edit".to_string()],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert_eq!(out.results.len(), 1, "批次必有结果");
+        let err = out
+            .results
+            .iter()
+            .filter_map(|c| match c {
+                crate::core::types::Content::ToolResult {
+                    content,
+                    is_error: true,
+                    ..
+                } => Some(content.clone()),
+                _ => None,
+            })
+            .next()
+            .expect("被排除工具应被硬门拒绝");
+        assert!(err.contains("E_TOOL_BLOCKED"), "{err}");
+
+        let entries = log.lock().unwrap().clone();
+        assert!(
+            event_details(&entries, "tool:start").is_empty(),
+            "批层硬门拒绝的调用不得发任何相位的 tool:start：{entries:?}"
+        );
+        assert_eq!(
+            event_details(&entries, "tool:error").len(),
+            1,
+            "硬门拒绝仍必须有结果事件：{entries:?}"
+        );
+    }
+
+    /// 反向回归（未知工具不建卡）：幻觉出的不存在的工具名在注册表查找即失败，
+    /// 只有 E_UNKNOWN_TOOL 结果事件，不得发任何 `tool:start`。
+    #[tokio::test]
+    async fn unknown_tool_emits_no_start_event() {
+        let (core, rt, log) = recording_core("tunknown");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "definitely_not_a_tool".into(),
+            args: serde_json::json!({}),
+            index: 0,
+        };
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![call],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert_eq!(out.results.len(), 1, "批次必有结果");
+        let err = out
+            .results
+            .iter()
+            .filter_map(|c| match c {
+                crate::core::types::Content::ToolResult {
+                    content,
+                    is_error: true,
+                    ..
+                } => Some(content.clone()),
+                _ => None,
+            })
+            .next()
+            .expect("未知工具必须落为错误结果");
+        assert!(err.contains("E_UNKNOWN_TOOL"), "{err}");
+
+        let entries = log.lock().unwrap().clone();
+        assert!(
+            event_details(&entries, "tool:start").is_empty(),
+            "未知工具不得发任何相位的 tool:start：{entries:?}"
+        );
+        assert_eq!(
+            event_details(&entries, "tool:error").len(),
+            1,
+            "未知工具必须有结果事件：{entries:?}"
+        );
+    }
+
+    /// 回归（空 chunk 起始帧已移除）：非 command 工具不再靠「空进度帧」建卡，
+    /// 因此 calculate 这类无流式输出的工具**一条 tool_progress 帧都不发**（更不会有 empty 帧）——
+    /// 若空帧回来，卡片会出现两条建卡通道（事件 + 帧），前端又会建出重复卡。
+    #[tokio::test]
+    async fn progress_frame_only_carries_real_output_chunks() {
+        let (core, rt, log) = recording_core("tframe");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "calculate".into(),
+            args: serde_json::json!({ "expression": "1+1" }),
+            index: 0,
+        };
+        let (out, _, _) = run_tool(
+            &core,
+            &rt,
+            &call,
+            "b1",
+            0,
+            tokio_util::sync::CancellationToken::new(),
+            false,
+        )
+        .await;
+        assert!(out.ok, "{out:?}");
+        // command 的帧由独立任务异步发出：留出窗口，确保结论是「根本不发」而非「还没发到」
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let entries = log.lock().unwrap().clone();
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.starts_with("frame:tool_progress:") && e.ends_with(":empty")),
+            "空 chunk 起始帧已移除，不得再出现：{entries:?}"
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.starts_with("frame:tool_progress:calculate:")),
+            "无流式输出的工具不该有进度帧（建卡职责已归 tool:start）：{entries:?}"
+        );
+    }
+
+    /// `tool:start` 必须携带入参预览（运行中即可看到参数 / 前端 diff 预览的数据源）。
+    #[tokio::test]
+    async fn start_event_carries_args_preview() {
+        let (core, rt, log) = recording_core("targs");
+        let call = NormalizedCall {
+            id: "c1".into(),
+            name: "calculate".into(),
+            args: serde_json::json!({ "expression": "1+1" }),
+            index: 0,
+        };
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![call],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert_eq!(out.results.len(), 1, "批次必有结果");
+        let entries = log.lock().unwrap().clone();
+        let raw = entries
+            .iter()
+            .find_map(|e| e.strip_prefix("eventargs:tool:start:"))
+            .unwrap_or_else(|| panic!("缺 tool:start 的 args_preview：{entries:?}"));
+        let v: serde_json::Value =
+            serde_json::from_str(raw).expect("args_preview 必须是合法 JSON（前端 diff 直接解析）");
+        assert_eq!(v["expression"].as_str(), Some("1+1"), "{v}");
     }
 
     /// 回归：命令首帧进度不受 2KB 阈值限制——短命令（`echo hi`）也必须发帧，

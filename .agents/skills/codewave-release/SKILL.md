@@ -27,10 +27,9 @@ Run these before touching any file; a red tree never gets bumped.
 
 1. `git status --porcelain` — must be empty. The bump rewrites 5 files; committing on a dirty tree mixes unrelated changes into the release commit.
 2. `git branch --show-current` must be `main`, then `git pull --ff-only` — releases are always cut from an up-to-date main (GitHub Flow).
-3. Full gate, in fail-fast order (mirrors CI 硬门槛; fmt/clippy 在 lint.yml 仍是 continue-on-error 软门槛，不阻塞发版):
-   - `cargo test` (in `src-tauri/`; baseline: all green, 0 warnings)
-   - `pnpm --dir ui test`
-   - `pnpm --dir ui build` (tsc + vite build)
+3. 全量本地门禁，一条命令（镜像 CI 的两个 workflow，含 fmt/clippy/eslint/前后端测试/构建/脚本测试/锁定文件）：
+   - `pnpm prepr`（等价 CI 全部检查；硬步骤失败即停并列出失败项，见 [docs/pre-pr-local-gate](../docs/pre-pr-local-gate.md)）
+   - 只想快跑核心门禁时可 `pnpm prepr --only=rust-test,ui-test,ui-build`（发版前建议跑全量）
 
 On failure: stop, show the failing output, and let the user decide what to fix. Do not bump.
 

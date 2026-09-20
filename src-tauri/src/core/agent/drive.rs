@@ -32,7 +32,8 @@ pub struct NormalizedCall {
     pub name: String,
     /// 归一化后的参数（非 object 值包成 {"value": ...}）
     pub args: serde_json::Value,
-    /// provider 侧调用序号
+    /// 批内位置（`execute_batch` 入口重编号；前端 `call_key` 与进度帧 index 的唯一真相）。
+    /// 上游 provider 侧下标（anthropic 内容块下标，会被 thinking / text 块顶偏）不得泄漏到前端 key。
     pub index: usize,
 }
 

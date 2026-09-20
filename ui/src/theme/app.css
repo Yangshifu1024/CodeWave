@@ -365,6 +365,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-ok); flex: none; }
 .tool-card.st-running .dot { background: var(--ws-accent); animation: pulse 1.2s infinite; }
 .tool-card.st-error .dot { background: var(--ws-err); }
+/* 等待确认（审批/范围确认门）：橙 = 需注意；必须显式声明，否则会落到基类的 --ws-ok 绿点被读成「成功」 */
+.tool-card.st-waiting .dot { background: var(--ws-warn); }
 /* ask 未作答类错误的中性展示：灰点替代红点，错误行同步降色（错误码与提示文本仍可在展开体查看） */
 .tool-card.st-neutral .dot { background: var(--ws-dim); opacity: 0.55; }
 @keyframes pulse { 50% { opacity: 0.3; } }

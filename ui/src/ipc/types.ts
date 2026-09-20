@@ -237,6 +237,14 @@ export interface ToolResultEvent {
   outcome: ToolOutcome; duration_ms: number;
 }
 
+/** 工具开始事件（tool:start）：同一 call_key 可能先 waiting 再 running（写工具在审批/范围确认门期间 waiting）；只读工具只收一次 running */
+export interface ToolStartEvent {
+  session: string; batch_id: string; call_index: number;
+  /** 工具卡锚点键（= batch:index，与 tool_progress 帧 / tool:result 一致） */
+  call_key: string; tool: string; args_preview: string;
+  phase: "waiting" | "running";
+}
+
 /** ask:opened payload：询问/审批卡数据 */
 export interface AskOpenedEvent {
   session: string; ask_id: string;

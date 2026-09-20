@@ -36,7 +36,26 @@ pnpm --dir ui build
 ## 文档纪律
 
 - 每个功能 / 修复批次落一份报告：`docs/<topic>.md`（英文主题 slug，平铺不编号），并在 [docs/0-README.md](./docs/0-README.md) 登记日期与条目
-- 触及契约锚点（事件面 28 键、SessionMeta 快照、CI 系统依赖清单等）时同步更新对应文档
+- 触及契约锚点（事件面 29 键、SessionMeta 快照、CI 系统依赖清单等）时同步更新对应文档
+
+## 开 PR 前的本地门禁
+
+**开 PR 前必须本地跑完全部 CI 检查**，由 `pnpm prepr` 一条命令完成（逐条对照 `.github/workflows/` 的 `run:` 语句执行；`scripts/pre-pr.test.mjs` 反向守门：CI 新增检查而本地未跟上会测试红）：
+
+| 步骤 | 命令 | 硬度 |
+|---|---|---|
+| lockfile | `pnpm install --frozen-lockfile` | 硬 |
+| rust-fmt | `cargo fmt --all -- --check` | 硬 |
+| rust-clippy | `cargo clippy --all-targets` | 软（CI 亦 `continue-on-error`） |
+| rust-test | `cargo test --workspace` | 硬 |
+| ui-lint | `pnpm --dir ui run lint` | 硬 |
+| ui-test | `pnpm --dir ui test` | 硬 |
+| ui-build | `pnpm --dir ui build` | 硬 |
+| scripts-test | `node --test "scripts/**/*.test.mjs"` | 硬 |
+
+- 硬步骤失败即停，并给出失败清单；`--only=a,b` 只跑指定步骤，`--skip-soft` 跳过 clippy。
+- 本地只能覆盖当前平台；三平台矩阵（macos-14 / ubuntu-24.04 / windows-2022）差异仍以 CI 为准。
+- 详见 [docs/pre-pr-local-gate.md](./docs/pre-pr-local-gate.md)。
 ## 提交 PR
 
 使用仓库内置模板 [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md)（GitHub 新建 PR 时自动填入），核心字段：概要、关联文档、类型、变更内容、验证清单、风险与迁移说明。

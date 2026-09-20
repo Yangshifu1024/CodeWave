@@ -63,7 +63,7 @@ pub enum Frame {
 pub trait EventSink: Send + Sync {
     /// 下发一条流式帧到指定会话通道。
     fn channel_frame(&self, session: &SessionId, frame: &Frame);
-    /// 发一条具名事件（27 键契约面）到指定会话。
+    /// 发一条具名事件（29 键契约面）到指定会话。
     fn emit(&self, session: &SessionId, event: &str, payload: serde_json::Value);
     /// 子代理启动时把它绑定到父会话通道（默认 no-op：测试 sink 与非 Tauri 环境无通道）。
     /// 绑定后该子的 channel_frame 帧由 host 包装为 Frame::Sub 转发到父通道。

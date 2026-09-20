@@ -65,7 +65,7 @@ impl EventSink for TauriSink {
         }
     }
 
-    /// 低频事件：emit 到 labeled "main" 窗口（27 键事件面，契约由前端测试守护）。
+    /// 低频事件：emit 到 labeled "main" 窗口（29 键事件面，契约由前端测试守护）。
     fn emit(&self, _session: &SessionId, event: &str, payload: serde_json::Value) {
         let _ = self
             .app
