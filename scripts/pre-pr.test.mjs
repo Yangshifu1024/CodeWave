@@ -15,8 +15,16 @@ import { PRE_PR_STEPS, summarize, selectSteps } from "./pre-pr.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOWS = ["lint.yml", "test.yml"].map((f) => resolve(ROOT, ".github/workflows", f));
 
-/** 从 workflow 文本里取所有 `run:` 命令（单行 scalar 与块 scalar；块内按行拆分，反斜杠续行合并） */
-function runCommands(text) {
+/** 读取 workflow 文本并把 CRLF 归一化为 LF：Windows runner 的 checkout 是 CRLF，
+ *  而 `\n` / `(.*)$` 都不匹配 `\r`（JS 里 \r 是行终止符）——不归一化会在 Windows 上解析出 0 条命令。 */
+function readWorkflow(file) {
+  return readFileSync(file, "utf8").replace(/\r\n?/g, "\n");
+}
+
+/** 从 workflow 文本里取所有 `run:` 命令（单行 scalar 与块 scalar；块内按行拆分，反斜杠续行合并）。
+ *  导出以便单测：直接用 CRLF 文本验证归一化前的行为。 */
+export function runCommands(rawText) {
+  const text = rawText.replace(/\r\n?/g, "\n");
   const out = [];
   const lines = text.split("\n");
   // YAML 块 scalar 指示符（`run: |` / `run: >-`）本身不是命令
@@ -37,7 +45,8 @@ function runCommands(text) {
       if (!line.trim()) continue;
       if (line.length - line.trimStart().length <= indent.length) break;
       const prev = block[block.length - 1];
-      if (prev && prev.endsWith("\\")) block[block.length - 1] = `${prev} ${line.trim()}`;
+      // 续行（反斜杠结尾）与下一行合并成一条；丢弃反斜杠本身（shell 续行语义）
+      if (prev && prev.endsWith("\\")) block[block.length - 1] = `${prev.slice(0, -1).trimEnd()} ${line.trim()}`;
       else block.push(line.trim());
     }
     out.push(...block);
@@ -54,7 +63,7 @@ const norm = (s) => s.replace(/["']/g, "").replace(/\s+/g, " ").trim();
 test("本地门禁覆盖 CI 两个 workflow 里的每条检查命令", () => {
   const ciCommands = new Set();
   for (const file of WORKFLOWS) {
-    for (const cmd of runCommands(readFileSync(file, "utf8"))) {
+    for (const cmd of runCommands(readWorkflow(file))) {
       if (NON_CHECK.test(cmd)) continue;
       ciCommands.add(norm(cmd));
     }
@@ -71,13 +80,49 @@ test("本地门禁覆盖 CI 两个 workflow 里的每条检查命令", () => {
 });
 
 test("软/硬门槛与 CI 的 continue-on-error 一致", () => {
-  const lint = readFileSync(WORKFLOWS[0], "utf8");
+  const lint = readWorkflow(WORKFLOWS[0]);
   // CI 里唯一带 continue-on-error 的是 clippy；本地也必须只有 clippy 是软步骤
   const softInCi = /- name:\s*cargo clippy\n(?:\s+.*\n)*?\s+continue-on-error:\s*true/.test(lint);
   assert.ok(softInCi, "lint.yml 的 clippy 不再是 continue-on-error：需同步调整本测试与 pre-pr.mjs 的 soft 标记");
 
   const soft = PRE_PR_STEPS.filter((s) => s.soft).map((s) => s.name);
   assert.deepEqual(soft, ["rust-clippy"], "本地软步骤集合应与 CI 的 continue-on-error 集合一致");
+});
+
+test("runCommands 对 CRLF 文本与 LF 文本解析一致（Windows runner 回归）", () => {
+  const lf = [
+    "      - name: a",
+    "        run: cargo fmt --all -- --check",
+    "      - name: b",
+    "        run: |",
+    "          sudo apt-get update",
+    "          cmake -S . -B build \\",
+    "            -DCMAKE_BUILD_TYPE=Release",
+    "",
+  ].join("\n");
+  const crlf = lf.replace(/\n/g, "\r\n");
+  const expected = [
+    "cargo fmt --all -- --check",
+    "sudo apt-get update",
+    "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release",
+  ];
+  assert.deepEqual(runCommands(crlf), expected, "CRLF 文本必须与 LF 解析出同一批命令");
+  assert.deepEqual(runCommands(lf), expected);
+});
+
+test("块指示符（run: | / >-）本身不算命令，续行合并为一条", () => {
+  const text = [
+    "        run: |-",
+    "          sudo apt-get update",
+    "          sudo apt-get install -y pkg \\",
+    "            other-pkg",
+    "",
+  ].join("\n");
+  const cmds = runCommands(text);
+  assert.equal(cmds.length, 2);
+  assert.equal(cmds[0], "sudo apt-get update");
+  assert.ok(!cmds.some((c) => c === "|" || c === "|-"), `块指示符不得成为命令：${cmds}`);
+  assert.ok(cmds[1].includes("other-pkg"), `续行应合并：${cmds[1]}`);
 });
 
 test("步骤名唯一且无空字段（汇总与 --only 依赖名字）", () => {
