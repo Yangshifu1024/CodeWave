@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use umya_spreadsheet::{Workbook, Worksheet};
 
-use super::xlsx;
+use super::{docx, patch, xlsx};
 
 /// 读取上限（共识值：读与预览 200MB）。**实测后可能下调**——这是一条先按计划写死、
 /// 待真实文件验证的数值，不是已经验证过的安全值。
@@ -225,6 +225,72 @@ fn read_xlsx(args: &Args, path: &Path) -> ToolOutcome {
     }
 }
 
+/// 单次返回的文字长度上限（字符）。超长文档截断返回，避免一次灌爆上下文。
+const MAX_TEXT_CHARS: usize = 40_000;
+
+/// 读取 Word 文档：解析出段落、标题层级与表格。
+fn read_docx(args: &Args, path: &Path) -> ToolOutcome {
+    let xml = match patch::read_entry(path, docx::DOCUMENT_ENTRY) {
+        Ok(Some(bytes)) => match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                return ToolOutcome::err(
+                    "E_PARSE",
+                    format!("{} 的正文内容无法解析（文件可能已损坏）", args.path),
+                )
+            }
+        },
+        Ok(None) => {
+            return ToolOutcome::err(
+                "E_PARSE",
+                format!("{} 里找不到正文内容，可能不是有效的 Word 文档", args.path),
+            )
+        }
+        Err(e) => return ToolOutcome::err("E_PARSE", e),
+    };
+
+    let blocks = docx::parse_blocks(&xml);
+    let full = docx::render_blocks(&blocks);
+    let total_chars = full.chars().count();
+    let (text, truncated) = if total_chars > MAX_TEXT_CHARS {
+        (
+            full.chars().take(MAX_TEXT_CHARS).collect::<String>(),
+            true,
+        )
+    } else {
+        (full, false)
+    };
+    let headings: Vec<Value> = blocks
+        .iter()
+        .filter_map(|b| match b {
+            docx::Block::Paragraph {
+                text,
+                heading: Some(lv),
+            } => Some(json!({"level": lv, "text": text})),
+            _ => None,
+        })
+        .collect();
+    let tables = blocks
+        .iter()
+        .filter(|b| matches!(b, docx::Block::Table { .. }))
+        .count();
+
+    ToolOutcome::ok(json!({
+        "file": args.path,
+        "totalChars": total_chars,
+        "truncated": truncated,
+        "truncatedHint": if truncated {
+            "文档较长，这里只返回了前一部分。需要后续内容请结合其它工具定位具体段落。"
+        } else {
+            ""
+        },
+        "tables": tables,
+        "headings": headings,
+        "text": text,
+        "hint": "标题以 # 开头（层级即 # 的个数），表格用 | 分隔。要改文字请用 edit_document 的 find/replace。",
+    }))
+}
+
 /// `read_document` 工具：读取 Office 文档与 PDF 的内容。
 pub struct ReadDocumentTool;
 
@@ -300,10 +366,15 @@ impl Tool for ReadDocumentTool {
                     args.path
                 ),
             ),
-            DocKind::Docx => ToolOutcome::err(
-                "E_UNSUPPORTED",
-                "Word 文档的读取将在下一批次加入；本批次只支持表格（.xlsx/.xlsm）。",
-            ),
+            DocKind::Docx => {
+                if args.sheet.is_some() || args.range.is_some() {
+                    return ToolOutcome::err(
+                        "E_ARGS",
+                        "sheet / range 只对表格有效；读取 Word 文档不需要这两个参数",
+                    );
+                }
+                read_docx(&args, &resolved)
+            }
             DocKind::Pptx => ToolOutcome::err(
                 "E_UNSUPPORTED",
                 "演示文稿（.pptx）不在本期支持范围内。",

@@ -89,15 +89,198 @@ impl Edit {
 }
 
 /// `edit_document` 入参。
+///
+/// 表格用 `edits`（单元格级），Word 文档用 `textEdits`（文字替换）。
+/// 两者互斥，由文件类型决定用哪一个。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Args {
     /// 工作区相对路径。
     pub path: String,
-    /// 要修改的单元格列表。
+    /// 要修改的单元格列表（表格）。
     #[serde(default)]
     pub edits: Vec<Edit>,
+    /// 要替换的文字（Word 文档）。
+    #[serde(default)]
+    pub text_edits: Vec<super::edit_word::TextEdit>,
 }
+
+/// 文件类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// 新版表格（单元格级修改）。
+    Sheet,
+    /// Word 文档（文字替换）。
+    Word,
+}
+
+/// 按扩展名判定文件类型；不支持的返回 None。
+fn kind_of(path: &str) -> Option<Kind> {
+    match Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xlsx") | Some("xlsm") => Some(Kind::Sheet),
+        Some("docx") => Some(Kind::Word),
+        _ => None,
+    }
+}
+
+/// 按类型校验参数里的修改列表，并把数量上限一并检查。
+fn check_edits(kind: Kind, args: &Args) -> Result<(), String> {
+    match kind {
+        Kind::Sheet => {
+            if !args.text_edits.is_empty() {
+                return Err(
+                    "textEdits 只用于 Word 文档；表格请用 edits 按单元格修改。".to_string(),
+                );
+            }
+            if args.edits.is_empty() {
+                return Err("edits 不能为空".to_string());
+            }
+            if args.edits.len() > MAX_EDITS {
+                return Err(format!(
+                    "一次最多修改 {MAX_EDITS} 处，本次给了 {} 处",
+                    args.edits.len()
+                ));
+            }
+        }
+        Kind::Word => {
+            if !args.edits.is_empty() {
+                return Err(
+                    "edits 只用于表格；Word 文档请用 textEdits 做文字替换。".to_string(),
+                );
+            }
+            if args.text_edits.is_empty() {
+                return Err("textEdits 不能为空".to_string());
+            }
+            if args.text_edits.len() > MAX_EDITS {
+                return Err(format!(
+                    "一次最多替换 {MAX_EDITS} 处，本次给了 {} 处",
+                    args.text_edits.len()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Word 文档的修改：只改正文里的文字，其余内部文件与非文字节点全部保留。
+fn run_word(
+    ctx: &ToolCtx,
+    args: &Args,
+    resolved: &std::path::Path,
+) -> ToolOutcome {
+    if let Err(e) = super::edit_word::preview(
+        &match super::patch::read_entry(resolved, super::docx::DOCUMENT_ENTRY) {
+            Ok(Some(bytes)) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    return ToolOutcome::err("E_PARSE", format!("{} 的正文无法解析", args.path))
+                }
+            },
+            Ok(None) => {
+                return ToolOutcome::err(
+                    "E_PARSE",
+                    format!("{} 里找不到正文内容", args.path),
+                )
+            }
+            Err(e) => return ToolOutcome::err("E_PARSE", e),
+        },
+        &args.text_edits,
+    ) {
+        return ToolOutcome::err("E_EDIT_FAILED", e);
+    }
+
+    // 真正执行：读出正文 → 逐处替换 → 其余内部文件原样搬运重打包
+    let document_xml = match super::patch::read_entry(resolved, super::docx::DOCUMENT_ENTRY) {
+        Ok(Some(bytes)) => match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_) => return ToolOutcome::err("E_PARSE", format!("{} 的正文无法解析", args.path)),
+        },
+        Ok(None) => {
+            return ToolOutcome::err("E_PARSE", format!("{} 里找不到正文内容", args.path))
+        }
+        Err(e) => return ToolOutcome::err("E_PARSE", e),
+    };
+    let (patched_xml, applied) = match super::edit_word::apply_text_edits(&document_xml, &args.text_edits) {
+        Ok(v) => v,
+        Err(e) => return ToolOutcome::err("E_EDIT_FAILED", e),
+    };
+
+    let work = match tempfile::tempdir() {
+        Ok(w) => w,
+        Err(e) => return ToolOutcome::err("E_IO", format!("创建临时目录失败：{e}")),
+    };
+    let out_path = work.path().join("patched.docx");
+    let reps = vec![super::patch::Replacement {
+        name: super::docx::DOCUMENT_ENTRY.to_string(),
+        bytes: patched_xml.into_bytes(),
+    }];
+    if let Err(e) = super::patch::apply(resolved, &out_path, &reps) {
+        return ToolOutcome::err("E_PATCH_FAILED", e);
+    }
+    let patched = match std::fs::read(&out_path) {
+        Ok(b) => b,
+        Err(e) => return ToolOutcome::err("E_IO", format!("读取修改结果失败：{e}")),
+    };
+
+    finish_write(ctx, args, resolved, &patched, &applied)
+}
+
+/// 写入公共收尾：备份 → 原子落盘 → 产物登记 → 回执。
+fn finish_write(
+    ctx: &ToolCtx,
+    args: &Args,
+    resolved: &std::path::Path,
+    patched: &[u8],
+    applied: &[super::edit_word::Applied],
+) -> ToolOutcome {
+    let original = std::fs::read(resolved).ok();
+    let backup_path = match &original {
+        Some(bytes) => match super::backup::save(&ctx.rt.data_dir, resolved, bytes) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!("修改前备份失败（{}）：{e}", args.path);
+                None
+            }
+        },
+        None => None,
+    };
+    if let Err(e) = crate::util::atomic::atomic_write(resolved, patched) {
+        return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
+    }
+    if !ctx.rt.is_task_runtime {
+        let owner = ctx
+            .rt
+            .root_session_id
+            .clone()
+            .unwrap_or_else(|| ctx.rt.id.clone());
+        let canonical = pathutil::canonical_best_effort(resolved)
+            .to_string_lossy()
+            .into_owned();
+        if let Err(e) = ctx.core.store.append_artifact(
+            &owner,
+            &canonical,
+            crate::core::sessions::ArtifactOp::Edit,
+        ) {
+            tracing::warn!("产物登记失败（edit_document {}）：{e}", args.path);
+        }
+    }
+    let mut out = ToolOutcome::ok(json!({
+        "path": args.path,
+        "changed": applied.iter().map(|a| a.count).sum::<usize>(),
+        "changes": super::edit_word::changes_json(applied),
+        "backup": backup_path.map(|p| p.to_string_lossy().into_owned()),
+        "hint": "其余内容（图表、页眉页脚、图片、批注、样式）已原样保留。",
+    }));
+    out.warnings
+        .push("本次改动已保留原件备份；如需回退请告知。".to_string());
+    out
+}
+
+
 
 /// 一处已完成定位的修改，供审批卡片与执行共用（避免两处逻辑漂移）。
 #[derive(Debug, Clone)]
@@ -257,14 +440,14 @@ impl Tool for EditDocumentTool {
     }
 
     fn description(&self) -> &'static str {
-        "保真修改表格文件（.xlsx/.xlsm）：只改指定的单元格，文件里的图表、条件格式、数据透视表等一律原样保留。每处修改用 sheet + cell + 四选一的 text/number/formula/bool 指定。一次最多 200 处。增删行列不在支持范围内（目标行整行为空时会新建一个空行，不影响其它内容）。"
+        "保真修改已有的表格（.xlsx/.xlsm）或 Word 文档（.docx），文件里的图表、条件格式、数据透视表、页眉页脚、批注等一律原样保留。表格：用 edits 按单元格改（sheet + cell + 四选一的 text/number/formula/bool）。Word：用 textEdits 做文字替换（find + replace，默认只替换唯一命中，命中多处会报错要求补充上下文）。一次最多 200 处。增删行列不在支持范围内。"
     }
 
     fn schema(&self) -> &'static str {
         r#"{
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "edits"],
+  "required": ["path"],
   "properties": {
     "path": {"type": "string", "description": "工作区相对路径"},
     "edits": {
@@ -285,6 +468,22 @@ impl Tool for EditDocumentTool {
           "bool": {"type": "boolean", "description": "写入逻辑值"}
         }
       }
+    },
+    "textEdits": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "description": "Word 文档的文字替换列表（表格请用 edits）",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["find"],
+        "properties": {
+          "find": {"type": "string", "description": "要查找的文字"},
+          "replace": {"type": "string", "description": "替换成什么；留空表示删除"},
+          "all": {"type": "boolean", "description": "是否替换全部命中，默认否（命中多处会报错）"}
+        }
+      }
     }
   }
 }"#
@@ -296,10 +495,23 @@ impl Tool for EditDocumentTool {
 
     async fn approval_detail(&self, ctx: &ToolCtx, args: &Value) -> Option<String> {
         let args: Args = serde_json::from_value(args.clone()).ok()?;
-        let roots = ctx.write_roots();
-        let loaded = load(&roots, &args.path, &args.edits).ok()?;
-        let (planned, _) = plan(&loaded, &args.edits).ok()?;
-        Some(render_plan(&args.path, &planned))
+        match kind_of(&args.path)? {
+            Kind::Sheet => {
+                let roots = ctx.write_roots();
+                let loaded = load(&roots, &args.path, &args.edits).ok()?;
+                let (planned, _) = plan(&loaded, &args.edits).ok()?;
+                Some(render_plan(&args.path, &planned))
+            }
+            Kind::Word => {
+                let roots = ctx.write_roots();
+                let resolved = pathutil::resolve_read(&roots, &args.path).ok()?;
+                let xml = super::patch::read_entry(&resolved, super::docx::DOCUMENT_ENTRY)
+                    .ok()??;
+                let xml = String::from_utf8(xml).ok()?;
+                let applied = super::edit_word::preview(&xml, &args.text_edits).ok()?;
+                Some(super::edit_word::render_plan(&args.path, &applied))
+            }
+        }
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
@@ -307,31 +519,38 @@ impl Tool for EditDocumentTool {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
         };
-        if args.edits.is_empty() {
-            return ToolOutcome::err("E_ARGS", "edits 不能为空");
-        }
-        if args.edits.len() > MAX_EDITS {
-            return ToolOutcome::err(
-                "E_ARGS",
-                format!("一次最多修改 {MAX_EDITS} 处，本次给了 {} 处", args.edits.len()),
-            );
-        }
         // 先过路径边界：越界是最该优先报出来的问题，不能被「格式不支持」掩盖
-        if let Err((code, msg)) = pathutil::resolve_read(&ctx.write_roots(), &args.path) {
-            return ToolOutcome::err(&code, msg);
+        let roots = ctx.write_roots();
+        let resolved = match pathutil::resolve_read(&roots, &args.path) {
+            Ok(p) => p,
+            Err((c, m)) => return ToolOutcome::err(&c, m),
+        };
+        let kind = match kind_of(&args.path) {
+            Some(k) => k,
+            None => {
+                return ToolOutcome::err(
+                    "E_UNSUPPORTED",
+                    format!(
+                        "{} 不是支持修改的格式（只支持 .xlsx/.xlsm/.docx）。旧格式请先用对应软件另存为新格式。",
+                        args.path
+                    ),
+                )
+            }
+        };
+        if let Err(e) = check_edits(kind, &args) {
+            return ToolOutcome::err("E_ARGS", e);
         }
-        let ext = Path::new(&args.path)
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default();
-        if !matches!(ext.as_str(), "xlsx" | "xlsm") {
-            return ToolOutcome::err(
-                "E_UNSUPPORTED",
-                format!(
-                    "{} 不是支持修改的表格格式（只支持 .xlsx/.xlsm）。其它类型请先用对应方式另存为新格式。",
-                    args.path
-                ),
-            );
+        if kind == Kind::Word {
+            if !matches!(ctx.rt.root_session_id, Some(_))
+                && let Err(conflicts) =
+                    crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
+            {
+                return ToolOutcome::err(
+                    "E_FILE_CLAIMED",
+                    crate::tools::claims::denial_message(&conflicts),
+                );
+            }
+            return run_word(&ctx, &args, &resolved);
         }
 
         let roots = ctx.write_roots();
@@ -360,7 +579,7 @@ impl Tool for EditDocumentTool {
             Err(e) => return ToolOutcome::err("E_PATCH_FAILED", e),
         };
 
-        // 备份原件（失败不阻塞修改，只记日志）
+        // 备份 → 原子落盘 → 产物登记 → 回执
         let original = std::fs::read(&loaded.path).ok();
         let backup_path = match &original {
             Some(bytes) => match backup::save(&ctx.rt.data_dir, &loaded.path, bytes) {

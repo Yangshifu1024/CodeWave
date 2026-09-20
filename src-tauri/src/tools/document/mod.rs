@@ -11,11 +11,14 @@
 
 pub mod backup;
 pub mod edit;
+pub mod docx;
+pub mod edit_word;
 pub mod patch;
 pub mod read;
 pub mod sheet_edit;
 pub mod workbook;
 pub mod write;
+pub mod write_word;
 pub mod xlsx;
 pub mod xml_util;
 

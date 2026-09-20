@@ -40,13 +40,83 @@ struct SheetSpec {
 }
 
 /// `write_document` 入参。
+///
+/// 表格用 `sheets`，Word 文档用 `docx`；由目标文件的扩展名决定用哪一个。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Args {
     /// 工作区相对路径（必须尚不存在）。
     path: String,
-    /// 工作表列表。
+    /// 工作表列表（表格）。
+    #[serde(default)]
     sheets: Vec<SheetSpec>,
+    /// 文档内容（Word）。
+    #[serde(default)]
+    docx: Option<super::write_word::DocxSpec>,
+}
+
+/// 目标文件类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Sheet,
+    Word,
+}
+
+/// 按扩展名判定；不支持的返回 None。
+fn kind_of(path: &str) -> Option<Kind> {
+    match Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xlsx") => Some(Kind::Sheet),
+        Some("docx") => Some(Kind::Word),
+        _ => None,
+    }
+}
+
+/// 生成 Word 文档并写入目标路径。
+fn write_word(
+    ctx: &ToolCtx,
+    args: &Args,
+    resolved: &std::path::Path,
+    spec: &super::write_word::DocxSpec,
+) -> ToolOutcome {
+    if !args.sheets.is_empty() {
+        return ToolOutcome::err(
+            "E_ARGS",
+            "sheets 只用于表格；Word 文档请用 docx 字段。",
+        );
+    }
+    let bytes = match super::write_word::generate(spec) {
+        Ok(b) => b,
+        Err(e) => return ToolOutcome::err("E_ARGS", e),
+    };
+    if let Err(e) = crate::util::atomic::atomic_write(resolved, &bytes) {
+        return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
+    }
+    if !ctx.rt.is_task_runtime {
+        let owner = ctx
+            .rt
+            .root_session_id
+            .clone()
+            .unwrap_or_else(|| ctx.rt.id.clone());
+        let canonical = pathutil::canonical_best_effort(resolved)
+            .to_string_lossy()
+            .into_owned();
+        if let Err(e) = ctx.core.store.append_artifact(
+            &owner,
+            &canonical,
+            crate::core::sessions::ArtifactOp::Create,
+        ) {
+            tracing::warn!("产物登记失败（write_document {}）：{e}", args.path);
+        }
+    }
+    ToolOutcome::ok(json!({
+        "path": args.path,
+        "blocks": spec.blocks.len(),
+        "bytes": bytes.len(),
+    }))
 }
 
 /// 单元格取值：字符串 / 数值 / 逻辑值 / 公式对象。
@@ -136,16 +206,40 @@ impl Tool for WriteDocumentTool {
     }
 
     fn description(&self) -> &'static str {
-        "生成新的表格文件（.xlsx）。派生值（汇总、占比等）要写成真公式，并在 formula 单元格里用 cached 给出算好的值，这样用户改了输入汇总会跟着变、不看公式的工具也能读到数字。目标文件必须尚不存在——要改已有文件请用 edit_document。"
+        "生成新文件：表格（.xlsx）或 Word 文档（.docx）。表格：派生值（汇总、占比等）要写成真公式，并在 formula 单元格里用 cached 给出算好的值，这样用户改了输入汇总会跟着变、不看公式的工具也能读到数字。Word：用 blocks 描述内容，支持标题（自动成为可导航的大纲层级）、段落与表格。目标文件必须尚不存在——要改已有文件请用 edit_document。"
     }
 
     fn schema(&self) -> &'static str {
         r#"{
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "sheets"],
+  "required": ["path"],
   "properties": {
     "path": {"type": "string", "description": "工作区相对路径，必须以 .xlsx 结尾"},
+    "docx": {
+      "type": "object",
+      "description": "Word 文档内容（目标为 .docx 时必填）",
+      "additionalProperties": false,
+      "required": ["blocks"],
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "description": "内容块，按顺序排列",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {"type": "string", "enum": ["heading", "paragraph", "table"]},
+              "level": {"type": "integer", "description": "标题层级 1-6（仅 heading）"},
+              "text": {"type": "string", "description": "文字内容（heading / paragraph）"},
+              "rows": {"type": "array", "description": "表格内容（仅 table）", "items": {"type": "array", "items": {"type": "string"}}},
+              "header": {"type": "boolean", "description": "首行是否作为表头加粗（仅 table，默认是）"}
+            }
+          }
+        }
+      }
+    },
     "sheets": {
       "type": "array",
       "minItems": 1,
@@ -183,31 +277,38 @@ impl Tool for WriteDocumentTool {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
         };
-        if args.sheets.is_empty() {
-            return ToolOutcome::err("E_ARGS", "sheets 不能为空");
-        }
-        if args.sheets.len() > MAX_SHEETS {
-            return ToolOutcome::err(
-                "E_ARGS",
-                format!("一次最多生成 {MAX_SHEETS} 个工作表，本次给了 {}", args.sheets.len()),
-            );
-        }
-        let ext = Path::new(&args.path)
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default();
-        if ext != "xlsx" {
-            return ToolOutcome::err(
-                "E_UNSUPPORTED",
-                format!("{ext} 不是支持生成的表格格式（只支持 .xlsx）"),
-            );
-        }
-        let total_rows: usize = args.sheets.iter().map(|s| s.rows.len() + s.header.len()).sum();
-        if total_rows > MAX_TOTAL_ROWS {
-            return ToolOutcome::err(
-                "E_ARGS",
-                format!("总行数 {total_rows} 超过上限 {MAX_TOTAL_ROWS}"),
-            );
+        let kind = match kind_of(&args.path) {
+            Some(k) => k,
+            None => {
+                return ToolOutcome::err(
+                    "E_UNSUPPORTED",
+                    format!(
+                        "{} 不是支持生成的文件类型（只支持 .xlsx 与 .docx）",
+                        args.path
+                    ),
+                )
+            }
+        };
+        if kind == Kind::Sheet {
+            if args.sheets.is_empty() {
+                return ToolOutcome::err("E_ARGS", "生成表格时 sheets 不能为空");
+            }
+            if args.sheets.len() > MAX_SHEETS {
+                return ToolOutcome::err(
+                    "E_ARGS",
+                    format!("一次最多生成 {MAX_SHEETS} 个工作表，本次给了 {}", args.sheets.len()),
+                );
+            }
+            let total_rows: usize =
+                args.sheets.iter().map(|s| s.rows.len() + s.header.len()).sum();
+            if total_rows > MAX_TOTAL_ROWS {
+                return ToolOutcome::err(
+                    "E_ARGS",
+                    format!("总行数 {total_rows} 超过上限 {MAX_TOTAL_ROWS}"),
+                );
+            }
+        } else if args.docx.is_none() {
+            return ToolOutcome::err("E_ARGS", "生成 Word 文档时 docx 字段不能为空");
         }
 
         let roots = ctx.write_roots();
@@ -233,6 +334,11 @@ impl Tool for WriteDocumentTool {
                 "E_FILE_CLAIMED",
                 crate::tools::claims::denial_message(&conflicts),
             );
+        }
+
+        if kind == Kind::Word {
+            let spec = args.docx.as_ref().expect("上面已校验过");
+            return write_word(&ctx, &args, &resolved, spec);
         }
 
         let mut book = umya_spreadsheet::new_file();
