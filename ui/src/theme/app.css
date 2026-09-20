@@ -1068,7 +1068,7 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 
 /* 折叠段标题与信息页其他标题（项目目录 / 额度与余额）同款：11px + dim 色 + 无多余内边距。
    注意 antd 6 的标题文本类是 `.ant-collapse-title`（旧版 `-header-text` 已不存在，写成它等于死规则，
-   字号会回默认 14px）；标题文字与其他标题的左对齐由 RightBar 的 `expandIconPosition="end"` 保证。 */
+   字号会回默认 14px）；标题文字与其他标题的左对齐由 RightBar 的 `expandIconPlacement="end"` 保证。 */
 .rb-collapse { border-top: 1px dashed var(--ws-border); padding-top: 6px; }
 .rb-collapse .ant-collapse-header { padding: 2px 0 !important; align-items: center !important; }
 .rb-collapse .ant-collapse-title { font-size: 11px; color: var(--ws-dim); font-weight: normal; line-height: 1.7; }

@@ -40,19 +40,3 @@ export function activeProviderIdOf(
   const target = modelId ?? config?.active_model_id ?? null;
   return findModel(config, target)?.providerId ?? null;
 }
-
-/**
- * 当前生效模型所属 provider 的 `base_url`（通用工具，保留给按端点判定供应商的调用方）。
- * 额度段已改用 `activeProviderIdOf` 传 provider id（后端直接按配置行建模，不再按 base_url 反推），
- * 故本函数目前无调用方；保留以避免跨包引用断裂。
- * `modelId` 为会话级覆盖；为空则回落到全局 `active_model_id`；未配置返回 null。
- */
-export function activeBaseUrlOf(
-  config: ConfigState | null | undefined,
-  modelId: string | null | undefined,
-): string | null {
-  const target = modelId ?? config?.active_model_id ?? null;
-  const model = findModel(config, target);
-  if (!model) return null;
-  return config?.providers.find((p) => p.id === model.providerId)?.base_url ?? null;
-}
