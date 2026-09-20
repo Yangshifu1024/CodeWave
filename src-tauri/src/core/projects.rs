@@ -23,6 +23,11 @@ pub struct ProjectEntry {
     pub data_dir: Option<String>,
     /// 创建时间（RFC3339）
     pub created_at: String,
+    /// 已允许访问的外部目录（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）：
+    /// 用户把项目目录外的文件拖进来时选「始终允许这个目录」后记在这里，以后不再询问。
+    /// 子目录一并放行；目录移动或改名后按路径匹配自然失效。
+    #[serde(default)]
+    pub allowed_dirs: Vec<String>,
 }
 
 impl ProjectEntry {
@@ -31,8 +36,41 @@ impl ProjectEntry {
         while self.directory.ends_with('/') && self.directory.len() > 1 {
             self.directory.pop();
         }
+        self.allowed_dirs = normalize_allowed_dirs(self.allowed_dirs);
         self
     }
+
+    /// 追加一个已允许目录（去重 + 归一化）；已存在时返回 false。
+    pub fn allow_dir(&mut self, dir: &str) -> bool {
+        let d = strip_trailing_slash(dir);
+        if d.is_empty() || self.allowed_dirs.iter().any(|x| x == &d) {
+            return false;
+        }
+        self.allowed_dirs.push(d);
+        true
+    }
+}
+
+/// 剥掉尾部斜杠（保留根 `/`）。
+fn strip_trailing_slash(d: &str) -> String {
+    let mut s = d.to_string();
+    while s.ends_with('/') && s.len() > 1 {
+        s.pop();
+    }
+    s
+}
+
+/// 已允许目录列表归一化：逐项去尾斜杠、去空、去重，保持原顺序。
+pub fn normalize_allowed_dirs(dirs: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in dirs {
+        let s = strip_trailing_slash(&d);
+        if s.is_empty() || out.iter().any(|x| x == &s) {
+            continue;
+        }
+        out.push(s);
+    }
+    out
 }
 
 // ---------- id → 目录索引（新位置项目的发现锚点） ----------
@@ -297,6 +335,7 @@ mod tests {
             directory: dd.join(format!("proj-{id}")).to_string_lossy().into_owned(),
             data_dir: None, // 保存时归一化 → <directory>/.codewave
             created_at: "2026-08-30T00:00:00Z".into(),
+            allowed_dirs: vec![],
         }
     }
 

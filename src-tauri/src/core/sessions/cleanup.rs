@@ -829,6 +829,7 @@ mod tests {
             directory: proj_dir.path().to_string_lossy().into_owned(),
             data_dir: None,
             created_at: ago(0),
+            allowed_dirs: vec![],
         };
         crate::core::projects::save_project(dd.path(), &entry).unwrap();
 
