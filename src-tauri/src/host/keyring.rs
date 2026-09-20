@@ -2,7 +2,7 @@
 //! 明文 key 迁入系统 keyring，config 中以占位符替代；解析时按占位符回读。
 //! keyring 不可用（如 Linux 无 Secret Service）时回退明文并在日志中注明。
 
-use crate::core::config::{ConfigState, KEYRING_PLACEHOLDER, ModelConfig};
+use crate::core::config::{ConfigState, KEYRING_PLACEHOLDER, ModelConfig, ProviderConfig};
 /// keyring service 名（本应用所有凭据共用）。
 pub const SERVICE: &str = "codewave.yangshifu.xyz";
 
@@ -114,6 +114,34 @@ pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
 pub fn pick_resolved_key(model: &ModelConfig) -> Option<String> {
     resolve_keys(model).into_iter().find(|k| !k.is_empty())
 }
+
+/// provider 级回读（订阅额度用，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+/// account = `provider.id`（key 归属 provider），占位符回读逻辑与 `resolve_keys` 同源。
+///
+/// 与 `resolve_keys` 的差异：**回读失败必须返回 Err**——额度行态要据此区分
+/// `invalid`（密钥形态不可用，重试无用）与 `no_key`（用户确实没配 key）。
+/// 回读参数不能携带密钥，错误文案来自 keyring 层，不含密钥。
+pub fn resolve_provider_keys(p: &ProviderConfig) -> Result<Vec<String>, String> {
+    if p.keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let has_placeholder = p.keys.iter().any(|k| k == KEYRING_PLACEHOLDER);
+    let mut resolved: Vec<String> = p
+        .keys
+        .iter()
+        .filter(|k| !k.is_empty() && k.as_str() != KEYRING_PLACEHOLDER)
+        .cloned()
+        .collect();
+    if !has_placeholder {
+        return Ok(resolved);
+    }
+    for k in read_account(&p.id)? {
+        if !resolved.contains(&k) {
+            resolved.push(k);
+        }
+    }
+    Ok(resolved)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +227,64 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(pick_resolved_key(&mixed).as_deref(), Some("sk-plain"));
+    }
+
+    #[test]
+    fn resolve_provider_keys_plain_returns_all_without_keyring() {
+        let provider = ProviderConfig {
+            id: "provider-plain".into(),
+            keys: vec!["sk-plain-a".into(), "sk-plain-b".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_provider_keys(&provider),
+            Ok(vec!["sk-plain-a".to_string(), "sk-plain-b".to_string()])
+        );
+        let none = ProviderConfig {
+            id: "provider-none".into(),
+            keys: vec![],
+            ..Default::default()
+        };
+        assert_eq!(resolve_provider_keys(&none), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn resolve_provider_keys_reports_keyring_failure_as_err() {
+        let _serial = KEYRING_LOCK.lock().unwrap();
+        // 占位符 + 不存在的 keyring 账户（随机 uuid 作 account）→ Err（额度层判 invalid）
+        let provider = ProviderConfig {
+            keys: vec![KEYRING_PLACEHOLDER.into()],
+            ..Default::default()
+        };
+        let err = resolve_provider_keys(&provider).unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn resolve_provider_keys_roundtrips_migrated_key() {
+        let _serial = KEYRING_LOCK.lock().unwrap();
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(ProviderConfig {
+            keys: vec!["sk-migrated".to_string()],
+            ..Default::default()
+        });
+        let (changed, warning) = migrate(&mut cfg);
+        let provider_id = cfg.providers[0].id.clone();
+        if warning.is_some() {
+            // 无 keyring 环境（如 Linux CI）：保留明文
+            assert!(!changed);
+            assert_eq!(
+                resolve_provider_keys(&cfg.providers[0]),
+                Ok(vec!["sk-migrated".to_string()])
+            );
+            return;
+        }
+        assert!(changed);
+        assert_eq!(cfg.providers[0].keys, vec![KEYRING_PLACEHOLDER.to_string()]);
+        assert_eq!(
+            resolve_provider_keys(&cfg.providers[0]),
+            Ok(vec!["sk-migrated".to_string()])
+        );
+        let _ = entry(&provider_id).and_then(|e| e.delete_credential().map_err(|e| e.to_string()));
     }
 }

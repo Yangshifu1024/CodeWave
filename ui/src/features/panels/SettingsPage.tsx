@@ -201,6 +201,10 @@ function overlayOpen(): boolean {
  *
  * 判定用 `offsetHeight` 与 `getClientRects()` 的**与**：无布局引擎的测试环境里 offsetHeight 恒为 0，
  * 单看它会把全部节点都判成退化（真实浏览器里 0 高度节点才两个条件同时成立）。
+ *
+ * 锚点 id 有两类来源，本函数一视同仁（都是属性选择器的精确值）：注册表项 id（搜索命中）与
+ * **动态行级锚点** `providers.<uuid>`（外部跳转，[docs/settings-search-and-advanced] §1.6 例外）。
+ * 后者与三个供应商视图根节点共用的 `providers` 不会互撞：属性选择器是等值匹配，不是前缀匹配。
  */
 function hitTargetOf(root: HTMLElement, id: string): HTMLElement | null {
   const node = root.querySelector<HTMLElement>(`[data-setting-id="${id}"]`);
@@ -301,6 +305,12 @@ export default function SettingsPage() {
   // 下方保存校验跳页也走同一 store 状态（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）
   const tab = normalizePageKey(useUi((s) => s.settingsTab));
   const setTab = (next: PageKey) => useUi.getState().setSettingsTab(next);
+  /**
+   * 外部命中请求（额度灰行「去设置」等入口经 `showSettingsAt` 置位）：store 只负责「打开设置 + 切页 +
+   * 置锚点」，真正的滚动 + 临时高亮住在下方 effect。本组件是唯一消费方，**消费后写回 null 丢弃**——
+   * 否则关掉设置再打开时，这条陈旧的请求会重新滚动/高亮一次（用户没点任何东西却跳了）。
+   */
+  const settingsHit = useUi((s) => s.settingsHit);
   // MCP：结构化条目；null = 原 JSON 解析失败，回退 textarea 模式避免丢配置
   const [mcpEntries, setMcpEntries] = useState<McpEntry[] | null>(null);
   const [mcpRaw, setMcpRaw] = useState("");
@@ -333,10 +343,18 @@ export default function SettingsPage() {
   const [showAdvanced, setShowAdvanced] = useState<boolean>(readShowAdvanced);
   /** 被「搜索命中」临时展开的页：**不写** localStorage，离开该页即回手动偏好值 */
   const [forcedAdvanced, setForcedAdvanced] = useState<PageKey | null>(null);
-  /** 待定位的命中项：跨页时先切页，等目标页体渲染后再定位 */
+  /** 待定位的命中项（**搜索命中**专用：要带 page 才能跨页走三选拦截，故只收注册表项） */
   const [pendingHit, setPendingHit] = useState<SettingItem | null>(null);
-  /** 本轮要滚动 + 临时高亮的命中项（带 nonce：同一项连点两次也要重新定位） */
-  const [hitTarget, setHitTarget] = useState<{ item: SettingItem; nonce: number } | null>(null);
+  /**
+   * 待定位的**动态行级锚点**（**外部跳转**专用，如额度灰行给的 `providers.<uuid>`）。
+   * 与 `pendingHit` 分开一条轻量通道：这类锚点来自动态条目（供应商行），**不在注册表里**，
+   * 伪造成 `SettingItem` 就等于顺手伪造 labelKey/page —— 那正是本通道要绕开的
+   * （[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6）。
+   */
+  const [pendingAnchorId, setPendingAnchorId] = useState<string | null>(null);
+  /** 本轮要滚动 + 临时高亮的目标（带 nonce：同一目标连点两次也要重新定位）。
+   *  搜索命中与外部跳转共用这一段（两者只差锚点来源），故这里只存锚点 id */
+  const [hitTarget, setHitTarget] = useState<{ anchorId: string; nonce: number } | null>(null);
   const hitSeqRef = useRef(0);
   const hitTimerRef = useRef<number | null>(null);
   /** 当前挂着 .settings-item-hit 的元素：1.5s 内换项时先摘旧的（旧定时器已被 clearTimeout） */
@@ -958,16 +976,41 @@ export default function SettingsPage() {
     if (!pendingHit || pendingHit.page !== tab) return;
     if (!advancedVisible && ADVANCED_ID_SET.has(pendingHit.id)) setForcedAdvanced(tab);
     setPendingHit(null);
-    setHitTarget({ item: pendingHit, nonce: ++hitSeqRef.current });
+    setHitTarget({ anchorId: pendingHit.id, nonce: ++hitSeqRef.current });
   }, [pendingHit, tab, advancedVisible]);
+
+  // 段一·外部跳转：`useUi.settingsHit` 里的锚点是**动态行级锚点**（没有注册表项，也没有进阶折叠要展开），
+  // 但「页体已渲染」这一关比搜索路径更硬：供应商页体挂在 `body: draft && (...)` 上，而 draft 要等本组件
+  // 挂载后回填。冷启动（设置页首次打开）时若不等 draft，锚点当帧根本不存在，定位会静默落空
+  // （观感：点了「去设置」没反应）。故把 draft 就绪纳入就绪条件。
+  useEffect(() => {
+    if (!settingsHit) return;
+    const anchorId = settingsHit.anchorId;
+    // 消费即丢弃：store 里这条请求是一次性的（同一行连点两次靠新的对象 + nonce 区分）
+    useUi.setState({ settingsHit: null });
+    setPendingAnchorId(anchorId);
+  }, [settingsHit]);
+
+  // 段一·就绪判定：锚点已在 DOM（不依赖 draft 的页）即刻定位；否则等 draft 回填后再来一次。
+  // tab 也在依赖里：切页本身会让锚点出现或消失
+  useEffect(() => {
+    if (!pendingAnchorId) return;
+    const root = shellRef.current;
+    if (!root) return;
+    if (!draft && !root.querySelector(`[data-setting-id="${pendingAnchorId}"]`)) return;
+    setPendingAnchorId(null);
+    setHitTarget({ anchorId: pendingAnchorId, nonce: ++hitSeqRef.current });
+  }, [pendingAnchorId, draft, tab]);
 
   // 段二：节点已渲染（页体 + 临时展开都就位）→ 滚动到该项并加临时高亮类，约 1.5s 后摘掉。
   // 锚点缺失 / 0 高度锚点时退化为高亮页体容器（退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6）。
+  // 外部跳转给的动态行级锚点（`providers.<uuid>`）走的是同一个 hitTargetOf：它按属性选择器精确匹配，
+  // 天然不会误命中三个视图根节点的 `providers`。
   useEffect(() => {
     if (!hitTarget) return;
     const root = shellRef.current;
     if (!root) return;
-    const el = hitTargetOf(root, hitTarget.item.id);
+    const el = hitTargetOf(root, hitTarget.anchorId);
     if (!el) return;
     el.scrollIntoView?.({ block: "center" });
     // 命令式加类：高亮不属于渲染态（1.5s 后自动摘），故不往渲染态里塞第二个状态。

@@ -605,6 +605,11 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
         split={false}
         renderItem={(p) => (
           <List.Item
+            /* 行级动态锚点：命名空间 `providers.<uuid>`（与三个视图根节点的 `providers`、
+               以及注册表项的静态锚点都不同名）。外部入口（额度灰行的「去设置」）靠它定位到具体一行；
+               类名沿用 `.setting-anchor` 包裹层约定（只补 min-width）。列表行为不变：整行点击仍进编辑视图。 */
+            className="setting-anchor"
+            data-setting-id={`providers.${p.id}`}
             style={{ cursor: "pointer", padding: "10px 4px" }}
             onClick={() => setView({ kind: "edit", providerId: p.id })}
             actions={[

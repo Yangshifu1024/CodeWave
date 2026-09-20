@@ -1066,7 +1066,7 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 .rb-editor-select { width: 132px; }
 .rb-editor-select .ant-select-selector { font-size: 11.5px; }
 
-/* 折叠段标题与信息页其他标题（项目目录 / 订阅额度）同款：11px + dim 色 + 无多余内边距。
+/* 折叠段标题与信息页其他标题（项目目录 / 额度与余额）同款：11px + dim 色 + 无多余内边距。
    注意 antd 6 的标题文本类是 `.ant-collapse-title`（旧版 `-header-text` 已不存在，写成它等于死规则，
    字号会回默认 14px）；标题文字与其他标题的左对齐由 RightBar 的 `expandIconPosition="end"` 保证。 */
 .rb-collapse { border-top: 1px dashed var(--ws-border); padding-top: 6px; }
@@ -1077,15 +1077,45 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 .rb-collapse .ant-collapse-content-box { padding: 2px 0 4px !important; }
 .rb-collapse .ant-collapse-item + .ant-collapse-item { margin-top: 8px; }
 
-/* ---------- 信息页签：订阅额度段（百分比行按剩余方向，色彩强度映射风险等级） ---------- */
+/* ---------- 信息页签：额度与余额段（行集合 = 供应商配置；色彩强度映射风险等级） ---------- */
 .rb-quota .rb-quota-provider + .rb-quota-provider { margin-top: 6px; }
+/* 行外壳：行按钮与行内「去设置」按钮同级（HTML 不允许 button 嵌套）；min-height 保证行高恒定——
+   有/无标签、有/无按钮的行高度一致（窄栏不给列表添乱） */
+.rb-quota > .rb-quota-row { margin-top: 6px; }
+.rb-quota-row { display: flex; align-items: center; gap: 2px; min-height: 20px; margin: 0 -4px; }
 .rb-quota-summary {
-  display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 4px; margin: 0 -4px;
+  display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 2px 4px; margin: 0;
   background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
   color: var(--ws-text-2); font-size: 12px; font-family: inherit; transition: background 0.15s;
 }
 .rb-quota-summary:hover { background: var(--ws-hover); }
-.rb-quota-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
+/* 灰行（rejected / no_key / unsupported）：无可展开内容的那两类恒为只读样式 */
+.rb-quota-summary.rb-quota-degraded, .rb-quota-summary.rb-quota-static { color: var(--ws-dim); }
+.rb-quota-summary.rb-quota-degraded .rb-quota-name, .rb-quota-summary.rb-quota-static .rb-quota-name { color: var(--ws-text-2); }
+.rb-quota-summary.rb-quota-static { cursor: default; }
+.rb-quota-summary.rb-quota-static:hover { background: transparent; }
+.rb-quota-name { flex: none; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
+/* 状态标签（未配置密钥 / 查询被拒 / 不支持额度查询）与原因：窄栏一律截断，title 补全 */
+.rb-quota-tag { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ws-dim); }
+.rb-quota-reason { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ws-dim); }
+/* 行内次级跳转（去设置）：只留图标，尺寸固定 */
+.rb-quota-gosettings { flex: none; width: 20px; min-width: 20px; height: 20px; padding: 0; font-size: 11px; color: var(--ws-dim); opacity: 0.7; }
+.rb-quota-gosettings:hover { opacity: 1; }
+/* 空态里带文案的变体：不受图标版固定宽度约束 */
+.rb-quota-gosettings-text { width: auto; min-width: 0; padding: 0 4px; font-size: 11.5px; }
+/* 窗口级状态标签：受限类走 --ws-warn（与 rb-quota-bar risk-warn 同档强度），未知值灰显 */
+.rb-quota-status { flex: none; font-size: 10.5px; color: var(--ws-dim); white-space: nowrap; }
+.rb-quota-status.risk-warn { color: var(--ws-warn, #d46b08); }
+/* 展开里的时间行：显示与否看**数据**（非 ok 行的 `last_ok_at` 有值 → 「上次成功：…」），不按行态白名单——
+   error / invalid / rejected 都走这条规则；无值（按定义只有 rejected 产得出来）则文案是「从未成功查询」。 */
+.rb-quota-lastok { margin-top: 2px; font-size: 11px; }
+/* unsupported 折叠汇总行（> 3 家时默认折叠，点它展开/收起） */
+.rb-quota-collapse {
+  display: block; width: 100%; min-height: 20px; padding: 2px 4px; margin: 6px 0 0;
+  background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
+  color: var(--ws-dim); font-size: 11.5px; font-family: inherit; transition: background 0.15s;
+}
+.rb-quota-collapse:hover { background: var(--ws-hover); }
 .rb-quota-window { flex: none; font-size: 11px; color: var(--ws-dim); }
 .rb-quota-remaining { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .rb-quota-remaining.risk-warn { color: var(--ws-warn, #d46b08); }
@@ -1104,7 +1134,7 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 .rb-quota-entry { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ws-text-2); }
 .rb-quota-entry .rb-quota-bar { max-width: 96px; }
 .rb-quota-error { margin-top: 2px; color: var(--ws-err, #cf1322); font-size: 11.5px; white-space: normal; word-break: break-word; }
-.rb-quota-empty { margin-top: 2px; }
+.rb-quota-empty { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
 .rb-quota-updated { font-size: 11px; white-space: nowrap; }
 
 /* ---------- mermaid / katex（B4） ---------- */

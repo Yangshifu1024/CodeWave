@@ -33,7 +33,23 @@ describe("i18n 键集合契约", () => {
       "rightbar.openInEditorFailed",
       "rightbar.quota",
       "rightbar.quotaRefresh",
-      "rightbar.quotaNoCredential",
+      "rightbar.quotaEmpty",
+      "rightbar.quotaGoSettings",
+      "rightbar.quotaUnsupported",
+      "rightbar.quotaReasonNoAdapter",
+      "rightbar.quotaReasonEmptyUrl",
+      "rightbar.quotaNoKey",
+      "rightbar.quotaRejected",
+      "rightbar.quotaCollapsed",
+      "rightbar.quotaLastOk",
+      "rightbar.quotaNeverOk",
+      "rightbar.quotaAgoJustNow",
+      "rightbar.quotaAgoMinutes",
+      "rightbar.quotaAgoHours",
+      "rightbar.quotaAgoDays",
+      "rightbar.quotaStatusRateLimited",
+      "rightbar.quotaKeySourceKeyring",
+      "rightbar.quotaKeySourceConfig",
       "rightbar.window.rolling",
       "rightbar.window.weekly",
       "rightbar.window.monthly",
@@ -43,8 +59,14 @@ describe("i18n 键集合契约", () => {
       expect(zhKeys.has(key), `zh 缺键：${key}`).toBe(true);
       expect(enKeys.has(key), `en 缺键：${key}`).toBe(true);
     }
-    // 已移除的键不得复活（数据目录行 / 会话段）
-    for (const gone of ["rightbar.dataDir", "rightbar.startedAt", "rightbar.session"]) {
+    // 已移除的键不得复活（数据目录行 / 会话段 / 旧凭证链语义）
+    for (const gone of [
+      "rightbar.dataDir",
+      "rightbar.startedAt",
+      "rightbar.session",
+      "rightbar.quotaSource",
+      "rightbar.quotaNoCredential",
+    ]) {
       expect(zhKeys.has(gone), `zh 残留旧键：${gone}`).toBe(false);
       expect(enKeys.has(gone), `en 残留旧键：${gone}`).toBe(false);
     }

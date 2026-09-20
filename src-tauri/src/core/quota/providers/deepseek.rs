@@ -3,6 +3,7 @@
 //! 这是**数值行**（余额）而非百分比行。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
+use super::FetchFailure;
 use serde_json::Value;
 
 pub(crate) const URL: &str = "https://api.deepseek.com/user/balance";
@@ -10,9 +11,12 @@ pub(crate) const URL: &str = "https://api.deepseek.com/user/balance";
 /// 只认官方支持的两种币种（与上游一致，其余币种一律忽略）。
 const CURRENCIES: [&str; 2] = ["CNY", "USD"];
 
-pub(crate) async fn fetch(key: &str, client: &reqwest::Client) -> Result<Vec<QuotaEntry>, String> {
+pub(crate) async fn fetch(
+    key: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<QuotaEntry>, FetchFailure> {
     let body = fetch_json(client, URL, key, AuthStyle::Bearer, "DeepSeek API").await?;
-    parse_balance(&body)
+    parse_balance(&body).map_err(FetchFailure::message)
 }
 
 fn amount(value: Option<&Value>) -> Option<f64> {

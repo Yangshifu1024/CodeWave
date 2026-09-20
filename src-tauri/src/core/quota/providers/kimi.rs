@@ -5,7 +5,7 @@
 //! 三种来源（与上游解析保持一致）。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
-use super::{number, text};
+use super::{FetchFailure, number, text};
 use chrono::{DateTime, Duration, NaiveDateTime, SecondsFormat, Utc};
 use serde_json::Value;
 
@@ -16,9 +16,12 @@ const RESET_TEXT_FIELDS: [&str; 4] = ["reset_at", "resetAt", "reset_time", "rese
 /// 重置「剩余秒数」字段候选。
 const RESET_SECONDS_FIELDS: [&str; 3] = ["reset_in", "resetIn", "ttl"];
 
-pub(crate) async fn fetch(key: &str, client: &reqwest::Client) -> Result<Vec<QuotaEntry>, String> {
+pub(crate) async fn fetch(
+    key: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<QuotaEntry>, FetchFailure> {
     let body = fetch_json(client, URL, key, AuthStyle::Bearer, "Kimi API").await?;
-    parse_usage(&body, Utc::now())
+    parse_usage(&body, Utc::now()).map_err(FetchFailure::message)
 }
 
 fn as_object(value: Option<&Value>) -> Option<&Value> {
@@ -84,6 +87,7 @@ fn row(
         label,
         100.0 - remaining_percent,
         resets_at,
+        None,
     ))
 }
 

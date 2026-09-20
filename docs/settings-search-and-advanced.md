@@ -91,6 +91,12 @@ Esc 的完整优先级（window 捕获监听，见 `SettingsPage` 的 `escRef`/`
 - 命中项落在**已收起的进阶区**时：**临时展开该页进阶行**（`forcedAdvanced`，**不写 localStorage**）；
   离开该页即回手动偏好值。开关本身仍反映手动值（临时展开不动开关状态）。
 - 临时高亮是**命令式**加的类（不属于渲染态，1.5s 后自动消失，故不往渲染态里塞第二个状态位）。
+- **外部跳转命中（来源不是搜索框）**：`ui.settingsHit`（`showSettingsAt(page, anchorId)`）走**另一条轻量锚点
+  通道**汇入同一套「滚动 + 1.5s 高亮」。它带的锚点可能是**动态行级锚点**（`providers.<uuid>`）而非注册表项，
+  因此不伪造 `SettingItem`、不参与跨页三选——打开设置与切页由 store 直接置位（调用方是额度灰行的「去设置」）。
+  就绪条件比搜索路径多一条：**等 draft 就绪**。供应商页体挂在 `body: draft && (...)` 上，冷启动（设置页首次
+  打开）时 draft 还没回填，锚点当帧并不存在 → 不等它就会间歇性「点了没反应」。请求是**一次性**的
+  （消费后写回 `settingsHit: null`）：否则关掉设置再打开会莫名重放一次定位。
 
 ### 1.6 锚点约定：`data-setting-id`
 
@@ -105,7 +111,17 @@ Esc 的完整优先级（window 捕获监听，见 `SettingsPage` 的 `escRef`/`
    2. `approval.command_allowlist`——锚点**常驻但常为 0 高度**：其内 `<Form.Item>` 只在白名单非空时渲染，而白名单默认为空
      （不退化的话：`scrollIntoView` 无效、高亮退化成 1px 线，用户观感是「搜了没反应」）。
   契约测试 `锚点覆盖` 用例逐页核对全部 40 项，**锚点存在性**的例外清单仍只允许 `active_model_id` 这一项（0 高度不属于“缺锚点”）。
-- 排错提示：**动态条目**（供应商 / 模型、MCP 服务器、技能条目）没有锚点也不该有——搜索只覆盖注册表里的设置项。
+ - **动态行级锚点（唯一例外）**：动态条目（模型 / MCP 服务器 / 技能条目）**不参与搜索**，搜索面只覆盖注册表里的
+   静态设置项；但**供应商行**额外带一个行级锚点 `data-setting-id="providers.<uuid>"`，专供**外部跳转**
+   （额度灰行的「去设置」→ `ui.showSettingsAt("providers", "providers.<uuid>")`）。三条约定：
+   1. **命名空间独立**：三个供应商视图根节点的注册表锚点仍是 `providers`，行级锚点一律 `providers.<uuid>`；
+     `hitTargetOf` 用属性选择器**等值**匹配（不是前缀匹配），两者不会互撞；
+   2. **不进注册表、不进搜索面**：行随配置增删、uuid 由后端给，故不进 `SETTINGS_ITEMS`，也不参与 `matchSettings`；
+     契约守护：`settings.registry.test.ts` 的「锚点契约：动态行级锚点命名空间」三条 + `settings.page.test.tsx`
+     的「外部命中动态行级锚点」四条；
+   3. **落点必须精确到行**：行级锚点缺失 / 查询落空时会退化为「高亮页体容器」，在真实使用里等同于
+     「点了没反应」——外部跳转的用例专门断言命中类落在**行**（`.settings-item-hit` 在该行、不在 `.settings-pane-body` 上）。
+ - 排错提示：除上述供应商行外，**其余动态条目**（模型 / MCP 服务器 / 技能条目）没有锚点也不该有。
 
 ## 2. 进阶折叠
 
@@ -230,12 +246,12 @@ MCP 行内控件（名称 / 传输方式）与 LSP 额外 SDK 根目录行（`ls
 | 文件 | 内容 |
 |---|---|
 | `settingsRegistry.ts` | `width` 字段 + `WIDTH_CLASS` / `WIDTH_TIERS` / `WIDTH_EXEMPT_ITEM_IDS`、`SETTINGS_ADVANCED_PREF_KEY` / `ADVANCED_ITEM_IDS` / `advancedCountByPage` / `isAdvancedOnlyGroup`、`matchSettings` + 稳定排序比较器 |
-| `SettingsPage.tsx` | 搜索状态与 UI（`.settings-search` / `.settings-search-results` / `.settings-search-item`）、键盘与 Esc 优先级、两段式命中定位与临时高亮、页级进阶开关、全部锚点与宽度类 |
+| `SettingsPage.tsx` | 搜索状态与 UI（`.settings-search` / `.settings-search-results` / `.settings-search-item`）、键盘与 Esc 优先级、两段式命中定位与临时高亮、**外部跳转的轻量锚点通道（`settingsHit` → `pendingAnchorId` → 同一段高亮，就绪条件含 draft）**、页级进阶开关、全部锚点与宽度类 |
 | `FontSettings.tsx` / `AboutSettings.tsx` / `ProvidersPanel.tsx` | 界面页 / 关于页锚点、供应商三视图锚点与 `active_model_id` 折叠、`providers` 内散装控件归档 |
 | `theme/app.css` | 三档宽度类、搜索框与结果列表、进阶开关行、`.settings-advanced-hidden`、`.setting-anchor`、`.settings-item-hit` |
 | `i18n/zh-CN.ts` + `en-US.ts` | `settings.searchPlaceholder` / `searchResults` / `searchEmpty` / `searchEmptyHint` / `showAdvanced` / `advancedHint`（双侧同步）；`SHELL_SETTING_KEYS` 同步豁免登记 |
-| `__tests__/settings.page.test.tsx` | 新增 19 例：搜索框整行与焦点（防御性表述）、搜索框 ARIA（combobox/aria-activedescendant）、搜索态替掉 tablist、↑↓/Enter 语义与焦点、跨页命中与临时高亮、命中当前页、同页连中两项只留一处高亮、高亮自动摘除、0 高度锚点退化、空态、Esc 两级、进阶折叠与记忆、折叠整行（含 label）隐藏、临时展开、进阶项脏点往返、命中跳转 × 三选拦截三路径、锚点覆盖 40 项（批④ 起 45 项：关于页新增 5 个只读入口） |
-| `__tests__/settings.registry.test.ts` | 新增 18 例：宽度档与豁免双向闭合、CSS 三档与 `max-width:100%`、页体无像素内联宽度、`matchSettings` 归一（含 haystack 大小写归一的 en 大写用例）/ 多词 AND / 空值 / 稳定排序、进阶项计数与整组判定、偏好键钉死 |
+| `__tests__/settings.page.test.tsx` | 新增 19 例：搜索框整行与焦点（防御性表述）、搜索框 ARIA（combobox/aria-activedescendant）、搜索态替掉 tablist、↑↓/Enter 语义与焦点、跨页命中与临时高亮、命中当前页、同页连中两项只留一处高亮、高亮自动摘除、0 高度锚点退化、空态、Esc 两级、进阶折叠与记忆、折叠整行（含 label）隐藏、临时展开、进阶项脏点往返、命中跳转 × 三选拦截三路径、锚点覆盖 40 项（批④ 起 45 项：关于页新增 5 个只读入口）；**后续增量：外部跳转命中行级锚点 4 例，并在锚点覆盖用例里补一条「有供应商行必有行级锚点」** |
+| `__tests__/settings.registry.test.ts` | 新增 18 例：宽度档与豁免双向闭合、CSS 三档与 `max-width:100%`、页体无像素内联宽度、`matchSettings` 归一（含 haystack 大小写归一的 en 大写用例）/ 多词 AND / 空值 / 稳定排序、进阶项计数与整组判定、偏好键钉死；**后续增量：动态行级锚点命名空间 3 例（模板串 / 不与注册表 id 重叠 /`settingsHit` 单一消费方）** |
 
 前端全量：`pnpm --dir ui test` 全绿（67 文件 / 627 例），`pnpm --dir ui build`（`tsc --noEmit` + vite build）通过。
 
@@ -253,3 +269,20 @@ MCP 行内控件（名称 / 传输方式）与 LSP 额外 SDK 根目录行（`ls
 | F8 焦点保护表述不实 | 已改表述（源码注释 + 本文档 + 测试注释）：防御性写法，当前不可构造验证，保留代码 |
 | F9 文档台账口径 | 已改为实测口径（18 处 / 7 个数值 / 12 组控件），并修 `docs/0-README.md` 行首多余缩进 |
 | F10 ↑ 从 -1 被钳到第 0 项 | **改文档**：明确「-1 时 ↑/↓ 都落到第 0 项」是刻意行为（行为不变，用例已守护） |
+
+## 7. 增量（2026-09-20）：外部跳转命中动态行级锚点
+
+**需求来源**：右栏额度的灰行（未配置供应商 / key 的 provider）提供「去设置」一键跳转，落点必须是**该供应商
+所在的那一行**，而不只是「切到模型与供应商页」。这是本批「动态条目没有锚点也不该有」的**唯一例外**。
+
+| 面 | 内容 |
+|---|---|
+| 锚点 | `ProvidersPanel.tsx` 列表视图每个供应商行加 ``data-setting-id={`providers.${p.id}`}``（行级命名空间），其余列表行为不变 |
+| 通道 | `SettingsPage.tsx` 新增轻量通道 `pendingAnchorId`（**不伪造 `SettingItem`**，与搜索的 `pendingHit` 并列）；`hitTarget` 统一为「锚点 id + nonce」，搜索与外部跳转共用同一段滚动 + 1.5s 高亮 |
+| 时序 | 就绪条件 = 锚点已在 DOM **或** draft 已回填（供应商页体挂 `draft &&`；不等 draft 会在冷启动时间歇性「没反应」）；`tab` 也在依赖里 |
+| 生命周期 | `ui.settingsHit` 一次性消费（读完写回 `null`），同一行连点两次靠新对象 + nonce 重新定位 |
+| 边界 | 不做：动态条目搜索、自动进供应商编辑视图（`view` 不提升、不改）、行内滚动位置的真实校验（happy-dom 无布局引擎 → 交手动验证） |
+
+新增用例 7 条：`settings.page.test.tsx` 四条（打开并停在目标页且不进编辑视图 / 设置页已打开时跳转仍生效 /
+命中类落在行而非页体或视图根节点 / 连点两次仍重定位）+ 锚点覆盖用例补一行「有供应商行必有行级锚点」；
+`settings.registry.test.ts` 三条（见 §5）。

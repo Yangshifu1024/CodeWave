@@ -3,6 +3,9 @@
 //!
 //! 每个适配器拆成「取数（`fetch`）+ 纯解析（`parse_*`）」两半：解析收 serde_json 值与
 //! 注入的 `now`，因此单测不需要网络、也不需要时钟。
+//!
+//! 失败统一为 `FetchFailure`：**带 HTTP 状态的失败**（4xx/5xx）与「无状态失败」
+//!（超时/连接失败/解析失败）分开表达，上层据此判 `rejected` 与 `error`。
 
 pub(crate) mod deepseek;
 pub(crate) mod glm;
@@ -12,12 +15,30 @@ pub(crate) mod opencode_go;
 
 use super::{ProviderKind, QuotaEntry};
 
-/// 按提供商分发取数（凭证已解析完成）。
+/// 一次取数失败：`status` 是有 HTTP 响应时的状态码，无响应（超时/连接失败/解析失败）为 None。
+/// `message` 已完成脱敏，可直接进快照与日志。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FetchFailure {
+    pub(crate) status: Option<u16>,
+    pub(crate) message: String,
+}
+
+impl FetchFailure {
+    /// 无 HTTP 状态的失败（超时/连接失败/解析失败）。
+    pub(crate) fn message(message: impl Into<String>) -> Self {
+        Self {
+            status: None,
+            message: message.into(),
+        }
+    }
+}
+
+/// 按提供商分发取数（密钥已解析完成）。
 pub(crate) async fn fetch(
     kind: ProviderKind,
     key: &str,
     client: &reqwest::Client,
-) -> Result<Vec<QuotaEntry>, String> {
+) -> Result<Vec<QuotaEntry>, FetchFailure> {
     match kind {
         ProviderKind::OpenCodeGo => opencode_go::fetch(key, client).await,
         ProviderKind::DeepSeek => deepseek::fetch(key, client).await,

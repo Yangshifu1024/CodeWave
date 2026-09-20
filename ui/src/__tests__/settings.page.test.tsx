@@ -1534,8 +1534,11 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     await mountWithSession();
     await openSettings();
 
-    // active_model_id 的「当前」标记只在「编辑供应商」视图的模型列表里（列表视图无此节点）→
-    // 搜索命中该项时退化为「切页 + 高亮页体容器」，已在文档登记
+    // 例外分两类，均已在 [docs/settings-search-and-advanced] §1.6 登记：
+    //  ① 注册表项**当前视图没有锚点**：`active_model_id` 的「当前」标记只在「编辑供应商」视图的模型列表里
+    //    （列表视图无此节点）→ 搜索命中该项时退化为「切页 + 高亮页体容器」；
+    //  ② **动态行级锚点**（`providers.<uuid>`）：供应商行不在注册表里（数量与 id 随配置变），
+    //    故不进本清单，但「有行就必须有锚点」另行断言（见下方 + 外部跳转用例组）。
     const EXCEPTIONS = ["active_model_id"];
     const missing: string[] = [];
     for (const page of PAGE_ORDER) {
@@ -1547,6 +1550,93 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
       }
     }
     expect(missing, `缺锚点：${missing.join("、")}`).toEqual([]);
+
+    // 动态条目（供应商行）不在注册表里，故不在上面逐项核对之列：行级锚点 `providers.<uuid>` 随配置增删，
+    // 这里按 fixture 的供应商断言「有行必有锚点」（它是外部跳转的落点，缺了就退化成高亮页体容器）
+    fireEvent.click(navItem("providers") as HTMLElement);
+    await waitFor(() => expect(useUi.getState().settingsTab).toBe("providers"));
+    await waitFor(() => expect(anchor("providers.p1")).toBeTruthy());
+  });
+});
+
+// ---------- 外部跳转命中动态行级锚点（额度灰行的「去设置」） ----------
+// 供应商行是**动态条目**（数量与 id 都由配置决定），不在注册表里，所以外部跳转单开一条轻量锚点通道
+// `providers.<uuid>`。本组守护三件事：设置页被打开且停在目标页（不自动进编辑视图）、命中类落在**行**
+// 而不是页体容器 / 视图根节点、连点两次仍重新定位。真实滚动位置（scrollIntoView）交手动验证：
+// happy-dom 无布局引擎，只能断言类名落在正确节点。
+describe("设置页：外部命中动态行级锚点（settingsHit）", () => {
+  /** 供应商行的行级锚点（fixture 的供应商 id = p1） */
+  function rowAnchor(id: string): HTMLElement | null {
+    return document.querySelector<HTMLElement>(`[data-testid="settings-page"] [data-setting-id="providers.${id}"]`);
+  }
+
+  /** 外部入口（额度灰行「去设置」）的等价调用：打开设置 + 切页 + 置锚点 */
+  async function jumpFromOutside(anchorId: string) {
+    await act(async () => {
+      useUi.getState().showSettingsAt("providers", anchorId);
+    });
+  }
+
+  it("打开设置页并停在模型与供应商页，且不自动进入编辑视图", async () => {
+    await mountWithSession();
+    expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy();
+
+    await jumpFromOutside("providers.p1");
+
+    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeTruthy());
+    expect(useUi.getState().settingsTab).toBe("providers");
+    // 导航选中态跟上（页体渲染的判定靠它）
+    await waitFor(() => expect(activeNavTabText()).toBe("模型与供应商"));
+    // 停在**列表**视图：编辑视图里的「供应商名称」输入框（值 = fixture 的供应商名）不该出现。
+    // 注意不能用「编辑供应商」文本判定——列表视图每行的操作按钮也叫这个名字。
+    await waitFor(() => expect(rowAnchor("p1")).toBeTruthy());
+    const providerNameInputs = Array.from(
+      document.querySelectorAll<HTMLInputElement>('[data-testid="settings-page"] input'),
+    ).filter((i) => i.value === "Test Provider");
+    expect(providerNameInputs.length).toBe(0);
+  });
+
+  it("设置页已打开时跳转同样生效（切页 + 定位，不重开设置页）", async () => {
+    await mountWithSession();
+    await openSettings(); // 默认落在界面页
+    expect(activeNavTabText()).toBe("界面");
+
+    await jumpFromOutside("providers.p1");
+
+    await waitFor(() => expect(activeNavTabText()).toBe("模型与供应商"));
+    await waitFor(() => expect(rowAnchor("p1")?.classList.contains("settings-item-hit")).toBe(true));
+    expect(useUi.getState().settingsOpen).toBe(true);
+  });
+
+  it("行级锚点落在供应商行：命中类在该行，不退化到页体容器 / 视图根节点", async () => {
+    await mountWithSession();
+    await jumpFromOutside("providers.p1");
+
+    await waitFor(() => expect(rowAnchor("p1")?.classList.contains("settings-item-hit")).toBe(true));
+    // 该行确实是供应商行（不是占位节点）
+    expect(rowAnchor("p1")?.textContent).toContain("Test Provider");
+    // 行级锚点与三个视图根节点的 `providers` 是两个节点：属性选择器等值匹配，不会互撞
+    const viewRoot = document.querySelector<HTMLElement>('[data-testid="settings-page"] [data-setting-id="providers"]');
+    expect(viewRoot).toBeTruthy();
+    expect(viewRoot!.contains(rowAnchor("p1"))).toBe(true);
+    expect(viewRoot!.classList.contains("settings-item-hit")).toBe(false);
+    // 退化保护：命中页体容器 = 用户观感「点了没反应」
+    expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(false);
+    // 请求是一次性的：消费后 store 里不再留值（否则关掉设置再打开会莫名重放一次定位）
+    expect(useUi.getState().settingsHit).toBeNull();
+  });
+
+  it("连点两次同一行（第二次是新请求）仍重新定位", async () => {
+    await mountWithSession();
+    await jumpFromOutside("providers.p1");
+    await waitFor(() => expect(rowAnchor("p1")?.classList.contains("settings-item-hit")).toBe(true));
+
+    // 模拟 1.5s 到点自动摘除（不必真等：类与定时器都是命令式的），再点一次同一行
+    act(() => {
+      rowAnchor("p1")!.classList.remove("settings-item-hit");
+    });
+    await jumpFromOutside("providers.p1");
+    await waitFor(() => expect(rowAnchor("p1")?.classList.contains("settings-item-hit")).toBe(true));
   });
 });
 

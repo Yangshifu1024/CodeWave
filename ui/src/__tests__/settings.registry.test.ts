@@ -375,6 +375,27 @@ describe("宽度档：app.css 类与页体（批③）", () => {
   });
 });
 
+// ---------- 动态行级锚点（额度灰行「去设置」） ----------
+/**
+ * 供应商行是**动态条目**（数量与 id 随配置变），不在注册表里 → 它的锚点走独立命名空间
+ * `providers.<uuid>`（例外与来源见 [docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md) §1.6）。
+ * 这里钉三件事：模板串写法、命名空间不与注册表 id 重叠、settingsHit 只有一个消费方。
+ */
+describe("锚点契约：动态行级锚点命名空间", () => {
+  it("供应商列表行带 providers.<id> 行级锚点（模板串，id 由配置决定）", () => {
+    expect(panelSrc("ProvidersPanel.tsx")).toContain("data-setting-id={`providers.${p.id}`}");
+  });
+
+  it("行级命名空间不与注册表 id 重叠：容器锚点 providers 仍在册，providers.* 一律不是注册表项", () => {
+    expect(SETTINGS_ITEMS.some((i) => i.id === "providers")).toBe(true);
+    expect(SETTINGS_ITEMS.filter((i) => i.id.startsWith("providers.")).map((i) => i.id)).toEqual([]);
+  });
+
+  it("settingsHit 只有 SettingsPage 一个消费方（多一个消费方就会抢请求 / 重复定位）", () => {
+    expect(CLOSURE_FILES.filter((f) => panelSrc(f).includes("settingsHit"))).toEqual(["SettingsPage.tsx"]);
+  });
+});
+
 describe("设置项注册表：搜索 matchSettings（批③）", () => {
   const ids = (q: string) => matchSettings(q, zhT).map((i) => i.id);
 
@@ -573,7 +594,7 @@ const SHARED_SEGMENTS = ["app.", "common."];
 const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
   chat: ["chat.", "composer.", "notice.", "queue."], // 消息区 / 输入区 / 引导条 / 运行队列
   files: ["files."], // 会话产物与文件列表
-  quota: [], // 订阅额度：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
+  quota: [], // 额度与余额：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
   shell: ["closeTab.", "exitApp.", "git.", "nav.", "rightbar.", "sessions.", "skills.", "titlebar."], // 壳层：左导航 / 顶栏 / 右栏 / 拦截框 / git 身份条 / 技能详情
   subagent: ["subagent."], // 子代理抽屉与卡片
   tools: ["ask.", "tools."], // 审批面板与工具调用卡

@@ -36,6 +36,11 @@ interface UiState {
    *  （[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；深链语义见 showSettings
    *  （[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md) / [docs/settings-ia](../../../docs/settings-ia.md)） */
   settingsTab: PageKey;
+  /** 设置页「外部命中」请求：除了切页，还要滚动定位到某个锚点（如额度灰行的 `providers.<uuid>`）。
+   *  nonce 保证向同一锚点连点两次也能重新定位（SettingsPage 消费后自己丢弃） */
+  settingsHit: { anchorId: string; nonce: number } | null;
+  /** 打开设置页并命中指定锚点（page = 所属页，anchorId = 锚点 id，如 `providers.<uuid>`） */
+  showSettingsAt(page: string, anchorId: string): void;
   /** 切页（左导航与保存校验跳页用）：非法 / 未知值经 normalizePageKey 回退默认页 */
   setSettingsTab(tab: string): void;
   /** 设置页是否存在未保存改动（全页聚合；SettingsPage 同步）：退出拦截链（ExitConfirm）读它决定
@@ -105,6 +110,7 @@ export const useUi = create<UiState>((set, get) => ({
   theme: readStoredTheme(),
   settingsOpen: false,
   settingsTab: DEFAULT_PAGE,
+  settingsHit: null,
   setSettingsTab(tab) {
     set({ settingsTab: normalizePageKey(tab) });
   },
@@ -163,6 +169,14 @@ export const useUi = create<UiState>((set, get) => ({
   showSettings(tab) {
     // 无参 = 保持当前页（旧实现回 general，见接口注释里的「有意变更」说明）
     set(tab ? { settingsOpen: true, settingsTab: normalizePageKey(tab) } : { settingsOpen: true });
+  },
+  showSettingsAt(page, anchorId) {
+    // nonce 单调递增：同一锚点连点两次也是新命中（SettingsPage 按值变化消费）
+    set({
+      settingsOpen: true,
+      settingsTab: normalizePageKey(page),
+      settingsHit: { anchorId, nonce: Date.now() },
+    });
   },
   createProjectRequested: false,
   mcpStatus: [],

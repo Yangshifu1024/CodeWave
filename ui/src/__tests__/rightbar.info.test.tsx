@@ -126,7 +126,7 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
     // 样式表钉的是 .ant-collapse-title；antd 6 已废弃 -header-text（写成它 = 死规则，字号回默认 14px）
     expect(collapse.querySelector(".ant-collapse-title")).toBeTruthy();
     expect(collapse.querySelector(".ant-collapse-header-text")).toBeNull();
-    // 箭头在行末 → 标题文字与「项目目录 / 订阅额度」左对齐
+    // 箭头在行末 → 标题文字与「项目目录 / 额度与余额」左对齐
     expect(collapse.className).toContain("icon-placement-end");
     expect(collapse.querySelector(".ant-collapse-expand-icon")).toBeTruthy();
   });
@@ -149,6 +149,10 @@ describe("右栏偏好读盘容错", () => {
     expect([...readExpandedQuotaProviders()]).toEqual([]);
     localStorage.setItem(EXPANDED_QUOTA_KEY, JSON.stringify(["deepseek", 7]));
     expect([...readExpandedQuotaProviders()]).toEqual(["deepseek"]);
+    // 传入当前快照的 provider_id 集合时，旧版本写的 kind 串被过滤，且**不回写** localStorage
+    localStorage.setItem(EXPANDED_QUOTA_KEY, JSON.stringify(["opencode-go", "uuid-1"]));
+    expect([...readExpandedQuotaProviders(new Set(["uuid-1"]))]).toEqual(["uuid-1"]);
+    expect(JSON.parse(localStorage.getItem(EXPANDED_QUOTA_KEY)!)).toEqual(["opencode-go", "uuid-1"]);
     // 空白编辑器记忆等同未选过
     localStorage.setItem(PREFERRED_EDITOR_KEY, "   ");
     expect(readPreferredEditor()).toBeNull();
