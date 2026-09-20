@@ -9,6 +9,7 @@ pub mod command;
 pub mod compact;
 pub mod create;
 pub mod delete;
+pub mod document;
 pub mod edit;
 #[cfg(test)]
 mod fuzz;

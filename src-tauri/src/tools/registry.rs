@@ -41,6 +41,8 @@ impl ToolRegistry {
         reg!(crate::tools::skill::SkillTool);
         reg!(crate::tools::subagent::SubagentTool);
         reg!(crate::tools::scheduled_task::ScheduledTaskTool);
+        // 文档批次（docs/office-and-pdf-support）
+        reg!(crate::tools::document::read::ReadDocumentTool);
         ToolRegistry { tools }
     }
 
@@ -108,6 +110,7 @@ mod tests {
                 "list_files",
                 "plan",
                 "read",
+                "read_document",
                 "render_html",
                 "scheduled_task",
                 "service",
@@ -147,7 +150,7 @@ mod tests {
         let reg = ToolRegistry::default_tools();
         let a = reg.schemas_token_estimate();
         let b = reg.schemas_token_estimate();
-        assert!(a > 0, "20 built-in tools yield a positive estimate");
+        assert!(a > 0, "21 built-in tools yield a positive estimate");
         assert_eq!(a, b, "estimate must be deterministic");
         assert_eq!(ToolRegistry::empty().schemas_token_estimate(), 0);
     }
