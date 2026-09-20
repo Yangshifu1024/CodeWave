@@ -86,7 +86,23 @@ quota_snapshots(active_provider_id) → QuotaSection（五类行 / 折叠 / 去�
 - 「读时按当前 providers 过滤、写时清孤儿」；**一次刷新批次只写一次盘**；全失败且无孤儿则完全不写。
 - **并发安全**：`state::commit` 在进程内互斥临界区里完成「重新 load → 清孤儿 → 记录本批成功者 → 原子 save」，且临界区内**只有同步文件 IO、不跨 `.await`**。
   为什么需要它：两次刷新并发（手动连点 + 定时器）若各自「load → 内存改 → save」，后写会覆盖前写、丢掉某家的 `last_ok_at` → 该家下次 401/403/404 会被判成「从未成功」而降级为 `rejected` 灰行，正是本批要消灭的「额度静默消失」。
-- 文件损坏 / 非法 JSON → 回退默认值，不 panic（日志一条 warn）。
+- **启动期自愈**（[docs/quota-state-heal](./quota-state-heal.md)）：每次启动在 `lib.rs` 的 setup 里同步调一次 `core::quota::state::heal(&data_dir)`（与日志清理 / 崩溃恢复 / 幽灵会话清扫同类的一次性维护），规则见下表。
+
+| 盘上形态 | 处置 | 结果 |
+|---|---|---|
+| 文件不存在 / 读不到 | 什么都不做 | 不创建、不写盘（保持「无记录 == 文件不存在」不变式） |
+| `version` 数值形态 > 当前 schema | **完全不碰** | 只记日志（降级运行时不挪走新版数据、不把未知字段写没） |
+| JSON 语法坏 / 顶层非对象 / `verified` 非数组 | **移动隔离**为 `quota.json.corrupt`（先删同名旧备份），**不重建** quota.json | 原字节逐字保留作证据；下次成功刷新自然重建 |
+| 元素类型错（如 `last_ok_at: null`） | 逐元素丢弃该条 | **不隔离**：同文件里的合法记录照旧生效（隔离会让它们的「曾成功过」事实一起失效→误报「查询被拒」） |
+| `provider_id` trim 后为空 / `last_ok_at` 空串或非法 RFC3339 | 清掉该条 | 删除判据只收窄到「必然不可用」 |
+| `version` 形态非法（`"abc"`/`null`）/ `verified: null` | 重写为可读形态（不删记录） | 这类形态 `load` 会**整文件**回退默认——不修就永远每次启动告警、且「曾成功过」全失效 |
+| 健康 | 什么都不做 | **不写盘、不记日志**（不 churn mtime） |
+
+- 时间戳宽容度：只用 `chrono::DateTime::parse_from_rfc3339`——`Z` / `+08:00` 等偏移 / 小数秒**都算合法**（自定义正则或只认 `...Z` 会误删合法记录）。
+- **核心不变式**：`heal` 返回后，quota.json 要么不存在（读不到 / 已隔离），要么 `QuotaState::load` **必定成功**且等于自愈保留的状态。写盘判据为「丢过记录 **或** 盘上内容按严格语义读出来 ≠ 保留结果」。
+- `.corrupt` 语义**同 `ui-state.json.corrupt`**（只作证据、可被下次隔离覆盖、不参与任何判据、不自动清理），**不是** `sessions/index.json.corrupt` 那种「持久不可信信号」。
+- 与 `commit` 共用同一把进程内互斥（临界区内只有同步 IO、不跨 `.await`）；任何失败路径只 `tracing::warn`，不 panic；日志只带结构化摘要（类别 + 行列号），**不回显文件内容**（日志常被用户分享）。
+- 隔离出的 `.corrupt` 不会被本应用读取或上传；修完故障后用户可自行删除。
 
 ## 6. 设置页行级锚点（跳转定位）
 
@@ -102,7 +118,8 @@ quota_snapshots(active_provider_id) → QuotaSection（五类行 / 折叠 / 去�
 - 额度请求打的是**各适配器内置的官方端点常量**，不是用户填的 `base_url`；`base_url` 只用于「是否可查」的白名单判定与置顶/消歧。
 - **接受的盲区**：自建网关（new-api / one-api / Ollama 等）指向兼容端点时域名不命中 → 永远归 `unsupported`（灰行）；Anthropic / OpenAI 官方本身没有额度接口。**不提供**手动指定适配器的开关。
 - **普通账号被白名单误伤**：域名命中但 key 不是订阅套餐（如 Moonshot 普通 key、智谱普通 key）→ 上游报错 → 首次即 401/403/404 判 `rejected` 灰行（文案写「可能非订阅账号」），**曾成功过**才升格为 `error` 错误行。
-- 若 `quota.json` 里存在 `last_ok_at` 为空串的极端旧记录：`has_succeeded` 为真（该家走 `error`）而展示层取不到时间 → 「曾成功过」不再可见。
+- `quota.json` 里 `last_ok_at` 为空串 / 非法的记录（旧构建中断写入或手改的残留）：每次启动由自愈清除。此后该家按「从未成功过」参与判定——即下次 401/403/404 会显示为 `rejected` 灰行而不是 `error` 错误行（有意取舍：空串时间本就在界面上渲染不出，「状态与展示一致」优先于「保留一条半残事实」）。
+- 该文件是**托管文件**：请勿手改。自愈会按上表重写，手改的痕迹不保证保留（会留 `.corrupt` 证据）。
 - 设置页处于「新增/编辑」视图时，外部跳转会退化为高亮页体（当前不可达：设置页全屏覆盖右栏，用户路径上点不到额度行的按钮）。
 
 ## 8. 非目标
@@ -113,12 +130,13 @@ quota_snapshots(active_provider_id) → QuotaSection（五类行 / 折叠 / 去�
 
 | 项 | 结果 |
 |---|---|
-| `cargo test`（src-tauri） | **787 passed / 0 failed / 3 ignored**（基线 769；含删除凭证链 ~14 例与新增分类/状态/并发用例） |
+| `cargo test`（src-tauri） | **805 passed / 0 failed / 3 ignored**（主批改造基线 769 → 787；自愈增量 +8 → +7 → +3，见 [docs/quota-state-heal](./quota-state-heal.md)） |
 | `cargo clippy --lib` | 0 warning（强制重编译后复核） |
 | `pnpm --dir ui test` | **733 passed / 71 文件**（基线 702） |
 | `pnpm --dir ui build` + `npx tsc --noEmit` | 通过（exit 0） |
 | `cargo test --lib -- --ignored live_probe --nocapture` | 真实网络 + 真实钥匙串通过：三窗口齐出（`rolling 剩余 100% / weekly 剩余 0% status rate-limited / monthly 剩余 50%`），`key_source=keyring`，`quota.json` 正常落盘 |
 | 方案对齐审查 | 26 条 AC 全部落实、零 🔴；唯一「方案承诺未落实」项为本文档与 `0-README` 登记，落地后关闭 |
+| `quota.json` 启动期自愈 | 14 条 AC 对齐、零 🔴；反向自检确认关键用例能咬住风险（把逐元素容错 / 写盘判据改回去会立即变红） |
 | 界面行为 | **未做 GUI 自动点验**（仓库约定），交付 20 步手动验证清单（见任务目录 `report.md`） |
 
 ## 10. 提交建议

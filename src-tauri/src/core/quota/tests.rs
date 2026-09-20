@@ -743,6 +743,960 @@ fn quota_state_load_never_panics_on_broken_or_partial_files() {
     assert_eq!(loaded.verified[0].last_ok_at, "");
 }
 
+// ---------- quota.json 启动期自愈（`state::heal`） ----------
+
+/// 读回文件字节（隔离/保留都要逐字节保真）。
+fn bytes_of(file: &std::path::Path) -> Vec<u8> {
+    std::fs::read(file).expect("读文件")
+}
+
+/// 目录条目名（排序后）：用来断言「不留临时文件 / 不留 .bak / 空目录仍为空」。
+fn entries_of(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("读目录")
+        .map(|e| {
+            e.expect("目录条目")
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// 文件 mtime（AC-6）：字节相同区分不了「完全没写」与「写回了同样的内容」，mtime 能。
+fn modified_of(file: &std::path::Path) -> std::time::SystemTime {
+    std::fs::metadata(file)
+        .expect("读元数据")
+        .modified()
+        .expect("读 mtime")
+}
+
+fn record(provider_id: &str, last_ok_at: &str) -> state::VerifiedProvider {
+    state::VerifiedProvider {
+        provider_id: provider_id.to_string(),
+        last_ok_at: last_ok_at.to_string(),
+    }
+}
+
+/// 核心不变式（本次修复的要害）：**`heal` 返回后，文件要么不存在（读不到 / 已被隔离留证），
+/// 要么 [`QuotaState::load`] 成功、且读出的状态与 `heal` 保留的状态完全一致**——
+/// `heal` 绝不留下「自己判健康、`load` 却读不了」的文件。
+///
+/// 为什么必须这样：`heal` 的分层判定（逐元素宽松、`version` 不参与结构解析）与 `load` 的严格语义
+/// 不在一条线上。若写盘判据只看「有没有丢记录」，下面两类形态就会被判健康并原样留在盘上：
+/// - `{"version":"abc","verified":[<合法记录>]}`：`version` 收不进 `u32` → `load` 整文件回退默认；
+/// - `{"version":1,"verified":null}`：显式 `null` ≠ 字段缺失，`#[serde(default)]` 不生效 → 同样整文件回退。
+///
+/// 后果不是好看不好看：这两类文件每次启动都告警、且「曾成功过」整批失效 → 那些家下次 401/403/404
+/// 被渲染成「查询被拒（可能非订阅账号）」的误导性灰行（正是本批要消灭的结论），而自愈反复跑也修不好
+/// （它自己认为没事）。用例按形态遍历，并区分三类：
+/// - `untouched`：本来就 load 得回同一状态 → 必须**一字不写**（不 churn、连 mtime 都不动）；
+/// - 需修：写完必须 load 得回来、且等于期望状态；
+/// - `expected == None`：文件级形态不识别 → 必须**隔离留证**（不得静默删除）。
+#[test]
+fn heal_always_leaves_a_loadable_file_or_none_at_all() {
+    let legal = record("p-a", "2026-01-01T00:00:00Z");
+    let ok_records = json!([{"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"}]);
+    let with_version =
+        |version: serde_json::Value| json!({"version": version, "verified": ok_records.clone()});
+    let one_legal = || QuotaState {
+        version: state::VERSION,
+        verified: vec![legal.clone()],
+    };
+    let none_legal = || QuotaState {
+        version: state::VERSION,
+        verified: Vec::new(),
+    };
+
+    struct Case {
+        label: &'static str,
+        body: Vec<u8>,
+        /// 自愈后该读到的状态；`None` = 期望「文件不存在（已被隔离留证）」
+        expected: Option<QuotaState>,
+        /// 期望「一字未写」（字节 + mtime 都不变）
+        untouched: bool,
+    }
+    fn case(
+        label: &'static str,
+        body: serde_json::Value,
+        expected: Option<QuotaState>,
+        untouched: bool,
+    ) -> Case {
+        Case {
+            label,
+            body: serde_json::to_vec(&body).unwrap(),
+            expected,
+            untouched,
+        }
+    }
+
+    let cases = vec![
+        // ---- 本来就 load 得回来：必须一字不写（含「版本号本身不触发写盘」）----
+        case(
+            "健康（v1 + 合法记录）",
+            with_version(json!(1)),
+            Some(one_legal()),
+            true,
+        ),
+        case(
+            "version 缺失",
+            json!({"verified": ok_records.clone()}),
+            Some(one_legal()),
+            true,
+        ),
+        case(
+            "version = 0（合法 u32：原样保留、不迁移）",
+            with_version(json!(0)),
+            Some(QuotaState {
+                version: 0,
+                verified: vec![legal.clone()],
+            }),
+            true,
+        ),
+        case(
+            "verified 缺失",
+            json!({"version": 1}),
+            Some(none_legal()),
+            true,
+        ),
+        case(
+            "verified = []",
+            json!({"version": 1, "verified": []}),
+            Some(none_legal()),
+            true,
+        ),
+        case("空对象 {}", json!({}), Some(none_legal()), true),
+        // ---- load 读不回来：必须修成可读形态（缺口两类 + 同族的版本写法）----
+        case(
+            "version 为字符串 \"abc\"",
+            with_version(json!("abc")),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "version 为 null",
+            with_version(json!(null)),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "version 为数字字符串 \"1\"",
+            with_version(json!("1")),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "version 为浮点 1.0",
+            with_version(json!(1.0)),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "version 为负数 -1",
+            with_version(json!(-1)),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "verified 为 null",
+            json!({"version": 1, "verified": null}),
+            Some(none_legal()),
+            false,
+        ),
+        // ---- 元素级坏元素：丢坏元素、保住合法记录 ----
+        case(
+            "verified = [合法, 空白 provider_id]",
+            json!({"version": 1, "verified": [
+                {"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"},
+                {"provider_id": "   ", "last_ok_at": "2026-01-01T00:00:00Z"}
+            ]}),
+            Some(one_legal()),
+            false,
+        ),
+        case(
+            "verified = [合法, null 元素]",
+            json!({"version": 1, "verified": [
+                {"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"},
+                null
+            ]}),
+            Some(one_legal()),
+            false,
+        ),
+        // ---- 文件级形态不识别：隔离留证（`expected == None`）----
+        case("顶层数组 []", json!([]), None, false),
+        case("verified 非数组", json!({"verified": 5}), None, false),
+    ];
+
+    for Case {
+        label,
+        body,
+        expected,
+        untouched,
+    } in cases
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let file = state::path(dir.path());
+        std::fs::write(&file, &body).unwrap();
+        let before_mtime = modified_of(&file);
+
+        let outcome = state::heal(dir.path());
+        assert!(
+            !outcome.write_failed,
+            "{label}：这条路径上写盘不该失败：{outcome:?}"
+        );
+
+        match &expected {
+            Some(expected) => {
+                assert!(
+                    file.exists(),
+                    "{label}：该保留的文件却被移走了：{outcome:?}"
+                );
+                let bytes = bytes_of(&file);
+                assert!(
+                    serde_json::from_slice::<QuotaState>(&bytes).is_ok(),
+                    "{label}：自愈留下了 load 读不了的文件（正是本次修复的缺口）"
+                );
+                assert_eq!(
+                    &QuotaState::load(dir.path()),
+                    expected,
+                    "{label}：load 结果与自愈保留的状态不一致"
+                );
+                assert!(
+                    !state::backup_path(dir.path()).exists(),
+                    "{label}：形态可用的文件不得产生 .corrupt"
+                );
+                if untouched {
+                    assert_eq!(bytes, body, "{label}：健康形态不该写盘");
+                    assert_eq!(
+                        modified_of(&file),
+                        before_mtime,
+                        "{label}：健康形态连 mtime 都不该变"
+                    );
+                    assert_eq!(
+                        outcome,
+                        state::HealOutcome::default(),
+                        "{label}：{outcome:?}"
+                    );
+                } else {
+                    assert!(
+                        outcome.dropped > 0 || outcome.repaired_only,
+                        "{label}：确实写了盘，结果里却没体现：{outcome:?}"
+                    );
+                }
+            }
+            None => {
+                assert!(!file.exists(), "{label}：形态不识别的文件不得留在原位");
+                assert!(
+                    state::backup_path(dir.path()).exists(),
+                    "{label}：文件既不在原位、也没被隔离——不许静默删除"
+                );
+                assert_eq!(
+                    bytes_of(&state::backup_path(dir.path())),
+                    body,
+                    "{label}：隔离内容须逐字节保真"
+                );
+                assert!(outcome.quarantined, "{label}：{outcome:?}");
+            }
+        }
+    }
+}
+
+/// AC-1/AC-2：损坏文件被移动隔离且逐字节保真、**不重建**；旧备份可覆盖。
+#[test]
+fn heal_quarantines_a_corrupt_file_and_keeps_its_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let broken = b"{ not json".to_vec();
+    std::fs::write(state::path(dir.path()), &broken).unwrap();
+
+    let outcome = state::heal(dir.path());
+    assert!(outcome.quarantined, "损坏文件应被隔离：{outcome:?}");
+    assert_eq!(outcome.dropped, 0);
+    assert!(
+        !outcome.skipped_future && !outcome.write_failed,
+        "{outcome:?}"
+    );
+
+    // 原文件被移走且**不重建**（维持「无记录 = 文件不存在」的既有不变式）
+    assert!(!state::path(dir.path()).exists(), "quota.json 不应被重建");
+    assert_eq!(
+        bytes_of(&state::backup_path(dir.path())),
+        broken,
+        "隔离文件内容须与原文件逐字节相同"
+    );
+    assert_eq!(
+        entries_of(dir.path()),
+        vec![format!("{}{}", state::FILE_NAME, state::BACKUP_SUFFIX)],
+        "目录里只该多出隔离文件"
+    );
+
+    // 加载仍是默认值（自愈不改变 load 的语义）
+    let loaded = QuotaState::load(dir.path());
+    assert_eq!(loaded.version, state::VERSION);
+    assert!(loaded.verified.is_empty());
+
+    // 再损坏一次：旧备份被覆盖为新内容（备份可覆盖、只作证据）
+    std::fs::write(state::backup_path(dir.path()), b"stale").unwrap();
+    let broken_again = b"{ also not json".to_vec();
+    std::fs::write(state::path(dir.path()), &broken_again).unwrap();
+    assert!(state::heal(dir.path()).quarantined);
+    assert_eq!(
+        bytes_of(&state::backup_path(dir.path())),
+        broken_again,
+        "旧备份应被新内容覆盖"
+    );
+}
+
+/// AC-1：形态不识别（空文件 / 顶层 null / 顶层数组 / `verified` 类型错 / 截断 / 非 UTF-8）
+/// 一律隔离，且都不重建。
+#[test]
+fn heal_quarantines_unrecognised_shapes() {
+    let shapes: Vec<(&str, Vec<u8>)> = vec![
+        ("0 字节", Vec::new()),
+        ("顶层 null", b"null".to_vec()),
+        ("顶层数组", b"[]".to_vec()),
+        ("顶层数字", b"5".to_vec()),
+        ("verified 类型错（数字）", br#"{"verified": 5}"#.to_vec()),
+        (
+            "verified 类型错（字符串）",
+            br#"{"verified": "x"}"#.to_vec(),
+        ),
+        ("截断的 JSON", br#"{"version": 1, "verified": ["#.to_vec()),
+        ("非 UTF-8", vec![0x80, 0xff, 0xfe]),
+    ];
+    for (label, body) in shapes {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(state::path(dir.path()), &body).unwrap();
+
+        let outcome = state::heal(dir.path());
+        assert!(outcome.quarantined, "{label} 应被隔离：{outcome:?}");
+        assert!(
+            !state::path(dir.path()).exists(),
+            "{label}：quota.json 不应被重建"
+        );
+        assert_eq!(
+            bytes_of(&state::backup_path(dir.path())),
+            body,
+            "{label}：隔离内容须逐字节相同"
+        );
+    }
+}
+
+/// AC-3/AC-4/AC-5：只删「必然不可用」的记录；三种合法时间戳形态（Z / 偏移 / 小数秒）全保留。
+#[test]
+fn heal_drops_only_records_that_cannot_be_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let keep = vec![
+        record("p-z", "2026-01-01T00:00:00Z"),
+        record("p-offset", "2026-02-02T08:00:00+08:00"),
+        record("p-frac", "2026-03-03T00:00:00.123Z"),
+    ];
+    let mut all = keep.clone();
+    all.extend([
+        record("p-empty", ""),
+        record("p-junk", "not-a-time"),
+        record("   ", "2026-04-04T00:00:00Z"),
+    ]);
+    let seed = QuotaState {
+        version: state::VERSION,
+        verified: all,
+    };
+    assert!(seed.save(dir.path()));
+    let before = bytes_of(&state::path(dir.path()));
+
+    let outcome = state::heal(dir.path());
+    assert_eq!(outcome.dropped, 3, "只应清掉必然不可用的 3 条：{outcome:?}");
+    assert!(
+        !outcome.quarantined && !outcome.skipped_future && !outcome.write_failed,
+        "可解析文件不该被隔离、写盘应成功：{outcome:?}"
+    );
+    assert!(
+        !state::backup_path(dir.path()).exists(),
+        "能解析的文件不该产生 .corrupt"
+    );
+
+    // 合法记录逐字保留（顺序 + 字段值都不变），文件被重写且仍可解析、无残留
+    let healed = QuotaState::load(dir.path());
+    assert_eq!(healed.version, state::VERSION);
+    assert_eq!(healed.verified, keep, "合法记录必须逐字保留");
+    assert_ne!(
+        bytes_of(&state::path(dir.path())),
+        before,
+        "有记录被清时应重写文件"
+    );
+    assert_eq!(
+        entries_of(dir.path()),
+        vec![state::FILE_NAME.to_string()],
+        "不该留临时文件或 .bak"
+    );
+}
+
+/// AC-6/AC-8：健康文件一字不写，且连续两次自愈第二次仍是 no-op。
+#[test]
+fn heal_leaves_a_healthy_file_untouched_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut healthy = QuotaState::default();
+    healthy.record_ok("p-a", "2026-01-01T00:00:00Z");
+    healthy.record_ok("p-b", "2026-02-02T08:00:00+08:00");
+    assert!(healthy.save(dir.path()));
+    let before = bytes_of(&state::path(dir.path()));
+    let before_mtime = modified_of(&state::path(dir.path()));
+
+    assert_eq!(
+        state::heal(dir.path()),
+        state::HealOutcome::default(),
+        "健康文件应 no-op"
+    );
+    assert_eq!(bytes_of(&state::path(dir.path())), before, "字节不变");
+    // AC-6：mtime 不变才证明「完全没写盘」，而不是「写回了同样的内容」
+    assert_eq!(
+        modified_of(&state::path(dir.path())),
+        before_mtime,
+        "健康文件连 mtime 都不该变"
+    );
+    assert!(!state::backup_path(dir.path()).exists());
+
+    // 幂等：第二次仍是 no-op
+    assert_eq!(state::heal(dir.path()), state::HealOutcome::default());
+    assert_eq!(bytes_of(&state::path(dir.path())), before, "字节仍不变");
+    assert_eq!(
+        modified_of(&state::path(dir.path())),
+        before_mtime,
+        "第二次自愈后 mtime 仍不变"
+    );
+}
+
+/// AC-7：文件不存在时不创建（空目录仍为空）。
+#[test]
+fn heal_does_not_create_a_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(state::heal(dir.path()), state::HealOutcome::default());
+    assert!(
+        entries_of(dir.path()).is_empty(),
+        "空目录应仍为空（不凭空创建 quota.json）"
+    );
+}
+
+/// AC-13：`version` 高于当前 schema 的文件完全不碰（降级运行保护）。
+#[test]
+fn heal_skips_files_written_by_a_newer_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = serde_json::to_vec(&json!({
+        "version": state::VERSION + 1,
+        "verified": [{"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"}],
+        "unknown_future_field": {"nested": true},
+    }))
+    .unwrap();
+    std::fs::write(state::path(dir.path()), &body).unwrap();
+
+    let outcome = state::heal(dir.path());
+    assert!(outcome.skipped_future, "{outcome:?}");
+    assert!(
+        !outcome.quarantined && outcome.dropped == 0 && !outcome.write_failed,
+        "未来的 schema 只该被跳过：{outcome:?}"
+    );
+    assert_eq!(bytes_of(&state::path(dir.path())), body, "文件须一字未动");
+    assert!(!state::backup_path(dir.path()).exists(), "不得隔离未来版本");
+}
+
+/// AC-9：写盘失败（只读目录）只上报不 panic，原文件保留。
+#[cfg(unix)]
+#[test]
+fn heal_reports_a_write_failure_without_panicking() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut dirty = QuotaState::default();
+    dirty.record_ok("p-keep", "2026-01-01T00:00:00Z");
+    dirty.record_ok("p-empty", "");
+    assert!(dirty.save(dir.path()));
+
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let outcome = state::heal(dir.path());
+    // 先恢复权限，否则 TempDir 清理会失败（并影响同进程其它用例）
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(outcome.write_failed, "只读目录应上报写失败：{outcome:?}");
+    assert_eq!(outcome.dropped, 1);
+    assert!(
+        !outcome.quarantined && !outcome.skipped_future,
+        "{outcome:?}"
+    );
+    // 行为退回自愈前：原文件保留（仍含那条待清记录），load 照旧可用
+    let loaded = QuotaState::load(dir.path());
+    assert!(loaded.has_succeeded("p-keep"));
+    assert_eq!(loaded.verified.len(), 2, "写失败时原文件不动");
+}
+
+/// AC-9 变体：`dir` 指向普通文件（不是目录）→ 静默 no-op、不 panic、不碰该文件。
+#[test]
+fn heal_never_panics_when_the_directory_path_is_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("not-a-dir");
+    std::fs::write(&file, b"x").unwrap();
+
+    assert_eq!(state::heal(&file), state::HealOutcome::default());
+    assert_eq!(bytes_of(&file), b"x".to_vec(), "该文件不该被动");
+}
+
+/// AC-1 变体：**缺** `verified` 属「空数组」（`#[serde(default)]` 同语义），不是形态错——
+/// 隔离它只会把「无记录」误报成「文件损坏」，反而误导排障；`load` 也读得回来，故连写盘都不该有。
+#[test]
+fn heal_treats_missing_verified_as_an_empty_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = br#"{"version":1}"#;
+    std::fs::write(state::path(dir.path()), body).unwrap();
+    let before_mtime = modified_of(&state::path(dir.path()));
+
+    let outcome = state::heal(dir.path());
+    assert_eq!(
+        outcome,
+        state::HealOutcome::default(),
+        "缺 verified 应 no-op（无记录可清、不隔离）：{outcome:?}"
+    );
+    assert_eq!(bytes_of(&state::path(dir.path())), body, "字节不变");
+    assert_eq!(
+        modified_of(&state::path(dir.path())),
+        before_mtime,
+        "未写盘"
+    );
+    assert!(!state::backup_path(dir.path()).exists(), "不得隔离");
+    assert_eq!(
+        QuotaState::load(dir.path()),
+        QuotaState {
+            version: state::VERSION,
+            verified: Vec::new()
+        },
+        "load 该读回「无记录」"
+    );
+}
+
+/// 本次修复的缺口之一：`verified: null` 在**值上**同样是「没有记录」，但显式 `null` ≠ 字段缺失，
+/// `#[serde(default)]` 不生效 → `load` 会**整文件**回退默认。旧行为把 `null` 当空数组就完事，
+/// 于是这种文件每次启动反复告警，且（若同文件还有别的记录）那些家的「曾成功过」全部失效
+/// → 下次 401/403/404 被渲染成「查询被拒」的误导性灰行，正是本批要消灭的结论。
+/// 修法是写成 `[]`：不动任何记录，只让文件重新可读。
+#[test]
+fn heal_repairs_explicit_null_verified_into_an_empty_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = br#"{"version":1,"verified":null}"#;
+    assert!(
+        serde_json::from_slice::<QuotaState>(body).is_err(),
+        "前提：显式 null 在 load 侧是整文件失败（不是「空数组」）"
+    );
+    std::fs::write(state::path(dir.path()), body).unwrap();
+
+    let outcome = state::heal(dir.path());
+    assert_eq!(
+        outcome,
+        state::HealOutcome {
+            repaired_only: true,
+            ..state::HealOutcome::default()
+        },
+        "只该修可读性，不删记录：{outcome:?}"
+    );
+    assert_eq!(outcome.dropped, 0, "没有记录可删");
+    assert!(
+        !state::backup_path(dir.path()).exists(),
+        "不是形态错，不得隔离"
+    );
+    assert_eq!(
+        QuotaState::load(dir.path()),
+        QuotaState {
+            version: state::VERSION,
+            verified: Vec::new()
+        },
+        "修完必须 load 得回来且是「无记录」"
+    );
+
+    // 幂等：修完即转 no-op
+    let after = bytes_of(&state::path(dir.path()));
+    let after_mtime = modified_of(&state::path(dir.path()));
+    assert_eq!(state::heal(dir.path()), state::HealOutcome::default());
+    assert_eq!(bytes_of(&state::path(dir.path())), after, "字节不变");
+    assert_eq!(
+        modified_of(&state::path(dir.path())),
+        after_mtime,
+        "mtime 不变"
+    );
+}
+
+/// 本批的核心边界（R1）：**元素级类型错不得把整文件判死**。
+///
+/// 手改出的 `"last_ok_at": null` / `"provider_id": 123` / 元素不是对象，只能丢这些元素；
+/// 同一文件里合法记录的「曾成功过」事实必须保住（否则那些家下次 401/403/404 会被渲染成
+/// 「查询被拒（可能非订阅账号）」，正是要消灭的误导性结论）。
+#[test]
+fn heal_keeps_valid_records_when_some_elements_are_malformed() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = serde_json::to_vec(&json!({
+        "version": state::VERSION,
+        "verified": [
+            {"provider_id": "p-keep", "last_ok_at": "2026-01-01T00:00:00Z"},
+            {"provider_id": "p-null", "last_ok_at": null},
+            {"provider_id": 123, "last_ok_at": "2026-02-02T00:00:00Z"},
+            "not-an-object",
+            {"provider_id": "p-keep2", "last_ok_at": "2026-02-02T08:00:00+08:00"}
+        ]
+    }))
+    .unwrap();
+    std::fs::write(state::path(dir.path()), &body).unwrap();
+
+    let outcome = state::heal(dir.path());
+    assert!(
+        !outcome.quarantined,
+        "元素级类型错不该隔离整文件：{outcome:?}"
+    );
+    assert_eq!(outcome.dropped, 3, "只该丢三个坏元素：{outcome:?}");
+    assert!(
+        !outcome.skipped_future && !outcome.write_failed,
+        "{outcome:?}"
+    );
+    assert!(
+        !state::backup_path(dir.path()).exists(),
+        "能逐元素读出来的文件不得产生 .corrupt"
+    );
+
+    // 合法记录逐字保留（顺序 + 字段值），且写回的文件能被严格解析（否则下次启动又退回默认）
+    let healed = QuotaState::load(dir.path());
+    assert_eq!(healed.version, state::VERSION);
+    assert_eq!(
+        healed.verified,
+        vec![
+            record("p-keep", "2026-01-01T00:00:00Z"),
+            record("p-keep2", "2026-02-02T08:00:00+08:00"),
+        ],
+        "合法记录的「曾成功过」事实必须保住"
+    );
+    assert!(healed.has_succeeded("p-keep") && healed.has_succeeded("p-keep2"));
+    assert_eq!(
+        entries_of(dir.path()),
+        vec![state::FILE_NAME.to_string()],
+        "不该留临时文件或 .bak"
+    );
+}
+
+/// AC-13：`version` 的**数值形态**（浮点 / 数字字符串 / 超 `u64` 大整数）也要判为未来版本。
+///
+/// 漏判的后果不是好看不好看：未来版本可能以 `2.0` 这类形式落盘，隔离它就等于在降级运行时
+/// 挪走新版数据。
+#[test]
+fn heal_skips_numeric_versions_beyond_the_current_schema() {
+    let versions: Vec<(&str, serde_json::Value)> = vec![
+        ("整数", json!(state::VERSION + 1)),
+        ("浮点 2.0", json!(2.0)),
+        ("浮点 2.5", json!(2.5)),
+        ("数字字符串", json!("2")),
+        (
+            "超 u64 大整数",
+            serde_json::from_str("99999999999999999999").unwrap(),
+        ),
+    ];
+    for (label, version) in versions {
+        let dir = tempfile::tempdir().unwrap();
+        let body = serde_json::to_vec(&json!({
+            "version": version,
+            "verified": [{"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"}],
+            "unknown_future_field": {"nested": true},
+        }))
+        .unwrap();
+        std::fs::write(state::path(dir.path()), &body).unwrap();
+
+        let outcome = state::heal(dir.path());
+        assert!(outcome.skipped_future, "{label} 应判未来版本：{outcome:?}");
+        assert!(
+            !outcome.quarantined && outcome.dropped == 0 && !outcome.write_failed,
+            "{label} 只该被跳过：{outcome:?}"
+        );
+        assert_eq!(
+            bytes_of(&state::path(dir.path())),
+            body,
+            "{label}：文件须一字未动"
+        );
+        assert!(
+            !state::backup_path(dir.path()).exists(),
+            "{label}：不得隔离未来版本"
+        );
+    }
+}
+
+/// AC-14：版本号本身不触发写盘——**合法 `u32` 且 ≤ [`state::VERSION`]** 的写法（缺失 / `0` / `1`）
+/// 一律不迁移、不重写、不隔离。这三种形态在 `load` 侧都读得回来（`0` 就是要被原样保留的旧版本号），
+/// 所以「版本号与当前不同」本身不构成写盘理由。
+#[test]
+fn heal_does_not_write_for_the_version_field_alone() {
+    let cases: Vec<(&str, &[u8], u32)> = vec![
+        (
+            "version 缺失",
+            br#"{"verified":[{"provider_id":"p-a","last_ok_at":"2026-01-01T00:00:00Z"}]}"#,
+            state::VERSION,
+        ),
+        (
+            "version = 0（合法 u32，原样保留）",
+            br#"{"version":0,"verified":[{"provider_id":"p-a","last_ok_at":"2026-01-01T00:00:00Z"}]}"#,
+            0,
+        ),
+        (
+            "version = 1（当前版本）",
+            br#"{"version":1,"verified":[{"provider_id":"p-a","last_ok_at":"2026-01-01T00:00:00Z"}]}"#,
+            state::VERSION,
+        ),
+    ];
+    for (label, body, expected_version) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(state::path(dir.path()), body).unwrap();
+        let before_mtime = modified_of(&state::path(dir.path()));
+
+        assert_eq!(
+            state::heal(dir.path()),
+            state::HealOutcome::default(),
+            "{label}：版本号不该触发写盘"
+        );
+        assert_eq!(
+            bytes_of(&state::path(dir.path())),
+            body,
+            "{label}：字节不变"
+        );
+        assert_eq!(
+            modified_of(&state::path(dir.path())),
+            before_mtime,
+            "{label}：mtime 不变"
+        );
+        assert!(
+            !state::backup_path(dir.path()).exists(),
+            "{label}：不得隔离"
+        );
+        assert_eq!(
+            QuotaState::load(dir.path()).version,
+            expected_version,
+            "{label}：load 该读回盘上的版本号（`0` 不迁移、不被 canonical 成当前版本）"
+        );
+    }
+}
+
+/// 与上一条对照：`version` 读不成 `u32` 的写法**必须被修好**——`version` 不参与结构解析
+/// （宽松侧看不出问题），但 `load` 收不进 `u32` → **整文件**回退默认：「曾成功过」整批失效
+/// → 那些家下次 401/403/404 被渲染成「查询被拒（可能非订阅账号）」的误导性灰行，
+/// 且每次启动都告警、永不收敛。修法是重写成可读形态（`version` 落当前值），**不删任何记录**，
+/// 修完再自愈即转 no-op（不 churn）。
+#[test]
+fn heal_repairs_versions_that_load_cannot_read() {
+    let cases: Vec<(&str, serde_json::Value)> = vec![
+        ("非数值字符串", json!("abc")),
+        ("null", json!(null)),
+        ("数字字符串", json!("1")),
+        ("浮点 1.0", json!(1.0)),
+        ("负数 -1", json!(-1)),
+    ];
+    for (label, version) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let body = serde_json::to_vec(&json!({
+            "version": version,
+            "verified": [{"provider_id": "p-a", "last_ok_at": "2026-01-01T00:00:00Z"}],
+        }))
+        .unwrap();
+        // 前提：这类写法确实 load 读不回来（否则本用例就测不到缺口）
+        assert!(
+            serde_json::from_slice::<QuotaState>(&body).is_err(),
+            "fixture 需重挑：version={label} 本应 load 失败"
+        );
+        std::fs::write(state::path(dir.path()), &body).unwrap();
+
+        let outcome = state::heal(dir.path());
+        assert_eq!(
+            outcome,
+            state::HealOutcome {
+                repaired_only: true,
+                ..state::HealOutcome::default()
+            },
+            "{label}：应只做「修可读性」的写盘：{outcome:?}"
+        );
+        assert_eq!(outcome.dropped, 0, "{label}：一条记录都不许删");
+        assert!(
+            !state::backup_path(dir.path()).exists(),
+            "{label}：形态可用只是 load 读不回，不该隔离"
+        );
+
+        let healed = QuotaState::load(dir.path());
+        assert_eq!(
+            healed.version,
+            state::VERSION,
+            "{label}：写回统一落当前版本"
+        );
+        assert_eq!(
+            healed.verified,
+            vec![record("p-a", "2026-01-01T00:00:00Z")],
+            "{label}：合法记录的「曾成功过」事实必须保住"
+        );
+
+        // 幂等：修完即转 no-op（字节 + mtime 都不动）
+        let after = bytes_of(&state::path(dir.path()));
+        let after_mtime = modified_of(&state::path(dir.path()));
+        assert_eq!(
+            state::heal(dir.path()),
+            state::HealOutcome::default(),
+            "{label}：修完应转 no-op"
+        );
+        assert_eq!(
+            bytes_of(&state::path(dir.path())),
+            after,
+            "{label}：字节不变"
+        );
+        assert_eq!(
+            modified_of(&state::path(dir.path())),
+            after_mtime,
+            "{label}：mtime 不变"
+        );
+    }
+}
+
+/// AC-14 补：当前版本号的非整数写法（`1.0` / `"1"`）不算未来版本，照常走清洗流程
+/// （有坏记录就写回，并统一落当前整数 `VERSION`）。
+#[test]
+fn heal_accepts_numeric_current_version_and_sanitizes() {
+    for (label, version) in [("浮点 1.0", json!(1.0)), ("数字字符串 1", json!("1"))] {
+        let dir = tempfile::tempdir().unwrap();
+        let body = serde_json::to_vec(&json!({
+            "version": version,
+            "verified": [
+                {"provider_id": "p-keep", "last_ok_at": "2026-01-01T00:00:00Z"},
+                {"provider_id": "p-junk", "last_ok_at": ""}
+            ]
+        }))
+        .unwrap();
+        std::fs::write(state::path(dir.path()), &body).unwrap();
+
+        let outcome = state::heal(dir.path());
+        assert!(
+            !outcome.skipped_future && !outcome.quarantined && !outcome.write_failed,
+            "{label}：当前版本应走清洗流程：{outcome:?}"
+        );
+        assert_eq!(outcome.dropped, 1, "{label}");
+        let healed = QuotaState::load(dir.path());
+        assert_eq!(
+            healed.version,
+            state::VERSION,
+            "{label}：写回统一落当前版本"
+        );
+        assert_eq!(
+            healed.verified,
+            vec![record("p-keep", "2026-01-01T00:00:00Z")]
+        );
+    }
+}
+
+/// AC-10 日志卫生：摘要只描述形态（类别 / 行列号），**不回显文件内容**。
+///
+/// serde 的 `Error::to_string()` 对 `Unexpected::Str` 会打印**完整字符串不截断**，
+/// 于是 `{"verified": "<很长内容>"}` 这类文件会把整段内容写进 warn，而日志常被用户分享。
+#[test]
+fn quarantine_and_load_summaries_never_echo_file_content() {
+    let long = "x".repeat(200);
+
+    // 1) 形态错（verified 是长字符串）：摘要只描述形态
+    let shape = format!(r#"{{"verified": "{long}"}}"#);
+    let failure =
+        state::parse_state(shape.as_bytes()).expect_err("verified 不是数组应判形态不识别");
+    assert_eq!(failure, state::ShapeFailure::VerifiedNotAnArray);
+    assert!(
+        !failure.summary().contains(&long),
+        "摘要回显了文件内容：{}",
+        failure.summary()
+    );
+
+    // 2) 语法错（截断）：摘要只用「类别 + 行列号」
+    let truncated = format!(r#"{{"version": "{long}""#);
+    let failure = state::parse_state(truncated.as_bytes()).expect_err("截断应判形态不识别");
+    let summary = failure.summary();
+    assert!(summary.contains("第 1 行"), "摘要该带行列号：{summary}");
+    assert!(!summary.contains(&long), "摘要回显了文件内容：{summary}");
+
+    // 3) 对照：serde 自身的 to_string() 确实会回显整段内容（证明上面的防护不是空转）
+    let data_body = format!(r#"{{"version": "{long}"}}"#);
+    let raw = serde_json::from_slice::<QuotaState>(data_body.as_bytes()).unwrap_err();
+    assert!(
+        raw.to_string().contains(&long),
+        "serde 的 to_string() 会回显内容（这正是要绕开的）：{raw}"
+    );
+    let structured = state::ShapeFailure::from_error(&raw).summary();
+    assert!(structured.contains("字段类型或结构不符"), "{structured}");
+    assert!(
+        !structured.contains(&long),
+        "摘要回显了文件内容：{structured}"
+    );
+
+    // 4) 真实路径：这类文件仍不 panic 地隔离、内容逐字节留证
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(state::path(dir.path()), shape.as_bytes()).unwrap();
+    let outcome = state::heal(dir.path());
+    assert!(outcome.quarantined, "{outcome:?}");
+    assert!(!state::path(dir.path()).exists(), "隔离后不重建");
+    assert_eq!(
+        bytes_of(&state::backup_path(dir.path())),
+        shape.as_bytes(),
+        "隔离内容须逐字节相同"
+    );
+}
+
+/// 自愈与提交并发：两者共用同一把 `lock_io()`，谁都不该把对方的记录覆盖掉。
+///
+/// 与 `concurrent_batches_do_not_lose_each_others_success_records` 同一风险面，但覆盖的是
+/// `heal` 的「读—改—写」：自愈会重写文件（清不可用记录），若它不参与串行化，提交刚写下的
+/// 成功记录就会被自愈用旧快照覆盖回去。
+///
+/// 预置一条「必然不可用」记录（id 合法、时间戳非法）让自愈**真的走写盘分支**；
+/// 两条断言都与线程交错顺序无关（成功记录的非法时间戳只可能被能读到旧文件的提交补上）。
+#[test]
+fn heal_and_commit_do_not_lose_each_others_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().to_path_buf();
+    let ids = vec!["p-a".to_string(), "p-b".to_string()];
+    std::fs::write(
+        state::path(&dir_path),
+        br#"{"version":1,"verified":[{"provider_id":"p-a","last_ok_at":"2026-01-01T00:00:00Z"},{"provider_id":"p-b","last_ok_at":"junk"}]}"#,
+    )
+    .unwrap();
+
+    let healer = {
+        let dir_path = dir_path.clone();
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                let _ = state::heal(&dir_path);
+            }
+        })
+    };
+    for _ in 0..100 {
+        assert!(state::commit(
+            &dir_path,
+            &ids,
+            &["p-a".to_string()],
+            "2026-01-01T00:00:00Z"
+        ));
+        assert!(state::commit(
+            &dir_path,
+            &ids,
+            &["p-b".to_string()],
+            "2026-02-02T00:00:00Z"
+        ));
+    }
+    healer.join().expect("自愈线程不得 panic");
+
+    let saved = QuotaState::load(&dir_path);
+    assert!(
+        saved.has_succeeded("p-a") && saved.has_succeeded("p-b"),
+        "并发下丢了成功记录：{saved:?}"
+    );
+    assert_eq!(saved.verified.len(), 2);
+    assert_eq!(
+        saved.verified[0].last_ok_at, "2026-01-01T00:00:00Z",
+        "合法记录的时间戳不该被自愈改写"
+    );
+    assert!(
+        !state::backup_path(&dir_path).exists(),
+        "始终形态完好的文件不该被隔离"
+    );
+}
+
 // ---------- 密钥来源（按实际取用的那枚 key 判定） ----------
 
 /// 混合池偏乐观的反例：池里出现占位符就报 `keyring`，而实际取用的是排在前面的明文
