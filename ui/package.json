@@ -23,6 +23,7 @@
     "katex": "^0.18.4",
     "markdown-it": "^15.0.1",
     "mermaid": "^12.0.0",
+    "pdfjs-dist": "5.4.149",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-i18next": "^16.0.0",

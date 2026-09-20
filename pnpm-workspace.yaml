@@ -3,3 +3,7 @@ packages:
 # pnpm 11+ 已废弃 onlyBuiltDependencies，改用 allowBuilds（name: true|false）
 allowBuilds:
   esbuild: true
+# pdfjs-dist 的可选依赖 @napi-rs/canvas 只在 Node 侧服务端渲染用得上（要下载 12MB
+# 平台原生二进制）；界面预览只用浏览器渲染路径，故不安装。
+ignoredOptionalDependencies:
+  - "@napi-rs/canvas"
