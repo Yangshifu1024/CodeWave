@@ -34,8 +34,9 @@ impl Region {
 }
 
 /// Excel 的最大列数与最大行数（用于拒绝越界地址）。
-const MAX_COLS: u32 = 16_384;
-const MAX_ROWS: u32 = 1_048_576;
+/// 单张表的行列上限（与 Excel 一致；写越界坐标会让 Excel 弹修复提示）。
+pub const MAX_COLS: u32 = 16_384;
+pub const MAX_ROWS: u32 = 1_048_576;
 
 /// 列字母转列号：A → 1、Z → 26、AA → 27。空串、含非字母、越界均返回 None。
 pub fn col_to_index(s: &str) -> Option<u32> {

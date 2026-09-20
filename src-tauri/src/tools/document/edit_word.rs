@@ -251,4 +251,81 @@ mod tests {
         assert!(out.contains("<w:b/>"), "加粗不得丢失：{out}");
         assert!(text_of(&out).contains("周五"), "{}", text_of(&out));
     }
+
+    /// XML 实体不得被切开：含 & < > 的文字在文件里是转义形态（`&amp;` / `&lt;` / `&gt;`），
+    /// 搜索与命中区间必须都落在同一形态上，否则会把 `&amp;` 切成两半——那会让 Word 打不开文档。
+    /// 这里直接检查产出仍然能被解析回正确文字，而不是只看字符串包含。
+    #[test]
+    fn xml_entities_are_never_split() {
+        let doc = "<w:document><w:body><w:p><w:r><w:t>研发 &amp; 测试 &lt;阶段&gt;</w:t></w:r></w:p></w:body></w:document>";
+
+        // 1) 替换含实体的文字：命中的区间必须是完整的转义串（写入侧也转义，不打乱实体）
+        let (out, applied) = apply_text_edits(
+            doc,
+            &[TextEdit {
+                find: "研发 & 测试".into(),
+                replace: "A & B".into(),
+                all: false,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].count, 1);
+        let text = text_of(&out);
+        assert!(text.contains("A & B"), "{out}");
+        assert!(text.contains("<阶段>"), "实体必须完整：{out}");
+        assert!(entities_well_formed(&out), "有未闭合/被切开的实体：{out}");
+
+        // 2) 替换文本本身就含 & < >：写入侧必须转义，否则产出非法 XML
+        let (out2, _) = apply_text_edits(
+            doc,
+            &[TextEdit {
+                find: "阶段".into(),
+                replace: "<b>粗</b> & 斜".into(),
+                all: false,
+            }],
+        )
+        .unwrap();
+        assert!(
+            out2.contains("&lt;b&gt;"),
+            "要写成实体而不是裸尖括号：{out2}"
+        );
+        assert!(!out2.contains("<b>"), "不得裸写尖括号：{out2}");
+        assert!(entities_well_formed(&out2), "有未闭合的实体：{out2}");
+        let text2 = text_of(&out2);
+        assert!(text2.contains("<b>粗</b> & 斜"), "{text2}");
+    }
+
+    /// 目标文字被拆在多个片段里且中间隔着实体：跨片段回填不得改到实体以外的位置。
+    #[test]
+    fn cross_run_replacement_keeps_entities_intact() {
+        let doc = "<w:document><w:body><w:p><w:r><w:t>订单号 A&amp;</w:t></w:r><w:r><w:t>B123 已支付</w:t></w:r></w:p></w:body></w:document>";
+        let (out, applied) = apply_text_edits(
+            doc,
+            &[TextEdit {
+                find: "A&B123".into(),
+                replace: "A&B124".into(),
+                all: false,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].count, 1);
+        let text = text_of(&out);
+        assert!(text.contains("A&B124"), "{out}");
+        assert!(text.contains("已支付"), "{out}");
+        assert!(out.contains("&amp;"), "实体形态应保持：{out}");
+        assert!(entities_well_formed(&out), "有未闭合的实体：{out}");
+    }
+
+    /// 每个 `&` 后面必须是完整合法的实体（`&amp;` / `&lt;` / `&gt;` / `&quot;` / `&apos;`）。
+    /// 实体被切开时就会在这里露出来——这样的 document.xml 会让 Word 整份拒绝打开。
+    fn entities_well_formed(xml: &str) -> bool {
+        const OK: [&str; 5] = ["&amp;", "&lt;", "&gt;", "&quot;", "&apos;"];
+        let bytes = xml.as_bytes();
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == b'&' && !OK.iter().any(|e| xml[i..].starts_with(e)) {
+                return false;
+            }
+        }
+        true
+    }
 }

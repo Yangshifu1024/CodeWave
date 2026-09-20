@@ -308,7 +308,9 @@ impl Tool for ReadTool {
                 return ToolOutcome::err(
                     "E_UNSUPPORTED",
                     format!(
-                        "{} 的内容不是文本（含二进制字节），read 无法读取。若它是一份表格或文档，请用 read_document。",
+                        "{} 的内容不是文本（含二进制字节），read 无法读取。\
+                         若它其实是文本，可能是不带字节顺序标记（BOM）的 UTF-16 编码，请先转成 UTF-8；\
+                         若它是一份表格或文档，请用 read_document。",
                         f.path
                     ),
                 );

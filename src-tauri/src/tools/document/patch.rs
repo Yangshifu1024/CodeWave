@@ -122,9 +122,13 @@ pub fn apply(src: &Path, dst: &Path, replacements: &[Replacement]) -> Result<Pat
         }
     }
 
-    writer
+    // 封包后必须把内层 BufWriter flush 干净：`finish()` 把 writer 交回来，
+    // 丢弃返回值的话它就只在 Drop 时 flush 而且忽略错误——磁盘写满恰好落在最后一段时，
+    // 这里会返回 Ok，但产出的是截断的压缩包，而调用方随后就用它覆盖用户的文件。
+    let mut inner = writer
         .finish()
         .map_err(|e| format!("封包 {} 失败：{e}", dst.display()))?;
+    std::io::Write::flush(&mut inner).map_err(|e| format!("写入 {} 失败：{e}", dst.display()))?;
 
     Ok(PatchReport {
         entries_total,

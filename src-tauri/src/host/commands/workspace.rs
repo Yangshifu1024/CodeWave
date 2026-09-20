@@ -306,6 +306,11 @@ pub async fn allow_external_dir(
         return Err(format!("不是目录：{dir}"));
     }
     let dir_str = canonical.to_string_lossy().into_owned();
+    if let Some(why) = too_broad_to_allow(&dir_str, &core.data_dir) {
+        return Err(format!(
+            "{dir_str} 范围太大，不能整体放行（{why}）。请选择更具体的目录（例如其中的某个子目录）。"
+        ));
+    }
     {
         let mut extra = rt.extra_roots.lock().unwrap();
         if !extra.iter().any(|x| x == &dir_str) {
@@ -318,6 +323,27 @@ pub async fn allow_external_dir(
     let mut roots = vec![rt.workspace.to_string_lossy().into_owned()];
     roots.extend(rt.extra_roots.lock().unwrap().iter().cloned());
     Ok(roots)
+}
+
+/// 放行的是「读 + 写 + 列」三项权限（额外根对三个方向同时生效），所以太宽的目录不能整体放行：
+/// 一次误点确认就会让整个文件系统（或整个用户主目录）变成模型可写区。
+/// 返回拒绝理由；None 表示可以放行。
+fn too_broad_to_allow(dir: &str, data_dir: &std::path::Path) -> Option<&'static str> {
+    let p = std::path::Path::new(dir);
+    if p.parent().is_none() {
+        return Some("这是文件系统的根目录");
+    }
+    if let Some(home) = dirs::home_dir()
+        && let Ok(h) = std::fs::canonicalize(&home)
+        && h == p
+    {
+        return Some("这是用户主目录，范围太大");
+    }
+    let dd = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    if dd == p {
+        return Some("这是本应用的托管数据目录");
+    }
+    None
 }
 
 /// 把目录写进项目设置的「已允许目录」（去重；项目不存在时不动）。
@@ -420,6 +446,37 @@ mod tests {
                     .to_string_lossy()
             )
         );
+    }
+
+    /// 放行目录的广度护栏：根目录 / 用户主目录 / 托管数据目录一律拒绝（放行 = 读 + 写 + 列），
+    /// 其余目录照常放行。
+    #[test]
+    fn too_broad_dirs_are_refused() {
+        let dd = tempfile::tempdir().unwrap();
+        let dd_canon = std::fs::canonicalize(dd.path()).unwrap();
+        let dd_str = dd_canon.to_string_lossy().into_owned();
+        assert!(too_broad_to_allow("/", &dd_canon).is_some());
+        assert!(
+            too_broad_to_allow(&dd_str, &dd_canon).is_some(),
+            "托管数据目录不得放行"
+        );
+        if let Some(h) = dirs::home_dir()
+            && let Ok(h) = std::fs::canonicalize(&h)
+            && let Some(hs) = h.to_str()
+        {
+            assert!(
+                too_broad_to_allow(hs, &dd_canon).is_some(),
+                "用户主目录不得放行"
+            );
+            // 主目录下的子目录可以放行（使用者真正要的通常是这种）
+            let parent = tempfile::tempdir().unwrap();
+            let sub = parent.path().join("some-folder");
+            std::fs::create_dir_all(&sub).unwrap();
+            assert!(
+                too_broad_to_allow(&sub.to_string_lossy(), &dd_canon).is_none(),
+                "普通目录应当可以放行"
+            );
+        }
     }
 
     /// 放行目录写进项目设置：重复放行不重复记，目录尾斜杠归一。

@@ -174,6 +174,8 @@ fn build_cell(coord: &str, original_attrs: &[(String, String)], value: &CellValu
 }
 
 /// 坐标 `B3` 拆成（列号, 行号）；非法返回 None。
+/// 行列上限与 `xlsx::parse_cell` 同一口径：越界写进文件会产出 Excel 认不了的表格，
+/// 而「写出去才报错」是用户拿到损坏文件之后才知道——必须在解析阶段就拦住。
 fn split_coord(coord: &str) -> Option<(u32, u32)> {
     let letters: String = coord
         .chars()
@@ -185,7 +187,7 @@ fn split_coord(coord: &str) -> Option<(u32, u32)> {
         .collect();
     let col = col_to_index(&letters)?;
     let row: u32 = digits.parse().ok()?;
-    if row == 0 {
+    if row == 0 || row > xlsx::MAX_ROWS {
         return None;
     }
     Some((col, row))
@@ -738,5 +740,25 @@ mod tests {
 
         // 同一张表上读不存在的坐标同样必须立即返回
         assert_eq!(peek_cell(&xml, "Z999", None), None);
+    }
+
+    /// 越界坐标必须拒绝：写出去 Excel 会弹修复提示（等于产出损坏文件），
+    /// 而使用者拿到损坏文件之后才知道就太晚了。行上限与列上限同一口径。
+    #[test]
+    fn out_of_range_coordinates_are_refused() {
+        // Excel 的行上限是 1048576
+        let too_many_rows = set_cell(SHEET, "A1048577", &CellValue::Number(1.0));
+        assert!(too_many_rows.is_err(), "{too_many_rows:?}");
+        assert!(
+            too_many_rows.unwrap_err().contains("无法解析"),
+            "文案应指出坐标非法"
+        );
+        // Excel 的列上限是 16384（XFD）；XFE 越界
+        assert!(set_cell(SHEET, "XFE1", &CellValue::Number(1.0)).is_err());
+        // 行号为 0 同样非法
+        assert!(set_cell(SHEET, "A0", &CellValue::Number(1.0)).is_err());
+        // 边界值本身必须能用
+        assert!(set_cell(SHEET, "A1048576", &CellValue::Number(1.0)).is_ok());
+        assert!(set_cell(SHEET, "XFD1", &CellValue::Number(1.0)).is_ok());
     }
 }
