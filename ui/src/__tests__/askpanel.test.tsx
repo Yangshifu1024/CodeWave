@@ -723,4 +723,19 @@ describe("AskPanel 多题提交分页", () => {
     fireEvent.click(btnByText("提交回答"));
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
   });
+
+  it("修复：在补充说明输入框内按回车 = 提交（此前 isFormTarget 早退，输入框内回车完全无反应）", async () => {
+    seedAsk({
+      askId: "kb1", kind: "ask",
+      questions: [{ id: "q1", question: "选一个", options: [{ id: "a", label: "甲" }] }],
+    });
+    render(<AskPanel />);
+    const note = (document.querySelector(".ask-note input") ?? document.querySelector(".ask-note")) as HTMLInputElement;
+    expect(note).toBeTruthy();
+    fireEvent.change(note, { target: { value: "补充说明文字" } });
+    fireEvent.keyDown(note, { key: "Enter" });
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
+    expect(payload.answers.q1.note).toBe("补充说明文字");
+  });
 });

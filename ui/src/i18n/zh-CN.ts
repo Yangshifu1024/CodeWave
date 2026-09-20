@@ -64,6 +64,8 @@ export default {
     keyHint: "使用 Tab / 上下键选择，回车确认（点击卡片后生效）",
     keyHintMulti: "使用 Tab / 上下键选择，空格选中；回车 = 下一题 / 提交",
     keyHintSingle: "单选：点选或数字键选中；选项互斥；回车 = 提交",
+    /* 缺陷修复：补充说明输入框内现在也能回车提交，明示以免用户误以为只能鼠标点提交 */
+    noteHint: "回车 = 下一题 / 提交；Shift + 回车换行",
     planTitle: "计划", copyPlan: "复制计划全文", viewFullPlan: "查看完整计划", proceedPlan: "是否按上述计划执行？",
     prevPage: "上一题", nextPage: "下一题",
     recommended: "推荐",

@@ -20,10 +20,23 @@ import { useSessions } from "../../stores/sessions";
 import { renderMarkdown } from "../../utils/markdown";
 import FileViewerModal from "../files/FileViewerModal";
 
-/** 判断键盘事件目标是否在输入框内（输入框内不拦截按键）。 */
+/** 判断键盘事件目标是否在输入框内（输入框内不拦截方向键/数字/空格等按键）。 */
 function isFormTarget(e: React.KeyboardEvent): boolean {
   const tag = (e.target as HTMLElement)?.tagName;
   return tag === "INPUT" || tag === "TEXTAREA";
+}
+
+/** 回车提交判定（缺陷修复：ask 卡内的回车提交在输入框内曾完全失效）。
+ *
+ *  旧行为：isFormTarget 命中即早退，而展开卡片后焦点就在「补充说明」输入框里（用户敲回车时
+ *  必然在此），于是回车 / 数字键 / 方向键全部被放行——提交按钮只认鼠标，「提交回答不支持回车」。
+ *  新行为：只把**回车**从输入框放行路径里拎出来提交（无 Shift、非 IME 组合中）；
+ *  其余按键保持旧语义（输入框内不拦截，方向键/空格照常编辑文本）。 */
+function enterCommits(e: React.KeyboardEvent): boolean {
+  if (e.key !== "Enter" || e.shiftKey) return false;
+  if ((e.nativeEvent as KeyboardEvent)?.isComposing) return false;
+  e.preventDefault();
+  return true;
 }
 
 /** 询问面板：审批（三选项单选直提）/ 询问（分页多题 + 编号选项 + 键盘导航环含补充输入 + 忽略/提交）
@@ -201,7 +214,21 @@ export default function AskPanel() {
   }
 
   // ---------- 键盘（焦点不在输入框内时生效；卡片有焦点即可用；鼠标始终可用） ----------
+  /** 回车统一出口：审批 = 应答当前高亮项；询问 = 非末页翻页 / 末页提交（输入框内与卡片上同一路径） */
+  function commitAsk() {
+    if (isApproval) {
+      answer(approvalOptions[cursor] ?? approvalOptions[0]);
+      return;
+    }
+    if (page < questions.length - 1) goNextPage();
+    else void submit();
+  }
+
   function onKeyApproval(e: React.KeyboardEvent) {
+    if (enterCommits(e)) {
+      commitAsk();
+      return;
+    }
     if (isFormTarget(e)) return;
     const n = approvalOptions.length;
     if (e.key === "ArrowDown" || e.key === "Tab") {
@@ -223,6 +250,10 @@ export default function AskPanel() {
   }
 
   function onKeyAsk(e: React.KeyboardEvent) {
+    if (enterCommits(e)) {
+      commitAsk();
+      return;
+    }
     if (isFormTarget(e)) return;
     const opts = (cur?.options ?? []) as any[];
     if (!cur) return;
@@ -253,11 +284,7 @@ export default function AskPanel() {
         return;
       }
       // 非批准形：回车 = 下一题 / 提交（选项选择走鼠标、数字键或空格）
-      if (page < questions.length - 1) {
-        goNextPage();
-      } else {
-        void submit();
-      }
+      commitAsk();
     } else if (e.key === " ") {
       e.preventDefault();
       if (cursor >= opts.length) return;
@@ -395,15 +422,21 @@ export default function AskPanel() {
               </div>
             )}
             {cur && (
-              <Input
-                ref={noteRef}
-                className={`ask-note${cursor >= options.length ? " kb" : ""}`}
-                variant="borderless"
-                value={notes[cur.id] ?? ""}
-                placeholder={t("ask.note")}
-                onChange={(e) => setNotes((prev) => ({ ...prev, [cur.id]: e.target.value }))}
-                onFocus={() => setCursor(options.length)} // 聚焦即同步导航槽（鼠标/Tab，docs/ask-approval-shape-note-nav）
-              />
+              <>
+                <Input
+                  ref={noteRef}
+                  className={`ask-note${cursor >= options.length ? " kb" : ""}`}
+                  variant="borderless"
+                  value={notes[cur.id] ?? ""}
+                  placeholder={t("ask.note")}
+                  onChange={(e) => setNotes((prev) => ({ ...prev, [cur.id]: e.target.value }))}
+                  onFocus={() => setCursor(options.length)} // 聚焦即同步导航槽（鼠标/Tab，docs/ask-approval-shape-note-nav）
+                  /* 输入框内回车 = 下一题 / 提交（缺陷修复：此前 isFormTarget 早退把所有按键放行，
+                     在补充说明里敲回车无任何反应；Shift+回车 / IME 组合期放行，见 enterCommits） */
+                  onKeyDown={(e) => { if (enterCommits(e)) commitAsk(); }}
+                />
+                <div className="note-hint">{t("ask.noteHint")}</div>
+              </>
             )}
             <div className="ask-foot">
               <span className="hint">
