@@ -5,6 +5,7 @@ import type { ToolView } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { ipc } from "../../ipc/client";
 import { collapseDiff, type DiffLine } from "../../utils/diff";
+import { shortestUniqueLabels } from "../../utils/path";
 import CodeBlock from "../../components/CodeBlock";
 
 // 工具名 -> i18n 键映射（内置工具；mcp__ 前缀的工具名原样展示）
@@ -17,6 +18,16 @@ const VERBS: Record<string, string> = {
 };
 
 interface EditFileView { path: string; diff: { type: string; text: string }[] }
+
+/** 出错时降级为中性展示的错误码 → 文案键（docs/ask-ignore-not-answered-fix.md 的展示层配套）：
+ *  后端把「忽略 / 取消」按 err 返回是模型侧硬信号（防误读为默许），运行/子代理结束时仍在途的工具卡也带 err，
+ *  但用户视角只是「没完成」。渲染层按错误码降为中性灰 + 各自的措辞，其余错误仍红色「失败」。
+ *  store 三路（实时/历史恢复/子代理流）共用本组件，一处修复全覆盖；模型侧语义零改动。 */
+const NEUTRAL_ERR_KEYS: Record<string, string> = {
+  E_ASK_CANCELLED: "tools.cancelled",
+  E_ASK_NOT_ANSWERED: "tools.notAnswered",
+  E_INTERRUPTED: "tools.interrupted",
+};
 
 // memo：immer 结构共享让历史工具卡引用稳定，流式帧不再触发 diff/JSON 重算
 /** 工具调用卡实现：头部为状态点 + 动作词 + 工具名 + 摘要 + 耗时；展开体按工具类型分派
@@ -64,10 +75,9 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   const listText = (data.entries ?? []).join("\n");
   const bodyPreview = typeof data.body === "string" ? data.body : JSON.stringify(data.body ?? null, null, 1);
 
-  // read/batch_read/edit 一次调用携带 files 数组：头部列全部文件名（basename，不带路径）。
+  // read/batch_read/edit 一次调用携带 files 数组：头部列全部文件名（不带目录的末段）。
   // 列表优先 outcome（入参过大时 argsPreview 被截断标记替换、无法解析出文件列表）；运行中才回退 args
   const fileListTool = tool.tool === "read" || tool.tool === "batch_read" || tool.tool === "edit";
-  const baseName = (p: any) => String(p ?? "").split(/[\\/]/).pop() ?? "";
   const summary = (() => {
     if (fileListTool) {
       const fromOutcome =
@@ -81,7 +91,8 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
               return [];
             }
           })();
-      return paths.map(baseName).filter(Boolean).join(", ");
+      // 同名文件（a/ui.ts / b/ui.ts）向前扩段区分：同一天读到多个 index.ts 时头部摘要不再无从分辨
+      return shortestUniqueLabels(paths).filter(Boolean).join(", ");
     }
     try {
       const args = JSON.parse(tool.argsPreview ?? "{}");
@@ -141,22 +152,19 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   const showArgsInstead = noOutcomeData && !!argsJson;
 
   const displayName = tool.tool.startsWith("mcp__") ? tool.tool : tool.tool;
-  // ask 未作答类错误码中性化（docs/ask-ignore-not-answered-fix.md 的展示层配套）：
-  // 后端把「忽略/取消」按 err 返回是模型侧硬信号（防误读为默许），但用户视角只是「没回答」。
-  // 渲染层按错误码把这两类降级为中性灰 + 「未回答/已取消」，其余错误仍红色「失败」。
-  // store 三路（实时/历史恢复/子代理流）共用本组件，一处修复全覆盖；模型侧语义零改动。
-  const askNotAnsweredErr =
-    tool.tool === "ask" &&
-    (tool.outcome?.error?.code === "E_ASK_NOT_ANSWERED" || tool.outcome?.error?.code === "E_ASK_CANCELLED");
+  const errCode: string | undefined = tool.outcome?.error?.code;
+  const neutralErrKey = errCode ? NEUTRAL_ERR_KEYS[errCode] : undefined;
+  const neutralErr = !!neutralErrKey;
   const verbLabel = (() => {
     const key = VERBS[tool.tool];
     // "?" = 运行中占位卡（无名帧兑底）：只显示状态词，不渲染问号
     const label = key ? t(key) : tool.tool === "?" ? "" : tool.tool.replace(/^mcp__/, "[mcp] ");
-    if (askNotAnsweredErr) {
-      return `${tool.outcome?.error?.code === "E_ASK_CANCELLED" ? t("tools.cancelled") : t("tools.notAnswered")} ${label}`;
-    }
+    if (neutralErrKey) return label ? `${t(neutralErrKey)} ${label}` : t(neutralErrKey);
+    // waiting = 审批 / 范围确认门等待中（橙点 + 需注意语义），必须在 running 之前判定
     const prefix =
-      tool.status === "running" ? t("tools.running") : tool.status === "error" ? t("tools.failed") : t("tools.used");
+      tool.status === "waiting" ? t("tools.waiting")
+        : tool.status === "running" ? t("tools.running")
+          : tool.status === "error" ? t("tools.failed") : t("tools.used");
     return label ? `${prefix} ${label}` : prefix;
   })();
 
@@ -169,7 +177,7 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   }
 
   return (
-    <div className={`tool-card st-${askNotAnsweredErr ? "neutral" : tool.status}`}>
+    <div className={`tool-card st-${neutralErr ? "neutral" : tool.status}`}>
       <div
         className="tool-head"
         onClick={() => {
@@ -185,6 +193,7 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
         <span className="chev">{expanded ? "▾" : "▸"}</span>
       </div>
 
+      {/* 进度尾迹只在真正执行时展示（waiting = 审批/范围确认门等待中，还没有任何输出；已中断/已结束的卡 tail 已被 store 清空） */}
       {tool.status === "running" && tool.progressTail && <pre className="tail">{tool.progressTail}</pre>}
 
       {expanded && (
@@ -281,8 +290,10 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
             </>
           )}
 
-          {tool.outcome?.error && (
-            <div className={askNotAnsweredErr ? "err err-neutral" : "err"}>
+          {/* E_INTERRUPTED 的 message 为空（store 落定形态）：渲染成「E_INTERRUPTED: 」是纯噪声，
+              verb 已表达「已中断」——故不渲染错误行；ask 两类的中性化行为保持不变。 */}
+          {tool.outcome?.error && errCode !== "E_INTERRUPTED" && (
+            <div className={neutralErr ? "err err-neutral" : "err"}>
               {tool.outcome.error.code}: {tool.outcome.error.message}
             </div>
           )}

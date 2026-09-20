@@ -65,9 +65,10 @@ describe("事件契约：后端 emit ↔ 前端 handler", () => {
   });
 
   // 键数硬锚点：每次新增事件必须在此同步改数（且上面两条双向扫描都要过），防止“加了 handler 忘了 emit”或反过来
-  it("事件面键数为 28（lsp:server_missing 已随写入后检查删除）", () => {
+  it("事件面键数为 29（含 tool:start；lsp:server_missing 已随写入后检查删除）", () => {
     const handled = Object.keys(useRun.getState().bindGlobalHandlers());
     expect(handled).not.toContain("lsp:server_missing");
-    expect(handled.length).toBe(28);
+    expect(handled).toContain("tool:start");
+    expect(handled.length).toBe(29);
   });
 });

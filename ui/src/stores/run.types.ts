@@ -5,7 +5,8 @@ import type { Breakdown, Todo } from "../ipc/types";
 export interface ToolView {
   callKey: string;
   tool: string;
-  status: "running" | "ok" | "error";
+  /** waiting = 审批 / 范围确认门等待中（tool:start 的 waiting 相；门通过后转 running，被门拒绝则直接来 tool:error） */
+  status: "running" | "waiting" | "ok" | "error";
   argsPreview?: string;
   outcome?: any;
   durationMs?: number;

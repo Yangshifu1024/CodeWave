@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyFrameToTab } from "../stores/runFrames";
 import { useRun, type TimelineSeg } from "../stores/run";
+import type { ToolView } from "../stores/run.types";
 
 // Interleaving order contract ([docs/thinking-interleave-report](../../../docs/thinking-interleave-report.md)): frame arrival order = timeline display order; history restore is isomorphic; retry leaves no residue.
 // applyFrameToTab is the real reducer shared by send()'s onmessage and the tests.
@@ -13,6 +14,12 @@ function timelineOf(session: string): TimelineSeg[] {
   return tabOf(session)
     .items.filter((i) => i.kind === "assistant")
     .flatMap((i) => (i.kind === "assistant" ? i.timeline : []));
+}
+
+/** 跨所有 assistant 项收集某 call_key 的工具卡：同一次调用重复建卡时返回 >1 张 */
+function toolCardsOf(session: string, callKey: string): ToolView[] {
+  const items = tabOf(session).items.filter((i) => i.kind === "assistant") as any[];
+  return items.map((i) => i.toolsMap[callKey]).filter(Boolean) as ToolView[];
 }
 
 describe("思考与工具穿插顺序", () => {
@@ -255,5 +262,132 @@ describe("思考与工具穿插顺序", () => {
     expect(a.timeline[1].subId).toBe("sub_1");
     const sub = tabOf(session).subs.find((x) => x.subId === "sub_1");
     expect(sub).toMatchObject({ status: "done", step: 3, detail: "内部摘录", report: "最终汇报" });
+  });
+
+  // 工具卡重复 + 卡死修复：帧/事件同键（call_key = batch:index）时必须落在同一张卡上
+  it("tool:start → tool_progress → tool:result 同 key：同一张卡由 running 翻 ok，items 不增", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b7:0", tool: "command", args_preview: '{"command":"ls"}', phase: "running" });
+    const before = tabOf(session).items.length;
+    useRun.setState((s) => {
+      const t = s.tabs[session]!;
+      applyFrameToTab(t, { type: "tool_progress", batch: "b7", index: 0, chunk: "partial", name: "command" } as any);
+    });
+    handlers["tool:result"]({
+      session, call_key: "b7:0", tool: "command", args_preview: '{"command":"ls"}',
+      outcome: { ok: true, data: { output: "ok" } }, duration_ms: 12,
+    });
+    const items = tabOf(session).items.filter((i) => i.kind === "assistant");
+    expect(items).toHaveLength(1);
+    expect(tabOf(session).items.length).toBe(before);
+    const cards = items.flatMap((i: any) => Object.values(i.toolsMap) as any[]);
+    expect(cards).toHaveLength(1); // 不是两张卡
+    expect(cards[0]).toMatchObject({ tool: "command", status: "ok", progressTail: "" });
+  });
+
+  it("锚点落在非当前 assistant 项（notice 插队后另建末项）：结果仍回原卡，不新建卡", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b7:0", tool: "read", args_preview: "{}", phase: "running" });
+    // run:inject 类通知插到 items 末尾，随后 delta 帧让 currentAssistantIm 另建 assistant 项
+    handlers["run:inject"]({ session, count: 1 });
+    useRun.setState((s) => {
+      applyFrameToTab(s.tabs[session]!, { type: "delta_text", gen: 0, text: "注入后正文" } as any);
+    });
+    expect(tabOf(session).items).toHaveLength(3);
+    handlers["tool:result"]({
+      session, call_key: "b7:0", tool: "read", args_preview: "{}",
+      outcome: { ok: true, data: { files: [] } }, duration_ms: 4,
+    });
+    const t = tabOf(session);
+    expect(t.items).toHaveLength(3); // 没多出第二张卡
+    expect((t.items[0] as any).toolsMap["b7:0"]).toMatchObject({ status: "ok", progressTail: "" });
+    expect(Object.keys((t.items[2] as any).toolsMap)).toEqual([]);
+  });
+
+  it("run:done 后仍 running/waiting 的工具卡落定「已中断」", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b8:0", tool: "command", args_preview: "{}", phase: "running" });
+    handlers["tool:start"]({ session, call_key: "b8:1", tool: "edit", args_preview: "{}", phase: "waiting" });
+    handlers["run:done"]({ session });
+    const a = tabOf(session).items.find((i) => i.kind === "assistant") as any;
+    for (const k of ["b8:0", "b8:1"]) {
+      expect(a.toolsMap[k].status).toBe("error");
+      expect(a.toolsMap[k].outcome.error.code).toBe("E_INTERRUPTED");
+    }
+  });
+
+  it("run 结束后迟到的 tool:start 不建卡（幽灵转圈守卫）", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["run:done"]({ session });
+    handlers["tool:start"]({ session, call_key: "b9:0", tool: "read", args_preview: "{}", phase: "running" });
+    const t = tabOf(session);
+    expect(t.items).toHaveLength(0);
+  });
+
+  // waiting → running 两相 + tool_progress 帧都必须跨 assistant 项命中已有卡：
+  // 审批门期间 notice（run:inject / sub:error）插到 items 末尾后，currentAssistantIm 会另建 assistant 项，
+  // 只查末项的实现会为同一次调用建出第二张卡（旧卡永久停在 waiting/running，直到 run 收尾才被标「已中断」）。
+  it("waiting → notice 插队 → running：同一次调用仍只有一张卡", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b1:0", tool: "edit", args_preview: '{"files":["a.ts"]}', phase: "waiting" });
+    expect(toolCardsOf(session, "b1:0")).toHaveLength(1);
+    // 审批门等待期间的第三方通知插队：流式项不再是末项
+    handlers["run:inject"]({ session, count: 1 });
+    expect(tabOf(session).items.map((i) => i.kind)).toEqual(["assistant", "notice"]);
+    // 门通过后的 running 相：必须翻原卡，不得另建项/另建卡
+    handlers["tool:start"]({ session, call_key: "b1:0", tool: "edit", args_preview: "", phase: "running" });
+    const cards = toolCardsOf(session, "b1:0");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("running");
+    expect(cards[0].tool).toBe("edit");
+    expect(cards[0].argsPreview).toBe('{"files":["a.ts"]}'); // 已有值不被空值覆盖
+    expect(tabOf(session).items).toHaveLength(2); // 两次相变没有多建 assistant 项
+  });
+
+  it("tool:start → notice 插队 → tool_progress：分片帧不另建卡", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b1:0", tool: "read", args_preview: "{}", phase: "running" });
+    handlers["run:inject"]({ session, count: 2 });
+    useRun.setState((s) => {
+      applyFrameToTab(s.tabs[session]!, { type: "tool_progress", batch: "b1", index: 0, chunk: "hello" } as any);
+    });
+    const cards = toolCardsOf(session, "b1:0");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].progressTail).toBe("hello");
+    expect(cards[0].status).toBe("running");
+    expect(tabOf(session).items.map((i) => i.kind)).toEqual(["assistant", "notice"]); // 帧不得新开 assistant 项
+  });
+
+  it("tool_progress 先到 → notice 插队 → tool:result 仍回原卡", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    useRun.setState((s) => {
+      applyFrameToTab(s.tabs[session]!, { type: "tool_progress", batch: "b1", index: 0, chunk: "partial", name: "command" } as any);
+    });
+    handlers["run:inject"]({ session, count: 1 });
+    handlers["tool:result"]({
+      session, call_key: "b1:0", tool: "command", args_preview: "{}",
+      outcome: { ok: true, data: { output: "ok" } }, duration_ms: 9,
+    });
+    const cards = toolCardsOf(session, "b1:0");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("ok");
+    expect(cards[0].progressTail).toBe("");
+    // 结果事件同样不得新开项：仍是「帧建的流式项 + notice」
+    expect(tabOf(session).items.map((i) => i.kind)).toEqual(["assistant", "notice"]);
+  });
+
+  it("waiting 相 → sub:error notice 插队 → tool_progress：进度落回原卡，不另建卡", () => {
+    const handlers = useRun.getState().bindGlobalHandlers();
+    handlers["tool:start"]({ session, call_key: "b3:0", tool: "edit", args_preview: "{}", phase: "waiting" });
+    // 审批门期间的子代理失败通知：另一条 notice 插队路径（runFrames 不变量注释列出的三处之一）
+    handlers["sub:error"]({ session, sub_id: "sub_x", error: "boom" });
+    useRun.setState((s) => {
+      applyFrameToTab(s.tabs[session]!, { type: "tool_progress", batch: "b3", index: 0, chunk: "hi", name: "edit" } as any);
+    });
+    const cards = toolCardsOf(session, "b3:0");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].progressTail).toBe("hi");
+    expect(cards[0].status).toBe("waiting"); // 相变由 tool:start 负责，进度帧只填尾部
+    expect(tabOf(session).items.map((i) => i.kind)).toEqual(["assistant", "notice"]);
   });
 });

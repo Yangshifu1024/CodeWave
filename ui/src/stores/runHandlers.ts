@@ -1,4 +1,4 @@
-// 后端事件 handler 工厂 —— 28 键事件面（契约测试锚点；键名不可增删）。
+// 后端事件 handler 工厂 —— 29 键事件面（契约测试锚点；键名不可增删）。
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
@@ -8,7 +8,7 @@ import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
-import { blank, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
+import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
 import type { RunStore } from "./run";
 
 /** immer set：对 store 草稿原地变异 */
@@ -79,6 +79,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
         // 这里扫全部 assistant 项统一收尾（streaming=false + 冻结思考时长）；本 handler 其余语义一概不动。
         closeStreamingAssistantItems(t);
+        // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
+        closeRunningTools(t);
         if (p.suggestions) t.suggestions = p.suggestions;
       });
       void get().refreshGit(p.session);
@@ -101,6 +103,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
         // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
         closeStreamingAssistantItems(t);
+        closeRunningTools(t);
         // errorKind 携带后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）：auth/billing 有设置快捷入口
         t.items.push({ kind: "error", text: String(p?.error ?? i18n.t("notice.runFailed")), errorKind: p?.kind });
       });
@@ -112,6 +115,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         t.running = false;
         // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
         closeStreamingAssistantItems(t);
+        closeRunningTools(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
       // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：「立即运行」打断后立即执行该项；普通取消 = 队列保持暂停
@@ -228,9 +232,10 @@ export function compactHandlers(set: SetFn): Record<string, (p: any) => void> {
   };
 }
 
-/** 工具结果落地（2 键）：成功/失败统一汇入 onToolResult */
+/** 工具结果落地（3 键）：开始信号建/翻卡（waiting → running），成功/失败统一汇入 onToolResult */
 export function toolHandlers(get: GetFn): Record<string, (p: any) => void> {
   return {
+    "tool:start": (p) => get().onToolStart(p.session, p),
     "tool:result": (p) => get().onToolResult(p.session, p, true),
     "tool:error": (p) => get().onToolResult(p.session, p, false),
   };
@@ -343,6 +348,8 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         }
         const st = t.subStreams[p.sub_id];
         if (st) st.status = "done";
+        // 只扫该子流：子代理结束时主会话可能仍在跑，不得误伤主会话在途工具
+        closeRunningTools(t, p.sub_id);
       });
     },
     "sub:error": (p: SubagentEvent) => {
@@ -353,6 +360,7 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         if (sub) sub.status = "error";
         const st = t.subStreams[p.sub_id];
         if (st) st.status = "error";
+        closeRunningTools(t, p.sub_id);
         t.items.push({ kind: "notice", text: i18n.t("notice.subagentFailed", { error: p.error ?? "" }) });
       });
     },

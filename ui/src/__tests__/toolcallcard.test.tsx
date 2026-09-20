@@ -1,7 +1,7 @@
 // Tool card header summary ([docs/tool-card-multi-file-summary](../../../docs/tool-card-multi-file-summary.md)): read/batch_read/edit batch args list all file names (basename, no path)
 // outcome takes priority (still lists when oversized argsPreview was replaced by the truncation marker); falls back to args while running; single-path tools keep the full path
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import "../i18n"; // i18n init (nothing triggers it when rendering components directly; t() would otherwise return the key itself)
 import ToolCallCard from "../features/tools/ToolCallCard";
 import type { ToolView } from "../stores/run";
@@ -194,5 +194,47 @@ describe("ToolCallCard 运行中占位卡（running-name fix）", () => {
     render(<ToolCallCard tool={toolView({ tool: "?", status: "error" })} />);
     expect(verbText()).toContain("失败");
     expect(document.querySelector(".tool-card .tool-head")?.textContent).not.toContain("?");
+  });
+});
+
+describe("ToolCallCard 等待确认（waiting）与已中断（E_INTERRUPTED）", () => {
+  it("waiting 态：verb 显示「等待确认」、卡片类名 st-waiting、摘要仍可读", () => {
+    render(<ToolCallCard
+      tool={toolView({
+        tool: "edit",
+        status: "waiting",
+        argsPreview: JSON.stringify({ files: [{ path: "src/a/b.ts", changes: [] }] }),
+      })}
+    />);
+    expect(verbText()).toContain("等待确认");
+    expect(document.querySelector(".tool-card.st-waiting")).not.toBeNull();
+    expect(document.querySelector(".tool-card.st-running")).toBeNull();
+    expect(summaryText()).toBe("b.ts");
+  });
+
+  it("waiting 态不渲染进度尾迹（尚无任何输出）；running 态照常渲染", () => {
+    render(<ToolCallCard tool={toolView({ tool: "command", status: "waiting", progressTail: "残留 tail" })} />);
+    expect(document.querySelector(".tool-card .tail")).toBeNull();
+    cleanup();
+    render(<ToolCallCard tool={toolView({ tool: "command", status: "running", progressTail: "真实输出" })} />);
+    expect(document.querySelector(".tool-card .tail")?.textContent).toBe("真实输出");
+  });
+
+  it("E_INTERRUPTED：中性样式 + verb「已中断」，展开体不渲染空 message 的错误行", () => {
+    render(<ToolCallCard
+      tool={toolView({
+        tool: "edit",
+        status: "error",
+        outcome: { ok: false, data: null, error: { code: "E_INTERRUPTED", message: "" } },
+      })}
+    />);
+    expect(verbText()).toContain("已中断");
+    expect(verbText()).not.toContain("失败");
+    expect(document.querySelector(".tool-card.st-neutral")).not.toBeNull();
+    expect(document.querySelector(".tool-card.st-error")).toBeNull();
+
+    fireEvent.click(document.querySelector(".tool-card .tool-head") as HTMLElement);
+    expect(document.querySelector(".tool-card .tool-body")?.textContent).not.toContain("E_INTERRUPTED");
+    expect(document.querySelector(".tool-card .err")).toBeNull();
   });
 });
