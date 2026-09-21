@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -74,13 +74,53 @@ export const ipc = {
   searchWorkspacePaths: (sessionId: string, query: string, limit?: number) =>
     invoke<string[]>("search_workspace_paths", { sessionId, query, limit }),
   readWorkspaceFile: (sessionId: string, path: string) =>
-    invoke<{ path: string; size: number; content: string }>("read_workspace_file", { sessionId, path }),
+    invoke<{ path: string; size: number; encoding: string; content: string }>("read_workspace_file", { sessionId, path }),
+
+  // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：四个文件入口
+  /** 原生文件选择框（任意文件）；返回绝对路径列表 */
+  selectDocumentFiles: () => invoke<string[]>("select_document_files"),
+  /** 判定路径是否在会话可访问范围内（在外时给出所在目录与拿给模型的引用写法） */
+  checkExternalPath: (sessionId: string, path: string) =>
+    invoke<{ inside: boolean; dir: string; ref: string }>("check_external_path", { sessionId, path }),
+  /** 放行一个目录：persist=true 写进项目设置（以后不再询问）；返回放行后的全部根 */
+  allowExternalDir: (sessionId: string, dir: string, persist: boolean) =>
+    invoke<string[]>("allow_external_dir", { sessionId, dir, persist }),
 
   // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：会话产物
   listSessionFiles: (sessionId: string) =>
     invoke<SessionFileEntry[]>("list_session_files", { sessionId }),
   readWorkspaceFileBase64: (sessionId: string, path: string) =>
     invoke<{ path: string; size: number; content: string }>("read_workspace_file_base64", { sessionId, path }),
+
+  // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：文档预览取数
+  /** 表格 / 文档 / PDF 的结构化预览数据（与 read_document 工具同一条解析路径；失败时 reject 的错误文本形如 "E_XXX: 说明"） */
+  previewDocument: (
+    sessionId: string,
+    path: string,
+    opts?: { sheet?: string; range?: string; pages?: string },
+  ) =>
+    invoke<any>("preview_document", {
+      sessionId,
+      path,
+      sheet: opts?.sheet ?? null,
+      range: opts?.range ?? null,
+      pages: opts?.pages ?? null,
+    }),
+  /** 分片读取原始字节（base64）：大文件不进一次性 base64 通道，避免单条 IPC 消息过大 */
+  readFileChunk: (sessionId: string, path: string, offset: number, length?: number) =>
+    invoke<{ offset: number; length: number; total: number; eof: boolean; content: string }>(
+      "read_file_chunk",
+      { sessionId, path, offset, length: length ?? null },
+    ),
+  /** 某个文档可回退的备份（新的在前）；没有备份返回空数组而不是报错 */
+  listDocumentBackups: (sessionId: string, path: string) =>
+    invoke<DocumentBackupEntry[]>("list_document_backups", { sessionId, path }),
+  /** 把某一份备份还原回原文件位置；回退前会把当前内容也备份一份（回退本身能再撒回） */
+  restoreDocumentBackup: (sessionId: string, path: string, backupPath: string) =>
+    invoke<{ path: string; restoredFrom: string; currentBackup: string | null; size: number }>(
+      "restore_document_backup",
+      { sessionId, path, backupPath },
+    ),
 
   gitStatus: (sessionId: string) =>
     invoke<{ repo: boolean; entries: any[]; branch?: string | null }>("git_status", { sessionId }),

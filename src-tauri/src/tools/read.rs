@@ -1,5 +1,9 @@
 //! read 工具：一次批量读取 1–20 个文件，带行号预览、UTF-16 转码、图片 DataURL 注入与 version token。
 //! 图片以 extra_model_content（多模态）注入给模型，前端 outcome 中同样携带。
+//!
+//! 二进制文件不进文本通道：Office / PDF 扩展名与「含 NUL 字节」的内容一律拒绝，
+//! 并点名该用哪个工具——否则模型拿到的是一堆替换符乱码，会据此编造结论。
+//! 文档读取见 [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)。
 
 use super::pathutil;
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
@@ -60,6 +64,60 @@ pub fn media_type_of(path: &Path) -> Option<&'static str> {
     IMAGE_EXTS.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)
 }
 
+/// 二进制文档扩展名 → 拒绝时的指引（点名该用哪个工具）。
+/// 这些文件用文本通道读出来只有乱码，必须在读取前就拦下。
+const BINARY_DOC_EXTS: &[(&str, &str)] = &[
+    ("xlsx", "请改用 read_document"),
+    ("xlsm", "请改用 read_document"),
+    ("docx", "请改用 read_document"),
+    ("pdf", "请改用 read_document"),
+    ("xls", "这是 2003 格式的表格，请先另存为 .xlsx 再读"),
+    ("doc", "这是 2003 格式的文档，请先另存为 .docx 再读"),
+    ("pptx", "演示文稿不在支持范围内"),
+];
+
+/// 按扩展名给出「二进制文档」的拒绝原因；不是已知二进制文档则返回 None。
+pub fn binary_doc_hint(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    BINARY_DOC_EXTS
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, h)| *h)
+}
+
+/// NUL 字节是否呈 UTF-16 规律的隔位分布：一侧几乎全是 NUL（≥90%）、另一侧几乎没有（≤10%）。
+/// 这种规律性只在 UTF-16 文本里出现；二进制文件里的 NUL 分布没有这个性质。
+fn is_utf16_shaped(sample: &[u8]) -> bool {
+    let odd_len = sample.len() / 2;
+    if odd_len == 0 {
+        return false;
+    }
+    let even_len = sample.len() - odd_len;
+    let even_nul = sample.iter().step_by(2).filter(|&&b| b == 0).count();
+    let odd_nul = sample
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|&&b| b == 0)
+        .count();
+    let er = even_nul as f64 / even_len as f64;
+    let or = odd_nul as f64 / odd_len as f64;
+    (er >= 0.9 && or <= 0.1) || (or >= 0.9 && er <= 0.1)
+}
+
+/// 内容探测：含 NUL 字节即认定为二进制，但 UTF-16 文本（带 BOM 或隔位 NUL 规律）除外。
+/// 只做启发式判断，误判代价是让模型换工具而不是给出错误内容——宁可保守。
+fn looks_binary(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        return false;
+    }
+    let sample = &bytes[..bytes.len().min(8192)];
+    if !sample.contains(&0) {
+        return false;
+    }
+    !is_utf16_shaped(sample)
+}
+
 /// 探测字节流是否为 UTF-16 编码：有 BOM 直接判定；无 BOM 时用 NUL 字节密度启发式
 ///（UTF-16 编码 ASCII 文本时每字符含一个 0x00，密度显著高于 UTF-8）。
 fn looks_utf16(bytes: &[u8]) -> bool {
@@ -100,13 +158,10 @@ fn decode_utf16(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// 文本解码统一入口：先做 UTF-16 探测，命中则转码，否则按 UTF-8 宽松解码（非法字节以替换符保留）。
+/// 文本解码统一入口：UTF-16 探测命中则转码，否则交给编码探测（BOM → UTF-8 → GBK → 宽松 UTF-8）。
+/// 想知道实际用了什么编码的调用方用 [`crate::tools::encoding::decode_text`]。
 pub fn read_text_content(bytes: &[u8]) -> String {
-    if looks_utf16(bytes) {
-        decode_utf16(bytes)
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
+    crate::tools::encoding::decode_text(bytes).text
 }
 
 /// 截取 `[start, end]` 行区间并加行号前缀（右对齐 6 位 + `| `），供模型精确引用行号。
@@ -238,6 +293,26 @@ impl Tool for ReadTool {
                 continue;
             }
 
+            // 二进制拦截（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）：
+            // 先按扩展名点名工具，再用内容探测兜住「扩展名看不出是什么」的二进制文件。
+            if let Some(hint) = binary_doc_hint(&resolved) {
+                return ToolOutcome::err(
+                    "E_UNSUPPORTED",
+                    format!("{} 是二进制文档，read 读出来只有乱码，{hint}。", f.path),
+                );
+            }
+            if looks_binary(&bytes) {
+                return ToolOutcome::err(
+                    "E_UNSUPPORTED",
+                    format!(
+                        "{} 的内容不是文本（含二进制字节），read 无法读取。\
+                         若它其实是文本，可能是不带字节顺序标记（BOM）的 UTF-16 编码，请先转成 UTF-8；\
+                         若它是一份表格或文档，请用 read_document。",
+                        f.path
+                    ),
+                );
+            }
+
             // 文本分支
             if meta.len() > MAX_TEXT_BYTES && f.start_line.is_none() {
                 return ToolOutcome::err(
@@ -245,7 +320,9 @@ impl Tool for ReadTool {
                     format!("{} 超过 1MB，请用 startLine/endLine 分段读取", f.path),
                 );
             }
-            let text = read_text_content(&bytes);
+            let decoded = crate::tools::encoding::decode_text(&bytes);
+            let text = decoded.text;
+            let encoding = decoded.encoding;
             let total_lines = text.split_inclusive('\n').count();
             let (start, end) = match f.start_line {
                 Some(n) if n < 0 => {
@@ -286,6 +363,9 @@ impl Tool for ReadTool {
                 "start_line": start, "end_line": end.min(total), "total_lines": total,
                 "truncated": end.min(total) < total,
                 "version": version,
+                // 实际采用的编码：非 utf-8 时让模型知道内容是怎么解出来的
+                //（GBK 是中文环境里 csv / tsv 的常见编码，按 UTF-8 硬读只会得到乱码）
+                "encoding": encoding,
                 "content": content,
             }));
         }
@@ -309,6 +389,32 @@ mod tests {
         assert!(s.contains("     3| gamma"));
     }
 
+    /// GBK 编码的 csv：读出来必须是正常汉字，而不是一片替换符。
+    /// 内容对了还不够——返回值里的 encoding 要如实说明「这是按 GBK 解的」，
+    /// 否则模型看到可疑内容时无法判断是文件本身的问题还是解码的问题。
+    #[tokio::test]
+    async fn gbk_text_is_decoded_and_encoding_is_reported() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, main_rt) = make_ctx(&ws, &dd);
+        let (gbk, _, had_errors) = encoding_rs::GBK.encode("月份,金额\n1月,120\n");
+        assert!(!had_errors);
+        std::fs::write(ws.path().join("表.csv"), gbk.as_ref()).unwrap();
+
+        let out = ReadTool
+            .run(
+                &ctx_for(core, main_rt),
+                serde_json::json!({"files":[{"path":"表.csv"}]}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let f = &out.data["files"][0];
+        assert_eq!(f["encoding"], serde_json::json!("gbk"));
+        let content = f["content"].as_str().unwrap();
+        assert!(content.contains("月份,金额"), "{content}");
+        assert!(!content.contains('\u{FFFD}'), "不该有替换符：{content}");
+    }
+
     #[test]
     fn utf16_detection() {
         let le: Vec<u8> = {
@@ -321,6 +427,18 @@ mod tests {
         assert!(looks_utf16(&le));
         assert_eq!(read_text_content(&le), "hi 你");
         assert!(!looks_utf16(b"plain ascii text"));
+        // UTF-16 文件里天然含 NUL 字节，不能因此被判成二进制
+        assert!(!looks_binary(&le));
+        assert!(looks_binary(&[0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]));
+        assert!(!looks_binary("正常的中文文本".as_bytes()));
+    }
+
+    #[test]
+    fn binary_doc_extension_table() {
+        assert!(binary_doc_hint(Path::new("a/b.XLSX")).is_some());
+        assert!(binary_doc_hint(Path::new("a/b.pdf")).is_some());
+        assert!(binary_doc_hint(Path::new("a/b.rs")).is_none());
+        assert!(binary_doc_hint(Path::new("noext")).is_none());
     }
 
     #[test]
@@ -382,6 +500,57 @@ mod tests {
         // 子代理豁免：读代码是其本职
         let out2 = ReadTool.run(&ctx_for(core, sub), args).await;
         assert!(out2.ok, "{out2:?}");
+    }
+
+    /// 二进制文档按扩展名拦下并点名 read_document（不能给模型乱码）。
+    #[tokio::test]
+    async fn binary_document_ext_is_rejected_with_pointer() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, main_rt) = make_ctx(&ws, &dd);
+        // 内容伪装成 ZIP 头（真 .xlsx 也是 ZIP），确保拦截来自扩展名判断
+        std::fs::write(ws.path().join("t.xlsx"), b"PK\x03\x04rest").unwrap();
+        let out = ReadTool
+            .run(
+                &ctx_for(core.clone(), main_rt.clone()),
+                serde_json::json!({"files":[{"path":"t.xlsx"}]}),
+            )
+            .await;
+        assert!(!out.ok, "{out:?}");
+        let e = out.error.as_ref().unwrap();
+        assert_eq!(e.code, "E_UNSUPPORTED");
+        assert!(e.message.contains("read_document"), "{}", e.message);
+
+        // 旧格式给的是「另存为新格式」的指引，不是 read_document
+        std::fs::write(ws.path().join("t.xls"), b"\xd0\xcf\x11\xe0").unwrap();
+        let out2 = ReadTool
+            .run(
+                &ctx_for(core, main_rt),
+                serde_json::json!({"files":[{"path":"t.xls"}]}),
+            )
+            .await;
+        assert!(!out2.ok, "{out2:?}");
+        assert!(out2.error.as_ref().unwrap().message.contains("另存为"));
+    }
+
+    /// 扩展名看不出是什么、但内容含 NUL 字节的二进制文件同样被拦下。
+    #[tokio::test]
+    async fn binary_content_is_rejected_without_known_extension() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, main_rt) = make_ctx(&ws, &dd);
+        let mut bytes = b"\x7fELF".to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.extend_from_slice(b"payload");
+        std::fs::write(ws.path().join("blob.bin"), &bytes).unwrap();
+        let out = ReadTool
+            .run(
+                &ctx_for(core, main_rt),
+                serde_json::json!({"files":[{"path":"blob.bin"}]}),
+            )
+            .await;
+        assert!(!out.ok, "{out:?}");
+        assert_eq!(out.error.as_ref().unwrap().code, "E_UNSUPPORTED");
     }
 
     /// 主会话窗口读取（预算内）通过；超预算单文件整读被拒但窗口仍可用（edit 前置读不受影响）。

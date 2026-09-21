@@ -23,7 +23,15 @@ pub async fn create_session(
         }
         let pd = crate::core::projects::project_data_dir(&core.data_dir, &project);
         crate::core::projects::save_project(&core.data_dir, &project).map_err(err)?; // 顺带确保子目录存在
-        (primary, Vec::new(), Some(pid), Some(pd), Some(project))
+        // [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目设置里已允许的外部目录
+        // 直接作为额外根带动（只放行仍然存在的目录；目录被删掉就把这条丢掉，不让它一直躺在设置里）
+        let allowed: Vec<String> = project
+            .allowed_dirs
+            .iter()
+            .filter(|d| std::path::Path::new(d).is_dir())
+            .cloned()
+            .collect();
+        (primary, allowed, Some(pid), Some(pd), Some(project))
     } else if let Some(ws) = workspace {
         let path = std::path::PathBuf::from(&ws);
         if !path.is_dir() {
@@ -86,6 +94,17 @@ pub async fn load_session(
             let mut roots = meta.roots;
             if roots.is_empty() {
                 roots = vec![workspace.clone()];
+            }
+            // [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目设置里已允许的外部目录
+            // 在重开会话时重新带上（meta 快照可能还是放行之前写的），否则用户会莫名其妙再被问一次
+            if let Some(pid) = meta.project_id.as_deref()
+                && let Some(entry) = crate::core::projects::find(&core.data_dir, pid)
+            {
+                for d in &entry.allowed_dirs {
+                    if std::path::Path::new(d).is_dir() && !roots.iter().any(|r| r == d) {
+                        roots.push(d.clone());
+                    }
+                }
             }
             let pd = meta
                 .project_id

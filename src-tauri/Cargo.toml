@@ -6,7 +6,7 @@ license = "MIT"
 repository = "https://github.com/Yangshifu1024/CodeWave"
 authors = ["Yangzhenbiao"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.98"
 # 多 bin 目标历史上用于承载假 LSP server；LSP 机制已随 post-write-check 删除（[docs/post-write-check-plan]），
 # 现仅剩主程序，保留 default-run 以免未来新增 bin 时 `cargo run` 歧义。
 default-run = "codewave"
@@ -65,6 +65,9 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "7"
 sha2 = "0.11"
 base64 = "0.23"
+# 文本编码探测（[docs/office-and-pdf-support](../../docs/office-and-pdf-support.md)）：导出成 csv 的表格
+# 常见 GBK，按 UTF-8 硬读会得到一片乱码。这个包同时在依赖树里（间接依赖已存在），不新增下载量。
+encoding_rs = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 # Enabled in P1 (docs/03: introduced in P0 without being called); keyring 3.x with per-platform features
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -72,6 +75,20 @@ dom_smoothie = "0.18.0"
 tokio-cron-scheduler = "0.15.1"
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
 cron = "0.17.0"
+
+# Office 文档支持（docs/office-and-pdf-support）：
+# - umya-spreadsheet：读写 .xlsx / .xlsm（样式、公式、多工作表）
+# - docx-rs：生成 .docx（读取走自研解包，见 tools/document 模块）
+# - zip + quick-xml：保真修改的基础设施（解开压缩包 → 只替换目标内部文件 → 其余原样搬运重打包），
+#   绝不整份解析重建（重建会丢图表、数据透视表、迷你图）。zip 关默认特性只留 deflate，
+#   避开默认特性中需要 C 工具链的压缩后端。
+umya-spreadsheet = "3"
+docx-rs = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"
+# PDF 文字提取。这个包有已知的崩溃记录（畸形文件会 panic），所以调用处必须做崩溃隔离，
+# 见 tools/document/pdf.rs：绝不能让它的 panic 传到命令线程上。
+pdf-extract = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

@@ -15,6 +15,7 @@
 
 ## 基准与方案
 
+- 2026-09-21 · [office-and-pdf-support.md](./office-and-pdf-support.md) — Office 与 PDF 文件支持：新增 `read_document` / `write_document` / `edit_document` 三个工具（表格 / Word / PDF 的读、生成与保真修改）+ 三份内置技能（xlsx/docx/pdf）+ 四个文件入口（附件按钮改走原生选择框、拖入窗口、项目外目录放行、`@` 引用）+ 修改前自动备份与右栏一键回退 + 预览通道体积分档（文本与二进制 8MB、结构化文档 200MB、大文件 4MB 分片）与表格/PDF 预览视图；`read` 拒收二进制文档并点名新工具；最低 Rust 版本 1.85 → 1.98，新增 umya-spreadsheet / docx-rs / zip / quick-xml / pdf-extract 与前端 pdfjs-dist；保真验证 = 11 份真实样本逐字节比对 + **用户用真 Excel 打开确认不弹修复提示**
 - 2026-08-30 · [technical-design.md](./technical-design.md) — 技术方案基准（决策记录 D1–D7、分层规则）
 - 2026-08-30 · [p0-plan.md](./p0-plan.md) — P0 阶段方案
 - 2026-08-30 · [p1-plan.md](./p1-plan.md) — P1 阶段方案

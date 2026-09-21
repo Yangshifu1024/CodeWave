@@ -624,6 +624,7 @@ mod tests {
                 directory: a.to_string_lossy().into_owned(),
                 data_dir: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
+                allowed_dirs: vec![],
             },
         )
         .unwrap();

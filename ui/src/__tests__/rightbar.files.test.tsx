@@ -2,6 +2,7 @@
 // plus the run store's writeTick write signal (incremented on create/edit success, not on failure or other tools)
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { App as AntApp } from "antd";
 import "../i18n"; // RightBar mounted standalone must init i18next explicitly (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
@@ -36,12 +37,19 @@ let fileMode: "fixture" | "defer" = "fixture";
 let filePayload: any = fixture;
 let fileResolvers: ((v: any) => void)[] = [];
 
+// [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：回退入口的备份清单（默认空 = 没备份）
+let backupsPayload: any[] = [];
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: any) => {
     calls.push({ cmd, args });
     if (cmd === "list_session_files") {
       if (fileMode === "defer") return new Promise((resolve) => fileResolvers.push(resolve));
       return filePayload;
+    }
+    if (cmd === "list_document_backups") return backupsPayload;
+    if (cmd === "restore_document_backup") {
+      return { path: args?.path ?? "", restoredFrom: args?.backupPath ?? "", currentBackup: null, size: 9 };
     }
     if (cmd === "read_workspace_file") return { path: args?.path ?? "", size: 12, content: "# Hello" };
     if (cmd === "read_workspace_file_base64") return { path: args?.path ?? "", size: 4, content: "aGk=" };
@@ -79,6 +87,7 @@ afterEach(() => {
   fileMode = "fixture";
   filePayload = fixture;
   fileResolvers = [];
+  backupsPayload = [];
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   // Reset the right-sidebar toggle singleton ([docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)): prevent collapsed state leaking across cases
   useUi.setState({ rightBarOpen: true });
@@ -154,6 +163,107 @@ it("切会话后晚到的旧产物响应不覆盖新列表", async () => {
   openFilesTab();
   expect(await screen.findByText("new-session.md")).toBeTruthy();
   expect(screen.queryByText("old-session.md")).toBeNull();
+});
+
+describe("文档回退入口", () => {
+  /** 一条被本应用改过的表格：只有这种产物才会有备份。 */
+  const xlsx = {
+    path: "/ws/预算表.xlsx",
+    first_op: "create", last_op: "edit",
+    first_at: "2026-09-20T01:00:00Z", last_at: "2026-09-20T02:00:00Z",
+    count: 2, exists: true, size: 4096,
+  };
+
+  async function openPanel(files: any[]) {
+    filePayload = files;
+    seedTabs(["s1"]);
+    // 回退成功要弹提示，而提示走 App.useApp()（与仓库其他组件同一惯例）——
+    // 在没包 <AntApp> 的上下文里 message 方法是 undefined，一调就抛，
+    // 连后续的刷新也会跟着跳掉。所以这一组用例必须包上 AntApp。
+    render(<AntApp><RightBar /></AntApp>);
+    openFilesTab();
+  }
+
+  it("表格行上有回退按钮；列出版本、确认后真的回退并刷新列表", async () => {
+    backupsPayload = [
+      { path: "/data/tmp/document-backup/B-new.xlsx.bak", at: "2026-09-20T02:00:00Z", size: 4096 },
+      { path: "/data/tmp/document-backup/A-old.xlsx.bak", at: "2026-09-20T01:00:00Z", size: 2048 },
+    ];
+    await openPanel([xlsx]);
+    await screen.findByText("预算表.xlsx");
+
+    const btn = document.querySelector(".rb-file-btn") as HTMLElement;
+    expect(btn).toBeTruthy();
+    fireEvent.click(btn);
+
+    // 拉清单：路径与会话都传对了
+    await waitFor(() => {
+      const c = calls.find((x) => x.cmd === "list_document_backups");
+      expect(c?.args?.path).toBe("/ws/预算表.xlsx");
+      expect(c?.args?.sessionId).toBe("s1");
+    });
+    // 两份版本可选，默认选中最新那份（清单新的在前）
+    const radios = await waitFor(() => {
+      const r = document.querySelectorAll(".ant-radio-wrapper");
+      expect(r.length).toBe(2);
+      return r;
+    });
+    expect((radios[0] as HTMLElement).textContent ?? "").toContain("4 KB");
+    expect((radios[1] as HTMLElement).textContent ?? "").toContain("2 KB");
+
+    // antd 会在两个字的按钮里插空格（「回 退」），所以按去空白后的文本找
+    const ok = Array.from(document.querySelectorAll(".ant-modal-footer button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === "回退",
+    ) as HTMLElement;
+    expect(ok).toBeTruthy();
+    const listCallsBefore = calls.filter((c) => c.cmd === "list_session_files").length;
+    fireEvent.click(ok);
+
+    await waitFor(() => {
+      const c = calls.find((x) => x.cmd === "restore_document_backup");
+      // 默认回退到最新那份备份
+      expect(c?.args).toMatchObject({
+        sessionId: "s1",
+        path: "/ws/预算表.xlsx",
+        backupPath: "/data/tmp/document-backup/B-new.xlsx.bak",
+      });
+    });
+    // 回退改了体积与修改时间：成功后列表刷新一次
+    await waitFor(() =>
+      expect(calls.filter((c) => c.cmd === "list_session_files").length).toBeGreaterThan(listCallsBefore),
+    );
+    // 点回退不应把预览一并打开
+    expect(calls.some((c) => c.cmd.startsWith("read_workspace_file"))).toBe(false);
+  });
+
+  it("没有备份：弹框里说明原因且确定键禁用，不发回退请求", async () => {
+    backupsPayload = [];
+    await openPanel([xlsx]);
+    await screen.findByText("预算表.xlsx");
+    fireEvent.click(document.querySelector(".rb-file-btn") as HTMLElement);
+
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("还没有备份"));
+    const ok = Array.from(document.querySelectorAll(".ant-modal-footer button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === "回退",
+    ) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    fireEvent.click(ok);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.some((c) => c.cmd === "restore_document_backup")).toBe(false);
+  });
+
+  it("非文档产物（比如 markdown）不显示回退按钮", async () => {
+    await openPanel([fixture[0]]);
+    await screen.findByText("requirement.md");
+    expect(document.querySelector(".rb-file-btn")).toBeNull();
+  });
+
+  it("已删除的文档行不显示回退按钮（没东西可回退）", async () => {
+    backupsPayload = [{ path: "/data/tmp/document-backup/x.bak", at: "2026-09-20T02:00:00Z", size: 10 }];
+    await openPanel([{ ...xlsx, exists: false }]);
+    await screen.findByText("预算表.xlsx");
+    expect(document.querySelector(".rb-file-btn")).toBeNull();
+  });
 });
 
 describe("writeTick 写入信号", () => {

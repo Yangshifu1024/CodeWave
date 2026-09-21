@@ -612,6 +612,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
+  "chat/ExternalDirPrompt.tsx": ["composer."], // 项目外目录放行确认框（文案归 composer 段，与附件入口同一处）
   "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
   "chat/segments.tsx": ["chat."], // 流式段落状态词
   "files/FileViewerModal.tsx": ["files."], // 产物预览弹窗

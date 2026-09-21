@@ -259,6 +259,15 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
+/* 文件拖入提示条（[docs/office-and-pdf-support]）：只做视觉提示，接收拖放的是 Tauri 事件（见 ipc/dragdrop.ts）。
+   指针事件一律放行，否则提示条会挡住底下输入区的鼠标交互 */
+.composer-drop-hint {
+  position: absolute; inset: 0; z-index: 20; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--ws-accent); border-radius: 12px;
+  background: color-mix(in srgb, var(--ws-panel) 80%, transparent);
+  color: var(--ws-accent); font-size: 13px;
+}
 /* 菜单宽度上限（[docs/slash-skills-and-dollar-agents]）：Composer 以 ResizeObserver 实测输入卡片宽度
    注入 maxWidth；此处的 calc 兜底保证首帧/测量失败时不撑出视口。left 对齐卡片左边缘（.composer 有 16px 外边距） */
 .menu { display: flex; flex-direction: column; gap: 2px; min-width: 260px; margin-left: 16px; max-width: calc(100vw - 40px); }
@@ -1054,6 +1063,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-file-icon { flex: none; display: inline-flex; }
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
+/* 回退按钮（[docs/office-and-pdf-support]）：平时不占视线，悬停该行时才出现 */
+.rb-file-btn { flex: none; opacity: 0; transition: opacity 0.12s; }
+.rb-file:hover .rb-file-btn { opacity: 1; }
+.rb-file-btn:focus-visible { opacity: 1; }
 .rb-file-gone { opacity: 0.45; cursor: default; }
 
 /* ---------- 栏宽分隔条（可拖拽栏宽，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */

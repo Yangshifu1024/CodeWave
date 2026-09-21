@@ -15,9 +15,13 @@ import { useUi } from "../../stores/ui";
 import type { ApprovalMode, EffortLevel } from "../../ipc/types";
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
+import { ipc } from "../../ipc/client";
+import { listenFileDrop } from "../../ipc/dragdrop";
 import CompactButton from "./ContextInfoBar";
 import AskPanel from "../tools/AskPanel";
 import QueuePanel from "./QueuePanel";
+import ExternalDirPrompt from "./ExternalDirPrompt";
+import type { DirDecision } from "./useComposerAttachments";
 import { useComposerAttachments } from "./useComposerAttachments";
 import { useComposerHistory } from "./useComposerHistory";
 import { useComposerMentions } from "./useComposerMentions";
@@ -77,8 +81,78 @@ export default function Composer() {
   const [menuWidth, setMenuWidth] = useState(0);
 
   // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
-  const attachments = useComposerAttachments({ t, message, images: draft.images, setImages: setDraftImages });
-  const { images, setImages, fileRef, recalledImages, addFiles, onPaste } = attachments;
+  //
+  // 项目外目录放行（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+  // 判定与放行都在后端，这里是「问一次」的桥——把 resolve 存起来，等用户点完三选一再让流程继续。
+  // 用 Promise 而不是「先弹框、下次事件再续跑」：一次拖入多个外部文件时流程要原地暂停，
+  // 拆成状态机会把后面每个文件的处理都变成回调套回调。
+  const [extDir, setExtDir] = useState<string | null>(null);
+  const extResolve = useRef<((v: DirDecision) => void) | null>(null);
+  const askExternalDir = (dir: string) =>
+    new Promise<DirDecision>((resolve) => {
+      extResolve.current = resolve;
+      setExtDir(dir);
+    });
+  const decideExternalDir = (v: DirDecision) => {
+    setExtDir(null);
+    const r = extResolve.current;
+    extResolve.current = null;
+    r?.(v);
+  };
+
+  const attachments = useComposerAttachments({
+    t,
+    message,
+    images: draft.images,
+    setImages: setDraftImages,
+    // 显式锁定当前 Tab：判定与放行都是异步的，期间切 Tab 也不能把引用写进别的会话
+    sessionId: tab?.key ?? null,
+    appendRefs: (refs) => {
+      // 引用就是文本（见 useComposerAttachments 文件头），直接追加到草稿末尾
+      useRun
+        .getState()
+        .setDraftText(
+          (cur) => (cur === "" || /\s$/.test(cur) ? cur : `${cur} `) + refs.map((r) => `@${r}`).join(" ") + " ",
+          tab?.key,
+        );
+    },
+    askExternalDir,
+  });
+  const { images, setImages, recalledImages, addPaths, onPaste } = attachments;
+
+  /** 系统拖入的文件（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+   *  网页层的 ondrop 在窗口开启系统拖放后不再触发，只能走 Tauri 事件通道。 */
+  const [dropping, setDropping] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let dropped = false;
+    void listenFileDrop({
+      onOver: () => setDropping(true),
+      onLeave: () => setDropping(false),
+      onDrop: (paths) => {
+        setDropping(false);
+        void addPaths(paths);
+      },
+    }).then((un) => {
+      // 订阅是异步完成的：组件已卸载就直接取消，别留一个永远收不到的监听
+      if (dropped) un();
+      else unlisten = un;
+    });
+    return () => {
+      dropped = true;
+      unlisten?.();
+    };
+  }, [addPaths]);
+
+  /** 附件按钮：开原生文件选择框（拿真实路径，这是「原地引用」的前提）。 */
+  async function pickFiles() {
+    try {
+      const paths = await ipc.selectDocumentFiles();
+      if (paths.length) await addPaths(paths);
+    } catch (e) {
+      message.warning(String(e).replace(/^Error[:\s]*/i, ""));
+    }
+  }
   useComposerEvents({ taRef, setText, setImages, recalledImages });
   const history = useComposerHistory({
     tabKey: tab?.key,
@@ -463,7 +537,7 @@ export default function Composer() {
     ],
     onClick: ({ key }) => {
       if (key === "attach") {
-        fileRef.current?.click();
+        void pickFiles();
       } else if (key === "at") {
         insertTrigger("@");
       } else if (key === "slash") {
@@ -563,17 +637,11 @@ export default function Composer() {
         <span />
       </Popover>
 
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        multiple
-        style={{ display: "none" }}
-        onChange={(e) => {
-          void addFiles(e.target.files);
-          e.target.value = ""; // 允许重复选择同一文件
-        }}
-      />
+      {/* 文件选择走原生对话框（ipc.select_document_files）：网页内的 <input type=file> 只给文件内容、
+          拿不到真实路径，而本应用对文件是原地引用，必须有路径。 */}
+
+      {/* 项目外目录放行确认：一次拖入多个外部文件时，后面的会排队等这一个决定 */}
+      <ExternalDirPrompt dir={extDir} onDecide={decideExternalDir} />
 
       <div className="composer">
         {/* 多条流光边框（docs/antd6-upgrade-and-composer-border-beam，antd 6 BorderBeam）：条纹均匀分布；颜色跟随主题强调色，
@@ -748,6 +816,9 @@ export default function Composer() {
           </div>
         </BorderBeam>
       </div>
+
+      {/* 拖入提示条：只在拖拽悬停时出现，落下即消失（实际处理在 addPaths） */}
+      {dropping && <div className="composer-drop-hint">{t("composer.dropHere")}</div>}
         </>
       )}
     </div>
