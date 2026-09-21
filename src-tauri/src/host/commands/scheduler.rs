@@ -52,6 +52,8 @@ pub async fn create_scheduled_task(
         last_status: None,
         last_summary: None,
         project_id,
+        enabled: true,
+        runs: Vec::new(),
     };
     core.tasks.upsert(task.clone()).await; // upsert 内部自持久化（项目附属任务）
     Ok(task)
@@ -69,6 +71,35 @@ pub async fn delete_scheduled_task(
         .await
         .ok_or_else(|| "任务不存在".to_string())?;
     Ok(())
+}
+
+/// 编辑计划任务（名称 / 指令 / 计划）：计划变化时由 core 侧重算 next_run。
+/// 全局任务表操作，与当前会话无关，故不收 session_id（只校验 + 转调 core）。
+#[tauri::command]
+pub async fn update_scheduled_task(
+    core: Core<'_>,
+    id: String,
+    name: String,
+    instruction: String,
+    schedule: String,
+) -> Result<crate::core::scheduler::ScheduledTask, String> {
+    core.tasks.update(&id, name, instruction, schedule).await
+}
+
+/// 暂停 / 启用计划任务（暂停保留 next_run；启用重算，once 已过期则报错）。
+#[tauri::command]
+pub async fn set_scheduled_task_enabled(
+    core: Core<'_>,
+    id: String,
+    enabled: bool,
+) -> Result<crate::core::scheduler::ScheduledTask, String> {
+    core.tasks.set_enabled(&id, enabled).await
+}
+
+/// 立即运行一次计划任务（不修改 next_run；已有任务在跑时直接拒绝）。
+#[tauri::command]
+pub async fn run_scheduled_task_now(core: Core<'_>, id: String) -> Result<(), String> {
+    crate::core::scheduler::trigger_now(core.inner().clone(), &id).await
 }
 
 // ---------- 统计查询（P2-H）----------

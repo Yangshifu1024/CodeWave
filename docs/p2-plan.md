@@ -69,9 +69,11 @@ pub struct DriveCtx {
 
 - schema：action 三选一：`create{name, instruction, schedule}` / `list` / `delete{id}`。
 - schedule 文法：`cron:<5 段表达式>` | `every:<n m|h|d>` | `once:<ISO8601 本地时间>`；解析校验（cron 用 tokio-cron-scheduler 自带校验）。
+  - **后续修正（2026-09-22）**：实际用的是 `cron` crate 的 `Schedule::from_str`（自写 tick 推进）；`tokio-cron-scheduler` 从未被引用，已从 `Cargo.toml` 移除。见 [docs/tasks-module-polish](./tasks-module-polish.md)。
 - `TaskTable{id→{name, instruction, schedule, next_run, last_result}}`。
 - **执行语义**：
   - 进程本地（重启即清，启动时提示"有 N 个任务未恢复"不自动重建）；
+    - **后续修正（2026-09-22）**：项目任务已落盘（`<主目录>/.codewave/projects/<project_id>/tasks/<id>.json`），重启后仍在；仅自由会话任务保持进程内。见 [docs/tasks-module-polish](./tasks-module-polish.md)。
   - 全局串行队列（同时最多 1 个任务 run，避免与用户 run 抢工作区写）；
   - 每 run：全新隔离上下文（system = 核心提示词 + 任务指令；无任何会话历史）；工具集 = 内置全套（无 MCP 以免副作用扩散，文档明示）；独立 StepBudget（默认 30）；
   - 结果：完成 → 通知（I 组 notification）+ `scheduled:done` 事件 + 结果摘要存 `stats/` 附带日志 `tmp/tasks/<id>.log`。

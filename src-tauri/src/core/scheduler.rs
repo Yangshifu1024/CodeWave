@@ -14,6 +14,35 @@ use tokio::sync::Mutex;
 /// 任务运行步数预算（force_report 前的收敛余量由此保证）。
 pub const TASK_BUDGET_STEPS: usize = 30;
 
+/// 每任务保留的执行记录条数上限（新的在前）。
+pub const MAX_TASK_RUNS: usize = 20;
+/// 执行来源：定时触发（supervisor tick）。
+pub const RUN_SOURCE_SCHEDULE: &str = "schedule";
+/// 执行来源：立即运行（用户手动触发）。
+pub const RUN_SOURCE_MANUAL: &str = "manual";
+
+/// 单次执行记录（任务内嵌的最近 MAX_TASK_RUNS 条；新的在前）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TaskRun {
+    /// 结束时间（RFC3339，本地时区）
+    pub at: String,
+    /// 执行状态：ok / error / skipped
+    pub status: String,
+    /// 执行摘要（沿用既有 300 字符截断口径）
+    pub summary: String,
+    /// 来源：schedule（定时触发）/ manual（立即运行）
+    pub source: String,
+    /// 本次运行的输出 token 数（= usage.output）
+    #[serde(default)]
+    pub out_tokens: u64,
+}
+
+/// 旧数据兼容：`enabled` 缺省为 true（裸 `#[serde(default)]` 会得到 false，
+/// 会把既有任务误判为暂停）。
+fn default_true() -> bool {
+    true
+}
+
 /// 一条计划任务（内存表条目 + projects/<project_id>/tasks/<id>.json 持久化形态）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduledTask {
@@ -34,6 +63,13 @@ pub struct ScheduledTask {
     /// 所属项目（持久化于 projects/<project_id>/tasks/；None = 自由会话任务，不落盘）
     #[serde(default)]
     pub project_id: Option<String>,
+    /// 是否启用（暂停的任务不参与 tick：不执行、不写状态、不记历史、不发事件）；
+    /// 旧数据无此字段 → 默认启用
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 最近执行记录（新的在前，最多 MAX_TASK_RUNS 条）
+    #[serde(default)]
+    pub runs: Vec<TaskRun>,
 }
 
 /// 计划语法：`cron:<5 字段>` | `every:<n m|h|d>` | `once:<RFC3339>`。
@@ -107,8 +143,10 @@ impl ScheduleKind {
 pub struct TaskTable {
     /// 任务表（id → 任务）
     pub tasks: Mutex<HashMap<String, ScheduledTask>>,
-    /// 全局串行执行（[docs/p2-plan](../../../docs/p2-plan.md) §3：同时至多 1 个任务运行）
-    pub exec_lock: Mutex<()>,
+    /// 全局串行执行（[docs/p2-plan](../../../docs/p2-plan.md) §3：同时至多 1 个任务运行）。
+    /// 用 `Arc` 持有：`trigger_now` 要把 `OwnedMutexGuard` move 进 `tokio::spawn` 的
+    /// 后台任务（裸 `MutexGuard` 借用 `AgentCore` 字段，无法跨 'static 任务）。
+    pub exec_lock: Arc<Mutex<()>>,
     /// 持久化根（~/.codewave）；测试注入临时目录
     pub data_dir: std::path::PathBuf,
 }
@@ -118,7 +156,7 @@ impl TaskTable {
     pub fn new(data_dir: std::path::PathBuf) -> Self {
         TaskTable {
             tasks: Mutex::new(HashMap::new()),
-            exec_lock: Mutex::new(()),
+            exec_lock: Arc::new(Mutex::new(())),
             data_dir,
         }
     }
@@ -127,6 +165,82 @@ impl TaskTable {
     pub async fn upsert(&self, task: ScheduledTask) {
         self.persist(&task);
         self.tasks.lock().await.insert(task.id.clone(), task);
+    }
+
+    /// 编辑任务（名称 / 指令 / 计划）：计划变化时才重算 next_run。
+    /// 计划语法非法、或（改后的）once 时间已过去 → Err（内存与磁盘都不动）。
+    pub async fn update(
+        &self,
+        id: &str,
+        name: String,
+        instruction: String,
+        schedule: String,
+    ) -> Result<ScheduledTask, String> {
+        let kind = parse_schedule(&schedule)?;
+        let snap = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(t) = tasks.get_mut(id) else {
+                return Err("任务不存在".into());
+            };
+            // 先算后改：校验失败不得留下半改状态
+            let next = if t.schedule == schedule {
+                None
+            } else {
+                match kind.next_after(Local::now()) {
+                    Some(n) => Some(n.to_rfc3339()),
+                    None => return Err("once 时间已过去，请改计划".into()),
+                }
+            };
+            t.name = name;
+            t.instruction = instruction;
+            if let Some(n) = next {
+                t.schedule = schedule;
+                t.next_run = Some(n);
+            }
+            t.clone()
+        };
+        self.persist(&snap);
+        Ok(snap)
+    }
+
+    /// 暂停 / 启用：暂停保留 next_run 不动；启用重算 next_run（once 已过期 → Err）。
+    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ScheduledTask, String> {
+        let snap = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(t) = tasks.get_mut(id) else {
+                return Err("任务不存在".into());
+            };
+            let next = if enabled {
+                let kind = parse_schedule(&t.schedule)?;
+                match kind.next_after(Local::now()) {
+                    Some(n) => Some(n.to_rfc3339()),
+                    None => return Err("once 时间已过去，请改计划".into()),
+                }
+            } else {
+                None
+            };
+            t.enabled = enabled;
+            if let Some(n) = next {
+                t.next_run = Some(n);
+            }
+            t.clone()
+        };
+        self.persist(&snap);
+        Ok(snap)
+    }
+
+    /// 追加一条执行记录（新的在前，最多 MAX_TASK_RUNS 条）并落盘。
+    pub async fn record_run(&self, id: &str, run: TaskRun) {
+        let snap = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(t) = tasks.get_mut(id) else {
+                return;
+            };
+            t.runs.insert(0, run);
+            t.runs.truncate(MAX_TASK_RUNS);
+            t.clone()
+        };
+        self.persist(&snap);
     }
     /// 移除任务并删除其持久化文件（评审 H3：此前只改内存 + 重写 json，
     /// 任务重启后复活）。
@@ -200,37 +314,55 @@ impl TaskTable {
         v
     }
     /// tick：返回到期任务（并更新 next_run；Once 触发即移除）。
+    /// 暂停（!enabled）的任务一律跳过：不执行、不写状态、不记历史、不发事件。
     pub async fn tick(&self, now: DateTime<Local>) -> Vec<ScheduledTask> {
         let mut due = Vec::new();
-        let mut tasks = self.tasks.lock().await;
-        let ids: Vec<String> = tasks.keys().cloned().collect();
-        for id in ids {
-            let Some(t) = tasks.get_mut(&id) else {
-                continue;
-            };
-            let Some(next) = t.next_run.as_deref().and_then(|s| {
-                DateTime::parse_from_rfc3339(s)
-                    .ok()
-                    .map(|d| d.with_timezone(&Local))
-            }) else {
-                continue;
-            };
-            if next <= now {
-                due.push(t.clone());
-                match parse_schedule(&t.schedule).map(|k| k.next_after(now)) {
-                    Ok(Some(n)) => t.next_run = Some(n.to_rfc3339()),
-                    // once：触发后移除（Every/Cron 经解析期上限后恒返回 Some）
-                    Ok(None) => {
-                        tasks.remove(&id);
-                    }
-                    Err(e) => {
-                        // 计划表达式损坏（如手改任务文件）：隔离而非静默删除循环任务——
-                        // next_run=None 跳过后续 tick
-                        tracing::warn!("计划任务「{}」计划表达式失效（{e}），已暂停调度", t.name);
-                        t.next_run = None;
+        // 锁内只改内存：推进过 next_run 的任务快照留到释放锁之后再落盘
+        let mut rescheduled: Vec<ScheduledTask> = Vec::new();
+        {
+            let mut tasks = self.tasks.lock().await;
+            let ids: Vec<String> = tasks.keys().cloned().collect();
+            for id in ids {
+                let Some(t) = tasks.get_mut(&id) else {
+                    continue;
+                };
+                if !t.enabled {
+                    continue;
+                }
+                let Some(next) = t.next_run.as_deref().and_then(|s| {
+                    DateTime::parse_from_rfc3339(s)
+                        .ok()
+                        .map(|d| d.with_timezone(&Local))
+                }) else {
+                    continue;
+                };
+                if next <= now {
+                    due.push(t.clone());
+                    match parse_schedule(&t.schedule).map(|k| k.next_after(now)) {
+                        Ok(Some(n)) => {
+                            t.next_run = Some(n.to_rfc3339());
+                            rescheduled.push(t.clone());
+                        }
+                        // once：触发后移除（Every/Cron 经解析期上限后恒返回 Some）
+                        Ok(None) => {
+                            tasks.remove(&id);
+                        }
+                        Err(e) => {
+                            // 计划表达式损坏（如手改任务文件）：隔离而非静默删除循环任务——
+                            // next_run=None 跳过后续 tick
+                            tracing::warn!(
+                                "计划任务「{}」计划表达式失效（{e}），已暂停调度",
+                                t.name
+                            );
+                            t.next_run = None;
+                            rescheduled.push(t.clone());
+                        }
                     }
                 }
             }
+        }
+        for t in rescheduled {
+            self.persist(&t);
         }
         due
     }
@@ -260,16 +392,46 @@ pub async fn start_supervisor(core: Arc<crate::core::agent::AgentCore>) {
             for task in due {
                 let core = core.clone();
                 tokio::spawn(async move {
-                    run_task(core, task).await;
+                    run_task(core, task, RUN_SOURCE_SCHEDULE).await;
                 });
             }
         }
     });
 }
 
-/// 单任务执行：全新隔离上下文（独立 SessionRuntime），在串行锁内运行。
-async fn run_task(core: Arc<crate::core::agent::AgentCore>, task: ScheduledTask) {
-    let _guard = core.tasks.exec_lock.lock().await;
+/// 单任务执行（定时路径）：等待串行锁后运行。
+async fn run_task(core: Arc<crate::core::agent::AgentCore>, task: ScheduledTask, source: &str) {
+    let _guard = Arc::clone(&core.tasks.exec_lock).lock_owned().await;
+    run_task_locked(core, task, source).await;
+}
+
+/// 立即运行一次任务（IPC「立即运行」路径）：**不修改 next_run**。
+/// 串行锁被占用 → 直接拒绝（不排队）；否则把 guard move 进后台任务后立即返回。
+pub async fn trigger_now(core: Arc<crate::core::agent::AgentCore>, id: &str) -> Result<(), String> {
+    let task = {
+        let tasks = core.tasks.tasks.lock().await;
+        tasks.get(id).cloned()
+    };
+    let Some(task) = task else {
+        return Err("任务不存在".into());
+    };
+    let guard = match Arc::clone(&core.tasks.exec_lock).try_lock_owned() {
+        Ok(g) => g,
+        Err(_) => return Err("已有任务正在运行，请稍后再试".into()),
+    };
+    tokio::spawn(async move {
+        let _guard = guard;
+        run_task_locked(core, task, RUN_SOURCE_MANUAL).await;
+    });
+    Ok(())
+}
+
+/// 任务执行内核：调用方必须已持有 exec_lock；全新隔离上下文（独立 SessionRuntime）。
+async fn run_task_locked(
+    core: Arc<crate::core::agent::AgentCore>,
+    task: ScheduledTask,
+    source: &str,
+) {
     core.sink.emit(
         &String::new(),
         "scheduled:fired",
@@ -286,6 +448,18 @@ async fn run_task(core: Arc<crate::core::agent::AgentCore>, task: ScheduledTask)
                 t.last_summary = Some("所属项目不存在或无有效目录".into());
             }
         }
+        core.tasks
+            .record_run(
+                &task.id,
+                TaskRun {
+                    at: Local::now().to_rfc3339(),
+                    status: "skipped".into(),
+                    summary: "所属项目不存在或无有效目录".into(),
+                    source: source.to_string(),
+                    out_tokens: 0,
+                },
+            )
+            .await;
         core.sink.emit(&String::new(), "scheduled:done", json!({
             "name": task.name, "id": task.id, "status": "skipped", "summary": "所属项目不存在或无有效目录",
         }));
@@ -343,6 +517,20 @@ async fn run_task(core: Arc<crate::core::agent::AgentCore>, task: ScheduledTask)
             t.last_summary = Some(summary.clone());
         }
     }
+    // 执行记录（新的在前，上限 20）+ 落盘：record_run 落盘时连带写入上一步的
+    // last_status / last_summary（同一份快照）
+    core.tasks
+        .record_run(
+            &task.id,
+            TaskRun {
+                at: Local::now().to_rfc3339(),
+                status: status.clone(),
+                summary: summary.clone(),
+                source: source.to_string(),
+                out_tokens: usage.output,
+            },
+        )
+        .await;
     // L10：任务运行用量计入统计（来源 kind=task）
     if usage.input + usage.output > 0 {
         let model_id = core
@@ -475,6 +663,8 @@ mod tests {
             last_status: None,
             last_summary: None,
             project_id: Some("p1".into()),
+            enabled: true,
+            runs: Vec::new(),
         };
         task_log(&core, &task, "触发");
         task_log(&core, &task, "完成");
@@ -510,6 +700,8 @@ mod tests {
                 last_status: None,
                 last_summary: None,
                 project_id: None,
+                enabled: true,
+                runs: Vec::new(),
             })
             .await;
         // once：到期 → 触发后移除
@@ -523,6 +715,8 @@ mod tests {
                 last_status: None,
                 last_summary: None,
                 project_id: None,
+                enabled: true,
+                runs: Vec::new(),
             })
             .await;
         // 未到期：不触发
@@ -537,6 +731,8 @@ mod tests {
                 last_status: None,
                 last_summary: None,
                 project_id: None,
+                enabled: true,
+                runs: Vec::new(),
             })
             .await;
 
@@ -576,6 +772,8 @@ mod tests {
             last_status: None,
             last_summary: None,
             project_id: Some("p9".into()),
+            enabled: true,
+            runs: Vec::new(),
         };
         table.upsert(task).await;
         let file = dir.path().join("projects/p9/tasks/e9.json");
@@ -612,6 +810,8 @@ mod tests {
             last_status: None,
             last_summary: None,
             project_id: Some("p-missing".into()),
+            enabled: true,
+            runs: Vec::new(),
         };
         assert!(task_scope(&core, &missing).is_none(), "项目缺失应跳过执行");
         // 注册项目（先建子目录结构：save_project 需要项目目录存在）
@@ -637,6 +837,8 @@ mod tests {
             last_status: None,
             last_summary: None,
             project_id: Some("p-multi".into()),
+            enabled: true,
+            runs: Vec::new(),
         };
         let (ws, pid, pdir, extra) = task_scope(&core, &task).unwrap();
         assert_eq!(ws, a, "主目录 = 项目目录");
@@ -657,5 +859,385 @@ mod tests {
         let (ws2, pid2, pdir2, extra2) = task_scope(&core, &free).unwrap();
         assert_eq!(ws2, core.data_dir);
         assert!(pid2.is_none() && pdir2.is_none() && extra2.is_empty());
+    }
+
+    /// 暂停：任务不参与 tick（不执行、不推进 next_run、不记历史、不写状态）。
+    #[tokio::test]
+    async fn tick_skips_disabled_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        let past = (Local::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        table
+            .upsert(ScheduledTask {
+                id: "d1".into(),
+                name: "paused".into(),
+                instruction: "x".into(),
+                schedule: "every:30 m".into(),
+                next_run: Some(past.clone()),
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: false,
+                runs: Vec::new(),
+            })
+            .await;
+        let due = table.tick(Local::now()).await;
+        assert!(due.is_empty(), "暂停任务不应被触发：{due:?}");
+        let list = table.list().await;
+        assert_eq!(
+            list[0].next_run.as_deref(),
+            Some(past.as_str()),
+            "暂停不推进 next_run"
+        );
+        assert!(list[0].runs.is_empty(), "暂停不记历史");
+        assert!(list[0].last_status.is_none(), "暂停不写状态");
+        // 启用后 next_run 重算到未来，重新入调度
+        let t = table.set_enabled("d1", true).await.unwrap();
+        let next = DateTime::parse_from_rfc3339(t.next_run.as_deref().unwrap()).unwrap();
+        assert!(next.with_timezone(&Local) > Local::now());
+    }
+
+    /// update 仅在 schedule 变化时重算 next_run。
+    #[tokio::test]
+    async fn update_recomputes_next_run_only_when_schedule_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        let fixed = (Local::now() + chrono::Duration::hours(3)).to_rfc3339();
+        table
+            .upsert(ScheduledTask {
+                id: "u1".into(),
+                name: "old".into(),
+                instruction: "i1".into(),
+                schedule: "every:1 h".into(),
+                next_run: Some(fixed.clone()),
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: true,
+                runs: Vec::new(),
+            })
+            .await;
+        // 只改 name / instruction：next_run 原样保留
+        let t = table
+            .update("u1", "new".into(), "i2".into(), "every:1 h".into())
+            .await
+            .unwrap();
+        assert_eq!(t.name, "new");
+        assert_eq!(t.instruction, "i2");
+        assert_eq!(
+            t.next_run.as_deref(),
+            Some(fixed.as_str()),
+            "计划未变不重排"
+        );
+        // 改 schedule：重算到未来
+        let t = table
+            .update("u1", "new".into(), "i2".into(), "every:2 h".into())
+            .await
+            .unwrap();
+        assert_eq!(t.schedule, "every:2 h");
+        assert_ne!(t.next_run.as_deref(), Some(fixed.as_str()));
+        let next = DateTime::parse_from_rfc3339(t.next_run.as_deref().unwrap()).unwrap();
+        assert!(next.with_timezone(&Local) > Local::now(), "计划变化应重排");
+        // 未知 id
+        assert!(
+            table
+                .update("ghost", "n".into(), "i".into(), "every:1 h".into())
+                .await
+                .is_err()
+        );
+    }
+
+    /// update 传非法 schedule → 返回错误原文，且内存与磁盘都不改。
+    #[tokio::test]
+    async fn update_rejects_invalid_schedule_without_persisting() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        table
+            .upsert(ScheduledTask {
+                id: "u2".into(),
+                name: "orig".into(),
+                instruction: "i1".into(),
+                schedule: "every:1 h".into(),
+                next_run: None,
+                last_status: None,
+                last_summary: None,
+                project_id: Some("proj".into()),
+                enabled: true,
+                runs: Vec::new(),
+            })
+            .await;
+        let file = dir.path().join("projects/proj/tasks/u2.json");
+        let before = std::fs::read_to_string(&file).unwrap();
+        let err = table
+            .update("u2", "changed".into(), "i2".into(), "weekly".into())
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("cron: / every: / once:"),
+            "应为解析错误原文：{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            before,
+            "非法计划不得落盘"
+        );
+        assert_eq!(table.list().await[0].name, "orig", "非法计划不得改内存");
+        // 过去的 once 计划：同样报错且不改内存
+        let err = table
+            .update(
+                "u2",
+                "changed".into(),
+                "i2".into(),
+                "once:2020-01-01T00:00:00Z".into(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, "once 时间已过去，请改计划");
+        assert_eq!(table.list().await[0].name, "orig");
+    }
+
+    /// set_enabled(true) 重算 next_run；暂停保留；once 已过期 → 报错且保持暂停。
+    #[tokio::test]
+    async fn set_enabled_recomputes_and_rejects_expired_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        let stale = (Local::now() - chrono::Duration::hours(2)).to_rfc3339();
+        table
+            .upsert(ScheduledTask {
+                id: "s1".into(),
+                name: "s".into(),
+                instruction: "i".into(),
+                schedule: "every:1 h".into(),
+                next_run: Some(stale),
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: false,
+                runs: Vec::new(),
+            })
+            .await;
+        let t = table.set_enabled("s1", true).await.unwrap();
+        assert!(t.enabled);
+        let after_enable = t.next_run.clone().unwrap();
+        let next = DateTime::parse_from_rfc3339(&after_enable).unwrap();
+        assert!(
+            next.with_timezone(&Local) > Local::now(),
+            "启用应重算 next_run"
+        );
+        // 暂停：next_run 原样保留
+        let t = table.set_enabled("s1", false).await.unwrap();
+        assert!(!t.enabled);
+        assert_eq!(t.next_run.as_deref(), Some(after_enable.as_str()));
+        // once 已过期：启用报错且保持暂停
+        table
+            .upsert(ScheduledTask {
+                id: "s2".into(),
+                name: "s2".into(),
+                instruction: "i".into(),
+                schedule: "once:2020-01-01T00:00:00Z".into(),
+                next_run: None,
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: false,
+                runs: Vec::new(),
+            })
+            .await;
+        assert_eq!(
+            table.set_enabled("s2", true).await.unwrap_err(),
+            "once 时间已过去，请改计划"
+        );
+        let list = table.list().await;
+        let s2 = list.iter().find(|t| t.id == "s2").unwrap();
+        assert!(!s2.enabled, "报错后仍保持暂停");
+        assert!(table.set_enabled("ghost", true).await.is_err());
+    }
+
+    /// 执行记录新的在前 + 20 条上限（插 21 条丢最旧）。
+    #[tokio::test]
+    async fn record_run_keeps_newest_first_with_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        table
+            .upsert(ScheduledTask {
+                id: "r1".into(),
+                name: "r".into(),
+                instruction: "i".into(),
+                schedule: "every:1 h".into(),
+                next_run: None,
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: true,
+                runs: Vec::new(),
+            })
+            .await;
+        for i in 0..21u64 {
+            table
+                .record_run(
+                    "r1",
+                    TaskRun {
+                        at: format!("2026-01-01T00:00:{i:02}+08:00"),
+                        status: "ok".into(),
+                        summary: format!("run-{i}"),
+                        source: RUN_SOURCE_SCHEDULE.into(),
+                        out_tokens: i,
+                    },
+                )
+                .await;
+        }
+        let list = table.list().await;
+        let t = list.iter().find(|t| t.id == "r1").unwrap();
+        assert_eq!(t.runs.len(), MAX_TASK_RUNS, "上限 20 条");
+        assert_eq!(t.runs[0].summary, "run-20", "新的在前");
+        assert_eq!(t.runs[19].summary, "run-1", "最旧的 run-0 被丢弃");
+        assert_eq!(t.runs[0].out_tokens, 20);
+        assert!(t.runs.iter().all(|r| r.source == RUN_SOURCE_SCHEDULE));
+        // 未知 id：静默忽略（不 panic）
+        table.record_run("ghost", TaskRun::default()).await;
+    }
+
+    /// 旧 JSON（不含 enabled / runs）兼容：enabled == true（丰 default 会得 false）。
+    #[test]
+    fn legacy_json_defaults_enabled_true() {
+        let json = r#"{
+            "id": "o1", "name": "n", "instruction": "i", "schedule": "every:1 h",
+            "next_run": null, "last_status": null, "last_summary": null, "project_id": null
+        }"#;
+        let t: ScheduledTask = serde_json::from_str(json).unwrap();
+        assert!(t.enabled, "旧数据必须默认启用");
+        assert!(t.runs.is_empty());
+        // TaskRun.out_tokens 同样带默认值
+        let r: TaskRun = serde_json::from_str(
+            r#"{"at":"2026-01-01T00:00:00+08:00","status":"ok","summary":"s","source":"manual"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.out_tokens, 0);
+        assert_eq!(r.source, RUN_SOURCE_MANUAL);
+    }
+
+    /// persist 覆盖 tick / update / set_enabled / record_run，load_all 能读回全部字段。
+    #[tokio::test]
+    async fn persist_roundtrip_covers_new_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        let future = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
+        table
+            .upsert(ScheduledTask {
+                id: "p1".into(),
+                name: "orig".into(),
+                instruction: "i".into(),
+                schedule: "every:1 h".into(),
+                next_run: Some(future),
+                last_status: Some("ok".into()),
+                last_summary: Some("done".into()),
+                project_id: Some("proj".into()),
+                enabled: true,
+                runs: vec![TaskRun {
+                    at: Local::now().to_rfc3339(),
+                    status: "ok".into(),
+                    summary: "first".into(),
+                    source: RUN_SOURCE_MANUAL.into(),
+                    out_tokens: 42,
+                }],
+            })
+            .await;
+        // update 落盘
+        table
+            .update("p1", "renamed".into(), "i2".into(), "every:2 h".into())
+            .await
+            .unwrap();
+        // tick 落盘：now 拨到未来令任务到期 → next_run 推进
+        let advanced = table.tick(Local::now() + chrono::Duration::hours(5)).await;
+        assert_eq!(advanced.len(), 1);
+        let mut loaded = TaskTable::load_all_from_projects(dir.path()).await;
+        assert_eq!(loaded.len(), 1);
+        let l = loaded.remove(0);
+        assert_eq!(l.name, "renamed", "update 应落盘");
+        assert_eq!(l.instruction, "i2");
+        assert_eq!(l.schedule, "every:2 h");
+        assert_eq!(l.last_status.as_deref(), Some("ok"));
+        assert_eq!(l.last_summary.as_deref(), Some("done"));
+        assert_eq!(l.runs.len(), 1);
+        assert_eq!(l.runs[0].summary, "first");
+        assert_eq!(l.runs[0].out_tokens, 42);
+        assert_eq!(
+            l.next_run,
+            table.list().await[0].next_run,
+            "tick 推进的 next_run 应落盘"
+        );
+        // set_enabled 落盘（暂停保留 next_run）
+        table.set_enabled("p1", false).await.unwrap();
+        let l = TaskTable::load_all_from_projects(dir.path())
+            .await
+            .remove(0);
+        assert!(!l.enabled, "set_enabled 应落盘");
+        assert!(l.next_run.is_some(), "暂停保留 next_run");
+        // record_run 落盘（新的在前）
+        table
+            .record_run(
+                "p1",
+                TaskRun {
+                    at: "2026-01-02T00:00:00+08:00".into(),
+                    status: "error".into(),
+                    summary: "boom".into(),
+                    source: RUN_SOURCE_SCHEDULE.into(),
+                    out_tokens: 0,
+                },
+            )
+            .await;
+        let l = TaskTable::load_all_from_projects(dir.path())
+            .await
+            .remove(0);
+        assert_eq!(l.runs.len(), 2);
+        assert_eq!(l.runs[0].summary, "boom", "record_run 应落盘");
+    }
+
+    /// exec_lock 被占用时 trigger_now 直接拒绝（且不改 next_run、不记历史）。
+    #[tokio::test]
+    async fn trigger_now_rejects_when_busy() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let next = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
+        core.tasks
+            .upsert(ScheduledTask {
+                id: "m1".into(),
+                name: "manual".into(),
+                instruction: "i".into(),
+                schedule: "every:1 h".into(),
+                next_run: Some(next.clone()),
+                last_status: None,
+                last_summary: None,
+                project_id: None,
+                enabled: true,
+                runs: Vec::new(),
+            })
+            .await;
+        // 未知 id
+        assert_eq!(
+            trigger_now(core.clone(), "ghost").await.unwrap_err(),
+            "任务不存在"
+        );
+        // 串行锁被占用 → 拒绝（不排队）
+        let held = core.tasks.exec_lock.lock().await;
+        assert_eq!(
+            trigger_now(core.clone(), "m1").await.unwrap_err(),
+            "已有任务正在运行，请稍后再试"
+        );
+        drop(held);
+        let mut list = core.tasks.list().await;
+        let t = list.remove(0);
+        assert_eq!(
+            t.next_run.as_deref(),
+            Some(next.as_str()),
+            "立即运行不改 next_run"
+        );
+        assert!(t.runs.is_empty(), "被拒绝时不写记录");
     }
 }

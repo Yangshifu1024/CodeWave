@@ -303,10 +303,25 @@ export interface Todo { title: string; status: "pending" | "in_progress" | "comp
 
 // ---------- P2：计划任务 / 统计 ----------
 
+/** 计划任务的一次执行记录（任务内嵌最近 20 条，新的在前） */
+export interface TaskRun {
+  at: string;
+  status: string;
+  summary: string;
+  source: string;
+  out_tokens: number;
+}
+
 /** 计划任务登记与最近一次执行状态 */
 export interface ScheduledTask {
   id: string; name: string; instruction: string; schedule: string;
   next_run: string | null; last_status: string | null; last_summary: string | null;
+  /** 所属项目 id（null = 自由会话任务，不落盘）；列表是全局的，界面据此标注项目归属 */
+  project_id: string | null;
+  /** 是否启用（关闭后调度器跳过，不影响手工「立即运行」） */
+  enabled: boolean;
+  /** 最近执行记录（后端只留最近 20 条，新的在前） */
+  runs: TaskRun[];
 }
 
 /** 按维度聚合的 token 用量。四把耗时字段可选（serde default）：

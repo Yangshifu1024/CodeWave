@@ -65,6 +65,7 @@ vi.mock("@tauri-apps/api/core", () => ({
                  total_tokens: 6, context_window: 128000, ratio: 0.01 };
       case "get_mcp_config": return "{}";
       case "mcp_status": return [];
+      case "list_scheduled_tasks": return []; // 任务列表：左栏任务区与任务页都从这里取（stores/tasks）
       case "list_skills": return [{ name: "demo", description: "d", whenToUse: "w", origin: "x" }];
       case "list_agents": return [{ name: "backend-dev", description: "后端实现" }];
       case "search_workspace_paths": return [];
@@ -450,6 +451,33 @@ describe("App 渲染冒烟", () => {
     await mountApp();
     await clickIconBtn("统计");
     await waitFor(() => expect(screen.getByText("Token 用量（近 30 天）")).toBeTruthy());
+  });
+
+  it("任务页：覆盖式全屏页挂在内层 Layout 里（度量与设置页一致），工作区只加 .workspace-covered", async () => {
+    await mountApp();
+    await clickIconBtn("任务");
+
+    const shell = document.querySelector(".tasks-shell");
+    expect(shell).toBeTruthy();
+    expect(document.querySelector('[data-testid="tasks-page"]')).toBeTruthy();
+    // 回归：.tasks-shell 是 absolute inset:0 —— 必须挂在**内层** Layout（position:relative）里，
+    // 挂到外层会连自绘标题栏一起盖住；断言方式：它的父节点就是那个 has-sider 布局（Sider/Content 的同一父）
+    expect(shell?.parentElement?.classList.contains("ant-layout-has-sider")).toBe(true);
+    expect(shell?.parentElement).toBe(document.querySelector(".ant-layout-sider")?.parentElement);
+    // 工作区仍挂载，让位集合与设置页完全一致（Sider + Content + 两条栏宽分隔条）
+    expect(document.querySelector(".project-nav")).toBeTruthy();
+    expect(document.querySelector(".right-bar")).toBeTruthy();
+    const covered = Array.from(document.querySelectorAll(".workspace-covered"));
+    expect(covered.length).toBe(4);
+    expect(document.querySelector(".ant-layout-sider")?.classList.contains("workspace-covered")).toBe(true);
+    expect(document.querySelector(".right-bar")?.closest(".workspace-covered")).toBeTruthy();
+    for (const el of document.querySelectorAll<HTMLElement>(".rb-resize-handle")) expect(el.tabIndex).toBe(-1);
+
+    // Esc 归任务页：关闭页面而不是去停运行中的会话
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeFalsy());
+    expect(useUi.getState().tasksOpen).toBe(false);
+    expect(document.querySelectorAll(".workspace-covered").length).toBe(0);
   });
 
   it("设置：MCP 页的结构化编辑器与技能页的列表各自渲染（拆页后不再同页）", async () => {

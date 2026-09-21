@@ -126,7 +126,7 @@ host ──▶ core ──▶ provider
 | grep-regex + grep-searcher + ignore | grep 工具引擎 | **ripgrep 官方库 crate**：内嵌同源引擎，纯 Rust，无需捆绑 rg 二进制 |
 | similar | diff 计算 | edit 卡片/GitDiffModal |
 | dom_smoothie | 网页正文抽取（P1） | web_fetch 的 Readability 实现 |
-| tokio-cron-scheduler | 计划任务（P2） | cron/interval/once |
+| cron | 计划任务（P2） | 5 字段表达式校验（内部前补秒位）；调度由自写 tick 驱动，不引入 tokio-cron-scheduler（该依赖已移除） |
 | flate2 + tempfile | gzip 会话存档、原子写 | — |
 | keyring | API key 存系统钥匙串（P1） | 服务名 `codewave.yangshifu.xyz`；P0 暂明文 config.json |
 | thiserror / anyhow | 错误处理 | 库层 thiserror、host 层 anyhow |
@@ -398,7 +398,7 @@ repair  ：剥离悬空 tool_use；丢弃孤儿 tool_result；tool_use id 配对
 | mcp/ | rmcp 客户端池；配置 = 用户级 `~/.codewave/mcp.json` + 工作区 `mcp.json` 叠加；stdio（Windows 隐藏窗口 + Job Object 防孤儿）/sse/streamable-http；函数名 `mcp__<server>__<tool>`，三键排序；invalid session 自动重连；工具以 `[server]` 描述前缀追加在内置工具后 |
 | skills/ | 扫描：项目 `.codewave/skills/` > 用户 `~/.codewave/skills/` > 工作区 `.agents/skills/`、`.claude/skills/` > 用户级 `~/.agents/skills/`、`~/.claude/skills/`（生态兼容）> 内置（`include_str!` 嵌入 2–3 个自研 skill）；TTL 索引 + invalidate 重载；托管目录技能可删（deletable 标记 + canonicalize 前缀双校验）；YAML frontmatter；系统提示词仅注入索引；斜杠命令与 `skill` 工具双通道 |
 | memory/ | `~/.codewave/memories/*.md`；无专用工具——目录在 write_roots 白名单，模型直接用 create/edit 维护；索引注入；`/remember` 辅助 |
-| scheduler/ | tokio-cron-scheduler；进程本地（重启即清）；全局串行执行；每 run 隔离上下文（P2） |
+| scheduler/ | `cron` crate 校验表达式 + 自写 tick 推进（**无** tokio-cron-scheduler）；任务随项目**落盘**（`<主目录>/.codewave/projects/<project_id>/tasks/<id>.json`，自由会话任务仅进程内）；全局串行执行（`exec_lock`）；每 run 隔离上下文；暂停开关 / 立即运行 / 执行历史（每任务最近 20 条）（P2，见 [docs/tasks-module-polish](./tasks-module-polish.md)） |
 | stats/ | 异步有界队列（2048）写 `stats/<date>.json`，90 天保留；按天/模型/工作区聚合（P2） |
 
 ## 4.10 host —— 唯一框架边界

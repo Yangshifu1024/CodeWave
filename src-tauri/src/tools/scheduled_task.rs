@@ -95,6 +95,8 @@ impl Tool for ScheduledTaskTool {
                     last_status: None,
                     last_summary: None,
                     project_id: ctx.rt.project_id.clone(),
+                    enabled: true,
+                    runs: Vec::new(),
                 };
                 ctx.core.tasks.upsert(task.clone()).await;
                 ToolOutcome::ok(json!({ "created": task }))

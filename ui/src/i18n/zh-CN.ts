@@ -245,8 +245,6 @@ export default {
     waitingConfirm: "等待你的确认",
     waitingAnswer: "等待你的回答",
     subagentFailed: "子代理失败：{{error}}",
-    taskFired: "计划任务已触发",
-    taskDoneName: "计划任务完成：{{name}}",
     updateFailed: "更新下载或安装失败：{{error}}",
     updateFailedRateLimited:
       "更新下载失败：GitHub 匿名 API 配额已耗尽（403）。请稍后重试，或到 Release 页面手动下载安装包；切换代理无法解决此问题。",
@@ -365,13 +363,36 @@ export default {
   titlebar: { tempSession: "临时会话" },
   plan: { title: "当前计划" },
   tasks: {
-    title: "计划任务", name: "任务名", scheduleHint: "计划：cron:0 9 * * * / every:30m / once:ISO",
-    instruction: "任务指令（Agent 将在独立上下文执行）", create: "创建", created: "已创建",
-    // 创建按钮的禁用原因就地显示（版式审计：禁用无原因、语法只当 placeholder）
-    createDisabled: "填写任务名、计划与指令后可创建",
-    // 任务状态兜底文案（此前硬编码在组件里，英文界面会露中文）
-    pending: "待触发",
-    empty: "暂无计划任务（进程本地，重启后清空）",
+    title: "计划任务", name: "任务名",
+    // 周期选择器的语法说明：示例必须**合法**（`every:30m` 这种无空白形态后端会拒，别再写回来）
+    scheduleHint:
+      "支持：每天 09:00 / 每周一 09:00 / 每隔 30 分钟；也可自定义 cron:0 9 * * * 、every:30 m 、once:2026-10-01T09:00:00+08:00",
+    instruction: "任务指令（Agent 将在独立上下文执行）",
+    // 保存按钮的禁用原因就地显示（禁用无原因会让用户猜）
+    createDisabled: "填写任务名、周期与指令后可保存",
+    empty: "暂无计划任务",
+    newTask: "新建任务", editTask: "编辑任务", backToWorkspace: "返回工作区",
+    period: "周期", periodDaily: "每天", periodWeekly: "每周", periodMonthly: "每月",
+    periodEvery: "每隔", periodOnce: "一次", periodCustom: "自定义表达式",
+    time: "时间", weekday: "星期", monthDay: "日期",
+    weekdaySun: "日", weekdayMon: "一", weekdayTue: "二", weekdayWed: "三",
+    weekdayThu: "四", weekdayFri: "五", weekdaySat: "六",
+    intervalUnitMin: "分钟", intervalUnitHour: "小时", intervalUnitDay: "天",
+    intervalTooLarge: "间隔超出上限：分钟 ≤ 43200、小时 ≤ 720、天 ≤ 30",
+    nextRun: "下次触发", paused: "已暂停", noMoreRuns: "不再触发", neverRun: "从未运行",
+    running: "运行中", skipped: "已跳过", pause: "暂停", resume: "启用",
+    // 执行状态文案：任务行标签 / 历史行 / 左栏 tooltip 共用 statusLabel（不再裸显 ok / error）
+    statusOk: "正常", statusError: "失败", lastStatus: "上次状态",
+    runNow: "立即运行", edit: "编辑", history: "执行历史", historyEmpty: "还没有执行记录",
+    sourceSchedule: "定时", sourceManual: "手动", tokens: "{{n}} tok",
+    loadFailed: "加载失败：{{msg}}", deleteFailed: "删除失败：{{msg}}",
+    saveFailed: "保存失败：{{msg}}", runRejected: "{{msg}}",
+    needProjectSession: "先打开一个项目会话", freeSessionNoPersist: "当前是临时会话，任务不会落盘",
+    projectMissing: "项目已不存在", unattributed: "未归属项目", projectUnknown: "项目信息未加载",
+    unattendedApprovalHint: "任务执行中的写操作仍需你在场确认，详见文档",
+    // 周期描述（describeExpr 注入 t 用；插值不可省）
+    descDaily: "每天 {{time}}", descWeekly: "每周{{days}} {{time}}", descMonthly: "每月 {{day}} 日 {{time}}",
+    descEvery: "每 {{n}} {{unit}}", descOnce: "仅一次 {{at}}", weekdaySep: "、",
   },
   stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}", avgRate: "平均生成速率", avgStepMs: "均步耗时", avgTtft: "平均 TTFT" },
   skills: {
