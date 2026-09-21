@@ -262,17 +262,21 @@ pub async fn run_chat(
                 .map(|m| m.id.clone())
                 .unwrap_or_default()
         };
-        core.stats.record(crate::core::stats::UsageRecord {
-            session: rt.id.clone(),
-            model_id,
-            workspace: rt.workspace.to_string_lossy().into_owned(),
-            input: run_usage.input,
-            output: run_usage.output,
-            cache_read: run_usage.cache_read,
-            cache_write: run_usage.cache_write,
-            runs: 1,
-            kind: crate::core::stats::KIND_MAIN.into(),
-        });
+        core.stats.record_timed(
+            crate::core::stats::UsageRecord {
+                session: rt.id.clone(),
+                model_id,
+                workspace: rt.workspace.to_string_lossy().into_owned(),
+                input: run_usage.input,
+                output: run_usage.output,
+                cache_read: run_usage.cache_read,
+                cache_write: run_usage.cache_write,
+                runs: 1,
+                kind: crate::core::stats::KIND_MAIN.into(),
+            },
+            // 本 run 的耗时/TTFT 观测（仅主会话步计入：压缩/命名/子代理/任务走 record，计时全 0）
+            *rt.run_timing.lock().unwrap(),
+        );
     }
 }
 
@@ -484,6 +488,9 @@ pub async fn drive_agent(
     let mut sanitized_once = false;
     let mut attempt: u32 = 0;
     let mut run_usage = crate::provider::RunUsage::default();
+    // 本 run 的生成耗时/TTFT 观测每 run 复位（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+    // 子代理/任务运行也复位各自的 runtime，不会跨 run 累积。
+    *rt.run_timing.lock().unwrap() = crate::core::stats::UsageTiming::default();
     let mut final_text = String::new();
     let mut outcome: Result<(), ProviderError> = Ok(());
     // suggest 路径产出的跟进建议：经返回值交给 run_chat 并入 run:done
@@ -968,8 +975,11 @@ async fn run_llm_turn(
             .clamp(5, 3600),
     );
     loop {
+        // 本**尝试**的计时起点（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+        // 必须在环内——环外的 `step_started` 含上一步的退避等待，拿它当 duration 会把重试等待算进去。
+        let attempt_started = std::time::Instant::now();
         let (tx, rx) = mpsc::channel::<crate::provider::StreamDelta>(1024);
-        let collector = tokio::spawn(collect_deltas(rx, rt.stream.clone()));
+        let collector = tokio::spawn(collect_deltas(rx, rt.stream.clone(), attempt_started));
         // 多 key 池：每次尝试挑一把 key（鉴权/瞬时失败冷却并 failover）；
         // 冷却按 provider 粒度共享（[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
         let resolved_keys = crate::host::keyring::resolve_keys(model);
@@ -1039,6 +1049,14 @@ async fn run_llm_turn(
                 core.key_pool
                     .report(&model.provider_id, &resolved_keys, key_idx, None);
                 *run_usage = *run_usage + usage;
+                // 收干流（= 本次生成结束）后才计耗时：duration 是「请求发出 → 流失结束」的
+                // **成功尝试**窗口（退避与失败尝试不进此窗口）
+                let (asm, ttft_ms) = collector.await.unwrap_or_default();
+                let duration_ms = attempt_started.elapsed().as_millis() as u64;
+                rt.run_timing
+                    .lock()
+                    .unwrap()
+                    .add_step(Some(duration_ms), ttft_ms);
                 if params.emit_events {
                     sink.channel_frame(
                         &rt.id,
@@ -1047,10 +1065,11 @@ async fn run_llm_turn(
                             output: usage.output,
                             cache_read: usage.cache_read,
                             cache_write: usage.cache_write,
+                            duration_ms: Some(duration_ms),
+                            ttft_ms,
                         },
                     );
                 }
-                let asm = collector.await.unwrap_or_default();
                 // 空响应按可重试处理
                 if asm.is_empty()
                     && retry::should_retry(&ProviderError::Server("空响应".into()), *attempt)

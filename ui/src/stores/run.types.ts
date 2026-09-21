@@ -156,6 +156,25 @@ export interface TabRunState {
    *  可选：仅 runtime 新建的桶（blank()）必定有值，测试夹具的历史字面量可缺省——
    *  消费方（applyUsageFrame / cacheHitRate / Composer）均已做缺省处理。 */
   usage?: UsageTotals;
+  /** **本轮**（单次 run）计数（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：工具条速率段与 tooltip 的唯一数据源。
+   *  与 `usage` 的关键差别是「不跨 run 累加」——`send()` 处归零，否则速率会跨轮累积失真。
+   *  可选：缺省 = 本轮无 usage 数据（旧后端 / 重挂载后未收到帧）→ 速率段整体隐藏。 */
+  runMetrics?: RunMetrics;
+}
+
+/** 本轮运行计数（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。派生展示口径全在
+ *  `features/chat/composerMetrics.ts`（纯函数，不依赖 store），此处只描述字段来源。 */
+export interface RunMetrics {
+  /** Σ 本轮**被计入步**的 output（仅 `duration_ms > 0` 的帧，与 `genMs`/`steps` 同域） */
+  output: number;
+  /** Σ 各步生成耗时（仅 `duration_ms > 0` 的帧；= 速率分母，不含工具与审批等待） */
+  genMs: number;
+  /** 计入的 LLM 步数（与 `genMs` 同域：`duration_ms > 0` 才 +1） */
+  steps: number;
+  /** 本轮**首个**非空 TTFT（首个输出增量延迟，含思考；不是求和） */
+  ttftMs: number | null;
+  /** Σ 本轮工具卡 `durationMs`（工具卡计时起点在审批门之后，天然不含审批等待；仅 tooltip 单列，不进速率分母） */
+  toolMs: number;
 }
 
 /** 会话级 usage 累加值（命中率派生源；跨帧累加，Tab 关闭即丢弃、不持久化）。 */

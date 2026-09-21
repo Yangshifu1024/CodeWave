@@ -52,7 +52,37 @@ pub struct UsageRecord {
     pub kind: String,
 }
 
-/// 单桶聚合（按模型/工作区/来源共用的五字段累加器）。
+/// 一次「LLM step 生成耗时」观测汇总（usage 帧与统计落盘共用，[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+/// 口径：只含**成功那次尝试**的窗口（失败尝试与退避不计）；TTFT 取首个任意类型增量（含思考）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageTiming {
+    /// Σ 各步生成耗时（请求发出 → 流失结束）
+    pub gen_ms: u64,
+    /// Σ TTFT
+    pub ttft_ms: u64,
+    /// TTFT 样本数（= 有 TTFT 的步数；平均 TTFT 的分母）
+    pub ttft_count: u64,
+    /// 计入的 LLM 步数（均步耗时的分母）
+    pub steps: u64,
+}
+
+impl UsageTiming {
+    /// 累积一步：`duration_ms` 缺失或 0 → **整步不计**（不进分母、不计步数，防除零与速率虚高）；
+    /// 有 TTFT 才计入 TTFT（分母 ttft_count 同步）。
+    pub fn add_step(&mut self, duration_ms: Option<u64>, ttft_ms: Option<u64>) {
+        let Some(d) = duration_ms.filter(|v| *v > 0) else {
+            return;
+        };
+        self.gen_ms += d;
+        self.steps += 1;
+        if let Some(t) = ttft_ms {
+            self.ttft_ms += t;
+            self.ttft_count += 1;
+        }
+    }
+}
+
+/// 单桶聚合（按模型/工作区/来源共用的九字段累加器；后四项为耗时/TTFT，旧文件缺这些字段 → serde 默认 0）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelAgg {
     pub input: u64,
@@ -60,16 +90,45 @@ pub struct ModelAgg {
     pub cache_read: u64,
     pub cache_write: u64,
     pub runs: u64,
+    /// Σ 各步生成耗时（同一步内多次尝试只计成功那次）
+    #[serde(default)]
+    pub gen_ms: u64,
+    /// Σ TTFT
+    #[serde(default)]
+    pub ttft_ms: u64,
+    /// TTFT 样本数
+    #[serde(default)]
+    pub ttft_count: u64,
+    /// 计入的 LLM 步数
+    #[serde(default)]
+    pub steps: u64,
 }
 
 impl ModelAgg {
-    /// 累加一条记录的五个字段（缺一会丢数，merge 同理）。
-    fn add(&mut self, r: &UsageRecord) {
+    /// 累加一条记录：token 五字段取记录、耗时四字段取计时（缺一会丢数，merge 同理）。
+    fn add(&mut self, r: &UsageRecord, t: &UsageTiming) {
         self.input += r.input;
         self.output += r.output;
         self.cache_read += r.cache_read;
         self.cache_write += r.cache_write;
         self.runs += r.runs;
+        self.gen_ms += t.gen_ms;
+        self.ttft_ms += t.ttft_ms;
+        self.ttft_count += t.ttft_count;
+        self.steps += t.steps;
+    }
+
+    /// 合并另一桶的九个字段（flush 合并旧文件的唯一累加点：漏一项即重启后丢数）。
+    fn merge(&mut self, o: &ModelAgg) {
+        self.input += o.input;
+        self.output += o.output;
+        self.cache_read += o.cache_read;
+        self.cache_write += o.cache_write;
+        self.runs += o.runs;
+        self.gen_ms += o.gen_ms;
+        self.ttft_ms += o.ttft_ms;
+        self.ttft_count += o.ttft_count;
+        self.steps += o.steps;
     }
 }
 
@@ -92,7 +151,7 @@ pub struct DailyStats {
 /// 统计收集器：非阻塞 record + 后台 writer 定时落盘。
 pub struct StatsCollector {
     /// 惰性初始化：首次 record 时（异步上下文内）才启动通道与 writer
-    tx: std::sync::OnceLock<mpsc::Sender<UsageRecord>>,
+    tx: std::sync::OnceLock<mpsc::Sender<(UsageRecord, UsageTiming)>>,
     /// 数据目录（构造注入；OnceLock 初始化前确定）
     data_dir: PathBuf,
     /// 队列满导致的累计丢弃计数
@@ -110,12 +169,12 @@ impl StatsCollector {
     }
 
     /// 须在异步上下文调用：确保 writer 已启动（OnceLock 双检 + tokio::spawn）。
-    fn ensure_writer(&self) -> Option<&mpsc::Sender<UsageRecord>> {
+    fn ensure_writer(&self) -> Option<&mpsc::Sender<(UsageRecord, UsageTiming)>> {
         if let Some(tx) = self.tx.get() {
             return Some(tx);
         }
         let data_dir = self.data_dir.clone();
-        let (tx, rx) = mpsc::channel::<UsageRecord>(QUEUE_CAP);
+        let (tx, rx) = mpsc::channel::<(UsageRecord, UsageTiming)>(QUEUE_CAP);
         let _ = self.tx.set(tx);
         tokio::spawn(async move {
             Self::writer(data_dir, rx).await;
@@ -124,11 +183,17 @@ impl StatsCollector {
     }
 
     /// 非阻塞提交；队列满则丢弃并计数（绝不阻塞聊天热路径）。
+    /// 无耗时数据的调用方（压缩/自动命名/子代理/任务）走此入口：计时全 0，速率聚合按「同域」自动排除。
     pub fn record(&self, r: UsageRecord) {
+        self.record_timed(r, UsageTiming::default());
+    }
+
+    /// 同 `record`，并带上本 run 的生成耗时/TTFT 观测（主会话 LLM 步，[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+    pub fn record_timed(&self, r: UsageRecord, t: UsageTiming) {
         let Some(tx) = self.ensure_writer() else {
             return;
         };
-        if tx.try_send(r).is_err() {
+        if tx.try_send((r, t)).is_err() {
             let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 100 == 1 {
                 tracing::warn!("统计队列已满，累计丢弃 {n} 条");
@@ -142,7 +207,7 @@ impl StatsCollector {
     }
 
     /// 后台 writer：聚合进 pending 表，定时/定量冲刷；通道全关退出前做最终冲刷。
-    async fn writer(data_dir: PathBuf, mut rx: mpsc::Receiver<UsageRecord>) {
+    async fn writer(data_dir: PathBuf, mut rx: mpsc::Receiver<(UsageRecord, UsageTiming)>) {
         let stats_dir = data_dir.join("stats");
         let _ = std::fs::create_dir_all(&stats_dir);
         let mut pending: HashMap<String, DailyStats> = HashMap::new();
@@ -165,14 +230,15 @@ impl StatsCollector {
                 date: date.clone(),
                 ..Default::default()
             });
-            let rec = received;
+            let rec = received.0;
+            let timing = received.1;
             let m = day.by_model.entry(rec.model_id.clone()).or_default();
-            m.add(&rec);
+            m.add(&rec, &timing);
             let w = day.by_workspace.entry(rec.workspace.clone()).or_default();
-            w.add(&rec);
+            w.add(&rec, &timing);
             let k = day.by_kind.entry(rec.kind.clone()).or_default();
-            k.add(&rec);
-            day.total.add(&rec);
+            k.add(&rec, &timing);
+            day.total.add(&rec, &timing);
 
             let pending_count: usize = pending.values().map(|d| d.total.runs as usize).sum();
             if last_flush.elapsed() >= FLUSH_EVERY || pending_count >= FLUSH_RECORDS {
@@ -195,35 +261,18 @@ fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>)
         let mut merged = day.clone();
         if let Ok(text) = std::fs::read_to_string(&path) {
             if let Ok(old) = serde_json::from_str::<DailyStats>(&text) {
+                // 四桶统一走 ModelAgg::merge（九字段一份清单）：旧文件缺耗时字段时反序列化为 0，
+                // 新值照常保留——绝不是「旧文件的四字段丢掉」
                 for (k, v) in old.by_model {
-                    let m = merged.by_model.entry(k).or_default();
-                    m.input += v.input;
-                    m.output += v.output;
-                    m.cache_read += v.cache_read;
-                    m.cache_write += v.cache_write;
-                    m.runs += v.runs;
+                    merged.by_model.entry(k).or_default().merge(&v);
                 }
                 for (k, v) in old.by_workspace {
-                    let w = merged.by_workspace.entry(k).or_default();
-                    w.input += v.input;
-                    w.output += v.output;
-                    w.cache_read += v.cache_read;
-                    w.cache_write += v.cache_write;
-                    w.runs += v.runs;
+                    merged.by_workspace.entry(k).or_default().merge(&v);
                 }
                 for (k, v) in old.by_kind {
-                    let g = merged.by_kind.entry(k).or_default();
-                    g.input += v.input;
-                    g.output += v.output;
-                    g.cache_read += v.cache_read;
-                    g.cache_write += v.cache_write;
-                    g.runs += v.runs;
+                    merged.by_kind.entry(k).or_default().merge(&v);
                 }
-                merged.total.input += old.total.input;
-                merged.total.output += old.total.output;
-                merged.total.cache_read += old.total.cache_read;
-                merged.total.cache_write += old.total.cache_write;
-                merged.total.runs += old.total.runs;
+                merged.total.merge(&old.total);
             }
         }
         if let Ok(bytes) = serde_json::to_vec_pretty(&merged) {
@@ -280,17 +329,26 @@ mod tests {
     async fn collect_flush_and_query() {
         let dir = tempfile::tempdir().unwrap();
         let collector = Arc::new(StatsCollector::new(dir.path().to_path_buf()));
-        collector.record(UsageRecord {
-            session: "s1".into(),
-            model_id: "m1".into(),
-            workspace: "/w".into(),
-            input: 100,
-            output: 50,
-            cache_read: 10,
-            cache_write: 5,
-            runs: 1,
-            kind: KIND_MAIN.into(),
-        });
+        // 混合入口：s1 走 record_timed（带耗时四字段），s2 走 record（计时全 0，压缩/子代理等路径）
+        collector.record_timed(
+            UsageRecord {
+                session: "s1".into(),
+                model_id: "m1".into(),
+                workspace: "/w".into(),
+                input: 100,
+                output: 50,
+                cache_read: 10,
+                cache_write: 5,
+                runs: 1,
+                kind: KIND_MAIN.into(),
+            },
+            UsageTiming {
+                gen_ms: 1000,
+                ttft_ms: 200,
+                ttft_count: 2,
+                steps: 2,
+            },
+        );
         collector.record(UsageRecord {
             session: "s2".into(),
             model_id: "m2".into(),
@@ -303,7 +361,7 @@ mod tests {
             kind: KIND_SUB.into(),
         });
         // 显式关闭发送端以触发最终冲刷
-        let inner: mpsc::Sender<UsageRecord> = collector.tx.get().unwrap().clone();
+        let inner: mpsc::Sender<(UsageRecord, UsageTiming)> = collector.tx.get().unwrap().clone();
         drop(inner);
         let closed = std::sync::Arc::downgrade(&collector);
         drop(collector);
@@ -320,6 +378,60 @@ mod tests {
         // L10：分来源聚合可见
         assert_eq!(days[0].by_kind[KIND_MAIN].input, 100);
         assert_eq!(days[0].by_kind[KIND_SUB].input, 200);
+        // 耗时四字段随记录进四桶（无耗时的 record 入口贡献 0）
+        assert_eq!(days[0].total.gen_ms, 1000);
+        assert_eq!(days[0].total.ttft_ms, 200);
+        assert_eq!(days[0].total.ttft_count, 2);
+        assert_eq!(days[0].total.steps, 2);
+        assert_eq!(days[0].by_model["m1"].gen_ms, 1000);
+        assert_eq!(days[0].by_workspace["/w"].gen_ms, 1000);
+        assert_eq!(days[0].by_kind[KIND_MAIN].steps, 2);
+        assert_eq!(days[0].by_kind[KIND_SUB].gen_ms, 0);
+    }
+
+    /// 计时口径（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：耗时缺失或 0 → 整步不计；
+    /// 有 TTFT 才计入 TTFT（分母 ttft_count 同步）。
+    #[test]
+    fn usage_timing_add_step_semantics() {
+        let mut t = UsageTiming::default();
+        t.add_step(None, Some(5));
+        t.add_step(Some(0), Some(5));
+        assert_eq!(
+            t,
+            UsageTiming::default(),
+            "缺失/0 耗时整步不计（连 TTFT 也不入分母）"
+        );
+        t.add_step(Some(1200), None);
+        assert_eq!(
+            (t.gen_ms, t.steps, t.ttft_ms, t.ttft_count),
+            (1200, 1, 0, 0)
+        );
+        t.add_step(Some(800), Some(90));
+        assert_eq!(
+            (t.gen_ms, t.steps, t.ttft_ms, t.ttft_count),
+            (2000, 2, 90, 1)
+        );
+    }
+
+    /// 旧落盘 JSON 只有 token 五字段：新四字段 serde 默认 0（不报错、不丢旧值）。
+    #[test]
+    fn model_agg_deserializes_legacy_json_without_timing_fields() {
+        let v: ModelAgg = serde_json::from_str(
+            r#"{"input":1,"output":2,"cache_read":3,"cache_write":4,"runs":5}"#,
+        )
+        .unwrap();
+        assert_eq!((v.gen_ms, v.ttft_ms, v.ttft_count, v.steps), (0, 0, 0, 0));
+        assert_eq!(v.runs, 5);
+        // 新字段必须进 JSON（前端/文档形态的锛点）
+        let s = serde_json::to_value(ModelAgg {
+            steps: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(s.get("gen_ms").is_some());
+        assert!(s.get("ttft_ms").is_some());
+        assert!(s.get("ttft_count").is_some());
+        assert_eq!(s["steps"], 3);
     }
 
     fn day(date: &str, model: &str, input: u64, runs: u64, kind: &str) -> DailyStats {
@@ -327,19 +439,36 @@ mod tests {
             date: date.into(),
             ..Default::default()
         };
+        // 四桶各带一份耗时观测（合并路径的丢数防线用）
         let m = d.by_model.entry(model.into()).or_default();
         m.input += input;
         m.runs += runs;
+        m.gen_ms += 100;
+        m.ttft_ms += 20;
+        m.ttft_count += 1;
+        m.steps += 1;
         let w = d.by_workspace.entry("/w".into()).or_default();
         w.input += input;
         w.cache_read += 7;
         w.cache_write += 3;
         w.runs += runs;
+        w.gen_ms += 100;
+        w.ttft_ms += 20;
+        w.ttft_count += 1;
+        w.steps += 1;
         let k = d.by_kind.entry(kind.into()).or_default();
         k.input += input;
         k.runs += runs;
+        k.gen_ms += 100;
+        k.ttft_ms += 20;
+        k.ttft_count += 1;
+        k.steps += 1;
         d.total.input += input;
         d.total.runs += runs;
+        d.total.gen_ms += 100;
+        d.total.ttft_ms += 20;
+        d.total.ttft_count += 1;
+        d.total.steps += 1;
         d
     }
 
@@ -377,6 +506,12 @@ mod tests {
         // 新内存记录没有 cache 计数；旧 by_workspace 的 cache 字段在合并后保留
         assert_eq!(days[0].by_workspace["/w"].cache_read, 7);
         assert_eq!(days[0].by_workspace["/w"].cache_write, 3);
+        // 耗时四字段同样四桶累加（新值保留 + 旧值累加）
+        assert_eq!(days[0].total.gen_ms, 200);
+        assert_eq!(days[0].total.ttft_ms, 40);
+        assert_eq!(days[0].total.ttft_count, 2);
+        assert_eq!(days[0].total.steps, 2);
+        assert_eq!(days[0].by_model["m1"].gen_ms, 200);
     }
 
     /// [docs/arithmetic-audit](../../../docs/arithmetic-audit.md)#2：by_workspace 合并必须像 by_model/by_kind 一样带齐五个字段
@@ -401,6 +536,82 @@ mod tests {
             days[0].by_workspace["/w"].cache_read, 7,
             "old cache_read must survive"
         );
+    }
+
+    /// AC-13 的丢数防线：磁盘旧 JSON **缺**耗时四字段（上一版本落盘形态）时视为 0，
+    /// 本次新记录的耗时照常保留，且 by_model/by_workspace/by_kind/total 四桶都累加到。
+    #[test]
+    fn flush_merges_timing_fields_when_old_file_lacks_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        std::fs::create_dir_all(dir.path().join("stats")).unwrap();
+        // 手写旧形态（只有 token 五字段）：serde default 必须吸收缺失字段
+        let legacy = serde_json::json!({
+            "date": today,
+            "by_model": { "m1": { "input": 1, "output": 1, "cache_read": 0, "cache_write": 0, "runs": 1 } },
+            "by_workspace": { "/w": { "input": 1, "output": 1, "cache_read": 0, "cache_write": 0, "runs": 1 } },
+            "by_kind": { KIND_MAIN: { "input": 1, "output": 1, "cache_read": 0, "cache_write": 0, "runs": 1 } },
+            "total": { "input": 1, "output": 1, "cache_read": 0, "cache_write": 0, "runs": 1 }
+        });
+        std::fs::write(
+            dir.path().join("stats").join(format!("{today}.json")),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let mut pending: HashMap<String, DailyStats> = HashMap::new();
+        let mut fresh = DailyStats {
+            date: today.clone(),
+            ..Default::default()
+        };
+        let rec = UsageRecord {
+            session: "s".into(),
+            model_id: "m1".into(),
+            workspace: "/w".into(),
+            input: 100,
+            output: 50,
+            cache_read: 0,
+            cache_write: 0,
+            runs: 1,
+            kind: KIND_MAIN.into(),
+        };
+        let timing = UsageTiming {
+            gen_ms: 900,
+            ttft_ms: 120,
+            ttft_count: 3,
+            steps: 3,
+        };
+        fresh
+            .by_model
+            .entry("m1".into())
+            .or_default()
+            .add(&rec, &timing);
+        fresh
+            .by_workspace
+            .entry("/w".into())
+            .or_default()
+            .add(&rec, &timing);
+        fresh
+            .by_kind
+            .entry(KIND_MAIN.into())
+            .or_default()
+            .add(&rec, &timing);
+        fresh.total.add(&rec, &timing);
+        pending.insert(today.clone(), fresh);
+
+        flush(&dir.path().join("stats"), &mut pending);
+        let days = query(dir.path(), 1);
+        assert_eq!(days.len(), 1);
+        // 旧值（全无耗时）+ 新值：token 合计照常，耗时四项全为新值
+        assert_eq!(days[0].total.input, 101);
+        assert_eq!(days[0].total.gen_ms, 900, "旧文件缺字段 → 视为 0，不丢新值");
+        assert_eq!(days[0].total.ttft_ms, 120);
+        assert_eq!(days[0].total.ttft_count, 3);
+        assert_eq!(days[0].total.steps, 3);
+        assert_eq!(days[0].by_model["m1"].gen_ms, 900);
+        assert_eq!(days[0].by_workspace["/w"].gen_ms, 900);
+        assert_eq!(days[0].by_kind[KIND_MAIN].gen_ms, 900);
+        assert_eq!(days[0].by_kind[KIND_MAIN].input, 101);
     }
 
     #[test]

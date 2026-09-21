@@ -218,7 +218,11 @@ export type Frame =
   | { type: "delta_text"; gen: number; text: string }
   | { type: "delta_thinking"; gen: number; text: string }
   | { type: "tool_progress"; batch: string; index: number; chunk: string; name?: string }
-  | { type: "usage"; input: number; output: number; cache_read: number; cache_write: number }
+  | { type: "usage"; input: number; output: number; cache_read: number; cache_write: number;
+      /** 该 LLM step **成功尝试**的生成耗时（请求发出 → 流失结束）；缺省 = 无数据（旧后端） */
+      duration_ms?: number | null;
+      /** 首个任意类型增量（text 或 thinking）的延迟；缺省 = 无数据 */
+      ttft_ms?: number | null }
   /** 子代理帧信封（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：在父会话通道上区分来源，按 sub_id 路由进过程抽屉消息流 */
   | { type: "sub"; sub_id: string; frame: Frame };
 
@@ -305,8 +309,20 @@ export interface ScheduledTask {
   next_run: string | null; last_status: string | null; last_summary: string | null;
 }
 
-/** 按维度聚合的 token 用量 */
-export interface ModelAgg { input: number; output: number; cache_read: number; cache_write: number; runs: number }
+/** 按维度聚合的 token 用量。四把耗时字段可选（serde default）：
+ *  旧记录（[docs/composer-token-rate] 之前）没有它们 → 统计面板总览的加权三项必须**把这类记录整条排除**
+ *  （分子分母同域），否则「分子含全部 output、分母只含部分耗时」会把速率算虚高。 */
+export interface ModelAgg {
+  input: number; output: number; cache_read: number; cache_write: number; runs: number;
+  /** Σ 各步生成耗时（同一 step 内多次尝试只计成功那次） */
+  gen_ms?: number;
+  /** Σ TTFT */
+  ttft_ms?: number;
+  /** TTFT 样本数（= 计入的步数，用于平均） */
+  ttft_count?: number;
+  /** 计入的 LLM 步数（用于均步耗时） */
+  steps?: number;
+}
 
 /** 单日 token 统计（统计页数据源） */
 export interface DailyStats {

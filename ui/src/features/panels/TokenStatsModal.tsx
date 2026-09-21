@@ -6,13 +6,7 @@ import type { DailyStats, ModelAgg } from "../../ipc/types";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { cacheDenominator, cacheSemanticsOfFormat, type CacheSemantics } from "../../utils/models";
-
-/** token 数缩写：M/k 分级缩写，便于柱状图标签与摘要展示。 */
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
+import { avgStepMs, formatInt as fmt, formatMs, formatRate, tokPerSec } from "../chat/composerMetrics";
 
 /**
  * 计费语义（[docs/prompt-caching-hardening]）：anthropic_messages 的 usage.input 不含缓存部分
@@ -138,6 +132,36 @@ export default function TokenStatsModal() {
       .join(" · ");
   })();
 
+  // 总览三项的加权聚合（[docs/composer-token-rate]）：**分子分母同域**——只在带耗时数据的记录子集内聚合。
+  // 聚合桶必须取 `by_kind` 而**不是** `by_model`：`by_model` 只按 model 分桶、不含来源维度，子代理（sub）、
+  // 上下文压缩（compact）、自动命名（title）、计划任务（task）的记录与主会话落进**同一个 model 桶**——
+  // 它们的 output 在桶里、却因这些路径走 `record` 不带计时而 `gen_ms` 为 0，桶级 `gen_ms > 0` 过滤
+  // **剔不掉桶内的这部分子集** → 分子含其 output、分母不含耗时，实测可把 50 tok/s 抬到 150–200 tok/s
+  // （需求 §7 列为「最高优先」的虚高风险）。
+  // 换成 `by_kind` 后每个来源各自成桶：`gen_ms > 0` 的桶（今天等价于 `main`）与无计时的桶（sub/task/compact/title）
+  // 天然分离；将来若给这些路径补计时，也只有真带耗时的桶会进分子，本段无需再改。
+  // 三项分母各自为 0 时显示 `—`，绝不出 NaN / Infinity。
+  const totals = (() => {
+    const acc = { output: 0, genMs: 0, steps: 0, ttftMs: 0, ttftCount: 0 };
+    for (const d of days) {
+      for (const v of Object.values(d.by_kind ?? {})) {
+        const genMs = v.gen_ms ?? 0;
+        if (!(genMs > 0)) continue; // 该来源桶整体无耗时 → 整桶排除（连它的 output 也不进分子）
+        acc.output += v.output;
+        acc.genMs += genMs;
+        acc.steps += v.steps ?? 0;
+        acc.ttftMs += v.ttft_ms ?? 0;
+        acc.ttftCount += v.ttft_count ?? 0;
+      }
+    }
+    return acc;
+  })();
+
+  // 展示口径复用 composerMetrics（与工具条速率段同一份实现，避免两处公式漂移）
+  const avgRate = tokPerSec({ output: totals.output, genMs: totals.genMs, steps: totals.steps });
+  const avgStep = avgStepMs({ output: totals.output, genMs: totals.genMs, steps: totals.steps });
+  const avgTtft = totals.ttftCount > 0 ? totals.ttftMs / totals.ttftCount : null;
+
   function barHeight(d: DailyStats): string {
     const max = Math.max(...days.map(dayTotal), 1);
     return `${Math.max(2, (dayTotal(d) / max) * 120)}px`;
@@ -173,6 +197,13 @@ export default function TokenStatsModal() {
           {fmt(days.reduce((a, d) => a + dayTotal(d), 0))} tokens ·
           {" "}{days.reduce((a, d) => a + d.total.runs, 0)} runs
           {topModel && ` · ${t("stats.topModel")}：${topModel}`}
+        </div>
+      )}
+      {days.length > 0 && (
+        <div className="stats-summary dim">
+          {t("stats.avgRate")}：{avgRate != null ? `${formatRate(avgRate)} tok/s` : "—"} ·{" "}
+          {t("stats.avgStepMs")}：{avgStep != null ? formatMs(avgStep) : "—"} ·{" "}
+          {t("stats.avgTtft")}：{avgTtft != null ? formatMs(avgTtft) : "—"}
         </div>
       )}
       {days.length > 0 && hit && (

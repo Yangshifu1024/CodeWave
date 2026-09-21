@@ -296,6 +296,13 @@ export default {
     contextThreshold: "阈",
     cacheHit: "命中",
     ctxTitle: "上下文占用 · 自动压缩阈值 · 缓存命中率",
+    // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/composer-token-rate]）
+    rateRunning: "在跑",
+    rateTitle: "本轮生成速率",
+    rateTtft: "首步 TTFT（首个输出增量，含思考）",
+    rateOutput: "输出 tokens",
+    rateGenMs: "生成耗时（不含重试等待）",
+    rateToolWait: "工具等待合计",
     other: "其他",
     noModel: "未配置模型",
     goSettings: "前往设置添加模型",
@@ -348,7 +355,7 @@ export default {
     instruction: "任务指令（Agent 将在独立上下文执行）", create: "创建", created: "已创建",
     empty: "暂无计划任务（进程本地，重启后清空）",
   },
-  stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}" },
+  stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}", avgRate: "平均生成速率", avgStepMs: "均步耗时", avgTtft: "平均 TTFT" },
   skills: {
     detailUse: "使用", detailClose: "关闭", detailWhen: "触发时机", detailOrigin: "来源", detailLoading: "加载正文中…",
   },
