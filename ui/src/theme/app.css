@@ -462,15 +462,23 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .ask-options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .ask-opt {
-  display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
   cursor: pointer; font-size: 13px; min-width: 0;
 }
 .ask-opt:hover { background: var(--ws-hover); }
 .ask-opt.kb { background: var(--ws-hover); }
 .ask-opt.picked { background: rgba(127, 127, 127, 0.16); }
 .ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
-.ask-opt .label { font-weight: 500; flex: none; }
-.ask-opt .desc { color: var(--ws-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-opt .label { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+/* 选项描述完整折行显示（[docs/ask-option-desc-wrap](../../../docs/ask-option-desc-wrap.md)）：
+   原为单行省略号（`nowrap` + `ellipsis`），长说明只显半句——用户看不全“选它会发生什么”。
+   现在与标签同行时占据剩余宽度（flex-basis 240px，短描述保持紧凑的单行观感）；
+   剩余列宽不足 240px（长标签 / 窄窗口）时整段落到下一行并完整折行，不再截断。 */
+.ask-opt .desc {
+  flex: 1 1 240px; min-width: 0;
+  color: var(--ws-dim); font-size: 12px; line-height: 1.5;
+  white-space: normal; overflow-wrap: anywhere;
+}
 /* ---------- [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：选项前导指示物——多选=复选框 / 单选=单选框；视觉直接声明交互语义。
    纯视觉零事件（整行可点）；picked = 墨色 accent 填充 + 反色对勾线 / 居中墨点，亮暗自适应 ---------- */
 .ask-opt .opt-box {
