@@ -13,6 +13,7 @@ pub mod backup;
 pub mod docx;
 pub mod edit;
 pub mod edit_word;
+pub mod formula;
 pub mod patch;
 pub mod pdf;
 pub mod read;

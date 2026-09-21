@@ -158,13 +158,10 @@ fn decode_utf16(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// 文本解码统一入口：先做 UTF-16 探测，命中则转码，否则按 UTF-8 宽松解码（非法字节以替换符保留）。
+/// 文本解码统一入口：UTF-16 探测命中则转码，否则交给编码探测（BOM → UTF-8 → GBK → 宽松 UTF-8）。
+/// 想知道实际用了什么编码的调用方用 [`crate::tools::encoding::decode_text`]。
 pub fn read_text_content(bytes: &[u8]) -> String {
-    if looks_utf16(bytes) {
-        decode_utf16(bytes)
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
+    crate::tools::encoding::decode_text(bytes).text
 }
 
 /// 截取 `[start, end]` 行区间并加行号前缀（右对齐 6 位 + `| `），供模型精确引用行号。
@@ -323,7 +320,9 @@ impl Tool for ReadTool {
                     format!("{} 超过 1MB，请用 startLine/endLine 分段读取", f.path),
                 );
             }
-            let text = read_text_content(&bytes);
+            let decoded = crate::tools::encoding::decode_text(&bytes);
+            let text = decoded.text;
+            let encoding = decoded.encoding;
             let total_lines = text.split_inclusive('\n').count();
             let (start, end) = match f.start_line {
                 Some(n) if n < 0 => {
@@ -364,6 +363,9 @@ impl Tool for ReadTool {
                 "start_line": start, "end_line": end.min(total), "total_lines": total,
                 "truncated": end.min(total) < total,
                 "version": version,
+                // 实际采用的编码：非 utf-8 时让模型知道内容是怎么解出来的
+                //（GBK 是中文环境里 csv / tsv 的常见编码，按 UTF-8 硬读只会得到乱码）
+                "encoding": encoding,
                 "content": content,
             }));
         }
@@ -385,6 +387,32 @@ mod tests {
         assert_eq!(total, 3);
         assert!(s.contains("     2| beta"));
         assert!(s.contains("     3| gamma"));
+    }
+
+    /// GBK 编码的 csv：读出来必须是正常汉字，而不是一片替换符。
+    /// 内容对了还不够——返回值里的 encoding 要如实说明「这是按 GBK 解的」，
+    /// 否则模型看到可疑内容时无法判断是文件本身的问题还是解码的问题。
+    #[tokio::test]
+    async fn gbk_text_is_decoded_and_encoding_is_reported() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, main_rt) = make_ctx(&ws, &dd);
+        let (gbk, _, had_errors) = encoding_rs::GBK.encode("月份,金额\n1月,120\n");
+        assert!(!had_errors);
+        std::fs::write(ws.path().join("表.csv"), gbk.as_ref()).unwrap();
+
+        let out = ReadTool
+            .run(
+                &ctx_for(core, main_rt),
+                serde_json::json!({"files":[{"path":"表.csv"}]}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let f = &out.data["files"][0];
+        assert_eq!(f["encoding"], serde_json::json!("gbk"));
+        let content = f["content"].as_str().unwrap();
+        assert!(content.contains("月份,金额"), "{content}");
+        assert!(!content.contains('\u{FFFD}'), "不该有替换符：{content}");
     }
 
     #[test]

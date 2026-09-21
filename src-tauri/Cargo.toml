@@ -65,6 +65,9 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "7"
 sha2 = "0.11"
 base64 = "0.23"
+# 文本编码探测（[docs/office-and-pdf-support](../../docs/office-and-pdf-support.md)）：导出成 csv 的表格
+# 常见 GBK，按 UTF-8 硬读会得到一片乱码。这个包同时在依赖树里（间接依赖已存在），不新增下载量。
+encoding_rs = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 # Enabled in P1 (docs/03: introduced in P0 without being called); keyring 3.x with per-platform features
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

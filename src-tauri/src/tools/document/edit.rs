@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::sheet_edit::CellValue;
-use super::{backup, patch, sheet_edit, workbook};
+use super::{backup, formula, patch, sheet_edit, workbook};
 
 /// 单次调用允许修改的单元格数上限（防止一次改动过大、审批卡片无法阅读）。
 const MAX_EDITS: usize = 200;
@@ -65,7 +65,12 @@ impl Edit {
             match (&self.text, self.number, &self.formula, self.boolean) {
                 (Some(t), ..) => CellValue::Text(t.clone()),
                 (_, Some(n), ..) => CellValue::Number(n),
-                (_, _, Some(f), _) => CellValue::Formula(f.clone()),
+                (_, _, Some(f), _) => CellValue::Formula {
+                    text: f.clone(),
+                    // 缓存值在这里开不出来：要等拿到工作簿其它单元格才谈得上「算」。
+                    // 计划阶段会把能算的填上，见 edit.rs 的 plan()。
+                    cached: None,
+                },
                 (_, _, _, Some(b)) => CellValue::Bool(b),
                 _ => unreachable!("上面已保证恰好一个"),
             },
@@ -77,7 +82,7 @@ impl Edit {
         match self.value() {
             Ok(CellValue::Text(t)) => t,
             Ok(CellValue::Number(n)) => sheet_edit::format_number_for_display(n),
-            Ok(CellValue::Formula(f)) => {
+            Ok(CellValue::Formula { text: f, .. }) => {
                 if f.trim_start().starts_with('=') {
                     f.clone()
                 } else {
@@ -349,6 +354,26 @@ fn load(roots: &pathutil::WriteRoots, raw_path: &str, edits: &[Edit]) -> Result<
         }
     }
 
+    // 公式可能引用别的工作表（`=SUM(明细!B2:B3)`）：那些表也要载入，
+    // 否则求值时读不到单元格，只能一律判「算不出来」——白丢一次填缓存值的机会。
+    let referenced: Vec<String> = edits
+        .iter()
+        .filter_map(|e| e.formula.as_deref())
+        .flat_map(formula::referenced_sheets)
+        .collect();
+    for name in referenced {
+        let Some(sheet) = workbook::find_sheet(&sheets, &name) else {
+            // 引用了不存在的工作表：不求值（求值那边也会因读不到而放弃）
+            continue;
+        };
+        if sheet.entry.is_empty() || xml.contains_key(&sheet.entry) {
+            continue;
+        }
+        if let Some(content) = read(&sheet.entry)? {
+            xml.insert(sheet.entry.clone(), content);
+        }
+    }
+
     Ok(Loaded {
         path,
         sheets,
@@ -357,15 +382,16 @@ fn load(roots: &pathutil::WriteRoots, raw_path: &str, edits: &[Edit]) -> Result<
     })
 }
 
-/// 试运行：在内存里把全部修改应用一遍，返回（改动清单、每个工作表文件的新内容）。
+/// 试跑结果：改动清单 + 每个工作表文件的新内容 + 是否需要给工作簿打「打开时重算」标记。
+type PlanResult = (Vec<Planned>, BTreeMap<String, String>, bool);
+
+/// 试运行：在内存里把全部修改应用一遍。
 ///
 /// 审批卡片与真正执行都走这里——两处共用同一套逻辑，避免「卡片上显示的」与「实际改的」不一致。
-fn plan(
-    loaded: &Loaded,
-    edits: &[Edit],
-) -> Result<(Vec<Planned>, BTreeMap<String, String>), String> {
+fn plan(loaded: &Loaded, edits: &[Edit]) -> Result<PlanResult, String> {
     let mut planned = Vec::new();
     let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut needs_recalc = false;
     for e in edits {
         let sheet = workbook::find_sheet(&loaded.sheets, &e.sheet)
             .ok_or_else(|| format!("没有名为「{}」的工作表", e.sheet))?;
@@ -373,7 +399,42 @@ fn plan(
             .get(&sheet.entry)
             .or_else(|| loaded.xml.get(&sheet.entry))
             .ok_or_else(|| format!("工作表「{}」的内容未载入", e.sheet))?;
-        let value = e.value()?;
+        let mut value = e.value()?;
+        let mut note = String::new();
+        if let CellValue::Formula { text, .. } = &value {
+            // 前面几处修改已经生效，所以取值时当前表的「演变中」内容是准确的；
+            // 跨表引用查的是载入时的快照（不追迹跨表依赖，算不出来就不算）。
+            let entry_now = sheet.entry.clone();
+            let snapshot = |want: Option<&str>, col: u32, row: u32| {
+                let entry = match want {
+                    None => Some(entry_now.clone()),
+                    Some(name) => {
+                        workbook::find_sheet(&loaded.sheets, name).map(|s| s.entry.clone())
+                    }
+                }?;
+                if entry.is_empty() {
+                    return None;
+                }
+                let xml = out.get(&entry).or_else(|| loaded.xml.get(&entry))?;
+                Some(sheet_edit::peek_typed(
+                    xml,
+                    &format!("{}{}", sheet_edit::col_name(col), row),
+                ))
+            };
+            match formula::evaluate(text, &snapshot) {
+                formula::Computed::Value(n) => {
+                    note = format!("（已算出 {n}）");
+                    value = CellValue::Formula {
+                        text: text.clone(),
+                        cached: Some(n),
+                    };
+                }
+                formula::Computed::NeedsRecalc => {
+                    note = "（打开时重算）".to_string();
+                    needs_recalc = true;
+                }
+            }
+        }
         let old = sheet_edit::peek_cell(
             current,
             &e.cell,
@@ -389,11 +450,11 @@ fn plan(
             sheet: e.sheet.clone(),
             cell: e.cell.to_ascii_uppercase(),
             old,
-            new_text: e.describe(),
+            new_text: format!("{}{note}", e.describe()),
         });
         out.insert(sheet.entry.clone(), updated);
     }
-    Ok((planned, out))
+    Ok((planned, out, needs_recalc))
 }
 
 /// 渲染单元格级改动清单（审批卡片正文）。
@@ -406,17 +467,112 @@ fn render_plan(path: &str, planned: &[Planned]) -> String {
     lines.join("\n")
 }
 
+/// 在工作簿声明上打「打开时重算」标记（`<calcPr fullCalcOnLoad="1"/>`）。
+///
+/// 什么时候需要它：改完的公式我们算不出来（语法不在白名单、引用了别的公式……），
+/// 于是单元格里只写了公式没写值。Excel 看到已有公式就会按标记重算整本，
+/// 使用者打开时看到的是正确数字，而不是一片空白。
+///
+/// 只能改这一个元素：`calcPr` 在 schema 里有固定位置（在 `sheets` / `definedNames` 之后，
+/// 在 `pivotCaches` / `extLst` 之前），插错位置 Excel 会报「文件已损坏」。
+fn mark_full_recalc(workbook_xml: &str) -> String {
+    if let Some(at) = workbook_xml.find("<calcPr") {
+        let Some(gt) = workbook_xml[at..].find('>').map(|e| at + e) else {
+            return workbook_xml.to_string();
+        };
+        let tag = &workbook_xml[at..gt];
+        if tag.contains("fullCalcOnLoad") {
+            // 已经有这个属性：把值改写成 1（可能原来是 0）
+            let updated = replace_attr_value(tag, "fullCalcOnLoad", "1");
+            return format!("{}{}{}", &workbook_xml[..at], updated, &workbook_xml[gt..]);
+        }
+        let self_closing = tag.ends_with('/');
+        let head = tag.trim_end_matches('/').trim_end();
+        let updated = if self_closing {
+            format!("{head} fullCalcOnLoad=\"1\"/>")
+        } else {
+            format!("{head} fullCalcOnLoad=\"1\"")
+        };
+        return format!("{}{}{}", &workbook_xml[..at], updated, &workbook_xml[gt..]);
+    }
+    // 没有 calcPr：插在它该在的位置。找第一个「比 calcPr 靠后」的元素，插到它前面；
+    // 都没找到就插在 </workbook> 之前。
+    const AFTER: [&str; 9] = [
+        "<oleSize",
+        "<customWorkbookViews",
+        "<pivotCaches",
+        "<smartTagPr",
+        "<smartTagTypes",
+        "<webPublishing",
+        "<fileRecoveryPr",
+        "<webPublishObjects",
+        "<extLst",
+    ];
+    let insert_at = AFTER
+        .iter()
+        .filter_map(|t| workbook_xml.find(t))
+        .min()
+        .or_else(|| workbook_xml.find("</workbook>"))
+        .unwrap_or(workbook_xml.len());
+    format!(
+        "{}<calcPr fullCalcOnLoad=\"1\"/>{}",
+        &workbook_xml[..insert_at],
+        &workbook_xml[insert_at..]
+    )
+}
+
+/// 把一个属性（含引号）的值换成 `value`；属性不存在时原样返回。
+fn replace_attr_value(tag: &str, name: &str, value: &str) -> String {
+    let needle = format!("{name}=");
+    let Some(at) = tag.find(&needle) else {
+        return tag.to_string();
+    };
+    let rest = &tag[at + needle.len()..];
+    let Some(quote) = rest.chars().next() else {
+        return tag.to_string();
+    };
+    if quote != '"' && quote != '\'' {
+        return tag.to_string();
+    }
+    let Some(len) = rest[1..].find(quote) else {
+        return tag.to_string();
+    };
+    format!(
+        "{}{}{}{}",
+        &tag[..at],
+        needle,
+        format_args!("{quote}{value}{quote}"),
+        &rest[1 + len + 1..]
+    )
+}
+
 /// 生成修改后的文件内容：把每个工作表的新 XML 替换进去，其余内部文件原样搬运。
-fn build_patched(loaded: &Loaded, sheet_xml: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
+/// `recalc` 为真时同时把工作簿声明换成带「打开时重算」标记的版本。
+fn build_patched(
+    loaded: &Loaded,
+    sheet_xml: &BTreeMap<String, String>,
+    recalc: bool,
+) -> Result<Vec<u8>, String> {
     let work = tempfile::tempdir().map_err(|e| format!("创建临时目录失败：{e}"))?;
     let out = work.path().join("patched.xlsx");
-    let reps: Vec<patch::Replacement> = sheet_xml
+    let mut reps: Vec<patch::Replacement> = sheet_xml
         .iter()
         .map(|(name, xml)| patch::Replacement {
             name: name.clone(),
             bytes: xml.as_bytes().to_vec(),
         })
         .collect();
+    if recalc && let Some(wb) = patch::read_entry(&loaded.path, workbook::WORKBOOK_ENTRY)? {
+        let text =
+            String::from_utf8(wb).map_err(|_| "工作簿声明不是文本，无法标记重算".to_string())?;
+        let marked = mark_full_recalc(&text);
+        if marked != text {
+            reps.push(patch::Replacement {
+                name: workbook::WORKBOOK_ENTRY.to_string(),
+                bytes: marked.into_bytes(),
+            });
+        }
+    }
     patch::apply(&loaded.path, &out, &reps)?;
     std::fs::read(&out).map_err(|e| format!("读取修改结果失败：{e}"))
 }
@@ -431,7 +587,7 @@ impl Tool for EditDocumentTool {
     }
 
     fn description(&self) -> &'static str {
-        "保真修改已有的表格（.xlsx/.xlsm）或 Word 文档（.docx），文件里的图表、条件格式、数据透视表、页眉页脚、批注等一律原样保留。表格：用 edits 按单元格改（sheet + cell + 四选一的 text/number/formula/bool）。Word：用 textEdits 做文字替换（find + replace，默认只替换唯一命中，命中多处会报错要求补充上下文）。一次最多 200 处。增删行列不在支持范围内。"
+        "保真修改已有的表格（.xlsx/.xlsm）或 Word 文档（.docx），文件里的图表、条件格式、数据透视表、页眉页脚、批注等一律原样保留。表格：用 edits 按单元格改（sheet + cell + 四选一的 text/number/formula/bool）。写公式时，能算的（纯数值四则运算与 SUM/AVERAGE/COUNT/MIN/MAX）会把算好的值一并写上，不看公式的读取方也能立刻拿到数字；算不出来的不编数字，改成让 Excel 打开时重算。Word：用 textEdits 做文字替换（find + replace，默认只替换唯一命中，命中多处会报错要求补充上下文）。一次最多 200 处。增删行列不在支持范围内。"
     }
 
     fn schema(&self) -> &'static str {
@@ -490,7 +646,7 @@ impl Tool for EditDocumentTool {
             Kind::Sheet => {
                 let roots = ctx.write_roots();
                 let loaded = load(&roots, &args.path, &args.edits).ok()?;
-                let (planned, _) = plan(&loaded, &args.edits).ok()?;
+                let (planned, _, _) = plan(&loaded, &args.edits).ok()?;
                 Some(render_plan(&args.path, &planned))
             }
             Kind::Word => {
@@ -561,11 +717,11 @@ impl Tool for EditDocumentTool {
             );
         }
 
-        let (planned, sheet_xml) = match plan(&loaded, &args.edits) {
+        let (planned, sheet_xml, needs_recalc) = match plan(&loaded, &args.edits) {
             Ok(v) => v,
             Err(e) => return ToolOutcome::err("E_EDIT_FAILED", e),
         };
-        let patched = match build_patched(&loaded, &sheet_xml) {
+        let patched = match build_patched(&loaded, &sheet_xml, needs_recalc) {
             Ok(b) => b,
             Err(e) => return ToolOutcome::err("E_PATCH_FAILED", e),
         };
@@ -724,6 +880,126 @@ mod tests {
         // 返回里带了改动清单与备份路径
         assert!(out.data["changes"].as_array().unwrap().len() == 3);
         assert!(out.data["backup"].as_str().unwrap().ends_with(".bak"));
+    }
+
+    /// 能算的公式：把算好的值一并写上（不看公式的读取方也能立刻拿到数字），
+    /// 并且**不**需要给工作簿打「打开时重算」标记。
+    #[tokio::test]
+    async fn simple_formula_gets_a_cached_value() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, rt) = make_ctx(&ws, &dd);
+        write_sample(ws.path());
+        let ctx = ctx_for(core, rt);
+        let target = ws.path().join("sample.xlsx");
+
+        let out = EditDocumentTool
+            .run(
+                &ctx,
+                json!({"path": "sample.xlsx", "edits": [
+                    {"sheet": "Sheet1", "cell": "B2", "number": 999.0},
+                    // 引用同一个批次里刚改过的单元格：应当看到改后的 999，而不是原值
+                    {"sheet": "Sheet1", "cell": "C2", "formula": "=SUM(B2:B3)"}
+                ]}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        // 缓存值真的落到文件里了；1149 = 999 + 150，正是「看到同批次刚改过的值」的证据
+        // （若用了载入时的旧快照就是 120 + 150 = 270）。
+        assert_eq!(cell_of(&target, "Sheet1", "", "C2"), "1149");
+        // 审批/回执里写明算出了多少
+        let changes = out.data["changes"].as_array().unwrap();
+        assert!(
+            changes
+                .iter()
+                .any(|c| c["new"].as_str().unwrap_or("").contains("已算出 1149")),
+            "{changes:?}"
+        );
+        // 都算得出来，就不该打重算标记（打了会让 Excel 每次打开都全量重算）
+        let wb = String::from_utf8(
+            patch::read_entry(&target, workbook::WORKBOOK_ENTRY)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!wb.contains("fullCalcOnLoad"), "{wb}");
+    }
+
+    /// 算不出来的公式：只写公式、不编数字，同时给工作簿打「打开时重算」标记；
+    /// 文件必须仍然能被正常读取（标记插错位置会被 Excel 当成文件损坏）。
+    #[tokio::test]
+    async fn complex_formula_marks_the_workbook_for_recalc() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, rt) = make_ctx(&ws, &dd);
+        write_sample(ws.path());
+        let ctx = ctx_for(core, rt);
+        let target = ws.path().join("sample.xlsx");
+
+        let out = EditDocumentTool
+            .run(
+                &ctx,
+                json!({"path": "sample.xlsx", "edits": [
+                    {"sheet": "Sheet1", "cell": "C3", "formula": "=VLOOKUP(1,A1:B3,2)"}
+                ]}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        // 回执里说清楚了会由 Excel 重算，而不是假装有值
+        let changes = out.data["changes"].as_array().unwrap();
+        assert!(
+            changes
+                .iter()
+                .any(|c| c["new"].as_str().unwrap_or("").contains("打开时重算")),
+            "{changes:?}"
+        );
+        // 工作表里只有公式、没有编出来的值
+        let sheet = String::from_utf8(
+            patch::read_entry(&target, "xl/worksheets/sheet1.xml")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(sheet.contains("<f>VLOOKUP(1,A1:B3,2)</f>"), "{sheet}");
+        assert!(!sheet.contains("<f>VLOOKUP(1,A1:B3,2)</f><v>"), "{sheet}");
+        // 工作簿声明上有重算标记，而且文件仍能被读（标记没插错位置）
+        let wb = String::from_utf8(
+            patch::read_entry(&target, workbook::WORKBOOK_ENTRY)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(wb.contains("fullCalcOnLoad=\"1\""), "{wb}");
+        assert_eq!(cell_of(&target, "Sheet1", "", "A1"), "月份");
+        assert_eq!(cell_of(&target, "Sheet1", "", "B3"), "150");
+    }
+
+    /// 「打开时重算」标记只在真需要时才进工作簿：已有的 `<calcPr>` 就地改属性，
+    /// 不新增元素（同一份文件上多次改公式不应把 calcPr 越加越多）。
+    #[test]
+    fn recalc_marker_is_idempotent_and_keeps_schema_order() {
+        let wb = r#"<?xml version="1.0"?><workbook><sheets><sheet name="S" sheetId="1"/></sheets><definedNames/><calcPr calcId="0"/><pivotCaches/></workbook>"#;
+        let once = mark_full_recalc(wb);
+        let twice = mark_full_recalc(&once);
+        assert_eq!(once, twice, "重复标记不得叠加");
+        assert!(
+            once.contains(r#"<calcPr calcId="0" fullCalcOnLoad="1"/>"#),
+            "{once}"
+        );
+        assert_eq!(once.matches("<calcPr").count(), 1, "{once}");
+
+        // 没有 calcPr：插在 pivotCaches / extLst 这些「靠后」的元素之前（schema 有固定顺序）
+        let plain = r#"<workbook><sheets/><pivotCaches/><extLst/></workbook>"#;
+        let marked = mark_full_recalc(plain);
+        let at = marked.find("<calcPr").unwrap();
+        assert!(at < marked.find("<pivotCaches").unwrap(), "{marked}");
+        assert!(
+            marked.contains(r#"<calcPr fullCalcOnLoad="1"/>"#),
+            "{marked}"
+        );
+
+        // 连 </workbook> 都没有的怪文件：插在末尾，不 panic
+        assert!(mark_full_recalc("<workbook>").contains("<calcPr"));
     }
 
     #[tokio::test]

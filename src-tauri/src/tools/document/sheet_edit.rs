@@ -21,7 +21,10 @@ pub enum CellValue {
     /// 逻辑值。
     Bool(bool),
     /// 公式（不含前导等号）。
-    Formula(String),
+    /// `cached` 是算好的值：能算的公式把值一并写上，不看公式的工具（包括 Excel 之外的
+    /// 一切读取方）也能立刻读到数字；算不出来时给 None，同时由调用方给工作簿打「打开时重算」标记。
+    /// 注意公式值 0 是合法值，不能用“有值/无值”区分 0 与“没算出来”，所以这里是 Option。
+    Formula { text: String, cached: Option<f64> },
 }
 
 /// 把数值格式化成 Excel 能读的写法：整数不带小数点，其余保留足够精度。
@@ -129,7 +132,7 @@ fn build_cell(coord: &str, original_attrs: &[(String, String)], value: &CellValu
         CellValue::Text(_) => Some("inlineStr"),
         CellValue::Number(_) => None,
         CellValue::Bool(_) => Some("b"),
-        CellValue::Formula(_) => None,
+        CellValue::Formula { .. } => None,
     };
     let mut parts: Vec<String> = Vec::new();
     for (name, raw) in original_attrs {
@@ -165,10 +168,16 @@ fn build_cell(coord: &str, original_attrs: &[(String, String)], value: &CellValu
         }
         CellValue::Number(n) => format!("<v>{}</v>", format_number(*n)),
         CellValue::Bool(b) => format!("<v>{}</v>", if *b { 1 } else { 0 }),
-        CellValue::Formula(f) => {
-            // 不带缓存值：由 Excel 在打开时算（文件同时被标记为「打开时重算」）
-            format!("<f>{}</f>", escape_text(f.trim_start_matches('=')))
-        }
+        CellValue::Formula { text, cached } => match cached {
+            // 算得出就写缓存值：使用者改完立刻能看到数字，而不是打开 Excel 之前一片空。
+            Some(n) => format!(
+                "<f>{}</f><v>{}</v>",
+                escape_text(text.trim_start_matches('=')),
+                format_number(*n)
+            ),
+            // 算不出来就不编：只写公式，由工作簿上的「打开时重算」标记让 Excel 自己算。
+            None => format!("<f>{}</f>", escape_text(text.trim_start_matches('='))),
+        },
     };
     format!("<c {attr_text}>{body}</c>")
 }
@@ -471,6 +480,52 @@ pub fn peek_cell(xml: &str, coord: &str, shared_strings: Option<&[String]>) -> O
     }
 }
 
+/// 读单元格时区分得清的四类值（供公式求值时判断能不能算）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellSnapshot {
+    /// 数值（含有缓存值的公式结果？不——公式一律归到 [`CellSnapshot::Formula`]）。
+    Number(f64),
+    /// 文本、布尔、错误码：数值运算里一律当「非数字」处理。
+    Text,
+    /// 没有这个单元格，或单元格里什么都没有。
+    Empty,
+    /// 公式。库里只有缓存值可读，而缓存值可能过期，所以求值时遇到它就停——
+    /// 算错一个数比不给数字糟糕得多。
+    Formula,
+}
+
+/// 按类型读单元格（不经共享字符串表；求值只关心是不是数字）。
+pub fn peek_typed(xml: &str, coord: &str) -> CellSnapshot {
+    let Ok((from, to)) = sheet_data_range(xml) else {
+        return CellSnapshot::Empty;
+    };
+    let Some(span) = find_cell(xml, from, to, coord) else {
+        return CellSnapshot::Empty;
+    };
+    let attrs = split_attrs(&span.tag_inner);
+    let t = attr_of(&attrs, "t").unwrap_or("n");
+    let body = if span.self_closing {
+        ""
+    } else {
+        &xml[span.start..span.end]
+    };
+    if body.contains("<f") {
+        return CellSnapshot::Formula;
+    }
+    let Some(raw) = extract_tag(body, "<v", "</v>") else {
+        return CellSnapshot::Empty;
+    };
+    match t {
+        "n" => raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(CellSnapshot::Number)
+            .unwrap_or(CellSnapshot::Text),
+        _ => CellSnapshot::Text,
+    }
+}
+
 /// 列字母转列号（对外暴露，供工作簿层判断行列范围）。
 pub fn col_letters(coord: &str) -> Option<u32> {
     let letters: String = coord
@@ -544,13 +599,21 @@ mod tests {
     }
 
     #[test]
-    fn formula_replaces_cached_value_and_keeps_style() {
-        let out = set_cell(SHEET, "B2", &CellValue::Formula("=SUM(C1:C5)".into())).unwrap();
+    fn formula_without_cache_replaces_cached_value_and_keeps_style() {
+        let out = set_cell(
+            SHEET,
+            "B2",
+            &CellValue::Formula {
+                text: "=SUM(C1:C5)".into(),
+                cached: None,
+            },
+        )
+        .unwrap();
         // 前导等号被剥掉（带上等号会让 Excel 报错）
         assert_eq!(peek_cell(&out, "B2", None).as_deref(), Some("=SUM(C1:C5)"));
         // 旧公式不得残留
         assert!(!out.contains("SUM(C1:C1)"), "旧公式未清：{out}");
-        // 元素里不得再有缓存值
+        // 没算出值就不编：只写公式，缓存值留空（由工作簿的「打开时重算」标记兑现）
         let elem = cell_element(&out, "B2");
         assert!(!elem.contains("<v>"), "不得保留旧缓存值：{elem}");
         // 样式保留
@@ -682,7 +745,10 @@ mod tests {
         for v in [
             CellValue::Number(42.5),
             CellValue::Text("中文 mixed".into()),
-            CellValue::Formula("A1+B1".into()),
+            CellValue::Formula {
+                text: "A1+B1".into(),
+                cached: None,
+            },
             CellValue::Bool(true),
         ] {
             let out = set_cell(SHEET, "A2", &v).unwrap();
@@ -690,11 +756,42 @@ mod tests {
             let expect = match &v {
                 CellValue::Number(n) => format_number(*n),
                 CellValue::Text(s) => s.clone(),
-                CellValue::Formula(f) => format!("={f}"),
+                CellValue::Formula { text, .. } => format!("={text}"),
                 CellValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             };
             assert_eq!(got, expect, "{v:?} 往返失败");
         }
+    }
+
+    /// 带缓存值的公式：公式与值都写进去，读取方（不看公式的那些）能立刻拿到数字。
+    #[test]
+    fn formula_with_cache_writes_both_formula_and_value() {
+        let out = set_cell(
+            SHEET,
+            "B2",
+            &CellValue::Formula {
+                text: "=SUM(C1:C5)".into(),
+                cached: Some(270.0),
+            },
+        )
+        .unwrap();
+        let elem = cell_element(&out, "B2");
+        assert!(elem.contains("<f>SUM(C1:C5)</f>"), "{elem}");
+        assert!(elem.contains("<v>270</v>"), "{elem}");
+        // 缓存值不能是 0：0 会把「算出来是 0」与「没算出来」混为一谈
+        let zero = set_cell(
+            SHEET,
+            "B2",
+            &CellValue::Formula {
+                text: "=SUM(D1:D1)".into(),
+                cached: Some(0.0),
+            },
+        )
+        .unwrap();
+        assert!(
+            cell_element(&zero, "B2").contains("<v>0</v>"),
+            "算出 0 也要写"
+        );
     }
 
     #[test]

@@ -410,6 +410,8 @@ export default {
     pdfTooLarge: "File exceeds the preview limit; open it in an external application",
     docHint: "Headings are marked with # by level; tables use | as separator",
     docTruncated: "The document is long; only the first part is shown here",
+    encodingUnknown: "This file is neither UTF-8 nor GBK; what you see below is a lenient decode and may contain mojibake. Convert it to UTF-8 first.",
+    encodingGbk: "The file was decoded as GBK (common for spreadsheets exported on Chinese systems).",
     // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): restore an earlier version
     restore: "Restore",
     restoreTitle: "Restore an earlier version",

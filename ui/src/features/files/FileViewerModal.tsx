@@ -70,11 +70,24 @@ type ViewerState =
   | { phase: "loading" }
   | { phase: "error"; error: string; tooLarge: boolean }
   | { phase: "image"; dataUrl: string }
-  | { phase: "markdown"; html: string }
-  | { phase: "code"; text: string }
-  | { phase: "sheet"; sheet: SheetState }
+  | { phase: "markdown"; html: string; encoding: string }
+  | { phase: "code"; text: string; encoding: string }
+  | { phase: "sheet"; sheet: SheetState; encoding: string }
   | { phase: "doc"; text: string; truncated: boolean }
   | { phase: "pdf"; scanned: boolean };
+
+/** 文本编码提示（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+ *  非 UTF-8 时说清楚内容是怎么解出来的——使用者看到乱码才能知道下一步该干什么。 */
+function EncodingNote({ encoding }: { encoding: string }) {
+  const { t } = useTranslation();
+  if (encoding === "unknown") {
+    return <Alert type="warning" showIcon message={t("files.encodingUnknown")} style={{ marginBottom: 8 }} />;
+  }
+  if (encoding === "gbk") {
+    return <Alert type="info" showIcon message={t("files.encodingGbk")} style={{ marginBottom: 8 }} />;
+  }
+  return null;
+}
 
 /** 错误文本：去掉 `Error: ` 前缀，保留后端给的 `E_XXX: 说明` 形态。 */
 function errorText(e: unknown): string {
@@ -146,7 +159,8 @@ export default function FileViewerModal({
         }
         if (kind === "markdown") {
           const r = await ipc.readWorkspaceFile(sid, target);
-          if (!cancelled) setSt({ phase: "markdown", html: renderMarkdown(r.content) });
+          if (!cancelled)
+            setSt({ phase: "markdown", html: renderMarkdown(r.content), encoding: r.encoding });
           return;
         }
         if (kind === "tableText") {
@@ -156,6 +170,7 @@ export default function FileViewerModal({
           setSt({
             phase: "sheet",
             sheet: { sheets: [], active: "", rows, total: rows.length, truncated: false, busy: false },
+            encoding: r.encoding,
           });
           return;
         }
@@ -168,12 +183,14 @@ export default function FileViewerModal({
             setSt({
               phase: "sheet",
               sheet: { sheets: [], active: "", rows: [], total: 0, truncated: false, busy: false },
+              encoding: "utf-8",
             });
             return;
           }
           setSt({
             phase: "sheet",
             sheet: { sheets: names, active: names[0]!, rows: [], total: 0, truncated: false, busy: true },
+            encoding: "utf-8",
           });
           await loadSheet(sid, target, names[0]!);
           return;
@@ -190,7 +207,7 @@ export default function FileViewerModal({
           return;
         }
         const r = await ipc.readWorkspaceFile(sid, target);
-        if (!cancelled) setSt({ phase: "code", text: r.content });
+        if (!cancelled) setSt({ phase: "code", text: r.content, encoding: r.encoding });
       } catch (e) {
         if (cancelled) return;
         const msg = errorText(e);
@@ -240,7 +257,9 @@ export default function FileViewerModal({
           <Image src={st.dataUrl} alt={name} style={{ maxWidth: "100%" }} />
         </div>
       ) : st.phase === "sheet" ? (
-        <SheetView
+        <>
+          <EncodingNote encoding={st.encoding} />
+          <SheetView
           sheets={st.sheet.sheets}
           active={st.sheet.active}
           rows={st.sheet.rows}
@@ -256,6 +275,7 @@ export default function FileViewerModal({
             truncated: t("files.sheetTruncated", { cols: maxCols(st.sheet.rows) }),
           }}
         />
+        </>
       ) : st.phase === "pdf" ? (
         st.scanned ? (
           <Alert type="info" showIcon message={t("files.pdfScanned")} />
@@ -280,11 +300,17 @@ export default function FileViewerModal({
           </div>
         </div>
       ) : st.phase === "markdown" ? (
-        <div className="assistant">
-          <div ref={bodyRef} className="md" dangerouslySetInnerHTML={{ __html: html }} />
-        </div>
+        <>
+          <EncodingNote encoding={st.encoding} />
+          <div className="assistant">
+            <div ref={bodyRef} className="md" dangerouslySetInnerHTML={{ __html: html }} />
+          </div>
+        </>
       ) : (
-        <CodeBlock code={st.phase === "code" ? st.text : ""} language={lang} />
+        <>
+          <EncodingNote encoding={st.phase === "code" ? st.encoding : "utf-8"} />
+          <CodeBlock code={st.phase === "code" ? st.text : ""} language={lang} />
+        </>
       )}
     </Modal>
   );

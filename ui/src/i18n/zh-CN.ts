@@ -405,6 +405,8 @@ export default {
     pdfTooLarge: "文件超过预览上限，请用外部程序打开",
     docHint: "标题以 # 标记层级，表格用 | 分隔",
     docTruncated: "文档较长，这里只显示了前一部分",
+    encodingUnknown: "这个文件不是 UTF-8 / GBK 编码，下面显示的是宽松解码的结果，可能有乱码。建议先转成 UTF-8。",
+    encodingGbk: "文件按 GBK 编码解码（中文环境里导出的表格常见这种编码）。",
     // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：修改回退
     restore: "回退",
     restoreTitle: "回退到改动前的版本",

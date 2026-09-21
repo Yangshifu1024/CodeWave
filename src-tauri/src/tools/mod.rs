@@ -11,6 +11,7 @@ pub mod create;
 pub mod delete;
 pub mod document;
 pub mod edit;
+pub mod encoding;
 #[cfg(test)]
 mod fuzz;
 pub mod grep;

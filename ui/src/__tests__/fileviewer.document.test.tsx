@@ -129,3 +129,31 @@ describe("PDF 与既有路径", () => {
     expect(mocks.calls.some((c) => c.cmd === "preview_document")).toBe(false);
   });
 });
+
+describe("文本编码提示", () => {
+  it("GBK 解码的 csv：正常显示内容并说明是按 GBK 解的", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/表.csv", size: 20, encoding: "gbk", content: "月份,金额\n1月,120\n",
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/表.csv" onClose={() => {}} />);
+    expect(await screen.findByText(/GBK 编码解码/)).toBeTruthy();
+    // 内容进的是表格视图（按逗号切开了）
+    expect(screen.getByText("月份")).toBeTruthy();
+  });
+
+  it("认不出编码的文本：给出可能乱码的警告，而不是默默显示乱码", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/a.txt", size: 8, encoding: "unknown", content: "\uFFFD\uFFFD",
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/a.txt" onClose={() => {}} />);
+    expect(await screen.findByText(/不是 UTF-8 \/ GBK 编码/)).toBeTruthy();
+  });
+
+  it("普通 UTF-8 文本不出现编码提示（不打扰）", async () => {
+    mocks.readFile.mockResolvedValue({ path: "/ws/a.txt", size: 5, encoding: "utf-8", content: "内容" });
+    render(<FileViewerModal sessionId="s1" path="/ws/a.txt" onClose={() => {}} />);
+    await waitFor(() => expect(mocks.readFile).toHaveBeenCalled());
+    expect(document.body.textContent ?? "").not.toContain("GBK");
+    expect(document.body.textContent ?? "").not.toContain("乱码");
+  });
+});

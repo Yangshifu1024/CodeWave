@@ -725,6 +725,7 @@ dependencies = [
  "dirs 7.0.0",
  "docx-rs",
  "dom_smoothie",
+ "encoding_rs",
  "flate2",
  "futures",
  "git2",

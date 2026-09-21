@@ -74,7 +74,7 @@ export const ipc = {
   searchWorkspacePaths: (sessionId: string, query: string, limit?: number) =>
     invoke<string[]>("search_workspace_paths", { sessionId, query, limit }),
   readWorkspaceFile: (sessionId: string, path: string) =>
-    invoke<{ path: string; size: number; content: string }>("read_workspace_file", { sessionId, path }),
+    invoke<{ path: string; size: number; encoding: string; content: string }>("read_workspace_file", { sessionId, path }),
 
   // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：四个文件入口
   /** 原生文件选择框（任意文件）；返回绝对路径列表 */

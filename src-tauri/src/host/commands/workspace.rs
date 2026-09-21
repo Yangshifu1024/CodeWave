@@ -75,10 +75,15 @@ pub async fn read_workspace_file(
         ));
     }
     let bytes = std::fs::read(&resolved).map_err(err)?;
+    // 编码探测（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+    // 导出成 csv 的表格在国内环境里常见 GBK，按 UTF-8 硬读只会得到一片乱码。
+    // 实际用的编码一并返回，界面能如实告知使用者。「unknown」表示没认出来。
+    let decoded = crate::tools::encoding::decode_text(&bytes);
     Ok(serde_json::json!({
         "path": path,
         "size": meta.len(),
-        "content": String::from_utf8_lossy(&bytes),
+        "encoding": decoded.encoding,
+        "content": decoded.text,
     }))
 }
 
