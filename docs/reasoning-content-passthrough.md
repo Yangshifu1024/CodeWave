@@ -143,7 +143,7 @@ drive.rs：400 文案分类 Reasoning400（大小写不敏感）
 
 **未覆盖（明确声明）**：真实上游 HTTP 端到端（缺 `reasoning_content` 真被 400、拒收型端点真被拒）无自动化用例；真机 GUI 多轮对话不在自动化能力内（§7）。
 
-### 既有 flaky（本次范围外）
+### 既有 flaky（本次范围外；**已于 2026-09-21 修复**）
 
 `provider::tests_integration::midstream_disconnect_maps_to_network` 在**默认并行**执行下会间歇失败（`got Server("")`）。三重证据判定与本次改动无关：
 
@@ -151,8 +151,7 @@ drive.rs：400 文案分类 Reasoning400（大小写不敏感）
 2. `--test-threads=1` 串行全量 639 passed / 0 failed；
 3. **跳过本次全部新增用例**后并行仍复现（19 filtered，1 failed）。
 
-成因推测：TCP 中途断连在「收到 RST」与「读到干净 EOF」之间依调度漂移，断言只接受 `Network(_) | Protocol(_)`。建议单独立项收窄（例如放宽判定或固定断连方式）。
-
+**已修（2026-09-21，分支 `test/provider-midstream-flaky`）**：根因经复现坐实（改前 `cargo test --lib provider::` 连跑 20 次红 4 次，恒为 `got Server("")`），两条且均与产品行为无关——① mock 只 `read` 一次就写半截响应并立即 `drop(sock)`：带未读数据 close 在 Windows 上发 RST，客户端因此忽而 RST 忽而 EOF；② listener 随任务结束被释放，而并发用例也绑 `127.0.0.1:0`，同一临时端口可能被另一条用例的 mock 抢到并用它自己的脚本（含空 body 的 5xx）应答——客户端拿到与本地 mock 无关的响应，经 `from_status(5xx, "")` 归为 `Server("")`。修法：listener 用 `Arc` 持有并活到用例结束 + 读干请求头（到 `\r\n\r\n`）+ `shutdown()` 写半部优雅收尾 + 断言接受集纳入 `Server(_)`（`retry.rs` 同样视其为可重试，本用例只承诺「不被误判为硬失败」）。验证：改后 30 次模块连跑 + 8 次全量跑 0 红，`pnpm prepr` 8/8；教训已写入 [AGENTS.md](../AGENTS.md) 踩坑清单。
 ## 7. 手动验证清单（GUI 不做自动点验）
 
 前置：`pnpm tauri dev`，会话模型选 `deepseek-v4.1-flash`（provider `OpenCode Go`，`api_format = openai_chat`）。
@@ -172,7 +171,7 @@ drive.rs：400 文案分类 Reasoning400（大小写不敏感）
 3. **进程重启后重新学习**：粘性标记是会话级内存态，重启后拒收型端点会再撞一次 400 再自愈。
 4. **上游校验粒度未实测**：本实现按「有思考就带、没有就不带」的最保守形态实现。若某上游要求**每条** assistant 消息都必须带该键（含空串），需追加「缺失时补空串」分支——建议用一条 curl 最小复现确认。
 5. **8MB 上限**：落盘保留思考使压缩后体积变大，极端情况下（无图可剥且文本不可压缩）会走到「拒绝保存，请新开会话」。`trim` 预算（256k token / 保留末 2 轮）使其实际难以触达。
-6. **既有 flaky 用例**（§6 末）未在本次处理，建议单独立项。
+6. **既有 flaky 用例**（§6 末）：**已于 2026-09-21 修复**（分支 `test/provider-midstream-flaky`，成因与验证见 §6 末）。
 
 ## 9. 审查记录
 

@@ -92,6 +92,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - antd `TextArea` 的 `autoSize` 会在 DOM 里另放一个测量用 textarea：测试里用 `getByPlaceholderText` 定位真身，别用 `querySelector("textarea")`（拿到替身后 fireEvent.change 静默无效）
 - 草稿里有些内容**不在正文文本里**（文件引用 chip 存 `refs`、图片存 `images`）：凡「覆盖草稿」的链路（`ws:composer-fill`、队列编辑、历史召回）必须连带覆盖它们，只 `setText` 盖不住
 - 触发菜单/回填要看**真实光标**：`onChange` 只给文本与 `selectionStart`，点击与方向键移动光标**不过** `onChange`（靠 `onSelect/onClick/onKeyUp` 补同步）；测试里要指定光标位置时给 `fireEvent.change` 传 `target.selectionStart`（不传就是文末，happy-dom 与浏览器一致）
+- 测试里的 mock server 别「读完一次就 `drop(sock)`」：临时端口是共享资源——① 带未读数据 close 在 Windows 上会发 RST（客户端的「半截响应」因此忽 RST 忽 EOF）；② 任务结束后 listener 释放的临时端口可能被**并发用例**的 listener 抢到，客户端于是拿到别的用例的响应（表现为毫不相干的错误变体）。做法：listener 用 `Arc` 持有并活到用例结束 + 读干请求头（到 `\r\n\r\n`）+ `shutdown()` 写半部优雅收尾。2026-09-21 修 `provider::tests_integration::midstream_disconnect_maps_to_network` 的间歇性 `got Server("")` 即此二因（当时 20 次跑 4 次红，修后 30 次模块连跑 + 8 次全量跑 0 红）
 
 ## 可用专门代理
 
