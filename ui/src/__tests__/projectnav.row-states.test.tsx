@@ -98,6 +98,22 @@ describe("等待确认行：重命名/删除按钮与「等待确认」徽标互
     row = firstRow();
     expect(row.querySelectorAll(".row-action")).toHaveLength(2);
   });
+
+  it("「等待确认」徽标是中性标签：不带预设绿 / 红（色彩只映射风险等级）", () => {
+    renderNav({ tabs: [tab({ sessionId: "s1", title: "提问中会话" })], activeKey: "s1" });
+    useRun.getState().initTab("s1");
+    act(() => {
+      useRun.setState((s) => {
+        s.tabs["s1"].ask = { askId: "a1", kind: "ask" } as any;
+      });
+    });
+
+    const tag = firstRow().querySelector(".ant-tag") as HTMLElement;
+    expect(tag.textContent).toContain("等待确认");
+    // 等待确认属「需注意」而非成功：预设绿（ant-tag-success）违反「无色彩=默认、色彩只映射风险等级」
+    expect(tag.className).not.toContain("ant-tag-success");
+    expect(tag.className).not.toContain("ant-tag-error");
+  });
 });
 
 describe("会话结束未读点（docs/ask-ink-accent-and-composer-cover）", () => {

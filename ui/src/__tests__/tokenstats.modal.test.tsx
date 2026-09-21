@@ -110,7 +110,8 @@ describe("TokenStatsModal 摘要行", () => {
     await waitFor(() => {
       expect(screen.getByText(/最常用模型/)).toBeTruthy();
     });
-    const line = screen.getByText(/最常用模型/).textContent ?? "";
+    // 标签与数字现在在同一个摘要行里（数字不再与标签同元素）：取整行文本
+    const line = screen.getByText(/最常用模型/).closest(".stats-summary")?.textContent ?? "";
     expect(line).toContain("glm-4.7");
     expect(line).not.toContain("eb8dcd57");
   });
@@ -122,7 +123,8 @@ describe("TokenStatsModal 摘要行", () => {
     await waitFor(() => {
       expect(screen.getByText(/最常用模型/)).toBeTruthy();
     });
-    const line = screen.getByText(/最常用模型/).textContent ?? "";
+    // 同上：取整行文本（标签元素只含标签）
+    const line = screen.getByText(/最常用模型/).closest(".stats-summary")?.textContent ?? "";
     expect(line).toContain("eb8dcd57…");
     expect(line).not.toContain("glm-4.7");
   });
@@ -136,7 +138,8 @@ describe("TokenStatsModal 总览三项（速率 / 均步耗时 / 平均 TTFT）"
   /** 总览三项所在的那一行（唯一包含「平均生成速率」的摘要行） */
   async function overviewLine(): Promise<string> {
     const el = await waitFor(() => screen.getByText(/平均生成速率/));
-    return el.textContent ?? "";
+    // 标签与三项数字在同一摘要行里（数字走容器色、标签走 .dim），故取整行文本
+    return el.closest(".stats-summary")?.textContent ?? "";
   }
 
   it("加权计算，且不带计时的来源桶整条排除（分子分母同域）", async () => {

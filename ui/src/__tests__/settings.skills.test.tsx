@@ -1,4 +1,4 @@
-// 设置页工具与集成页：技能段：来源短标签 + 重新加载（reload_skills 清缓存重扫）+ 托管技能删除（delete_skill + Popconfirm）。
+// 设置页技能页（自「工具与集成」拆出）：来源短标签 + 重新加载（reload_skills 清缓存重扫）+ 托管技能删除（delete_skill + Popconfirm）。
 // 挂载方式与 shell.settings.test.tsx 同源（standalone + useUi 控制开关），两字按钮按去空白文本匹配。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -82,7 +82,7 @@ function buttonByText(text: string): HTMLElement {
 
 async function openSkillsTab() {
   useSettings.setState({ config: makeConfig(), loaded: true });
-  useUi.setState({ settingsOpen: true, settingsTab: "tools" });
+  useUi.setState({ settingsOpen: true, settingsTab: "skills" });
   render(
     <AntApp>
       <SettingsPage />
@@ -91,7 +91,7 @@ async function openSkillsTab() {
   await waitFor(() => expect(screen.getByText("demo")).toBeTruthy());
 }
 
-describe("设置页工具与集成页：技能段", () => {
+describe("设置页技能页：禁用清单", () => {
   it("每行渲染来源短标签：内置显示「内置」，目录形态取技能目录名并悬浮完整 origin", async () => {
     await openSkillsTab();
     // 内置：显示「内置」标签
@@ -144,7 +144,7 @@ describe("设置页工具与集成页：技能段", () => {
       cmd === "list_skills" ? [] : baseInvoke(cmd, args),
     );
     useSettings.setState({ config: makeConfig(), loaded: true });
-    useUi.setState({ settingsOpen: true, settingsTab: "tools" });
+    useUi.setState({ settingsOpen: true, settingsTab: "skills" });
     render(
       <AntApp>
         <SettingsPage />

@@ -192,23 +192,28 @@ export default function TokenStatsModal() {
         <Empty description={t("stats.empty")} />
       )}
       {days.length > 0 && (
-        <div className="stats-summary dim">
-          {t("stats.total")}：
-          {fmt(days.reduce((a, d) => a + dayTotal(d), 0))} tokens ·
-          {" "}{days.reduce((a, d) => a + d.total.runs, 0)} runs
-          {topModel && ` · ${t("stats.topModel")}：${topModel}`}
+        /* 主结论数字走容器的 --ws-text-2，只有「标签」降到 --ws-dim（整行 dim 会让数字与次要说明同色） */
+        <div className="stats-summary">
+          <span className="dim">{t("stats.total")}：</span>
+          {fmt(days.reduce((a, d) => a + dayTotal(d), 0))} tokens ·{" "}
+          {days.reduce((a, d) => a + d.total.runs, 0)} runs
+          {topModel && <> · <span className="dim">{t("stats.topModel")}：</span>{topModel}</>}
         </div>
       )}
       {days.length > 0 && (
-        <div className="stats-summary dim">
-          {t("stats.avgRate")}：{avgRate != null ? `${formatRate(avgRate)} tok/s` : "—"} ·{" "}
-          {t("stats.avgStepMs")}：{avgStep != null ? formatMs(avgStep) : "—"} ·{" "}
-          {t("stats.avgTtft")}：{avgTtft != null ? formatMs(avgTtft) : "—"}
+        <div className="stats-summary">
+          <span className="dim">{t("stats.avgRate")}：</span>
+          {avgRate != null ? `${formatRate(avgRate)} tok/s` : "—"} ·{" "}
+          <span className="dim">{t("stats.avgStepMs")}：</span>
+          {avgStep != null ? formatMs(avgStep) : "—"} ·{" "}
+          <span className="dim">{t("stats.avgTtft")}：</span>
+          {avgTtft != null ? formatMs(avgTtft) : "—"}
         </div>
       )}
       {days.length > 0 && hit && (
-        <div className="stats-summary dim">
-          {t("stats.cacheHit", {
+          /* 整行是一个带插值的句式，拆不开标签与数字：整行用容器色（比原先的整行 dim 更可读） */
+          <div className="stats-summary">
+            {t("stats.cacheHit", {
             rate: `${(hit.rate * 100).toFixed(1)}%`,
             read: fmt(hit.read),
             write: fmt(hit.write),
@@ -216,7 +221,7 @@ export default function TokenStatsModal() {
         </div>
       )}
       {days.length > 0 && byKind && (
-        <div className="stats-summary dim">{t("stats.sources", { list: byKind })}</div>
+        <div className="stats-summary">{t("stats.sources", { list: byKind })}</div>
       )}
     </Modal>
   );

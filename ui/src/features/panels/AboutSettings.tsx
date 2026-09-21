@@ -35,7 +35,7 @@ const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
 export function AboutSettings() {
   const { t } = useTranslation();
   const [version, setVersion] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ at: string; message: string } | null>(null);
   // 手动检查更新进行中（按钮 loading）；结果经 UpdateModal / toast 反馈：有更新与失败会弹窗，
   // 本页只需 loading
   const [checking, setChecking] = useState(false);
@@ -68,13 +68,17 @@ export function AboutSettings() {
     }
   }
 
-  /** 目录 / 外链入口共用一条「失败就地提示」路径（.about-error，位于 Form 末尾；不离开设置页） */
-  async function runAction(action: () => Promise<void>) {
+  /**
+   * 目录 / 外链入口共用的「失败就地提示」路径：错误**记在触发的行上**（at = 该行锚点 id），
+   * 由 entryRow 渲染在自己那行下方——原先统一堆在 Form 末尾，点第 2 行失败可能要到第 5 行之后才看到
+   * （版式审计）。仍然不离开设置页。
+   */
+  async function runAction(at: string, action: () => Promise<void>) {
     setActionError(null);
     try {
       await action();
     } catch (e) {
-      setActionError(String(e));
+      setActionError({ at, message: String(e) });
     }
   }
 
@@ -86,6 +90,8 @@ export function AboutSettings() {
           <Button size="small" icon={icon} onClick={onClick}>
             {buttonText}
           </Button>
+          {/* 失败提示贴在触发行上（而非统一堆在 Form 末尾） */}
+          {actionError?.at === settingId && <div className="about-error">{actionError.message}</div>}
         </div>
       </Form.Item>
     );
@@ -124,7 +130,7 @@ export function AboutSettings() {
           "app.data_dir",
           <FolderOpenOutlined />,
           t("settings.aboutOpenAppData"),
-          () => void runAction(() => ipc.openDataDir()),
+          () => void runAction("app.data_dir", () => ipc.openDataDir()),
         )}
         {entryRow(
           t("settings.aboutLogsDir"),
@@ -132,7 +138,7 @@ export function AboutSettings() {
           "app.logs_dir",
           <FileTextOutlined />,
           t("settings.aboutOpenLogsDir"),
-          () => void runAction(() => ipc.openLogsDir()),
+          () => void runAction("app.logs_dir", () => ipc.openLogsDir()),
         )}
         {entryRow(
           t("settings.aboutRepo"),
@@ -140,7 +146,7 @@ export function AboutSettings() {
           "app.repo",
           <GithubOutlined />,
           t("settings.aboutOpenRepo"),
-          () => void runAction(() => ipc.openUrl(REPO_URL)),
+          () => void runAction("app.repo", () => ipc.openUrl(REPO_URL)),
         )}
         {entryRow(
           t("settings.aboutLicense"),
@@ -148,9 +154,11 @@ export function AboutSettings() {
           "app.license",
           <FileProtectOutlined />,
           t("settings.aboutViewLicense"),
-          () => void runAction(() => ipc.openUrl(LICENSE_URL)),
+          () => void runAction("app.license", () => ipc.openUrl(LICENSE_URL)),
         )}
-        <Form.Item label={t("settings.updates")} extra={t("settings.updatesHint")}>
+        {/* 「即时生效」写进标题的括号里（instantApplySuffix）：本行是 flex 行、标题带 margin-right:auto，
+            标注挂行尾会被推到最右侧，看不见。 */}
+        <Form.Item label={<>{t("settings.updates")}{t("settings.instantApplySuffix")}</>} extra={t("settings.updatesHint")}>
           <div className="settings-update-row">
             {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记。
                 锚点（data-setting-id）供批③ 搜索定位：整行控件，不参与宽度三档。
@@ -164,10 +172,8 @@ export function AboutSettings() {
               />
             </div>
             <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
-            <span className="settings-instant">{t("settings.instantApply")}</span>
           </div>
         </Form.Item>
-        {actionError && <div className="about-error">{actionError}</div>}
       </Form>
     </div>
   );

@@ -1,8 +1,8 @@
 // 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md) /
-// 8 页重划 [docs/settings-ia](../../../../docs/settings-ia.md)）：绝对定位贴在内层 Layout 上的全屏页；
-// 8 个分区按左导航三组铺开，draft/save 全量提交语义不变。
+// 10 页 [docs/settings-ia](../../../../docs/settings-ia.md)）：绝对定位贴在内层 Layout 上的全屏页；
+// 10 个分区按左导航三组铺开，draft/save 全量提交语义不变。
 // 本文件承担四件事：
-//   1. 容器：左导航列（返回工作区 + 运行中指示 + 三组 8 页自建导航）+ 右内容列（操作条 + 页体）；
+//   1. 容器：左导航列（返回工作区 + 运行中指示 + 三组 10 页自建导航）+ 右内容列（操作条 + 页体）；
 //   2. 逐页脏标记（draft 与已保存配置的差集，字段归属由注册表 PAGE_FIELDS 驱动，即时生效项不打点）；
 //   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）；
 //   4. 搜索与进阶折叠（批③，[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)）：
@@ -10,11 +10,15 @@
 //      （只加类、零 DOM 搬迁），控件宽度统一走 .w-narrow / .w-mid / .w-wide 三档。
 // 页面 JSX 手写（不做数据驱动渲染）：注册表只提供页序、页名、分组与字段归属。
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
-  App, Button, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
+  App, Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
 } from "antd";
-import { ArrowLeftOutlined, DeleteOutlined } from "@ant-design/icons";
+import {
+  ApiOutlined, ArrowLeftOutlined, BgColorsOutlined, CheckSquareOutlined, DeleteOutlined, DeploymentUnitOutlined,
+  GlobalOutlined, InfoCircleOutlined, ProfileOutlined, RobotOutlined, SafetyCertificateOutlined,
+  ThunderboltOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
@@ -30,6 +34,7 @@ import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { AboutSettings } from "./AboutSettings";
+import McpStatusTable, { mcpStatusRow, type McpStatusRow } from "./McpStatusTable";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import {
@@ -58,6 +63,24 @@ const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
 const SETTINGS_NAV_W = 280;
 /** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
 const SETTINGS_NAV_RATIO = 0.32;
+
+/**
+ * 页图标（Outlined 线性，跟随文本色 —— 不设 color，符合「无彩色 = 默认」的配色约定）。
+ * 住在这里而不是注册表里：注册表必须保持纯数据（无 React 依赖，stores/ui.ts 直接引用它做页 key 归一）。
+ * 键集由 PageKey 联合类型保证不重不漏。
+ */
+const PAGE_ICON: Record<PageKey, ComponentType<{ className?: string }>> = {
+  appearance: BgColorsOutlined,
+  providers: ApiOutlined,
+  network: GlobalOutlined,
+  security: SafetyCertificateOutlined,
+  mcp: DeploymentUnitOutlined,
+  skills: ThunderboltOutlined,
+  tools: CheckSquareOutlined,
+  agent: RobotOutlined,
+  logs: ProfileOutlined,
+  about: InfoCircleOutlined,
+};
 
 /**
  * 会话保留期档位（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 1 条）：`null` = 不清理，
@@ -283,10 +306,11 @@ function resolveShellDisplay(selection: string | null | undefined, shells: Shell
   return { kind: "path", text: current.path };
 }
 
-/** 设置页：8 个分区（界面 / 模型与供应商 / 网络与连接 / 安全与审批 / 工具与集成 / 工作区与智能体 /
+/** 设置页：10 个分区（界面 / 模型与供应商 / 网络与连接 / 安全与审批 / MCP / 技能 / 写入后检查与校验 /
  *  日志 / 关于），按左导航三组铺开。draft 只改内存、「保存」一次性提交；供应商校验失败报错并跳页不落盘；
- *  MCP 支持结构化条目与原文本兜底双模式。
+ *  MCP 支持结构化条目与原文本兜底双模式（服务器状态表住在 McpStatusTable）。
  *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */
+
 export default function SettingsPage() {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
@@ -316,6 +340,10 @@ export default function SettingsPage() {
   const [mcpRaw, setMcpRaw] = useState("");
   /** 打开时的 MCP 文本基线（已归一化），用于逐页脏判定与「放弃改动」回退 */
   const [mcpOriginal, setMcpOriginal] = useState("");
+  /** MCP 运行时状态（useUi.mcpStatus：mcp:status 事件 upsert；打开设置页与进入 MCP 页各重读一次） */
+  const mcpStatus = useUi((s) => s.mcpStatus);
+  /** 状态刷新中：按钮转圈 + 防重复点击（只重读状态，不触发连接 / 重连） */
+  const [mcpRefreshing, setMcpRefreshing] = useState(false);
   // shell 探测：null = 探测失败（仅显示「自动」+ 失败提示），[] = 探测成功但无可用项
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
@@ -446,7 +474,10 @@ export default function SettingsPage() {
       const parsed = parseMcpEntries(raw);
       // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
       const normalized = parsed ? serializeMcpEntries(parsed) : raw;
-      setMcpEntries(parsed ?? []);
+      // null = 原 JSON 解析失败 → 进入「文本兜底模式」（只有 mcpEntries === null 才走那个分支）。
+      // 注意不能写成 `parsed ?? []`：那样兜底模式在真实使用中不可达——解析不了的 mcp.json 既不显示、
+      // 点「保存并重连」还会被空配置覆盖（数据丢失）。回归用例：settings.mcp.test.tsx。
+      setMcpEntries(parsed);
       setMcpRaw(normalized);
       setMcpOriginal(normalized);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
@@ -802,6 +833,50 @@ export default function SettingsPage() {
     setMcpEntries((prev) => (prev ? prev.filter((_, i) => i !== idx) : prev));
   }
 
+  /** 刷新 MCP 状态：只重读 mcp_status（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
+  async function refreshMcpStatus() {
+    setMcpRefreshing(true);
+    try {
+      // 失败保留旧值：整份替成 [] 会把「一次 IPC 抖动」伪装成「所有服务器都没连接」，
+      // 而「未连接」在本页是**正常态**文案（见状态表下方的说明），误导性最强
+      const st = await ipc.mcpStatus().catch(() => null);
+      if (st) useUi.setState({ mcpStatus: st });
+      else message.error(t("settings.mcpStatusRefreshFailed"));
+    } finally {
+      setMcpRefreshing(false);
+    }
+  }
+
+  /**
+   * 状态表行 = 配置名单 ∪ 状态记录：
+   *  · 只取配置名单会漏掉「管理端仍持有连接、但配置里已删掉」的服务器；
+   *  · 只取状态记录则会在保存配置后（后端 stop_all 清空、且无会话不重连）得到空表，
+   *    看起来像「没配置服务器」——故两侧取并集，并把没记录的一律显示为「未连接」。
+   */
+  const mcpStatusRows = useMemo<McpStatusRow[]>(() => {
+    // 文本兜底模式（原 JSON 解析失败）拿不到配置名单：那一半按空处理，状态表只列管理端已知的服务器
+    const names: string[] = [];
+    for (const e of mcpEntries ?? []) {
+      const n = e.name.trim();
+      if (n && !names.includes(n)) names.push(n);
+    }
+    const byName = new Map(mcpStatus.map((s) => [s.name, s]));
+    const rows = names.map((n) => mcpStatusRow(n, byName.get(n)));
+    for (const s of mcpStatus) if (!names.includes(s.name)) rows.push(mcpStatusRow(s.name, s));
+    return rows;
+  }, [mcpEntries, mcpStatus]);
+
+  /**
+   * 切到 MCP 页时重读一次状态：`mcp:status` 事件只在 connect_mcp 之后触发（开会话 / 保存配置），
+   * 久留设置页会看到陈旧状态；「切页」本身就是用户主动要看状态的信号。
+   */
+  useEffect(() => {
+    if (tab !== "mcp") return;
+    void refreshMcpStatus();
+    // 只在切页时重读：refreshMcpStatus 每次渲染都是新引用，纳入依赖会退化成频繁 refetch
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
   // 代理模式视图态：proxy=null（从未配置）显示为「系统代理」——与 HTTP 栈默认行为一致（诚实呈现）
   const proxyMode = draft?.proxy?.mode ?? "system";
   const proxyUrl = draft?.proxy?.url ?? "";
@@ -816,14 +891,15 @@ export default function SettingsPage() {
 
   // ---------- 逐页脏标记与离开拦截（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)） ----------
   const config = useSettings((s) => s.config);
-  // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集，挂在拥有它的 tools 页
+  // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集，挂在拥有它的 mcp 页
+  // （MCP 配置拆成独立页后脏点必须跟着页走：挂在 tools 页会出现「改了 MCP、脏点却亮在写入后检查页」）
   const mcpSerialized = mcpEntries !== null ? serializeMcpEntries(mcpEntries) : mcpRaw;
   const mcpDirty = mcpSerialized !== mcpOriginal;
   const dirtyMap = useMemo(() => {
     const out = {} as Record<PageKey, boolean>;
     for (const page of PAGE_ORDER) {
       const configDirty = !!draft && !!config && !sameSlice(pageSlice(draft, page), pageSlice(config, page));
-      out[page] = configDirty || (page === "tools" && mcpDirty);
+      out[page] = configDirty || (page === "mcp" && mcpDirty);
     }
     return out;
   }, [draft, config, mcpDirty]);
@@ -865,7 +941,8 @@ export default function SettingsPage() {
   function discardDraft() {
     if (config) setDraft(JSON.parse(JSON.stringify(config)));
     const parsed = parseMcpEntries(mcpOriginal);
-    setMcpEntries(parsed ?? []);
+    // 同加载路径：解析失败要回到文本兜底模式（而不是空结构化列表）
+    setMcpEntries(parsed);
     setMcpRaw(parsed ? serializeMcpEntries(parsed) : mcpOriginal);
   }
 
@@ -1038,7 +1115,7 @@ export default function SettingsPage() {
     hitElRef.current = null;
   }, []);
 
-  /** 8 页清单：页名键与页序来自注册表，页体按当前页渲染到右列（不做数据驱动渲染） */
+  /** 10 页清单：页名键与页序来自注册表，页体按当前页渲染到右列（不做数据驱动渲染） */
   const pages: { key: PageKey; labelKey: string; body: ReactNode }[] = [
     {
       key: "appearance",
@@ -1210,10 +1287,11 @@ export default function SettingsPage() {
     {
       key: "tools",
       labelKey: PAGE_LABEL_KEY.tools,
+      // 写入后检查与校验：MCP / 技能拆走后本页只剩这四项。原 `<Divider>写入后检查</Divider>` 与页名
+      // 重复（拆页后才出现的冗余），故去掉——页名已承担分段标题职责。
       body: draft && (
         <>
           <Form layout="vertical">
-            <Divider>{t("settings.postWriteCheck")}</Divider>
             <div className="hint" style={{ marginBottom: 10 }}>{t("settings.postWriteHint")}</div>
             {/* 开关：Switch 无宽度档，锚点挂整行 */}
             <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
@@ -1265,9 +1343,21 @@ export default function SettingsPage() {
               </Form.Item>
             </div>
           </Form>
-
-          {/* MCP：不在 config 内（独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它） */}
-          <Divider>{t("settings.mcp")}</Divider>
+        </>
+      ),
+    },
+    {
+      key: "mcp",
+      labelKey: PAGE_LABEL_KEY.mcp,
+      // MCP 页（[docs/settings-ia](../../../../docs/settings-ia.md)）：上段「服务器状态」、下段「服务器配置」。
+      // 状态段的数据源是既有的 mcp_status 命令 + mcp:status 事件（此前只写不读）；配置段不在 config 内
+      // （独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它）。
+      body: draft && (
+        <>
+          {/* 服务器状态段：行由本页拼好（配置名单 ∪ 状态记录），展示与交互都在 McpStatusTable 里
+              （两侧皆空时该组件自身返回 null）。 */}
+          <McpStatusTable rows={mcpStatusRows} refreshing={mcpRefreshing} onRefresh={() => void refreshMcpStatus()} />
+          <div className="settings-subhead">{t("settings.mcpConfigHead")}</div>
           {mcpEntries === null ? (
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
@@ -1352,8 +1442,17 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <Divider>{t("settings.skills")}</Divider>
-          {/* 锚点落在既有容器上：技能列表是整行行（名条 / 来源 / 开关 / 删除） */}
+        </>
+      ),
+    },
+    {
+      key: "skills",
+      labelKey: PAGE_LABEL_KEY.skills,
+      // 技能页：拆走后只剩禁用清单（反向清单：默认全启用，只列被你禁用的）。
+      // 原 `<Divider>技能</Divider>` 与页名重复，故去掉；锚点落在既有容器上
+      // （技能行：名称 / 来源 / 开关 / 删除）。
+      body: draft && (
+        <>
           <div className="setting-anchor" data-setting-id="disabled_skills">
             <div className="skills-toolbar">
               <div className="hint">{t("settings.skillsHint")}</div>
@@ -1411,7 +1510,7 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.agent,
       body: draft && (
         <Form layout="vertical">
-          <Form.Item label={t("settings.shell")} tooltip={t("settings.shellHint")}>
+          <Form.Item label={t("settings.shell")} extra={t("settings.shellHint")}>
             {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
             <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
               <Select
@@ -1515,7 +1614,7 @@ export default function SettingsPage() {
           </Form.Item>
           {/* 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 18/25/26 条）：
               下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
-          <Form.Item label={t("settings.sessionRetention")} tooltip={t("settings.sessionRetentionHint")}>
+          <Form.Item label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
             <div className="setting-anchor" data-setting-id="sessions.retention_days">
               <Select
                 size="small"
@@ -1562,7 +1661,7 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.logs,
       body: draft && (
         <Form layout="vertical">
-          <Form.Item label={t("settings.logLevel")} tooltip={t("settings.logLevelHint")}>
+          <Form.Item label={t("settings.logLevel")} extra={t("settings.logLevelHint")}>
             <div className="setting-anchor" data-setting-id="log.level">
               <Select
                 size="small"
@@ -1577,7 +1676,7 @@ export default function SettingsPage() {
               不能在 Form.Item 内部加类：antd 的 label 与 control 是兄弟节点，只藏 control 会留下
               孤立标签 + 空控制行（与 approval.command_allowlist 同形） */}
           <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
-            <Form.Item label={t("settings.sessionVerbose")} tooltip={t("settings.sessionVerboseHint")}>
+            <Form.Item label={t("settings.sessionVerbose")} extra={t("settings.sessionVerboseHint")}>
               <Switch
                 size="small"
                 checked={draft.log?.session_verbose ?? false}
@@ -1628,7 +1727,7 @@ export default function SettingsPage() {
       aria-modal="true"
       aria-label={t("settings.title")}
     >
-      {/* 左导航列：返回工作区 + 运行中指示 + 三组 8 页导航。
+      {/* 左导航列：返回工作区 + 运行中指示 + 三组 10 页导航。
           导航自建（批② 起替掉 antd Tabs）：Tabs 无法承载「组标题 + 页行」两列式布局，
           且其 pane 机制与本页「页体渲染在右列」的布局要求相冲。 */}
       <nav className="settings-nav" style={{ width: navWidth }}>
@@ -1718,24 +1817,29 @@ export default function SettingsPage() {
               <Fragment key={group.titleKey}>
                 {/* 组标题不是 tab：标 presentation，避免 tablist 的直接子节点混入非 tab 语义 */}
                 <div className="settings-nav-group" role="presentation">{t(group.titleKey)}</div>
-                {group.pages.map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    role="tab"
-                    id={`settings-tab-${key}`}
-                    aria-selected={key === tab}
-                    aria-controls="settings-panel"
-                    data-page={key}
-                    className={`settings-nav-item${key === tab ? " settings-nav-item-active" : ""}`}
-                    onClick={() => onTabChange(key)}
-                  >
-                    <span className="settings-nav-label">
-                      {t(PAGE_LABEL_KEY[key])}
-                      {dirtyMap[key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
-                    </span>
-                  </button>
-                ))}
+                {group.pages.map((key) => {
+                  const Icon = PAGE_ICON[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      id={`settings-tab-${key}`}
+                      aria-selected={key === tab}
+                      aria-controls="settings-panel"
+                      data-page={key}
+                      className={`settings-nav-item${key === tab ? " settings-nav-item-active" : ""}`}
+                      onClick={() => onTabChange(key)}
+                    >
+                      <span className="settings-nav-label">
+                        {/* 图标不设 color：跟随 .settings-nav-label 的文本色 */}
+                        <Icon className="settings-nav-icon" />
+                        {t(PAGE_LABEL_KEY[key])}
+                        {dirtyMap[key] && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
+                      </span>
+                    </button>
+                  );
+                })}
               </Fragment>
             ))}
           </div>

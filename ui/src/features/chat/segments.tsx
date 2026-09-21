@@ -9,16 +9,18 @@ import SubagentItemCard from "../subagent/SubagentItemCard";
 // markdown 渲染缓存：定稿的历史消息在流式期间不重复解析（容量上限防止长会话无限增长）
 const MD_CACHE_MAX = 160;
 const mdCache = new Map<string, string>();
-/** 带缓存的 markdown 渲染：LRU 语义（超容量淘汰最早条目）；流式未定稿文本勿用。 */
-export function renderCached(text: string): string {
-  const hit = mdCache.get(text);
+/** 带缓存的 markdown 渲染：LRU 语义（超容量淘汰最早条目）；流式未定稿文本勿用。
+ *  缓存键含 `diagramPending`（提示文案随语言变），否则切语言后会从缓存里取回旧语言的提示。 */
+export function renderCached(text: string, diagramPending?: string): string {
+  const key = `${diagramPending ?? ""}\u0000${text}`;
+  const hit = mdCache.get(key);
   if (hit !== undefined) return hit;
-  const html = renderMarkdown(text);
+  const html = renderMarkdown(text, diagramPending);
   if (mdCache.size >= MD_CACHE_MAX) {
     const first = mdCache.keys().next().value;
     if (first !== undefined) mdCache.delete(first);
   }
-  mdCache.set(text, html);
+  mdCache.set(key, html);
   return html;
 }
 
@@ -198,6 +200,7 @@ export function TimelineSegsView({
    *  默认 false：主聊天正文引用该标记是合法内容，不可全局剥离。 */
   stripReport?: boolean;
 }) {
+  const { t } = useTranslation();
   // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
   let tailIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
@@ -237,7 +240,9 @@ export function TimelineSegsView({
         // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由
         const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
         // 流式条目绕过缓存（文本每帧增长，避免前缀污染缓存）
-        const html = streaming && i === tailIdx ? renderMarkdown(text) : renderCached(text);
+        // mermaid 占位提示的文案走 i18n（写死在 CSS / HTML 里的中文在英文界面会露馅）
+        const diagramPending = t("chat.diagramPending");
+        const html = streaming && i === tailIdx ? renderMarkdown(text, diagramPending) : renderCached(text, diagramPending);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
         return <div key={i} className="md" data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}

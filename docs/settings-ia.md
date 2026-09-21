@@ -8,6 +8,11 @@
 > 「写入后语义校验」（六语言 LSP 开关 + 命令覆盖 + 预算 / 发现共 19 项）已整体删除，改为
 > **写入后检查**一项命令（`post_write_check.enabled / command / timeout_seconds / tail_chars` 四项）。
 > 本文中凡涉及 `validation.*` / `validation.lsp.*` / LSP 行的描述均为历史记录，现行实现见上述方案文档。
+>
+> **后续变更（MCP / 技能拆页，详见本文 §9）**：原「工具与集成」页一分为三——**MCP**、**技能**各成独立页，
+> 原页只剩写入后检查四项并改名「写入后检查与校验」（页 key 仍是 `tools`，旧深链不受影响）；页数 8 → 10，
+> 全部导航项配 Outlined 线性图标；MCP 页顶部新增服务器状态表（四态 + 工具数 + 行内展开错误 + 刷新）。
+> 下表「工具与集成」一行已按现状拆成三行；`validation.*` 相关行仍为历史记录。
 
 ## 1. 页集合与 3 组导航
 
@@ -17,7 +22,9 @@
 | 外观与模型 | `providers` | 模型与供应商 | AI 回复语言、供应商列表 / 新增 / 编辑（含活跃模型） |
 | 外观与模型 | `network` | 网络与连接 | 代理模式与地址、允许访问内网地址 |
 | 安全与能力 | `security` | 安全与审批 | 危险命令确认、工作区外新建路径确认、git push 前确认、5 分钟自动确认、命令白名单 |
-| 安全与能力 | `tools` | 工具与集成 | 写入后检查（[post-write-check-plan](./post-write-check-plan.md)：一条检查命令 + 开关 / 超时 / 输出尾部字符数）、MCP 服务器、技能 |
+| 安全与能力 | `mcp` | MCP | 服务器状态表（只读：名称 / 状态 / 工具数，失败行可展开完整错误）+ MCP 服务器配置（独立 `mcp.json`） |
+| 安全与能力 | `skills` | 技能 | 禁用技能清单（反向清单：默认全启用）+ 重新扫描 + 托管技能删除 |
+| 安全与能力 | `tools` | 写入后检查与校验 | 写入后检查（[post-write-check-plan](./post-write-check-plan.md)：一条检查命令 + 开关 / 超时 / 输出尾部字符数）；页 key 保 `tools`、页名随内容改名 |
 | 安全与能力 | `agent` | 工作区与智能体 | Shell、自定义提示词、自动压缩阈值、压缩请求超时 |
 | 诊断与其他 | `logs` | 日志 | 日志级别、会话详细日志 |
 | 诊断与其他 | `about` | 关于 | logo / 名称 / 简介、版本、数据目录、日志目录、代码仓库、开源许可证、自动更新开关、手动检查更新 |
@@ -43,7 +50,9 @@
 | 模型与供应商 | `ui.ai_language`、`providers`、`active_model_id` | 通用·AI 语言 + 供应商 |
 | 网络与连接 | `network.proxy`（= config.proxy）、`network.allow_private_network` | 网络 + 安全·内网访问 |
 | 安全与审批 | `approval.enabled / confirm_outside_create / confirm_git_push / auto_confirm / command_allowlist` | 安全（迁出内网访问与语义校验） |
-| 工具与集成 | `post_write_check.enabled / command / timeout_seconds / tail_chars`、`mcp.servers`（独立 mcp.json）、`disabled_skills` | 安全·写入后检查 + MCP + 技能 |
+| 写入后检查与校验 | `post_write_check.enabled / command / timeout_seconds / tail_chars` | 安全·写入后检查 |
+| MCP | `mcp.servers`（独立 `mcp.json`）、`app.mcp_status`（只读状态表，无落盘字段） | MCP（自「工具与集成」拆出） |
+| 技能 | `disabled_skills` | 技能（自「工具与集成」拆出） |
 | 工作区与智能体 | `shell.selection`、`custom_prompt`、`compact_threshold`、`compact_timeout_seconds` | 通用（这 4 项） |
 | 日志 | `log.level`、`log.session_verbose` | 通用（这 2 项） |
 | 关于 | `ui.auto_update`（localStorage）、`app.check_updates`（动作）；批④ 追加：`app.version` / `app.data_dir` / `app.logs_dir` / `app.repo` / `app.license`（只读信息与入口，均为 `app.*` 无落盘字段） | AboutModal 全部内容 + 通用·自动更新开关 |
@@ -92,7 +101,8 @@
 
 - `pageSlice(config, page)` 只取 `PAGE_FIELDS[page]` 的字段；两类字段刻意跳过：
   `INSTANT_APPLY_FIELD_IDS`（改完立即生效，纳入会永远显示「未保存」）与 `MCP_FIELD_ID`
-  （MCP 不在 config 内，脏判定走 mcp.json 文本基线，结果并在 `tools` 页上）。
+  （MCP 不在 config 内，脏判定走 mcp.json 文本基线，结果并在**拥有它的 `mcp` 页**上——拆页前是 `tools` 页，
+  迁移时脏点必须跟着页走，否则会出现「改了 MCP 配置、脏点却亮在写入后检查页」这种更坏的行为）。
 - 归一语义保持不变：空值三态折叠（`null`/`undefined`/`""`/纯空白）、
   `proxy: null` 折默认对象（`mode = system`）、数组内空条目与全空对象视作空值。
   （历史：`validation.java` / `validation.dart` / `validation.lsp.*` 的缺省折叠已随写入后检查的引入删除。）
@@ -108,8 +118,9 @@
 | `providers` | `providers` | 认证错误卡「打开模型设置」仍落此页 |
 | `security` | `security` | — |
 | `network` | `network` | 代理地址校验失败跳页仍走此页 |
-| `mcp` | `tools` | 旧 MCP 页并入工具与集成 |
-| `skills` | `tools` | 旧技能页并入工具与集成 |
+| `mcp` | `mcp` | 自映射：这个词从「并入工具与集成」升级为独立页 key，旧深链直达 |
+| `skills` | `skills` | 自映射：同上 |
+| `tools` | `tools` | 「工具与集成」页仍在（改名不改 key）→ 落到「写入后检查与校验」 |
 | 未知 / 空 | `appearance` | `normalizePageKey` 回退默认页 |
 
 `showSettings(tab?)` 语义未变：带参跳页（先归一）、无参保持当前页不重置（批① 的有意变更）。
@@ -126,9 +137,13 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
 - 删除零引用 i18n 键（删前全仓 grep 确认）：`settings.general`、`settings.appearance`、
   `settings.security`、`settings.network`、`settings.accent`、`about.title`、`about.checkUpdates`、`app.about`。
   保留 `settings.providers` / `settings.mcp` / `settings.skills`（分别是供应商列表、MCP 服务器、
-  技能三个设置项的显示名，**不做同义键收敛**——那是批④）。
-- 新增键：`settings.pageAppearance/pageProviders/pageNetwork/pageSecurity/pageTools/pageAgent/pageLogs/pageAbout`
-  与 `settings.groupUiModel/groupSafetyTools/groupDiagnostics`（中英双侧同步）。
+  技能三个设置项的显示名，**不做同义键收敛**——那是批④）；其中后两把自 MCP / 技能独立成页起
+  同时充当这两页的页名键（`PAGE_LABEL_KEY` 直接引用，不新增 `pageMcp` / `pageSkills` 造成双真源）。
+- 新增键：`settings.pageAppearance/pageProviders/pageNetwork/pageSecurity/pageAgent/pageLogs/pageAbout`
+  与 `settings.groupUiModel/groupSafetyTools/groupDiagnostics`（中英双侧同步）；拆页批次删 `settings.pageTools`、
+  新增 `settings.pagePostWrite`（页名键跟页 key 走的规则下，`tools` 页改名后换一把新键承载新文案）与
+  MCP 状态表一族键（`mcpStatus`（兼作 `app.mcp_status` 项名与段标题）/ `mcpConfigHead` / `mcpColState` /
+  `mcpColTools` / `mcpStateReady|Starting|Error|Disconnected` / `mcpStatusRefresh` / `mcpStatusToggleError` / `mcpStatusHint`）。
 
 ## 7. 术语表
 
@@ -165,3 +180,36 @@ macOS 应用菜单 `menu-about` 改为 `showSettings("about")`。
 
 搜索能力本身也在注册表里：`matchSettings(query, t)` 的命中范围 = 显示名 + `keywords`（直字符串、不进 i18n）
 + 页名 + 组名，多词 AND、空串返回空、按「页序 → 组序 → 注册表原序」稳定输出。
+
+## 9. MCP / 技能独立成页（本批）
+
+原「工具与集成」一页里塞了三件互不相关的事（写入后检查四项 / MCP 配置 / 技能启停），页名与页体不匹配。
+本批只做 IA 与可见性，不动任何配置字段语义：
+
+- **拆页**：`mcp` / `skills` 升为一级页（顺序：安全与审批 → MCP → 技能 → 写入后检查与校验 → 工作区与智能体），
+  页数 8 → 10；`tools` 页保留页 key（旧深链 `showSettings("tools")` 直达），页名改「写入后检查与校验」
+  （i18n 键由 `pageTools` 换成 `pagePostWrite`）。字段归属（`PAGE_FIELDS`）与脏标记随页面迁移。
+- **旧搜索词保留**：「工具与集成」作为 `keywords` 留在 `mcp.servers` 与 `disabled_skills` 两项上——
+  老用户（含看过旧文档的人）搜旧页名仍能命中，`matchSettings("工具与集成")` 的既有断言因此不需要改。
+- **导航图标**：10 项统一 antd `Outlined` 线性图标（16px、跟随文本色、悬停 / 选中不变色，不引彩色 accent）。
+  图标表 `PAGE_ICON` 住在 `SettingsPage.tsx`（注册表必须保持纯数据、无 React 依赖）。
+- **MCP 状态表**（`mcp` 页顶部，锚点 `app.mcp_status`）：数据面早已存在（`mcp_status` 命令 + `mcp:status` 事件 +
+  `useUi.mcpStatus`），此前**只写不读**，本批是它唯一的渲染方。四态：已连接（+ 工具数）/ 连接中（+ spinner）/
+  连接失败（红字，**点整行展开完整错误**，含 stderr）/ 未连接（次要灰度）。三条要点：
+  1. 名单 = 配置的服务器 ∪ 状态表已有记录：只取状态会在保存配置后（后端 `stop_all()` 清空、且无会话不重连）
+     得到空表，看起来像「没配置服务器」；只取配置会漏掉「配置里已删、管理端仍持有连接」的服务器；
+  2. 两侧都为空时**整段不渲染**（空表会把「没配」与「没连」显示成同一个样子）；
+  3. 「未连接」是**正常态**（连接由打开会话驱动、且是全局单例），故状态表下有一行说明文案；
+     刷新按钮（`ReloadOutlined`）只重读状态、**不会重连**（Tooltip 写明）——手动重连会打断其他会话正在跑的
+     MCP 调用，属本批非目标。进入 `mcp` 页时会 refetch 一次（`mcp:status` 事件只在 `connect_mcp` 后触发）。
+- **兜底模式真正生效（顺带修的既有缺陷）**：MCP 配置的「加载」与「放弃改动」两处原本写
+  `setMcpEntries(parsed ?? [])`，解析失败时被置成**空结构化列表**而非 `null`，于是「文本兜底模式」
+  （`mcpEntries === null`）在真实使用中不可达——解析不了的 `mcp.json` 既不显示、点「保存并重连」还会被
+  `{"mcpServers":{}}` 覆盖（数据丢失）。现改为 `setMcpEntries(parsed)`：JSON 原文在文本域里可见可改、
+  保存走原文直存；状态表在兜底模式下只列管理端已知的服务器（拿不到配置名单那一半按空处理）。
+  回归用例：`__tests__/settings.mcp.test.tsx`。
+- **锚点例外**：`app.mcp_status` 依赖数据才存在（无配置时整段不渲染），故登记进 `settings.page.test.tsx`
+  的锚点覆盖例外清单（与 `active_model_id` 同类：命中时退化为「切页 + 高亮页体容器」）；
+  带配置时的锚点与四态断言在 `__tests__/settings.mcp.test.tsx`。
+- **非目标**：手动重连 / 测试连接按钮、逐服务器工具名清单、per-session 状态视图、自动轮询与状态通知、
+  状态表内编辑配置、后端与事件面任何改动（事件面仍锁 29 键）。

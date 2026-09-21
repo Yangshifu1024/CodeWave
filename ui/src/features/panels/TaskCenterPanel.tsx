@@ -18,6 +18,8 @@ export default function TaskCenterPanel() {
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState("");
   const [instruction, setInstruction] = useState("");
+  /** 三字段齐全才能创建：禁用原因就地显示在按钮旁（与设置页同一范式，不藏在 Tooltip 里） */
+  const canCreate = !!name && !!schedule && !!instruction;
 
   async function refresh() {
     if (!sessionId) return;
@@ -60,13 +62,17 @@ export default function TaskCenterPanel() {
     >
       <div className="new-task">
         <Input className="grow" size="small" value={name} placeholder={t("tasks.name")} onChange={(e) => setName(e.target.value)} />
-        <Input
-          size="small"
-          style={{ width: 220 }}
-          value={schedule}
-          placeholder={t("tasks.scheduleHint")}
-          onChange={(e) => setSchedule(e.target.value)}
-        />
+        {/* 计划表达式 + 其语法说明：说明常驻在输入框下方（原先只当 placeholder，敲第一个字符就没了） */}
+        <div className="task-sched-field">
+          <Input
+            size="small"
+            style={{ width: 220 }}
+            value={schedule}
+            placeholder="cron:0 9 * * *"
+            onChange={(e) => setSchedule(e.target.value)}
+          />
+          <span className="hint">{t("tasks.scheduleHint")}</span>
+        </div>
         <TextArea
           style={{ width: "100%" }}
           rows={2}
@@ -75,9 +81,10 @@ export default function TaskCenterPanel() {
           placeholder={t("tasks.instruction")}
           onChange={(e) => setInstruction(e.target.value)}
         />
-        <Button size="small" type="primary" disabled={!name || !schedule || !instruction} onClick={() => void create()}>
+        <Button size="small" type="primary" disabled={!canCreate} onClick={() => void create()}>
           {t("tasks.create")}
         </Button>
+        {!canCreate && <span className="hint">{t("tasks.createDisabled")}</span>}
       </div>
 
       {tasks.length === 0 && <Empty description={t("tasks.empty")} style={{ marginTop: 24 }} />}
@@ -86,8 +93,10 @@ export default function TaskCenterPanel() {
           <div className="row1">
             <b>{task.name}</b>
             <code className="sched">{task.schedule}</code>
-            <Tag color={task.last_status === "ok" ? "success" : task.last_status ? "error" : "default"}>
-              {task.last_status ?? "待触发"}
+            {/* 色彩强度只映射风险等级：成功态用中性默认标签（预设绿违反「无色彩=默认」约定），
+                失败态才是红；「待触发」不再硬编码中文 */}
+            <Tag color={task.last_status && task.last_status !== "ok" ? "error" : "default"}>
+              {task.last_status ?? t("tasks.pending")}
             </Tag>
             <div className="flex" />
             <Popconfirm title={`${t("common.delete")}?`} onConfirm={() => void remove(task.id)}>

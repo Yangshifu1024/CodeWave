@@ -343,7 +343,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
 .composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
-/* 上下文用量小字（压缩图标与模型菜单之间）：百分比按占用分档着色，命中率按缓存实效四档着色 */
+/* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原住在 .toolbar-right 里，被 margin-left:auto
+   推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
+   百分比仍按占用分档着色（.ctx-label 的选择器前缀不变：composer.rate.style.test.ts 按字面选择器抓规则）。 */
+.composer-toolbar .toolbar-info { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0 4px; }
 .composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); white-space: nowrap; margin: 0 2px; }
 /* 上下文占用档：够阈值 = 红（危险）/ 阈值 70% 以上 = 橙（需注意）/ 以下 = 默认（中性墨） */
 .composer-toolbar .ctx-label .ctx-pct { color: var(--ws-accent); }
@@ -592,6 +595,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 11px; color: var(--ws-dim); font-family: var(--ws-font-mono);
 }
 .sub-card.st-error .sub-card-meta { color: var(--ws-err); }
+/* 提前退出原因（done 态的诊断信息）：与旁边的橙色感叹号图标同档强度，不再与普通 meta 同色 */
+.sub-card .sub-card-warn { color: var(--ws-warn); }
 /* 停止按钮（仅运行中渲染；中性色，hover 提亮——非危险语义，不用红色） */
 .sub-card .sub-card-stop {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
@@ -748,7 +753,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .project-row .row-action {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  margin-left: auto; opacity: 0; visibility: hidden; pointer-events: none;
+  opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.12s; background: var(--ws-hover);
 }
 .project-row:hover .row-action { opacity: 1; visibility: visible; pointer-events: auto; }
@@ -810,6 +815,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- TaskCenterPanel ---------- */
 .new-task { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+/* 计划表达式输入 + 其语法说明：说明常驻在输入框下方（原先只当 placeholder，敲第一个字符就消失） */
+.task-sched-field { display: flex; flex-direction: column; gap: 2px; }
 .new-task .grow { flex: 1; min-width: 160px; }
 .task { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
 .task .row1 { display: flex; align-items: center; gap: 8px; }
@@ -820,8 +827,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .chart { display: flex; align-items: flex-end; gap: 4px; height: 170px; padding: 8px 4px; overflow-x: auto; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
 .bar-col .bar { width: 16px; background: var(--ws-accent); border-radius: 3px 3px 0 0; opacity: 0.85; }
-.bar-col .lbl { font-size: 9px; color: var(--ws-dim); transform: rotate(-45deg); white-space: nowrap; }
-.stats-summary { margin-top: 10px; font-size: 12px; }
+.bar-col .lbl { font-size: 10.5px; color: var(--ws-dim); transform: rotate(-45deg); white-space: nowrap; }
+/* 主结论数字与「标签」分两层：容器走 --ws-text-2（数字读得到），只有标签（.dim 子元素）降到 --ws-dim。
+   整行 dim 会让面板最该被读到的数字与次要说明同色（版式审计）。 */
+.stats-summary { margin-top: 10px; font-size: 12px; color: var(--ws-text-2); }
 
 /* ---------- 设置全屏页（SettingsPage，[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)） ---------- */
 /* 覆盖层：绝对定位贴在内层 Layout（position:relative）上，盖住工作区但不卸载它。
@@ -852,6 +861,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-nav-item-active { background: var(--ws-hover); }
 .settings-nav-label { display: inline-flex; align-items: center; gap: 6px; line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
 .settings-nav-item-active .settings-nav-label { color: var(--ws-text-1); }
+/* 导航项图标：Outlined 线性图标——**不设 color**，跟随 .settings-nav-label 的文本色（无彩色约定） */
+.settings-nav-icon { font-size: 16px; flex: none; }
 
 /* ---------- 设置页批③：搜索 + 进阶折叠 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ---------- */
 /* 控件宽度三档（窄 180 / 中 240 / 宽 360）：都带 max-width:100% —— 窄窗下宽档被 max-width 兜住
@@ -896,6 +907,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 设置项锚点包裹层（data-setting-id 挂在这里）：供搜索命中定位与临时高亮 */
 .setting-anchor { min-width: 0; }
+/* 供应商编辑器的模型列表错误行（[docs/provider-form-rules-tightened]）：走风险色 token，
+   不再内联硬编码 #ff4d4f —— 硬编码色不跟主题走，暗色下对比不足 */
+.provider-models-error { color: var(--ws-err); font-size: 12px; margin-bottom: 8px; }
 /* 搜索命中临时高亮（约 1.5s 后由 JS 摘掉；墨色描边 + 浅底，不用彩色 accent） */
 .settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-hover); }
 
@@ -916,8 +930,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 脏圆点：导航项与操作条共用；只换前景色，不当背景块用 */
 .settings-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); flex: none; display: inline-block; }
-/* 「即时生效」标注：不进脏标记的项旁标一下，避免用户找不到保存入口 */
-.settings-instant { margin-left: 6px; font-size: 11.5px; color: var(--ws-dim); }
 
 /* 工作区让位：只隐可见性、不卸载、不 display:none
    （display:none 会让 ResizeObserver 测到 0 尺寸、滚动容器错乱，进而干扰运行中会话） */
@@ -933,6 +945,32 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .run-indicator .run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); animation: pulse 1.2s infinite; }
 
 /* ---------- 设置页内各页共用（原 SettingsModal 段） ---------- */
+/* 段小标题：拆页后页名已承担原 <Divider> 的分段标题职责，页内多段时用这个轻量小标题区分
+   （不引全宽分割线，也不用彩色）；右侧可挂动作按钮（MCP 状态的刷新图标） */
+.settings-subhead {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 2px 0 8px; font-size: 12px; color: var(--ws-dim);
+}
+
+/* MCP 服务器状态表（名称 / 状态 / 工具数三列；失败行整行可点展开错误） */
+.mcp-status { display: flex; flex-direction: column; margin-bottom: 8px; }
+.mcp-status-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 132px 72px;
+  align-items: center; gap: 8px; min-height: 26px; padding: 0 8px;
+  border-radius: 6px; font-size: 12.5px; color: var(--ws-text-2);
+}
+.mcp-status-row-head { min-height: 22px; font-size: 11px; color: var(--ws-dim); }
+.mcp-status-row-clickable { cursor: pointer; }
+.mcp-status-row-clickable:hover { background: var(--ws-hover); }
+.mcp-status-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-status-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.mcp-status-tools { text-align: right; color: var(--ws-dim); }
+/* 展开的完整错误（含 stderr）：等宽小字 + 换行保留 + 限高滚动，不撑破布局 */
+.mcp-status-error {
+  margin: 0 8px 6px; padding: 8px 10px; border-radius: 6px; background: var(--ws-bg-nav);
+  color: var(--ws-text-2); font-family: var(--ws-font-mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
+}
 .mcp-pane { display: flex; flex-direction: column; gap: 10px; }
 .mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: 12px; }
 .mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -974,7 +1012,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 设置 → 关于 → 更新：开关 + 文案同一行；版本号行（版本串 + 检查更新按钮）复用同一 flex 行样式 */
 .settings-update-row { display: flex; align-items: center; gap: 8px; }
-.settings-update-row .settings-update-label { font-size: 12.5px; color: var(--ws-text-2); margin-right: auto; }
+.settings-update-row .settings-update-label { font-size: 12.5px; color: var(--ws-text-2); }
 /* 版本串的 2px 上边距是为「单独成行」对齐标签留下的；进 flex 行后被垂直居中接管，
    留着会让文本比同行按钮低 2px（按钮已移到本行，2026-09-20） */
 .settings-update-row .about-version { margin-top: 0; }
@@ -1041,13 +1079,16 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-todo-dot.in_progress { color: var(--ws-accent); }
 .rb-todo-dot.completed { color: var(--ws-ok); }
 .rb-todo-done { color: var(--ws-dim); text-decoration: line-through; }
-/* 右栏「技能」段：只读展示，来源短标签右对齐、限宽省略，悬浮显示 description + 完整路径 */
+/* 右栏「技能」段：只读展示，来源短标签**紧跟技能名**（与设置页 .skill-origin 同形态）、限宽省略，
+   悬浮显示 description + 完整路径。
+   注：早期这里用 margin-left:auto 把来源右对齐，但它被 45% 限宽 + 10.5px + dim 三重弱化后又推到行尾，
+   实际上没人会去最右侧读它（版式审计）；与设置页同一信息统一为「紧跟名称」。 */
 .rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 12px; color: var(--ws-text-2); }
 /* 可点击技能行（点击弹详情）：负 margin 补偿 padding，悬停反馈与菜单高亮同 token */
 .rb-skill-line.rb-skill-clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; transition: background 0.15s; }
 .rb-skill-line.rb-skill-clickable:hover { background: var(--ws-hover); }
 .rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-skill-origin { margin-left: auto; padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 10.5px; color: var(--ws-dim); }
+.rb-skill-origin { padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 11px; color: var(--ws-dim); }
 /* [docs/session-logging-report](../../../docs/docs/session-logging-report.md)：右栏运行日志 */
 .rb-log-head { cursor: pointer; user-select: none; }
 .rb-log-tools { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
@@ -1057,9 +1098,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   color: var(--ws-text-2); background: var(--ws-code-bg, rgba(127, 127, 127, 0.08));
   border-radius: 6px; white-space: pre-wrap; word-break: break-all;
 }
-.rb-log .warn { color: #d46b08; }
-.rb-log .err { color: #cf1322; }
-.rb-log-error { color: #cf1322; white-space: normal; }
+.rb-log .warn { color: var(--ws-warn); }
+.rb-log .err { color: var(--ws-err); }
+.rb-log-error { color: var(--ws-err); white-space: normal; }
 /* [docs/session-artifacts-and-files-tab](../../../docs/docs/session-artifacts-and-files-tab.md)：右栏 Tabs 四页签（信息/日志/文件/变更，[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 调序）；高度链一直贯通到面板，
    让日志/文件列表占满右栏剩余高度（信息页内容溢出时由 body-holder 滚动）。
    缺陷修复（antd6）：自 @rc-component/tabs 起内容 DOM 为 body-holder > body > content（面板）；
@@ -1198,13 +1239,15 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 /* 流式期间的 mermaid 占位：推迟到消息定稿再渲染，半透明 + 提示（防流式期间滚动风暴） */
 .assistant .md[data-streaming] .ws-diagram { opacity: 0.6; }
 .assistant .md[data-streaming] .ws-diagram::after {
-  content: "⏳ 图表将在回复定稿后渲染";
+  /* 提示文案由 markdown 渲染器写进 data-pending（i18n 键 chat.diagramPending）：CSS 只负责位置与样式。
+     写死在 CSS 里的中文进不了 i18n，英文界面会露中文（版式审计发现）；attr() 让两侧各司其职。 */
+  content: attr(data-pending);
   display: block; margin-top: 4px; text-align: left;
   font-size: 11px; color: var(--ws-dim);
 }
 .assistant .md .ws-diagram-error {
   white-space: pre-wrap; text-align: left; font-family: var(--ws-font-mono);
-  font-size: 12px; color: #e5484d;
+  font-size: 12px; color: var(--ws-err);
 }
 .assistant .md .ws-math-raw {
   font-family: var(--ws-font-mono); font-size: 12.5px;

@@ -172,7 +172,16 @@ function installMath(md: MarkdownItInstance) {
 /** 全局共享的 markdown-it 实例（html 关闭：不信任 LLM 输出中的原始 HTML） */
 export const md = createMd();
 
-/** 将 markdown 源串渲染为 HTML。 */
-export function renderMarkdown(src: string): string {
-  return md.render(src ?? "");
+/**
+ * 将 markdown 源串渲染为 HTML。
+ *
+ * `diagramPending`：流式期间 mermaid 占位提示的文案（i18n 由调用方传入）。它写进占位符的
+ * `data-pending`，由 app.css 的 ::after 取用（CSS 里写死中文会漏译，见版式审计）。
+ * 不传 = 不写该属性（非流式调用与子代理汇报不需要它）。
+ */
+export function renderMarkdown(src: string, diagramPending?: string): string {
+  const html = md.render(src ?? "");
+  if (!diagramPending) return html;
+  const attr = md.utils.escapeHtml(diagramPending);
+  return html.replace(/<div class="ws-diagram"/g, `<div class="ws-diagram" data-pending="${attr}"`);
 }

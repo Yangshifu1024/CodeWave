@@ -46,8 +46,10 @@ export function AppearanceSettings({ draft, patchDraft }: {
         </div>
       </Form.Item>
       <FontSettings />
+      {/* 「即时生效」写在标题括号里（instantApplySuffix）：本行是 Form.Item 块布局，标注挂控件下方会跟
+          控件脱开、扫读时找不到（与关于·更新行同一形态）。 */}
       {draft && patchDraft && (
-        <Form.Item label={t("settings.language")}>
+        <Form.Item label={<>{t("settings.language")}{t("settings.instantApplySuffix")}</>}>
           {/* 即时生效：改完立即写 useUi.setLanguage（并镜像进 draft.ui.language），
               因此不进脏标记（也就不会亮脏点） */}
           <div className="setting-anchor" data-setting-id="ui.language">
@@ -65,7 +67,6 @@ export function AppearanceSettings({ draft, patchDraft }: {
               ]}
             />
           </div>
-          <span className="settings-instant">{t("settings.instantApply")}</span>
         </Form.Item>
       )}
     </Form>
