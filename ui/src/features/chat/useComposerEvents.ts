@@ -16,8 +16,11 @@ export function useComposerEvents(opts: {
   setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
   setRefs: React.Dispatch<React.SetStateAction<string[]>>;
   recalledImages: (imgs: { mediaType: string; data: string }[]) => PendingImage[];
+  /** 文本被本 hook 直接覆盖/追加后的通知（新长度）：Composer 据此作废触发片段并收敛光标
+   *  （[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)：这类改写不过 onChange） */
+  onTextReplaced?: (len: number) => void;
 }) {
-  const { taRef, setText, setImages, setRefs, recalledImages } = opts;
+  const { taRef, setText, setImages, setRefs, recalledImages, onTextReplaced } = opts;
 
   // Cmd/Ctrl+L（AppShell 快捷键）：聚焦输入框并把光标移到末尾（继续写草稿而非覆盖）
   useEffect(() => {
@@ -45,13 +48,14 @@ export function useComposerEvents(opts: {
       // 附件随文本一并覆盖（带图消息回显缩略图）——与队列「编辑」同一还原链；
       // 有意分歧：无图时清空现有附件（「修改」= 覆盖语义），队列编辑无图时保留旧附件
       setImages(recalledImages(detail.images ?? []));
+      onTextReplaced?.(parsed.text.length);
       const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
       el?.focus?.();
       el?.setSelectionRange?.(parsed.text.length, parsed.text.length);
     };
     window.addEventListener("ws:composer-fill", onFill);
     return () => window.removeEventListener("ws:composer-fill", onFill);
-  }, [taRef, setText, setImages, setRefs, recalledImages]);
+  }, [taRef, setText, setImages, setRefs, recalledImages, onTextReplaced]);
 
   // 技能详情「使用」（右栏 SkillDetailModal 经 ws:composer-insert 派发）：文本以空格分隔追加草稿
   // （与 + 菜单 insertTrigger 同语义，保留既有草稿）并聚焦到末尾；不自动发送
@@ -59,13 +63,18 @@ export function useComposerEvents(opts: {
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<{ text?: string }>).detail;
       if (!detail?.text) return;
-      setText((v) =>
-        v === "" || v.endsWith(" ") || v.endsWith("\n") ? v + detail.text : v + " " + detail.text,
-      );
+      // 追加语义：文本以空格分隔接在末尾（与 + 菜单 insertTrigger 同源），改完通知 Composer 收敛光标
+      const next = (v: string) =>
+        v === "" || v.endsWith(" ") || v.endsWith("\n") ? v + detail.text : v + " " + detail.text;
+      setText((v) => {
+        const merged = next(v);
+        onTextReplaced?.(merged.length);
+        return merged;
+      });
       const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
       el?.focus?.();
     };
     window.addEventListener("ws:composer-insert", onInsert);
     return () => window.removeEventListener("ws:composer-insert", onInsert);
-  }, [taRef, setText]);
+  }, [taRef, setText, onTextReplaced]);
 }

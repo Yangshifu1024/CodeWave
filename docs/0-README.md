@@ -16,6 +16,7 @@
 ## 基准与方案
 
 - 2026-09-21 · [composer-file-ref-chips.md](./composer-file-ref-chips.md) — Composer 文件引用 chip 化 + Windows verbatim 前缀清理：引用从「正文文本」解耦为草稿 `refs[]`，输入框里以 chip 展示（与图片附件同容器、同一套视觉，只显示文件名、悬停看全路径），**发送前一刻**才由 `mergeRefs` 合成 `@路径` 追加正文末尾（后端 `startChat` 与模型所见零改动）；判定与解析为保守启发式且**往返无损**（`@types/node` 不误判；引用在末尾时逐字节还原）；`@` 提及选文件入 chip、选目录仍写文本，历史召回与队列编辑回填先 `splitRefs`；后端仅在「呈现与引用出口」去 Windows verbatim 前缀（`pathutil::strip_verbatim_prefix`，内部边界仍用 canonical，附「去前缀后仍可被 `read` 解析」回归用例）
+- 2026-09-21 · [composer-trigger-caret.md](./composer-trigger-caret.md) — 缺陷修复：Composer 三个触发符（`/` 技能、`$` 子代理、`@` 提及）判定由「整段末尾锚定且不读光标」改为**光标感知**（`composerTriggers.ts` 的 `fragmentBefore` / `detectTrigger`，只看光标前那段不含空白的片段）——修好「正文里已有内容时在中间/头部拉不起菜单」；`@` 放宽到行首或空白后（`me@x.com` 不再误弹），`/`、`$` 仍限「消息以它开头」（模型侧点名契约 `skills/mod.rs` 与 `core/prompt.rs` 写死，放宽会造出「以为点名了其实没点名」），句中静默不触发；回填只替换 `[start, caret)` 片段、光标之后一字不动，`+` 菜单的插入改为插到光标处；已接受代价：光标停在开头片段中间时 Enter=选中（键盘语义不变）、菜单仍固定输入框上方
 
 - 2026-09-21 · [office-and-pdf-support.md](./office-and-pdf-support.md) — Office 与 PDF 文件支持：新增 `read_document` / `write_document` / `edit_document` 三个工具（表格 / Word / PDF 的读、生成与保真修改）+ 三份内置技能（xlsx/docx/pdf）+ 四个文件入口（附件按钮改走原生选择框、拖入窗口、项目外目录放行、`@` 引用）+ 修改前自动备份与右栏一键回退 + 预览通道体积分档（文本与二进制 8MB、结构化文档 200MB、大文件 4MB 分片）与表格/PDF 预览视图；`read` 拒收二进制文档并点名新工具；最低 Rust 版本 1.85 → 1.98，新增 umya-spreadsheet / docx-rs / zip / quick-xml / pdf-extract 与前端 pdfjs-dist；保真验证 = 11 份真实样本逐字节比对 + **用户用真 Excel 打开确认不弹修复提示**
 - 2026-08-30 · [technical-design.md](./technical-design.md) — 技术方案基准（决策记录 D1–D7、分层规则）
