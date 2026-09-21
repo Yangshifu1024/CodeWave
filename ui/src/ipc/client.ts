@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -111,6 +111,15 @@ export const ipc = {
     invoke<{ offset: number; length: number; total: number; eof: boolean; content: string }>(
       "read_file_chunk",
       { sessionId, path, offset, length: length ?? null },
+    ),
+  /** 某个文档可回退的备份（新的在前）；没有备份返回空数组而不是报错 */
+  listDocumentBackups: (sessionId: string, path: string) =>
+    invoke<DocumentBackupEntry[]>("list_document_backups", { sessionId, path }),
+  /** 把某一份备份还原回原文件位置；回退前会把当前内容也备份一份（回退本身能再撒回） */
+  restoreDocumentBackup: (sessionId: string, path: string, backupPath: string) =>
+    invoke<{ path: string; restoredFrom: string; currentBackup: string | null; size: number }>(
+      "restore_document_backup",
+      { sessionId, path, backupPath },
     ),
 
   gitStatus: (sessionId: string) =>

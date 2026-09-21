@@ -1063,6 +1063,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-file-icon { flex: none; display: inline-flex; }
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
+/* 回退按钮（[docs/office-and-pdf-support]）：平时不占视线，悬停该行时才出现 */
+.rb-file-btn { flex: none; opacity: 0; transition: opacity 0.12s; }
+.rb-file:hover .rb-file-btn { opacity: 1; }
+.rb-file-btn:focus-visible { opacity: 1; }
 .rb-file-gone { opacity: 0.45; cursor: default; }
 
 /* ---------- 栏宽分隔条（可拖拽栏宽，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */

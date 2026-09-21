@@ -155,6 +155,13 @@ export interface SessionFileEntry {
   size: number;
 }
 
+/** [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：文档修改前留下的备份（界面「回退」入口的数据源）；at 是备份时刻（RFC3339） */
+export interface DocumentBackupEntry {
+  path: string;
+  at: string;
+  size: number;
+}
+
 /** 会话元数据（左栏导航 / 会话列表数据源）。
  *  契约锚点：project_id + roots 是创建时固化的快照，是 @ 提及 / git 聚合的唯一数据源，勿绕过回查项目注册表。 */
 export interface SessionMeta {

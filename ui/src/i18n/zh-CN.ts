@@ -405,6 +405,14 @@ export default {
     pdfTooLarge: "文件超过预览上限，请用外部程序打开",
     docHint: "标题以 # 标记层级，表格用 | 分隔",
     docTruncated: "文档较长，这里只显示了前一部分",
+    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：修改回退
+    restore: "回退",
+    restoreTitle: "回退到改动前的版本",
+    restoreDesc: "选一份备份还原回文件原来的位置。回退前会把当前内容也备份一份，所以回退本身也能再撒回。",
+    restoreNone: "这份文件还没有备份。只有当本应用修改过它（edit_document）时才会留下备份。",
+    restorePick: "选择要还原的版本",
+    restoreDone: "已回退：{{name}}",
+    restoreNote: "同一份文件只保留最近几份备份；你自己复制或覆盖不产生备份。",
   },
   nav: {
     justNow: "刚刚", minutes: "{{n}}分", hours: "{{n}}小时", days: "{{n}}天",

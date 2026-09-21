@@ -50,6 +50,7 @@
 - **单元格改写走纯文本层**（`sheet_edit.rs`）：在 `<c>` 上做定位改写，写内联字符串而**不动共享字符串表**——改共享字符串表会影响所有引用同一索引的单元格。
 - **Word 文字替换跨片段回填**（`edit_word.rs`）：Word 会把一句话拆成多个 `<w:t>` 片段（拼写检查、批注锚点、修订都会造成拆分），所以按文字区间回填而不是按节点替换；不增删非文字节点，加粗与批注锚点都保留。默认只替换唯一命中，命中多处报错——改错地方比不改更糟。
 - **改前持久备份**（`backup.rs`）：同一文件保留最近 5 份，供一键回退（`tools/edit/tool.rs` 的备份是「成功即删」，那条路不可复用）。
+- **一键回退**：右栏「文件」里被本应用改过的表格 / 文档行上有一个回退按钮，列出可回退的版本（时刻 + 体积，默认选最新那份），确认即原子还原到原位置。回退前会把**当前内容**也备份一份，所以回退本身也能再撒回。
 - **审批卡片展示旧值 → 新值**，一次列出全部改动。
 
 ## 4. 保真验证（怎么知道它真的没丢东西）
@@ -111,12 +112,19 @@ PDF 阅读器的 `pdfjs-dist` 与 worker 都走动态 `import`（不打开 PDF �
 | 最低 Rust 版本 | 1.85 → **1.98** |
 | 新增后端依赖 | `umya-spreadsheet` 3.1.0、`docx-rs` 0.4.22、`zip` 8.6.0（关默认特性只留 deflate）、`quick-xml` 0.41.0、`pdf-extract` 0.12 |
 | 新增前端依赖 | `pdfjs-dist` 5.4.149（其可选依赖 `@napi-rs/canvas` 是 Node 侧服务端渲染用的 12MB 平台二进制，已在 `pnpm-workspace.yaml` 里排除） |
-| 新增 IPC 命令 | `preview_document`、`read_file_chunk`、`select_document_files`、`check_external_path`、`allow_external_dir`（三处同步：`commands/mod.rs` re-export、`lib.rs` 注册、`ipc/client.ts`） |
+| 新增 IPC 命令 | `preview_document`、`read_file_chunk`、`list_document_backups`、`restore_document_backup`、`select_document_files`、`check_external_path`、`allow_external_dir`（三处同步：`commands/mod.rs` re-export、`lib.rs` 注册、`ipc/client.ts`） |
 | 新增工具 | 3 个（`registry.rs` 的名字清单与数量断言已同步） |
 | 项目设置字段 | `ProjectEntry.allowed_dirs`（serde default，旧 `project.json` 读得回来） |
 | 事件面 | **不动**（29 键不变，未新增前端事件） |
 
 **一处刻意的取舍**：PDF 没有传 `wasmUrl`，所以 `cqms_bg.wasm` / `openjpeg.wasm`（ICC 色彩与 JPEG2000 的可选增强）不可用。不提供时 pdfjs 会打一条警告并回退（ICC 色彩空间降级、JPX 走 JS 回退），常规 PDF 不受影响。这样做是为了不给产物额外搬运两个二进制资源。
+
+## 8. 备份与回退的两条不变量
+
+1. **改之前一定先备份**：`edit_document` 的写入顺序是「先备份、再原子落盘、最后记产物」——动的是使用者的真实文件，改错一次代价很高。
+2. **备份名字不允许撞**：备份文件名就是时间戳，曾经只到毫秒——同一毫秒内两次备份会算出同一个名字，后一份直接盖掉前一份，而这件事没有任何提示（使用者只会发现「能回退的版本少了一个」）。现在时间戳细到纳秒，名字被占还会在标识段上递增兜底，有专门的回归用例守着。
+
+回退本身也走这两条：还原前先把当前内容备份一份，所以「回退」这个动作同样能再撒回。
 
 ## 9. 已知限制（如实列出）
 
@@ -127,6 +135,7 @@ PDF 阅读器的 `pdfjs-dist` 与 worker 都走动态 `import`（不打开 PDF �
 - **改公式时该单元格的缓存值会被清掉**：Excel 打开时会自动重算，但不看公式的工具在那之前读到的是空值。这是有意的（要自己算就得实现一整个公式引擎），技能文档里写明了。
 - **增删行列、增删段落表格不支持**：往表格中间插一行会连带影响合并区域、数据验证范围、图表引用与所有相对引用。写越界坐标（超出 Excel 的 1048576 行 / 16384 列）会被直接拒绝，因为写出去会让 Excel 弹修复提示。
 - **项目外目录放行有广度护栏**：放行的是「读 + 写 + 列」三项权限，所以文件系统根目录、用户主目录本身、本应用的托管数据目录一律拒绝（提示改选更具体的目录）。
+- **回退入口只在右栏「文件」里**：只有被 `edit_document` 改过的表格 / 文档才会产生备份，所以也只有它们会有回退按钮；你自己用别的工具覆盖、或用文件管理器复制回来的版本不在此列。
 - **PDF 只渲染当前页**，无缩放、无文字选择。
 - **中文 PDF 提取效果不保证**：文件如果没有内嵌字形对照表，提取结果会是乱码或缺失；此时如实告知使用者，不拿乱码当原文分析。
 - **`.xlsm` 的宏不会被动到**，但也不提供编辑宏。
@@ -137,9 +146,9 @@ PDF 阅读器的 `pdfjs-dist` 与 worker 都走动态 `import`（不打开 PDF �
 
 | 层 | 命令 / 方式 |
 |---|---|
-| 后端 | `cd src-tauri && cargo test`（本批后 **916 passed / 0 failed / 3 ignored**） |
+| 后端 | `cd src-tauri && cargo test`（本批后 **921 passed / 0 failed / 3 ignored**） |
 | 后端格式与静态检查 | `cargo fmt --check`、`cargo clippy --lib --all-targets`（本次新增/改动的文件 0 警告） |
-| 前端 | `pnpm --dir ui test`（**74 文件 / 793 例**，含本次新增的预览 6 例与文件引用 5 例） |
+| 前端 | `pnpm --dir ui test`（**74 文件 / 797 例**，含本次新增的预览 6 例、文件引用 5 例与回退入口 4 例） |
 | 前端类型与构建 | `pnpm --dir ui build` |
 | 开 PR 前门禁 | `pnpm prepr` |
 

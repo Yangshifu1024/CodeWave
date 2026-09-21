@@ -410,6 +410,14 @@ export default {
     pdfTooLarge: "File exceeds the preview limit; open it in an external application",
     docHint: "Headings are marked with # by level; tables use | as separator",
     docTruncated: "The document is long; only the first part is shown here",
+    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): restore an earlier version
+    restore: "Restore",
+    restoreTitle: "Restore an earlier version",
+    restoreDesc: "Pick a backup to put back in the file's original location. The current content is backed up first, so a restore can itself be undone.",
+    restoreNone: "No backup for this file yet. Backups are only made when this app modifies the file (edit_document).",
+    restorePick: "Version to restore",
+    restoreDone: "Restored: {{name}}",
+    restoreNote: "Only the most recent few backups per file are kept; copying or overwriting it yourself does not create one.",
   },
   nav: {
     justNow: "Just now", minutes: "{{n}}m", hours: "{{n}}h", days: "{{n}}d",

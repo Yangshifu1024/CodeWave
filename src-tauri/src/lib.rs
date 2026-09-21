@@ -377,6 +377,8 @@ pub fn run() {
             host::commands::read_workspace_file_base64,
             host::commands::preview_document,
             host::commands::read_file_chunk,
+            host::commands::list_document_backups,
+            host::commands::restore_document_backup,
             host::commands::select_document_files,
             host::commands::check_external_path,
             host::commands::allow_external_dir,
