@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PRE_PR_STEPS, summarize, selectSteps } from "./pre-pr.mjs";
+import { PRE_PR_STEPS, spawnOptions, summarize, selectSteps } from "./pre-pr.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOWS = ["lint.yml", "test.yml"].map((f) => resolve(ROOT, ".github/workflows", f));
@@ -123,6 +123,23 @@ test("块指示符（run: | / >-）本身不算命令，续行合并为一条", 
   assert.equal(cmds[0], "sudo apt-get update");
   assert.ok(!cmds.some((c) => c === "|" || c === "|-"), `块指示符不得成为命令：${cmds}`);
   assert.ok(cmds[1].includes("other-pkg"), `续行应合并：${cmds[1]}`);
+});
+
+test("Windows 上经 shell 启动（pnpm 是 .cmd 垫片，Node 直接 spawn 会 ENOENT）", () => {
+  assert.deepEqual(spawnOptions("win32"), { shell: true });
+  // 非 Windows 保持逐参数执行：与 CI 语义一致，也不给参数拼接留任何口子
+  assert.deepEqual(spawnOptions("darwin"), { shell: false });
+  assert.deepEqual(spawnOptions("linux"), { shell: false });
+});
+
+test("所有步骤的 cmd 与 args 都不含空白/shell 元字符（shell 拼接安全）", () => {
+  // 上一条测试让 Windows 走 shell：cmd.exe 会重新分词，含空白或 & | > < ^ " ' 的参数会被误解析
+  for (const s of PRE_PR_STEPS) {
+    assert.ok(!/[\s"'&|<>^]/.test(s.cmd), `cmd 含空白或元字符：${s.name} → ${s.cmd}`);
+    for (const a of s.args) {
+      assert.ok(!/[\s"'&|<>^]/.test(a), `参数含空白或元字符：${s.name} → ${a}`);
+    }
+  }
 });
 
 test("步骤名唯一且无空字段（汇总与 --only 依赖名字）", () => {
