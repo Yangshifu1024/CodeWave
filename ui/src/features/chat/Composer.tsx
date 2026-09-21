@@ -17,6 +17,7 @@ import type { ApprovalMode, EffortLevel } from "../../ipc/types";
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { baseName } from "../../utils/path";
 import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
+import { formatInt, formatMs, formatRate, tokPerSec } from "./composerMetrics";
 import { ipc } from "../../ipc/client";
 import { listenFileDrop } from "../../ipc/dragdrop";
 import CompactButton from "./ContextInfoBar";
@@ -511,6 +512,24 @@ export default function Composer() {
       + (cacheHit != null ? `\n${t("composer.cacheHit")}: ${hitPct}（${active.usage?.cacheRead ?? 0} / ${hitDenom}）` : "")
     : t("app.context");
 
+  // ---------- 本轮生成速率（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)） ----------
+
+  // 数据源是 run store 的 runMetrics（不是组件 state）：ask 弹窗遮住 Composer 导致卸载后恢复仍同值。
+  // 无数据（从未发过本轮 / 本轮还没收到 usage 帧 / 整页重载回 blank 桶）时 rate 为 null → 整段不渲染，
+  // 上下文与命中段不受影响（AC-8）。速率只在工具条展示，不算入上方 ctxTitle（那是上下文口径）。
+  const metrics = active.runMetrics;
+  const rate = tokPerSec(metrics);
+  const toolMs = metrics?.toolMs ?? 0;
+  /** 速率段悬浮明细（原生 title）：本轮平均速率 / 首步 TTFT / 输出 tokens / 生成耗时 / 工具等待合计。
+   *  「工具等待」为 0 时整行不出：没等过工具就不提这一句，免得单步 run 的工具箱显得有噪音。 */
+  const rateTitle = rate == null ? "" : [
+    `${t("composer.rateTitle")}: ${formatRate(rate)} tok/s`,
+    ...(metrics?.ttftMs != null ? [`${t("composer.rateTtft")}: ${formatMs(metrics.ttftMs)}`] : []),
+    `${t("composer.rateOutput")}: ${formatInt(metrics?.output ?? 0)}`,
+    `${t("composer.rateGenMs")}: ${formatMs(metrics?.genMs ?? 0)}`,
+    ...(toolMs > 0 ? [`${t("composer.rateToolWait")}: ${formatMs(toolMs)}`] : []),
+  ].join("\n");
+
   // ---------- 下拉菜单 ----------
 
   const rich = (title: string, desc: string, cls?: string) => (
@@ -880,6 +899,14 @@ export default function Composer() {
                     {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
                     {"）"}
                     {cacheHit != null && <span className={ctxHitClass}>{` · ${t("composer.cacheHit")} ${hitPct}`}</span>}
+                    {rate != null && (
+                      // 与上下文/命中同属一段小字（不新增控件、不抢位）；「在跑」点仅在运行中渲染，
+                      // 运行结束后消失而数值保留（AC-7）
+                      <span className="ctx-rate" title={rateTitle}>
+                        {` · ${formatRate(rate)} tok/s`}
+                        {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
+                      </span>
+                    )}
                   </>
                 ) : (
                   <>{t("app.context")} —</>

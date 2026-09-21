@@ -355,6 +355,19 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-toolbar .ctx-label .ctx-hit.yellow { color: var(--ws-accent); }
 .composer-toolbar .ctx-label .ctx-hit.warn { color: var(--ws-warn); }
 .composer-toolbar .ctx-label .ctx-hit.danger { color: var(--ws-err); }
+/* 本轮生成速率段（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：与上下文/命中同行同段。
+   铁律：色彩强度只映射风险等级 → 速率一律中性灰，不做分档着色（字号继承 .ctx-label 的 11.5px） */
+.composer-toolbar .ctx-label .ctx-rate { color: var(--ws-dim); }
+/* 「在跑」心跳点：极淡跳动，只表示「还在生成」，信息不依赖动效 */
+.composer-toolbar .ctx-label .rate-dot {
+  display: inline-block; width: 4px; height: 4px; margin-left: 4px;
+  border-radius: 50%; background: currentColor; vertical-align: middle;
+  opacity: 0.35; animation: rate-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rate-dot-pulse { 0%, 100% { opacity: 0.18; } 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) {
+  .composer-toolbar .ctx-label .rate-dot { animation: none; }
+}
 .composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }

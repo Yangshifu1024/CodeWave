@@ -125,6 +125,25 @@ describe("i18n 键集合契约", () => {
     }
   });
 
+  it("速率段与统计总览的新键双侧对偶（[docs/composer-token-rate]）", () => {
+    const zhKeys = new Set(keyPaths(zh));
+    const enKeys = new Set(keyPaths(en));
+    for (const key of [
+      "composer.rateRunning",
+      "composer.rateTitle",
+      "composer.rateTtft",
+      "composer.rateOutput",
+      "composer.rateGenMs",
+      "composer.rateToolWait",
+      "stats.avgRate",
+      "stats.avgStepMs",
+      "stats.avgTtft",
+    ]) {
+      expect(zhKeys.has(key), `zh 缺键：${key}`).toBe(true);
+      expect(enKeys.has(key), `en 缺键：${key}`).toBe(true);
+    }
+  });
+
   it("会话保留期与清理的新键双侧对偶且数量写死（[docs/session-cleanup]）", () => {
     const zhKeys = new Set(keyPaths(zh));
     const enKeys = new Set(keyPaths(en));

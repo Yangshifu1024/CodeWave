@@ -75,6 +75,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - **config schema v2（[docs/provider-management-refactor](./docs/provider-management-refactor.md)）**：`providers: Vec<ProviderConfig>` 嵌套 `ProviderModel`（wire id 即显示名），`active_model_id` 仍指向模型条目 id；`ModelConfig` 只是运行时摊平形态（`ConfigState::find_model`，前端对应 `ui/src/utils/models.ts`），两端摊平语义需同步改；schema v1 扁平 models 迁移已随全新发布移除（[docs/oss-prep-batch](./docs/oss-prep-batch.md)），不再受理旧格式
 - **SessionStore 索引写必须走 `index_lock`**
 - 配置结构变更必须 serde default（新字段向前兼容；旧版本/旧数据迁移代码已随全新发布移除，[docs/oss-prep-batch](./docs/oss-prep-batch.md) 后不再新增）
+- **Composer 工具条数据面**（[docs/composer-token-rate](./docs/composer-token-rate.md)）：`Frame::Usage` 的载荷可**增可选字段**（serde default；事件键名 `usage` 不变，`events.contract.test.ts` 只守键名）；工具条三段的数据源分工是——上下文/命中段读**会话级** `TabRunState.usage`（跨 run 累加、不持久化），速率段读**本轮** `TabRunState.runMetrics`（`send()` 处归零）；统计面板总览的耗时三项必须**分子分母同域**（只取 `gen_ms > 0` 的 `by_kind` 桶），否则子代理/压缩的 output 会把速率抬到数倍
 - **Composer 触发符以光标为锚**（[docs/composer-trigger-caret](./docs/composer-trigger-caret.md)）：`/`、`$`、`@` 的判定与回填一律基于**光标前的片段**（`ui/src/features/chat/composerTriggers.ts` + `Composer` 的 `caretRef`），**勿再引入锚定整段末尾的正则**（`^/(\S*)$`、`@[^@\s]*$` 这类写法正是「正文里已有内容时拉不起菜单」的根因）；`/`、`$` 限「消息以它开头」是与模型侧点名契约绑定的（`src-tauri/src/skills/mod.rs` 的 `prompt_listing` 与 `core/prompt.rs` 的 `CORE_PROMPT` 都写死「以 … 开头」），要放宽必须同步改提示词
 
 ## 踩坑清单（勿再踩）
@@ -92,6 +93,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - antd `TextArea` 的 `autoSize` 会在 DOM 里另放一个测量用 textarea：测试里用 `getByPlaceholderText` 定位真身，别用 `querySelector("textarea")`（拿到替身后 fireEvent.change 静默无效）
 - 草稿里有些内容**不在正文文本里**（文件引用 chip 存 `refs`、图片存 `images`）：凡「覆盖草稿」的链路（`ws:composer-fill`、队列编辑、历史召回）必须连带覆盖它们，只 `setText` 盖不住
 - 触发菜单/回填要看**真实光标**：`onChange` 只给文本与 `selectionStart`，点击与方向键移动光标**不过** `onChange`（靠 `onSelect/onClick/onKeyUp` 补同步）；测试里要指定光标位置时给 `fireEvent.change` 传 `target.selectionStart`（不传就是文末，happy-dom 与浏览器一致）
+- 后端全量测试有**既有 flaky**：`provider::tests_integration::midstream_disconnect_maps_to_network`（Windows 上约 10%–30% 概率红，报 `got Server("")`；隔离单跑或 `--skip` 它即绿，实测 10 次全量跑 3 次红）——判回归前先单独复跑该用例，别当成本次改动引起
 
 ## 可用专门代理
 

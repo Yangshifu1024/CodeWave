@@ -25,6 +25,7 @@ pub const CHECKPOINT_EVERY_STEPS: usize = 20;
 
 /// 高频帧（走 IPC 通道；点对点、有序）。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
     /// gen = 节流代数：run:retry 后前端按 generation 丢弃旧次尝试的半刷残帧（评审 C2）
@@ -46,12 +47,19 @@ pub enum Frame {
         chunk: String,
         name: String,
     },
-    /// 本轮 LLM 用量
+    /// 本轮 LLM 用量（可选耗时字段：仅本 step **成功那次尝试**的窗口；缺省 = 无数据，
+    /// 前端不累加不显示，旧后端/旧读者不受影响，[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）
     Usage {
         input: u64,
         output: u64,
         cache_read: u64,
         cache_write: u64,
+        /// 该 step 成功尝试：请求发出 → 流失结束（不含失败尝试与退避）
+        #[serde(default)]
+        duration_ms: Option<u64>,
+        /// 该 step 成功尝试：请求发出 → 首个任意类型 delta（含 thinking）
+        #[serde(default)]
+        ttft_ms: Option<u64>,
     },
     /// 子代理帧信封：子代理的流式帧借父会话通道下发；前端按 sub_id 路由进该子代理自己的
     /// 消息流（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）。
@@ -162,6 +170,10 @@ pub struct SessionRuntime {
     /// Anthropic 历史代际断点锚点（req.messages 下标；滞回前移，见 prompt-caching-hardening 批次），
     /// drive_agent 每个 run 清空
     pub cache_gen_anchor: Mutex<Option<usize>>,
+    /// 本 run 的生成耗时/TTFT 观测（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+    /// drive_agent 每 run 复位、run_llm_turn 每个成功 step 累积；run 收尾时随 usage 记录落盘。
+    /// 走 runtime 同通道回传（`drive_agent` 返回签名不变，子代理/测试的 3 元组解构不受影响）。
+    pub run_timing: Mutex<crate::core::stats::UsageTiming>,
 }
 
 impl SessionRuntime {
@@ -208,6 +220,7 @@ impl SessionRuntime {
             step_count: std::sync::atomic::AtomicUsize::new(0),
             system_frozen: Mutex::new(None),
             cache_gen_anchor: Mutex::new(None),
+            run_timing: Mutex::new(crate::core::stats::UsageTiming::default()),
         })
     }
 
