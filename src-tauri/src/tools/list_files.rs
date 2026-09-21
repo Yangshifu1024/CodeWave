@@ -193,7 +193,11 @@ pub fn search_workspace_paths(
                     continue;
                 }
                 if multi {
-                    paths.push(e.path().to_string_lossy().into_owned());
+                    // 多根（含已放行的额外根）给绝对路径才能唯一定位；额外根来自 canonicalize（Windows
+                    // 带 `\\?\` 前缀）→ 展示与引用前去掉（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）
+                    paths.push(crate::tools::pathutil::strip_verbatim_prefix(
+                        &e.path().to_string_lossy(),
+                    ));
                 } else {
                     paths.push(rel.to_string_lossy().into_owned());
                 }

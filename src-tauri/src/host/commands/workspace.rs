@@ -274,6 +274,9 @@ pub async fn check_external_path(
 ///
 /// `ref` 是拿给模型的引用写法：在项目主目录内就给相对路径（提示词与 @ 提及都用相对路径），
 /// 其余情况给绝对路径（额外根已放行时绝对路径可直接读）。
+/// `dir` 与 `ref` 两个出口都去掉 Windows verbatim 前缀（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)）：
+/// `\\?\C:\...` 既难看又会让界面 chip 的悬停提示与送给模型的引用带上噪声；
+/// `inside` 判定与内部存储仍用 canonical 形态（去前缀只动呈现）。
 fn external_path_payload(
     roots: &crate::tools::pathutil::WriteRoots,
     path: &str,
@@ -281,17 +284,21 @@ fn external_path_payload(
     let inside = crate::tools::pathutil::resolve_read(roots, path).is_ok();
     // 规范化后引用，避免同一个文件出现两种写法（选定框给的是原样路径，可能带 symlink）
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
-    let dir = canonical
-        .parent()
-        .map(|d| d.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let dir = crate::tools::pathutil::strip_verbatim_prefix(
+        &canonical
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    );
     let ws = std::fs::canonicalize(&roots.workspace).unwrap_or_else(|_| roots.workspace.clone());
     let rel = canonical
         .strip_prefix(&ws)
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty());
-    let reference = rel.unwrap_or_else(|| canonical.to_string_lossy().into_owned());
+    let reference = rel.unwrap_or_else(|| {
+        crate::tools::pathutil::strip_verbatim_prefix(&canonical.to_string_lossy())
+    });
     serde_json::json!({ "inside": inside, "dir": dir, "ref": reference })
 }
 
@@ -426,15 +433,18 @@ mod tests {
         assert_eq!(p["inside"], serde_json::json!(true));
         // 主目录内的文件给相对路径引用（模型与 @ 提及都用相对路径）
         assert_eq!(p["ref"], serde_json::json!("a.xlsx"));
-        // 已放行的 extra 根同样算「在内」（不再反复询问），引用写法是绝对路径
+        // 已放行的 extra 根同样算「在内」（不再反复询问），引用写法是绝对路径；
+        // Windows 上去掉 canonicalize 的 verbatim 前缀（展示与引用都干净），且去前缀后仍能通过读边界
         let in_extra = extra.path().join("b.docx");
         std::fs::write(&in_extra, b"x").unwrap();
         let pe = external_path_payload(&roots, &in_extra.to_string_lossy());
         assert_eq!(pe["inside"], serde_json::json!(true));
-        assert_eq!(
-            pe["ref"],
-            serde_json::json!(std::fs::canonicalize(&in_extra).unwrap().to_string_lossy())
+        let clean_ref = crate::tools::pathutil::strip_verbatim_prefix(
+            &std::fs::canonicalize(&in_extra).unwrap().to_string_lossy(),
         );
+        assert_eq!(pe["ref"], serde_json::json!(clean_ref.clone()));
+        assert!(!clean_ref.contains(r"\\?\"));
+        assert!(crate::tools::pathutil::resolve_read(&roots, &clean_ref).is_ok());
         // 根外：判「在外」，且给出的目录是它的父目录
         let outside = tempfile::tempdir().unwrap();
         let f = outside.path().join("c.pdf");
@@ -442,15 +452,18 @@ mod tests {
         let p2 = external_path_payload(&roots, &f.to_string_lossy());
         assert_eq!(p2["inside"], serde_json::json!(false));
         // 目录与引用都取规范化形态：macOS 上 /var 是指向 /private/var 的符号链接，
-        // 不规范化就会因为两种写法不同而让「已放行」判断失效
+        // 不规范化就会因为两种写法不同而让「已放行」判断失效；Windows 上去掉 verbatim 前缀，
+        // 否则确认框与引用 chip 的悬停提示会显示 `\\?\C:\...`
         assert_eq!(
             p2["dir"],
-            serde_json::json!(
-                std::fs::canonicalize(outside.path())
+            serde_json::json!(crate::tools::pathutil::strip_verbatim_prefix(
+                &std::fs::canonicalize(outside.path())
                     .unwrap()
                     .to_string_lossy()
-            )
+            ))
         );
+        assert!(!p2["dir"].as_str().unwrap().contains(r"\\?\"));
+        assert!(!p2["ref"].as_str().unwrap().contains(r"\\?\"));
     }
 
     /// 放行目录的广度护栏：根目录 / 用户主目录 / 托管数据目录一律拒绝（放行 = 读 + 写 + 列），

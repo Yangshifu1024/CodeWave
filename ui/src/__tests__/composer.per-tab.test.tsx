@@ -154,6 +154,19 @@ describe("Composer 草稿按 Tab 隔离", () => {
     expect(document.querySelector(".attach-chip")).toBeTruthy();
   });
 
+  it("D2b 引用 chip 随同一草稿桶隔离：s1 挂引用 → s2 无 chip → 切回恢复（[docs/composer-file-ref-chips]）", () => {
+    seedTwoTabs();
+    mountComposer();
+    act(() => {
+      useRun.getState().setDraftRefs(["report.xlsx"]);
+    });
+    expect(document.querySelector(".ref-chip")?.getAttribute("title")).toBe("report.xlsx");
+    switchTab("s2");
+    expect(document.querySelector(".ref-chip")).toBeFalsy();
+    switchTab("s1");
+    expect(document.querySelector(".ref-chip")?.getAttribute("title")).toBe("report.xlsx");
+  });
+
   it("D3 发送只清发送方 Tab：s1 发送后清空，s2 草稿不受影响", async () => {
     seedTwoTabs();
     mountComposer();

@@ -4,9 +4,10 @@
 //
 // - **图片**：必须把内容送上 wire（模型看的是图），所以读成 base64 进待发附件列表。
 //   校验链：仅图片类型、单张 5MB、最多 4 张、base64 总量 20MB 预算。
-// - **其他文件**：原地引用，不复制副本——只在输入框里插一行 `@路径`，模型需要时自己去读
+// - **其他文件**：原地引用，不复制副本——不再往正文里写路径，而是记进草稿的 `refs`（输入框里以 chip 展示，
+//   发送前一刻才由 mergeRefs 合成 `@路径` 追加到正文末尾，模型需要时自己去读
 //   （文本用 read、Office/PDF 用 read_document）。这类文件不走体积校验：
-//   文件本身从不进对话，多大都不占上下文。
+//   文件本身从不进对话，多大都不占上下文。见 [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)。
 //
 // 附件列表本体存 run store 每 Tab 桶（TabRunState.draft.images，按 Tab 隔离）；
 // 本 hook 只持校验链与入口，列表经 opts 注入。
@@ -40,12 +41,12 @@ export function useComposerAttachments(opts: {
   setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
   /** 当前会话 id：读文件、判定边界、放行目录都要它 */
   sessionId: string | null;
-  /** 把引用路径追加进输入框文本（引用就是文本，见文件头说明） */
-  appendRefs: (refs: string[]) => void;
+  /** 把引用路径记进草稿的 refs（引用不再写进正文文本，见文件头说明） */
+  onRefs: (refs: string[]) => void;
   /** 项目外目录的放行询问：返回用户的选择（调用方弹 ExternalDirPrompt 并等待） */
   askExternalDir: (dir: string) => Promise<DirDecision>;
 }) {
-  const { t, message, images, setImages, sessionId, appendRefs, askExternalDir } = opts;
+  const { t, message, images, setImages, sessionId, onRefs, askExternalDir } = opts;
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 用 useCallback 固定标识：本函数会被 Composer / useComposerEvents 放进 effect 依赖，
@@ -117,7 +118,7 @@ export function useComposerAttachments(opts: {
   }
 
   /**
-   * 按路径添加文件（附件按钮与拖拽共用）：图片读成 base64 进附件，其余插引用。
+   * 按路径添加文件（附件按钮与拖拽共用）：图片读成 base64 进附件，其余进草稿 refs（chip 展示）。
    * 遇到项目外路径时暂停等待用户决定，决定后重问一次判定——
    * 后端放行时会做规范化，引用写法以放行之后那次为准（否则同一文件会出现两种写法）。
    */
@@ -155,7 +156,7 @@ export function useComposerAttachments(opts: {
       }
     }
     if (imgs.length) await pushImages(images, imgs);
-    if (refs.length) appendRefs(refs);
+    if (refs.length) onRefs(refs);
   }
 
   // 粘贴：图片直接附件化；非图片文件提示改用附件按钮或 @ 引用；纯文本（无 File）不拦截、走默认粘贴

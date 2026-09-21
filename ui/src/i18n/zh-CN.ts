@@ -307,6 +307,8 @@ export default {
     pasteFilesHint: "仅支持图片，其他文件请用 @ 引用路径",
     visionUnsupported: "当前模型不支持图片，请移除附件或切换视觉模型",
     recalledImage: "历史图片 {{n}}",
+    // [docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)：文件引用以 chip 展示（悬停看完整路径）
+    removeRef: "移除该引用",
     // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：附件扩展到任意文件 + 项目外目录放行
     fileRef: "文件引用",
     fileRefHint: "按路径引用，不复制副本；模型需要时会自己去读",

@@ -312,6 +312,8 @@ export default {
     pasteFilesHint: "Only images can be pasted; for other files use @ to reference the path",
     visionUnsupported: "Current model does not support images; remove attachments or switch to a vision model",
     recalledImage: "Recalled image {{n}}",
+    // [docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md): file references shown as chips (hover for full path)
+    removeRef: "Remove this reference",
     // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): attachments extended to any file + outside-directory grant
     fileRef: "File reference",
     fileRefHint: "Referenced by path, no copy is made; the model reads it when needed",

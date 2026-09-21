@@ -11,8 +11,11 @@ import { useSessions } from "../../stores/sessions";
 export function useComposerMentions(opts: {
   setText: React.Dispatch<React.SetStateAction<string>>;
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
+  /** 选中「文件」时的引用入列（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：
+   *  文件以 chip 展示，不再把路径写进正文；目录仍写文本以便继续拼路径） */
+  addFileRef: (path: string) => void;
 }) {
-  const { setText, setActiveIndex } = opts;
+  const { setText, setActiveIndex, addFileRef } = opts;
   // 两级提及：@ 先列出项目目录（置顶），继续输入再匹配具体文件
   const [mentionResults, setMentionResults] = useState<{ label: string; path: string; isDir: boolean }[]>([]);
   const mentionSeq = useRef(0);
@@ -73,8 +76,15 @@ export function useComposerMentions(opts: {
     return p.split("/").filter(Boolean).pop() || p;
   }
 
+  // 选中提及项：目录回填 `@目录/ `（继续拼路径的字面输入）；文件改以引用 chip 呈现——
+  // 把正在输入的 `@片段` 从正文抹掉（连同它前面那段空白，免得留下尾空格）并可入 refs。
+  // 只认行首或空白后的 `@`：避免把 `me@x.com` 这类邮箱从中间切开
   function pickMention(item: { path: string; isDir: boolean }) {
-    setText((v) => v.replace(/@[^@\s]*$/, `@${item.path}${item.isDir ? "/" : " "} `));
+    if (item.isDir) setText((v) => v.replace(/(^|[\s])@[^@\s]*$/, `$1@${item.path}/ `));
+    else {
+      setText((v) => v.replace(/(^|[\s])@[^@\s]*$/, "$1").replace(/[ \t]+$/, ""));
+      addFileRef(item.path);
+    }
     setMentionResults([]);
   }
 

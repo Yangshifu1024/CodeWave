@@ -65,8 +65,8 @@ export interface UiState {
   window: { width: number; height: number; x?: number; y?: number } | null;
   /** 滚动锚点（key = sessionId） */
   scrollAnchors: Record<string, ScrollAnchor>;
-  /** 草稿（key = sessionId；dataUrl 不落盘，恢复时按 mime+data 重建） */
-  drafts: Record<string, { text: string; images: { id: string; name: string; mime: string; data: string }[] }>;
+  /** 草稿（key = sessionId；dataUrl 不落盘，恢复时按 mime+data 重建；refs 为后加字段，旧快照缺省按空处理） */
+  drafts: Record<string, { text: string; images: { id: string; name: string; mime: string; data: string }[]; refs?: string[] }>;
   /** 前端排队消息（key = sessionId） */
   queue: Record<string, { id: string; text: string; images?: { mime: string; data: string }[] }[]>;
   /** 左栏状态：会话树展开/项目区折叠/未读集合（未读语义 = 恢复上次的集合，不是启动全标未读） */
@@ -84,6 +84,8 @@ interface RetainedContent {
 interface ComposerDraftSnapshot {
   text: string;
   images: { id: string; name: string; mime: string; data: string }[];
+  /** 文件引用 chip（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）；旧快照可能缺字段 */
+  refs?: string[];
 }
 
 interface Memory {
@@ -252,10 +254,11 @@ function contentOf(sessionId: string): RetainedContent {
   const draft = run.drafts[sessionId];
   const t = run.tabs[sessionId];
   const out: RetainedContent = {};
-  if (draft && (draft.text !== "" || draft.images.length)) {
+  if (draft && (draft.text !== "" || draft.images.length || (draft.refs?.length ?? 0) > 0)) {
     out.draft = {
       text: draft.text,
       images: draft.images.map((im) => ({ id: im.id, name: im.name, mime: im.mime, data: im.data })),
+      refs: draft.refs ?? [],
     };
   }
   if (t?.queue.length) out.queue = t.queue;
@@ -505,7 +508,7 @@ export function setTreeCollapsed(collapsed: boolean): void {
 export function tabHasPendingContent(sessionId: string): boolean {
   const run = useRun.getState();
   const d = run.drafts[sessionId];
-  if (d && (d.text.trim() !== "" || d.images.length > 0)) return true;
+  if (d && (d.text.trim() !== "" || d.images.length > 0 || (d.refs?.length ?? 0) > 0)) return true;
   return (run.tabs[sessionId]?.queue.length ?? 0) > 0;
 }
 
@@ -531,10 +534,15 @@ export function applyRetainedContent(sessionId: string): void {
   run.initTab(sessionId);
   if (kept.draft) {
     const cur = run.drafts[sessionId];
-    if (!cur || (cur.text === "" && cur.images.length === 0)) {
+    if (!cur || (cur.text === "" && cur.images.length === 0 && (cur.refs?.length ?? 0) === 0)) {
       const images = toPendingImages(kept.draft.images);
+      // 旧快照缺 refs 时按空处理（schema 未递增，向前兼容靠这里兜）；顺带滤非法项与去重
+      // （手改过 ui-state.json 的重复 ref 会与 React 的 key={ref} 撞车）
+      const refs = Array.isArray(kept.draft.refs)
+        ? [...new Set(kept.draft.refs.filter((r) => typeof r === "string" && r !== ""))]
+        : [];
       useRun.setState((s) => {
-        s.drafts[sessionId] = { text: kept.draft!.text, images };
+        s.drafts[sessionId] = { text: kept.draft!.text, images, refs };
       });
     }
   }
