@@ -1331,3 +1331,262 @@ async fn read_only_run_over_new_files_is_not_idle() {
         "读新文件不应触发任何空转纠偏，实际历史：{texts:?}"
     );
 }
+
+// ---- 生成耗时 / TTFT（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）----
+
+/// AC-1/AC-2：usage 帧的两个可选字段——旧载荷（四个 token 字段）反序列化不报错（None）；
+/// 新载荷序列化带两键，键名 `type`/`usage` 不变。
+#[test]
+fn usage_frame_timing_fields_are_optional() {
+    let legacy: Frame = serde_json::from_value(serde_json::json!({
+        "type": "usage",
+        "input": 10,
+        "output": 4,
+        "cache_read": 2,
+        "cache_write": 1
+    }))
+    .unwrap();
+    match legacy {
+        Frame::Usage {
+            input,
+            output,
+            duration_ms,
+            ttft_ms,
+            ..
+        } => {
+            assert_eq!((input, output), (10, 4));
+            assert_eq!(duration_ms, None, "旧载荷缺字段 → None（不报错）");
+            assert_eq!(ttft_ms, None);
+        }
+        other => panic!("应反序列化为 Usage，实际：{other:?}"),
+    }
+
+    let v = serde_json::to_value(Frame::Usage {
+        input: 1,
+        output: 2,
+        cache_read: 3,
+        cache_write: 4,
+        duration_ms: Some(1200),
+        ttft_ms: Some(300),
+    })
+    .unwrap();
+    assert_eq!(v["type"], "usage", "事件/帧键名不变");
+    assert_eq!(v["input"], 1);
+    assert_eq!(v["duration_ms"], 1200);
+    assert_eq!(v["ttft_ms"], 300);
+
+    // 无数据：显式 null（前端按「无数据」处理，不累加不显示）
+    let v = serde_json::to_value(Frame::Usage {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        duration_ms: None,
+        ttft_ms: None,
+    })
+    .unwrap();
+    assert!(v["duration_ms"].is_null() && v["ttft_ms"].is_null());
+}
+
+/// Q2 口径：TTFT 取**首个任意类型**增量（thinking 也算），且不等到第二个增量。
+#[tokio::test]
+async fn collect_deltas_reports_ttft_from_first_delta_including_thinking() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<crate::provider::StreamDelta>(4);
+    let stream = Arc::new(crate::util::throttle::ThrottledStream::new());
+    let anchor = std::time::Instant::now();
+    // 收集端必须与发送端并发（否则带缓冲的通道不会唤醒消费者，首增量时刻被推迟到全发完）
+    let collecting = tokio::spawn(super::stream::collect_deltas(rx, stream, anchor));
+    // 首个增量是 thinking（25ms 后），第二个（正文）125ms 后才到——TTFT 必须落在前者
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    tx.send(crate::provider::StreamDelta::Reasoning {
+        text: "先想".into(),
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tx.send(crate::provider::StreamDelta::Text {
+        text: "再答".into(),
+    })
+    .await
+    .unwrap();
+    drop(tx);
+    let (asm, ttft_ms) = collecting.await.unwrap();
+    assert_eq!(asm.joined_text(), "再答");
+    let ttft = ttft_ms.expect("有增量就必须报 TTFT");
+    assert!(ttft >= 20, "TTFT 应为实测首增量时刻，实际 {ttft}ms");
+    assert!(
+        ttft < 120,
+        "TTFT 取的是首个增量（含思考），不得等到第二个增量：{ttft}ms"
+    );
+}
+
+/// 全程无增量（空流/仅收尾）→ 无 TTFT 样本（`None`，不进平均）。
+#[tokio::test]
+async fn collect_deltas_without_deltas_reports_no_ttft() {
+    let (tx, rx) = tokio::sync::mpsc::channel::<crate::provider::StreamDelta>(4);
+    drop(tx);
+    let stream = Arc::new(crate::util::throttle::ThrottledStream::new());
+    let (asm, ttft_ms) = super::stream::collect_deltas(rx, stream, std::time::Instant::now()).await;
+    assert!(asm.is_empty());
+    assert_eq!(ttft_ms, None, "无增量 = 无 TTFT 样本");
+}
+
+/// 同 `scripted_core`，但 core.sink 换成可捕获帧的 sink（usage 帧字段断言用）。
+#[allow(clippy::type_complexity)]
+fn scripted_core_capturing(
+    port: u16,
+    name: &str,
+) -> (
+    Arc<AgentCore>,
+    Arc<SessionRuntime>,
+    Arc<CaptureSink>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let mut cfg = crate::core::config::ConfigState::default();
+    cfg.providers.push(crate::core::config::ProviderConfig {
+        models: vec![crate::core::config::ProviderModel::default()],
+        ..Default::default()
+    });
+    cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+    cfg.providers[0].base_url = format!("http://127.0.0.1:{port}/v1");
+    cfg.providers[0].keys = vec!["test-key".into()];
+    let sink = Arc::new(CaptureSink::default());
+    let store = Arc::new(crate::core::sessions::SessionStore::new(
+        roots.data_dir.clone(),
+    ));
+    let core = Arc::new(AgentCore::new(
+        cfg,
+        sink.clone() as Arc<dyn EventSink>,
+        store,
+        reqwest::Client::new(),
+        roots.data_dir.clone(),
+    ));
+    let rt = core.get_or_create_session(name, roots.workspace.clone(), None, vec![], None, vec![]);
+    (core, rt, sink, ws, dd)
+}
+
+/// 脚本化 SSE mock（带响应前延迟）：进度可测要求服务端真的等一会儿——否则
+/// 本机回环上一个 step 可能不到 1ms，`duration_ms` 取整为 0 而整步不计。
+async fn spawn_delayed_sse(
+    script: Vec<(u64, Vec<u8>)>,
+) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = hits.clone();
+    tokio::spawn(async move {
+        let mut idx = 0usize;
+        while let Ok((mut sock, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 8192];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            let (delay_ms, resp) = script.get(idx).or_else(|| script.last()).unwrap().clone();
+            idx += 1;
+            if delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, &resp).await;
+            let _ = tokio::io::AsyncWriteExt::flush(&mut sock).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    });
+    (port, hits)
+}
+
+/// AC-1：每个 step 结束的 usage 帧带 `duration_ms`/`ttft_ms`，且 `ttft_ms <= duration_ms`；
+/// 本 run 的耗时观测（`run_timing`）与帧一致（steps=1）。
+#[tokio::test]
+async fn usage_frame_carries_step_timing() {
+    let (port, hits) = spawn_delayed_sse(vec![(
+        30,
+        sse_body(&[r#"{"choices":[{"delta":{"content":"答完了"}}]}"#, SSE_STOP]),
+    )])
+    .await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_capturing(port, "usage-timing");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: true,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_usage_timing").await;
+    assert!(result.is_ok(), "run 应成功：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let frames = sink.0.lock().unwrap().clone();
+    let usages: Vec<(Option<u64>, Option<u64>)> = frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Usage {
+                duration_ms,
+                ttft_ms,
+                ..
+            } => Some((*duration_ms, *ttft_ms)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usages.len(), 1, "每个 step 结束一帧 usage");
+    let (duration_ms, ttft_ms) = usages[0];
+    let duration_ms = duration_ms.expect("成功 step 必须有 duration_ms");
+    let ttft_ms = ttft_ms.expect("有增量就必须有 ttft_ms");
+    assert!(duration_ms > 0, "服务端延迟 30ms，duration 必须 > 0");
+    assert!(
+        ttft_ms <= duration_ms,
+        "ttft({ttft_ms}) 不得超过 duration({duration_ms})"
+    );
+
+    let timing = *rt.run_timing.lock().unwrap();
+    assert_eq!(timing.steps, 1);
+    assert_eq!(timing.ttft_count, 1);
+    assert!(timing.gen_ms > 0);
+    assert!(timing.ttft_ms <= timing.gen_ms);
+}
+
+/// Q1/AC-1：计时只含**成功那次尝试**——500 → 退避 500ms → 成功，退避不得进生成窗口。
+#[tokio::test]
+async fn step_timing_excludes_retry_backoff() {
+    let server_error =
+        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_vec();
+    let ok = sse_body(&[
+        r#"{"choices":[{"delta":{"content":"第二次就绪"}}]}"#,
+        SSE_STOP,
+    ]);
+    let (port, hits) = spawn_delayed_sse(vec![(0, server_error), (30, ok)]).await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_capturing(port, "usage-backoff");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: true,
+        ..DriveParams::default()
+    };
+    let started = std::time::Instant::now();
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_backoff").await;
+    let wall_ms = started.elapsed().as_millis() as u64;
+    assert!(result.is_ok(), "重试后应成功：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 2, "第一次 500、第二次成功");
+
+    let timing = *rt.run_timing.lock().unwrap();
+    assert_eq!(timing.steps, 1, "失败尝试不计步数");
+    assert!(timing.gen_ms > 0);
+    assert!(
+        wall_ms >= timing.gen_ms + 450,
+        "退避的 500ms 不得进生成窗口：wall={wall_ms}ms gen={}ms",
+        timing.gen_ms
+    );
+    // 失败尝试不发 usage 帧（只有成功那次发）
+    let usage_frames = sink
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|f| matches!(f, Frame::Usage { .. }))
+        .count();
+    assert_eq!(usage_frames, 1);
+}

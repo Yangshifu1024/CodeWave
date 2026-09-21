@@ -301,6 +301,13 @@ export default {
     contextThreshold: "thr",
     cacheHit: "hit",
     ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
+    // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/composer-token-rate])
+    rateRunning: "Running",
+    rateTitle: "Generation rate (this run)",
+    rateTtft: "First-step TTFT (first output delta, incl. thinking)",
+    rateOutput: "Output tokens",
+    rateGenMs: "Generation time (excl. retry waits)",
+    rateToolWait: "Total tool wait",
     other: "Other",
     noModel: "No model configured",
     goSettings: "Add a model in Settings",
@@ -353,7 +360,7 @@ export default {
     instruction: "Instruction (runs in isolated context)", create: "Create", created: "Created",
     empty: "No scheduled tasks (process-local, cleared on restart)",
   },
-  stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", cacheHit: "Cache hit {{read}} tokens ({{rate}}) · cache write {{write}} tokens", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources (output tokens): {{list}}" },
+  stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", cacheHit: "Cache hit {{read}} tokens ({{rate}}) · cache write {{write}} tokens", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources (output tokens): {{list}}", avgRate: "Avg generation rate", avgStepMs: "Avg step time", avgTtft: "Avg TTFT" },
   skills: {
     detailUse: "Use", detailClose: "Close", detailWhen: "When to use", detailOrigin: "Source", detailLoading: "Loading body…",
   },

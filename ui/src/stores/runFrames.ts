@@ -215,12 +215,17 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
   }
 }
 
-/** usage 帧载荷（ipc/types.ts 的 Frame usage 形状：snake_case，与后端 dto 一致）。 */
+/** usage 帧载荷（ipc/types.ts 的 Frame usage 形状：snake_case，与后端 dto 一致）。
+ *  `duration_ms` = 该 LLM step **成功尝试**的生成耗时（请求发出 → 流失结束，不含失败尝试与退避）；
+ *  `ttft_ms` = 首个任意类型增量（text 或 thinking）延迟。两字段缺省/为 null = 该步无数据
+ *  （旧后端），按「无数据」处理：不累加、不计步、不显示（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。 */
 export interface UsageFramePayload {
   input?: number;
   output?: number;
   cache_read?: number;
   cache_write?: number;
+  duration_ms?: number | null;
+  ttft_ms?: number | null;
 }
 
 /** usage 帧累加（纯函数，就地变异草稿）：字段缺失按 0 计，帧重放/乱序无害。
@@ -231,6 +236,27 @@ export function applyUsageFrame(t: TabRunState, u: UsageFramePayload | undefined
   t.usage.output += u?.output ?? 0;
   t.usage.cacheRead += u?.cache_read ?? 0;
   t.usage.cacheWrite += u?.cache_write ?? 0;
+  applyRunMetricsFrame(t, u);
+}
+
+/** 本轮计数累加（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：与上面会话级 `usage` 平行。
+ *  三条纪律：
+ *  - **只有「该步被计入」的帧才进分子**：`duration_ms` 缺失 / null / 0 / 负值 → 整帧不计（`output` 也不累加），
+ *    与后端 `UsageTiming::add_step`（`src-tauri/src/core/stats.rs`：耗时缺失或 0 → 整步不计）逐字同口径——
+ *    否则「带 usage 却不带计时」的帧（旧后端混跑 / 将来新增发帧路径）会让分子多、分母少，速率虚高（AC-17）；
+ *  - `genMs` / `steps` 同域累加（分母为 0 的步既不进耗时也不计步，防除零与虚高）；
+ *  - `ttftMs` 只取**首个非空值**（本轮首步 TTFT，不是求和；后续步的 TTFT 与整体体感无关），且该步必须已被计入。
+ *  惰性建立：任一 usage 帧到达即建（即使字段全缺）——全零计数经 `tokPerSec` 归为「无数据」，显示端整段隐藏。
+ *  `output` 的「整帧不计」只作用于本计数器：会话级 `usage`（命中率数据源）仍是「收到就累加」，两者口径分工不同。 */
+export function applyRunMetricsFrame(t: TabRunState, u: UsageFramePayload | undefined) {
+  const m = (t.runMetrics ??= { output: 0, genMs: 0, steps: 0, ttftMs: null, toolMs: 0 });
+  const genMs = u?.duration_ms ?? 0;
+  if (genMs > 0) {
+    m.output += u?.output ?? 0;
+    m.genMs += genMs;
+    m.steps += 1;
+    if (m.ttftMs == null && u?.ttft_ms != null) m.ttftMs = u.ttft_ms;
+  }
 }
 
 /** 会话级缓存命中率（0–1），分母按协议语义取（`utils/models.ts::cacheDenominator`）。

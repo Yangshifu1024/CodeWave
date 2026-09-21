@@ -132,3 +132,12 @@ usage?: UsageTotals;  // { input; output; cacheRead; cacheWrite }
 - **子代理 usage 不计入**：`Frame::Sub` 信封内的帧由 `applyFrameToSub` 消费，其 usage 不进主 Tab 累加器；子代理的 token 目前在子代理卡上单独展示。
 - **Shift+Enter 无可见换行**：补充说明仍是单行 `Input`（多行需换 `TextArea`），hint 按现状表述；若要多行补充说明，是独立的小改动。
 - **阈值/命中段的降级顺序未做代码级实现**：窄窗口下靠 `overflow: hidden` + `text-overflow: ellipsis` 由浏览器截断（hover 的 `title` 仍给全量），未按「命中 → 阈值 → 括号」逐段隐藏。
+
+## 8. 后续追加：token 速率段（2026-09-21）
+
+在同一行的命中段**之后**追加了第三段「生成速率」（[composer-token-rate](./composer-token-rate.md)），本档的既有约定继续沿用：
+
+- **同一行同一段**、同样中性灰小字、原生 `title` 承载明细；**不做分档着色**（速率不是风险等级）。
+- **数据源分工**：本档的上下文/命中段读**会话级** `TabRunState.usage`（跨 run 累加、不持久化，见本档 §7）；速率段读**本轮** `TabRunState.runMetrics`（`send()` 处归零，避免跨轮累积）。
+- **空态不变**：`breakdown` 缺失时仍是 `上下文 —`，速率段整体不渲染——本档 §1 决策 6 与相关断言逐字保持。
+- 速率段只在收到带 `duration_ms` 的 usage 帧后出现（旧后端 / 前端重挂载后未收帧 → 隐藏，不显陈旧值）。

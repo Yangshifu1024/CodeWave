@@ -90,18 +90,22 @@ pub struct DriveCtx {
 
 ### 4.1 采集与落盘（core/stats.rs）
 - 写路径：run 结束时投递 `UsageRecord{ts, session, model_id, provider, workspace, input, output, cache_read, cache_write, runs:1}` 到有界 mpsc（2048，满则丢弃并计数告警——不阻塞热路径）。
+- **生成计时（2026-09-21 追加，[composer-token-rate](./composer-token-rate.md)）**：主会话每个 LLM step 另带 `UsageTiming{gen_ms, ttft_ms, ttft_count, steps}`（成功那次尝试的窗口；`duration_ms` 缺失/为 0 的步整步不计）——`UsageRecord` 字段不变，计时经 `StatsCollector::record_timed` 与记录同行入队；仅主会话 `run_chat` 调用它，`compact`/`title`/`task`/`sub` 仍走 `record`（计时为 0，聚合时整桶排除）。
 - writer task：聚合计数器，每 60s 或 512 条 flush 到 `stats/YYYY-MM-DD.json`：
 
 ```json
-{"date":"2026-09-15","by_model":{"model-id":{"input":…,"output":…,"cache_read":…,"cache_write":…,"runs":…}},
- "by_workspace":{…},"total":{…}}
+{"date":"2026-09-15","by_model":{"model-id":{"input":…,"output":…,"cache_read":…,"cache_write":…,"runs":…,"gen_ms":…,"ttft_ms":…,"ttft_count":…,"steps":…}},
+ "by_workspace":{…},"by_kind":{…},"total":{…}}
 ```
+
+- `gen_ms`/`ttft_ms`/`ttft_count`/`steps` 均为 `#[serde(default)]`：旧文件缺字段反序列化为 0（不丢旧值）；flush 合并旧文件走 `ModelAgg::merge`，四个桶（`by_model`/`by_workspace`/`by_kind`/`total`）逐桶累加。
 
 - 启动合并：存在未 flush 的当日临时计数先并档；90 天前的文件清理（保留当月 1 号快照）。
 
 ### 4.2 查询与图表
 - `get_token_stats(range)`：服务端聚合返回（避免前端拉 90 个文件）。
 - UI `TokenStatsModal`：30 天柱状图（日总量）、模型占比环图、工作区占比环图——自绘 SVG（无图表库依赖），naive-ui Modal 容器。
+- **总览的耗时三项（2026-09-21，[composer-token-rate](./composer-token-rate.md)）**：平均生成速率 / 均步耗时 / 平均 TTFT，**分子分母同域**——逐天遍历 `by_kind` 桶、只取 `gen_ms > 0` 的桶（今天即 `main` 桶），子代理/压缩/命名/任务不带计时的 output 一律不进分子；各分组表不加速度列。
 
 ### 4.3 DoD
 - [ ] 跑 20 个 run 后当日文件与 UI 数字一致（对账脚本抽样）；重启不丢已 flush 数据

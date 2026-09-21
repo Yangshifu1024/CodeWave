@@ -6,7 +6,7 @@ use crate::tools::compact::compact_for_model;
 use crate::util::throttle::ThrottledStream;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -551,12 +551,21 @@ mod anchor_tests {
 }
 
 /// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。
+/// `anchor` = 本次尝试的请求发出时刻（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）；
+/// 返回值第二项 = TTFT（首个**任意类型**增量到达时的墙钟，含 thinking；全程无增量 → None）。
+/// 只读观测：不改 delta 语义、不碰 anthropic SSE 收尾路径。
 pub(super) async fn collect_deltas(
     mut rx: mpsc::Receiver<crate::provider::StreamDelta>,
     stream: Arc<ThrottledStream>,
-) -> Assembled {
+    anchor: Instant,
+) -> (Assembled, Option<u64>) {
     let mut asm = Assembled::default();
+    let mut ttft_ms: Option<u64> = None;
     while let Some(d) = rx.recv().await {
+        // 首帧（不论类型，含 ToolCall 增量）即 TTFT：放在 match 之前
+        if ttft_ms.is_none() {
+            ttft_ms = Some(anchor.elapsed().as_millis() as u64);
+        }
         // 每帧刷新流活跃度（含不经 stream 缓冲的 ToolCall 增量）——停滞看门狗的观测点
         stream.touch();
         match d {
@@ -586,7 +595,7 @@ pub(super) async fn collect_deltas(
             crate::provider::StreamDelta::ToolCallEnd { .. } => {}
         }
     }
-    asm
+    (asm, ttft_ms)
 }
 
 /// 组装 assistant 消息 + 归一化调用；参数无法修复的调用直接拒绝，合成错误结果。

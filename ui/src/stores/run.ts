@@ -182,6 +182,10 @@ export const useRun = create<RunStore>()(
         });
         t.running = true;
         t.suggestions = [];
+        // 本轮计数归零（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：
+        // 会话级 usage 跨 run 累加（命中率需要），而「本轮速率 / 本轮工具等待」必须从零重建，
+        // 否则数字跨轮累积失真；归零后尚未收到 usage 帧（genMs = 0）→ 速率段隐藏，即「新 run 覆盖」。
+        t.runMetrics = { output: 0, genMs: 0, steps: 0, ttftMs: null, toolMs: 0 };
         // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理卡片与消息流保持归档（跨运行可回看），不再随新运行重置
       });
       const channel = new Channel<any>();
@@ -355,6 +359,10 @@ export const useRun = create<RunStore>()(
           tool.outcome = p.outcome as any;
           tool.argsPreview = p.args_preview;
           tool.durationMs = p.duration_ms;
+          // 注意：**不**把子代理内部工具耗时累加进 owner.runMetrics.toolMs
+          // （[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+          // 主管道的 `subagent` 工具卡已把整个子代理运行的时长计过一次，再叠加内部工具即双计；
+          // 且工具条「工具等待」只反映主会话自己等过的工具。
           // 结果落定：清掉流式期间的进度尾部。结果卡自带完整输出且只在 running 时展示尾部，
           // 残留的 tail 已无意义（且是 ANSI/裂字符的载体）
           tool.progressTail = "";
@@ -372,6 +380,10 @@ export const useRun = create<RunStore>()(
         tool.outcome = p.outcome as any;
         tool.argsPreview = p.args_preview;
         tool.durationMs = p.duration_ms;
+        // 本轮工具等待累加（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：只算**本轮**已落定的工具卡——
+        // 历史（会话恢复）的工具卡由 restoreFromMessages 直接构造、不经本路径，故天然不计入（AC-11）。
+        // 不惰性新建 runMetrics：无本轮计数时凭空造桶会让「无数据」变成「有数据但为 0」。
+        if (t.runMetrics) t.runMetrics.toolMs += p.duration_ms ?? 0;
         // 同上：落定即清进度尾部（主会话与子代理流两处同步）
         tool.progressTail = "";
       });
