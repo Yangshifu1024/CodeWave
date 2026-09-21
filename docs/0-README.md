@@ -120,6 +120,7 @@
 - 2026-09-04 · [ask-ignore-not-answered-fix.md](./ask-ignore-not-answered-fix.md) — 缺陷修复：ask「忽略」显式失败（返回 err E_ASK_NOT_ANSWERED，错误消息硬约束模型不继续执行）
 - 2026-09-04 · [ask-approval-shape-note-nav.md](./ask-approval-shape-note-nav.md) — ask 交互加固批次：批准形判定单一事实源（后端识别）+ 选项视觉区分（复选/单选）+ 补充说明纳入键盘导航环
 - 2026-09-13 · [skill-ask-norm.md](./skill-ask-norm.md) — skill 注入条件式 ask 交互规范：任意技能加载时在 <skill-loaded> 闭合标签前附加 <ask-interaction-norm>，提问型技能（如用户级 grilling）提问轮次必经 ask 弹窗（推荐答案→recommended、>5 问拆连续调用、ask 不可用降级文本格式），无提问轮次技能行为零变化；关键词匹配否决 / frontmatter 声明搁置（YAGNI）的理由存档
+- 2026-09-21 · [ask-option-desc-wrap.md](./ask-option-desc-wrap.md) — 缺陷修复：ask 选项描述被单行省略号截断（「需你批…」→ 选它的后果看不全）改为**完整折行**——`flex-wrap: wrap` + 描述 `flex: 1 1 240px`（短描述仍与标签同行、剩余列宽不足 240px 时整段落下一行）+ `white-space: normal` / `overflow-wrap: anywhere` + 标签可收缩可断行；新增样式契约测试 ask.style.test.ts，纯视觉零交互改动
 
 ## 安全与工具链
 
