@@ -48,7 +48,7 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
         {sub.status === "error" && <CloseOutlined />}
         {sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok
         {sub.status === "done" && isEarlyEnded(sub) && (
-          <span>· {sub.ended === "budget" ? t("subagent.endedBudget") : t("subagent.endedEarly")}</span>
+          <span className="sub-card-warn">· {sub.ended === "budget" ? t("subagent.endedBudget") : t("subagent.endedEarly")}</span>
         )}
       </span>
       {/* 停止按钮（仅运行中）：stopPropagation 防止误开抽屉；点击 = 单独停止该子代理 */}

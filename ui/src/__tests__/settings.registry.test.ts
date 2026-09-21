@@ -201,7 +201,10 @@ describe("设置项注册表：键与页合法", () => {
     for (const raw of ["general", "appearance", "providers", "security", "network", "mcp", "skills", "nope", ""]) {
       expect(PAGE_ORDER).toContain(normalizePageKey(raw));
     }
-    expect(normalizePageKey("mcp")).toBe("tools");
+    // MCP / 技能拆成独立页后：旧段名即新页 key，直达（不再被别名表折到 tools）
+    expect(normalizePageKey("mcp")).toBe("mcp");
+    expect(normalizePageKey("skills")).toBe("skills");
+    expect(normalizePageKey("tools")).toBe("tools");
     expect(normalizePageKey(undefined)).toBe(DEFAULT_PAGE);
   });
 });
@@ -233,8 +236,11 @@ describe("设置项注册表：页字段归属（脏标记数据源）", () => {
     for (const id of INSTANT_APPLY_FIELD_IDS) {
       expect(all.has(id as never), `即时生效项未登记：${id}`).toBe(true);
     }
-    // MCP 不在 config 内：脏判定走独立 mcp.json 的文本基线（挂在其拥有页上）
-    expect(PAGE_FIELDS.tools).toContain(MCP_FIELD_ID as never);
+    // MCP 不在 config 内：脏判定走独立 mcp.json 的文本基线（拆页后拥有它的页是 mcp）
+    expect(PAGE_FIELDS.mcp).toContain(MCP_FIELD_ID as never);
+    // 拆页后字段归属随页面走：tools 页只剩写入后检查四项，不再拥有 MCP / 技能字段
+    expect(PAGE_FIELDS.tools).not.toContain(MCP_FIELD_ID as never);
+    expect(PAGE_FIELDS.skills).toContain("disabled_skills" as never);
   });
 
   /**

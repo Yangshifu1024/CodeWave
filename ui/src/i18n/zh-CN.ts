@@ -73,11 +73,13 @@ export default {
   },
   settings: {
     title: "设置",
-    // 8 页重划（[docs/settings-ia](../../../docs/settings-ia.md)）：页名键 + 左导航三组标题。
+    // 10 页（[docs/settings-ia](../../../docs/settings-ia.md)）：页名键 + 左导航三组标题。
     // 旧页名键 general / appearance / security / network 与 settings.accent 已随重划零引用删除；
-    // providers / mcp / skills 仍在用（分别是供应商列表、MCP 服务器、技能三个设置项的显示名）。
+    // providers / mcp / skills 仍在用（分别是供应商列表、MCP 服务器、技能三个设置项的显示名）——
+    // 其中 mcp / skills 自 MCP 与技能拆成独立页起，同时充当这两页的页名（PAGE_LABEL_KEY 直接引用）。
+    // pageTools 随本批改名退休：键名跟页 key 的规则下，tools 页的新页名键是 pagePostWrite。
     pageAppearance: "界面", pageProviders: "模型与供应商", pageNetwork: "网络与连接", pageSecurity: "安全与审批",
-    pageTools: "工具与集成", pageAgent: "工作区与智能体", pageLogs: "日志", pageAbout: "关于",
+    pagePostWrite: "写入后检查与校验", pageAgent: "工作区与智能体", pageLogs: "日志", pageAbout: "关于",
     groupUiModel: "外观与模型", groupSafetyTools: "安全与能力", groupDiagnostics: "诊断与其他",
     providers: "供应商", mcp: "MCP", skills: "技能",
     language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言",
@@ -186,6 +188,14 @@ export default {
     customHeadersHint: "随该供应商的所有请求发送（如 OpenCode Go 需要专属 User-Agent 与 x-opencode-session）。值支持 ${session_id} 占位符。明文保存，请勿放长期密钥。",
     addHeader: "添加请求头",
     vHeaders: "请求头名称需合法、非保留名且不重复（保留名：Content-Type、Authorization、x-api-key、anthropic-version、Host、Content-Length）；值仅支持可见 ASCII 字符且不含换行",
+    // MCP 独立页：状态表（服务器状态）+ 配置两段。mcpStatus 既是 app.mcp_status 的项名（搜索 / 锚点），
+    // 也是状态段的段标题——同一个概念只留一把键。
+    mcpStatus: "服务器状态", mcpConfigHead: "服务器配置",
+    mcpColState: "状态", mcpColTools: "工具数",
+    mcpStateReady: "已连接", mcpStateStarting: "连接中", mcpStateError: "连接失败", mcpStateDisconnected: "未连接",
+    mcpStatusRefresh: "刷新状态（不会重新连接）", mcpStatusToggleError: "展开 / 收起错误详情",
+    mcpStatusHint: "连接在打开会话时建立；此处显示的是全局连接状态。",
+    mcpStatusRefreshFailed: "读取 MCP 状态失败（显示的是上一次结果）",
     mcpHint: "编辑用户级 mcp.json（项目级放 <工作区>/.codewave/mcp.json，同名覆盖）。保存后自动重连。",
     mcpAdd: "添加服务器", mcpName: "服务器名称", mcpCommand: "命令",
     mcpArgs: "参数（空格分隔）", mcpEnv: "环境变量（K=V，每行一个）", mcpUrl: "URL",
@@ -200,7 +210,11 @@ export default {
     // 全屏设置页容器（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)）
     backToWorkspace: "返回工作区",
     runningCount: "{{n}} 个会话运行中", runningHint: "打开设置期间会话照常运行；点此返回工作区",
-    dirtyHint: "有未保存的改动", instantApply: "即时生效",
+    dirtyHint: "有未保存的改动",
+    // 「即时生效」的括号形态（标题后用：`t(项名) + t(instantApplySuffix)`）。原先它是行内独立标注，
+    // 但两处（关于·更新、界面·界面语言）都会被行内布局推到最右侧或控件之外，扫读时看不到，故统一成
+    // 跟在项名后的括号形态（用户反馈调整）。
+    instantApplySuffix: "（即时生效）",
     cancelHint: "放弃未保存改动并返回工作区",
     leaveTitle: "有未保存的设置改动",
     leaveDesc: "离开前请选择如何处理这些改动；取消按钮会直接放弃全部未保存改动。",
@@ -213,7 +227,7 @@ export default {
     showAdvanced: "显示进阶项（{{n}}）",
     advancedHint: "进阶项默认收起，该偏好会跨页跨会话记住",
   },
-  chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件" },
+  chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染" },
   notice: {
     cancelled: "已取消",
     compactSummary: "（压缩摘要）",
@@ -353,6 +367,10 @@ export default {
   tasks: {
     title: "计划任务", name: "任务名", scheduleHint: "计划：cron:0 9 * * * / every:30m / once:ISO",
     instruction: "任务指令（Agent 将在独立上下文执行）", create: "创建", created: "已创建",
+    // 创建按钮的禁用原因就地显示（版式审计：禁用无原因、语法只当 placeholder）
+    createDisabled: "填写任务名、计划与指令后可创建",
+    // 任务状态兜底文案（此前硬编码在组件里，英文界面会露中文）
+    pending: "待触发",
     empty: "暂无计划任务（进程本地，重启后清空）",
   },
   stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}", avgRate: "平均生成速率", avgStepMs: "均步耗时", avgTtft: "平均 TTFT" },

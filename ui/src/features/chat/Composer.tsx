@@ -37,7 +37,7 @@ const { TextArea } = Input;
 // Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）
 const MODE_ORDER: ApprovalMode[] = ["confirm_each", "auto_edit", "plan", "full_access"];
 
-/** Composer：底部输入区 + 工具条（+/权限/子代理/压缩/上下文/模型/力度/发送）。
+/** Composer：底部输入区 + 工具条（左：+/权限/子代理 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
  *  / 触发技能菜单、$ 触发子代理菜单、@ 触发提及菜单（↑↓ 导航、Enter/Tab 选中）；
  *  IME 组合期按键全部放行。ask 弹出时提问卡整体覆盖本组件与队列面板，回答后原样恢复
@@ -888,8 +888,9 @@ export default function Composer() {
                 </Dropdown>
               )}
             </div>
-            <div className="toolbar-right">
-              <CompactButton />
+            {/* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原先住在 .toolbar-right 内，
+                被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。 */}
+            <div className="toolbar-info">
               <span className="ctx-label" title={ctxTitle}>
                 {active.breakdown ? (
                   <>
@@ -912,6 +913,9 @@ export default function Composer() {
                   <>{t("app.context")} —</>
                 )}
               </span>
+            </div>
+            <div className="toolbar-right">
+              <CompactButton />
               <Dropdown menu={modelMenu} trigger={["click"]}>
                 <Button
                   type="text"

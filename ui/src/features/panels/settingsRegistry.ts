@@ -9,12 +9,16 @@
 //     （引用闭包 / 键存在性 / 页合法 / 分组完备 / 页字段覆盖 / 字段归属唯一 / 「项 ↔ 页字段」双向闭合 /
 //      豁免清单不重叠）。末条是结构性断言：删掉任一条字段登记都会立刻变红，不再是「删了也全绿」。
 
-/** 设置页的 8 个分区（页 key = 组件内的页标识，也是 ui.settingsTab 的取值域） */
+/** 设置页的 10 个分区（页 key = 组件内的页标识，也是 ui.settingsTab 的取值域）。
+ *  「MCP」/「技能」自本批起从原「工具与集成」页拆成独立页：原页保留页 key `tools`（旧深链
+ *  `showSettings("tools")` 仍直达），页面内容与页名改为「写入后检查与校验」。 */
 export type PageKey =
   | "appearance"
   | "providers"
   | "network"
   | "security"
+  | "mcp"
+  | "skills"
   | "tools"
   | "agent"
   | "logs"
@@ -26,6 +30,8 @@ export const PAGE_ORDER: PageKey[] = [
   "providers",
   "network",
   "security",
+  "mcp",
+  "skills",
   "tools",
   "agent",
   "logs",
@@ -41,7 +47,11 @@ export const PAGE_LABEL_KEY: Record<PageKey, string> = {
   providers: "settings.pageProviders",
   network: "settings.pageNetwork",
   security: "settings.pageSecurity",
-  tools: "settings.pageTools",
+  // mcp / skills 与设置项同键：这两个页名就是该段分段的名称，复用可保证同一页名只有一个文案真源。
+  mcp: "settings.mcp",
+  skills: "settings.skills",
+  // 页名键跟页 key 走（tools 页保留 key 以保住旧深链），故这里叫 pagePostWrite 而不是 pageTools
+  tools: "settings.pagePostWrite",
   agent: "settings.pageAgent",
   logs: "settings.pageLogs",
   about: "settings.pageAbout",
@@ -50,7 +60,7 @@ export const PAGE_LABEL_KEY: Record<PageKey, string> = {
 /** 左导航三组（组内页序 = PAGE_ORDER 中的相对序；titleKey 是组标题的 i18n 键） */
 export const PAGE_GROUPS: { titleKey: string; pages: PageKey[] }[] = [
   { titleKey: "settings.groupUiModel", pages: ["appearance", "providers", "network"] },
-  { titleKey: "settings.groupSafetyTools", pages: ["security", "tools", "agent"] },
+  { titleKey: "settings.groupSafetyTools", pages: ["security", "mcp", "skills", "tools", "agent"] },
   { titleKey: "settings.groupDiagnostics", pages: ["logs", "about"] },
 ];
 
@@ -64,8 +74,9 @@ export const LEGACY_PAGE_ALIASES: Record<string, PageKey> = {
   providers: "providers",
   security: "security",
   network: "network",
-  mcp: "tools", // 旧「MCP」→ 工具与集成
-  skills: "tools", // 旧「技能」→ 工具与集成
+  mcp: "mcp", // 旧「MCP」原是工具与集成页里的一段；现独立成页，深链直达（保留自映射与上方几条同风格）
+  skills: "skills", // 同上一行：旧「技能」段
+  tools: "tools", // 「工具与集成」页仍在（改名不改 key），旧深链直达写入后检查与校验页
 };
 
 /** 页 key 归一：合法页 key 原样返回；旧 key 走别名表；未知 / 空回默认页 */
@@ -123,15 +134,21 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "approval.auto_confirm", labelKey: "settings.autoConfirm", page: "security", keywords: ["auto", "自动确认", "超时", "5 分钟"] },
   { id: "approval.command_allowlist", labelKey: "settings.cmdAllowlist", page: "security", advanced: true, keywords: ["allowlist", "白名单", "允许", "命令"] },
 
-  // ---------- 工具与集成（页内分组：写入后检查 + MCP + 技能） ----------
+  // ---------- 写入后检查与校验（原「工具与集成」页：MCP / 技能已拆成独立页） ----------
   // 写入后检查命令（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：取代 LSP 写后语义校验
   { id: "post_write_check.enabled", labelKey: "settings.postWriteEnabled", page: "tools", group: "settings.postWriteCheck", keywords: ["post", "write", "check", "lint", "写入后检查", "检查", "校验"] },
   { id: "post_write_check.command", labelKey: "settings.postWriteCommand", page: "tools", group: "settings.postWriteCheck", keywords: ["command", "命令", "lint", "eslint", "tsc", "ruff", "cargo", "{file}", "写入后检查", "检查命令"] },
   { id: "post_write_check.timeout_seconds", labelKey: "settings.postWriteTimeout", page: "tools", group: "settings.postWriteCheck", width: "narrow", advanced: true, keywords: ["timeout", "超时", "秒"] },
   { id: "post_write_check.tail_chars", labelKey: "settings.postWriteTailChars", page: "tools", group: "settings.postWriteCheck", width: "narrow", advanced: true, keywords: ["tail", "输出", "字符", "尾部", "截断"] },
-  // MCP 与技能
-  { id: "mcp.servers", labelKey: "settings.mcp", page: "tools", group: "settings.mcp", width: "narrow", keywords: ["mcp", "mcp server", "mcp 服务器", "server", "服务器", "工具"] },
-  { id: "disabled_skills", labelKey: "settings.skills", page: "tools", group: "settings.skills", keywords: ["skill", "skills", "技能", "启用", "禁用", "禁用技能"] },
+  // ---------- MCP（独立页：状态表 + 服务器配置） ----------
+  // 服务器状态是只读信息与动作类项（`app.*` 前缀：无落盘字段、不进 PAGE_FIELDS，只提供搜索 / 锚点），
+  // 与 app.cleanup_status 同类；数据源是既有的 mcp_status 命令与 mcp:status 事件。
+  { id: "app.mcp_status", labelKey: "settings.mcpStatus", page: "mcp", keywords: ["mcp", "status", "连接", "状态", "服务器状态", "连接状态", "工具数"] },
+  // 「工具与集成」是这两个设置项原来的页名，留作关键词：老用户（含看过旧文档的人）搜旧页名仍能命中
+  { id: "mcp.servers", labelKey: "settings.mcp", page: "mcp", width: "narrow", keywords: ["mcp", "mcp server", "mcp 服务器", "server", "服务器", "工具", "工具与集成", "tools & integrations"] },
+
+  // ---------- 技能（独立页） ----------
+  { id: "disabled_skills", labelKey: "settings.skills", page: "skills", keywords: ["skill", "skills", "技能", "启用", "禁用", "禁用技能", "工具与集成", "tools & integrations"] },
 
   // ---------- 工作区与智能体 ----------
   { id: "shell.selection", labelKey: "settings.shell", page: "agent", width: "mid", keywords: ["shell", "bash", "powershell", "终端"] },
@@ -207,6 +224,7 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
   "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
   "app.cleanup_status", // 整行只读信息项：标签 + extra 说明 + 「时间 · 删除条数」回显，无独立控件
+  "app.mcp_status", // 整行只读状态表：服务器名 / 状态 / 工具数三列（列宽由 app.css 网格定，无控件宽度档）
 
   // —— 关于页的只读信息与目录 / 许可证入口（批④）：整行「标签 + extra 说明 + 值/按钮」，无独立控件宽度 ——
   "app.version", // 只读版本串（懒加载）
@@ -286,9 +304,10 @@ export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
     "post_write_check.command",
     "post_write_check.timeout_seconds",
     "post_write_check.tail_chars",
-    "mcp.servers",
-    "disabled_skills",
   ],
+  // MCP / 技能各自成页：字段归属随页面迁移（字段归属唯一断言要求只有一页拥有）
+  mcp: ["mcp.servers"],
+  skills: ["disabled_skills"],
   agent: ["shell.selection", "custom_prompt", "compact_threshold", "compact_timeout_seconds", "sessions.retention_days"],
   logs: ["log.level", "log.session_verbose"],
   // 关于页：只有「启动时自动检查更新」（localStorage 偏好，即时生效）+ 只读身份信息 —— 同样永不亮脏点
@@ -314,7 +333,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "title", // 设置页标题 / 全屏 dialog 的 aria-label
   "cancelHint", // 取消按钮 Tooltip（→ 对应按钮文案 = common.cancel）
   "dirtyHint", // 脏圆点 Tooltip
-  "instantApply", // 「即时生效」标注（挂在即时生效项旁）
+  "instantApplySuffix", // 「即时生效」的括号后缀（唯一形态：跟在项标题后，如「更新（即时生效）」）
   "backToWorkspace", // 左导航返回工作区
   "runningCount", // 运行中指示数量
   "runningHint", // 运行中指示 Tooltip
@@ -401,10 +420,22 @@ export const SHELL_SETTING_KEYS: string[] = [
   "autoConfirmHint", // → approval.auto_confirm 的说明
   "cmdAllowlistCwd", // → approval.command_allowlist 的悬浮目录标注
 
-  // —— 工具与集成的从属文案（项已登记：post_write_check.* / mcp.servers / disabled_skills） ——
+  // —— 写入后检查与校验 / MCP / 技能 三页的从属文案（项已登记：post_write_check.* /
+  //    mcp.servers / disabled_skills / app.mcp_status） ——
   "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
   "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
   "postWriteCommandPh", // → post_write_check.command 输入框占位
+  "mcpConfigHead", // → MCP 页分段小标题：服务器配置（页名已由 PageKey 承担，段标题走轻量小标题）
+  "mcpColState", // → 状态表列头：状态
+  "mcpColTools", // → 状态表列头：工具数（该服务器暴露的工具个数）
+  "mcpStateReady", // → 状态值：已连接
+  "mcpStateStarting", // → 状态值：连接中（30s 初始化窗口内，来自轮询）
+  "mcpStateError", // → 状态值：连接失败（详情按行展开）
+  "mcpStateDisconnected", // → 状态值：未连接（当前没有会话驱动连接）
+  "mcpStatusRefresh", // → 刷新按钮 Tooltip：只重读状态，不会重连
+  "mcpStatusToggleError", // → 失败行的展开 / 收起错误详情 aria-label
+  "mcpStatusHint", // → 状态表下方的全局语义说明（连接由打开会话驱动）
+  "mcpStatusRefreshFailed", // → 刷新失败提示（保留旧值，不把一次抖动伪装成「未连接」）
   "mcpHint", // → mcp.servers 结构化编辑说明
   "mcpRawHint", // → mcp.servers 文本兜底模式说明
   "mcpName", // → mcp.servers 条目字段

@@ -74,6 +74,8 @@ describe("SubagentItemCard 收尾原因徽标", () => {
     expect(warn).not.toBeNull();
     // 警示色走主题桥的 antd colorWarning，不硬编码色值
     expect(warn.style.color).toBe("var(--ws-warn)");
+    // 收尾原因文本与警示图标同档强度（此前与普通 meta 同色，夹在步数/token 里读不出来）
+    expect(c.querySelector(".sub-card-warn")?.textContent).toContain("提前结束");
     // 步数 / token 展示保持不变（收尾理由追加在 meta 末尾）
     expect(c.textContent).toContain("22/80");
     expect(c.textContent).toContain("1.2k tok");

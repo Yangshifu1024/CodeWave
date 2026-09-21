@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "../utils/markdown";
 import { upgradeDiagrams } from "../utils/diagrams";
+import { renderCached } from "../features/chat/segments";
 
 describe("markdown math/mermaid", () => {
   it("行内 $...$ 产出 ws-math 占位符（TeX 原文转义保留）", () => {
@@ -11,6 +12,19 @@ describe("markdown math/mermaid", () => {
     // No false positives outside math: numeric amounts produce no placeholder
     const plain = renderMarkdown("价格是 5 元和 10 元");
     expect(plain).not.toContain("ws-math");
+  });
+
+  it("mermaid 占位提示文案写进 data-pending（i18n 化；CSS 用 content: attr() 取用）", () => {
+    const src = ["```mermaid", "graph TD", "```"].join("\n");
+    expect(renderMarkdown(src, "PENDING")).toContain('data-pending="PENDING"');
+    // 不传文案 = 不写该属性（非流式调用与子代理汇报不需要它）
+    expect(renderMarkdown(src)).not.toContain("data-pending");
+  });
+
+  it("渲染缓存的键含提示文案：切语言不会取回旧语言的占位提示", () => {
+    const src = ["```mermaid", "graph TD", "```"].join("\n");
+    expect(renderCached(src, "A")).not.toBe(renderCached(src, "B"));
+    expect(renderCached(src, "A")).toBe(renderCached(src, "A")); // 同文案仍命中缓存
   });
 
   it("块级 $$...$$ 产出 ws-math 块占位符", () => {

@@ -493,8 +493,9 @@ function SessionRow({
         />
       )}
       <span className="session-title" title={meta.title}>{meta.title || "(untitled)"}</span>
+      {/* 中性墨色：等待确认属「需注意」而非成功，不用预设绿（无色彩=默认、色彩只映射风险等级） */}
       {askPending && (
-        <Tag color="success" style={{ marginLeft: 6, flex: "none", fontSize: 10, lineHeight: "16px" }}>
+        <Tag style={{ marginLeft: 6, flex: "none", fontSize: 10, lineHeight: "16px" }}>
           {t("nav.waitingConfirm")}
         </Tag>
       )}

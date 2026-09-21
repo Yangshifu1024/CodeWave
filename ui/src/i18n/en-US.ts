@@ -74,11 +74,13 @@ export default {
   },
   settings: {
     title: "Settings",
-    // 8-page re-division ([docs/settings-ia](../../../docs/settings-ia.md)): page-name keys + the three nav group titles.
+    // 10 pages ([docs/settings-ia](../../../docs/settings-ia.md)): page-name keys + the three nav group titles.
     // Retired page-name keys (general / appearance / security / network) and settings.accent are gone (zero references);
-    // providers / mcp / skills stay (they name the provider list, MCP servers and skills items).
+    // providers / mcp / skills stay (they name the provider list, MCP servers and skills items) — since MCP and
+    // skills became their own pages, mcp / skills double as those pages' name keys (referenced by PAGE_LABEL_KEY).
+    // pageTools retired with this batch: key names follow the page key, so the new name key is pagePostWrite.
     pageAppearance: "Interface", pageProviders: "Models & Providers", pageNetwork: "Network & Connections",
-    pageSecurity: "Security & Approvals", pageTools: "Tools & Integrations", pageAgent: "Workspace & Agent",
+    pageSecurity: "Security & Approvals", pagePostWrite: "Post-write checks & validation", pageAgent: "Workspace & Agent",
     pageLogs: "Logs", pageAbout: "About",
     groupUiModel: "Appearance & Models", groupSafetyTools: "Security & Capabilities", groupDiagnostics: "Diagnostics & Other",
     providers: "Providers", mcp: "MCP", skills: "Skills",
@@ -189,6 +191,14 @@ export default {
     customHeadersHint: "Sent with every request to this provider (e.g. OpenCode Go needs its own User-Agent and x-opencode-session). Values support the ${session_id} placeholder. Stored in plaintext — do not put long-lived secrets here.",
     addHeader: "Add header",
     vHeaders: "Header names must be valid, non-reserved and unique (reserved: Content-Type, Authorization, x-api-key, anthropic-version, Host, Content-Length); values must be visible ASCII with no line breaks",
+    // MCP page: status table (server status) + configuration. mcpStatus names both the app.mcp_status item
+    // (search / anchor) and that section's heading — one key per concept.
+    mcpStatus: "Server status", mcpConfigHead: "Server configuration",
+    mcpColState: "Status", mcpColTools: "Tools",
+    mcpStateReady: "Connected", mcpStateStarting: "Connecting", mcpStateError: "Failed", mcpStateDisconnected: "Not connected",
+    mcpStatusRefresh: "Refresh status (does not reconnect)", mcpStatusToggleError: "Toggle error details",
+    mcpStatusHint: "Connections are established when a session opens; this shows global connection status.",
+    mcpStatusRefreshFailed: "Failed to read MCP status (showing the last known result)",
     mcpHint: "Edit user-level mcp.json (project-level: <workspace>/.codewave/mcp.json overrides). Auto-reconnects on save.",
     mcpAdd: "Add server", mcpName: "Server name", mcpCommand: "Command",
     mcpArgs: "Args (space-separated)", mcpEnv: "Env (K=V, one per line)", mcpUrl: "URL",
@@ -204,7 +214,11 @@ export default {
     // Full-screen settings page shell ([docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md))
     backToWorkspace: "Back to workspace",
     runningCount: "{{n}} running", runningHint: "Sessions keep running while settings is open; click to return to the workspace",
-    dirtyHint: "Unsaved changes", instantApply: "Applies immediately",
+    dirtyHint: "Unsaved changes",
+    // Parenthesized form appended to an item title (`t(label) + t(instantApplySuffix)`). It used to be a
+    // standalone inline tag, but in both places (About·Updates, Interface·Language) in-row layout pushed it
+    // out of sight, so it now rides along with the item name (user feedback).
+    instantApplySuffix: " (applies immediately)",
     cancelHint: "Discard unsaved changes and return to the workspace",
     leaveTitle: "Unsaved settings changes",
     leaveDesc: "Choose what to do with these changes before leaving; the cancel button discards everything without asking again.",
@@ -217,7 +231,7 @@ export default {
     showAdvanced: "Show advanced ({{n}})",
     advancedHint: "Advanced items are hidden by default; this preference is remembered across pages and sessions",
   },
-  chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment" },
+  chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized" },
   notice: {
     cancelled: "Cancelled",
     compactSummary: "(compaction summary)",
@@ -357,6 +371,8 @@ export default {
   plan: { title: "Current plan" },
   tasks: {
     title: "Scheduled tasks", name: "Task name", scheduleHint: "Schedule: cron:0 9 * * * / every:30m / once:ISO",
+    createDisabled: "Fill in the name, schedule and instruction to create",
+    pending: "Pending",
     instruction: "Instruction (runs in isolated context)", create: "Create", created: "Created",
     empty: "No scheduled tasks (process-local, cleared on restart)",
   },

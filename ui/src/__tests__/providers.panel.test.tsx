@@ -78,7 +78,11 @@ describe("ProvidersPanel 供应商管理", () => {
     fireEvent.click(buttonByText("添加供应商"));
     // Fill provider fields ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md): API Key required; API format moved up, right under the name)
     fireEvent.change(inputByPlaceholder("如：智谱 GLM"), { target: { value: "智谱 GLM" } });
-    fireEvent.change(screen.getByPlaceholderText(/掩码/) as HTMLTextAreaElement, { target: { value: "sk-test-1" } });
+    // keys 的提示已改成常驻 extra（不再用 placeholder 承载「掩码」说明），故按字段容器定位 textarea
+    const keysBox = Array.from(document.querySelectorAll(".ant-form-item")).find((x) =>
+      (x.querySelector(".ant-form-item-label")?.textContent ?? "").includes("API Key"),
+    );
+    fireEvent.change(keysBox!.querySelector("textarea") as HTMLTextAreaElement, { target: { value: "sk-test-1" } });
     fireEvent.change(inputByPlaceholder("https://api.example.com/v1"), { target: { value: "https://open.bigmodel.cn/api/paas/v4" } });
     // Field order: name → API format → Base URL ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
     const labels = Array.from(document.querySelectorAll(".ant-form-item-label")).map((x) => (x.textContent ?? "").trim());

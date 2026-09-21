@@ -65,15 +65,17 @@ describe("stores/ui", () => {
     expect(useUi.getState().settingsTab).toBe("providers");
   });
 
-  it("旧页 key 经别名表归一（8 页重划：general→appearance、mcp/skills→tools），未知值回默认页", () => {
+  it("旧页 key 经别名表归一（general→appearance；mcp/skills 拆页后直达自身），未知值回默认页", () => {
     for (const [legacy, expected] of [
       ["general", "appearance"],
       ["appearance", "appearance"],
       ["providers", "providers"],
       ["security", "security"],
       ["network", "network"],
-      ["mcp", "tools"],
-      ["skills", "tools"],
+      // MCP / 技能自「工具与集成」拆成独立页：这两个词从「旧段名」升级成页 key，旧深链直达
+      ["mcp", "mcp"],
+      ["skills", "skills"],
+      ["tools", "tools"], // 旧「工具与集成」页仍在（改名不改 key）
     ] as const) {
       useUi.getState().showSettings(legacy);
       expect(useUi.getState().settingsTab, `${legacy} → ${expected}`).toBe(expected);

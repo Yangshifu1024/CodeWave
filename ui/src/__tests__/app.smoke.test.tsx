@@ -221,15 +221,15 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector(".chat-empty-guide")).toBeFalsy();
   });
 
-  it("设置页：8 个分区导航（三组）+ 逐页表单渲染", async () => {
+  it("设置页：10 个分区导航（三组）+ 逐页表单渲染", async () => {
     await mountApp();
     await clickIconBtn("设置");
 
-    // 8 页导航 + 三组标题（回归：导航项配置错了会渲染空页体）
+    // 10 页导航 + 三组标题（回归：导航项配置错了会渲染空页体）
     const navLabels = Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-item')).map((x) =>
       (x.textContent ?? "").trim(),
     );
-    expect(navLabels).toEqual(["界面", "模型与供应商", "网络与连接", "安全与审批", "工具与集成", "工作区与智能体", "日志", "关于"]);
+    expect(navLabels).toEqual(["界面", "模型与供应商", "网络与连接", "安全与审批", "MCP", "技能", "写入后检查与校验", "工作区与智能体", "日志", "关于"]);
     expect(
       Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-group')).map((x) =>
         (x.textContent ?? "").trim(),
@@ -274,12 +274,20 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-switch').length).toBeGreaterThanOrEqual(4);
     expect(document.body.textContent ?? "").toContain("5 分钟后自动确认推荐选项");
 
-    // 工具与集成页：写入后检查 + MCP + 技能三段同页
-    await clickTab("工具与集成");
+    // 写入后检查与校验页：只剩四项校验配置（MCP / 技能已拆成独立页）
+    await clickTab("写入后检查与校验");
     expect(document.querySelectorAll('[data-setting-id^="post_write_check."]').length).toBe(4);
     expect(document.body.textContent ?? "").toContain("写入后检查");
+
+    // MCP 页：服务器配置区（本组 fixture 未配服务器 → 状态表整段不渲染）
+    await clickTab("MCP");
+    expect(document.querySelector('[data-setting-id="mcp.servers"]')).toBeTruthy();
     expect(document.body.textContent ?? "").toContain("添加服务器");
-    expect(document.body.textContent ?? "").toContain("技能");
+    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeFalsy();
+
+    // 技能页：禁用清单
+    await clickTab("技能");
+    expect(document.querySelector('[data-setting-id="disabled_skills"]')).toBeTruthy();
 
     // 工作区与智能体页：Shell 下拉 + 自定义提示词 + 压缩两项（旧「通用」页的这 4 项）
     await clickTab("工作区与智能体");
@@ -444,16 +452,17 @@ describe("App 渲染冒烟", () => {
     await waitFor(() => expect(screen.getByText("Token 用量（近 30 天）")).toBeTruthy());
   });
 
-  it("设置：工具与集成页的 MCP 结构化编辑器 + 技能列表同页渲染", async () => {
+  it("设置：MCP 页的结构化编辑器与技能页的列表各自渲染（拆页后不再同页）", async () => {
     await mountApp();
     await clickIconBtn("设置");
-    await clickTab("工具与集成");
+    await clickTab("MCP");
     // Single-entry editing: add server → entry fields expand
     await clickButton("添加服务器");
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);
-    // 技能段与 MCP 段同在「工具与集成」页（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
+    // 技能列表搬到了独立页（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
+    await clickTab("技能");
     await waitFor(() => {
       const page = document.querySelector('[data-testid="settings-page"]');
       const inSettings = page

@@ -211,7 +211,7 @@ function ModelListSection(props: {
   if (models.length === 0) {
     return (
       <div style={{ border: "1px dashed", borderRadius: 8, padding: "18px 0", textAlign: "center" }}>
-        <div style={{ marginBottom: 12, opacity: 0.65 }}>{t("settings.noModels")}</div>
+        <div className="dim" style={{ marginBottom: 12 }}>{t("settings.noModels")}</div>
         <Button variant="dashed" icon={<PlusOutlined />} onClick={onAdd}>{t("settings.addModel")}</Button>
       </div>
     );
@@ -237,7 +237,7 @@ function ModelListSection(props: {
               <code>{m.model}</code>
               {m.vision && <Tag style={{ marginInlineEnd: 0 }}>{t("settings.typeImage")}</Tag>}
               {m.video && <Tag style={{ marginInlineEnd: 0 }}>{t("settings.typeVideo")}</Tag>}
-              <span style={{ opacity: 0.55, fontSize: 12 }}>
+              <span className="dim" style={{ fontSize: 12 }}>
                 {Math.round(m.context_window / 1000)}k · {Math.round(m.max_tokens / 1000)}k out
               </span>
               {activeModelId === m.id && (
@@ -328,7 +328,7 @@ function ProviderFields(props: {
         <Form.Item
           label={t("settings.apiKeys")}
           required
-          tooltip={t("settings.keyMaskedHint")}
+          extra={t("settings.keyMaskedHint")}
           validateStatus={errors?.keys ? "error" : undefined}
           help={errors?.keys}
           style={{ marginBottom: 0 }}
@@ -336,13 +336,12 @@ function ProviderFields(props: {
           <Input.TextArea
             rows={2}
             value={value.keys.join("\n")}
-            placeholder={t("settings.keyMaskedHint")}
             onChange={(e) => onPatch({ keys: e.target.value.split("\n").map((s) => s.trim()) })}
           />
         </Form.Item>
         <Form.Item
           label={t("settings.customHeaders")}
-          tooltip={t("settings.customHeadersHint")}
+          extra={t("settings.customHeadersHint")}
           validateStatus={errors?.headers ? "error" : undefined}
           help={errors?.headers}
           style={{ marginBottom: 0, marginTop: 12 }}
@@ -377,7 +376,7 @@ function ProviderFields(props: {
       </Form>
       <Divider style={{ margin: "16px 0 8px" }}>{t("settings.modelList")}</Divider>
       {errors?.models && (
-        <div className="provider-models-error" style={{ color: "#ff4d4f", fontSize: 12, marginBottom: 8 }}>
+        <div className="provider-models-error">
           {errors.models}
         </div>
       )}
@@ -516,7 +515,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
           <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView({ kind: "list" })} />
           <b>{t("settings.addProvider")}</b>
         </div>
-        <div style={{ opacity: 0.65, marginBottom: 12, fontSize: 12.5 }}>{t("settings.addProviderHint")}</div>
+        <div className="dim" style={{ marginBottom: 12, fontSize: 12.5 }}>{t("settings.addProviderHint")}</div>
         <ProviderFields
           value={addForm}
           errors={{
@@ -543,7 +542,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
         </ProviderFields>
         <Divider style={{ margin: "16px 0 12px" }} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span style={{ opacity: 0.45, fontSize: 12.5 }}>
+          <span className="dim" style={{ fontSize: 12.5 }}>
             <InfoCircleOutlined style={{ marginRight: 4 }} />
             {t("settings.providerNeedsModel")}
           </span>

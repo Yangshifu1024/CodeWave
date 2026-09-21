@@ -1,8 +1,8 @@
 // 设置全屏页容器契约（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md) /
-// 8 页重划与注册表 [docs/settings-ia](../../../docs/settings-ia.md)）：
+// 10 页（8 页重划 + MCP / 技能拆页）与注册表 [docs/settings-ia](../../../docs/settings-ia.md)）：
 // 覆盖式全屏页必须**不影响正在运行的会话**——工作区全程挂载、只藏可见性、Esc 绝不停运行、
 // 离开前有未保存改动时四条路径（切页 / 返回工作区 / 页内 Esc / 关窗退出）共用同一份三选拦截。
-// 批② 起左导航自建（三组 8 页，替掉 antd Tabs），因此本文件同时守护：页名与页序、逐页脏点、
+// 批② 起左导航自建（三组 10 页，替掉 antd Tabs），因此本文件同时守护：页名与页序、逐页脏点、
 // 「关于」页（原 AboutModal 迁入第 8 页）、左下角不再有「关于」入口、macOS 菜单落关于页。
 // mock 结构对齐 app.smoke.test.tsx（整树 App 挂载是唯一能验证「工作区仍挂载 + Esc 走全局键」的方式）。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -320,11 +320,11 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     const handles = Array.from(document.querySelectorAll<HTMLElement>(".rb-resize-handle"));
     expect(handles.length).toBe(2);
     for (const el of handles) expect(el.tabIndex).toBe(-1);
-    // 8 页导航：顺序 = PAGE_ORDER（注册表单源），分组标题三组齐备
+    // 10 页导航：顺序 = PAGE_ORDER（注册表单源），分组标题三组齐备
     const navLabels = Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-item')).map((x) =>
       (x.textContent ?? "").trim(),
     );
-    expect(navLabels).toEqual(["界面", "模型与供应商", "网络与连接", "安全与审批", "工具与集成", "工作区与智能体", "日志", "关于"]);
+    expect(navLabels).toEqual(["界面", "模型与供应商", "网络与连接", "安全与审批", "MCP", "技能", "写入后检查与校验", "工作区与智能体", "日志", "关于"]);
     expect(
       Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-group')).map((x) =>
         (x.textContent ?? "").trim(),
@@ -605,7 +605,7 @@ describe("设置全屏页：逐页脏标记与深链", () => {
 
   it("脏标记空值归一：空命令不算改动，填了命令才脏", async () => {
     await mountWithSession();
-    await openPage("工具与集成");
+    await openPage("写入后检查与校验");
 
     // 默认命令为空（draft 里的 post_write_check 与后端 serde default 等价）→ 不该染脏
     expect(document.querySelector(".settings-dirty-dot")).toBeFalsy();
@@ -635,8 +635,11 @@ describe("设置全屏页：逐页脏标记与深链", () => {
   it("即时生效项不打点：切界面语言不产生未保存状态", async () => {
     await mountWithSession();
     await openPage("界面");
-    // 界面页两个 Select：主题（第一个）与界面语言（第二个）——按 Form.Item 标签定位语言项
-    const select = controlByLabel("界面语言").querySelector(".ant-select") as HTMLElement;
+    // 界面页两个 Select：主题（第一个）与界面语言（第二个）——按 Form.Item 标签定位语言项；
+    // 标签含「（即时生效）」后缀（与关于·更新行同一形态）
+    const languageItem = controlByLabel("界面语言");
+    expect(languageItem.querySelector(".ant-form-item-label")?.textContent).toContain("界面语言（即时生效）");
+    const select = languageItem.querySelector(".ant-select") as HTMLElement;
     expect(select).toBeTruthy();
     fireEvent.mouseDown(select);
     await waitFor(() => expect(document.querySelector(".ant-select-dropdown")).toBeTruthy(), { timeout: 3000 });
@@ -708,13 +711,13 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
     fireEvent.click(approvalSwitch);
     await waitFor(() => expect(navDotCount()).toBe(0));
 
-    // ④ 工具与集成：MCP 条目（独立 mcp.json 的文本基线，不走 config）
+    // ④ MCP：条目（独立 mcp.json 的文本基线，不走 config）——拆页后脏点跟着 mcp 页走
     //   注意：空名条目会被序列化丢掉，所以要先填名字才真算改动
-    clickNavTab("工具与集成");
+    clickNavTab("MCP");
     fireEvent.click(buttonByText("添加服务器"));
     const mcpName = document.querySelector(".mcp-entry input") as HTMLInputElement;
     fireEvent.change(mcpName, { target: { value: "fs" } });
-    await waitFor(() => expect(navDot("tools")).toBe(true));
+    await waitFor(() => expect(navDot("mcp")).toBe(true));
     expect(navDotCount()).toBe(1);
     fireEvent.click(document.querySelector(".mcp-entry .ant-btn-dangerous") as HTMLElement);
     await waitFor(() => expect(navDotCount()).toBe(0));
@@ -835,10 +838,12 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
     // 兄弟而非嵌套：嵌套会让外层高亮框套住整行（搜索定位的范围与命中项不一致）
     expect(versionAnchor.contains(checkAnchor)).toBe(false);
     expect((checkAnchor.querySelector("button")?.textContent ?? "").replace(/\s/g, "").includes("检查更新")).toBe(true);
-    // 「更新」行只剩自动更新开关（按钮不再在该行），即时生效提示保留
+    // 「更新」行只剩自动更新开关（按钮不再在该行）
     const updatesAnchor = document.querySelector('[data-setting-id="ui.auto_update"]')!;
     expect(updatesAnchor.parentElement?.querySelector('[data-setting-id="app.check_updates"]')).toBeNull();
-    expect(document.querySelector('[data-testid="settings-page"] .settings-instant')).toBeTruthy();
+    // 「即时生效」改挂在标题的括号里：不再作为行尾标注（flex 行 + 标题的 margin-right:auto
+    // 会把它推到最右侧，实际没人会看到），行内也不再有 .settings-instant
+    expect(document.body.textContent ?? "").toContain("更新（即时生效）");
   });
 
   it("数据目录 / 日志目录 / 代码仓库 / 许可证四个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
@@ -880,7 +885,9 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
       return baseInvoke(cmd, args);
     });
     fireEvent.click(buttonByText("打开数据目录"));
-    await waitFor(() => expect(document.querySelector(".about-error")?.textContent ?? "").toContain("no file manager"));
+    // 判别性断言：错误落在**触发行**内（旧实现统一堆在 Form 末尾，那样这里会红）
+    const dataDirAnchor = document.querySelector('[data-setting-id="app.data_dir"]') as HTMLElement;
+    await waitFor(() => expect(dataDirAnchor.querySelector(".about-error")?.textContent ?? "").toContain("no file manager"));
     expect(document.querySelector('[data-testid="settings-page"]')).toBeTruthy();
     expect(activeNavTabText()).toBe("关于");
   });
@@ -931,7 +938,7 @@ describe("设置页：导航 ARIA 语义与非法页 key 收口", () => {
     ).toBe(true);
 
     const tabs = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]'));
-    expect(tabs.length).toBe(8);
+    expect(tabs.length).toBe(10);
     const panel = document.querySelector('[data-testid="settings-page"] .settings-pane-body') as HTMLElement;
     expect(panel.getAttribute("role")).toBe("tabpanel");
     expect(panel.id).toBe("settings-panel");
@@ -1085,9 +1092,9 @@ describe("设置页：可保存字段的脏点往返（PAGE_FIELDS 逐字段守�
     await waitFor(() => expect(navDotCount()).toBe(0));
   });
 
-  it("工具与集成：写入后检查开关与命令往返", async () => {
+  it("写入后检查与校验：写入后检查开关与命令往返", async () => {
     await mountWithSession();
-    await openPage("工具与集成");
+    await openPage("写入后检查与校验");
 
     // 开关：点开 → 亮；点回 → 灭
     const sw = () =>
@@ -1557,12 +1564,15 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     await mountWithSession();
     await openSettings();
 
-    // 例外分两类，均已在 [docs/settings-search-and-advanced] §1.6 登记：
+    // 例外分三类，均已在 [docs/settings-search-and-advanced] §1.6 登记：
     //  ① 注册表项**当前视图没有锚点**：`active_model_id` 的「当前」标记只在「编辑供应商」视图的模型列表里
     //    （列表视图无此节点）→ 搜索命中该项时退化为「切页 + 高亮页体容器」；
     //  ② **动态行级锚点**（`providers.<uuid>`）：供应商行不在注册表里（数量与 id 随配置变），
     //    故不进本清单，但「有行就必须有锚点」另行断言（见下方 + 外部跳转用例组）。
-    const EXCEPTIONS = ["active_model_id"];
+    //  ③ 注册表项**依赖数据才存在**：`app.mcp_status`（服务器状态表）在「一个服务器都没配置」时整段
+    //    不渲染（不显示零信息量的空表）→ 搜索命中它时退化为「切页 + 高亮页体容器」，与 ① 同类；
+    //    带配置时的锚点断言见 MCP 状态表用例组。
+    const EXCEPTIONS = ["active_model_id", "app.mcp_status"];
     const missing: string[] = [];
     for (const page of PAGE_ORDER) {
       fireEvent.click(navItem(page) as HTMLElement);
