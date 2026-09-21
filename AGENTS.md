@@ -20,7 +20,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - **纯 Rust 后端，零框架耦合**：`core/` 不依赖 tauri；只有 `lib.rs` 与 `host/` 允许 `use tauri::*`；IPC 命令只做校验 + 转调 core
 - **数据目录 `.codewave`**：路径约定随 2026-09-13 品牌改名定稿（原 `.wavestudio`，无自动迁移），勿再建议改名
 - **项目 = 名称 + 单一主目录**；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/oss-prep-batch](./docs/oss-prep-batch.md)：legacy 目录回退已移除）；`ProjectEntry.allowed_dirs`（serde default）记用户「始终允许」的项目外目录，会话创建/恢复时并入 `extra_roots`
-- **文件入口统一为「原地引用」**：附件按钮与拖入窗口拿到的都是**真实路径**，非图片文件只在输入框插一行 `@路径`（不复制副本、不占上下文）；图片因要上 wire 才读成 base64；网页内 `<input type=file>` 拿不到路径，故附件按钮走原生选择框（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）
+- **文件入口统一为「原地引用」**：附件按钮与拖入窗口拿到的都是**真实路径**，非图片文件记进草稿 `refs` 并以 **chip** 展示（输入框里不出现路径），发送前一刻才合成 `@路径` 追加正文末尾（不复制副本、不占上下文；[docs/composer-file-ref-chips](./docs/composer-file-ref-chips.md)）；图片因要上 wire 才读成 base64；网页内 `<input type=file>` 拿不到路径，故附件按钮走原生选择框（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）
 - **会话语义**：项目会话（必须选项目，快照固化主目录）或临时会话（免目录，工作区 = 全局数据目录，写入仍走 fence 审批）；命令 cwd = 项目数据目录下的 temps/（临时会话 = 全局数据目录）
 - **删除项目** = 级联删除其下会话 + 托管目录（确认弹框列明影响）；用户代码目录永不动
 - **界面风格**：自绘标题栏（[docs/custom-font-and-titlebar](./docs/custom-font-and-titlebar.md)：tauri-plugin-decoration v3，顶栏即标题栏；窗口 `visible:false` 起动，激活失败回退原生框）；主题跟随系统；**强调色 = 中性墨色**（`colorPrimary` 亮 `#1f1f1f`/暗 `#424242`，[docs/ask-ink-accent-and-composer-cover](./docs/ask-ink-accent-and-composer-cover.md)——勿再引入默认蓝或彩色 accent；色彩强度映射风险等级：无彩色=默认、橙=需注意、红=危险）；字体走 `--ws-font-sans/--ws-font-mono` 双槽 token（用户偏好由 `ui/src/utils/fonts.ts` 管理，勿再硬编码字体链）；组件样式一律 antd 组件库接管（`--ws-*` token 由 `ui/src/theme/bridge.tsx` 桥接），不手搓皮肤/自绘调色板
@@ -88,6 +88,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - `Arc<SessionRuntime>` 新建后改字段必须 `Arc::get_mut`（Arc 不支持 DerefMut）
 - 含 `${}` 的 TS 模板串不要用 python/heredoc 脚本打补丁（转义必错），用 Read+Edit 工具
 - antd Dropdown 菜单测试：按文本查 `.ant-dropdown-menu-item` 后 fireEvent.click
+- antd `TextArea` 的 `autoSize` 会在 DOM 里另放一个测量用 textarea：测试里用 `getByPlaceholderText` 定位真身，别用 `querySelector("textarea")`（拿到替身后 fireEvent.change 静默无效）
+- 草稿里有些内容**不在正文文本里**（文件引用 chip 存 `refs`、图片存 `images`）：凡「覆盖草稿」的链路（`ws:composer-fill`、队列编辑、历史召回）必须连带覆盖它们，只 `setText` 盖不住
 
 ## 可用专门代理
 

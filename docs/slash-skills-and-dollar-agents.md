@@ -20,10 +20,11 @@
 |---|---|---|---|
 | `/` 首 token（`/^\/(\S*)$/`，未含空白） | 技能清单（`list_skills`） | 回填 `/<name> ` | `/<name> …` 原样发送，`<available-skills>` 首行点名语义引导模型先经 `skill` 工具加载该技能再执行 |
 | `$` 尾片段（`/\$([^$\s]*)$/`） | 内置子代理角色（`list_agents`，剔除内部 title） | 回填 `$<role> ` | `$<role> …` 原样发送，核心提示 `$<role>` 点名规则引导主代理以该角色经 `subagent` 工具委派，其余内容作 task |
-| `@` 尾片段 | 文件/目录提及（不变） | 回填 `@<path>` | 原样发送（纯文本提示，不变） |
+| `@` 尾片段 | 文件/目录提及（不变） | 选**目录** → 回填 `@<path>/ `；选**文件** → 转成引用 chip（[composer-file-ref-chips](./composer-file-ref-chips.md)） | 目录提示原样发送；文件引用由 `mergeRefs` 合成 `@<path>` 追加正文末尾（与改造前逐字节一致） |
 
 - `/` 首 token 含空白（如已输入 `/repo-index `）→ 菜单收起，Enter 正常发送——修复了旧版「任何以 `/` 开头的文本 Enter 均被命令菜单吞掉、无法原样发送」的副作用。
 - 菜单互斥与键盘导航优先级：`/` 技能 > `$` 子代理 > `@` 提及；Enter 选中、Tab 仅子代理/提及、Escape 全收。
+- `@` 提及自 2026-09-21 起：只有第一级「📁 根目录」条目仍写文本（供继续拼路径），搜索命中（含目录）一律进引用 chip——搜索接口不返回 `is_dir`，目录命中进 chip 与改造前「插入 `@dir ` 也拼不了路径」等价（[composer-file-ref-chips](./composer-file-ref-chips.md)）。
 - 竞态加固：三组候选各带乱序守卫（`mentionSeq` 既有，新增 `skillSeq`/`agentSeq`）；离开触发符时经 `clearSkills`/`clearAgents`/`clearMentions` 自增 seq 作废在途查询，防止迟到的 IPC 结果把菜单顶回来。
 
 ## 3. 改动清单

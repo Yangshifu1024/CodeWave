@@ -114,6 +114,27 @@ fn inside_any(cand: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|r| cand.starts_with(r))
 }
 
+/// 去掉 Windows `canonicalize` 产生的 verbatim 前缀：`\\?\C:\x` → `C:\x`、`\\?\UNC\srv\share` → `\\srv\share`。
+///
+/// **只用于展示与「交给模型的引用写法」**（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：
+/// 边界比较、extra 根存储等内部形态一律保持 canonical（见 `safety/fence/check.rs` 的命名空间注释），
+/// 否则包含性判断会失真。去前缀后的路径在 Windows 上仍可被 `read`/`write` 接受——
+/// `resolve_read/resolve_write` 会先 `canonical_best_effort` 再比根，又回到同一命名空间。
+/// 幂等；仅剥离盘符（`X:`）与 `UNC` 两种形态，Unix 上把 `\\?\` 当普通文件名的相对路径不受影响。
+pub fn strip_verbatim_prefix(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        if !rest.is_empty() {
+            return format!(r"\\{rest}");
+        }
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return rest.to_string();
+        }
+    }
+    s.to_string()
+}
+
 /// fence 使用的包含性检查：候选路径是否落在任一根之内。
 pub(crate) fn inside_roots(cand: &Path, roots: &[PathBuf]) -> bool {
     inside_any(cand, roots)
@@ -221,6 +242,34 @@ mod tests {
             workspace: ws_canon,
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap_or_else(|_| dd.path().to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn verbatim_prefix_stripped_for_display() {
+        // Windows canonicalize 产物 → 去前缀（仅展示与引用写法；内部边界仍用 canonical）
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Users\x\a.xlsx"),
+            r"C:\Users\x\a.xlsx"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\srv\share\a.xlsx"),
+            r"\\srv\share\a.xlsx"
+        );
+        // 幂等：已剥过的路径再过一次不变
+        assert_eq!(
+            strip_verbatim_prefix(&strip_verbatim_prefix(r"\\?\C:\x")),
+            r"C:\x"
+        );
+        // 不误伤：POSIX 绝对路径、UNC 直接形式、以及 Unix 上把 `\\?\` 当普通名字的相对路径
+        for s in [
+            "/tmp/ws/a.xlsx",
+            r"\\srv\share",
+            r"\\?\weird",
+            "report.xlsx",
+            "",
+        ] {
+            assert_eq!(strip_verbatim_prefix(s), s, "{s}");
         }
     }
 

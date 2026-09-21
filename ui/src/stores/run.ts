@@ -73,6 +73,8 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   /** Composer 草稿读写（平行分桶；缺省写当前活跃 Tab，异步回填路径传显式 sessionId 防切 tab 竞态；与 useState 同形支持 updater） */
   setDraftText(v: string | ((prev: string) => string), sessionId?: string): void;
   setDraftImages(v: PendingImage[] | ((prev: PendingImage[]) => PendingImage[]), sessionId?: string): void;
+  /** 文件引用草稿（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：与文本/图片同桶、同隔离 */
+  setDraftRefs(v: string[] | ((prev: string[]) => string[]), sessionId?: string): void;
   /** 发送接受后清空对应 Tab 草稿（文本 + 附件一并）；缺省为当前活跃 Tab */
   clearDraft(sessionId?: string): void;
   onToolResult(sessionId: string, p: ToolResultEvent, ok: boolean): void;
@@ -302,7 +304,7 @@ export const useRun = create<RunStore>()(
     setDraftText(v, sessionId) {
       set((s) => {
         const key = sessionId ?? useSessions.getState().activeKey ?? "";
-        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [] });
+        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [], refs: [] });
         d.text = typeof v === "function" ? v(d.text) : v;
       });
     },
@@ -310,8 +312,18 @@ export const useRun = create<RunStore>()(
     setDraftImages(v, sessionId) {
       set((s) => {
         const key = sessionId ?? useSessions.getState().activeKey ?? "";
-        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [] });
+        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [], refs: [] });
         d.images = (typeof v === "function" ? v(d.images as PendingImage[]) : v) as PendingImage[];
+      });
+    },
+
+    setDraftRefs(v, sessionId) {
+      set((s) => {
+        const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [], refs: [] });
+        // 旧快照回填的桶可能没有 refs（ui-state schema 向前兼容）
+        const prev = d.refs ?? [];
+        d.refs = typeof v === "function" ? v(prev) : v;
       });
     },
 
@@ -322,6 +334,7 @@ export const useRun = create<RunStore>()(
         if (!d) return;
         d.text = "";
         d.images = [];
+        d.refs = [];
       });
     },
 
@@ -556,7 +569,7 @@ export function useActiveRun(): TabRunState {
 
 /** 活跃 Tab 的 Composer 草稿（无桶时回退共享空草稿）。平行分桶：击键不换 tabs[key] 身份，
  *  订阅者只有 Composer 自身，不把重渲染广播给 ChatMessages 等整桶订阅者。 */
-const EMPTY_DRAFT: ComposerDraft = { text: "", images: [] };
+const EMPTY_DRAFT: ComposerDraft = { text: "", images: [], refs: [] };
 export function useActiveDraft(): ComposerDraft {
   const activeKey = useSessions((s) => s.activeKey);
   return useRun((s) => s.drafts[activeKey ?? ""] ?? EMPTY_DRAFT);

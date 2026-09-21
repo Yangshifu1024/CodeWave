@@ -3,7 +3,8 @@ import { App, BorderBeam, Button, Dropdown, Image, Input, Popover } from "antd";
 import type { MenuProps } from "antd";
 import {
   ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined,
-  DownOutlined, ExclamationCircleOutlined, FileAddOutlined, FileTextOutlined,
+  DownOutlined, ExclamationCircleOutlined, FileAddOutlined, FileExcelOutlined,
+  FileOutlined, FilePdfOutlined, FileTextOutlined, FileWordOutlined,
   PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
   SettingOutlined, StopOutlined,
 } from "@ant-design/icons";
@@ -14,6 +15,7 @@ import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import type { ApprovalMode, EffortLevel } from "../../ipc/types";
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
+import { baseName } from "../../utils/path";
 import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
 import { ipc } from "../../ipc/client";
 import { listenFileDrop } from "../../ipc/dragdrop";
@@ -26,6 +28,7 @@ import { useComposerAttachments } from "./useComposerAttachments";
 import { useComposerHistory } from "./useComposerHistory";
 import { useComposerMentions } from "./useComposerMentions";
 import { useComposerEvents } from "./useComposerEvents";
+import { addRefs, mergeRefs, recoverRefs } from "./composerRefs";
 
 const { TextArea } = Input;
 
@@ -59,12 +62,15 @@ export default function Composer() {
   // Composer 本体与队列面板暂不渲染、回答后原样恢复；草稿存 run store 每 Tab 桶，子树卸载不丢
   const askActive = !!active.ask;
 
-  // 草稿按 Tab 隔离：文本与待发附件存 run store 平行分桶（drafts[key]，见 ComposerDraft 注释），切会话各自保留、
-  // 发送成功 clearDraft 清空；setText/setImages 与 useState 同形（支持 updater），直接注入下方子 hooks
+  // 草稿按 Tab 隔离：文本、引用与待发附件存 run store 平行分桶（drafts[key]，见 ComposerDraft 注释），切会话各自保留、
+  // 发送成功 clearDraft 清空；setText/setImages/setRefs 与 useState 同形（支持 updater），直接注入下方子 hooks
   const draft = useActiveDraft();
   const text = draft.text;
+  // refs 兜底：旧 ui-state 快照（后加字段）回填的桶可能缺该字段
+  const refs = draft.refs ?? [];
   const setText = useRun.getState().setDraftText;
-  const setDraftImages = useRun.getState().setDraftImages;
+  const setImages = useRun.getState().setDraftImages;
+  const setRefs = useRun.getState().setDraftRefs;
   // 流光显隐（[docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)）：输入框聚焦态——仅输入框聚焦或任务进行中时出现
   const [composerFocused, setComposerFocused] = useState(false);
   // 隐藏走 composer-beam-idle（app.css 中 display:none），动画停摆、零绘制
@@ -104,21 +110,15 @@ export default function Composer() {
     t,
     message,
     images: draft.images,
-    setImages: setDraftImages,
+    setImages,
     // 显式锁定当前 Tab：判定与放行都是异步的，期间切 Tab 也不能把引用写进别的会话
     sessionId: tab?.key ?? null,
-    appendRefs: (refs) => {
-      // 引用就是文本（见 useComposerAttachments 文件头），直接追加到草稿末尾
-      useRun
-        .getState()
-        .setDraftText(
-          (cur) => (cur === "" || /\s$/.test(cur) ? cur : `${cur} `) + refs.map((r) => `@${r}`).join(" ") + " ",
-          tab?.key,
-        );
-    },
+    // [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：引用记进草稿 refs（chip 展示），
+    // 不再往正文里押 `@路径`（发送前一刻由 mergeRefs 合成）
+    onRefs: (incoming) => setRefs((cur) => addRefs(cur ?? [], incoming), tab?.key),
     askExternalDir,
   });
-  const { images, setImages, recalledImages, addPaths, onPaste } = attachments;
+  const { images, recalledImages, addPaths, onPaste } = attachments;
 
   /** 系统拖入的文件（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
    *  网页层的 ondrop 在窗口开启系统拖放后不再触发，只能走 Tauri 事件通道。 */
@@ -153,14 +153,26 @@ export default function Composer() {
       message.warning(String(e).replace(/^Error[:\s]*/i, ""));
     }
   }
-  useComposerEvents({ taRef, setText, setImages, recalledImages });
+
+  /** 移除一项文件引用：引用不在正文里，只从草稿 refs 桶里剔除（不碰正文文字） */
+  function removeRef(ref: string) {
+    setRefs((cur) => (cur ?? []).filter((r) => r !== ref), tab?.key);
+  }
+
+  useComposerEvents({ taRef, setText, setImages, setRefs, recalledImages });
   const history = useComposerHistory({
     tabKey: tab?.key,
     setText,
     setImages,
+    setRefs,
     recalledImages,
   });
-  const mentions = useComposerMentions({ setText, setActiveIndex });
+  const mentions = useComposerMentions({
+    setText,
+    setActiveIndex,
+    // 提及选中文件 → 进引用 chip（引用不再写进正文，[docs/composer-file-ref-chips]）
+    addFileRef: (path) => setRefs((cur) => addRefs(cur ?? [], [path]), tab?.key),
+  });
   const { histIdx, setHistIdx, draftRef, recallHistory, applyRecall, exitRecall } = history;
   const {
     mentionResults, skillResults, agentResults,
@@ -181,13 +193,17 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabKey]);
 
-  // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
+  // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本、引用与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
+  // 队列条目文本是发送时合成过的（含末尾 `@路径`），回填前先经 recoverRefs 抽回引用 chip
+  // （[docs/composer-file-ref-chips]；带回往门禁，手打形态不解析）
   // 回填显式锁定点击所在 Tab：effect 提交前切 Tab 也不会把队列内容写进新会话、或因消费落空而二次回填
   const draftFromQueue = active.draftFromQueue;
   useEffect(() => {
     if (draftFromQueue == null) return;
     const targetKey = tab?.key;
-    useRun.getState().setDraftText(draftFromQueue.text, targetKey);
+    const parsed = recoverRefs(draftFromQueue.text);
+    useRun.getState().setDraftText(parsed.text, targetKey);
+    useRun.getState().setDraftRefs(parsed.refs, targetKey);
     if (draftFromQueue.images?.length) {
       useRun.getState().setDraftImages(
         recalledImages(draftFromQueue.images.map((im) => ({ mediaType: im.mime, data: im.data }))),
@@ -303,7 +319,7 @@ export default function Composer() {
         const prev = Math.max(0, histIdx - 1); // 停在最旧而不是回绕
         applyRecall(hist[prev], prev);
       } else {
-        draftRef.current = { text, images }; // 进入浏览态：快照当前草稿
+        draftRef.current = { text, images, refs }; // 进入浏览态：快照当前草稿（含引用，退出时一并还原）
         applyRecall(hist[hist.length - 1], hist.length - 1);
       }
       return;
@@ -358,7 +374,9 @@ export default function Composer() {
   // ---------- 发送 ----------
 
   async function send() {
-    const v = text.trim();
+    // 引用不在正文里（[docs/composer-file-ref-chips]）：发送前一刻合成 `@路径` 追加到末尾，
+    // 送给后端与模型的内容与改造前完全一致（chip 只是展示层）
+    const v = mergeRefs(text, refs);
     if (!v) return;
     if (!effectiveModel) {
       useRun.getState().pushItem(useSessions.getState().activeKey, { kind: "error", text: t("app.needModel") });
@@ -385,8 +403,9 @@ export default function Composer() {
   // 分档（相对阈值）与阈值段渲染统一在下方 contextLabel；命中率为独立段（缓存是否生效）。
   const thresholdPct = Math.round(compactThreshold * 100);
 
-  // 发送按钮三态：空闲有输入 = 发送；运行中无输入 = 停止；运行中有输入 = 提交（入队）
-  const hasDraft = !!text.trim();
+  // 发送按钮三态：空闲有内容 = 发送；运行中无内容 = 停止；运行中有内容 = 提交（入队）。
+  // 「有内容」含仅挂引用 chip（不写正文）的情形
+  const hasDraft = !!text.trim() || refs.length > 0;
   const stopActive = active.running && !hasDraft;
 
   // 菜单宽度上限 = 输入卡片实测宽度（技能 description 过长时不再撑破视口，与聊天框宽度一致）；
@@ -655,7 +674,7 @@ export default function Composer() {
           className={beamActive ? undefined : "composer-beam-idle"}
         >
           <div className="composer-card" ref={cardRef}>
-          {images.length > 0 && (
+          {(images.length > 0 || refs.length > 0) && (
             <div className="composer-attachments">
               {/* 缩略图点击打开大图预览（多图可切换），与会话内已发送图片同一交互；
                   .x 删除按钮在预览触发层之外，点击不会误开预览 */}
@@ -675,6 +694,21 @@ export default function Composer() {
                   </span>
                 ))}
               </Image.PreviewGroup>
+              {/* 文件引用 chip（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)）：
+                  与图片缩略图同处一个容器、同一套 .attach-chip 视觉；只显示文件名，悬停（title）看完整引用路径。
+                  引用本体住在草稿 refs 里（不在正文），故删除 chip 只动 refs，不碰正文 */}
+              {refs.map((ref) => (
+                <span key={ref} className="attach-chip ref-chip" title={ref} data-ref={ref}>
+                  {refIcon(ref)}
+                  <span className="attach-name">{baseName(ref)}</span>
+                  <CloseOutlined
+                    className="x"
+                    role="button"
+                    aria-label={t("composer.removeRef")}
+                    onClick={() => removeRef(ref)}
+                  />
+                </span>
+              ))}
             </div>
           )}
 
@@ -823,4 +857,19 @@ export default function Composer() {
       )}
     </div>
   );
+}
+
+/** 引用 chip 的文件类型图标：按扩展名分派（Office 三兄弟与 PDF 用专用图标，常见文本/源码用文本图标，
+ *  其余一律通用文件图标）。只影响观感，不参与任何判定。 */
+function refIcon(ref: string) {
+  const ext = ref.split(".").pop()?.toLowerCase() ?? "";
+  if (["xlsx", "xlsm", "xls", "csv"].includes(ext)) return <FileExcelOutlined />;
+  if (["docx", "doc"].includes(ext)) return <FileWordOutlined />;
+  if (ext === "pdf") return <FilePdfOutlined />;
+  if ([
+    "md", "txt", "json", "jsonc", "log", "yml", "yaml", "toml", "ini",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "java", "kt", "rb", "php",
+    "c", "h", "cpp", "hpp", "cs", "swift", "sh", "ps1", "bat", "sql", "html", "css", "scss", "vue",
+  ].includes(ext)) return <FileTextOutlined />;
+  return <FileOutlined />;
 }

@@ -114,6 +114,10 @@ const TWO = (): (UserItem | Record<string, unknown>)[] => [
   { kind: "user", text: "hello2" },
 ];
 
+/** 当前渲染的引用 chip 悬停标题（= 完整引用路径），按 DOM 顺序 */
+const refChipTitles = () =>
+  Array.from(document.querySelectorAll(".ref-chip")).map((el) => el.getAttribute("title"));
+
 beforeAll(() => {
   Element.prototype.scrollTo = (Element.prototype as any).scrollTo ?? (() => {});
 });
@@ -216,6 +220,36 @@ describe("Composer 历史消息召回（↑↓）", () => {
     const img = chip?.querySelector("img");
     expect(img?.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
     expect(document.body.textContent ?? "").toContain("历史图片 1");
+  });
+
+  it("H14 召回带引用的历史消息：@路径 抽成引用 chip，退出浏览态还原原草稿的 chip", async () => {
+    // [docs/composer-file-ref-chips]：历史消息正文里的引用回填前先抽成 chip（往返无损）
+    seedEnv([
+      { kind: "user", text: "看一下 @report.xlsx" },
+      { kind: "user", text: "装 @types/node 那个" },
+    ]);
+    // 进入浏览态前的草稿：正文为空（否则 ↑ 不进浏览）+ 一个引用 chip
+    useRun.setState((s) => {
+      s.drafts = { s1: { text: "", images: [], refs: ["keep.xlsx"] } };
+    });
+    mountComposer();
+    const ta = getTextarea();
+    await waitFor(() => expect(refChipTitles()).toEqual(["keep.xlsx"]));
+
+    fireKey(ta, "ArrowUp"); // 最新一条：@types/node 不是文件引用，原样留在正文
+    expect(ta.value).toBe("装 @types/node 那个");
+    expect(refChipTitles()).toEqual([]);
+
+    fireKey(ta, "ArrowUp"); // 更旧一条：@report.xlsx 抽成 chip，正文只剩人写的部分
+    expect(ta.value).toBe("看一下");
+    expect(refChipTitles()).toEqual(["report.xlsx"]);
+
+    fireKey(ta, "ArrowDown"); // 回到最新一条（仍带引用解析）
+    expect(ta.value).toBe("装 @types/node 那个");
+
+    fireKey(ta, "ArrowDown"); // 越过最新 → 退出浏览态，连同 chip 一起还原进入前草稿
+    expect(ta.value).toBe("");
+    expect(refChipTitles()).toEqual(["keep.xlsx"]);
   });
 
   it("H10 IME 组合中 ArrowUp 不触发召回", () => {

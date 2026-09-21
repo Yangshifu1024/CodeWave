@@ -110,6 +110,9 @@ export interface PendingImage {
 export interface ComposerDraft {
   text: string;
   images: PendingImage[];
+  /** 文件引用（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：输入框里以 chip 展示。
+   *  引用不再是正文文本——发送前一刻由 mergeRefs 合成 `@<ref>` 追加到正文末尾（模型所见与改造前一致）。 */
+  refs: string[];
 }
 
 /** 单个 Tab 的全部运行态（run store 的分桶单元，blank() 给出初值）。

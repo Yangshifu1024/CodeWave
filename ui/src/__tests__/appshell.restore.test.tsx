@@ -387,7 +387,7 @@ describe("关 Tab 二次确认（会话保存与恢复优化 · 批1）", () => 
     await waitFor(() => expect(useSessions.getState().tabs.length).toBe(2));
     act(() => {
       useRun.setState((s) => {
-        s.drafts["s1"] = { text: "珍贵草稿", images: [] };
+        s.drafts["s1"] = { text: "珍贵草稿", images: [], refs: [] };
       });
     });
 
@@ -409,7 +409,7 @@ describe("关 Tab 二次确认（会话保存与恢复优化 · 批1）", () => 
     await waitFor(() => expect(useSessions.getState().tabs.length).toBe(2));
     act(() => {
       useRun.setState((s) => {
-        s.drafts["s1"] = { text: "留着下次发", images: [] };
+        s.drafts["s1"] = { text: "留着下次发", images: [], refs: [] };
       });
     });
 
@@ -445,7 +445,7 @@ describe("关 Tab 二次确认（会话保存与恢复优化 · 批1）", () => 
     await waitFor(() => expect(useSessions.getState().tabs.length).toBe(1));
     act(() => {
       useRun.setState((s) => {
-        s.drafts["s1"] = { text: "未发送", images: [] };
+        s.drafts["s1"] = { text: "未发送", images: [], refs: [] };
       });
     });
 
