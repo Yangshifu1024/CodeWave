@@ -28,6 +28,7 @@ import { useComposerAttachments } from "./useComposerAttachments";
 import { useComposerHistory } from "./useComposerHistory";
 import { useComposerMentions } from "./useComposerMentions";
 import { useComposerEvents } from "./useComposerEvents";
+import { clampCaret, detectTrigger, type TriggerHit } from "./composerTriggers";
 import { addRefs, mergeRefs, recoverRefs } from "./composerRefs";
 
 const { TextArea } = Input;
@@ -75,7 +76,6 @@ export default function Composer() {
   const [composerFocused, setComposerFocused] = useState(false);
   // 隐藏走 composer-beam-idle（app.css 中 display:none），动画停摆、零绘制
   const beamActive = active.running || composerFocused;
-  // / 合并菜单的开合由 text 派生（/^\/(\S*)$/ 首 token 输入中），无需独立 state
   // 菜单高亮下标（三个菜单互斥，共用一个下标）
   const [activeIndex, setActiveIndex] = useState(0);
   // IME 组合追踪（WebKit 差异）：WebKit 以 isComposing=false（keyCode 229）触发组合确认的 Enter keydown，
@@ -85,6 +85,23 @@ export default function Composer() {
   // / @ $ 菜单的宽度上限来源：输入卡片实测宽度（长 description 不再撑出视口，见下方 menuStyle）
   const cardRef = useRef<HTMLDivElement>(null);
   const [menuWidth, setMenuWidth] = useState(0);
+  // 光标位置（触发判定与回填的唯一锚点，[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)）：
+  // onChange 拿事件里的 selectionStart；点击/方向键移光标不过 onChange，由 onSelect/onClick/onKeyUp 补同步。
+  // ref 供事件回调读即时值，state 供**渲染期复验**（菜单开合要判「trigger 在当前位置是否仍成立」）
+  const caretRef = useRef(0);
+  const [caret, setCaret] = useState(0);
+  const moveCaret = (n: number) => {
+    caretRef.current = n;
+    setCaret(n);
+  };
+  // 光标处的触发片段（null = 无）：菜单开合与回填范围都由它决定，不再从整段 text 派生
+  const [trigger, setTrigger] = useState<TriggerHit | null>(null);
+  /** 外部链路（fill / 历史召回 / 队列编辑 / 发送清空）直接改写草稿文本，不经过 onInputChange：
+   *  这里作废触发片段并把光标收敛到新文末，否则菜单会挂在旧位置、`+` 菜单会插到过期偏移 */
+  const onTextReplaced = (len: number) => {
+    setTrigger(null);
+    moveCaret(len);
+  };
 
   // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
   //
@@ -159,19 +176,21 @@ export default function Composer() {
     setRefs((cur) => (cur ?? []).filter((r) => r !== ref), tab?.key);
   }
 
-  useComposerEvents({ taRef, setText, setImages, setRefs, recalledImages });
+  useComposerEvents({ taRef, setText, setImages, setRefs, recalledImages, onTextReplaced });
   const history = useComposerHistory({
     tabKey: tab?.key,
     setText,
     setImages,
     setRefs,
     recalledImages,
+    onTextReplaced,
   });
   const mentions = useComposerMentions({
-    setText,
     setActiveIndex,
     // 提及选中文件 → 进引用 chip（引用不再写进正文，[docs/composer-file-ref-chips]）
     addFileRef: (path) => setRefs((cur) => addRefs(cur ?? [], [path]), tab?.key),
+    // 回填只替换「光标处那段触发片段」（实现在下方 replaceFragment）
+    replaceFragment,
   });
   const { histIdx, setHistIdx, draftRef, recallHistory, applyRecall, exitRecall } = history;
   const {
@@ -188,6 +207,8 @@ export default function Composer() {
     clearSkills();
     clearAgents();
     setActiveIndex(0);
+    setTrigger(null); // 触发片段属于上一会话的光标位置，一并作废
+    moveCaret(0);
     // clear* 由 useComposerMentions 每次渲染新建（普通函数声明）：纳入依赖会让本 effect 每渲染重跑，
     // 刚拉回的候选列表立刻被清空；这里只按切 Tab 驱动是有意为之
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -204,6 +225,7 @@ export default function Composer() {
     const parsed = recoverRefs(draftFromQueue.text);
     useRun.getState().setDraftText(parsed.text, targetKey);
     useRun.getState().setDraftRefs(parsed.refs, targetKey);
+    onTextReplaced(parsed.text.length);
     if (draftFromQueue.images?.length) {
       useRun.getState().setDraftImages(
         recalledImages(draftFromQueue.images.map((im) => ({ mediaType: im.mime, data: im.data }))),
@@ -224,26 +246,70 @@ export default function Composer() {
   // （命令入口已自 / 菜单移除：git/diff/tasks/stats 走顶栏四入口、compact 走工具条按钮，
   //   [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）
 
-  /** 从 + 菜单插入触发字符（@ / / / $）并聚焦；匹配弹层经 onInputChange 打开 */
+  /** 从 + 菜单插入触发字符（@ / / / $）：插到**光标处**（原来追加到末尾），并把光标推到插入内容之后；
+   *  菜单开合交给 onInputChange 按光标前片段重新判定（[docs/composer-trigger-caret]）。 */
   function insertTrigger(ch: string) {
-    const next = text === "" || text.endsWith(" ") || text.endsWith("\n") ? text + ch : text + " " + ch;
+    const caretNow = clampCaret(text, caretRef.current);
+    const before = text.slice(0, caretNow);
+    // 与光标前的字隔开（行首/空白后则不加空格），触发片段因此从光标前的边界开始
+    const insert = before === "" || /\s$/.test(before) ? ch : ` ${ch}`;
+    const next = before + insert + text.slice(caretNow);
+    const nextCaret = caretNow + insert.length;
     setText(next);
-    void onInputChange(next);
-    requestAnimationFrame(() => taRef.current?.focus());
+    moveCaret(nextCaret);
+    void onInputChange(next, nextCaret);
+    requestAnimationFrame(() => {
+      const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
+      el?.focus?.();
+      el?.setSelectionRange?.(nextCaret, nextCaret);
+    });
+  }
+
+  /** 把 DOM 里的真实光标同步进状态（点击 / 方向键 / 选中改变光标都不会经过 onChange） */
+  function syncCaret() {
+    const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
+    const sel = el?.selectionStart;
+    if (typeof sel === "number") moveCaret(clampCaret(String(el?.value ?? text), sel));
+  }
+
+  /** 回填：把「光标处那段触发片段」替换成 insert，光标落到插入内容之后；
+   *  光标之后的正文一字不改；无触发片段时插到光标处。
+   *  片段**现算**（不信任上一次 onChange 留下的 trigger 快照）：方向键能把光标移到片段之前，
+   *  照搬旧 start 会拼出重复正文（审查 🔴）。 */
+  function replaceFragment(insert: string) {
+    const caretNow = clampCaret(text, caretRef.current);
+    const live = detectTrigger(text, caretNow);
+    let start = Math.min(live ? live.start : caretNow, caretNow);
+    // 空插入 = 纯删除片段（提及选文件转 chip）：顺手吃掉片段前那整段空白，免得正文留个尾空格
+    if (insert === "") while (start > 0 && /[ \t]/.test(text[start - 1])) start -= 1;
+    const next = text.slice(0, start) + insert + text.slice(caretNow);
+    const nextCaret = start + insert.length;
+    setText(next);
+    setTrigger(null);
+    moveCaret(nextCaret);
+    requestAnimationFrame(() => {
+      const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
+      el?.focus?.();
+      el?.setSelectionRange?.(nextCaret, nextCaret);
+    });
   }
 
   // 菜单键盘导航：↑↓ 移动高亮，Enter/Tab 选中；取模防越界（列表变短也安全）
   // 三个互斥菜单共用同一高亮下标：/ 技能 -> $ 子代理 -> @ 提及
-  // （触发符语义 [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）
-  const agentOpen = agentResults.length > 0;
-  // / 技能菜单：首 token（/ 起始、未含空白）输入中即激活；条目 = refreshSkills(query) 过滤结果
-  const slashQuery = /^\/(\S*)$/.exec(text)?.[1] ?? null;
-  const slashOpen = slashQuery !== null && skillResults.length > 0;
+  // 开合由「光标处的触发片段 + 候选结果」共同决定（[docs/composer-trigger-caret]：不再从整段 text 派生）。
+  // trigger 只是「上一次输入判定的快照」：光标可能已被方向键/点击移走（或文本被外部链路改写），
+  // 渲染期用当前光标复验——不成立就当没有触发片段，菜单随之收起，不会按过期片段回填
+  const hit = trigger && trigger.end === caret ? trigger : null;
+  const slashOpen = hit?.kind === "slash" && skillResults.length > 0;
+  const agentOpen = hit?.kind === "dollar" && agentResults.length > 0;
+  const mentionOpen = hit?.kind === "at" && mentionResults.length > 0;
   const menuCount = slashOpen
     ? skillResults.length
     : agentOpen
       ? agentResults.length
-      : mentionResults.length;
+      : mentionOpen
+        ? mentionResults.length
+        : 0;
   const selIdx = menuCount ? activeIndex % menuCount : 0;
 
   function moveMenu(delta: number) {
@@ -275,9 +341,10 @@ export default function Composer() {
       clearMentions();
       clearSkills();
       clearAgents();
+      setTrigger(null);
       return;
     }
-    if (slashOpen || agentOpen || mentionResults.length > 0) {
+    if (slashOpen || agentOpen || mentionOpen) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault(); // 方向键在菜单打开时用于导航，不移动输入框内光标
         moveMenu(e.key === "ArrowDown" ? 1 : -1);
@@ -297,7 +364,7 @@ export default function Composer() {
         }
         return;
       }
-      if (e.key === "Tab" && (agentOpen || mentionResults.length > 0)) {
+      if (e.key === "Tab" && (agentOpen || mentionOpen)) {
         e.preventDefault();
         if (agentOpen) {
           const a = agentResults[selIdx];
@@ -341,30 +408,32 @@ export default function Composer() {
     }
   }
 
-  async function onInputChange(v: string) {
+  async function onInputChange(v: string, caretFromEvent?: number) {
     if (histIdx !== null) {
       setHistIdx(null); // 编辑即退出浏览态：保留当前文本作为编辑基底
       draftRef.current = null;
     }
     setText(v);
-    // / 合并菜单（命令 + 技能，[docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）：
-    // 首 token（/ 起始、未含空白）输入中即激活；空格后（如 "/repo-index 分析 X"）菜单收起，Enter 正常发送
-    const slash = /^\/(\S*)$/.exec(v);
-    if (slash) {
+    // 触发判定：只看**光标前的片段**（[docs/composer-trigger-caret]）。
+    // `/`、`$` 限消息开头（模型侧「消息以 /<name> / $<role> 开头」才是点名）；`@` 行首或空白后即可。
+    const caretNext =
+      caretFromEvent != null ? clampCaret(v, caretFromEvent) : clampCaret(v, v.length);
+    moveCaret(caretNext);
+    const hit = detectTrigger(v, caretNext);
+    setTrigger(hit);
+    if (hit?.kind === "slash") {
       clearMentions();
       clearAgents();
-      await refreshSkills(slash[1]);
+      await refreshSkills(hit.query);
       return;
     }
-    clearSkills(); // 离开 / 首 token：作废在途技能查询并收起菜单
-    const at = v.match(/@([^@\s]*)$/);
-    const dollar = v.match(/\$([^$\s]*)$/); // $ 触发子代理菜单（原技能触发符，已让位给 /）
-    if (at) {
+    clearSkills(); // 离开 / 片段：作废在途技能查询并收起菜单
+    if (hit?.kind === "at") {
       clearAgents();
-      await refreshMention(at[1]);
-    } else if (dollar) {
+      await refreshMention(hit.query);
+    } else if (hit?.kind === "dollar") {
       clearMentions();
-      await refreshAgents(dollar[1]);
+      await refreshAgents(hit.query);
     } else {
       clearMentions();
       clearAgents();
@@ -394,6 +463,7 @@ export default function Composer() {
     const accepted = await useRun.getState().send(v, images.map(({ mime, data }) => ({ mime, data })));
     if (accepted) {
       useRun.getState().clearDraft(targetKey); // 文本 + 附件一并清空（发送方 Tab 桶）
+      onTextReplaced(0); // 文本清空且不经 onChange：作废触发片段并把光标收回文首
       setHistIdx(null); // 发送后序列自然追加新消息；复位指针
       draftRef.current = null;
     }
@@ -604,7 +674,7 @@ export default function Composer() {
       </Popover>
 
       <Popover
-        open={mentionResults.length > 0}
+        open={mentionOpen}
         placement="topLeft"
         arrow={false}
         content={
@@ -631,7 +701,7 @@ export default function Composer() {
       {/* $ 子代理菜单（list_agents IPC）：回填 $<role> 前缀，发送后由核心提示 $<role> 点名规则
           引导主代理经 subagent 工具委派；进度在子代理卡/抽屉展示 */}
       <Popover
-        open={agentResults.length > 0}
+        open={agentOpen}
         placement="topLeft"
         arrow={false}
         content={
@@ -721,8 +791,12 @@ export default function Composer() {
             spellCheck={false}
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
-            onChange={(e) => void onInputChange(e.target.value)}
+            onChange={(e) => void onInputChange(e.target.value, e.target.selectionStart ?? undefined)}
             onKeyDown={onKeydown}
+            // 光标是触发判定与回填的锚点：点击/方向键移动它不会经过 onChange，这里补同步
+            onSelect={syncCaret}
+            onClick={syncCaret}
+            onKeyUp={syncCaret}
             onCompositionStart={() => {
               composingRef.current = true;
             }}

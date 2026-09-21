@@ -17,8 +17,11 @@ export function useComposerHistory(opts: {
   setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
   setRefs: React.Dispatch<React.SetStateAction<string[]>>;
   recalledImages: (imgs: { mediaType: string; data: string }[]) => PendingImage[];
+  /** 文本被本 hook 直接覆盖后的通知（新长度）：Composer 据此作废触发片段并收敛光标
+   *  （[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)：这类改写不过 onChange） */
+  onTextReplaced?: (len: number) => void;
 }) {
-  const { tabKey, setText, setImages, setRefs, recalledImages } = opts;
+  const { tabKey, setText, setImages, setRefs, recalledImages, onTextReplaced } = opts;
   // ↑↓ 历史召回浏览态：histIdx=null 表示未在浏览；否则为升序召回历史的下标（0 = 最旧、length-1 = 最新；↑ 翻向更旧、↓ 翻向更新）
   const [histIdx, setHistIdx] = useState<number | null>(null);
   // 进入浏览态时的草稿快照（退出时还原；含引用，否则退出浏览态会丢 chip）
@@ -50,6 +53,7 @@ export function useComposerHistory(opts: {
     setRefs(parsed.refs);
     setImages(recalledImages(entry.images));
     setHistIdx(idx);
+    onTextReplaced?.(parsed.text.length);
   }
 
   // 退出浏览态：还原进入前的草稿快照（无快照则只复位指针）
@@ -61,6 +65,7 @@ export function useComposerHistory(opts: {
       setText(draft.text);
       setImages(draft.images);
       setRefs(draft.refs);
+      onTextReplaced?.(draft.text.length);
     }
   }
 
