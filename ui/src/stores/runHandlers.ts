@@ -7,6 +7,7 @@ import type { WritableDraft } from "immer";
 import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
+import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
 import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
 import type { RunStore } from "./run";
@@ -177,8 +178,9 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         s.tabs[key].todos = p.todos ?? [];
       });
     },
-    "scheduled:fired": () => useUi.getState().toast(i18n.t("notice.taskFired")),
-    "scheduled:done": (p) => useUi.getState().toast(i18n.t("notice.taskDoneName", { name: p?.name ?? "" })),
+    // 计划任务运行态：静默驱动 tasks store（用户已拍板去掉这两个 toast；面板/左栏自行渲染运行中与状态）
+    "scheduled:fired": (p) => useTasks.getState().applyFired(p),
+    "scheduled:done": (p) => useTasks.getState().applyDone(p),
   };
 }
 

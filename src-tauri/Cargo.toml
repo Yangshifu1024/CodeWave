@@ -72,7 +72,8 @@ chrono = { version = "0.4", features = ["serde"] }
 # Enabled in P1 (docs/03: introduced in P0 without being called); keyring 3.x with per-platform features
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dom_smoothie = "0.18.0"
-tokio-cron-scheduler = "0.15.1"
+# tokio-cron-scheduler 已移除（[docs/tasks-module-polish]）：调度器自始就走自写的 tick + cron crate
+# （core/scheduler.rs 的 ScheduleKind），该依赖从未被引用，白担一份构建与供应链成本。
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
 cron = "0.17.0"
 

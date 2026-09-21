@@ -501,10 +501,10 @@ describe("设置项注册表：进阶项派生（批③）", () => {
 
 /**
  * 本目录里**不是设置页页体**的独立面板（各有自己的键段，与设置无关）。
- * 豁免粒度是「文件 → 段」而不是「整文件」：在 TaskCenterPanel.tsx 里写 t("sessions.empty") 同样会被抓住。
+ * 豁免粒度是「文件 → 段」而不是「整文件」：在 TasksPage.tsx 里写 t("sessions.empty") 同样会被抓住。
  */
 const NON_SETTINGS_PANEL_SEGMENTS: Record<string, string[]> = {
-  "TaskCenterPanel.tsx": ["tasks."],
+  "TasksPage.tsx": ["tasks."],
   "TokenStatsModal.tsx": ["stats."],
   "UpdateModal.tsx": ["updater."],
 };
@@ -626,7 +626,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "quota/QuotaSection.tsx": ["rightbar."], // 额度段挂在右栏信息页，沿用 rightbar.*
   "shell/AppShell.tsx": ["app.", "closeTab.", "exitApp.", "git.", "nav."], // 壳层：顶栏动作 / 两个拦截框 / git 身份条 / 中断提示
   "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
-  "shell/ProjectNav.tsx": ["common.", "nav.", "sessions."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名
+  "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
   "shell/RightBar.tsx": ["common.", "rightbar."], // rightbar.* 自有；common.builtin 与设置页共用的来源标签
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏
@@ -645,6 +645,9 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   "chat/Composer.tsx": {
     "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
     "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
+  },
+  "shell/ProjectNav.tsx": {
+    "tasks.": "左栏任务区展示的就是计划任务（与任务页共用 stores/tasks 单一数据源），状态/下次触发/历史等文案复用任务页的 tasks.* 段——两处说的是同一件事，另起一段反而会漂移",
   },
   "quota/QuotaSection.tsx": {
     "rightbar.": "额度段是本目录独立的组件（quota/）但渲染在右栏信息页里，文案沿用右栏段 rightbar.*",

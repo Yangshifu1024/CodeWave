@@ -765,7 +765,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .task-nav-row:hover { background: var(--ws-hover); }
 .task-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-dim); flex: none; }
-.task-dot.ok { background: var(--ws-ok); }
+/* 只有失败是红（与 .task-dot 的灰形成风险等级对比）：ok/skipped 走默认灰，不再另设 .task-dot.ok 死规则 */
 .task-dot.err { background: var(--ws-err); }
 .task-nav-row .task-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -813,17 +813,52 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .session-row .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-row .sub { font-size: 11.5px; color: var(--ws-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- TaskCenterPanel ---------- */
-.new-task { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-/* 计划表达式输入 + 其语法说明：说明常驻在输入框下方（原先只当 placeholder，敲第一个字符就消失） */
-.task-sched-field { display: flex; flex-direction: column; gap: 2px; }
-.new-task .grow { flex: 1; min-width: 160px; }
-.task { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
-.task .row1 { display: flex; align-items: center; gap: 8px; }
-.task .sched { font-size: 11px; color: var(--ws-accent); }
-.task .row2 { font-size: 12.5px; margin-top: 4px; color: var(--ws-text-2); }
-
-/* ---------- TokenStatsModal ---------- */
+/* ---------- 计划任务页（TasksPage，[docs/tasks-module-polish]） ---------- */
+/* 覆盖层：与 .settings-shell 同度量（绝对定位贴在内层 Layout 上，盖住工作区但不卸载它）；
+   z-index 20 = 高于分隔条（6），antd 下拉/弹窗层仍在覆盖层之上；颜色全部走 --ws-* token。 */
+.tasks-shell {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; min-width: 0; background: var(--ws-bg-main);
+}
+/* 顶部操作条：常驻可点（窄窗换行）：返回工作区 + 标题 + 右侧新建（禁用原因就在它旁边） */
+.tasks-actions {
+  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--ws-border); background: var(--ws-bg-main);
+}
+.tasks-actions-title {
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tasks-actions-buttons { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+.tasks-actions-note { font-size: 11.5px; }
+/* 内容区自己滚（操作条在列内不动，返回/新建始终可点） */
+.tasks-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 24px; min-width: 480px; }
+/* 加载/操作失败的错误行：走风险色 token（不硬编码红值，暗色下才能跟主题） */
+.tasks-error { color: var(--ws-err); font-size: 12px; margin: 6px 0; }
+.tasks-loading { display: flex; justify-content: center; padding: 24px 0; }
+/* 任务行两级：主信息区（可点展开历史）+ 操作区（同级兄弟，不做 role=button 里嵌按钮） */
+.task-row { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.task-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 0; border-radius: 6px; cursor: pointer; }
+.task-row-main:hover { background: var(--ws-hover); }
+.task-row-name { font-size: 12.5px; color: var(--ws-text-1); }
+.task-row-sched { font-size: 12px; color: var(--ws-text-2); }
+.task-row-project { font-size: 11.5px; }
+/* 下次触发：次要信息推列尾（主信息区内的 margin-left:auto，不挤操作按钮） */
+.task-row-next { font-size: 11.5px; margin-left: auto; }
+.task-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+/* 执行历史：时间・状态・来源・tokens 一行，摘要另起一段（pre-wrap + 限高滚动，同 .mcp-status-error 的路子） */
+.tasks-history { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ws-border); display: flex; flex-direction: column; gap: 6px; }
+.tasks-history-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 11.5px; color: var(--ws-text-2); }
+.tasks-history-at { font-variant-numeric: tabular-nums; }
+.tasks-history-status-error { color: var(--ws-err); }
+.tasks-history-tokens { margin-left: auto; }
+.tasks-history-summary { flex: 1 0 100%; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
+/* 弹窗表单：纵向字段（label 在上，与设置表单 vertical 同范式） */
+.tasks-form { display: flex; flex-direction: column; gap: 10px; }
+.tasks-field { display: flex; flex-direction: column; gap: 4px; }
+.tasks-label { font-size: 12px; color: var(--ws-dim); }
+.tasks-interval { display: flex; align-items: center; gap: 8px; }
+.tasks-field-error { font-size: 11.5px; color: var(--ws-err); }
 .chart { display: flex; align-items: flex-end; gap: 4px; height: 170px; padding: 8px 4px; overflow-x: auto; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
 .bar-col .bar { width: 16px; background: var(--ws-accent); border-radius: 3px 3px 0 0; opacity: 0.85; }

@@ -16,11 +16,37 @@ import {
 import { useTranslation } from "react-i18next";
 import { i18n } from "../../i18n";
 import { ipc } from "../../ipc/client";
-import type { ProjectEntry, SessionMeta } from "../../ipc/types";
+import type { ProjectEntry, ScheduledTask, SessionMeta } from "../../ipc/types";
 import { MANAGED_DIR_NAME } from "../../utils/path";
 import { useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
 import { useUi } from "../../stores/ui";
+import { statusKind, statusLabel, useTasks } from "../../stores/tasks";
+
+/** 任务行 tooltip：状态 / 下次触发 / 上次摘要——颜色之外的信息补回（[docs/tasks-module-polish]） */
+function taskTip(task: ScheduledTask, t: (k: string, o?: Record<string, unknown>) => string, running: boolean): string {
+  const next = task.next_run
+    ? fmtRunTime(task.next_run)
+    : task.enabled === false
+      ? t("tasks.paused")
+      : t("tasks.noMoreRuns");
+  return [
+    running ? t("tasks.running") : null,
+    `${t("tasks.nextRun")}: ${next}`,
+    task.last_status ? `${t("tasks.lastStatus")}: ${statusLabel(task.last_status, t)}` : t("tasks.neverRun"),
+    task.last_summary?.trim() || null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** next_run（RFC3339）→ 短本地时间；解析失败原样返回（不猜） */
+function fmtRunTime(rfc: string): string {
+  const d = new Date(rfc);
+  if (Number.isNaN(d.getTime())) return rfc;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 const PREVIEW_COUNT = 5;
 
@@ -64,7 +90,9 @@ export default function ProjectNav() {
   // （会话保存与恢复优化 · 批1）。组件内不留第二份副本，避免双事实源
   const expanded = useUi((s) => s.treeExpand);
   const collapsed = useUi((s) => s.treeCollapsed);
-  const [tasks, setTasks] = useState<{ id: string; name: string; last_status: string | null }[]>([]);
+  // 任务列表与被选中态都来自单一数据源（stores/tasks）：任务页与左栏共用，事件驱动的增量更新由 store 自己的 handler 负责
+  const tasks = useTasks((s) => s.items);
+  const runningIds = useTasks((s) => s.runningIds);
   // 新建/编辑项目弹窗
   const [editing, setEditing] = useState<ProjectEntry | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -137,17 +165,10 @@ export default function ProjectNav() {
     return out;
   }, [projects, allSessions]);
 
-  // 任务列表：任务中心开合或活跃会话变化时刷新（M-3：副作用归 useEffect，不进 useMemo）
+  // 任务列表：单一数据源（stores/tasks）——任务页与左栏共用，不再各自 ipc 取数（避免口径分叉）；
+  // 事件驱动的增量更新由 store 自己的 handler 负责，这里只在「开关任务页 / 切会话」时拉一次
   useEffect(() => {
-    const sessionId = useSessions.getState().activeKey;
-    if (!sessionId) {
-      setTasks([]);
-      return;
-    }
-    void ipc
-      .listScheduledTasks(sessionId)
-      .then((list) => setTasks(list.map((t) => ({ id: t.id, name: t.name, last_status: t.last_status }))))
-      .catch(() => setTasks([]));
+    void useTasks.getState().load();
   }, [tasksOpen, activeKey]);
 
   function openCreate() {
@@ -319,10 +340,16 @@ export default function ProjectNav() {
 
       <div className="nav-section-title" style={{ marginTop: 14 }}>{t("nav.tasks")}</div>
       {tasks.length === 0 && <div className="nav-empty">{t("nav.noTasks")}</div>}
-      {tasks.map((t) => (
-        <div className="task-nav-row" key={t.id} onClick={() => useUi.setState({ tasksOpen: true })}>
-          <span className={`task-dot${t.last_status === "ok" ? " ok" : t.last_status ? " err" : ""}`} />
-          <span className="task-name">{t.name}</span>
+      {tasks.map((task) => (
+        <div
+          className="task-nav-row"
+          key={task.id}
+          title={taskTip(task, t, runningIds.includes(task.id))}
+          onClick={() => useUi.setState({ tasksOpen: true })}
+        >
+          {/* 状态语义：ok / skipped 中性、只有 error 是红（与任务页共用 statusKind，禁各写一份） */}
+          <span className={`task-dot${statusKind(task.last_status) === "error" ? " err" : ""}`} />
+          <span className="task-name">{task.name}</span>
         </div>
       ))}
 

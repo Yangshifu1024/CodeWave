@@ -24,7 +24,7 @@ import Composer from "../chat/Composer";
 import SubagentDrawer from "../subagent/SubagentDrawer";
 import SettingsPage from "../panels/SettingsPage";
 import UpdateModal from "../panels/UpdateModal";
-import TaskCenterPanel from "../panels/TaskCenterPanel";
+import TasksPage from "../panels/TasksPage";
 import TokenStatsModal from "../panels/TokenStatsModal";
 import RightBar from "./RightBar";
 import ProjectNav from "./ProjectNav";
@@ -389,14 +389,15 @@ export default function AppShell() {
       if (e.isComposing || e.defaultPrevented) return;
       const mod = e.metaKey || e.ctrlKey;
       if (e.key === "Escape") {
-        // 设置页打开时不在此处置：Esc 归设置页（先关页内浮层，否则走「返回工作区」拦截），
-        // 事件目标可能是 body 而不在 .settings-shell 内，光靠下面的 closest 白名单会漏掉
-        // （[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）。
-        // 任何情况下都不得因设置页而停止运行中会话。
-        if (useUi.getState().settingsOpen) return;
-        // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行（.settings-shell 同列：全屏页里也归自己处置）
+        // 设置页 / 计划任务页打开时不在此处置：Esc 归该全屏页（先关页内浮层，否则走「返回工作区」拦截），
+        // 事件目标可能是 body 而不在 .settings-shell / .tasks-shell 内，光靠下面的 closest 白名单会漏掉
+        // （[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)、
+        //  [docs/tasks-module-polish](../../../../docs/tasks-module-polish.md)）。
+        // 任何情况下都不得因全屏页而停止运行中会话。
+        if (useUi.getState().settingsOpen || useUi.getState().tasksOpen) return;
+        // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行（两个全屏页同列：页内也归自己处置）
         const target = e.target as HTMLElement | null;
-        if (target?.closest(".settings-shell, .ant-modal, .ant-drawer, .ant-popover, .ant-select-dropdown, .ant-input, textarea, input")) return;
+        if (target?.closest(".settings-shell, .tasks-shell, .ant-modal, .ant-drawer, .ant-popover, .ant-select-dropdown, .ant-input, textarea, input")) return;
         const st = useRun.getState();
         const key = useSessions.getState().activeKey ?? "";
         if (st.tabs[key]?.running) void st.cancel();
@@ -421,6 +422,9 @@ export default function AppShell() {
   const settingsOpen = useUi((s) => s.settingsOpen);
   const tasksOpen = useUi((s) => s.tasksOpen);
   const statsOpen = useUi((s) => s.statsOpen);
+  // 全屏覆盖页（设置 / 计划任务）共用一个让位开关：两者都是「贴在内层 Layout 上的覆盖层 + 工作区照旧挂载」，
+  // 让位集合必须一致（Sider / Content / 两条栏宽分隔条），否则会出现「页盖住了、键盘焦点却还在工作区里」的裂缝。
+  const workspaceCovered = settingsOpen || tasksOpen;
 
   return (
     <Layout style={{ height: "100%", background: "var(--ws-bg)" }}>
@@ -442,8 +446,8 @@ export default function AppShell() {
             docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
             -zero-width 修饰类裁切子内容，内容恒挂载、折叠动画平滑 */}
         <Sider
-          className={settingsOpen ? "workspace-covered" : undefined}
-          aria-hidden={settingsOpen || undefined}
+          className={workspaceCovered ? "workspace-covered" : undefined}
+          aria-hidden={workspaceCovered || undefined}
           width={explorerOpen ? navWidth : SIDER_W_CLOSED}
           style={{
             background: "var(--ws-bg-nav)",
@@ -459,8 +463,8 @@ export default function AppShell() {
           </div>
         </Sider>
         <Content
-          className={settingsOpen ? "workspace-covered" : undefined}
-          aria-hidden={settingsOpen || undefined}
+          className={workspaceCovered ? "workspace-covered" : undefined}
+          aria-hidden={workspaceCovered || undefined}
           style={{ height: "100%", display: "flex", background: "var(--ws-bg-main)" }}
         >
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -473,7 +477,7 @@ export default function AppShell() {
         </Content>
 
         {/* 栏宽分隔条（绝对定位在栏边界；折叠态不渲染 = 拖动不抢折叠入口）。
-            设置页打开时 covered：z-index 比覆盖层低只挡得住指针，键盘焦点照旧能落到分隔条上
+            全屏页（设置 / 计划任务）打开时 covered：z-index 比覆盖层低只挡得住指针，键盘焦点照旧能落到分隔条上
             （Tab 序残留 + ←/→ 静默改栏宽），所以同步加 .workspace-covered 与 tabIndex=-1。 */}
         {explorerOpen && (
           <ResizeHandle
@@ -484,7 +488,7 @@ export default function AppShell() {
             offset={navWidth}
             label={t("app.resizeLeft")}
             disabled={navWidth < storedNavWidth}
-            covered={settingsOpen}
+            covered={workspaceCovered}
             onWidth={setNavWidth}
             onReset={() => setNavWidth(NAV_W_DEFAULT)}
           />
@@ -498,7 +502,7 @@ export default function AppShell() {
             offset={rightBarWidth}
             label={t("app.resizeRight")}
             disabled={rightBarWidth < storedRightBarWidth}
-            covered={settingsOpen}
+            covered={workspaceCovered}
             onWidth={setRightBarWidth}
             onReset={() => setRightBarWidth(RB_W_DEFAULT)}
           />
@@ -508,11 +512,14 @@ export default function AppShell() {
             工作区（Sider/Content/ChatMessages/Composer/RightBar）全程挂载，只是 .workspace-covered 隐藏可见性——
             绝不用 display:none（ResizeObserver 会测到 0 尺寸、滚动容器错乱，从而影响运行中任务）。 */}
         {settingsOpen && <SettingsPage />}
+        {/* 计划任务页（[docs/tasks-module-polish]）：与设置页同为覆盖式全屏页，工作区全程挂载不卸载。
+            必须挂在**内层 Layout**（position:relative）里——`.tasks-shell` 是 absolute inset:0，
+            挂到外层会连自绘标题栏一起盖住（度量必须与设置页一致）。 */}
+        {tasksOpen && <TasksPage />}
       </Layout>
 
       {/* 自动更新弹窗：常驻挂载（可见性取自 store 的 modalOpen），phase 驱动标题/正文/页脚 */}
       <UpdateModal />
-      {tasksOpen && <TaskCenterPanel />}
       {statsOpen && <TokenStatsModal />}
       {/* 退出拦截 / 关 Tab 二次确认：两者都挂在 store 请求位上，只在 AppShell 渲染这一处 */}
       <ExitConfirm />

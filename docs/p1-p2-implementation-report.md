@@ -105,6 +105,7 @@ cache-first 字节稳定回归（agent）、SSRF 私网矩阵、web 抽取/降�
 - 真实 MCP server 接入（场景 D）、真实网页抓取（场景 E）、真实 LLM 端到端（场景 H 三并行子代理）、`every:1m` 实际定时触发（场景 I）——均需外部资源/长时观察，单测覆盖了对应逻辑层。
 - Windows/Linux/三平台 CI 未运行（需推送）。
 - 计划任务为进程本地（重启清空）——[docs/p2-plan](./p2-plan.md) §3 约定如此，UI 有提示。
+  - **已失效（2026-09-22）**：计划任务现随项目**落盘**（`<主目录>/.codewave/projects/<project_id>/tasks/<id>.json`），重启后照旧存在；只有自由会话（无 project_id）创建的任务仍是进程内。现行为见 [docs/tasks-module-polish](./tasks-module-polish.md)。
 
 
 ---

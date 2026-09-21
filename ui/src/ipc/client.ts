@@ -158,6 +158,13 @@ export const ipc = {
     invoke<ScheduledTask>("create_scheduled_task", { sessionId, name, instruction, schedule }),
   deleteScheduledTask: (sessionId: string, id: string) =>
     invoke<void>("delete_scheduled_task", { sessionId, id }),
+  /** 改任务正文（改完 next_run 会按调度器重算） */
+  updateScheduledTask: (id: string, name: string, instruction: string, schedule: string) =>
+    invoke<ScheduledTask>("update_scheduled_task", { id, name, instruction, schedule }),
+  setScheduledTaskEnabled: (id: string, enabled: boolean) =>
+    invoke<ScheduledTask>("set_scheduled_task_enabled", { id, enabled }),
+  /** 手工触发一次（后端异步跑，立即返回）；已有任务在跑时后端 reject */
+  runScheduledTaskNow: (id: string) => invoke<void>("run_scheduled_task_now", { id }),
   getTokenStats: (days: number) => invoke<DailyStats[]>("get_token_stats", { days }),
   stopService: (sessionId: string, serviceId: string) =>
     invoke<void>("stop_service", { sessionId, serviceId }),
