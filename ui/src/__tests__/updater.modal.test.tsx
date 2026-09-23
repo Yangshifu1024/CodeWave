@@ -97,26 +97,66 @@ afterEach(() => {
 });
 
 describe("UpdateModal · available", () => {
-  it("显示新版本与当前版本、发布说明全文，页脚为稍后 + 下载并安装", () => {    const notes = "## 新特性\n\n- 更快的启动\n- 修复若干问题";
+  it("显示新版本与当前版本、发布说明按 markdown 渲染，页脚为稍后 + 下载并安装", () => {
+    const notes = "## 新特性\n\n- 更快的启动\n- 修复若干问题\n\n`inline` 与 **粗体**";
     seed({ phase: "available", notes });
 
     renderModal();
 
     expect(document.querySelector(".updater-version-new")!.textContent).toContain("9.9.9");
     expect(document.querySelector(".updater-version-cur")!.textContent).toContain("1.0.0");
-    // 发布说明按纯文本展示：多行原文必须在 DOM 文本里完整可见（含换行）
+    // 发布说明按 markdown 渲染（容器带 .md 接入共享样式组）：标题成 h2、列表成 ul/li、行内成 strong/code。
+    // 注意别用 toContain("\n") 断言「多行可见」——markdown-it 的块标签之间自带换行，那样会假通过。
     const body = document.querySelector(".updater-notes-body")!;
-    expect(body.textContent).toContain("更快的启动");
-    expect(body.textContent).toContain("修复若干问题");
-    expect(body.textContent).toContain("\n");
+    expect(body.classList.contains("md")).toBe(true);
+    expect(body.querySelector("h2")?.textContent).toBe("新特性");
+    expect([...body.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "更快的启动",
+      "修复若干问题",
+    ]);
+    expect(body.querySelector("strong")?.textContent).toBe("粗体");
+    expect(body.querySelector("code")?.textContent).toBe("inline");
+    // 标记字符不再原样出现在正文里
+    expect(body.textContent).not.toContain("##");
+    expect(body.textContent).not.toContain("- 更快的启动");
     expect(button(i18n.t("updater.actions.downloadInstall"))).toBeTruthy();
     expect(button(i18n.t("updater.actions.later"))).toBeTruthy();
   });
 
-  it("notes 为空时不渲染发布说明区块", () => {
-    seed({ phase: "available", notes: null });
+  it("发布说明的安全性：原始 HTML 被转义、javascript: 链接不可点、外链带 target/noopener", () => {
+    const notes = [
+      "<script>alert(1)</script>",
+      "",
+      "[点我](javascript:alert(1)) 与 [正常](https://example.com/x)",
+    ].join("\n");
+    seed({ phase: "available", notes });
+
     renderModal();
-    expect(document.querySelector(".updater-notes")).toBeNull();
+
+    const body = document.querySelector(".updater-notes-body")!;
+    // 前置条件：确实走了 markdown 渲染（否则下面几条断言在纯文本实现下也会成立）
+    expect(body.classList.contains("md")).toBe(true);
+    // html:false：原始 HTML 一律转义成文本，不产生可执行节点
+    expect(body.querySelector("script")).toBeNull();
+    expect(body.textContent).toContain("<script>alert(1)</script>");
+    // markdown-it 默认 validateLink 挡掉 javascript: —— 不产出可点 href
+    const hrefs = [...body.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "");
+    expect(hrefs.some((h) => h.startsWith("javascript:"))).toBe(false);
+    // 正常外链带 target=_blank + rel=noopener（点击行为由 utils/linkhandler 的 document 级委托接管）
+    const link = body.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://example.com/x");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener");
+  });
+
+  it("notes 为空时不渲染发布说明区块", () => {
+    // 只守 null 与空串；纯空白（"   "）由 stores/updater 的 markAvailable 归一为 null，不在本层重复判定
+    for (const empty of [null, ""]) {
+      seed({ phase: "available", notes: empty });
+      renderModal();
+      expect(document.querySelector(".updater-notes")).toBeNull();
+      cleanup();
+    }
   });
 
   it("「查看发布说明」打开该版本的 tag 页", () => {

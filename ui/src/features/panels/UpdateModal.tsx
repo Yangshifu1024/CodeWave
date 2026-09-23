@@ -2,10 +2,14 @@
 // 由 AppShell 无条件渲染（可见性取自 stores/updater 的 modalOpen），按钮只调 utils/updateCheck 的流程函数。
 //
 // 视觉走 antd Modal + Button + Progress，文案全部来自 i18n.updater.*，排版细节在 theme/app.css 的 .updater-* 段。
-// 发布说明按纯文本展示（latest.json 的 notes 是 markdown 源文，弹窗不做渲染，完整排版在 Release 页）。
+// 发布说明按 markdown 渲染（latest.json 的 notes 是 markdown 源文，如「## What's Changed + 列表」）：
+// 复用 utils/markdown.ts（html:false 不信任原始 HTML、外链带 target=_blank、代码块带 Copy 按钮），
+// 容器加 .md 类并接入 app.css 的共享 markdown 样式组；mermaid/公式不渲染（升级链路绑在聊天气泡上）。
+import { useMemo } from "react";
 import { App, Button, Modal, Progress } from "antd";
 import { useTranslation } from "react-i18next";
 import { useUpdater } from "../../stores/updater";
+import { renderMarkdown } from "../../utils/markdown";
 import {
   openReleases,
   restartUpdate,
@@ -33,6 +37,10 @@ export default function UpdateModal() {
   const downloadedBytes = useUpdater((s) => s.downloadedBytes);
   const totalBytes = useUpdater((s) => s.totalBytes);
   const error = useUpdater((s) => s.error);
+
+  // 发布说明的 HTML 只在 notes 变化时重算：下载相位每次进度写入都会重渲染本组件，
+  // 不缓存就会白白重解析一遍 markdown。notes 为空/纯空白已在 stores/updater 的 markAvailable 归一为 null。
+  const notesHtml = useMemo(() => (notes ? renderMarkdown(notes) : ""), [notes]);
 
   const close = () => useUpdater.getState().setModalOpen(false);
 
@@ -159,8 +167,8 @@ export default function UpdateModal() {
         {notes && (
           <div className="updater-notes">
             <div className="updater-notes-title">{t("updater.notesTitle")}</div>
-            {/* 纯文本展示（保留换行与超长行断行），不做 markdown 渲染 */}
-            <div className="updater-notes-body">{notes}</div>
+            {/* markdown 渲染（容器 .md 接入共享样式组）；html:false 已挡掉原始 HTML，无 XSS 面 */}
+            <div className="updater-notes-body md" dangerouslySetInnerHTML={{ __html: notesHtml }} />
           </div>
         )}
 

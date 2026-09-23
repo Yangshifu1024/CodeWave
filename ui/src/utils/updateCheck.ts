@@ -10,7 +10,8 @@
 //   · epoch 守卫：整条流程带检查代次，陈旧结果丢弃（启动静默检查与手动检查可能重叠，
 //     旧结果不得把 available 回滚成 up-to-date）；
 //   · pendingUpdate：模块级槽位，下载失败重试时复用它（不必重新检查）；
-//   · installInFlight：下载安装的防重入闸（弹窗按钮 + 菜单可能同时触发）。
+//   · installInFlight：下载安装的防重入闸（弹窗按钮 + 菜单可能同时触发）；
+//   · 进度降频：进度事件按 chunk 到达，逐条写 store 会让弹窗重渲染风暴（见 startUpdate 的 writeProgress）。
 // 无更新/失败不再 toast（弹窗接管反馈），但 notice.updateFailed* 文案仍是错误文案来源。
 // restart_app / open_url 走自定义 IPC（公钥在 tauri.conf.json；更新源 = GitHub Releases latest.json）。
 import { useEffect, useRef, useState } from "react";
@@ -39,6 +40,9 @@ let pendingUpdate: Update | null = null;
 // 配额耗尽识别：latest.json 若把下载地址指向 GitHub REST 资产 API 端点，匿名配额（60 次/小时/出口 IP）
 // 耗尽即回 403（偶发 429 / rate limit）。tauri 抛出的 Error 经 String() 后可能带前缀，故用宽松正则匹配。
 const RATE_LIMIT_RE = /\b(403|429)\b|rate limit/i;
+
+/** 服务端未给 content-length 时的进度写入步长：没有百分比可用，只能用字节粗粒度限流 */
+const PROGRESS_BYTE_STEP = 64 * 1024;
 
 /** 失败文案：403/429 走可行动指引（配额耗尽该等或手动下载，换代理无效），其余带原始错误串 */
 function formatError(e: unknown): string {
@@ -123,21 +127,52 @@ export async function startUpdate(): Promise<void> {
   store().beginDownload();
 
   // 进度事件（Started/Progress/Finished）由插件按 chunk 回调；contentLength 可能缺省，
-  // 此时只显示已下载字节、进度条走不确定态（antd Progress 不加 percent）
+  // 此时只显示已下载字节、进度条走不确定态（antd Progress 不加 percent）。
+  //
+  // 关键：**不能每个事件都写 store**。插件对每个 HTTP 分片发一条 Progress（19MB 的安装包是
+  // 千级到数千级事件），而每条事件都要经 tauri Channel 的 webview.eval 投递一次、并让整个
+  // 弹窗重渲染一次。处理速度跟不上到达速度时显示值会一路落后于真实下载，下载结束又被
+  // markReady 立刻换成「待重启」——用户看到的就是「进度卡在某个百分比直到下载完成」。
+  // 故只把**用户能看出来的变化**写进 store：有总量时按可见整数百分比、无总量时按字节跨步；
+  // Finished 与收尾一律强制写最终值。
   let downloaded = 0;
   let total: number | null = null;
+  /** 已写进 store 的可见百分比（null = 无总量或尚未写过）与已写进的字节数 */
+  let writtenPercent: number | null = null;
+  let writtenBytes = 0;
+  const writeProgress = (force = false) => {
+    // 与界面口径一致（弹窗用 Math.round 且封顶 100）：下载量超出总量时百分比不再变化，不再写
+    const percent =
+      total !== null && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
+    const changed =
+      percent !== null ? percent !== writtenPercent : downloaded - writtenBytes >= PROGRESS_BYTE_STEP;
+    if (!force && !changed) return;
+    writtenPercent = percent;
+    writtenBytes = downloaded;
+    store().setProgress(downloaded, total);
+  };
+
   try {
     await update.downloadAndInstall((event) => {
-      if (event.event === "Started") {
-        total = event.data.contentLength ?? null;
-      } else if (event.event === "Progress") {
-        downloaded += event.data.chunkLength;
-      } else {
-        // 收尾对齐总量：让进度条能走到 100%（服务端有小幅出入时不至于卡在 99%）
-        downloaded = total ?? downloaded;
+      // 本回调**绝不能抛**：tauri 的 JS Channel 用严格递增序号保序（只有 index === nextMessageIndex
+      // 才回调并递增），而 window.__TAURI_INTERNALS__.runCallback 没有 try/catch——抛一次异常就会
+      // 让序号停住，之后所有进度事件永久积压（表现为进度彻底不动且不再恢复）。畸形事件忽略即可。
+      try {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? null;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+        } else {
+          // 收尾对齐总量：让进度条能走到 100%（服务端有小幅出入时不至于卡在 99%）
+          downloaded = total ?? downloaded;
+        }
+        writeProgress();
+      } catch {
+        /* 单条事件解析失败不影响整体流程 */
       }
-      store().setProgress(downloaded, total);
     });
+    // 收尾强制写最终值：无总量时中间事件按字节步长被合并掉了，最后一次必须落库
+    writeProgress(true);
     // 安装完成：释放 Update 实例（后端资源），进入待重启态
     installInFlight = false;
     pendingUpdate = null;

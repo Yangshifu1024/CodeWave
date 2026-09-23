@@ -290,4 +290,90 @@ describe("下载进度事件与重试分支", () => {
     expect(mocks.check).toHaveBeenCalledTimes(1);
     expect(freshUpdater.getState().phase).toBe("up-to-date");
   });
+
+  it("进度写入降频：上千个分片最多只写 ~100 次（防「每事件一次整弹窗重渲染」回归）", async () => {
+    // 真实体量：线上 macOS 更新包 19,089,436 字节，按 ~15.9KB 一片 ≈ 1200 个 Progress 事件。
+    // 旧实现每事件写一次 store（每次都会重渲染整个弹窗），处理速度跟不上到达速度，
+    // 显示值一路落后于真实下载，下载结束又被 markReady 换成「待重启」——用户看到的就是
+    // 「进度卡在某个百分比直到下载完成」。本用例把「写入次数有界」钉成不变量。
+    mocks.check.mockResolvedValue(fakeUpdate());
+    await checkForUpdates();
+    const inst = await (mocks.check.mock.results[0].value as ReturnType<typeof fakeUpdate>);
+
+    const total = 19_089_436;
+    const chunk = 15_908;
+    const chunks = 1200;
+
+    let notifications = 0;
+    const unsub = useUpdater.subscribe(() => {
+      notifications += 1;
+    });
+    inst.downloadAndInstall.mockImplementation(async (cb: (e: unknown) => void) => {
+      cb({ event: "Started", data: { contentLength: total } });
+      for (let i = 0; i < chunks; i += 1) cb({ event: "Progress", data: { chunkLength: chunk } });
+      cb({ event: "Finished" });
+    });
+    await startUpdate();
+    unsub();
+
+    // 上界 = 100 个百分比档 + Started/Finished 各一次 + 收尾强制写 + beginDownload/markReady 两次相位写入
+    expect(notifications).toBeLessThanOrEqual(110);
+    const st = useUpdater.getState();
+    expect(st.phase).toBe("ready");
+    expect(st.totalBytes).toBe(total);
+    expect(st.downloadedBytes).toBe(total);
+  });
+
+  it("畸形事件不得抛异常（抛了会让 tauri Channel 的序号停住、后续进度永久积压）", async () => {
+    // 依据：JS 侧 Channel 只有 index === nextMessageIndex 才回调并递增，
+    // 而 window.__TAURI_INTERNALS__.runCallback 没有 try/catch——回调抛一次异常，
+    // 之后所有进度事件都会被塞进 pendingMessages 永不处理（进度彻底不动且不再恢复）。
+    mocks.check.mockResolvedValue(fakeUpdate());
+    await checkForUpdates();
+    const inst = await (mocks.check.mock.results[0].value as ReturnType<typeof fakeUpdate>);
+
+    inst.downloadAndInstall.mockImplementation(async (cb: (e: unknown) => void) => {
+      cb({ event: "Started", data: { contentLength: 100 } });
+      cb({ event: "Progress" }); // 缺 data：无守卫时 event.data.chunkLength 抛 TypeError
+      cb({ event: "Whatever", data: {} }); // 未知事件：按收尾对齐处理，同样不得抛
+      cb({ event: "Progress", data: { chunkLength: 100 } });
+      cb({ event: "Finished" });
+    });
+    await startUpdate();
+
+    // 本用例用测试替身模拟：抛出的异常会让 mock 直接抛出 → downloadAndInstall reject → 相位变 error。
+    // 真实链路更狠：runCallback 无 try/catch，异常不会 reject promise，而是让 Channel 序号永久停死、
+    // 后续进度事件全部积压在 pendingMessages（界面进度彻底不动且不再恢复）。
+    const st = useUpdater.getState();
+    expect(st.phase).toBe("ready");
+    expect(st.error).toBeNull();
+    expect(st.downloadedBytes).toBe(100);
+  });
+
+  it("总量未知（无 content-length）时按字节跨步写入，收尾必写最终值", async () => {
+    mocks.check.mockResolvedValue(fakeUpdate());
+    await checkForUpdates();
+    const inst = await (mocks.check.mock.results[0].value as ReturnType<typeof fakeUpdate>);
+
+    let notifications = 0;
+    const unsub = useUpdater.subscribe(() => {
+      notifications += 1;
+    });
+    inst.downloadAndInstall.mockImplementation(async (cb: (e: unknown) => void) => {
+      cb({ event: "Started", data: {} }); // 无 contentLength → 没有百分比可用
+      cb({ event: "Progress", data: { chunkLength: 2048 } }); // 未跨过 64KiB：不写
+      cb({ event: "Progress", data: { chunkLength: 2048 } }); // 同上
+      cb({ event: "Progress", data: { chunkLength: 100_000 } }); // 跨步：写一次
+      cb({ event: "Finished" });
+    });
+    await startUpdate();
+    unsub();
+
+    const st = useUpdater.getState();
+    expect(st.totalBytes).toBeNull();
+    expect(st.downloadedBytes).toBe(104_096);
+    // 2 次进度写入（跨步那次 + 收尾强制写）+ beginDownload / markReady 两次相位写入。
+    // 上界留 1 次余量：这里要钉的是「中途不逐条写」，不是精确通知次数。
+    expect(notifications).toBeLessThanOrEqual(5);
+  });
 });

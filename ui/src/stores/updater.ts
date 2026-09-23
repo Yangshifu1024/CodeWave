@@ -29,7 +29,7 @@ export interface UpdaterState {
   currentVersion: string | null;
   /** 可安装的新版本；error / up-to-date 时清空 */
   newVersion: string | null;
-  /** 发布说明（latest.json 的 notes，markdown 纯文本，按纯文本展示，不渲染 markdown） */
+  /** 发布说明（latest.json 的 notes，markdown 源文；由 UpdateModal 经 utils/markdown 的 renderMarkdown 渲染） */
   notes: string | null;
   downloadedBytes: number;
   /** 总字节数；null = 服务端未给 content-length（进度条不显示百分比） */
