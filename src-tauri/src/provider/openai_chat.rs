@@ -318,7 +318,12 @@ pub async fn stream(
     };
     let status = resp.status();
     if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
+        // 读错误响应体失败（连接在半截处断）与「上游真的返回空体」必须区分：
+        // 否则错误文案为空，用户只看到「请求被拒绝：」而不知道原因（会话 6bca80f4 现场）。
+        let body_text = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => format!("(读取错误响应体失败：{e})"),
+        };
         return Err(ProviderError::from_status(status, &body_text));
     }
 
@@ -645,6 +650,56 @@ mod tests {
         assert!(
             body.to_string().contains("正文"),
             "ToolResult 正文应保留：{body}"
+        );
+    }
+
+    /// 回归钉（会话 6bca80f4 的图片通道）：工具读到的图片由 agent 层（`stream::route_tool_images`）
+    /// 搬进用户消息后，必须真的以图片块出网；而留在 Tool 消息里的图片块按上一条钉死的语义被丢弃
+    /// —— 这正是「必须搬运」的原因，也是「读图结果不得只把 base64 当文本塞进 tool_result」的原因。
+    #[test]
+    fn user_message_image_parts_go_on_wire_and_tool_message_images_do_not() {
+        let mut req = test_request();
+        req.messages.push(Message {
+            role: Role::User,
+            content: vec![
+                Content::Text {
+                    text: "以下是刚才工具读取的图片（系统自动附加，不是用户输入）：".into(),
+                },
+                Content::Image {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                },
+            ],
+            created_at: None,
+        });
+        let text = build_body(&req).to_string();
+        assert!(text.contains("\"type\":\"image_url\""), "{text}");
+        assert!(
+            text.contains("data:image/png;base64,AAAA"),
+            "图片必须以 data URL 形式出网：{text}"
+        );
+
+        // 同一条图片块留在 Tool 消息里：不出网（协议只输出 tool_result 文本）
+        let mut req2 = test_request();
+        req2.messages.push(Message {
+            role: Role::Tool,
+            content: vec![
+                Content::ToolResult {
+                    tool_use_id: "t9".into(),
+                    content: "{\"files\":[]}".into(),
+                    is_error: false,
+                },
+                Content::Image {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                },
+            ],
+            created_at: None,
+        });
+        let text2 = build_body(&req2).to_string();
+        assert!(
+            !text2.contains("image_url"),
+            "Tool 消息里的图片块不得出网（这正是搬运的原因）：{text2}"
         );
     }
 

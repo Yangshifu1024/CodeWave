@@ -356,7 +356,12 @@ pub async fn stream(
 
     let status = resp.status();
     if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
+        // 读错误响应体失败（连接在半截处断）与「上游真的返回空体」必须区分：
+        // 否则错误文案为空，用户只看到「请求被拒绝：」而不知道原因（会话 6bca80f4 现场）。
+        let body_text = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => format!("(读取错误响应体失败：{e})"),
+        };
         return Err(ProviderError::from_status(status, &body_text));
     }
 

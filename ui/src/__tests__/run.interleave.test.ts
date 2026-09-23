@@ -129,6 +129,60 @@ describe("思考与工具穿插顺序", () => {
     expect(a.toolsMap["call-1"].status).toBe("ok");
   });
 
+  it("restoreFromMessages 还原 read 卡出参：图片条目带 path，供卡片按路径重新加载", () => {
+    useRun.getState().restoreFromMessages(session, [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call-img", name: "read", args: { files: [{ path: "a.png" }] } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call-img",
+            // 落盘的就是模型侧 JSON（data_url 已被剥掉，path/kind/media_type 仍在）
+            content: JSON.stringify({
+              files: [
+                { path: "a.png", kind: "image", media_type: "image/png", image_note: "[图片数据不在此文本中]" },
+              ],
+            }),
+            is_error: false,
+          },
+        ],
+      },
+    ] as any);
+    const card = toolCardsOf(session, "call-img")[0]!;
+    const data = (card.outcome as any)?.data;
+    expect(data?.files?.[0]?.path).toBe("a.png");
+    expect(data?.files?.[0]?.kind).toBe("image");
+    expect(data?.files?.[0]?.data_url).toBeUndefined();
+    // 入参同样还原（摘要行、ask 问答行的题干、edit 的 diff 都靠它）
+    expect(card.argsPreview).toContain("a.png");
+
+    // 非 JSON 结果（错误文本）：退回占位，不抛异常
+    useRun.getState().restoreFromMessages(session, [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call-err", name: "command", args: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call-err",
+            content: "[error E_EXIT_CODE: 命令退出码 1]",
+            is_error: true,
+          },
+        ],
+      },
+    ] as any);
+    expect((toolCardsOf(session, "call-err")[0]!.outcome as any)?.data).toEqual({ restored: true });
+  });
+
   it("run:retry 清空半截 timeline 无残留", () => {
     const handlers = useRun.getState().bindGlobalHandlers();
     useRun.setState((s) => {

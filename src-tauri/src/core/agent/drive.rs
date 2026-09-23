@@ -1049,6 +1049,10 @@ async fn run_llm_turn(
                 core.key_pool
                     .report(&model.provider_id, &resolved_keys, key_idx, None);
                 *run_usage = *run_usage + usage;
+                // 上游回报的真实输入量（口径按协议分叉，见 RunUsage::prompt_total）：自动压缩
+                // 触发同时看它——本地估算对图片 base64 少算 2.3 倍
+                rt.last_input_tokens
+                    .store(usage.prompt_total(&model.api_format), Ordering::SeqCst);
                 // 收干流（= 本次生成结束）后才计耗时：duration 是「请求发出 → 流失结束」的
                 // **成功尝试**窗口（退避与失败尝试不进此窗口）
                 let (asm, ttft_ms) = collector.await.unwrap_or_default();
@@ -1169,7 +1173,7 @@ async fn run_llm_turn(
                     // 缺陷修复：历史修好了，但请求体还是构建时那份快照——必须重建，否则
                     // 重试发出的 body 与首次逐字节相同，必然复现同一个 400（会话 d9941c4b
                     // 实测：相隔 2.45s 的两条同文 400，修复从未真正生效）。
-                    refresh_request_messages(rt, req);
+                    refresh_request_messages(rt, req, model.vision.unwrap_or(false));
                     rt.stream.reset();
                     session_log::warn(
                         rt,
@@ -1236,6 +1240,8 @@ async fn step_auto_compact(
     compact_fail_streak: &mut u32,
     on_compacted: &mut impl FnMut(),
 ) {
+    // 只覆盖主会话（子代理 / 任务运行的 emit_events=false 在此早退，历史上就不跑自动压缩）：
+    // 子代理读大图仍可能直接顶到上游上限，其上下文安全依赖调用方控制步数/范围。
     if !params.emit_events {
         return;
     }
@@ -1247,8 +1253,17 @@ async fn step_auto_compact(
     );
 
     // ④ 阈值自动压缩（失败冷却 + 压缩互斥 + 进度事件，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）
-    let threshold = core.cfg.read().unwrap().compact_threshold.clamp(0.05, 0.95);
-    if bd.ratio > threshold as f64 && *compact_fail_streak < 2 {
+    let threshold = core.cfg.read().unwrap().compact_threshold.clamp(0.05, 0.95) as f64;
+    // 判定同时看两路：本地估算（bd.ratio）与上游回报的真实输入占比。只看估算会漏掉
+    // 「估算少算数倍」的内容（图片 base64 实测：估算 0.57 / 真实 0.99），压缩于是全程不触发，
+    // 上下文一路顶到上游上限并被 400 拒绝（会话 6bca80f4）。
+    let reported_ratio =
+        rt.last_input_tokens.load(Ordering::SeqCst) as f64 / bd.context_window.max(1) as f64;
+    // 注：该值是**上一次**请求回报的规模（本步历史又长了一点），故会滞后一步——首次带上
+    // 超大图的请求仍可能先撞一次上限，下一步必然触发压缩。滞后是刻意的：本地估算与真实值
+    // 各有盲区，宁可晚一步，也不能凭一次读数把用户还需要的历史压掉。
+    let trigger = context::compact_trigger(bd.ratio, reported_ratio, threshold);
+    if trigger != context::CompactTrigger::None && *compact_fail_streak < 2 {
         let timeout_secs = core
             .cfg
             .read()
@@ -1259,7 +1274,7 @@ async fn step_auto_compact(
         session_log::info(
             rt,
             &format!(
-                "自动压缩触发 ratio={:.2} / threshold={threshold:.2} tokens={} timeout={timeout_secs}s",
+                "自动压缩触发 ratio={:.2} / threshold={threshold:.2} tokens={} reported_ratio={reported_ratio:.2} source={trigger:?} timeout={timeout_secs}s",
                 bd.ratio, bd.total_tokens
             ),
         );
@@ -1669,7 +1684,7 @@ mod tests {
         // 误判置位：此后每个请求的出网副本都被剥掉思考（锁死期间的症状）
         rt.reasoning_rejected.store(true, Ordering::SeqCst);
         assert!(
-            !has_thinking(&messages_for_request(&rt)),
+            !has_thinking(&messages_for_request(&rt, false)),
             "粘性置位后出网副本必须无思考（锁死症状：要求回传的端点每轮 400）"
         );
 
@@ -1689,7 +1704,7 @@ mod tests {
 
         // 复位后的下一个请求重新带上思考；转录全程未被改写
         assert!(
-            has_thinking(&messages_for_request(&rt)),
+            has_thinking(&messages_for_request(&rt, false)),
             "复位后下一个请求必须重新回传思考（要求回传的端点靠它拿数据）"
         );
         assert_eq!(

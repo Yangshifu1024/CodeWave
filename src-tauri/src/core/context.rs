@@ -26,6 +26,33 @@ pub struct ContextBreakdown {
     pub ratio: f64,
 }
 
+/// 自动压缩触发来源（日志与诊断用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactTrigger {
+    /// 不触发
+    None,
+    /// 本地估算占比超阈值
+    Estimate,
+    /// 上游回报的真实输入占比超阈值
+    Reported,
+}
+
+/// 自动压缩触发判定（纯函数）：估算占比与上游回报的真实占比**任一**超阈值即触发。
+///
+/// 为什么不能只看估算：本地估算按「字符数 ÷ 4」折算，对某些内容会少算数倍 —— 图片 base64
+/// 实测 1.59 字符/token（估算只算到 0.44 倍），于是「估算占比 0.57 / 真实占比 0.99」这种
+/// 组合下压缩全程不触发，上下文一路顶到上游上限并被 400 拒绝（会话 6bca80f4）。
+/// 两路都超阈值时报 [`CompactTrigger::Reported`]（诊断上信息量更大）。
+pub fn compact_trigger(est_ratio: f64, reported_ratio: f64, threshold: f64) -> CompactTrigger {
+    if reported_ratio > threshold {
+        CompactTrigger::Reported
+    } else if est_ratio > threshold {
+        CompactTrigger::Estimate
+    } else {
+        CompactTrigger::None
+    }
+}
+
 /// 压缩摘要请求的输出上限（min 进模型 max_tokens，防摘要喧宾夺主）。
 pub const SUMMARY_MAX_TOKENS: u32 = 8000;
 /// 压缩摘要请求默认超时秒数（可经 config.compact_timeout_seconds 覆盖，钳到 [30, 3600]）。
@@ -258,6 +285,10 @@ pub async fn compact_history(
     }
     *rt.history.lock().unwrap() = new_history;
     rt.breakdown_cache.lock().unwrap().take();
+    // 真实输入量随历史一起作废：不复位会让「按上游回报触发」在压缩后立刻重复触发
+    //（下一次请求回来前，那个值仍是被压缩掉的那份历史的规模）
+    rt.last_input_tokens
+        .store(0, std::sync::atomic::Ordering::SeqCst);
 
     // 压缩调用自身的 token 计账（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）：独立 kind=compact，不再凭空蒸发
     core.stats.record(crate::core::stats::UsageRecord {
@@ -284,6 +315,16 @@ mod tests {
         // breakdown 的纯计数逻辑由 token_est 测试覆盖。
         let _ = SUMMARY_SYSTEM.contains("LATEST_REQUEST");
         assert!(SUMMARY_SYSTEM.contains("KEY_FILES"));
+    }
+
+    /// 回归钉（会话 6bca80f4）：估算占比低、上游回报占比高时必须触发压缩。
+    #[test]
+    fn compact_trigger_uses_reported_ratio() {
+        assert_eq!(compact_trigger(0.10, 0.10, 0.6), CompactTrigger::None);
+        assert_eq!(compact_trigger(0.61, 0.10, 0.6), CompactTrigger::Estimate);
+        assert_eq!(compact_trigger(0.57, 0.99, 0.6), CompactTrigger::Reported);
+        // 两路都超阈值时报「真实输入」优先（诊断上更有信息量）
+        assert_eq!(compact_trigger(0.9, 0.9, 0.6), CompactTrigger::Reported);
     }
 
     #[test]

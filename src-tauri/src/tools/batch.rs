@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 /// 批次执行结果：模型侧结果 + suggest 语义（成功即结束 run）+ plan 批准语义（档位已切换）。
 pub struct BatchOutcome {
-    /// 按调用顺序排列的模型侧 ToolResult 内容。
+    /// 按调用顺序排列的模型侧 ToolResult 内容（read 读图时其后还会跟图片块：
+    /// 出网副本层 stream.rs::route_tool_images 会把它们搬进紧随其后的用户消息）。
     pub results: Vec<Content>,
     /// suggest 工具成功时携带的建议列表（run 循环据此结束 run）。
     pub suggest_items: Option<Vec<String>>,
@@ -62,7 +63,8 @@ pub async fn execute_batch(
                 "ask/wait/suggest 类工具必须是批次中唯一的调用",
             );
             emit_result(&sink, rt, run_id, &batch_id, c, &out, 0);
-            results.push(model_content(core, c, &out, None));
+            // vision 传 false：本路径（ask/wait/suggest 违反独占）只会产出错误结果，不可能带图片
+            results.push(model_content(core, c, &out, None, false));
         }
         return BatchOutcome {
             results,
@@ -249,6 +251,13 @@ pub async fn execute_batch(
     }
 
     // (4) 组装模型侧结果 + suggest 语义 + plan 批准语义
+    // 会话生效模型是否勾选「支持图片输入」：决定模型侧文本怎么写、图片块是否随历史带下去
+    let vision = {
+        let cfg = core.cfg.read().unwrap();
+        crate::core::prefs::effective_model(&cfg, &rt.prefs())
+            .and_then(|m| m.vision)
+            .unwrap_or(false)
+    };
     let mut results = Vec::new();
     let mut suggest_items: Option<Vec<String>> = None;
     let mut plan_approved = false;
@@ -285,12 +294,26 @@ pub async fn execute_batch(
         });
         // 提醒不是独立 Text 块（wire 层会丢弃 Tool 消息里的非 ToolResult 块），
         // 而是追加到本 ToolResult 的 content 尾部随正文到达模型；
-        // extra 当前只有 plan 软提醒（0/1 条 Text 块），取首个 Text 的文本拼接
+        // extra 里可能同时有图片块（read 读图）与文本（plan 软提醒 / edit 的修正说明），
+        // 这里只取首个 Text 当提醒，图片由下面的分支单独收集
         let hint = extra.iter().find_map(|c| match c {
             Content::Text { text } => Some(text.clone()),
             _ => None,
         });
-        results.push(model_content(core, call, &out, hint));
+        results.push(model_content(core, call, &out, hint, vision));
+        // 图片块（read 读图）跟在本条 ToolResult 之后进同一条工具消息：出网副本层
+        // （agent/stream.rs::route_tool_images）再把它们搬进紧随其后的用户消息 —— 工具消息里的
+        // 图片块两个协议的 convert_message 都会丢弃，而图片本体也绝不能挤进 ToolResult 文本
+        //（那段 base64 按约 1.6 字符/token 计费，实测 944KB 截图 ≈ 79 万 token）。
+        // 未勾选「支持图片输入」时不带下去：模型侧说明已如实写明看不到。
+        if vision {
+            results.extend(
+                extra
+                    .iter()
+                    .filter(|c| matches!(c, Content::Image { .. }))
+                    .cloned(),
+            );
+        }
     }
     BatchOutcome {
         results,
@@ -615,13 +638,14 @@ fn model_content(
     call: &NormalizedCall,
     out: &ToolOutcome,
     model_hint_non_empty: Option<String>,
+    vision: bool,
 ) -> Content {
     let kind = core
         .tools
         .get(&call.name)
         .map(|t| t.kind())
         .unwrap_or(ToolKind::Meta);
-    let mut text = crate::tools::compact::compact_for_model(kind, &call.name, out);
+    let mut text = crate::tools::compact::compact_for_model(kind, &call.name, out, vision);
     if let Some(hint) = model_hint_non_empty {
         text.push_str(&hint);
     }

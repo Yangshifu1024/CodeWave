@@ -826,7 +826,7 @@ async fn refresh_request_messages_rewrites_body_from_repaired_history() {
         reasoning_effort: None,
         session_id: None,
     };
-    super::stream::refresh_request_messages(&rt, &mut req);
+    super::stream::refresh_request_messages(&rt, &mut req, false);
     // 不再是构建时那份陈旧快照（仅含 "stale"）
     assert!(
         !matches!(&req.messages[0].content[0], Content::Text { text } if text == "stale"),

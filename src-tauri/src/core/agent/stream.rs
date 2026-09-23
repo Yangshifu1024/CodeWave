@@ -31,7 +31,7 @@ pub(super) const ERROR_CAP: usize = 500;
 /// 请求都不再回传」——否则每步新产的思考会重新带上线，每步各撞一次 400，而 BadRequest
 /// 按约定不重试，run 直接失败。粘性剥思考只作用于这份副本：`rt.history` 与落盘数据不动，
 /// 思考仍留在转录里，用户切回正常模型后仍可回传（`sanitize` 兜底则改写 `rt.history`，不落盘）。
-pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
+pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>, vision: bool) -> Vec<Message> {
     let mut messages = rt.history.lock().unwrap().clone();
     // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
     // 落在其之前最后一条非瞬态消息上，保前缀缓存）
@@ -55,6 +55,8 @@ pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>) -> Vec<Message> {
             rt.id
         );
     }
+    // 工具读到的图片：搬进紧随其后的用户消息（或未勾选图片输入时剥掉）——见 route_tool_images
+    route_tool_images(&mut messages, vision);
     repair_before_send(messages)
 }
 
@@ -73,6 +75,58 @@ pub(super) fn drop_thinking_blocks(messages: &mut [Message]) -> usize {
     dropped
 }
 
+/// 工具读到的图片随附消息的引导语（模型据此知道这不是用户输入）。
+pub(super) const TOOL_IMAGE_LEAD: &str = "以下是刚才工具读取的图片（系统自动附加，不是用户输入）：";
+
+/// 出网副本里「工具读到的图片」的去向（图片通道修复，会话 6bca80f4 的根因批次）：
+///
+/// - `vision = true`：搬到**紧随工具结果之后的一条用户消息**里。两个协议的 convert_message
+///   都只认用户消息里的图片（OpenAI 兼容：`provider/openai_chat.rs` 的 `Role::Tool` 分支只输出
+///   tool_result 文本；Anthropic：`provider/anthropic.rs` 同样只折叠 tool_result），图片留在工具
+///   消息里等于没发。图片本体也绝不该挤进 ToolResult 文本——那段 base64 按约 1.6 字符/token 计费
+///   （实测 944KB 截图 ≈ 79 万 token，而本地估算按 4 字符/token 只算 34 万）。
+/// - `vision = false`：直接从副本里剥掉（模型侧文本已如实说明「未开启图片输入，看不到」）。
+///   图片本体是否还在 `rt.history` 里取决于**读取当时**的勾选（batch.rs 据此决定带不带下去）；
+///   当时勾选过就还在，之后切回支持图片的模型又能发出去。
+///
+/// 只改这份副本：历史与落盘保持原样（界面按路径渲染图片卡片，不依赖这段 payload）。
+pub(super) fn route_tool_images(messages: &mut Vec<Message>, vision: bool) {
+    if !messages.iter().any(|m| {
+        m.role == Role::Tool && m.content.iter().any(|c| matches!(c, Content::Image { .. }))
+    }) {
+        return;
+    }
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for m in messages.drain(..) {
+        if m.role != Role::Tool {
+            out.push(m);
+            continue;
+        }
+        let (images, rest): (Vec<Content>, Vec<Content>) = m
+            .content
+            .into_iter()
+            .partition(|c| matches!(c, Content::Image { .. }));
+        out.push(Message {
+            role: Role::Tool,
+            content: rest,
+            created_at: m.created_at,
+        });
+        if images.is_empty() || !vision {
+            continue;
+        }
+        let mut content = vec![Content::Text {
+            text: TOOL_IMAGE_LEAD.to_string(),
+        }];
+        content.extend(images);
+        out.push(Message {
+            role: Role::User,
+            content,
+            created_at: None,
+        });
+    }
+    *messages = out;
+}
+
 /// 出网副本的修复步骤（纯函数，便于单测）：复用会话修复管线的 `repair`——
 /// 补悬空 tool_use 的 [interrupted] 结果、清孤儿 tool_result、丢空 assistant 消息。
 pub(super) fn repair_before_send(mut messages: Vec<Message>) -> Vec<Message> {
@@ -89,13 +143,17 @@ pub(super) fn repair_before_send(mut messages: Vec<Message>) -> Vec<Message> {
 ///   延拓（否则模型在重试那一轮会莫名失去计划视图）。
 /// - 不重算 `cache_gen_index`：修复会缩短历史，该锚点可能落到别的消息上或失效，最坏结果是
 ///   本次重试少一个代际缓存断点（一次性 1.25x 前缀重写），不影响正确性。
-pub(super) fn refresh_request_messages(rt: &Arc<SessionRuntime>, req: &mut StreamRequest) {
+pub(super) fn refresh_request_messages(
+    rt: &Arc<SessionRuntime>,
+    req: &mut StreamRequest,
+    vision: bool,
+) {
     let transient = req
         .messages
         .last()
         .filter(|m| is_plan_transient(m))
         .cloned();
-    req.messages = messages_for_request(rt);
+    req.messages = messages_for_request(rt, vision);
     if let Some(t) = transient {
         if !req.messages.last().map(is_plan_transient).unwrap_or(false) {
             req.messages.push(t);
@@ -194,7 +252,7 @@ pub(super) async fn build_stream_request(
             core
         }
     };
-    let messages = messages_for_request(rt);
+    let messages = messages_for_request(rt, model.vision.unwrap_or(false));
     // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
     let mut tools: Vec<crate::provider::ToolDef> = core
         .tools
@@ -498,6 +556,75 @@ mod anchor_tests {
         assert_eq!(clean, expected);
     }
 
+    // 工具读到的图片（回归钉，会话 6bca80f4）：勾选支持图片 → 搬到紧随工具结果之后的
+    // 用户消息（两个协议的工具消息都不发图片）；未勾选 → 从副本里剥掉。历史不被改写。
+    #[test]
+    fn route_tool_images_moves_to_user_message_or_drops() {
+        use crate::core::types::{Content, Message, Role};
+        let history = vec![
+            Message::user_text("看下这张图"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "read".into(),
+                    args: serde_json::json!({"files": [{"path": "a.png"}]}),
+                }],
+                created_at: None,
+            },
+            Message {
+                role: Role::Tool,
+                content: vec![
+                    Content::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: "{\"files\":[{\"path\":\"a.png\",\"kind\":\"image\"}]}".into(),
+                        is_error: false,
+                    },
+                    Content::Image {
+                        media_type: "image/png".into(),
+                        data: "AAAA".into(),
+                    },
+                ],
+                created_at: None,
+            },
+        ];
+
+        // 勾选支持图片：工具消息只剩 tool_result，图片落到紧随其后的用户消息
+        let mut on = history.clone();
+        super::route_tool_images(&mut on, true);
+        assert_eq!(on.len(), history.len() + 1);
+        assert_eq!(on[2].role, Role::Tool);
+        assert!(
+            !on[2]
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::Image { .. }))
+        );
+        assert_eq!(on[3].role, Role::User);
+        assert!(
+            matches!(&on[3].content[0], Content::Text { text } if text == super::TOOL_IMAGE_LEAD)
+        );
+        assert!(
+            matches!(&on[3].content[1], Content::Image { media_type, .. } if media_type == "image/png")
+        );
+
+        // 未勾选：图片从副本里剥掉，不加用户消息
+        let mut off = history.clone();
+        super::route_tool_images(&mut off, false);
+        assert_eq!(off.len(), history.len());
+        assert!(
+            !off.iter()
+                .flat_map(|m| m.content.iter())
+                .any(|c| matches!(c, Content::Image { .. }))
+        );
+
+        // 无图片的历史原样不动（幂等）
+        let mut plain = vec![Message::user_text("hi")];
+        let before = plain.clone();
+        super::route_tool_images(&mut plain, true);
+        assert_eq!(plain, before);
+    }
+
     // 集成：粘性标记置位后的 messages_for_request 出网副本不含思考，且 rt.history 不被改写
     #[test]
     fn messages_for_request_drops_thinking_when_reasoning_rejected() {
@@ -525,7 +652,7 @@ mod anchor_tests {
         *rt.history.lock().unwrap() = history.clone();
 
         // 标记未置位：出网副本仍带思考（今日行为不变）
-        let kept = super::messages_for_request(&rt);
+        let kept = super::messages_for_request(&rt, false);
         assert!(
             kept.iter()
                 .flat_map(|m| m.content.iter())
@@ -535,7 +662,7 @@ mod anchor_tests {
 
         // 标记置位：副本不含思考，转录原样不动
         rt.reasoning_rejected.store(true, Ordering::SeqCst);
-        let out = super::messages_for_request(&rt);
+        let out = super::messages_for_request(&rt, false);
         assert!(
             !out.iter()
                 .flat_map(|m| m.content.iter())
@@ -671,12 +798,14 @@ pub(super) fn build_assistant_message(
 }
 
 /// 模型侧双通道压缩包装（供批次执行层调用）。
+/// `vision` = 会话生效模型是否勾选「支持图片输入」（read 图片说明的措辞与图片块去向据此分叉）。
 pub fn model_side_result(
     kind: crate::tools::ToolKind,
     name: &str,
     outcome: &crate::tools::ToolOutcome,
+    vision: bool,
 ) -> String {
-    compact_for_model(kind, name, outcome)
+    compact_for_model(kind, name, outcome, vision)
 }
 
 /// 将一个节流批次按段顺序拆成多条单通道帧依次下发：帧到达序 = 显示顺序。

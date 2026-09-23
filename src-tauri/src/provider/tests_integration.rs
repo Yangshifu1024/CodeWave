@@ -140,7 +140,7 @@ async fn midstream_disconnect_maps_to_network() {
     //    「半截响应」因此有时表现为 RST、有时表现为 EOF（不确定）；
     // 2) 监听端口随任务结束被释放，而并发用例也用 `127.0.0.1:0`，同一临时端口可能被另一条用例的 mock
     //    抢到并用它自己的脚本（含空 body 的 5xx）应答——客户端就会拿到与本地 mock 无关的响应，
-    //    经 `from_status(5xx, "")` 归为 `Server("")`。
+    // 经 `from_status(5xx, "")` 归为 `Server("服务未返回原因（HTTP 5xx，响应内容为空）")`。
     // 因此：listener 用 `Arc` 持有并**活到用例结束**（端口不被复用），mock 读干请求头 + `shutdown` 写半部
     // 优雅收尾（让客户端看到干净 EOF）。
     let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());

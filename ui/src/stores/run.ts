@@ -21,6 +21,8 @@ import {
   findToolViewInItems,
   messagesToSubStream,
   scanToolResults,
+  restoredToolData,
+  safeArgsPreview,
   updateToolFromStart,
 } from "./runFrames";
 import {
@@ -471,12 +473,16 @@ export const useRun = create<RunStore>()(
                 restoredStreams[key] = { timeline: [], toolsMap: {}, status: "done", gen: 0, loaded: false };
               } else {
                 timeline.push({ kind: "tool", callKey });
+                // 出参尽量还原（restoredToolData）：read 读图卡片的图片条目里只剩 path/kind/media_type，
+                // 卡片据此按路径重新加载图片；解析不出来才退回占位。
+                // 入参同样填上（safeArgsPreview）：摘要行、ask 问答行的题干、edit 的 diff 都靠它。
                 // 本次未处理：主会话历史恢复把无结果调用呈现为已使用，与子代理流的「已中断」语义不一致，留待后续
                 toolsMap[callKey] = {
                   callKey,
                   tool: (c as any).name,
                   status: "ok",
-                  outcome: { ok: true, data: { restored: true } },
+                  outcome: { ok: true, data: restoredToolData(toolResults[callKey]?.content) },
+                  argsPreview: safeArgsPreview((c as any).args),
                   progressTail: "",
                 };
               }
