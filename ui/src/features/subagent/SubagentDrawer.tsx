@@ -3,6 +3,7 @@ import { Button, Drawer, Tag, Tooltip } from "antd";
 import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useActiveRun, useRun } from "../../stores/run";
+import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
 
 /** 子代理抽屉可用宽度：45% 视口，夹在 360–560 之间。 */
@@ -28,13 +29,15 @@ export default function SubagentDrawer() {
   const width = useMemo(() => drawerWidth(), [open]);
 
   // 轻量贴底：内容增长即滚到底部；滚轮上滚 = 阅读意图，暂停跟随。
-  // 移植自 ChatMessages（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：程序化跳转声明豁免窗口 + 目标值，onScroll 吞掉
+  // 移植自 ChatMessages（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：程序化跳转声明豁免窗口 + **实际落点**，onScroll 吞掉
   // 自身触发的滚动事件，仅用户驱动滚动才重判钉住状态——否则触控板小幅上滚（<40px）
   // 会被重判为「在底部」，下一帧流式又把视图拽回底部。
+  // 落点必须是 bottomScrollTarget（scrollTop 会被钳到 scrollHeight - clientHeight）：2026-09-23 与
+  // ChatMessages 同源修复，详见 [docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)。
   const bodyRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const progUntil = useRef(0); // 程序化滚动事件的豁免窗口（ms 时间戳）
-  const progTarget = useRef(Infinity); // 最近一次程序化跳转的 scrollTop 目标（目标比对，docs/thinking-scroll-fix §2.3）
+  const progTarget = useRef(Infinity); // 最近一次程序化跳转的**实际落点**（豁免比对用，docs/thinking-scroll-fix §2.3）
   const prevSubId = useRef<string | null>(null);
   // 指派任务默认展开：任务全文一眼可见（此前默认折叠 + 后端 2000 字符有损截断，展开也看不到全文）。
   // 长任务会把过程流推向下方，需要时用标签行收起——折叠态保留单行 ellipsis 预览（hover 有完整 title）。
@@ -51,8 +54,11 @@ export default function SubagentDrawer() {
   const scrollToBottom = useCallback(() => {
     const el = bodyRef.current;
     if (!el) return;
+    // 目标取**浏览器实际落点**：scrollTop 会被钳到 scrollHeight - clientHeight，拿未钳的 scrollHeight 比对时
+    // 差值恒等于 clientHeight（几百像素）≫ 40px 容差 ⇒ 豁免永不成立，自家跳转会被当成用户滚动；
+    // 流式下内容往往在 scroll 事件派发前又长一截，几何判定当场把跟随关掉且不自愈（同 ChatMessages 的缺陷）。
+    progTarget.current = bottomScrollTarget(el);
     progUntil.current = Date.now() + 150;
-    progTarget.current = el.scrollHeight;
     el.scrollTop = el.scrollHeight;
   }, []);
   const suspendFollow = useCallback(() => {
@@ -207,9 +213,12 @@ export default function SubagentDrawer() {
         onScroll={() => {
           const el = bodyRef.current;
           if (!el) return;
-          if (Date.now() < progUntil.current && Math.abs(el.scrollTop - progTarget.current) < 40) return; // 自家跳转，豁免
+          // 本抽屉只有瞬时跳转（无平滑滚动），豁免区间退化为「落点」这一点：
+          // isSelfScroll(x, landing, landing) 等价于「位置 ≈ 落点」，但判定口径与 ChatMessages 同一份实现。
+          const landed = progTarget.current;
+          if (Date.now() < progUntil.current && isSelfScroll(el.scrollTop, landed, landed)) return; // 自家跳转，豁免
           progUntil.current = 0;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          stick.current = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
         }}
       >
         {sub?.task && (

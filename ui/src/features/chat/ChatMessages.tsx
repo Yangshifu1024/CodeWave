@@ -18,7 +18,15 @@ import { useUi } from "../../stores/ui";
 import { upgradeDiagrams } from "../../utils/diagrams";
 import type { UiItem } from "../../stores/run";
 // 滚动锚点（会话保存与恢复优化 · 批1）：锚点读写与现场态落盘的调用链见本文件「滚动锚点」一节。
-import { captureAnchor, collectNodes, isAtBottom, itemSig, restoreAnchor } from "../../utils/scrollAnchor";
+import {
+  bottomScrollTarget,
+  captureAnchor,
+  collectNodes,
+  isAtBottom,
+  isSelfScroll,
+  itemSig,
+  restoreAnchor,
+} from "../../utils/scrollAnchor";
 import type { ScrollAnchor } from "../../utils/scrollAnchor";
 import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/uiState";
 import SubagentItemCard from "../subagent/SubagentItemCard";
@@ -148,10 +156,17 @@ const AssistantMessage = memo(function AssistantMessage({
   );
 });
 
+/** 瞬时跳底的豁免窗口：只需覆盖本次 scroll 事件的派发（事件在下一帧才到） */
+const PROG_SCROLL_MS = 150;
+/** 平滑跳底的豁免窗口：要盖住整段动画。浏览器平滑滚动时长随距离增长，这里取经验上限，
+ *  由 [docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md) 的手动清单第 3 项校准 */
+const SMOOTH_SCROLL_MS = 700;
+
 /** 聊天消息区：单实例随 activeKey 换数据不重挂；维护「贴底跟随 / 用户接管」滚动模型——
  *  贴底时内容增长自动下滚；滚轮上滚或展开卡片即阅读意图暂停跟随；恢复仅限滚回底部或
- *  「回到底部」按钮。程序化滚动用豁免窗口 + 目标值比对，防止自家跳转被误判为用户滚动
- *  （[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。 */
+ *  「回到底部」按钮。程序化滚动用豁免窗口 + **落点比对**（bottomScrollTarget / isSelfScroll）：
+ *  瞬时跳底只豁免落点，平滑动画才用 from→target 区间，防止自家跳转被误判为用户滚动
+ *  （[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)、[docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)）。 */
 export default function ChatMessages() {
   const { t } = useTranslation();
   const active = useActiveRun();
@@ -161,7 +176,8 @@ export default function ChatMessages() {
   const [atBottom, setAtBottom] = useState(true);
   const stickBottom = useRef(true);
   const progScroll = useRef(0); // 程序化滚动的豁免窗口：窗口内自家触发的滚动事件不参与贴底判定
-  const progTarget = useRef(Infinity); // 最近一次程序化跳底的 scrollTop 目标（目标比对豁免，docs/thinking-scroll-fix §2.3）
+  const progFrom = useRef(0); // 发起程序化滚动时的 scrollTop（豁免区间的下端）
+  const progTarget = useRef(Infinity); // 程序化滚动的落点 scrollTop（豁免区间的上端，docs/thinking-scroll-fix §2.3）
   // ---------- 滚动锚点：记录 → 落盘 → 还原 ----------
   // 记录：onScroll → recordAnchor → uiState.scheduleAnchor（200ms 节流）→ captureAnchor(容器) → setScrollAnchor → 落盘防抖
   // 还原：activeKey 变化 → getScrollAnchor(会话) → restoreAnchor(容器, 锚点)（无锚/贴底 ⇒ scrollTop = scrollHeight；
@@ -173,23 +189,42 @@ export default function ChatMessages() {
   const anchorSid = useRef<string | null>(null);
   const anchorHit = useRef(false);
 
-  const scrollToBottom = (smooth = false) => {
-    const el = scroller.current;
-    if (!el) return;
-    progScroll.current = Date.now() + 150;
-    progTarget.current = el.scrollHeight;
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-    stickBottom.current = true;
-    setAtBottom(true);
-  };
+  /** 登记程序化滚动的豁免窗口：窗口内落在 [from, target] 区间（±BOTTOM_EPS）的滚动事件算自家事件。
+   *  target 必须是**浏览器实际落点**（bottomScrollTarget，会被钳到 scrollHeight - clientHeight），
+   *  绝不是 scrollHeight —— 拿未钳值比对时差值恒等于 clientHeight（几百像素），豁免永不成立。
+   *  from 默认等于 target（瞬时跳底：落点即豁免点）；只有平滑滚动才显式传「发起位置」，
+   *  因为动画期间位置要在 from→target 之间逐帧移动。
+   *  useCallback（而非普通函数）：它被三个 effect 直接引用，稳定引用才能安心进依赖数组。 */
+  const markProgScroll = useCallback(
+    (el: HTMLElement, target: number, ms = PROG_SCROLL_MS, from = target) => {
+      progFrom.current = from;
+      progTarget.current = target;
+      progScroll.current = Date.now() + ms;
+    },
+    [],
+  );
 
-  /** 程序化滚动登记豁免窗口：自家产生的 scroll 事件不参与「用户接管」判定（否则还原动作会
-   *  把自己当成用户滚动，把待还原的锚点当场取消）。沿用 scrollToBottom 的目标值比对机制：
-   *  scroll 事件在下一帧才派发，所以我可以在赋值之后读回实际 scrollTop 作为目标值。 */
-  const markProgScroll = (el: HTMLElement) => {
-    progScroll.current = Date.now() + 150;
-    progTarget.current = el.scrollTop;
-  };
+  /** 程序化跳底：全部「我们自己滚到底」的唯一入口（激活贴底 / 内容增长跟随 / 「回到底部」按钮）。
+   *  一并登记豁免窗口与跟随态 —— 少了豁免，这次跳底产生的 scroll 事件会被 onScroll 按几何判定：
+   *  流式下内容往往在事件派发前又长了一截，当场判成「用户滚走了」，跟随被关掉且不再自愈
+   *  （[docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)）。
+   *  el 允许为 null（容器尚未挂载时仍要维持跟随态）。 */
+  const jumpToBottom = useCallback(
+    (el: HTMLElement | null, smooth = false) => {
+      if (el) {
+        const target = bottomScrollTarget(el);
+        // 瞬时跳底：落点即豁免点（不传 from）。给区间会随「离底多远」变宽 ——「发送后强制跳底」
+        // 与「切 Tab 贴底」的区间能盖住整段阅读位置，窗口内用户拖滚动条 / PageUp 的真实上滚会被吞。
+        // 平滑动画才需要区间：动画期间位置在 from→target 之间逐帧移动，且窗口要盖住整段动画。
+        if (smooth) markProgScroll(el, target, SMOOTH_SCROLL_MS, el.scrollTop);
+        else markProgScroll(el, target);
+        el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+      }
+      stickBottom.current = true;
+      setAtBottom(true);
+    },
+    [markProgScroll],
+  );
 
   /** 按真实几何同步「贴底/跟随」态：阈值沿用 scrollAnchor.isAtBottom（BOTTOM_EPS=40，与 onScroll 的 <40 同源，
    *  不另发明一套判定） */
@@ -230,9 +265,9 @@ export default function ChatMessages() {
     if (grew && userJustSent) {
       stickBottom.current = true;
       setAtBottom(true);
-      requestAnimationFrame(() => scrollToBottom(false));
+      requestAnimationFrame(() => jumpToBottom(scroller.current));
     }
-  }, [lastLen, lastKind]);
+  }, [lastLen, lastKind, jumpToBottom]);
 
   // 切 Tab / 首次激活：按 ui-state 的滚动锚点还原 —— 取代原先的「无条件贴底硬重置」。
   // ChatMessages 是单实例随 activeKey 换数据不重挂，贴底/跟随态必须在本轮 commit 里重定（否则跨 Tab 残留），
@@ -240,7 +275,9 @@ export default function ChatMessages() {
   // 声明在跟随 effect 之前，保证同一次 commit 内先落位，跟随 effect 才不会把视口拽回底部。
   useEffect(() => {
     progScroll.current = 0;
-    progTarget.current = Infinity;
+    // 哨兵用 NaN（与任何值比较恒 false = 永不豁免）：Infinity 在区间语义下会变成「≥ from-40 全豁免」，
+    // 后人若只改这一处、忘了同步关窗口就会踩雷
+    progTarget.current = NaN;
     anchorSid.current = activeKey;
     anchorHit.current = false;
     pendingAnchor.current = null;
@@ -248,9 +285,8 @@ export default function ChatMessages() {
     const anchor = activeKey ? getScrollAnchor(activeKey) : null;
     // 无锚点（新会话 / 从未滚动过）或上次本就贴底 ⇒ 保持贴底：与旧逻辑行为一致，不做无谓的中间位还原
     if (!anchor || anchor.kind === "bottom") {
-      stickBottom.current = true;
-      setAtBottom(true);
-      if (el) restoreAnchor(el, anchor); // bottom / null ⇒ scrollTop = scrollHeight
+      // 走 jumpToBottom 而不是 restoreAnchor：同样落到底部，但一并登记豁免窗口（见其注释）
+      jumpToBottom(el);
       return;
     }
     // 有消息锚：先落位，并停掉自动跟随 —— 否则流式新增消息的下滚会把刚还原的位置顶掉。
@@ -261,9 +297,9 @@ export default function ChatMessages() {
     // 降级贴底 —— 先跳底部再跳回锚点是白闪一下。干脆不落位：交给下面的「二次校正」等消息渲染出来一次落位。
     if (collectNodes(el).length === 0) return;
     anchorHit.current = restoreAnchor(el, anchor);
-    markProgScroll(el);
+    markProgScroll(el, el.scrollTop);
     if (anchorHit.current) syncFollowState(el); // 落在底部附近就当贴底跟随，否则显示「回到底部」
-  }, [activeKey]);
+  }, [activeKey, jumpToBottom, markProgScroll]);
 
   // 二次校正（懒加载）：Tab 刚加载完的首帧布局未稳定（items 从空变为有内容），锚点还原会偏 ——
   // 依赖 lastLen（items.length）：内容就绪时重跑，并在接下来的帧里重定位到命中为止。
@@ -279,7 +315,7 @@ export default function ChatMessages() {
       if (pendingAnchor.current !== anchor) return; // 已取消（切 Tab / 用户接管滚动）
       if (useSessions.getState().activeKey !== anchorSid.current) return; // 已切走：不把位置写到别的会话
       const hit = restoreAnchor(el, anchor);
-      markProgScroll(el);
+      markProgScroll(el, el.scrollTop);
       if (hit) {
         anchorHit.current = true;
         pendingAnchor.current = null;
@@ -302,7 +338,7 @@ export default function ChatMessages() {
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [activeKey, lastLen]);
+  }, [activeKey, lastLen, markProgScroll]);
 
   // 内容增长 / 定稿（streaming 翻转）时：贴底则跟随滚动；同时升级 katex/mermaid 占位符
   // （流式期间 diagrams 跳过 mermaid；收尾时 streamCount 变化重跑本 effect 补渲染）
@@ -324,23 +360,29 @@ export default function ChatMessages() {
     // 旧的几何 nearBottom<80 重接管会把刚暂停的跟随立即撤销（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。
     // 几何恢复只保留两条路：onScroll nearBottom<40 与「回到底部」按钮。
     if (!stickBottom.current) return;
-    void upgradeDiagrams(el).then(() => {
-      if (stickBottom.current) {
-        progScroll.current = Date.now() + 150;
-        progTarget.current = el.scrollHeight;
-        el.scrollTop = el.scrollHeight;
-      }
-    });
+    // 先同步贴底：跟随不能押在图表升级的 promise 上（升级链路一旦 reject，视图就再也跟不上）
+    jumpToBottom(el);
+    // 升级后高度会变（katex/mermaid 撑高）：贴底则再补一次；升级失败只影响图表渲染，不该影响聊天，故吞掉
+    void upgradeDiagrams(el)
+      .catch((e) => {
+        // 升级失败（动态导入失败等）只影响图表渲染，不该影响聊天跟随；DEV 下留个信号（仓库惯例）
+        if (import.meta.env.DEV) console.warn("[diagram-upgrade]", e);
+      })
+      .then(() => {
+        if (stickBottom.current && scroller.current === el) jumpToBottom(el);
+      });
   }, [
     active.items.length,
     active.subs.length,
     streamCount, // done/error/cancelled 是三条翻 streaming 的收尾路径——必须触发补渲染
     contentLen,
+    jumpToBottom,
   ]);
 
-  // 用户滚动 -> 更新贴底态（离底 >40px 记为离开）。程序化豁免窗口用目标值比对：
-  // 窗口内只有「scrollTop ≈ 跳转目标」的自家事件被吞；偏离目标即用户接管滚动
-  // （拖滚动条 / 键盘 PageUp 不产生 wheel 事件，走此路径暂停跟随，[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.3）。
+  // 用户滚动 -> 更新贴底态（离底 >40px 记为离开）。程序化豁免窗口用落点比对：
+  // 瞬时跳底只豁免「落点 ±BOTTOM_EPS」这一点，平滑动画才用 [from, target] 区间（动画期间位置逐帧移动）。
+  // 越过区间即用户接管滚动（拖滚动条 / 键盘 PageUp 不产生 wheel 事件，走此路径暂停跟随，
+  // [docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.3）。
   // 不做「落点是否到底」检查：流式期间渲染与滚动交错使几何读数漂移，会把正常跟随误判为用户滚动。
   const onScroll = () => {
     const el = scroller.current;
@@ -348,7 +390,7 @@ export default function ChatMessages() {
     // 滚动即记锚点（自家程序化滚动也记：跟随贴底期间记下的就是「贴底」，切回来照旧贴底）
     recordAnchor(activeKey);
     if (Date.now() < progScroll.current) {
-      if (Math.abs(el.scrollTop - progTarget.current) < 40) return; // 自家事件，豁免
+      if (isSelfScroll(el.scrollTop, progFrom.current, progTarget.current)) return; // 自家事件，豁免
       progScroll.current = 0; // 被外部打断 -> 交出控制权，按用户滚动处理
     }
     const nearBottom = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
@@ -501,7 +543,7 @@ export default function ChatMessages() {
             shape="circle"
             icon={<DownOutlined />}
             style={{ pointerEvents: "auto", boxShadow: "0 2px 8px rgba(0,0,0,0.15)" }}
-            onClick={() => scrollToBottom(true)}
+            onClick={() => jumpToBottom(scroller.current, true)}
             aria-label={t("chat.scrollToBottom")}
           />
         </div>

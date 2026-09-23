@@ -151,12 +151,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .msg.user:hover .user-msg-actions { visibility: visible; opacity: 1; }
 .assistant { max-width: 100%; overflow: hidden; }
 .assistant .md { max-width: 860px; min-width: 0; overflow-x: hidden; }
-/* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
-   inline code chip、表格等全部无样式；计划正文以纯文本渲染） */
-:is(.assistant .md, .plan-body.md) p { margin: 0.4em 0; }
+/* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡 + 更新弹窗发布说明（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
+   inline code chip、表格等全部无样式；[docs/updater-notes-markdown-and-progress-throttle](../../../docs/updater-notes-markdown-and-progress-throttle.md) 把更新弹窗的发布说明也并入本组）。
+   新增消费点一律往这里的 :is() 里加容器选择器，不要另抄一套排版。 */
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) p { margin: 0.4em 0; }
 /* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
-:is(.assistant .md, .plan-body.md) .code-wrap { position: relative; }
-:is(.assistant .md, .plan-body.md) .code-wrap > pre { margin: 0.4em 0; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap { position: relative; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap > pre { margin: 0.4em 0; }
 .code-copy {
   position: absolute; top: 6px; right: 6px; z-index: 2;
   height: 22px; padding: 0 8px;
@@ -167,28 +168,28 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   cursor: pointer; user-select: none;
 }
 /* 代码块悬停时显示按钮；复制成功/失败态保持可见 1.5s（类由 codecopy.ts 驱动） */
-:is(.assistant .md, .plan-body.md) .code-wrap:hover .code-copy,
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap:hover .code-copy,
 .code-copy:focus-visible,
 .code-copy-done { opacity: 1; visibility: visible; }
 .code-copy:hover { color: var(--ws-text-1); border-color: var(--ws-dim); }
 .code-copy-done { color: var(--ws-ok, #1f8f4d); }
 .code-copy-fail { color: var(--ws-err); }
-:is(.assistant .md, .plan-body.md) pre,
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre,
 .code-block {
   border-radius: 8px; padding: 10px 12px; overflow-x: auto;
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
-:is(.assistant .md, .plan-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
 /* inline code chip：token 化（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；原硬编码 #efefef/#1f2328 在暗色下不可读 */
-:is(.assistant .md, .plan-body.md) :not(pre) > code { background: var(--ws-code-bg); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
-:is(.assistant .md, .plan-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md) pre .hljs-quote { color: #6a737d; }
-:is(.assistant .md, .plan-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md) pre .hljs-selector-tag { color: #d73a49; }
-:is(.assistant .md, .plan-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md) pre .hljs-attr { color: #032f62; }
-:is(.assistant .md, .plan-body.md) pre .hljs-number, :is(.assistant .md, .plan-body.md) pre .hljs-literal { color: #005cc5; }
-:is(.assistant .md, .plan-body.md) pre .hljs-title, :is(.assistant .md, .plan-body.md) pre .hljs-name { color: #6f42c1; }
-:is(.assistant .md, .plan-body.md) pre .hljs-built_in { color: #e36209; }
-:is(.assistant .md, .plan-body.md) table { border-collapse: collapse; }
-:is(.assistant .md, .plan-body.md) th, :is(.assistant .md, .plan-body.md) td { border: 1px solid var(--ws-border); padding: 4px 8px; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-code-bg); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-quote { color: #6a737d; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-selector-tag { color: #d73a49; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-attr { color: #032f62; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-number, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-literal { color: #005cc5; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-title, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-name { color: #6f42c1; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-built_in { color: #e36209; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) table { border-collapse: collapse; }
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) th, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) td { border: 1px solid var(--ws-border); padding: 4px 8px; }
 /* 思考块：antd Collapse ghost 面板（默认收起）；样式微调仍走 token */
 .thinking-block.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
   padding: 2px 0; font-size: 12px; color: var(--ws-dim);
@@ -815,24 +816,36 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- 计划任务页（TasksPage，[docs/tasks-module-polish]） ---------- */
 /* 覆盖层：与 .settings-shell 同度量（绝对定位贴在内层 Layout 上，盖住工作区但不卸载它）；
-   z-index 20 = 高于分隔条（6），antd 下拉/弹窗层仍在覆盖层之上；颜色全部走 --ws-* token。 */
+   z-index 20 = 高于分隔条（6），antd 下拉/弹窗层仍在覆盖层之上；颜色全部走 --ws-* token。
+   行向排布：左栏 .tasks-nav + 内容列 .tasks-body（与设置页同版式）。 */
 .tasks-shell {
   position: absolute; inset: 0; z-index: 20;
-  display: flex; flex-direction: column; min-width: 0; background: var(--ws-bg-main);
+  display: flex; min-width: 0; background: var(--ws-bg-main);
 }
-/* 顶部操作条：常驻可点（窄窗换行）：返回工作区 + 标题 + 右侧新建（禁用原因就在它旁边） */
-.tasks-actions {
-  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-  padding: 8px 16px; border-bottom: 1px solid var(--ws-border); background: var(--ws-bg-main);
+/* 左栏：与 .settings-nav 同度量（宽由 fullscreenNavWidth 内联，180..480 夹取）。
+   背景 --ws-bg-nav 是关键契约：两页左栏同色，切换时不跳色。
+   宽度只保证「设置页 = 任务页」（同一个 fullscreenNavWidth）；工作区左栏宽另由用户拖拽记忆 +
+   resolveDisplayWidths 按窗口夹取，窄窗下会与全屏页左栏不等宽（此处曾写成「恒占同一格」，属误述，2026-09-23 修正）。
+   下面几条度量与 .settings-nav 逐条对齐（有测试逐条比对），改一处必须同步另一处。 */
+.tasks-nav {
+  flex: none; min-width: 180px; max-width: 480px;
+  display: flex; flex-direction: column;
+  padding: 8px; border-right: 1px solid var(--ws-border);
+  background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
 }
-.tasks-actions-title {
-  font-size: 13px; font-weight: 600; color: var(--ws-text-1);
+/* 返回工作区一行（与 .settings-nav-head 同度量） */
+.tasks-nav-head { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; padding: 2px 2px 8px; }
+.tasks-nav-title {
+  font-size: 13px; font-weight: 600; color: var(--ws-text-1); padding: 0 2px;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.tasks-actions-buttons { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
-.tasks-actions-note { font-size: 11.5px; }
-/* 内容区自己滚（操作条在列内不动，返回/新建始终可点） */
-.tasks-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 24px; min-width: 480px; }
+/* 页级操作（新建任务 + 禁用原因）：竖排贴标题下方；按钮占满列宽（左栏内不并排） */
+.tasks-nav-actions { display: flex; flex-direction: column; gap: 8px; padding: 10px 2px 0; }
+.tasks-nav-note { font-size: 11.5px; }
+/* 内容列：任务列表自己滚（返回/新建在左栏内不动，恒可点）。
+   min-width: 0 是必需的：flex 行项目的默认 min-width:auto = min-content，不写就会被长任务名撑破外壳；
+   基准 480px（与设置页页体同值）只在窗口够宽时生效，窄窗则收缩换行，而不是横向裁切。 */
+.tasks-body { flex: 1 1 480px; min-width: 0; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
 /* 加载/操作失败的错误行：走风险色 token（不硬编码红值，暗色下才能跟主题） */
 .tasks-error { color: var(--ws-err); font-size: 12px; margin: 6px 0; }
 .tasks-loading { display: flex; justify-content: center; padding: 24px 0; }
@@ -1064,12 +1077,28 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: var(--ws-panel);
 }
 .updater-notes-title { font-size: 11.5px; color: var(--ws-dim); margin-bottom: 4px; }
-/* 发布说明可滚动：notes 是 markdown 纯文本，保留换行 + 长 URL 强制断行，不渲染 markdown */
+/* 发布说明按 markdown 渲染（[docs/updater-notes-markdown-and-progress-throttle](../../../docs/updater-notes-markdown-and-progress-throttle.md)）：
+   容器带 .md，p/代码/表格等走上方共享样式组；这里只管本弹窗特有的排版——限高可滚、不撑破 440px 弹窗，
+   并把标题字号收敛到弹窗量级（共享组没有标题规则，不改共享组是为了不影响聊天区与计划卡的既有观感）。
+   不再用 white-space: pre-line：块级元素自带换行，留着会与块标签间的换行叠加出多余空行。 */
 .updater-notes-body {
-  max-height: 10rem; overflow-y: auto;
+  max-height: 10rem; overflow-y: auto; max-width: 100%;
   font-size: 12.5px; line-height: 1.6; color: var(--ws-text-2);
-  white-space: pre-line; word-break: break-word; overflow-wrap: anywhere;
+  word-break: break-word; overflow-wrap: anywhere;
 }
+.updater-notes-body.md > :first-child { margin-top: 0; }
+.updater-notes-body.md > :last-child { margin-bottom: 0; }
+.updater-notes-body.md h1, .updater-notes-body.md h2, .updater-notes-body.md h3, .updater-notes-body.md h4 {
+  font-size: 13px; font-weight: 600; line-height: 1.5; margin: 0.7em 0 0.3em; color: var(--ws-text-1);
+}
+.updater-notes-body.md ul, .updater-notes-body.md ol { margin: 0.3em 0; padding-left: 1.4em; }
+.updater-notes-body.md li { margin: 0.15em 0; }
+.updater-notes-body.md blockquote {
+  margin: 0.4em 0; padding-left: 8px; border-left: 2px solid var(--ws-border); color: var(--ws-dim);
+}
+/* 表格与图片都可能超宽：表格整体横向可滚（裁切会丢信息），图片限宽 */
+.updater-notes-body.md table { display: block; max-width: 100%; overflow-x: auto; }
+.updater-notes-body.md img { max-width: 100%; }
 .updater-note { font-size: 12.5px; color: var(--ws-text-2); }
 .updater-progress { display: flex; flex-direction: column; gap: 4px; }
 .updater-progress-text { font-size: 11.5px; color: var(--ws-dim); font-variant-numeric: tabular-nums; }

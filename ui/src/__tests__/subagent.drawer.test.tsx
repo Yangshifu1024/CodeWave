@@ -1,6 +1,6 @@
 // Subagent interaction batch ([docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)) component-level tests: chat card single-row clickable / process drawer render and close-without-destroy / Composer run indicator.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
+import { render, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // directly mounted components must explicitly init i18next (no global entry outside App.tsx)
 
@@ -16,6 +16,7 @@ import SubagentItemCard from "../features/subagent/SubagentItemCard";
 import SubagentDrawer from "../features/subagent/SubagentDrawer";
 import Composer from "../features/chat/Composer";
 import { useRun, type SubView, type SubStream } from "../stores/run";
+import { applyFrameToTab } from "../stores/runFrames";
 import { useSessions } from "../stores/sessions";
 import { useSettings } from "../stores/settings";
 
@@ -173,6 +174,60 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
     expect(header.parentElement).toBe(section);
     const body = document.querySelector(".sub-drawer-body") as HTMLElement;
     expect(body.parentElement).toBe(antBody); // 我们的内容包在 antd body 内
+  });
+
+  it("程序化跳底后的自家 scroll 事件不得被误判为用户接管（内容在事件派发前又长了一截）", async () => {
+    // 与 ChatMessages 同源的回归（[docs/chat-autoscroll-regression-fix](../../../docs/chat-autoscroll-regression-fix.md)）：
+    // 豁免目标若取未钳的 scrollHeight，与真实落点的差值恒等于 clientHeight ⇒ 豁免永不成立，
+    // 自家跳转被判成用户滚动、跟随被关掉且不自愈。happy-dom 无布局，必须自建钳位几何桩才能测出这条缺陷。
+    seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
+    render(
+      <AntApp>
+        <SubagentDrawer />
+      </AntApp>,
+    );
+    const body = document.querySelector(".sub-drawer-body") as HTMLElement;
+
+    let height = 1000;
+    let top = 0;
+    const maxTop = () => Math.max(0, height - 600);
+    Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => height });
+    Object.defineProperty(body, "clientHeight", { configurable: true, get: () => 600 });
+    Object.defineProperty(body, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.max(0, Math.min(v, maxTop()));
+      },
+    });
+
+    // 内容增长（sig 变化）⇒ 跟随 effect 程序化跳底（落点 = 1000 - 600 = 400）
+    // 注：抽屉跟随的是**子代理流**，帧必须走 sub 信封（直接发 delta_text 落在主 timeline 上，sig 不变）
+    const grow = (text: string) =>
+      act(() => {
+        useRun.setState((s) => {
+          applyFrameToTab(s.tabs.s1!, {
+            type: "sub",
+            sub_id: "sub_1",
+            frame: { type: "delta_text", gen: 0, text },
+          } as any);
+        });
+      });
+
+    grow("第一段过程");
+    await waitFor(() => expect(top).toBe(maxTop()));
+
+    // 事件派发前内容又长到 1600：scrollTop 仍是 400（浏览器不会因为内容变高就重新滚）
+    act(() => {
+      height = 1600;
+    });
+    act(() => {
+      body.dispatchEvent(new Event("scroll"));
+    });
+
+    // 自家事件 ⇒ 跟随不得中断：再长一次内容，视图应被重新拉到底
+    grow("第二段过程");
+    await waitFor(() => expect(top).toBe(maxTop()));
   });
 });
 

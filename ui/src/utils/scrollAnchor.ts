@@ -5,7 +5,7 @@
 // 因此以内容指纹为准、index 只作精确定位的提示；指纹在列表中已不存在 ⇒ 调用方降级为贴底。
 import type { UiItem } from "../stores/run.types";
 
-/** 贴底判定阈值（与 ChatMessages 的跟随阈值一致） */
+/** 贴底判定阈值（与 ChatMessages 的跟随阈值一致）；也是程序化滚动豁免的容差 */
 export const BOTTOM_EPS = 40;
 
 /** 滚动锚点：bottom = 贴底（重开后自动贴底）；item = 顶端消息指纹 + 段内偏移 */
@@ -51,6 +51,31 @@ export function itemSig(item: UiItem): string {
 /** 视口顶端是否贴底（阈值内视为贴底） */
 export function isAtBottom(g: AnchorGeometry): boolean {
   return g.scrollHeight - g.scrollTop - g.clientHeight < BOTTOM_EPS;
+}
+
+/** 程序化跳底的**目标 scrollTop = 浏览器实际会落到的位置**：scrollTop 会被钳到 scrollHeight - clientHeight（最小 0）。
+ *
+ *  为什么必须单独算：把未钳的 scrollHeight 当作目标去比对自家滚动事件时，
+ *  差值恒等于 clientHeight（几百像素），远超过 40px 容差 —— 豁免判定永远不成立，
+ *  于是每一次程序化跳底产生的 scroll 事件都会被当成「用户滚走了」。
+ *  在流式场景下内容往往在事件派发前又长了一截，几何判定当场得出「未贴底」⇒ 跟随被关掉且不再自愈
+ *  （[docs/chat-autoscroll-regression-fix](./chat-autoscroll-regression-fix.md)）。 */
+export function bottomScrollTarget(g: { scrollHeight: number; clientHeight: number }): number {
+  return Math.max(0, g.scrollHeight - g.clientHeight);
+}
+
+/** 程序化滚动的「自家事件」判定：位置落在 [from, target] 区间（各留 BOTTOM_EPS 容差）内即视为自家滚动。
+ *
+ *  用区间而不是单点，是为覆盖两种自家滚动：
+ *  ① 平滑滚动（scrollTo behavior:"smooth"）动画期间位置在 from→target 之间逐帧移动；
+ *  ② 连续多次跳底 —— scroll 事件在下一帧才派发，期间可能又跳了一次（目标已变）。
+ *  位置越过区间（用户上滚 / 拖滚动条 / PageUp）⇒ 非自家事件，交出控制权。
+ *  （from 恒 ≤ target 不成立：内容变矮时落点可能小于发起位置，故取 min/max。） */
+export function isSelfScroll(scrollTop: number, from: number, target: number): boolean {
+  return (
+    scrollTop >= Math.min(from, target) - BOTTOM_EPS &&
+    scrollTop <= Math.max(from, target) + BOTTOM_EPS
+  );
 }
 
 /** 计算当前锚点：视口贴底 ⇒ 贴底标记；否则取「顶端之前最近的一条消息」+ 段内偏移。

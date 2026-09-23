@@ -13,6 +13,8 @@ import { ArrowLeftOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import type { ScheduledTask } from "../../ipc/types";
+import { fullscreenNavWidth } from "../../utils/layout";
+import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { useActiveId, useSessions } from "../../stores/sessions";
 import { statusKind, statusLabel, useTasks } from "../../stores/tasks";
 import { useUi } from "../../stores/ui";
@@ -102,6 +104,10 @@ export default function TasksPage() {
   /** 项目注册表是否读盘失败（true = projects 不可信，不能拿它判「项目已不存在」） */
   const projectsLoadFailed = useSessions((s) => s.projectsLoadFailed);
   const canPersist = !!sessionId && !!projectId;
+
+  // 左栏宽：与设置页左栏同一函数（utils/layout 的 fullscreenNavWidth）—— 两页左侧同宽才能视觉连续
+  const { windowWidth } = useDisplayWidths();
+  const navWidth = fullscreenNavWidth(windowWidth);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -336,23 +342,27 @@ export default function TasksPage() {
   return (
     // 全屏 dialog 语义（与设置页同范式）：绝对定位贴在内层 Layout 上，盖住工作区但不卸载它
     <div className="tasks-shell" data-testid="tasks-page" role="dialog" aria-modal="true" aria-label={t("tasks.title")}>
-      <div className="tasks-actions">
-        <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={close}>
-          {t("tasks.backToWorkspace")}
-        </Button>
-        <span className="tasks-actions-title">{t("tasks.title")}</span>
-        <div className="tasks-actions-buttons">
+      {/* 左栏：与设置页左栏同度量同背景（--ws-bg-nav）——返回工作区 / 标题 / 新建都在这里。
+          宽与设置页左栏逐像素一致（同一个 fullscreenNavWidth）；工作区左栏另有一套夹取规则，不保证等宽 */}
+      <nav className="tasks-nav" style={{ width: navWidth }}>
+        <div className="tasks-nav-head">
+          <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={close}>
+            {t("tasks.backToWorkspace")}
+          </Button>
+        </div>
+        <div className="tasks-nav-title">{t("tasks.title")}</div>
+        <div className="tasks-nav-actions">
           {/* 禁用原因**就地**写在按钮旁（与设置页同一范式，不藏在 Tooltip 里） */}
           {!canPersist && (
-            <span className="tasks-actions-note hint">
+            <span className="tasks-nav-note hint">
               {sessionId ? t("tasks.freeSessionNoPersist") : t("tasks.needProjectSession")}
             </span>
           )}
-          <Button type="primary" icon={<PlusOutlined />} disabled={!canPersist} onClick={openCreate}>
+          <Button type="primary" block icon={<PlusOutlined />} disabled={!canPersist} onClick={openCreate}>
             {t("tasks.newTask")}
           </Button>
         </div>
-      </div>
+      </nav>
 
       <div className="tasks-body">
         {/* 加载失败：错误行常驻 + 旧列表照旧显示（一次瞬时失败不该把列表擦成空态） */}
