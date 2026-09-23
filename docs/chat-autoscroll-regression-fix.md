@@ -77,14 +77,15 @@ el.scrollTo({ top: el.scrollHeight });
   区间下端是点击时的阅读位置，因此动画期间（窗口 700ms）用户若在区间内小幅滚动会被当成自家事件 —— 这是本批**新引入**的
   宽区间（旧实现因豁免永不成立反而没有它），窗口长度取的是经验上限，按手动清单第 3 项实测校准。
 - 平滑动画结束若内容恰好又长高，由跟随 effect 下一帧补跳。
-- **同源缺陷未一并处理**：`features/subagent/SubagentDrawer.tsx` 有一份逐字同构的旧写法
+- **同源缺陷已一并修复**（同日后续提交）：`features/subagent/SubagentDrawer.tsx` 原有一份逐字同构的旧写法
   （`progTarget.current = el.scrollHeight` + `Math.abs(el.scrollTop - progTarget.current) < 40`），子代理抽屉的流式
-  跟随同样会被自家跳转误关。本次只修用户报的聊天区，抽屉留作独立小改动（复用 `bottomScrollTarget` / `isSelfScroll` 即可）。
+  跟随同样会被自家跳转误关。现复用 `bottomScrollTarget` / `isSelfScroll` / `isAtBottom`（该抽屉只有瞬时跳转，
+  豁免区间退化为落点这一点），回归用例在 `subagent.drawer.test.tsx`（同样自建钳位几何桩，
+  已做判别力验证：退回旧写法即转红）。
 - 本次只动滚动跟随，不改锚点记录/还原、不改「回到底部」按钮的样式与文案。
 
 ## 5 与更新弹窗那批改动同分支的说明
 
-本批改动与 [updater-notes-markdown-and-progress-throttle](./updater-notes-markdown-and-progress-throttle.md) 同处
-`fix/updater-notes-progress` 分支且都未提交（工作区改动）。两批改动的文件集合互不重叠，可按路径分别提交：
-`ui/src/utils/updateCheck.ts` + `ui/src/features/panels/UpdateModal.tsx` + `ui/src/theme/app.css` 为一批，
-本批为 `ui/src/utils/scrollAnchor.ts` + `ui/src/features/chat/ChatMessages.tsx`（测试与文档各按主题分开）。
+本批改动与 [updater-notes-markdown-and-progress-throttle](./updater-notes-markdown-and-progress-throttle.md) 曾同处
+`fix/updater-notes-progress` 分支的工作区；收尾时已按主题拆成三个提交（`fix(updater)` / `fix(chat)` / `feat(tasks)`），
+文件集合互不重叠。
