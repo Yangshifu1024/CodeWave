@@ -26,7 +26,7 @@ import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, PostWr
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
-import { clampNavWidth } from "../../utils/layout";
+import { fullscreenNavWidth } from "../../utils/layout";
 import { respondExitRequest } from "../../utils/uiState";
 import { useActiveId, useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
@@ -58,11 +58,6 @@ const { TextArea } = Input;
 
 /** 自定义代理地址前缀白名单（与后端 reqwest 支持一致；保存校验用） */
 const PROXY_URL_RE = /^(https?|socks5h?):\/\//;
-
-/** 左导航列基准宽（= 工作区左栏默认宽 280，复用同一套栏宽度量） */
-const SETTINGS_NAV_W = 280;
-/** 窄窗收缩比例：导航列随窗口宽度收缩，下限/上限由 clampNavWidth（180/480）兜底 */
-const SETTINGS_NAV_RATIO = 0.32;
 
 /**
  * 页图标（Outlined 线性，跟随文本色 —— 不设 color，符合「无彩色 = 默认」的配色约定）。
@@ -1696,8 +1691,8 @@ export default function SettingsPage() {
   ];
 
   const activePage = pages.find((p) => p.key === tab) ?? pages[0];
-  // 窄窗导航列宽：基准 280，随窗口宽度收缩，由 clampNavWidth 夹在 180..480 内
-  const navWidth = clampNavWidth(Math.min(SETTINGS_NAV_W, Math.round(windowWidth * SETTINGS_NAV_RATIO)));
+  // 左导航列宽：与计划任务页共用同一套度量（utils/layout 的 fullscreenNavWidth）
+  const navWidth = fullscreenNavWidth(windowWidth);
 
   /**
    * 导航方向键：↑/↓（兼认 ←/→）在页行之间移动**焦点**，Enter/Space 才激活（手动激活模式）——

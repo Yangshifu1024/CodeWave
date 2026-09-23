@@ -34,10 +34,19 @@ Sider / Content / 两条分隔条一起让位，绝不 `display: none`（会让 
 
 | 区 | 类 | 说明 |
 |---|---|---|
-| 操作条 | `.tasks-actions` | 返回工作区 + 标题 + 右侧「新建任务」；禁用原因**就地**写在按钮旁（不藏 Tooltip） |
-| 内容区 | `.tasks-body` | 自己滚（操作条恒在列内可点）；错误行常驻 + 旧列表照旧显示 |
+| 左栏 | `.tasks-nav` | 与设置页左栏**同度量同背景**（宽由 `utils/layout` 的 `fullscreenNavWidth` 内联、背景 `--ws-bg-nav`）：返回工作区 + 标题 + 「新建任务」；禁用原因**就地**写在按钮旁（不藏 Tooltip）。两页左栏同宽同色；工作区左栏宽另由用户拖拽记忆夹取，窄窗下**不保证**与全屏页左栏等宽 |
+| 内容区 | `.tasks-body` | 左栏的兄弟节点，自己滚；错误行常驻 + 旧列表照旧显示 |
 | 任务行 | `.task-row` | 两级：`.task-row-main`（整块可点展开历史，`role=button` + `aria-expanded`）与 `.task-row-actions`（同级兄弟，不做「button 里嵌按钮」的无效语义） |
 | 历史 | `.tasks-history` | 时间 · 状态 · 来源（定时/手动）· `out_tokens`；摘要另起一段（`pre-wrap` + 限高滚动） |
+
+> 2026-09-23 版式对齐：页内结构由「顶部操作条 `.tasks-actions` + 内容区」改为**左栏 + 内容列**（`.tasks-shell`
+> 从 `flex-direction: column` 改为行向），与设置页同版式——用户报「任务页左侧那条的背景与设置页左栏不一致」。
+> 左栏度量与 `.settings-nav` 逐条对齐（padding 8 / border-right / `overflow-y: auto` / 180–480 夹取），
+> 宽度改由两页共用的 `fullscreenNavWidth(windowWidth)` 决定（原先设置页有自己的一份 `SETTINGS_NAV_*` 常量，已收拢）。
+> 守门用例在 `app.smoke.test.tsx` 的任务页用例：左栏存在且含返回/标题/新建、原 `.tasks-actions` 不再存在、
+> `.tasks-nav` 背景取 `--ws-bg-nav`、`.tasks-shell` 非列向、两页左栏宽度逐像素相等，以及 `.tasks-nav` 与
+> `.settings-nav` 的**度量逐条比对**（防止只改一边）；`fullscreenNavWidth` 自身的语义（280 基准 / 0.32 / 180..480
+> 夹取 / 0 与 NaN 的兜底）另有纯函数用例在 `layout.resize.test.tsx`。
 
 行内容：名称 · 周期描述 · 项目归属 · 状态标签（运行中/正常/失败/已跳过）· 下次触发 · 暂停开关 ·
 立即运行 · 编辑 · 删除。

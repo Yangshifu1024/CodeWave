@@ -36,6 +36,16 @@ export function clampNavWidth(value: unknown): number {
   return clampWidth(value, NAV_W_MIN, NAV_W_MAX, NAV_W_DEFAULT);
 }
 
+/** 全屏页（设置 / 计划任务）左栏基准宽与窄窗收缩比例：两页共用同一套度量 ——
+ *  全屏页左栏恒占「工作区左栏」那一格（同宽、同背景 `--ws-bg-nav`），两页切换时左侧不跳色也不跳宽。 */
+export const FULLSCREEN_NAV_W = NAV_W_DEFAULT;
+export const FULLSCREEN_NAV_RATIO = 0.32;
+
+/** 全屏页左栏显示宽：基准 280，窄窗按比例收缩，由 clampNavWidth（180..480）夹取。 */
+export function fullscreenNavWidth(windowWidth: number): number {
+  return clampNavWidth(Math.min(FULLSCREEN_NAV_W, Math.round(windowWidth * FULLSCREEN_NAV_RATIO)));
+}
+
 /** 右栏宽度收敛（拖动与读盘共用）。 */
 export function clampRightBarWidth(value: unknown): number {
   return clampWidth(value, RB_W_MIN, RB_W_MAX, RB_W_DEFAULT);

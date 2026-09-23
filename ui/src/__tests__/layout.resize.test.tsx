@@ -18,6 +18,7 @@ import {
   clampNavWidth,
   clampRightBarWidth,
   dragLimit,
+  fullscreenNavWidth,
   resolveDisplayWidths,
 } from "../utils/layout";
 
@@ -58,6 +59,16 @@ describe("栏宽纯函数", () => {
     expect(dragLimit("right", NAV_W_DEFAULT, 1600)).toBe(RB_W_MAX);
     // 窄窗下右栏最多只能拿到 窗口 - 中栏保底 - 左栏（且不低于自身下限）
     expect(dragLimit("right", NAV_W_DEFAULT, 1024)).toBe(RB_W_MIN);
+  });
+
+  it("全屏页（设置 / 任务）左栏宽：基准 280、窄窗按比例收缩、180..480 夹取", () => {
+    // 设置页与任务页共用本函数 —— 两页左栏同宽全靠它，故语义必须钉死
+    expect(fullscreenNavWidth(1600)).toBe(NAV_W_DEFAULT); // 512 → 夹回基准 280
+    expect(fullscreenNavWidth(600)).toBe(192); // 600 × 0.32
+    expect(fullscreenNavWidth(300)).toBe(NAV_W_MIN); // 96 → 夹到下限 180
+    // 窗口宽未就绪 / 非法：0 → 下限；NaN → clampWidth 的既有兑底（默认 280）
+    expect(fullscreenNavWidth(0)).toBe(NAV_W_MIN);
+    expect(fullscreenNavWidth(Number.NaN)).toBe(NAV_W_DEFAULT);
   });
 });
 

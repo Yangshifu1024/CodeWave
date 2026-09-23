@@ -2,6 +2,9 @@
 // Goal: catch "build passes but renders blank" regressions (e.g. a wrong Tabs items config).
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------- Tauri IPC mock ----------
 const fixtureConfig = {
@@ -473,11 +476,44 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector(".right-bar")?.closest(".workspace-covered")).toBeTruthy();
     for (const el of document.querySelectorAll<HTMLElement>(".rb-resize-handle")) expect(el.tabIndex).toBe(-1);
 
+    // 左栏：返回工作区 / 标题 / 新建都在 .tasks-nav 内，原顶部操作条（.tasks-actions）已不存在 ——
+    // 全屏页左栏与设置页左栏同宽同色（docs/tasks-module-polish §1；工作区左栏另有一套夹取规则，不保证等宽）
+    const nav = document.querySelector(".tasks-nav") as HTMLElement | null;
+    expect(nav).toBeTruthy();
+    expect(nav!.querySelector(".tasks-nav-head button")?.textContent?.replace(/\s/g, "")).toContain("返回工作区");
+    expect(nav!.querySelector(".tasks-nav-title")?.textContent).toBe("计划任务");
+    expect(nav!.querySelector(".tasks-nav-actions button")?.textContent?.replace(/\s/g, "")).toContain("新建任务");
+    expect(document.querySelector(".tasks-actions")).toBeFalsy();
+    const tasksNavWidth = nav!.style.width;
+
+    // CSS 契约：左栏背景取 --ws-bg-nav（两页同色）；.tasks-shell 为行向排布（左栏 + 内容列）；
+    // 且 .tasks-nav 与 .settings-nav 的度量**逐条一致** —— 两页左栏是两套重复声明，只靠注释守护会被后人改飞
+    const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
+    expect(appCss).toMatch(/\.tasks-nav\s*\{[^}]*background:\s*var\(--ws-bg-nav\)/);
+    const shellBlock = /\.tasks-shell\s*\{([^}]*)\}/.exec(appCss)?.[1] ?? "";
+    expect(shellBlock).toContain("display: flex");
+    expect(shellBlock).not.toContain("flex-direction: column");
+    // 取声明块：`\.tasks-nav\s*\{` 不会误匹配 .tasks-nav-head / -title / -actions（其后是 `-`，不满足 \s*\{）
+    const cssBlock = (cls: string) => new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`).exec(appCss)?.[1] ?? "";
+    const decl = (block: string, prop: string) =>
+      new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`).exec(block)?.[1]?.trim() ?? "";
+    const tasksNavBlock = cssBlock("tasks-nav");
+    const settingsNavBlock = cssBlock("settings-nav");
+    expect(settingsNavBlock).not.toBe(""); // 防正则失配导致的假绿
+    for (const prop of ["flex", "min-width", "max-width", "padding", "border-right", "background", "overflow-y", "overflow-x"]) {
+      expect(decl(tasksNavBlock, prop)).toBe(decl(settingsNavBlock, prop));
+    }
+
     // Esc 归任务页：关闭页面而不是去停运行中的会话
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeFalsy());
     expect(useUi.getState().tasksOpen).toBe(false);
     expect(document.querySelectorAll(".workspace-covered").length).toBe(0);
+
+    // 两页左栏同宽：宽度都由 utils/layout 的 fullscreenNavWidth(windowWidth) 决定（同一窗口 ⇒ 同一像素值）
+    await clickIconBtn("设置");
+    await waitFor(() => expect(document.querySelector(".settings-nav")).toBeTruthy());
+    expect((document.querySelector(".settings-nav") as HTMLElement).style.width).toBe(tasksNavWidth);
   });
 
   it("设置：MCP 页的结构化编辑器与技能页的列表各自渲染（拆页后不再同页）", async () => {
