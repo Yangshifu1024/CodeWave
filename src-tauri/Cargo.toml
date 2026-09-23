@@ -1,6 +1,6 @@
 [package]
 name = "codewave"
-version = "0.7.0"
+version = "0.7.1"
 description = "CodeWave - local-first desktop AI coding agent"
 license = "MIT"
 repository = "https://github.com/Yangshifu1024/CodeWave"
