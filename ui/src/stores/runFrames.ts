@@ -328,8 +328,27 @@ export function scanToolResults(msgs: Message[]): Record<string, { content: stri
   return out;
 }
 
-/** args 序列化预览：超长截断为占位对象，序列化失败返回 undefined */
-function safeArgsPreview(args: any): string | undefined {
+/** 历史恢复：把配对的 tool_result 文本尽量还原成工具卡出参（该文本就是当时的模型侧 JSON）。
+ *  解析不出来（被截断、`[error E_XXX: ...]` 等非 JSON）时退回 `{ restored: true }` 占位。
+ *  为什么要还原：read 读图卡片的图片条目里 `data_url` 已不再落盘（那段 base64 曾把上下文顶爆），
+ *  只剩 `path` / `kind` / `media_type` —— 卡片据此按路径重新加载图片；不还原则 `files` 为空，
+ *  图片与占位提示都不会出现。 */
+export function restoredToolData(content: string | undefined): unknown {
+  if (typeof content !== "string") return { restored: true };
+  const s = content.trim();
+  if (!s.startsWith("{")) return { restored: true };
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === "object" ? v : { restored: true };
+  } catch {
+    return { restored: true };
+  }
+}
+
+/** args 序列化预览：超长截断为占位对象，序列化失败返回 undefined。
+ *  历史恢复（主会话与子代理过程流）也要填 argsPreview：工具卡的摘要行、ask 的问答行
+ *  （题干来自入参）与 edit 的 diff 都靠它。 */
+export function safeArgsPreview(args: any): string | undefined {
   if (args === undefined || args === null) return undefined;
   try {
     const s = JSON.stringify(args);

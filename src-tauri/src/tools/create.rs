@@ -336,7 +336,7 @@ mod tests {
         );
         // 模型侧文本经 compact 从 data 生成，必须能看到该结论（缺陷 B 的回归防线）
         let model_text =
-            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out);
+            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out, true);
         assert!(
             model_text.contains("JSON 解析失败"),
             "模型侧必须看得到检查结论：{model_text}"
@@ -415,7 +415,7 @@ mod tests {
         );
         // 模型侧经 compact 从 data 生成 → 必须看得到
         let model_text =
-            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out);
+            crate::tools::compact::compact_for_model(ToolKind::FileWrite, "create", &out, true);
         assert!(model_text.contains("checked:x.ts"), "模型侧：{model_text}");
         // 检查结论不走 warnings
         assert!(out.warnings.is_empty(), "{:?}", out.warnings);

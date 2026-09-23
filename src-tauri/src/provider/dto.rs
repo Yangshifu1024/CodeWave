@@ -143,6 +143,26 @@ impl std::ops::Add for RunUsage {
     }
 }
 
+impl RunUsage {
+    /// 本请求的「真实输入量」：自动压缩的 Reported 路据此判定
+    /// （[docs/composer-toolbar-context-hit-rate](../../../docs/composer-toolbar-context-hit-rate.md)）。
+    ///
+    /// 口径按协议分叉：Anthropic 的 `input_tokens` **不含**缓存读写（真输入 = input +
+    /// cache_read + cache_write）；OpenAI 两协议的 `prompt_tokens` / `input_tokens` 已含缓存部分。
+    /// 混用会让 Reported 路在 Anthropic 上恒接近 0（每请求都打 cache 断点），新守护静默失效。
+    pub fn prompt_total(&self, api_format: &crate::core::config::ApiFormat) -> u64 {
+        match api_format {
+            crate::core::config::ApiFormat::AnthropicMessages => {
+                self.input + self.cache_read + self.cache_write
+            }
+            // OpenAI 两协议的 prompt_tokens / input_tokens 已含缓存部分：逐协议显式列出，
+            // 将来新增协议时必须显式决定口径（不得默默落进兜底臂）
+            crate::core::config::ApiFormat::OpenAiChat
+            | crate::core::config::ApiFormat::OpenAiResponses => self.input,
+        }
+    }
+}
+
 /// provider 层统一错误：按重试语义分类（`is_transient` 判可重试），
 /// `kind_tag` 随 run:error 事件下发供前端归因。
 #[derive(Debug, thiserror::Error, Clone, Serialize)]
@@ -211,7 +231,9 @@ impl ProviderError {
     }
 
     /// HTTP 状态码 → 错误分类映射：错误详情优先取供应商自带的 error.message（见下方 `api_error_message`），
-    /// 取不到则回退原始 body 片段（截前 500 字符）。
+    /// 取不到则回退原始 body 片段（截前 500 字符）。**任何情况下都带上状态码**，
+    /// 且响应体为空时明写「没给原因」——否则用户只看到「请求被拒绝：」后面什么都没有
+    /// （会话 6bca80f4 现场：上游 400 空体，错误文案为空，无从判断是超限、入参非法还是网关问题）。
     pub fn from_status(status: reqwest::StatusCode, body: &str) -> Self {
         let snippet: String = body.chars().take(500).collect();
         let code = status.as_u16();
@@ -219,7 +241,10 @@ impl ProviderError {
         //（可读的一行原因，如智谱 type 1001），其余形态保留原始 JSON 片段。
         let detail = match api_error_message(body) {
             Some(m) => format!("{m} (HTTP {code})"),
-            None => snippet.clone(),
+            None if snippet.trim().is_empty() => {
+                format!("服务未返回原因（HTTP {code}，响应内容为空）")
+            }
+            None => format!("{} (HTTP {code})", snippet.trim()),
         };
         match code {
             401 | 403 => ProviderError::Auth(detail),
@@ -319,6 +344,22 @@ pub struct AssembledToolCall {
 mod tests {
     use super::*;
 
+    /// 回归钉（评审 🔴）：`prompt_total` 口径按协议分叉——Anthropic 的 input 不含缓存，
+    /// OpenAI 两协议已含。混用会让自动压缩的「真实输入」路在 Anthropic 上恒接近 0。
+    #[test]
+    fn run_usage_prompt_total_is_protocol_aware() {
+        use crate::core::config::ApiFormat;
+        let u = RunUsage {
+            input: 100,
+            output: 9,
+            cache_read: 900,
+            cache_write: 50,
+        };
+        assert_eq!(u.prompt_total(&ApiFormat::AnthropicMessages), 1050);
+        assert_eq!(u.prompt_total(&ApiFormat::OpenAiChat), 100);
+        assert_eq!(u.prompt_total(&ApiFormat::OpenAiResponses), 100);
+    }
+
     /// HTTP 状态码 → 错误分类：402 计费单独归入 Billing 变体（不重试），文案透出真实原因。
     #[test]
     fn from_status_classifies_billing_402() {
@@ -373,6 +414,29 @@ mod tests {
         );
         assert!(matches!(err, ProviderError::Auth(_)), "got {err:?}");
         assert!(err.to_string().contains("plain gateway error"), "{err}");
+        assert!(err.to_string().contains("(HTTP 401)"), "{err}");
+    }
+
+    /// 回归钉（会话 6bca80f4）：上游 400 且响应体为空时，文案不得为空——
+    /// 至少要说清「被拒绝 + 状态码 + 没给原因」。
+    #[test]
+    fn from_status_empty_body_yields_readable_reason() {
+        let err = ProviderError::from_status(reqwest::StatusCode::from_u16(400).unwrap(), "");
+        assert!(
+            matches!(err, ProviderError::BadRequest { .. }),
+            "got {err:?}"
+        );
+        let text = err.to_string();
+        assert!(text.contains("HTTP 400"), "{text}");
+        assert!(text.contains("响应内容为空"), "{text}");
+        assert!(
+            !text.trim_end().ends_with('：'),
+            "不得只剩一个空原因：{text}"
+        );
+        // 全空白体同样按「没给原因」处理（不能把空白当片段）
+        let blank =
+            ProviderError::from_status(reqwest::StatusCode::from_u16(400).unwrap(), "  \n\t ");
+        assert!(blank.to_string().contains("响应内容为空"), "{blank}");
     }
 
     /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：run:error 载荷的分类标签与 serde 变体标签一一对应。

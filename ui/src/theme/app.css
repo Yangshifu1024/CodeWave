@@ -429,6 +429,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   white-space: pre-wrap; word-break: break-all;
 }
 .tool-card .img { max-width: 320px; max-height: 240px; margin: 6px 10px; border-radius: 6px; }
+/* ask 卡片问答行：题干一行、答案一行；始终显示，不省略（长文本换行） */
+.tool-card .ask-rows { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; }
+.tool-card .ask-row .q { color: var(--ws-text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-card .ask-row .a { color: var(--ws-text); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-card .ask-row .note { color: var(--ws-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-card .diff-line {
   display: flex; padding: 0 10px; font-family: var(--ws-font-mono); font-size: 12px;
   white-space: pre-wrap; word-break: break-all;

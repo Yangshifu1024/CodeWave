@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Button, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 import type { ToolView } from "../../stores/run";
@@ -7,6 +7,7 @@ import { ipc } from "../../ipc/client";
 import { collapseDiff, type DiffLine } from "../../utils/diff";
 import { shortestUniqueLabels } from "../../utils/path";
 import CodeBlock from "../../components/CodeBlock";
+import { askAnswerRows } from "./askAnswerRows";
 
 // 工具名 -> i18n 键映射（内置工具；mcp__ 前缀的工具名原样展示）
 const VERBS: Record<string, string> = {
@@ -152,6 +153,15 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   const showArgsInstead = noOutcomeData && !!argsJson;
 
   const displayName = tool.tool.startsWith("mcp__") ? tool.tool : tool.tool;
+  // ask 卡片的问答行（题干一行 / 答案一行）：**始终显示**，与展开状态无关（见 docs 约定：
+  // 回答完不展开也应当能看到自己选了什么）。入参截断 / 无出参时为空数组 → 不渲染。
+  const askRows = useMemo(
+    () =>
+      tool.tool === "ask"
+        ? askAnswerRows(tool.argsPreview, data, { notAnswered: t("tools.notAnswered") })
+        : [],
+    [tool.tool, tool.argsPreview, data, t],
+  );
   const errCode: string | undefined = tool.outcome?.error?.code;
   const neutralErrKey = errCode ? NEUTRAL_ERR_KEYS[errCode] : undefined;
   const neutralErr = !!neutralErrKey;
@@ -193,6 +203,24 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
         <span className="chev">{expanded ? "▾" : "▸"}</span>
       </div>
 
+      {/* ask：问答行始终显示（题干一行、答案一行；不省略、不需展开） */}
+      {askRows.length > 0 && (
+        <div className="ask-rows">
+          {askRows.map((r, i) => (
+            <div className="ask-row" key={i}>
+              <div className="q">{r.question}</div>
+              <div className="a">{r.answer}</div>
+              {r.note !== "" && (
+                <div className="note">
+                  {t("tools.notePrefix")}
+                  {r.note}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* 进度尾迹只在真正执行时展示（waiting = 审批/范围确认门等待中，还没有任何输出；已中断/已结束的卡 tail 已被 store 清空） */}
       {tool.status === "running" && tool.progressTail && <pre className="tail">{tool.progressTail}</pre>}
 
@@ -206,7 +234,7 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
                     {f.path} <span className="dim">L{f.start_line}-{f.end_line} / {f.total_lines}</span>
                   </div>
                   <pre className="tail">{f.content || ""}</pre>
-                  {f.kind === "image" && <img src={f.data_url} className="img" alt="" />}
+                  {f.kind === "image" && <ReadImage file={f} />}
                 </div>
               ))}
             </>
@@ -282,6 +310,21 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
                 style={{ border: "1px solid var(--ws-border)", borderRadius: 8, width: "100%", maxHeight: 480 }}
               />
             </>
+          ) : tool.tool === "ask" ? (
+            <>
+              {/* 出参为空（取消 / 未作答）时回退渲染入参：那时「问了什么」才是用户要看的 */}
+              {showArgsInstead ? (
+                <>
+                  <div className="kv dim">入参</div>
+                  <CodeBlock code={argsJson} language="json" />
+                </>
+              ) : (
+                <>
+                  <div className="kv dim">{t("tools.rawData")}</div>
+                  <CodeBlock code={prettyJson} language="json" />
+                </>
+              )}
+            </>
           ) : (
             <>
               {/* 回退渲染入参时必须标一行说明，否则会被误认成出参（JSON 长得一样） */}
@@ -303,6 +346,54 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
         </div>
       )}
     </div>
+  );
+}
+
+/** read 结果里的图片：优先用事件带来的 `data_url` 直接渲染；没有 `data_url` 时（重开会话后从历史
+ *  重建的卡片——历史里不再保留那段 base64）按路径重新读出来显示；读失败（文件被移动/删除/
+ *  超出可读边界）才给占位提示。模型未勾选「支持图片输入」时另给一行提示。 */
+function ReadImage({ file }: { file: any }) {
+  const { t } = useTranslation();
+  const sessionId = useSessions((s) => s.activeKey);
+  const inline: string | undefined = typeof file?.data_url === "string" ? file.data_url : undefined;
+  const path: string = typeof file?.path === "string" ? file.path : "";
+  const [state, setState] = useState<{ phase: "ok" | "loading" | "fail"; url?: string }>(
+    inline ? { phase: "ok", url: inline } : { phase: "loading" },
+  );
+
+  useEffect(() => {
+    if (inline) {
+      setState({ phase: "ok", url: inline });
+      return;
+    }
+    if (!path || !sessionId) {
+      setState({ phase: "fail" });
+      return;
+    }
+    let cancelled = false;
+    setState({ phase: "loading" });
+    ipc
+      .readWorkspaceFileBase64(sessionId, path)
+      .then((r) => {
+        if (cancelled) return;
+        const mime = typeof file?.media_type === "string" ? file.media_type : "image/png";
+        setState({ phase: "ok", url: `data:${mime};base64,${r.content}` });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ phase: "fail" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inline, path, sessionId, file?.media_type]);
+
+  return (
+    <>
+      {state.phase === "ok" && state.url && <img src={state.url} className="img" alt="" />}
+      {state.phase === "loading" && <div className="kv dim">{t("tools.imageLoading")}</div>}
+      {state.phase === "fail" && <div className="kv dim">{t("tools.imageUnavailable", { path })}</div>}
+      {file?.sent_to_model === false && <div className="kv dim">{t("tools.imageNotSent")}</div>}
+    </>
   );
 }
 

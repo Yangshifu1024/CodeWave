@@ -54,6 +54,9 @@ export default {
     stopService: "停止服务", readLog: "读日志",
     argsTooLarge: "（参数过大，无法展示 diff）", serviceRunning: "运行中", serviceStopped: "已停止",
     grepHits: "{{n}} 处命中 / {{m}} 文件", truncated: "（已截断）",
+    imageLoading: "图片加载中…", imageUnavailable: "图片无法显示（文件可能已被移动或删除）：{{path}}",
+    imageNotSent: "当前模型未开启图片输入，图片未发送给模型",
+    rawData: "原始数据", notePrefix: "补充：",
   },
   ask: {
     title: "Agent 提问", approval: "安全确认", allow: "允许", deny: "拒绝",

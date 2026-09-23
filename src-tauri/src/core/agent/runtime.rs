@@ -163,6 +163,10 @@ pub struct SessionRuntime {
     /// 本 run 已执行的真实步数（drive_agent 每步 store）。sub:step 进度采样以此为准：
     /// history.len() 口径每步增约 2 条消息，60 步跑满会显示成 120+（前端 120/60 失真缺陷）
     pub step_count: std::sync::atomic::AtomicUsize,
+    /// 最近一次请求上游回报的输入 token 数（0 = 尚无回报）。自动压缩触发同时看它：
+    /// 本地估算对某些内容会少算数倍（图片 base64 实测少算 2.3 倍），只看估算会一路顶到
+    /// 上游上限才被 400 拒绝（会话 6bca80f4）。压缩成功后复位为 0。
+    pub last_input_tokens: std::sync::atomic::AtomicU64,
     /// 本 run 冻结的 system prompt 稳定主块（build_stream_request 首步组装后冻结，run 内复用）：
     /// 防 run 中途文件变更（如 agent 自己编辑 AGENTS.md）打穿 provider 前缀缓存，同时省每步 10+ 文件重读；
     /// drive_agent 每个 run 清空——文件变更从「下一步生效」变「下一条用户消息生效」（与子代理 spawn 冻结一致）
@@ -218,6 +222,7 @@ impl SessionRuntime {
             is_task_runtime: false,
             is_main_session: false,
             step_count: std::sync::atomic::AtomicUsize::new(0),
+            last_input_tokens: std::sync::atomic::AtomicU64::new(0),
             system_frozen: Mutex::new(None),
             cache_gen_anchor: Mutex::new(None),
             run_timing: Mutex::new(crate::core::stats::UsageTiming::default()),

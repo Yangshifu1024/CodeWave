@@ -629,8 +629,12 @@ async fn edit_puts_post_write_check_into_data_per_file() {
     );
     assert_eq!(checks[1]["path"], serde_json::json!("b.txt"));
     // 结论必须到达模型侧（compact 从 data 生成）；检查不再走 warnings
-    let model_text =
-        crate::tools::compact::compact_for_model(crate::tools::ToolKind::FileWrite, "edit", &out);
+    let model_text = crate::tools::compact::compact_for_model(
+        crate::tools::ToolKind::FileWrite,
+        "edit",
+        &out,
+        true,
+    );
     assert!(
         model_text.contains("checked:a.txt"),
         "模型侧必须看得到检查结论：{model_text}"

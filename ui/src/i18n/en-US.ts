@@ -55,6 +55,9 @@ export default {
     stopService: "Stop", readLog: "Read log",
     argsTooLarge: "(args too large to show diff)", serviceRunning: "Running", serviceStopped: "Stopped",
     grepHits: "{{n}} matches in {{m}} files", truncated: "(truncated)",
+    imageLoading: "Loading image…", imageUnavailable: "Image unavailable (file may have been moved or deleted): {{path}}",
+    imageNotSent: "This model has image input disabled — the image was not sent",
+    rawData: "Raw data", notePrefix: "Note: ",
   },
   ask: {
     title: "Agent question", approval: "Safety confirmation", allow: "Allow", deny: "Deny",

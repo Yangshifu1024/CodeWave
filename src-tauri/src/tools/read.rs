@@ -231,6 +231,14 @@ impl Tool for ReadTool {
         let mut images: Vec<crate::core::types::Content> = Vec::new();
         // 主会话读取预算累计（子代理/任务 runtime 不检查）
         let mut budget_used: usize = 0;
+        // 会话生效模型是否勾选「支持图片输入」：决定图片是否真的发给模型（batch/drive 据此
+        // 决定带不带图片块下去），也决定卡片要不要提示「图片未发送给模型」。
+        let model_vision = {
+            let cfg = ctx.core.cfg.read().unwrap();
+            crate::core::prefs::effective_model(&cfg, &ctx.rt.prefs())
+                .and_then(|m| m.vision)
+                .unwrap_or(false)
+        };
 
         for f in args.files {
             let resolved = match pathutil::resolve_read(&roots, &f.path) {
@@ -289,6 +297,9 @@ impl Tool for ReadTool {
                 out_files.push(json!({
                     "path": f.path, "kind": "image", "media_type": media,
                     "data_url": format!("data:{media};base64,{b64}"), "version": version,
+                    // 是否真的发给模型（未勾选「支持图片输入」时为 false：模型侧文本里只有一行
+                    // 说明，卡片据此提示用户；图片本体仍留在 data_url 里供界面预览）
+                    "sent_to_model": model_vision,
                 }));
                 continue;
             }
