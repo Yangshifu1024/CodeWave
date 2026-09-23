@@ -18,10 +18,12 @@ import { useSessions } from "../stores/sessions";
 import type { TimelineSeg, UiItem } from "../stores/run.types";
 import {
   BOTTOM_EPS,
+  bottomScrollTarget,
   captureAnchor,
   collectNodes,
   computeAnchor,
   isAtBottom,
+  isSelfScroll,
   itemSig,
   pickTarget,
   restoreAnchor,
@@ -320,6 +322,37 @@ describe("restoreAnchor 还原锚点", () => {
   });
 });
 
+describe("程序化跳底的目标与豁免判定（[docs/chat-autoscroll-regression-fix](../../../docs/chat-autoscroll-regression-fix.md)）", () => {
+  it("bottomScrollTarget 取浏览器实际落点（scrollHeight - clientHeight，钳到 0）", () => {
+    expect(bottomScrollTarget({ scrollHeight: 1000, clientHeight: 600 })).toBe(400);
+    expect(bottomScrollTarget({ scrollHeight: 300, clientHeight: 600 })).toBe(0); // 内容不足一屏
+  });
+
+  it("落点与 scrollHeight 的差值恒为 clientHeight —— 单点比对（旧实现）必然失败", () => {
+    const g = { scrollHeight: 1000, clientHeight: 600 };
+    const landing = bottomScrollTarget(g);
+    // 旧实现拿未钳的 scrollHeight 当目标：|400 - 1000| = 600 ≫ 40 ⇒ 自家跳底被当成用户接管
+    expect(Math.abs(landing - g.scrollHeight)).toBe(g.clientHeight);
+    expect(Math.abs(landing - g.scrollHeight) < BOTTOM_EPS).toBe(false);
+    // 新实现：目标就是落点
+    expect(isSelfScroll(landing, landing, landing)).toBe(true);
+  });
+
+  it("跳底之后内容又长：位置停在旧落点，仍须判为自家事件", () => {
+    // 跳底时 1000/600（落点 400），scroll 事件派发前内容长到 1600：scrollTop 仍是 400
+    expect(isSelfScroll(400, 400, 400)).toBe(true);
+    // 同一时刻按几何判定「是否贴底」为 false —— 这正是缺陷链条的第二步（跟随被关掉）
+    expect(isAtBottom({ scrollTop: 400, scrollHeight: 1600, clientHeight: 600 })).toBe(false);
+  });
+
+  it("平滑滚动区间内的中间位置算自家事件；越过区间（用户上滚）不算", () => {
+    expect(isSelfScroll(120, 0, 400)).toBe(true); // 动画中（from=0 → target=400）
+    expect(isSelfScroll(400, 0, 400)).toBe(true); // 动画结束
+    expect(isSelfScroll(370, 400, 400)).toBe(true); // 容差内（BOTTOM_EPS=40）
+    expect(isSelfScroll(100, 400, 400)).toBe(false); // 用户上滚 300px：交出控制权
+  });
+});
+
 // ---------- ChatMessages 接线（DOM 层） ----------
 
 /** 消息行高度（固定值：内容偏移 = idx × ROW）；容器一屏 600px、内容 1000px ⇒ 可滚 */
@@ -498,5 +531,62 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("程序化跳底后的自家 scroll 事件不得被误判为用户接管（内容在事件派发前又长了一截）", async () => {
+    // 真实浏览器的两条事实 happy-dom 都没有，必须自己搭桩，否则这条缺陷测不出来：
+    // ① scrollTop 会被钳到 scrollHeight - clientHeight；
+    // ② scroll 事件在下一帧才派发，期间内容可能又长了（流式场景几乎必然）。
+    const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
+    seedTab(items);
+    const { container } = mount();
+    const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
+
+    let height = SCROLL_HEIGHT;
+    let top = 0;
+    const maxTop = () => Math.max(0, height - CLIENT_HEIGHT);
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => CLIENT_HEIGHT });
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.max(0, Math.min(v, maxTop()));
+      },
+    });
+    (scroller as unknown as { scrollTo: (o: { top: number }) => void }).scrollTo = (o) => {
+      top = Math.max(0, Math.min(o.top, maxTop()));
+    };
+
+    // 内容增长：贴底态 ⇒ 跟随 effect 程序化跳底（落点 = 1000 - 600 = 400）
+    act(() => {
+      useRun.setState((s) => {
+        s.tabs.s1.items = [...items, user("第三句", ISO)];
+      });
+    });
+    await waitFor(() => expect(top).toBe(maxTop()));
+
+    // 事件派发前内容又长到 1600：scrollTop 仍是 400（浏览器不会因为内容变高就重新滚）
+    act(() => {
+      height = 1600;
+    });
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+
+    // 自家事件 ⇒ 跟随不得中断（不出现「回到底部」按钮）
+    expect(container.querySelector('button[aria-label="滚动到底部"]')).toBeFalsy();
+    // 反证：此刻按几何判定并不贴底 —— 正是旧实现把它当成「用户滚走了」的那一步
+    expect(isAtBottom({ scrollTop: top, scrollHeight: height, clientHeight: CLIENT_HEIGHT })).toBe(false);
+
+    // 另一半：跟随仍生效 —— 再长一次内容，视图应被重新拉到底
+    act(() => {
+      useRun.setState((s) => {
+        // 基于当前 items 追加：直接写 [...items, …] 会把上一步的「第三句」顶掉，长度不变 ⇒ 跟随 effect 不会重跑
+        s.tabs.s1.items = [...s.tabs.s1.items, user("第四句", ISO)];
+      });
+    });
+    await waitFor(() => expect(top).toBe(maxTop()));
+    expect(container.querySelector('button[aria-label="滚动到底部"]')).toBeFalsy();
   });
 });
