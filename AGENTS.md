@@ -31,8 +31,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **941 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；CI 用 `cargo test --workspace` |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **800 passed / 74 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿 / 0 warning（本地实测 **965 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1019 passed / 91 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
