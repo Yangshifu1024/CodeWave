@@ -2,7 +2,6 @@ use super::drive::{DriveParams, NormalizedCall};
 use super::runtime::{AgentCore, EventSink, Frame, STREAM_THROTTLE_MS, SessionRuntime};
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, StreamRequest};
-use crate::tools::compact::compact_for_model;
 use crate::util::throttle::ThrottledStream;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -795,17 +794,6 @@ pub(super) fn build_assistant_message(
         calls,
         synth,
     )
-}
-
-/// 模型侧双通道压缩包装（供批次执行层调用）。
-/// `vision` = 会话生效模型是否勾选「支持图片输入」（read 图片说明的措辞与图片块去向据此分叉）。
-pub fn model_side_result(
-    kind: crate::tools::ToolKind,
-    name: &str,
-    outcome: &crate::tools::ToolOutcome,
-    vision: bool,
-) -> String {
-    compact_for_model(kind, name, outcome, vision)
 }
 
 /// 将一个节流批次按段顺序拆成多条单通道帧依次下发：帧到达序 = 显示顺序。
