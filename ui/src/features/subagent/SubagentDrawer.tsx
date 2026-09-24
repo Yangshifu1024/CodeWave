@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Drawer, Tag, Tooltip } from "antd";
 import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import type { ApprovalMode } from "../../ipc/types";
 import { useActiveRun, useRun } from "../../stores/run";
 import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
@@ -158,6 +159,15 @@ export default function SubagentDrawer() {
   }, [open, sig]);
 
   const role = sub?.name || sub?.role || "";
+  // 档位行（[docs/mode-gate-and-subagent-sync]）：sub:step 每步上报当前档位；归档 / 旧数据无该字段（undefined）→ 不渲染该行。
+  // 档位名复用 Composer 胶囊的键（同一档位两处必须同名）：写成字面键让守门② 的字面键闭包看得见（跨段借用已在 settings.registry.test.ts 登记）
+  const modeLabels: Record<ApprovalMode, string> = {
+    confirm_each: t("composer.modeConfirmEach"),
+    auto_edit: t("composer.modeAutoEdit"),
+    plan: t("composer.modePlan"),
+    full_access: t("composer.modeFullAccess"),
+  };
+  const modeLabel = sub?.approvalMode ? modeLabels[sub.approvalMode] : "";
   const statusNode = !sub ? null : running ? (
     <Tag variant="filled" className="sub-drawer-status st-running">{t("subagent.statusRunning")}</Tag>
   ) : sub.status === "error" ? (
@@ -197,6 +207,13 @@ export default function SubagentDrawer() {
             {role && <span className="sub-drawer-role">{role}</span>}
             {sub?.description && <span className="sub-drawer-desc">· {sub.description}</span>}
           </span>
+          {/* 档位行：子代理当前权限档位（继承自主会话；每步上报，随会话切档更新） */}
+          {modeLabel && (
+            <span className="sub-drawer-mode">
+              {t("subagent.modeLine", { mode: modeLabel })}
+              <span className="sub-drawer-mode-note">{t("subagent.modeInherited")}</span>
+            </span>
+          )}
           {statusNode}
         </div>
       }

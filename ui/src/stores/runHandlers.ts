@@ -2,7 +2,7 @@
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
-import type { McpStatusPayload, SubagentEvent } from "../ipc/types";
+import type { AskOpenedEvent, McpStatusPayload, SubagentEvent } from "../ipc/types";
 import type { WritableDraft } from "immer";
 import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
@@ -246,7 +246,7 @@ export function toolHandlers(get: GetFn): Record<string, (p: any) => void> {
 /** ask/审批（2 键）：打开询问卡 + 失焦通知；close 清空 */
 export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
-    "ask:opened": (p) => {
+    "ask:opened": (p: AskOpenedEvent) => {
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return; // M-1：不重建桶——避免无人能应答的幽灵审批
@@ -317,6 +317,9 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         const sub = s.tabs[p.session]?.subs.find((x) => x.subId === p.sub_id);
         if (!sub) return;
         sub.step = p.step ?? sub.step;
+        // 批准门选档（[docs/mode-gate-and-subagent-sync]）：子代理当前档位每步上报，过程抽屉显示档位行；
+        // 旧后端 / 归档回放不带该字段 → 保持原值（不写成 undefined，避免抽屉出现空档位）
+        if (p.approval_mode) sub.approvalMode = p.approval_mode;
         if (p.tool) {
           sub.lastTools.push(p.tool);
           if (sub.lastTools.length > 8) sub.lastTools.shift();

@@ -68,6 +68,10 @@ pub struct DriveParams {
     /// 14 步终止）；只读角色子代理由 `subagent` 工具置 `NudgeOnly`（空转层 16 步纠偏一次、
     /// 不硬终止——失败重复层与步数/汇报门不受本字段影响，照常终止）。
     pub idle_policy: IdlePolicy,
+    /// 子代理档位基座（B1）：`Some` = 本 run 是子代理，每步按父会话**实时**档位从基座重建
+    /// 排除集 / system_extra / idle_policy（`refresh_subagent_mode`）；`None` = 主会话或
+    /// 任务运行（任务运行的档位在 `core::scheduler` 侧显式置 FullAccess，参数保持冻结）。
+    pub sub_base: Option<SubBase>,
 }
 
 impl Default for DriveParams {
@@ -84,6 +88,7 @@ impl Default for DriveParams {
             main_session: false,
             parent_cancel: None,
             idle_policy: IdlePolicy::default(),
+            sub_base: None,
         }
     }
 }
@@ -290,8 +295,9 @@ pub const WRITE_TOOLS: &[&str] = &["edit", "create", "delete"];
 /// Plan 档收紧（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）：排除写工具 / 后台服务 / 任务运行 + MCP；
 /// shell 保留但受只读 fence 白名单约束（plan_readonly，白名单外一律确认）；
 /// 子代理继承同样语义。
-/// 主会话 run 每步按当前偏好重算限制（ask 批准切到 AutoEdit 在下一步生效）；
-/// 子代理/任务 run 由父参数冻结，不受会话中途切档影响。
+/// 主会话 run 每步按当前偏好重算限制（ask 批准切档在下一步生效）；
+/// 子代理每步按父会话实时档位从基座重建（`subagent_drive_params`，B1）；
+/// 任务运行的参数由 spawn 时冻结（其档位在 `core::scheduler` 侧显式置 FullAccess）。
 pub fn main_drive_params(prefs: &crate::core::prefs::SessionPrefs) -> DriveParams {
     let mut params = DriveParams {
         main_session: true,
@@ -316,8 +322,145 @@ pub(super) fn apply_plan_mode(params: &mut DriveParams, prefs: &crate::core::pre
     );
     params.exclude_mcp = true;
     params.system_extra =
-        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-mode-workflow），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：同意则选「执行方案」（系统将自动切换到自动编辑模式并指示你立即执行），有意见则选「补充意见」——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
+        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-mode-workflow），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：批准门为 ask 单题并携带 switchToAutoEdit=true，提供两个批准类选项——「执行方案」（切自动编辑档）与「完全访问执行」（切完全访问档）：批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（mode=\"auto_edit\" / mode=\"full_access\"，缺省回落 auto_edit）——不声明就会回落自动编辑档，用户选「完全访问执行」会被静默降级；系统按用户所选档位切档并指示你立即执行；有意见则选「补充意见」——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
             .into();
+}
+
+/// 子代理档位基座（B1）：spawn 时冻结一次，此后每步按父会话**实时**档位重建。
+/// **重建语义（本改造的核心约束）**：排除集与 system_extra 一律从本基座 clone 重算，
+/// 绝不增量追加——增量追加会让 Plan→AutoEdit 后旧的写工具排除与 `<plan-mode>` 块
+/// 永久残留（子代理已能写文件却仍被告知「计划模式只读」）。
+#[derive(Debug, Clone)]
+pub struct SubBase {
+    /// 根会话 id（= 子 rt 的 `root_session_id`，嵌套派发时仍指向主会话）：每步据此取实时父档
+    pub root_session_id: Option<crate::core::types::SessionId>,
+    /// 角色名（原样字符串，供 `tools::subagent::apply_role_policy` 归一查表）
+    pub role: String,
+    /// 步数预算（重建角色纪律块时复用）
+    pub max_steps: usize,
+    /// spawn 时的档位：与当前档位相同时逐字复用冻结的角色纪律块（少一次拼装）
+    pub spawn_mode: crate::core::prefs::ApprovalMode,
+    /// 基座排除集（spawn 冻结的内部 7 项：ask/subagent/plan/skill/scheduled_task/suggest/wait）
+    pub base_excludes: Vec<String>,
+    /// 基座 system_extra（角色纪律块 + 角色定义）
+    pub base_system_extra: String,
+    /// 基座 idle_policy（只读角色 = NudgeOnly；与档位解耦，不随档位变化）
+    pub idle_policy: IdlePolicy,
+}
+
+/// 按**当前父档**从基座重建子代理参数——spawn 与每步重算共用这一条装配路径
+///（同源保证「spawn 时的参数」与「第一步重算后的参数」逐字一致）。
+///
+/// 装配顺序与既有语义一致：基座排除集 → 父档派生（Plan 档 = 写工具三件套 +
+/// `service` + `scheduled_task`，另加 MCP 排除与 `<plan-mode>` 块）→ 角色派生
+///（只读角色在非 FullAccess 档下排除写工具，B3）。重复调用幂等：反复切档不会
+/// 累积排除项，也不会残留旧档位的提示块。
+pub fn subagent_drive_params(
+    base: &SubBase,
+    parent_prefs: &crate::core::prefs::SessionPrefs,
+) -> DriveParams {
+    // 角色纪律块：档位变了才重拼（只读提示句在 FullAccess 档下是授权说明，B3）
+    let base_extra = if parent_prefs.approval_mode == base.spawn_mode {
+        base.base_system_extra.clone()
+    } else {
+        crate::tools::subagent::base_extra(&base.role, base.max_steps, parent_prefs.approval_mode)
+    };
+    let mut params = DriveParams {
+        exclude_tools: base.base_excludes.clone(),
+        system_extra: base_extra,
+        idle_policy: base.idle_policy,
+        ..DriveParams::default()
+    };
+    let parent = main_drive_params(parent_prefs);
+    params.exclude_tools.extend(parent.exclude_tools);
+    params.exclude_mcp = params.exclude_mcp || parent.exclude_mcp;
+    if !parent.system_extra.is_empty() {
+        params.system_extra.push_str(&parent.system_extra);
+    }
+    crate::tools::subagent::apply_role_policy(&mut params, &base.role, parent_prefs.approval_mode);
+    dedup_excludes(&mut params.exclude_tools);
+    params
+}
+
+/// 排除集去重（保序）：基座 ∪ 父档 ∪ 角色三路来源本有重叠（如 `scheduled_task`），
+/// 去重后重建结果稳定可比，也让「反复切档长度不增」可被直接断言。
+fn dedup_excludes(tools: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    tools.retain(|t| seen.insert(t.clone()));
+}
+
+/// 取子代理的**实时**父档（B1）：经根会话 id 查活跃会话表。
+/// 父会话已删除 / 未注册 → `None`，调用方保持现状（优雅降级，绝不 panic）。
+fn live_parent_prefs(
+    core: &AgentCore,
+    base: &SubBase,
+    rt: &SessionRuntime,
+) -> Option<crate::core::prefs::SessionPrefs> {
+    let root = base
+        .root_session_id
+        .clone()
+        .or_else(|| rt.root_session_id.clone())?;
+    core.session(&root).map(|p| p.prefs())
+}
+
+/// 子代理每步档位同步（B1，`run_tool_batch` 的重算点）：按父会话实时档位重建参数
+///（工具集 / `<plan-mode>` 块 / idle 策略），并把根会话的 `approval_mode` 写进子 rt 的
+/// prefs——fence（`ToolCtx::fence_policy`）与写审批门读的都是它，不同步会出现
+/// 「工具集松了但 fence 还锁着」的错位。
+///
+/// 只同步 `approval_mode`：`model_id` / `reasoning_effort` 保持 spawn 快照（产品决策）。
+/// 档位**真的变化**时才注入 `[system]` 消息并记日志——未变不动历史，避免污染历史与
+/// 打穿 provider 前缀缓存。
+pub(super) fn refresh_subagent_mode(
+    core: &AgentCore,
+    rt: &Arc<SessionRuntime>,
+    params: &mut DriveParams,
+) {
+    let Some(base) = params.sub_base.clone() else {
+        return;
+    };
+    let Some(parent_prefs) = live_parent_prefs(core, &base, rt) else {
+        return;
+    };
+    let fresh = subagent_drive_params(&base, &parent_prefs);
+    params.exclude_tools = fresh.exclude_tools;
+    params.exclude_mcp = fresh.exclude_mcp;
+    params.system_extra = fresh.system_extra;
+    params.idle_policy = fresh.idle_policy;
+
+    let prev = rt.prefs().approval_mode;
+    if prev == parent_prefs.approval_mode {
+        return;
+    }
+    let mut prefs = rt.prefs();
+    prefs.approval_mode = parent_prefs.approval_mode;
+    rt.set_prefs(prefs);
+    rt.history.lock().unwrap().push(
+        Message::user_text(format!(
+            "[system] 权限模式已变更为 {}",
+            approval_mode_label(parent_prefs.approval_mode)
+        ))
+        .stamped(),
+    );
+    session_log::info(
+        rt,
+        &format!(
+            "子代理档位跟随父会话：{} → {}（工具集与 fence 已同步）",
+            approval_mode_label(prev),
+            approval_mode_label(parent_prefs.approval_mode)
+        ),
+    );
+}
+
+/// 审批档位的中文名（注入文案与日志共用，B1/B4）。
+pub(super) fn approval_mode_label(mode: crate::core::prefs::ApprovalMode) -> &'static str {
+    use crate::core::prefs::ApprovalMode;
+    match mode {
+        ApprovalMode::ConfirmEach => "逐项确认模式",
+        ApprovalMode::AutoEdit => "自动编辑模式",
+        ApprovalMode::Plan => "计划模式",
+        ApprovalMode::FullAccess => "完全访问模式",
+    }
 }
 
 /// 低预算提醒触发步：剩余预算 20% 时（`step` 从 0 计已耗步数，
@@ -1372,16 +1515,24 @@ async fn run_tool_batch(
 
     // 主会话：计划经 ask 批准 → 切档已发生（ask 工具内部）；注入执行指令。
     // 下一步的 ⑦ 会重算 system prompt 与工具集，解除计划限制。
+    // 文案按**实际落到的档位**渲染（B4）：批准门可能切到自动编辑档，也可能切到完全访问档
+    //（[docs/mode-gate-and-subagent-sync]），写死「自动编辑模式」会与事实不符。
     if batch_out.plan_approved && params.emit_events {
-        rt.history.lock().unwrap().push(Message::user_text(
-            "[system] 方案已获批准，会话已切换到自动编辑模式。请立即按方案开始执行，无需再次询问。",
-        ).stamped());
+        rt.history.lock().unwrap().push(
+            Message::user_text(format!(
+                "[system] 方案已获批准，会话已切换到{}。请立即按方案开始执行，无需再次询问。",
+                approval_mode_label(rt.prefs().approval_mode)
+            ))
+            .stamped(),
+        );
     }
 
-    // 主会话每步重算计划限制（切档即时生效）；子代理/任务参数保持冻结。
+    // 重算三分支（B1）：主会话按当前偏好重算 / 子代理按父会话实时档位重建 / 任务运行保持冻结。
     // main_drive_params 内部已置 main_session = true，无需再显式赋值
     if params.main_session {
         *params = main_drive_params(&rt.prefs());
+    } else if params.sub_base.is_some() {
+        refresh_subagent_mode(core, rt, params);
     }
 
     // M6：强制汇报轮也在工具批次完成后才结束（历史不留悬空 tool_use）
@@ -1400,6 +1551,8 @@ async fn run_tool_batch(
 }
 
 /// 任务运行执行（[docs/p2-plan](../../../../docs/p2-plan.md) §3）：隔离上下文 + 30 步预算 + 无 MCP。
+/// 档位由 `core::scheduler` 在创建 runtime 时显式置 FullAccess（无人值守需写文件与执行命令，
+/// 且审批弹窗无人应答）；本参数集保持冻结，不参与每步重算。
 /// 返回（结果，usage）——usage 由调用方记入统计（L10）与任务日志（B7）。
 pub async fn run_task_agent(
     core: Arc<AgentCore>,
@@ -1428,6 +1581,8 @@ pub async fn run_task_agent(
         parent_cancel: None,
         // 任务运行按默认 Stop（与引入 idle_policy 前逐字一致）
         idle_policy: IdlePolicy::default(),
+        // 任务运行不参与每步档位重算（sub_base 仅在子代理 spawn 时置位）
+        sub_base: None,
     };
     // 指令成为首条用户消息（隔离 runtime 无既有历史）
     rt.history

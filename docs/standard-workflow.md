@@ -11,7 +11,7 @@
 |---|---|
 | 适用范围 | 分档路由：轻量（≤2 文件/无删除/无新依赖/无跨层）直接实现；任一维度超阈自动走完整流水线 S1-S9；用户显式说法可升/降档；拿不准默认轻量。计划批准即定分支：S4 拟定分支名（git 仓库内 `<type>/<slug>`），S5 批准询问列明并构成建分支预授权，S6 动工前先 `git switch -c`（[docs/plan-branch-proposal](./plan-branch-proposal.md)） |
 | 产物 | 完整流水线保留 `.codewave/tasks/` 四文档；轻量路径不落盘；临时会话可跑流水线但跳过落盘（S9 说明） |
-| 批准门 | S5 保留 ask 批准门（`switchToAutoEdit=true`，id="approve" / id="revise"，驳回修订 ≤2 轮）；批准 = 预授权创建并切换计划所示分支 |
+| 批准门 | S5 保留 ask 批准门：**三个选项**（两个批准类选项各带 `mode` 字段声明目标档位——「执行方案」= `auto_edit`、「完全访问执行」= `full_access`，再加无 mode 的「补充意见」；批准类判定 = `mode.is_some()`，锚点 `switchToAutoEdit` 与 `id="approve"` 保留为兼容兜底；驳回修订 ≤2 轮）；批准 = 用户在两档中选一（自动编辑 / 完全访问）+ 预授权创建并切换计划所示分支（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)） |
 | 注入位置 | 常驻系统提示第 1 层（`core/prompt.rs` 编译期常量 `WORKFLOW_SECTION`，字节稳定缓存友好） |
 | 并行（用户两轮补充） | S1 explore ∥ S2 product-manager 同批；S6 任务包并发额度（≤4）内拉满、三角色混派、真实依赖才顺序、超额补位不等整批；S7 reviewer ∥ S8 tester 同批 |
 

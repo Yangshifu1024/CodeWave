@@ -139,6 +139,17 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect(legacy.ended).toBeUndefined();
   });
 
+  it("sub:step 上报 approval_mode：写入子代理档位；旧载荷无该字段不覆盖", () => {
+    const h = handlers();
+    h["sub:spawn"]({ session, sub_id: "sub_mode", role: "backend-dev", description: "d", max_steps: 5 });
+    expect(tabOf(session).subs[0].approvalMode).toBeUndefined();
+    h["sub:step"]({ session, sub_id: "sub_mode", step: 2, approval_mode: "full_access" });
+    expect(tabOf(session).subs[0].approvalMode).toBe("full_access");
+    // 归档 / 旧后端：payload 不带 approval_mode → 保持原值（不写成 undefined，抽屉不会突然丢档位行）
+    h["sub:step"]({ session, sub_id: "sub_mode", step: 3 });
+    expect(tabOf(session).subs[0].approvalMode).toBe("full_access");
+  });
+
   it("子代理流内 tool_progress 落锚点，tool:result（session=sub_id）路由回填工具卡", () => {
     const h = handlers();
     h["sub:spawn"]({ session, sub_id: "sub_1", role: "backend-dev", description: "d", max_steps: 10 });

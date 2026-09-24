@@ -229,6 +229,32 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
     grow("第二段过程");
     await waitFor(() => expect(top).toBe(maxTop()));
   });
+
+  it("档位行：approvalMode 有值时显示「权限模式：<档位>（继承自主会话）」", () => {
+    seedTab("s1", [subView({ approvalMode: "full_access" })], { sub_1: subStream() }, { open: true, subId: "sub_1" });
+    render(
+      <AntApp>
+        <SubagentDrawer />
+      </AntApp>,
+    );
+    const line = document.querySelector(".sub-drawer-mode") as HTMLElement;
+    expect(line).not.toBeNull();
+    expect(line.textContent).toContain("权限模式：完全访问");
+    expect(line.textContent).toContain("继承自主会话");
+  });
+
+  it("档位行优雅降级：approvalMode 缺失（归档 / 旧数据）不渲染该行，也不出现 undefined 文本", () => {
+    seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
+    render(
+      <AntApp>
+        <SubagentDrawer />
+      </AntApp>,
+    );
+    expect(document.querySelector(".sub-drawer-mode")).toBeNull();
+    const head = document.querySelector(".sub-drawer-head") as HTMLElement;
+    expect(head.textContent).not.toContain("undefined");
+    expect(head.textContent).not.toContain("权限模式");
+  });
 });
 
 describe("Composer 子代理运行指示器（docs/subagent-interaction-drawer）", () => {

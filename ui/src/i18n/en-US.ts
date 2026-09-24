@@ -74,6 +74,11 @@ export default {
     prevPage: "Previous question", nextPage: "Next question",
     recommended: "Recommended",
     switchHint: "Submitting will switch to auto-edit mode",
+    /* Mode gate ([docs/mode-gate-and-subagent-sync]): fallback risk note for the full-access option —
+       appended **always**, after the backend description (a model-authored description cannot suppress it) */
+    fullAccessRisk: "Skips all approval prompts; disaster-level commands are still blocked",
+    /* Separator between the backend description and the fallback risk note */
+    fullAccessRiskSep: " — ",
   },
   settings: {
     title: "Settings",
@@ -381,6 +386,9 @@ export default {
     stop: "Stop this subagent",
     endedEarly: "Ended early",
     endedBudget: "Budget exhausted",
+    /* Drawer header mode line ([docs/mode-gate-and-subagent-sync]): mode = label from composer.mode* keys */
+    modeLine: "Permission mode: {{mode}}",
+    modeInherited: " (inherited from the main session)",
   },
   diff: { title: "Workspace changes (vs HEAD)", empty: "No changes" },
   git: { notConfigured: "Not configured" },

@@ -73,6 +73,11 @@ export default {
     prevPage: "上一题", nextPage: "下一题",
     recommended: "推荐",
     switchHint: "提交后将切换到自动编辑档",
+    /* 批准门选档（[docs/mode-gate-and-subagent-sync]）：完全访问档选项的兜底风险说明——
+       与后端 description **并存**（叠在模型文案之后），模型自带 description 也顶不掉它 */
+    fullAccessRisk: "跳过所有审批弹窗，灾难级命令仍拦截",
+    /* 后端 description 与兜底风险文案之间的分隔（中文用全角分号，不放空格） */
+    fullAccessRiskSep: "；",
   },
   settings: {
     title: "设置",
@@ -376,6 +381,9 @@ export default {
     stop: "停止该子代理",
     endedEarly: "提前结束",
     endedBudget: "预算耗尽",
+    /* 抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）：mode = 档位名（复用 composer.mode* 键） */
+    modeLine: "权限模式：{{mode}}",
+    modeInherited: "（继承自主会话）",
   },
   diff: { title: "工作区变更（vs HEAD）", empty: "无变更" },
   git: { notConfigured: "未配置" },

@@ -1,4 +1,5 @@
 use super::drive::budget_notice_step;
+use super::drive::main_drive_params;
 use super::runtime::{Frame, SessionRuntime};
 use super::stream::{build_assistant_message, build_stream_request, flush_segments};
 use super::*;
@@ -1589,4 +1590,278 @@ async fn step_timing_excludes_retry_backoff() {
         .filter(|f| matches!(f, Frame::Usage { .. }))
         .count();
     assert_eq!(usage_frames, 1);
+}
+
+// ===== B1：子代理档位实时同步（每步从基座重建，不累积、不残留） =====
+
+/// 测试用子代理基座：内部 7 项 + explore（只读角色）纪律块。
+fn test_sub_base(spawn_mode: crate::core::prefs::ApprovalMode) -> SubBase {
+    test_sub_base_role("explore", spawn_mode)
+}
+
+/// 指定角色的测试基座（档位重算与角色策略交叉验证用）。
+fn test_sub_base_role(role: &str, spawn_mode: crate::core::prefs::ApprovalMode) -> SubBase {
+    crate::tools::subagent::sub_base(role, 25, crate::agents::find(role), spawn_mode)
+}
+
+/// 父档 Plan → AutoEdit 后子代理的排除集与提示块按父档重建；来回切不累积。
+/// 用**可写角色**（backend-dev）：写工具的唯一来源是父档，故能直接验证档位重算。
+#[test]
+fn subagent_params_rebuild_from_base_on_mode_switch() {
+    use crate::core::prefs::ApprovalMode;
+    let base = test_sub_base_role("backend-dev", ApprovalMode::Plan);
+
+    // 父档 Plan：写工具被排除 + 恰一个 <plan-mode> 块
+    let plan = subagent_drive_params(&base, &prefs_of(ApprovalMode::Plan, None));
+    for t in ["edit", "create", "delete"] {
+        assert!(
+            plan.exclude_tools.iter().any(|e| e == t),
+            "Plan 档应排除 {t}：{:?}",
+            plan.exclude_tools
+        );
+    }
+    assert_eq!(plan.system_extra.matches("<plan-mode>").count(), 1);
+    assert!(plan.system_extra.contains("<subagent-discipline>"));
+    assert!(plan.exclude_mcp, "Plan 档排除 MCP");
+
+    // 父档切 AutoEdit：写工具回归 + plan 块消失（从基座重建，旧档提示不残留）
+    let auto = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None));
+    for t in ["edit", "create", "delete"] {
+        assert!(
+            !auto.exclude_tools.iter().any(|e| e == t),
+            "AutoEdit 档不应排除 {t}：{:?}",
+            auto.exclude_tools
+        );
+    }
+    assert!(!auto.system_extra.contains("<plan-mode>"));
+    assert!(auto.system_extra.contains("<subagent-discipline>"));
+    assert!(!auto.exclude_mcp);
+
+    // 来回切：长度稳定（不累积）、plan 块出现次数恰为 0/1、基座 7 项恒在
+    let (plan_len, auto_len) = (plan.exclude_tools.len(), auto.exclude_tools.len());
+    for mode in [
+        ApprovalMode::AutoEdit,
+        ApprovalMode::Plan,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::Plan,
+    ] {
+        let next = subagent_drive_params(&base, &prefs_of(mode, None));
+        assert_eq!(
+            next.exclude_tools.len(),
+            if mode == ApprovalMode::Plan {
+                plan_len
+            } else {
+                auto_len
+            },
+            "{mode:?} 档排除集长度应稳定（不累积）：{:?}",
+            next.exclude_tools
+        );
+        assert_eq!(
+            next.system_extra.matches("<plan-mode>").count(),
+            if mode == ApprovalMode::Plan { 1 } else { 0 }
+        );
+        for t in crate::tools::subagent::SUB_BASE_EXCLUDES {
+            assert!(
+                next.exclude_tools.iter().any(|e| e == t),
+                "缺基座排除项 {t}"
+            );
+        }
+    }
+}
+
+/// B1：子 rt 的 prefs 跟随根会话档位（仅 approval_mode；模型 / 力度保持 spawn 快照），
+/// 档位真变化时恰好注入一条 `[system]`。
+#[tokio::test]
+async fn subagent_prefs_follow_parent_mode_without_touching_model() {
+    use crate::core::prefs::{ApprovalMode, EffortLevel, SessionPrefs};
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let core = test_support::make_core(&roots);
+    let root =
+        core.get_or_create_session("root", roots.workspace.clone(), None, vec![], None, vec![]);
+    // spawn 时的父档：Plan + 指定模型 / 力度（子代理快照）
+    root.set_prefs(SessionPrefs {
+        approval_mode: ApprovalMode::Plan,
+        model_id: Some("m-snapshot".into()),
+        reasoning_effort: Some(EffortLevel::Low),
+    });
+    let sub = SessionRuntime::new_sub(&root, "sub-1".into());
+    // 可写角色：写工具只受父档控制，便于断言「档位变了工具集跟着变」
+    let mut base = test_sub_base_role("backend-dev", ApprovalMode::Plan);
+    base.root_session_id = sub.root_session_id.clone();
+    let mut params = subagent_drive_params(&base, &root.prefs());
+    params.max_steps = 25;
+    params.sub_base = Some(base);
+    let before = sub.history.lock().unwrap().len();
+
+    // 档位未变：不注入、不动历史
+    super::drive::refresh_subagent_mode(&core, &sub, &mut params);
+    assert_eq!(
+        sub.history.lock().unwrap().len(),
+        before,
+        "档位未变不得注入 [system] 消息"
+    );
+
+    // 父会话切到 AutoEdit 并换模型：子代理只跟档位
+    root.set_prefs(SessionPrefs {
+        approval_mode: ApprovalMode::AutoEdit,
+        model_id: Some("m-changed".into()),
+        reasoning_effort: Some(EffortLevel::High),
+    });
+    super::drive::refresh_subagent_mode(&core, &sub, &mut params);
+    assert_eq!(sub.prefs().approval_mode, ApprovalMode::AutoEdit);
+    assert_eq!(
+        sub.prefs().model_id.as_deref(),
+        Some("m-snapshot"),
+        "模型必须保持 spawn 快照"
+    );
+    assert_eq!(
+        sub.prefs().reasoning_effort,
+        Some(EffortLevel::Low),
+        "力度必须保持 spawn 快照"
+    );
+    // 参数同步：写工具回归 + plan 块消失
+    for t in ["edit", "create", "delete"] {
+        assert!(!params.exclude_tools.iter().any(|e| e == t));
+    }
+    assert!(!params.system_extra.contains("<plan-mode>"));
+    {
+        let h = sub.history.lock().unwrap();
+        assert_eq!(h.len(), before + 1, "档位变化恰好注入一条消息");
+        let injected = h
+            .last()
+            .unwrap()
+            .content
+            .iter()
+            .find_map(|c| match c {
+                Content::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            injected.contains("[system] 权限模式已变更为 自动编辑模式"),
+            "注入文案不符：{injected}"
+        );
+    }
+
+    // 再刷一次（档位已同）：不再注入
+    super::drive::refresh_subagent_mode(&core, &sub, &mut params);
+    assert_eq!(sub.history.lock().unwrap().len(), before + 1);
+}
+
+/// B1 降级：父会话查不到（已删除）时保持子 rt 现有档位与参数，不 panic、不注入。
+#[tokio::test]
+async fn subagent_mode_refresh_degrades_when_parent_missing() {
+    use crate::core::prefs::ApprovalMode;
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let core = test_support::make_core(&roots);
+    let root =
+        core.get_or_create_session("gone", roots.workspace.clone(), None, vec![], None, vec![]);
+    root.set_prefs(prefs_of(ApprovalMode::Plan, None));
+    let sub = SessionRuntime::new_sub(&root, "sub-2".into());
+    let mut base = test_sub_base(ApprovalMode::Plan);
+    // 指向不存在的会话（父会话已删除）
+    base.root_session_id = Some("ghost".into());
+    let mut params = subagent_drive_params(&base, &root.prefs());
+    params.sub_base = Some(base);
+    let before = sub.history.lock().unwrap().len();
+
+    super::drive::refresh_subagent_mode(&core, &sub, &mut params);
+    assert_eq!(
+        sub.prefs().approval_mode,
+        ApprovalMode::Plan,
+        "降级：档位保持"
+    );
+    assert_eq!(
+        sub.history.lock().unwrap().len(),
+        before,
+        "降级不注入 [system]"
+    );
+    for t in ["edit", "create", "delete"] {
+        assert!(
+            params.exclude_tools.iter().any(|e| e == t),
+            "降级后参数应保持 spawn 时的 Plan 形态"
+        );
+    }
+}
+
+/// B3：父档 FullAccess 时只读子代理解锁写工具（提示同步为授权说明）；其余档仍只读。
+#[test]
+fn subagent_readonly_role_unlocked_under_full_access() {
+    use crate::core::prefs::ApprovalMode;
+    let base = test_sub_base(ApprovalMode::FullAccess);
+    let p = subagent_drive_params(&base, &prefs_of(ApprovalMode::FullAccess, None));
+    for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
+        assert!(
+            !p.exclude_tools.iter().any(|e| e == t),
+            "完全访问档不应排除 {t}：{:?}",
+            p.exclude_tools
+        );
+    }
+    assert!(p.system_extra.contains("完全访问档"));
+    assert!(!p.system_extra.contains("你是只读角色，没有写工具"));
+    // 🟡5 返工：只读角色的定义正文自带只读禁令（explore「只读调研：不修改任何文件」），
+    // 与授权说明打架 → 完全访问档下正文末尾必须带覆盖声明
+    assert!(p.system_extra.contains("上述角色定义中的只读约束"));
+    assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly, "idle 策略与档位解耦");
+
+    // 父档 AutoEdit（≠ 基座 spawn 档）：重新生成纪律块 → 回到只读约束
+    let q = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None));
+    for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
+        assert!(
+            q.exclude_tools.iter().any(|e| e == t),
+            "AutoEdit 档应排除 {t}"
+        );
+    }
+    assert!(q.system_extra.contains("你是只读角色，没有写工具"));
+    assert!(!q.system_extra.contains("完全访问档"));
+    assert!(!q.system_extra.contains("上述角色定义中的只读约束"));
+}
+
+/// B4：批准后注入文案按实际档位渲染（AutoEdit 与旧文案逐字一致）。
+#[test]
+fn approval_mode_labels_cover_all_modes() {
+    use crate::core::prefs::ApprovalMode;
+    assert_eq!(
+        super::drive::approval_mode_label(ApprovalMode::AutoEdit),
+        "自动编辑模式"
+    );
+    assert_eq!(
+        super::drive::approval_mode_label(ApprovalMode::FullAccess),
+        "完全访问模式"
+    );
+    assert_eq!(
+        super::drive::approval_mode_label(ApprovalMode::Plan),
+        "计划模式"
+    );
+    assert_eq!(
+        super::drive::approval_mode_label(ApprovalMode::ConfirmEach),
+        "逐项确认模式"
+    );
+}
+
+/// B5：`<plan-mode>` 块的 S5 描述与批准门（两个批准类选项 + 补充意见）保持一致。
+#[test]
+fn plan_mode_block_describes_two_approve_options() {
+    use crate::core::prefs::ApprovalMode;
+    let p = main_drive_params(&prefs_of(ApprovalMode::Plan, None));
+    assert!(p.system_extra.contains("switchToAutoEdit"), "保留锚点词");
+    assert!(p.system_extra.contains("完全访问执行"));
+    assert!(p.system_extra.contains("补充意见"));
+    assert!(p.system_extra.contains("<plan-mode>"));
+    // 🟡3 返工：必须显式要求批准类选项声明 mode（否则模型不声明 → 后端 selected_target_mode
+    // 回落 AutoEdit →「完全访问执行」被静默降级）；措辞与 ask 工具 description / core/prompt.rs 的 S5 行对齐。
+    assert!(p.system_extra.contains("mode=\"auto_edit\""));
+    assert!(p.system_extra.contains("mode=\"full_access\""));
 }

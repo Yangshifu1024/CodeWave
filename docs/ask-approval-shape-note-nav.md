@@ -26,7 +26,7 @@
 | `approve_option_id(qs)` | 首个命中项 id（前端直提判定用） |
 | `ask:opened` payload | 附加字段 `approval: bool` + `approve_id: Option<String>`（先例 [docs/ask-ink-accent-and-composer-cover](./ask-ink-accent-and-composer-cover.md) `switch_to_auto_edit`；零新增事件键，27 键契约不动） |
 | `approved_hit` 扩展 | selections 命中 approve 候选 id 集合（宽松识别收集）∨ 既有 id 子串匹配（保留）——**修复批准静默失效** |
-| `arch_gate_shape` 不变 | id==="approve" 精确形状仍是 `switchToAutoEdit` 升档 flag 的安全闸（[docs/arch-orchestrator](./arch-orchestrator.md) Y3）；已知边界：label 守约但 id 非严格形状时 ConfirmEach+flag 不切档（与现状一致），Plan 档批准不受影响（走宽松 approved_hit） |
+| `arch_gate_shape` 不变 | id==="approve" 精确形状仍是 `switchToAutoEdit` 升档 flag 的安全闸（[docs/arch-orchestrator](./arch-orchestrator.md) Y3）；**档位字段（`mode`）同样受该形状约束**——严格批准形态仍是升档安全闸，批准门的 `mode` 只在标准批准形态下被接受（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）；已知边界：label 守约但 id 非严格形状时 ConfirmEach+flag 不切档（与现状一致），Plan 档批准不受影响（走宽松 approved_hit） |
 
 **前端**：`AskState`/`AskOpenedEvent` += `approval/approveId`（run.ts ask:opened 处理器透传）；AskPanel `approvalShape = ask.approval === true || 严格判定兜底`（宽松集 ⊇ 严格集不冲突）、直提条件 `opt.id === approveOptionId`、submitWith 的 approved 判定取并集、hint 按形态切换（单选「回车确认」/ 多选「回车或空格选中」，复用既有两键，i18n 零新增 hint）。
 
@@ -59,7 +59,7 @@
 ## 四、手动验证清单
 
 1. **批准形（后端标记生效）**：发起一次计划批准询问（模型自拟选项 id）→ 选项前显示**单选框**、hint 为「回车确认」；点「执行方案」免提交直发；选「补充意见」再点「执行方案」→ 旧选中自动取消、直提生效
-2. **批准切档**：同上批准后会话切自动编辑档（胶囊变色）——即使选项 id 是自拟英文（如 execute），批准依然生效（此前会静默失效）
+2. **批准切档**：同上批准后会话切到**所选档位**（后续批次：缺省「执行方案」= 自动编辑档，选「完全访问执行」则切完全访问档，[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)；胶囊变色）——即使选项 id 是自拟英文（如 execute），批准依然生效（此前会静默失效）
 3. **多选题**：普通多选询问 → 选项前显示**复选框**、hint 为「回车或空格选中」；勾选两项均保持勾选；提交载荷含两项
 4. **键盘环**：Tab 从最后选项 → 补充说明输入框底线浮现；回车聚焦开始输入（不触发提交）；↑ 回退到最后选项；继续 Tab 环回第一项
 5. **审批确认**：命令审批三选项显示单选框，checked 跟随高亮移动
