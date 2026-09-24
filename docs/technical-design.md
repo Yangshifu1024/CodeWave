@@ -352,7 +352,8 @@ async fn request(&self, req: ApprovalRequest) -> ApprovalVerdict {
 ~/.codewave/
 ├── sessions/index.json        # 索引：{id, title, workspace, model, updated_at, …}，≤2000 条（LRU 淘汰）
 ├── sessions/<id>.snap.json.gz # 会话元信息快照，≤16MB
-├── histories/<id>.json.gz     # PersistedMessage[] 的 gzip JSON，≤8MB（图片以 blob 引用落盘）
+├── histories/<id>/           # 会话历史：分段 append-only JSONL（0001.jsonl…，明文不压缩，无上限）
+│   └── .segmeta.json         # 增量水位边车（[session-history-storage](./session-history-storage.md)）
 ├── sessions/<id>.imgblob/     # 图片外置 blob（sha256 内容寻址去重；[session-history-limits](./session-history-limits.md)）
 ```
 

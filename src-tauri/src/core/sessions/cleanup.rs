@@ -266,9 +266,12 @@ pub fn session_log_candidates(data_dir: &Path, meta: &SessionMeta) -> Vec<PathBu
 /// 把整条会话卡在索引里）。
 ///
 /// 会话编号先过白名单（`is_safe_session_id`）：下面的路径全部由编号拼出来
-///（`histories/<id>.json.gz`、`sessions/<id>.*`、`histories/subs/<id>/`、`sessions/<id>.toolres/`、
-/// `sessions/<id>.imgblob/`、子历史的 `sessions/<父>__<sub>.imgblob/`、`logs/<id>.log`），
+///（新格式 `histories/<id>/` 段目录与旧格式 `histories/<id>.json.gz`、`sessions/<id>.*`、
+/// `histories/subs/<id>/`、`sessions/<id>.toolres/`、`sessions/<id>.imgblob/`、
+/// 子历史的 `sessions/<父>__<sub>.imgblob/`、`logs/<id>.log`），
 /// 索引里的脏编号绝不能进拼接；编号非法时返回 false（本次不删、索引行保留、计入失败），
+///
+/// 历史两种形态都存在时**都要删**（读兼容期不迁移，不做二选一）。
 /// 宁可删不掉也不让脏值变成目录穿越。
 pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &SessionMeta) -> bool {
     if !is_safe_session_id(&meta.id) {
@@ -291,6 +294,8 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
         .collect();
 
     let mut ok = true;
+    // 历史：**两种形态都删**——新格式段目录 + 旧格式单文件（读兼容期可能共存）
+    ok &= remove_dir_if_exists(&store.history_dir(&meta.id));
     ok &= remove_file_if_exists(&store.history_path(&meta.id));
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
@@ -322,8 +327,9 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
 }
 
 /// 清理索引之外的残留（超出索引条数上限被挤出、列表里已看不到的会话文件）：
-/// 只删「id 不在索引里」且「文件修改时间早于 cutoff」的 `histories/<id>.json.gz`、
-/// `sessions/<id>.{artifacts,todos}.json` 与 `sessions/<id>.{toolres,imgblob}/`。
+/// 只删「id 不在索引里」且「条目修改时间早于 cutoff」的 `histories/<id>/` 段目录
+///（旧格式 `histories/<id>.json.gz` 同样认）、`sessions/<id>.{artifacts,todos}.json`
+/// 与 `sessions/<id>.{toolres,imgblob}/`。
 /// **子历史的 blob 目录（`sessions/<父>__<sub>.imgblob/`）不在范围内**：它的「id」不在会话索引里、
 /// 也不带 `sub_` 前缀，按「不在索引即孤儿」判定会被误删，而父会话的子历史还引用着那些图——
 /// 这类目录由级联删除路径负责（见 `is_sub_blob_owner`）。
@@ -380,13 +386,29 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
     if let Ok(rd) = std::fs::read_dir(store.histories_dir()) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            // 新格式：histories/<id>/ 段目录（递归删）。`subs` 是子历史桶——其下还有各父会话的
+            // 子历史，绝不是会话孤儿，一律由级联删除路径负责。
+            if path.is_dir() {
+                if name == "subs"
+                    || !is_safe_session_id(&name)
+                    || known.contains(&name)
+                    || is_non_session_id(&name)
+                {
+                    continue;
+                }
+                if dir_modified_before(&path, cutoff) {
+                    out.push(path);
+                }
+                continue;
+            }
+            // 旧格式：histories/<id>.json.gz
             let Some(id) = name.strip_suffix(".json.gz") else {
                 continue;
             };
             if !is_safe_session_id(id) || known.contains(id) || is_non_session_id(id) {
                 continue;
             }
-            let path = entry.path();
             if modified_before(&path, cutoff) {
                 out.push(path);
             }
@@ -440,6 +462,178 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
     }
 
     out
+}
+
+// ---------- 旧格式历史清理（P5；[docs/session-cleanup](../../../../docs/session-cleanup.md) /
+// [docs/session-history-limits](../../../../docs/session-history-limits.md)） ----------
+//
+// 新格式（`histories/<id>/` 段目录）落地后，旧格式单文件（`histories/<id>.json.gz`）仍在磁盘上：
+// 读兼容、**不自动删**（用户已拍板）。本节的入口就是设置页的「清理旧格式历史」——
+// 预览可回收的体积与条数 → 执行 → 给出回收统计。
+//
+// **铁律（不可违反）**：绝不删除「没有对应新格式数据」的旧 `.json.gz`——那是该会话历史的
+// **唯一副本**，删了永久丢失。这类文件在执行时必须**跳过并计数**，界面如实呈现「已保留 N 个」。
+
+/// 一条旧格式历史（`histories/<id>.json.gz`）的清理候选。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyHistoryEntry {
+    /// 会话编号
+    pub id: String,
+    /// 旧文件的字节数（扫描时量得；执行时据此累计回收量）
+    pub bytes: u64,
+}
+
+/// 旧格式历史的扫描结果（预览与执行**共用同一份判据**：绝不会出现「预览说可回收、执行却删了别的」）。
+#[derive(Debug, Clone, Default)]
+pub struct LegacyHistoryScan {
+    /// **可清理**：旧文件存在，且该会话已有新格式段数据（新格式已是权威）
+    pub cleanable: Vec<LegacyHistoryEntry>,
+    /// **必须保留**：只有旧文件、没有新格式数据——那是该会话历史的唯一副本
+    pub keep: Vec<LegacyHistoryEntry>,
+}
+
+/// 「清理旧格式历史」的预览（IPC 返回结构，字段名为前端契约）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LegacyCleanupPreview {
+    /// 可清理的会话数（该会话已有新格式数据）
+    pub cleanable_sessions: u32,
+    /// 可回收字节数（只算旧文件本身）
+    pub cleanable_bytes: u64,
+    /// 必须保留的会话数（只有旧文件 = 唯一副本，绝不删）
+    pub keep_sessions: u32,
+}
+
+/// 「清理旧格式历史」的结果（IPC 返回结构，字段名为前端契约）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LegacyCleanupOutcome {
+    /// 实际删除的会话数（每个会话一个旧文件）
+    pub deleted_sessions: u32,
+    /// 实际删除的文件数（当前恒等于 `deleted_sessions`；分成两个字段是为将来「一条会话多个旧文件」留位）
+    pub deleted_files: u32,
+    /// 释放的字节数
+    pub freed_bytes: u64,
+    /// 因「无新格式数据」被保留（跳过）的会话数
+    pub kept_sessions: u32,
+    /// 删除失败的条数（文件被占用等；下次可再试）
+    pub failed: u32,
+}
+
+/// 该会话是否已有**可读的**新格式段数据（= 旧文件可以安全删除的**唯一**前提）。
+///
+/// 判据与读路径的权威裁决**同源**（[`super::segments::has_readable_messages`]）：段目录存在
+/// **且**段里至少有一条可读的 message 记录。空目录 / 全是坏段 / 只有头与封口的段都不算——
+/// 那些情形下旧 `.json.gz` 才是那份内容**唯一可读**的副本，删掉就是不可逆丢失。
+///
+/// 为什么**不**直接复用 `SessionStore::reads_new_format`：那个函数的语义是「读历史时该走哪种格式」，
+/// 其中「段目录存在、但没有旧文件」被当成新格式为权威（没有可回落的副本，如实报空历史即可）；
+/// 而本入口的语义是「这个旧文件现在删掉安全吗」，问的是**新格式里到底有没有可读内容**。
+/// 两者在本入口的调用点（旧文件必然存在）虽恰好等价，但那是巧合而非契约——判据该按各自语义选，
+/// 借 `reads_new_format` 会把「读路径的回落规则」绑进删除决策里。
+///
+/// 保守方向永远是留着：多留一个文件不算错，删错一次找不回来。
+fn has_new_format_history(dir: &Path) -> bool {
+    super::segments::has_readable_messages(dir)
+}
+
+/// 扫描旧格式历史（只读盘、不删任何文件）。预览与执行共用它，保证两条口径一致。
+///
+/// 范围：`histories/` 下**文件**名形如 `<id>.json.gz` 的条目。排除：
+/// - 编号非法（`is_safe_session_id`：脏编号绝不参与路径拼接）或带 `sub_` / `task_` 前缀
+///   （子代理过程历史 / 计划任务，本就不在会话索引里）；
+/// - `histories/subs/`：子历史桶，其下是 `subs/<父>/<子>.json.gz`，本函数只看顶层文件因而天然不碰
+///   （子历史的旧文件随父会话级联删除，不在本入口范围内）。
+///
+/// **索引不参与判定**：可删与否只取决于「有没有新格式数据」，与「是否还在会话列表里」无关——
+/// 已被挤出索引的会话同样可能有新格式段目录，其旧文件同样是多余副本。
+pub fn scan_legacy_histories(store: &SessionStore) -> LegacyHistoryScan {
+    let mut out = LegacyHistoryScan::default();
+    // 目录不存在 = 从来没有旧格式历史（不是错误）
+    let Ok(rd) = std::fs::read_dir(store.histories_dir()) else {
+        return out;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".json.gz") else {
+            continue;
+        };
+        if !is_safe_session_id(id) || is_non_session_id(id) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let item = LegacyHistoryEntry {
+            id: id.to_string(),
+            bytes,
+        };
+        if has_new_format_history(&store.history_dir(id)) {
+            out.cleanable.push(item);
+        } else {
+            out.keep.push(item);
+        }
+    }
+    out
+}
+
+/// 预览「清理旧格式历史」：可回收的会话数 / 字节数 + 必须保留的会话数（只读，不删任何文件）。
+pub fn preview_legacy_histories(store: &SessionStore) -> LegacyCleanupPreview {
+    let scan = scan_legacy_histories(store);
+    LegacyCleanupPreview {
+        cleanable_sessions: scan.cleanable.len() as u32,
+        cleanable_bytes: scan.cleanable.iter().map(|e| e.bytes).sum(),
+        keep_sessions: scan.keep.len() as u32,
+    }
+}
+
+/// 执行「清理旧格式历史」：**只删**「已有新格式数据」的旧 `.json.gz`。
+///
+/// 铁律：`scan.keep` 里的文件（只有旧文件、没有新格式数据）**一个都不删**——删了就是永久丢失；
+/// 它们计入 `kept_sessions` 如实回传，界面必须把这句话说出来。
+///
+/// 只删旧文件本身：**新格式段目录、会话索引与其它边车一律不碰**（旧文件与段目录是否并存与本操作无关）。
+/// 每个会话一个旧文件，单条失败不中断整批（计入 `failed`，下次再试）。
+pub fn run_legacy_cleanup(store: &SessionStore) -> LegacyCleanupOutcome {
+    let scan = scan_legacy_histories(store);
+    let mut outcome = LegacyCleanupOutcome {
+        kept_sessions: scan.keep.len() as u32,
+        ..Default::default()
+    };
+    for entry in &scan.cleanable {
+        let path = store.history_path(&entry.id);
+        let removed = match std::fs::remove_file(&path) {
+            Ok(()) => true,
+            // 已不存在（并发清理 / 用户手工删过）同样算达成目标；回收量按扫描时量得的算
+            Err(e) if e.kind() == ErrorKind::NotFound => true,
+            Err(e) => {
+                outcome.failed += 1;
+                tracing::warn!("清理旧格式历史失败（{}）：{e}", path.display());
+                false
+            }
+        };
+        if removed {
+            outcome.deleted_sessions += 1;
+            outcome.deleted_files += 1;
+            outcome.freed_bytes += entry.bytes;
+            tracing::info!("已清理旧格式历史：{}（{} 字节）", entry.id, entry.bytes);
+        }
+    }
+    if outcome.kept_sessions > 0 {
+        tracing::info!(
+            "旧格式历史清理：{} 个会话只有旧格式文件、没有新格式数据，已保留（唯一副本，绝不删除）",
+            outcome.kept_sessions
+        );
+    }
+    tracing::info!(
+        "旧格式历史清理完成：删除 {} 个会话 / {} 个文件 / 释放 {} 字节，保留 {} 个，失败 {} 个",
+        outcome.deleted_sessions,
+        outcome.deleted_files,
+        outcome.freed_bytes,
+        outcome.kept_sessions,
+        outcome.failed
+    );
+    outcome
 }
 
 /// 执行一次清理：先删文件、最后**一次性**写索引；随后扫索引外残留并写状态文件。
@@ -613,6 +807,26 @@ fn modified_before(path: &Path, cutoff: DateTime<Utc>) -> bool {
     };
     let at: DateTime<Utc> = modified.into();
     at < cutoff
+}
+
+/// 目录级陈旧判定：**目录本身与其中全部条目**的修改时间都早于 cutoff 才算陈旧。
+///
+/// 为什么不能只比目录 mtime：往既有段文件里**追加**内容不会刷新目录自身的 mtime，
+/// 只看目录 mtime 会把「刚刚还在写」的历史目录当成陈旧残留删掉（不可逆数据丢失）。
+/// 任一条目取不到时间戳 → 一律不删（保守）。
+fn dir_modified_before(path: &Path, cutoff: DateTime<Utc>) -> bool {
+    if !modified_before(path, cutoff) {
+        return false;
+    }
+    let Ok(rd) = std::fs::read_dir(path) else {
+        return false;
+    };
+    for entry in rd.flatten() {
+        if !modified_before(&entry.path(), cutoff) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1060,21 +1274,41 @@ mod tests {
         assert!(!dir.exists(), "残留的 .imgblob 目录应被递归删除");
     }
 
-    /// 历史 / 子代理过程历史目录都随会话删除。
+    /// 历史（新旧两种形态）与子代理过程历史目录都随会话删除。
+    ///
+    /// 段式布局落地后同一个会话可能同时存在两种历史形态（读兼容期不迁移）：
+    /// `histories/<id>/`（新）与 `histories/<id>.json.gz`（旧）——删除路径必须两种都认。
     #[test]
     fn history_and_sub_histories_removed() {
         let dd = tempfile::tempdir().unwrap();
         let store = store_in(dd.path());
         let id = "sess-h";
         std::fs::create_dir_all(store.histories_dir()).unwrap();
+        // 旧格式单文件 + 新格式段目录并存
         std::fs::write(store.history_path(id), b"x").unwrap();
-        let subs = store.sub_histories_dir(id).join("sub_1");
-        std::fs::create_dir_all(&subs).unwrap();
-        std::fs::write(subs.join("sub_1.json.gz"), b"x").unwrap();
+        std::fs::create_dir_all(store.history_dir(id)).unwrap();
+        std::fs::write(store.history_dir(id).join("0001.jsonl"), b"x").unwrap();
+        // 子历史：新格式（段目录）与旧格式（目录里放 .json.gz）各一份
+        let subs_new = store.sub_histories_dir(id).join("sub_1");
+        std::fs::create_dir_all(&subs_new).unwrap();
+        std::fs::write(subs_new.join("0001.jsonl"), b"x").unwrap();
+        let subs_old = store.sub_histories_dir(id).join("sub_2");
+        std::fs::create_dir_all(&subs_old).unwrap();
+        std::fs::write(subs_old.join("sub_2.json.gz"), b"x").unwrap();
+        // 子历史的 blob 目录（owner = <父>__<sub>）也要被连带删
+        std::fs::create_dir_all(store.sub_image_blobs_dir(id, "sub_1")).unwrap();
 
         assert!(delete_session_files(&store, dd.path(), &meta(id, &ago(0))));
-        assert!(!store.history_path(id).exists());
-        assert!(!store.sub_histories_dir(id).exists());
+        assert!(!store.history_path(id).exists(), "旧格式历史文件");
+        assert!(!store.history_dir(id).exists(), "新格式段目录");
+        assert!(
+            !store.sub_histories_dir(id).exists(),
+            "子历史目录（两种形态都在其下）"
+        );
+        assert!(
+            !store.sub_image_blobs_dir(id, "sub_1").exists(),
+            "子历史的 blob 目录"
+        );
     }
 
     /// 计划文件删除的路径白名单：必须同时是 `.md` 且位于托管的 `.codewave/tasks/` 下；
@@ -1196,7 +1430,7 @@ mod tests {
         let dd = tempfile::tempdir().unwrap();
         let store = store_in(dd.path());
 
-        // 两条都过期：good 正常，bad 的历史路径被占成**非空目录**（remove_file 必失败）
+        // 两条都过期：good 正常（会写出新格式段目录），bad 的旧格式历史路径被占成非空目录
         store
             .save_history(
                 "good",
@@ -1215,6 +1449,8 @@ mod tests {
         store
             .upsert_meta(meta("bad", &real_ago(30 * 86_400)))
             .unwrap();
+        // 失败注入：bad 的历史路径占成**非空目录**——旧格式删除（remove_file）必失败，
+        // 该会话因此计入失败（索引行保留，下次清理再试）
         std::fs::create_dir_all(store.history_path("bad").join("inner")).unwrap();
 
         let candidates = select_expired(&store.load_index().sessions, Utc::now(), 1, &none());
@@ -1231,6 +1467,15 @@ mod tests {
         // 失败的会话索引行保留（下次清理再试），成功的消失
         assert!(store.get("bad").is_some());
         assert!(store.get("good").is_none());
+        // 新格式段目录随会话删除（两种历史形态都不残留）
+        assert!(
+            !store.history_dir("good").exists(),
+            "新格式段目录随会话删除"
+        );
+        assert!(
+            store.history_path("bad").is_dir(),
+            "失败会话被占用的路径不得被动（本次失败注入占的就是它）"
+        );
 
         // 状态文件：每次执行都写（本次删除 1 失败 1）
         let status = read_status(dd.path());
@@ -1637,5 +1882,413 @@ mod tests {
         assert_eq!(count_orphan_files(&store, cutoff), 0);
         assert_eq!(remove_orphan_files(&store, cutoff), 0);
         assert!(blob_dir.is_dir(), "子历史的 blob 目录不得被残留清理删掉");
+    }
+
+    /// 🔴 新格式段目录（`histories/<id>/`）在索引外残留清理里的两个方向：
+    /// ① 陈旧且不在索引里 → 递归删除（新目录与旧文件一起认）；
+    /// ② `histories/subs/` 是子历史桶，**永远不是会话孤儿**（否则会连带删掉子历史）。
+    ///
+    /// 「陈旧」用 cutoff 表达（目录 mtime 在测试里无法回拨）：cutoff 落在未来 = 一切都算陈旧；
+    /// 落在过去 = 一切都不算。段目录的陈旧判定要求**目录与其中全部条目**都早于 cutoff——
+    /// 只看目录 mtime 会把「最近还在追加」的历史当残留删掉（追加不刷新目录 mtime）。
+    #[test]
+    fn orphan_scan_recognizes_new_format_dirs_and_never_touches_subs() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        store.upsert_meta(meta("known", &real_ago(0))).unwrap();
+
+        let ghost_dir = store.history_dir("ghost-dir");
+        std::fs::create_dir_all(&ghost_dir).unwrap();
+        std::fs::write(ghost_dir.join("0001.jsonl"), "x").unwrap();
+        let ghost_gz = dd.path().join("histories/ghost-gz.json.gz");
+        std::fs::write(&ghost_gz, "x").unwrap();
+        std::fs::create_dir_all(store.histories_dir().join("subs").join("parent")).unwrap();
+        // 索引里的会话（新旧两种形态）不得被当孤儿
+        std::fs::create_dir_all(store.history_dir("known")).unwrap();
+        std::fs::write(store.history_path("known"), "x").unwrap();
+
+        let stale = Utc::now() + chrono::Duration::hours(1);
+        assert_eq!(
+            count_orphan_files(&store, stale),
+            2,
+            "新格式段目录 + 旧格式文件都认（还要排除 histories/subs）"
+        );
+        let fresh = Utc::now() - chrono::Duration::hours(1);
+        assert_eq!(count_orphan_files(&store, fresh), 0, "新鲜的不算残留");
+
+        assert_eq!(remove_orphan_files(&store, stale), 2);
+        assert!(!ghost_dir.exists(), "陈旧的段目录应被递归删除");
+        assert!(!ghost_gz.exists());
+        assert!(
+            store.histories_dir().join("subs").is_dir(),
+            "histories/subs 是子历史桶，绝不是会话孤儿"
+        );
+        assert!(
+            store.history_dir("known").is_dir(),
+            "索引里的会话（新格式）不得被当孤儿删"
+        );
+        assert!(store.history_path("known").is_file());
+    }
+
+    // ---------- 旧格式历史清理（P5） ----------
+
+    /// 写一份旧格式历史文件（`histories/<id>.json.gz`）并返回路径。
+    fn write_legacy(store: &SessionStore, id: &str, content: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(store.histories_dir()).unwrap();
+        let path = store.history_path(id);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    /// 写一份新格式段目录（`histories/<id>/0001.jsonl`）并返回目录。
+    ///
+    /// **内容由调用方给**：这里不保证「可读」——需要「有新格式数据」语义的用例请用
+    /// [`write_readable_new_format`]，否则会在严格判据下被判成「没有可读消息」。
+    fn write_new_format(store: &SessionStore, id: &str, content: &[u8]) -> PathBuf {
+        let dir = store.history_dir(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("0001.jsonl"), content).unwrap();
+        dir
+    }
+
+    /// 一份**合法可读**的段文件字节（头记录 + 每条 message 记录 + 封口行）。
+    ///
+    /// 用真实落盘形态（`persist::to_persisted` + 序列化 [`segments::Record`]）而不是手搓近似 JSON：
+    /// 本模块的判据问的正是「段里有没有**可读** message 记录」，`b"new-bytes\n"` 这类假字节在新判据下
+    /// 不算数；手搓的近似结构则会把测试变成对 fixture 的自我验证。
+    fn readable_segment_bytes(
+        store: &SessionStore,
+        session: &str,
+        seq: u32,
+        texts: &[&str],
+    ) -> Vec<u8> {
+        use crate::core::sessions::segments::{Record, SCHEMA_VERSION};
+        let msgs: Vec<crate::core::types::Message> = texts
+            .iter()
+            .map(|t| crate::core::types::Message::user_text(*t))
+            .collect();
+        let (persisted, _blobs) =
+            crate::core::sessions::persist::to_persisted(store, session, &msgs);
+
+        fn line(rec: &Record) -> Vec<u8> {
+            let mut bytes = serde_json::to_string(rec).unwrap().into_bytes();
+            bytes.push(b'\n');
+            bytes
+        }
+
+        let at = "2026-01-01T00:00:00+00:00".to_string();
+        let mut out = line(&Record::Header {
+            schema: SCHEMA_VERSION,
+            session: session.to_string(),
+            seq,
+            base: seq == 1,
+            at: at.clone(),
+        });
+        for msg in &persisted {
+            out.extend(line(&Record::Message { msg: msg.clone() }));
+        }
+        // 封口行让 `message_count` 走「尾读封口」快路（与生产写入结果同形态）
+        out.extend(line(&Record::Seal {
+            messages: persisted.len(),
+            sig: "0000000000000000".to_string(),
+            at,
+        }));
+        out
+    }
+
+    /// 写一份「两种形态并存且可清理」的会话：旧文件由调用方补，这里写**可读**的新格式段（`0001.jsonl`）。
+    fn write_readable_new_format(store: &SessionStore, id: &str) -> PathBuf {
+        let dir = store.history_dir(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("0001.jsonl"),
+            readable_segment_bytes(store, id, 1, &["新格式内容"]),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// 段目录的「文件名 → 字节」快照（「逐字节未变」的断言基座）。
+    fn dir_snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        crate::core::sessions::segments::list_segments(dir)
+            .into_iter()
+            .map(|(_, p)| {
+                (
+                    p.file_name().unwrap().to_string_lossy().into_owned(),
+                    std::fs::read(&p).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// 🔴 铁律：只删「已有新格式数据」的旧文件；只有旧文件的会话**一个文件都不许删**。
+    ///
+    /// 范围排除也在此钉死：子历史（`histories/subs/` 桶）、`sub_` / `task_` 前缀、脏编号一律不碰。
+    #[test]
+    fn legacy_cleanup_deletes_only_sessions_with_new_format_data() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+
+        // ① 两种形态并存，且新格式段里**真有可读消息** → 可清理（新格式已是权威）
+        let both_legacy = write_legacy(&store, "both", b"legacy-bytes");
+        let both_dir = write_readable_new_format(&store, "both");
+        let both_before = dir_snapshot(&both_dir);
+        // ② 只有旧文件、没有新目录 → **唯一副本**，必须保留
+        let only_legacy = write_legacy(&store, "only-legacy", b"unique");
+        // ③ 只有新格式 → 与旧格式清理无关
+        write_readable_new_format(&store, "only-new");
+        // ④ 不该进范围的三类：子历史桶 / 两类非会话前缀
+        let sub_dir = store.sub_histories_dir("parent-a");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(sub_dir.join("sub_1.json.gz"), b"x").unwrap();
+        let sub_legacy = write_legacy(&store, "sub_deadbeef", b"x");
+        let task_legacy = write_legacy(&store, "task_daily-1", b"x");
+
+        let scan = scan_legacy_histories(&store);
+        assert_eq!(
+            scan.cleanable
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["both"],
+            "只有「两种形态并存」的会话可清理"
+        );
+        assert_eq!(scan.cleanable[0].bytes, 12, "字节数按旧文件自身计");
+        assert_eq!(
+            scan.keep.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["only-legacy"],
+            "只有旧文件的会话必须落在「保留」一侧"
+        );
+
+        let p = preview_legacy_histories(&store);
+        assert_eq!(p.cleanable_sessions, 1);
+        assert_eq!(p.cleanable_bytes, 12);
+        assert_eq!(p.keep_sessions, 1);
+
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, 1);
+        assert_eq!(outcome.deleted_files, 1);
+        assert_eq!(outcome.freed_bytes, 12);
+        assert_eq!(outcome.kept_sessions, 1);
+        assert_eq!(outcome.failed, 0);
+
+        assert!(!both_legacy.exists(), "已有新格式数据的旧文件应被删除");
+        assert!(only_legacy.exists(), "🔴 唯一副本绝不能被删");
+        assert_eq!(std::fs::read(&only_legacy).unwrap(), b"unique");
+        assert!(sub_legacy.exists(), "子代理过程历史不在范围内");
+        assert!(task_legacy.exists(), "计划任务不在范围内");
+        assert!(sub_dir.join("sub_1.json.gz").exists(), "subs 桶绝不碰");
+        assert_eq!(
+            dir_snapshot(&both_dir),
+            both_before,
+            "新格式段文件逐字节未变（本操作只删旧文件）"
+        );
+        assert!(store.history_dir("only-new").is_dir());
+    }
+
+    /// 🔴 铁律单钉：只有旧文件（没有新格式数据）时，预览报 0 可回收、执行一个字节都不动。
+    #[test]
+    fn legacy_cleanup_never_touches_unique_copy() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let legacy = write_legacy(&store, "lonely", b"the-only-copy");
+
+        let p = preview_legacy_histories(&store);
+        assert_eq!(p.cleanable_sessions, 0, "没有新格式数据 → 没有可回收的");
+        assert_eq!(p.cleanable_bytes, 0);
+        assert_eq!(p.keep_sessions, 1);
+
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, 0);
+        assert_eq!(outcome.deleted_files, 0);
+        assert_eq!(outcome.freed_bytes, 0);
+        assert_eq!(outcome.kept_sessions, 1, "保留数要如实回传（界面据此提示）");
+        assert_eq!(outcome.failed, 0);
+        assert!(legacy.exists(), "🔴 唯一副本必须原样留在磁盘上");
+        assert_eq!(std::fs::read(&legacy).unwrap(), b"the-only-copy");
+    }
+
+    /// 预览口径与执行口径一致：条数 / 字节数逐项对上；执行后预览归零且重跑幂等。
+    #[test]
+    fn legacy_cleanup_preview_matches_execution() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        for (id, size) in [("a", 10usize), ("b", 20), ("c", 3)] {
+            write_legacy(&store, id, &vec![b'x'; size]);
+            // 新格式必须是**可读**段：假字节不算「有新格式数据」（严格判据）
+            write_readable_new_format(&store, id);
+        }
+        let kept = write_legacy(&store, "keep-me", b"unique");
+
+        let p = preview_legacy_histories(&store);
+        assert_eq!(p.cleanable_sessions, 3);
+        assert_eq!(p.cleanable_bytes, 33);
+        assert_eq!(p.keep_sessions, 1);
+
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, p.cleanable_sessions);
+        assert_eq!(outcome.deleted_files, p.cleanable_sessions);
+        assert_eq!(outcome.freed_bytes, p.cleanable_bytes);
+        assert_eq!(outcome.kept_sessions, p.keep_sessions);
+        assert_eq!(outcome.failed, 0);
+
+        // 重跑幂等：没有旧文件可删了，但仍要报出保留的那一个
+        let again = run_legacy_cleanup(&store);
+        assert_eq!((again.deleted_sessions, again.freed_bytes), (0, 0));
+        assert_eq!(again.kept_sessions, 1);
+        assert_eq!(again.failed, 0);
+
+        let after = preview_legacy_histories(&store);
+        assert_eq!(after.cleanable_sessions, 0);
+        assert_eq!(after.cleanable_bytes, 0);
+        assert_eq!(after.keep_sessions, 1, "保留的那份永远不会变成可回收");
+        assert!(kept.exists());
+    }
+
+    /// 执行后旧文件消失，**新格式段目录逐字节未变**（只删旧文件，绝不碰新格式数据）。
+    #[test]
+    fn legacy_cleanup_leaves_new_format_dir_byte_identical() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let dir = write_readable_new_format(&store, "sess");
+        std::fs::write(
+            dir.join("0002.jsonl"),
+            readable_segment_bytes(&store, "sess", 2, &["第二条"]),
+        )
+        .unwrap();
+        let before = dir_snapshot(&dir);
+        let before_bytes = crate::core::sessions::segments::dir_bytes(&dir);
+        write_legacy(&store, "sess", b"old");
+
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, 1);
+        assert_eq!(outcome.freed_bytes, 3);
+        assert!(!store.history_path("sess").exists(), "旧文件已消失");
+        assert!(dir.is_dir(), "段目录本身不得被删");
+        assert_eq!(
+            crate::core::sessions::segments::dir_bytes(&dir),
+            before_bytes,
+            "段目录体积未变"
+        );
+        assert_eq!(dir_snapshot(&dir), before, "段文件逐字节未变");
+        assert_eq!(before.len(), 2, "两个段文件都在");
+    }
+
+    /// 段目录存在但**一个段文件都没有**时不算「已有新格式数据」：旧文件仍然保留。
+    ///
+    /// 判据故意比读路径（只看目录是否存在）更严：此刻旧文件是那份内容唯一的落盘副本，
+    /// 宁可多留一个文件，也不赌「空目录 = 新格式已接管」。
+    #[test]
+    fn legacy_cleanup_keeps_file_when_new_dir_is_empty() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        std::fs::create_dir_all(store.history_dir("empty-dir")).unwrap();
+        let legacy = write_legacy(&store, "empty-dir", b"still-the-only-copy");
+
+        assert_eq!(preview_legacy_histories(&store).cleanable_sessions, 0);
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, 0);
+        assert_eq!(outcome.kept_sessions, 1);
+        assert!(legacy.exists());
+    }
+
+    /// 🔴 铁律第二条：段目录存在但**段全都不可读**（坏段 / 段里一条消息都没有）时不算「已有新格式数据」——
+    /// 旧文件此刻仍是那份内容唯一**可读**的副本，必须保留。
+    ///
+    /// 判据必须与读路径同源（[`super::segments::has_readable_messages`]）：只判「段文件存不存在」，
+    /// 这类会话的旧文件会被删掉，而新格式那边一条可读消息都没有 → 用户再也看不到任何内容（不可逆丢失）。
+    /// 对照组（③ 有真实可读段）保证判据没有矫枉过正到「一律不删」。
+    #[test]
+    fn legacy_cleanup_keeps_file_when_segments_have_no_readable_messages() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+
+        // ① 段目录存在、但三个段全坏（缺头记录 / 不是 JSON / 头 schema 版本不符）
+        let bad_dir = store.history_dir("all-bad");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("0001.jsonl"), "{\"kind\":\"message\"}\n").unwrap();
+        std::fs::write(bad_dir.join("0002.jsonl"), "not json at all\n").unwrap();
+        std::fs::write(
+            bad_dir.join("0003.jsonl"),
+            "{\"kind\":\"header\",\"schema\":99,\"session\":\"all-bad\",\"seq\":3,\"base\":false,\"at\":\"2026-01-01T00:00:00+00:00\"}\n",
+        )
+        .unwrap();
+        let bad_legacy = write_legacy(&store, "all-bad", b"the-only-readable-copy");
+
+        // ② 段本身合法，但一条 message 记录都没有（只有头与封口）→ 同样不算「有历史」
+        let bare_dir = store.history_dir("header-only");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        std::fs::write(
+            bare_dir.join("0001.jsonl"),
+            readable_segment_bytes(&store, "header-only", 1, &[]),
+        )
+        .unwrap();
+        let bare_legacy = write_legacy(&store, "header-only", b"also-the-only-copy");
+
+        // ③ 对照组：段里**真有可读消息** → 旧文件是多余副本，可清理
+        let readable_dir = write_readable_new_format(&store, "readable");
+        let readable_legacy = write_legacy(&store, "readable", b"redundant-copy");
+
+        let scan = scan_legacy_histories(&store);
+        let ids = |v: &[LegacyHistoryEntry]| {
+            let mut ids: Vec<String> = v.iter().map(|e| e.id.clone()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(
+            ids(&scan.cleanable),
+            vec!["readable"],
+            "只有「段里真有可读消息」的会话可清理"
+        );
+        assert_eq!(
+            ids(&scan.keep),
+            vec!["all-bad", "header-only"],
+            "全是坏段 / 段里没有可读消息 → 必须落在「保留」一侧"
+        );
+
+        let p = preview_legacy_histories(&store);
+        assert_eq!(p.cleanable_sessions, 1);
+        assert_eq!(p.cleanable_bytes, 14, "只算对照组那一个旧文件");
+        assert_eq!(p.keep_sessions, 2);
+
+        let outcome = run_legacy_cleanup(&store);
+        assert_eq!(outcome.deleted_sessions, 1);
+        assert_eq!(outcome.freed_bytes, 14);
+        assert_eq!(outcome.kept_sessions, 2);
+        assert_eq!(outcome.failed, 0);
+
+        assert!(!readable_legacy.exists(), "对照组的旧文件应被删除");
+        assert!(
+            bad_legacy.exists(),
+            "🔴 段全坏的会话：旧文件是唯一可读副本，绝不能删"
+        );
+        assert_eq!(
+            std::fs::read(&bad_legacy).unwrap(),
+            b"the-only-readable-copy"
+        );
+        assert!(
+            bare_legacy.exists(),
+            "🔴 段里没有任何可读消息 → 旧文件同样必须保留"
+        );
+        assert_eq!(std::fs::read(&bare_legacy).unwrap(), b"also-the-only-copy");
+        assert!(bad_dir.is_dir(), "段目录本身不碰");
+        assert!(readable_dir.is_dir(), "段目录本身不碰");
+    }
+
+    /// 保留期清理（`run`）对**两种历史形态**都正确：过期会话的旧文件与新段目录一起消失。
+    #[test]
+    fn retention_cleanup_removes_both_history_formats() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let id = "expired-both";
+        let legacy = write_legacy(&store, id, b"old");
+        let dir = write_new_format(&store, id, b"new\n");
+        store.upsert_meta(meta(id, &real_ago(30 * 86_400))).unwrap();
+
+        let outcome = run(&store, dd.path(), 7);
+        assert_eq!(outcome.deleted, 1);
+        assert_eq!(outcome.failed, 0);
+        assert!(!legacy.exists(), "旧格式历史随会话删除");
+        assert!(!dir.exists(), "新格式段目录随会话删除");
     }
 }

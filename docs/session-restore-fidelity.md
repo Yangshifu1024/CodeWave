@@ -83,12 +83,12 @@
 - **`durationMs` 采集未做**：sidecar 记录里字段已留（`duration_ms`），需要把每次调用的耗时一并带进批次层的结果向量（涉及 4 处同源赋值），列为 P1；因此回填后历史卡片仍无耗时（`duration_ms` 为 null 时前端不覆盖原值）。
 - **旧会话（本机制上线前）无备份**：`.toolres` 里没有文件，回读返回空 → 卡片保持占位文案（行为与接入前一致，不报错）。
 - 图片仍按路径重读（原设计）；`data_url` 不入历史。
-- 历史 trim / checkpoint 粒度属于结构性话题，见 §4；**8MB 上限与图片外置已落地**（[session-history-limits](./session-history-limits.md)：附件图片搬出历史文件 + 越限可见 + 按轮降级，不再整份静默丢弃）。
+- 历史 trim / checkpoint 粒度已由 [session-history-storage](./session-history-storage.md) 落地（分段 append-only JSONL、**落盘不再 trim**、按段分页、有界 wire 装载）；**8MB 上限已取消**，改为软告警 200MB / 硬熔断 1GB。图片外置见 [session-history-limits](./session-history-limits.md)。
 
 ## 4. 未做（分级）
 
 **P1**：空 assistant 保留（历史里保留、发送前再丢）；`SessionMeta.interrupted` 不再被加载即清（需先定义「何时算已读」）；会话级 usage 落盘（工具条跨重启）；thinking 耗时落盘；`durationMs` 采集；运行中会话的在途卡片/ask 重建。
-**P2（与 [session-restore-batch1](./session-restore-batch1.md) 的「批2 范围」重叠，建议单独批次）**：历史 trim 双删与 256k 预算口径；checkpoint 粒度 → append-only JSONL；后台服务重启清理；自由会话计划任务落盘。
+**P2（与 [session-restore-batch1](./session-restore-batch1.md) 的「批2 范围」重叠，建议单独批次）**：~~历史 trim 双删与 256k 预算口径~~、~~checkpoint 粒度 → append-only JSONL~~ 已由 [session-history-storage](./session-history-storage.md) 落地；**剩余**：后台服务重启清理；自由会话计划任务落盘。
 
 ## 5. 验证
 

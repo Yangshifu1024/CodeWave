@@ -51,7 +51,7 @@
 
 ## 4. 现状事实（调研结论）
 
-- 会话索引与历史统一存在全局数据目录 `~/.codewave`：`sessions/index.json`（索引）、`histories/<id>.json.gz`（历史，单会话上限 8 MiB）、`sessions/<id>.todos.json` 与 `sessions/<id>.artifacts.json`（边车）、`histories/subs/<id>/`（子代理过程历史）、`sessions/<id>.toolres/`（工具结果原样 sidecar）与 `sessions/<id>.imgblob/`（图片外置 blob，子代理为 `sessions/<父>__<sub>.imgblob/`；[session-history-limits](./session-history-limits.md)）。
+- 会话索引与历史统一存在全局数据目录 `~/.codewave`：`sessions/index.json`（索引）、`histories/<id>/`（历史：**分段 append-only JSONL**，`0001.jsonl…` + 水位边车 `.segmeta.json`；[session-history-storage](./session-history-storage.md)）、旧格式遗留 `histories/<id>.json.gz`（读兼容、不自动删，可由设置页的「清理旧格式历史」入口回收）、`sessions/<id>.todos.json` 与 `sessions/<id>.artifacts.json`（边车）、`histories/subs/<id>/`（子代理过程历史，同为段式）、`sessions/<id>.toolres/`（工具结果原样 sidecar）与 `sessions/<id>.imgblob/`（图片外置 blob，子代理为 `sessions/<父>__<sub>.imgblob/`；[session-history-limits](./session-history-limits.md)）。
 - `SessionMeta`（`src-tauri/src/core/sessions/store.rs`）字段：`id` / `title` / `workspace` / `model_id` / `created_at` / `updated_at` / `message_count` / `project_id` / `roots` / `running` / `interrupted`；时间戳为 RFC3339 字符串；`created_at` 在 upsert 时保留首见值，`updated_at` 只在会话落盘检查点时刷新，没有"最近打开时间"。
 - 现有唯一会话删除入口 `SessionStore::remove`：删索引行（持索引锁）+ 历史 + 两个边车 + 子代理历史目录；**不删**会话日志，**不删**计划文件；文件删除失败静默忽略。
 - 索引有条数上限 2000，超出按 `updated_at` 倒序截断，被截断的会话文件仍留在磁盘且没有重新入索引的生产路径（"索引外残留"由此产生）。

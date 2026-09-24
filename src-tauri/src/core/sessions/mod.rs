@@ -1,5 +1,6 @@
-//! 会话持久化（[docs/p0-plan](../../../../docs/p0-plan.md) §8）：纯文件 + gzip，不引入数据库。
-//! 保存 = sanitize → trim → repair → 原子写；加载 = gunzip → repair → trim。
+//! 会话持久化（[docs/p0-plan](../../../../docs/p0-plan.md) §8）：纯文件，不引入数据库。
+//! 保存 = sanitize → repair → **分段 append-only JSONL**（不 trim、不整份改写）；
+//! 加载 = 段回放 → repair → trim（wire 侧裁剪与落盘解耦）。
 
 pub mod cleanup;
 pub mod interrupt;
@@ -10,6 +11,9 @@ pub mod tool_results;
 // 历史文件里只留 blob 引用，base64 原文落到 `sessions/<owner>.imgblob/`
 pub(crate) mod image_blobs;
 pub(crate) mod persist;
+// 分段 append-only JSONL 历史存储（会话保存与恢复优化 · 批2 P1）：
+// 段格式 / 增量水位与基线段 / 容错读取（半行、坏行、坏段一律跳过而不报错）
+pub(crate) mod segments;
 
 mod store;
 
@@ -19,4 +23,8 @@ pub use cleanup::{CleanupOutcome, CleanupPreview, CleanupStatus};
 // 转出是必要的（`mod store` 私有，外部只能走这里），而本 crate 的非测试代码尚未引用它们
 // （由调用方接线时使用），故显式 allow，不新增一条「未使用导入」噪音。
 #[allow(unused_imports)]
-pub use store::{ArtifactKind, ArtifactOp, HistoryStatus, SaveReport, SessionMeta, SessionStore};
+pub use segments::{HistoryBoundary, HistoryFormat, SegmentInfo};
+#[allow(unused_imports)]
+pub use store::{
+    ArtifactKind, ArtifactOp, HistoryLoad, HistoryStatus, SaveReport, SessionMeta, SessionStore,
+};

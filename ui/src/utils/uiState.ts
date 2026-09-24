@@ -114,6 +114,11 @@ let flushing: Promise<void> | null = null;
 /** 在途落盘期间又有变更 → 落盘循环结束后补写一次 */
 let flushPending = false;
 let anchoring = false;
+/** 滚动锚点防抖窗口的计时器（必须留句柄）：窗口的语义是「先挂起、过 ANCHOR_DEBOUNCE_MS 再读 DOM」，
+ *  挂窗口的那个实例被卸载后它照样会触发——此时 reader 读到的是一个空容器，会把「贴底」写进那个会话
+ *  （生产里切 Tab/关 Tab 后仍写底是兼容行为，但 reset 必须能把它清掉：否则上一轮挂着的窗口会漏进
+ *  下一个场景，把刚记下的锚点踩成贴底 —— 见 reset 的注释） */
+let anchorTimer: ReturnType<typeof setTimeout> | null = null;
 /** 最近一次成功写入的序列化结果（内容未变则跳过写盘，避免空转 I/O） */
 let lastWritten = "";
 let lastFailAt = 0;
@@ -467,7 +472,8 @@ export function scheduleAnchor(
 ): void {
   if (anchoring) return;
   anchoring = true;
-  setTimeout(() => {
+  anchorTimer = setTimeout(() => {
+    anchorTimer = null;
     try {
       setScrollAnchor(sessionId, reader());
     } catch {
@@ -590,9 +596,13 @@ export function initUiStatePersistence(): void {
   });
 }
 
-/** 测试用复位：清内存态与计时器（不清订阅，订阅无副作用） */
+/** 测试用复位：清内存态与计时器（不清订阅，订阅无副作用）。
+ *  「计时器」**包含锚点防抖窗口**：它是延迟读取 DOM 的窗口，不在复位时清掉就会在复位之后触发，
+ *  把上一轮现场读出的陈旧锚点（常见为「贴底」）写进新场景 */
 export function reset(): void {
   clearFlushTimers();
+  if (anchorTimer) clearTimeout(anchorTimer);
+  anchorTimer = null;
   flushing = null;
   flushPending = false;
   memory = freshMemory();

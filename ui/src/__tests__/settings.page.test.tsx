@@ -127,6 +127,8 @@ import { useSessions } from "../stores/sessions";
 import { PAGE_GROUPS, PAGE_ORDER, SETTINGS_ITEMS, type PageKey } from "../features/panels/settingsRegistry";
 // 清理提示的去重记录键（与启动轻提示共用一处口径；键名本身就是契约）
 import { CLEANUP_NOTICE_SEEN_KEY } from "../utils/cleanupNotice";
+// 旧格式历史清理（分段 JSONL 落地后的显式入口）的两个返回结构
+import type { LegacyCleanupOutcome, LegacyCleanupPreview } from "../ipc/types";
 
 /** 当前 IPC mock（用例覆盖实现后再复位） */
 async function invokeMock() {
@@ -2073,5 +2075,193 @@ describe("设置页：会话保留期与清理", () => {
     expect(calls.save[0].skipCleanup).toBe(true);
     // 离开照常进行（取消只影响清理，不影响保存与离开）
     await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
+  });
+});
+
+// ---------- 旧格式历史清理入口（分段 JSONL 落地后的显式入口） ----------
+// 铁律：只有旧文件、没有新格式数据的会话**必须保留**（唯一副本）——界面要把保留数说出来；
+// 而且「没什么可清」时必须有回应（点按钮没反应是最差的形态）。
+describe("设置页：旧格式历史清理入口", () => {
+  /** 两个命令的调用次数（每个用例开头的 mockLegacyIpc 会先复位） */
+  const calls = { preview: 0, run: 0 };
+
+  /**
+   * 旧格式清理链路的 IPC mock：预览在挂载时就拉一次（只读行数据源）；
+   * `afterRun` = 执行过后再拉预览时改成什么（默认一直用 `preview`）。
+   * `previewFails` = 预览命令一直失败（命令层失败路径）。
+   */
+  async function mockLegacyIpc(opts: {
+    preview?: LegacyCleanupPreview;
+    outcome?: LegacyCleanupOutcome;
+    afterRun?: LegacyCleanupPreview;
+    previewFails?: boolean;
+  }) {
+    calls.preview = 0;
+    calls.run = 0;
+    const emptyPreview: LegacyCleanupPreview = { cleanable_sessions: 0, cleanable_bytes: 0, keep_sessions: 0 };
+    const invoke = await invokeMock();
+    invoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "preview_legacy_history_cleanup") {
+        calls.preview += 1;
+        if (opts.previewFails) throw new Error("预览失败");
+        if (calls.run > 0 && opts.afterRun) return opts.afterRun;
+        return opts.preview ?? emptyPreview;
+      }
+      if (cmd === "run_legacy_history_cleanup") {
+        calls.run += 1;
+        return (
+          opts.outcome ?? {
+            deleted_sessions: 0,
+            deleted_files: 0,
+            freed_bytes: 0,
+            kept_sessions: 0,
+            failed: 0,
+          }
+        );
+      }
+      return baseInvoke(cmd, args);
+    });
+  }
+
+  /** 旧格式历史状态行（注册表锚点；常驻渲染） */
+  function legacyStatusRow(): HTMLElement {
+    return document.querySelector('[data-setting-id="app.legacy_history_status"]') as HTMLElement;
+  }
+
+  /** 当前打开的确认框里，按文本找按钮（碰到别处同名的「取消」才不会点错） */
+  function modalButton(titlePart: string, text: string): HTMLButtonElement {
+    const modal = Array.from(document.querySelectorAll(".ant-modal")).find((m) =>
+      (m.textContent ?? "").includes(titlePart),
+    );
+    expect(modal, `未找到标题含「${titlePart}」的确认框`).toBeTruthy();
+    const btn = Array.from(modal!.querySelectorAll("button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === text,
+    );
+    expect(btn, `确认框里未找到「${text}」按钮`).toBeTruthy();
+    return btn as HTMLButtonElement;
+  }
+
+  it("一个旧文件都没有：状态行说无需清理，两个按钮都给回应（不弹确认框、不执行）", async () => {
+    await mockLegacyIpc({});
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    await waitFor(() => expect(calls.preview).toBe(1)); // 挂载时拉一次（只读行数据源）
+    expect(legacyStatusRow().textContent ?? "").toContain("没有旧格式历史，无需清理");
+
+    fireEvent.click(buttonByText("预览可回收"));
+    await waitFor(() => expect(calls.preview).toBe(2));
+    await waitFor(() => expect(document.querySelectorAll(".ant-message-notice").length).toBeGreaterThan(0));
+
+    fireEvent.click(buttonByText("立即清理旧格式历史"));
+    await waitFor(() => expect(calls.preview).toBe(3));
+    expect(calls.run).toBe(0); // 无事可做不发执行命令
+    expect(document.body.textContent ?? "").not.toContain("清理旧格式历史？");
+  });
+
+  it("预览：可回收条数与体积、必须保留的条数都写进状态行", async () => {
+    await mockLegacyIpc({ preview: { cleanable_sessions: 4, cleanable_bytes: 1572864, keep_sessions: 2 } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    await waitFor(() => expect(calls.preview).toBe(1));
+    const row = legacyStatusRow().textContent ?? "";
+    expect(row).toContain("可回收 4 个会话的旧格式历史（约 1.5 MB）");
+    expect(row).toContain("另有 2 个会话必须保留（无新格式数据）");
+
+    fireEvent.click(buttonByText("预览可回收"));
+    await waitFor(() => expect(calls.preview).toBe(2));
+    await waitFor(() =>
+      expect(document.body.textContent ?? "").toContain("可回收 4 个会话的旧格式历史，约 1.5 MB"),
+    );
+  });
+
+  it("只有必须保留的那类：状态行说清「已保留 N 个」，点执行也给同一句回应", async () => {
+    await mockLegacyIpc({ preview: { cleanable_sessions: 0, cleanable_bytes: 0, keep_sessions: 3 } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    await waitFor(() => expect(calls.preview).toBe(1));
+    expect(legacyStatusRow().textContent ?? "").toContain("暂无可回收的旧格式历史（3 个会话只有旧格式数据，已保留）");
+
+    fireEvent.click(buttonByText("立即清理旧格式历史"));
+    await waitFor(() => expect(calls.preview).toBe(2));
+    expect(calls.run).toBe(0);
+    expect(document.body.textContent ?? "").not.toContain("清理旧格式历史？");
+  });
+
+  it("执行：确认框写清删除条数 / 体积与要保留的条数，完成后报回收统计与保留提示，状态行刷新", async () => {
+    await mockLegacyIpc({
+      preview: { cleanable_sessions: 4, cleanable_bytes: 1572864, keep_sessions: 2 },
+      outcome: { deleted_sessions: 4, deleted_files: 4, freed_bytes: 1572864, kept_sessions: 2, failed: 0 },
+      afterRun: { cleanable_sessions: 0, cleanable_bytes: 0, keep_sessions: 2 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理旧格式历史"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("清理旧格式历史？"));
+    expect(document.body.textContent ?? "").toContain("将删除 4 个会话的旧格式历史文件，释放约 1.5 MB");
+    expect(document.body.textContent ?? "").toContain("另有 2 个会话的旧格式历史会保留（它们是唯一副本）。");
+
+    fireEvent.click(modalButton("清理旧格式历史？", "清理旧格式历史"));
+    await waitFor(() => expect(calls.run).toBe(1));
+    await waitFor(() =>
+      expect(document.body.textContent ?? "").toContain("已清理 4 个会话的旧格式历史（4 个文件，释放 1.5 MB）"),
+    );
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("2 个会话因无新格式数据已保留"));
+    // 执行后再拉一次预览：只读行不会留着过期的可回收数
+    await waitFor(() => expect(calls.preview).toBe(3));
+    await waitFor(() =>
+      expect(legacyStatusRow().textContent ?? "").toContain("暂无可回收的旧格式历史（2 个会话只有旧格式数据，已保留）"),
+    );
+  });
+
+  it("取消确认框：不发执行命令，状态行保持原样", async () => {
+    await mockLegacyIpc({ preview: { cleanable_sessions: 1, cleanable_bytes: 2048, keep_sessions: 0 } });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理旧格式历史"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("清理旧格式历史？"));
+    fireEvent.click(modalButton("清理旧格式历史？", "取消"));
+
+    // 取消后只等一拍：antd 弹框的离场动画在 happy-dom 里不会走完（勿断言 wrap 隐藏），
+    // 要断的是「没执行」这个事实
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.run).toBe(0);
+    expect(legacyStatusRow().textContent ?? "").toContain("约 2.0 KB");
+    expect(document.body.textContent ?? "").not.toContain("已清理");
+  });
+
+  it("有失败条数：完成提示之外补一条警示（没说清「没删掉几个」会让用户以为全清完了）", async () => {
+    await mockLegacyIpc({
+      preview: { cleanable_sessions: 2, cleanable_bytes: 4096, keep_sessions: 0 },
+      outcome: { deleted_sessions: 1, deleted_files: 1, freed_bytes: 2048, kept_sessions: 0, failed: 1 },
+    });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    fireEvent.click(buttonByText("立即清理旧格式历史"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("清理旧格式历史？"));
+    fireEvent.click(modalButton("清理旧格式历史？", "清理旧格式历史"));
+
+    await waitFor(() => expect(calls.run).toBe(1));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已清理 1 个会话的旧格式历史"));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("1 个旧格式历史文件未能删除"));
+  });
+
+  it("预览失败：不弹确认框也不执行，状态行回退到「未取到统计」", async () => {
+    await mockLegacyIpc({ previewFails: true });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+
+    await waitFor(() => expect(calls.preview).toBe(1));
+    expect(legacyStatusRow().textContent ?? "").toContain("未取到旧格式历史的统计");
+
+    fireEvent.click(buttonByText("预览可回收"));
+    await waitFor(() => expect(calls.preview).toBe(2));
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("旧格式历史预览失败，本次不清理"));
+    expect(calls.run).toBe(0);
   });
 });

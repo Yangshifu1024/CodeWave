@@ -359,6 +359,7 @@ pub fn run() {
             host::commands::select_workspace_dir,
             host::commands::list_sessions,
             host::commands::load_session,
+            host::commands::load_session_earlier,
             host::commands::load_subagent_history,
             host::commands::load_tool_outcomes,
             host::commands::delete_session,
@@ -431,6 +432,9 @@ pub fn run() {
             host::commands::preview_session_cleanup,
             host::commands::run_session_cleanup,
             host::commands::get_cleanup_status,
+            // 旧格式历史清理入口（P5）：预览可回收体积 / 条数 → 执行 → 回收统计（只删已有新格式数据的旧文件）
+            host::commands::preview_legacy_history_cleanup,
+            host::commands::run_legacy_history_cleanup,
             host::notify::notify_system,
         ])
         .build(tauri::generate_context!())

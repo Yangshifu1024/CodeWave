@@ -2,13 +2,15 @@
 //   ① `run:done` 载荷的可选字段 `history_save`（后端**仅当保存不干净时**才带上）→ 转录补一条 notice；
 //   ② `SessionMeta.history_status`（挂在会话索引上，重启后仍在）→ 恢复历史时补同一条 notice。
 // 口径：干净路径零打扰；只要状态在就每次打开都显示（不做「已读」交互、不加本地持久化）。
+// P4（[docs/session-history-limits](../../../docs/session-history-limits.md)）：体积软告警 `warned` / 硬熔断 `fused`
+// 走**同一条**链路（`run:done.history_save` 当场 + `SessionMeta.history_status` 重启后），文案各自独立。
 // 惯例：唯一 invoke 入口 ui/src/ipc/client 必须 mock（不直接 mock @tauri-apps/api/core）；
 // zustand store 是模块级单例，逐用例重建态桶（踩坑清单）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitFor } from "@testing-library/react";
 
 const ipcMock = vi.hoisted(() => ({
-  loadSession: vi.fn(async (): Promise<unknown[]> => []),
+  loadSession: vi.fn(async (): Promise<unknown> => ({ messages: [] })),
   listSessions: vi.fn(async (): Promise<unknown[]> => []),
   listProjects: vi.fn(async (): Promise<unknown[]> => []),
   getSessionPrefs: vi.fn(async () => ({ approval_mode: "auto_edit", model_id: null, reasoning_effort: null })),
@@ -24,7 +26,7 @@ vi.mock("../ipc/client", () => ({ ipc: ipcMock }));
 
 import { i18n } from "../i18n";
 import { DEFAULT_PREFS } from "../ipc/types";
-import type { Message, SessionMeta } from "../ipc/types";
+import type { HistoryStatus, Message, SessionMeta } from "../ipc/types";
 import { useRun } from "../stores/run";
 import type { Tab } from "../stores/sessions";
 import { useSessions } from "../stores/sessions";
@@ -96,9 +98,46 @@ const rejected = { saved: false, stripped_images: 0, dropped_rounds: 0, bytes: 0
 const degraded = { saved: true, stripped_images: 2, dropped_rounds: 1, bytes: 4096 };
 const clean = { saved: true, stripped_images: 0, dropped_rounds: 0, bytes: 1024 };
 
+/** P4 的后端体积状态（`kind: warned` / `fused`）：已并入 types.ts 的 `HistoryStatus` 判别联合（P3 扩键）。
+ *  期望文案里写的是格式化后的字面量（300.0 MB / 1.0 GB）——顺带钉住前端的 MB / GB 格式化，
+ *  后端只给字节数（不塞格式化字符串）。 */
+const warnedStatus = {
+  kind: "warned",
+  bytes: 314572800, // = 300 MB
+  threshold: 209715200, // = 200 MB（后端软线）
+  at: "2026-09-24T00:00:00Z",
+} satisfies HistoryStatus;
+const fusedStatus = {
+  kind: "fused",
+  bytes: 1073741824, // = 1 GB
+  threshold: 1073741824, // = 1 GB（后端硬线）
+  at: "2026-09-24T00:00:00Z",
+} satisfies HistoryStatus;
+
+/** 两种体积裁决的 `history_save` 载荷（`history_status` 与索引侧同源） */
+const warnedSave = { saved: true, stripped_images: 0, dropped_rounds: 0, bytes: 314572800, history_status: warnedStatus };
+const fusedSave = { saved: true, stripped_images: 0, dropped_rounds: 0, bytes: 1073741824, history_status: fusedStatus };
+/** 干净保存（无体积状态）→ 零打扰 */
+const cleanWithStatus = { saved: true, stripped_images: 0, dropped_rounds: 0, bytes: 1024, history_status: null };
+
+/** `load_session` 首屏载荷（批2 P3 起返回 `{ messages, paging }`）：这里用 legacy 口径——整份给出、无更早内容 */
+function firstPage(messages: Message[] = MSGS) {
+  return {
+    messages,
+    paging: {
+      format: "legacy" as const,
+      loaded_from_seq: 0,
+      segment_count: 1,
+      total_messages: messages.length,
+      bytes: 0,
+      has_more: false,
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  ipcMock.loadSession.mockResolvedValue(MSGS);
+  ipcMock.loadSession.mockResolvedValue(firstPage());
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [] });
   useRun.setState((s) => {
     s.tabs = {};
@@ -135,6 +174,47 @@ describe("run:done.history_save（当次保存结果）", () => {
     seedRun("s1");
     handlers()["run:done"]({ session: "s1", run_id: "r1", history_save: clean });
     expect(noticeTexts("s1")).toEqual([]);
+  });
+
+  it("history_save 带体积软告警（warned）→ 一条「已达 {{size}}」提示（含阈值）", () => {
+    seedRun("s1");
+    handlers()["run:done"]({ session: "s1", run_id: "r1", history_save: warnedSave });
+    const texts = noticeTexts("s1");
+    expect(texts).toEqual([
+      i18n.t("notice.historySizeWarned", { size: "300.0 MB", threshold: "200.0 MB" }),
+    ]);
+    // 文案与「未完整保存」两条刻意区分：这里是体积提醒，不是内容被省略 / 未保存
+    expect(texts[0]).not.toBe(i18n.t("notice.historyRejected"));
+    expect(texts[0]).not.toBe(i18n.t("notice.historyDegraded", { images: 0, rounds: 0 }));
+  });
+
+  it("history_save 带硬熔断（fused）→ 一条「已停止增长」提示（体积用 GB）", () => {
+    seedRun("s1");
+    handlers()["run:done"]({ session: "s1", run_id: "r1", history_save: fusedSave });
+    const texts = noticeTexts("s1");
+    expect(texts).toEqual([i18n.t("notice.historyFused", { size: "1.0 GB", threshold: "1.0 GB" })]);
+    expect(texts[0]).not.toBe(
+      i18n.t("notice.historySizeWarned", { size: "1.0 GB", threshold: "1.0 GB" }),
+    );
+  });
+
+  it("history_save 干净（history_status=null）→ 零打扰", () => {
+    seedRun("s1");
+    handlers()["run:done"]({ session: "s1", run_id: "r1", history_save: cleanWithStatus });
+    expect(noticeTexts("s1")).toEqual([]);
+  });
+
+  it("连续两次体积软告警（同文案、不同 run_id）→ 仍只留一条（跨 run 去重对体积文案同样生效）", () => {
+    seedRun("s1");
+    const h = handlers();
+    h["run:done"]({ session: "s1", run_id: "r1", history_save: warnedSave });
+    useRun.setState((s) => {
+      s.tabs["s1"]!.running = true; // 新一轮运行开始（上一次 notice 已是转录末项）
+    });
+    h["run:done"]({ session: "s1", run_id: "r2", history_save: warnedSave });
+    expect(noticeTexts("s1")).toEqual([
+      i18n.t("notice.historySizeWarned", { size: "300.0 MB", threshold: "200.0 MB" }),
+    ]);
   });
 
   it("载荷不带 history_save（干净路径）→ 不产生任何提示", () => {
@@ -213,6 +293,21 @@ describe("SessionMeta.history_status（重启后仍可见）", () => {
       text: i18n.t("notice.historyDegraded", { images: 2, rounds: 1 }),
     });
     expect(noticeTexts("s2")).toHaveLength(1); // 历史重建本身不额外造 notice
+  });
+
+  it("restoreFromMessages 带 meta.history_status=warned / fused → 各自的体积提示（重启后仍可见）", () => {
+    useRun.getState().restoreFromMessages("s2", MSGS, { history_status: warnedStatus });
+    expect(useRun.getState().tabs["s2"]!.items.at(-1)).toEqual({
+      kind: "notice",
+      text: i18n.t("notice.historySizeWarned", { size: "300.0 MB", threshold: "200.0 MB" }),
+    });
+    useRun.getState().restoreFromMessages("s3", MSGS, { history_status: fusedStatus });
+    expect(noticeTexts("s3")).toEqual([
+      i18n.t("notice.historyFused", { size: "1.0 GB", threshold: "1.0 GB" }),
+    ]);
+    // 无状态仍零打扰（体积链路不影响干净路径）
+    useRun.getState().restoreFromMessages("s4", MSGS, {});
+    expect(noticeTexts("s4")).toEqual([]);
   });
 
   it("restoreFromMessages 不带 meta / meta 无 history_status → 不产生提示", () => {

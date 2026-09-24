@@ -918,7 +918,9 @@ async fn checkpoint_persists_main_session() {
     let metas = core.store.list();
     assert_eq!(metas.len(), 1);
     assert_eq!(metas[0].id, "main-1");
-    assert!(roots.data_dir.join("histories/main-1.json.gz").exists());
+    // 历史落在**分段 JSONL**目录里（histories/<id>/0001.jsonl）：本批存储布局变更后，
+    // 旧 `histories/<id>.json.gz` 单文件不再由保存路径产生
+    assert!(roots.data_dir.join("histories/main-1/0001.jsonl").exists());
     assert!(rt.is_main_session);
 }
 
