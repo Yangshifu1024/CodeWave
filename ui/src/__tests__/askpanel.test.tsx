@@ -1055,3 +1055,301 @@ describe("AskPanel 高档位下的胶囊同步", () => {
     expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
   });
 });
+
+// ---------- 批准门融合（main 的显式选档 × 本分支 preview）：四选项交叉用例 ----------
+// 融合后的批准门 = 两个批准类选项（id=approve / approve_full，各带 mode）+「补充意见」+「先看预览」。
+// 上面两组选档用例用的是 mode_auto / mode_full 这组自拟 id，与融合后的 id 不是同一批：
+// approve_full 的 id 含 "approve" 子串，会额外命中 submitWith 里的宽松兼容路径（/approve|执行方案/i），
+// 故必须钉住「档位取自所选选项声明的 mode，不被兼容路径改回 auto_edit」，以及 preview 第四选项的语义。
+
+describe("AskPanel 四选项批准门（[docs/mode-gate-and-subagent-sync] × [docs/preview-skill]）", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {}; s.drafts = {};
+    });
+  });
+
+  // 后端融合后的批准门载荷（S5 形态）：approve=auto_edit（推荐）/ approve_full=full_access / revise / preview（不带 mode）
+  const fusedGate = (askId: string) => ({
+    askId, kind: "ask", approval: true, approveId: "approve",
+    planFile: "/ws/.codewave/tasks/plan-gate.md",
+    questions: [{
+      id: "q1", question: "是否按上述计划执行？",
+      options: [
+        { id: "approve", label: "以自动编辑档执行", mode: "auto_edit", recommended: true },
+        { id: "approve_full", label: "以完全访问档执行", mode: "full_access" },
+        { id: "revise", label: "补充意见" },
+        { id: "preview", label: "先看预览" },
+      ],
+    }],
+  });
+
+  // 等一拍让 submitWith 里 await resolveAsk 之后的胶囊同步（若有）跑完再断言「没切档」——
+  // 否则 bug 版的 updatePrefs 可能晚于断言发生 → 假绿（与既有 preview 用例同法）
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("四选项门点「先看预览」：点击即直提（只一次 resolve_ask），plan 档胶囊不变（不被切到自动编辑/完全访问档）", async () => {
+    seedAsk(fusedGate("f1")); // plan 档：批准即走 planPath 切档，最能暴露「preview 被误判成批准」
+    render(<AskPanel />);
+    // 批准形渲染：四个选项都是单选（若渲染成多选，说明批准形判定没成立）
+    expect(document.querySelectorAll('.ask-options .ask-opt[role="radio"]')).toHaveLength(4);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1); // 直提 = 不需要再点「提交回答」
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  it("四选项门 + confirm_each 档点「先看预览」：直提且不走「有效应答」轻量切档", async () => {
+    seedAsk(fusedGate("f1b"), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("四选项门点「以自动编辑档执行」(id=approve, mode=auto_edit)：直提且胶囊切到 auto_edit", async () => {
+    seedAsk(fusedGate("f2"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+
+  it("四选项门点「以完全访问档执行」(id=approve_full, mode=full_access)：胶囊切 full_access——id 含 approve 子串也不被兼容路径改回 auto_edit", async () => {
+    seedAsk(fusedGate("f3"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以完全访问档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve_full"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    // approve_full 同时命中宽松正则（/approve/）与结构化 mode 路径：档位必须取选项声明的 full_access
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("full_access");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("full_access");
+  });
+
+  it("四选项门点「补充意见」(id=revise)：不直提、不切档（plan 档胶囊保持 plan）", async () => {
+    seedAsk(fusedGate("f4"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("补充意见"));
+    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false); // 非批准项不直提
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["revise"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  it("preview 单独存在（无 approval 标记 / 无 mode / 无 approve 项）不构成批准形：不直提，提交后也不切档", async () => {
+    seedAsk({
+      askId: "f5", kind: "ask",
+      questions: [{ id: "q1", question: "要看预览吗？", options: [{ id: "preview", label: "先看预览" }] }],
+    });
+    render(<AskPanel />);
+    // 非批准形 = 多选复选框（批准形才渲染单选 + 直提）
+    expect(document.querySelector(".ask-options .ask-opt")?.getAttribute("role")).toBe("checkbox");
+    fireEvent.click(screen.getByText("先看预览"));
+    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false);
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  it("后端 approval 标记被 preview 单独点亮（宽松 label 匹配）时：点「先看预览」仍不切档（与后端 preview_only 同口径）", async () => {
+    seedAsk({
+      askId: "f6", kind: "ask", approval: true, approveId: null,
+      questions: [{ id: "q1", question: "是否按上述计划执行？", options: [{ id: "preview", label: "先看预览（暂不执行方案）" }] }],
+    });
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText(/先看预览/));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  // ---------- 预览项 id 自拟（含 approve 子串）：宽松批准匹配必须剔除预览项 ----------
+  // 形态：label 守约（「先看预览」，previewOptionId 的 label 兜底认得出）+ id 自拟成 preview_approve。
+  // 旧版宽松匹配（/approve|执行方案/i 作用于选中项 id）会拿这个 id 当批准命中 → approved=true → planPath /
+  // switchToAutoEdit 通道切胶囊，而后端 approved_hit 剔除 preview_ids、preview_only 也不切档 → 单边静默提权。
+  const selfNamedPreviewGate = (askId: string, extra: Record<string, unknown> = {}) => ({
+    askId, kind: "ask", approval: true, approveId: "approve", ...extra,
+    questions: [{
+      id: "q1", question: "是否按上述计划执行？",
+      options: [
+        { id: "approve", label: "以自动编辑档执行", mode: "auto_edit", recommended: true },
+        { id: "preview_approve", label: "先看预览" },
+      ],
+    }],
+  });
+
+  it("预览项 id 自拟为 preview_approve（plan 档起点）：点它不产生 set_session_prefs，胶囊保持 plan", async () => {
+    seedAsk(selfNamedPreviewGate("p1")); // plan 档：误判成批准即走 planPath 切档，最能暴露单边提权
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    // 先钉住这一击真的落在预览项上（否则「没切档」可能只是点击没生效 → 假绿）
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview_approve"]);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1); // 预览项直提
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  it("预览项 id 自拟为 preview_approve（confirm_each 起点）：点它不走「有效应答」轻量切档，胶囊保持 confirm_each", async () => {
+    seedAsk(selfNamedPreviewGate("p2"), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview_approve"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("预览项 id 自拟为 preview_approve + ask 带 switchToAutoEdit（confirm_each 起点）：flag 通道不被预览项点亮", async () => {
+    seedAsk(selfNamedPreviewGate("p3", { switchToAutoEdit: true }), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview_approve"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("对照：同一载荷点真批准项 (id=approve, mode=auto_edit) 仍照常直提并切到 auto_edit（收紧不误伤真批准）", async () => {
+    seedAsk(selfNamedPreviewGate("p4"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+
+  it("对照：旧形态载荷（批准项 id=approve、无 mode）点它仍走兼容路径切到 auto_edit（字面兜底未被收紧误伤）", async () => {
+    seedAsk({
+      askId: "p5", kind: "ask", approval: true, approveId: "approve",
+      questions: [{
+        id: "q1", question: "是否按上述计划执行？",
+        options: [
+          { id: "approve", label: "执行方案" },
+          { id: "preview_approve", label: "先看预览" },
+        ],
+      }],
+    });
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("执行方案"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+});
+
+// ---------- 违约载荷：预览项被挂上 mode（协议外）——所有切档通道都必须与后端 !preview_only_answer 同口径 ----------
+// 协议规定预览项不带 mode（语义「先看预览」= 不批准、不切档）。模型偏离协议时，前端若只看 approvedMode /
+// approved 就会单边切档，而后端 switch = !preview_only_answer && … 根本不切 → 单边静默提权。
+describe("AskPanel 违约载荷：预览项挂 mode（[docs/preview-skill] × [docs/mode-gate-and-subagent-sync]）", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {}; s.drafts = {};
+    });
+  });
+
+  // 违约载荷：预览项（id=preview → previewOptionId 认得）被挂上 mode=auto_edit。
+  // 该载荷下点预览项会同时点亮多条通道：结构化 modePath（approvedMode 非空）、planPath
+  // （当前 plan 档 / switchToAutoEdit 标志）——必须全部被 previewOnly 封住。
+  const roguePreviewGate = (askId: string, extra: Record<string, unknown> = {}) => ({
+    askId, kind: "ask", approval: true, approveId: "approve", ...extra,
+    questions: [{
+      id: "q1", question: "是否按上述计划执行？",
+      options: [
+        { id: "approve", label: "以自动编辑档执行", mode: "auto_edit", recommended: true },
+        { id: "revise", label: "补充意见" },
+        { id: "preview", label: "先看预览", mode: "auto_edit" },
+      ],
+    }],
+  });
+
+  // 等一拍再断言「没切档」：submitWith 里 updatePrefs 在 await resolveAsk 之后跑，晚于同步断言会发生 → 假绿
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("plan 档起点：点挂 mode 的预览项 → 不产生 set_session_prefs、胶囊保持 plan（modePath + planPath 双通道都被封）", async () => {
+    seedAsk(roguePreviewGate("r1"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    // 先钉住这一击真的落在预览项上（否则「没切档」可能只是点击没生效 → 假绿）
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1); // 预览项直提
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+  });
+
+  it("confirm_each 档起点：点挂 mode 的预览项 → 不产生 set_session_prefs、胶囊保持 confirm_each", async () => {
+    seedAsk(roguePreviewGate("r2"), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("switchToAutoEdit 标志（confirm_each 起点）：flag 通道同样不被「挂 mode 的预览项」点亮", async () => {
+    seedAsk(roguePreviewGate("r3", { switchToAutoEdit: true }), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("对照：同一违约载荷点真批准项（id=approve, mode=auto_edit）仍照常直提并切到 auto_edit（收紧不误伤）", async () => {
+    seedAsk(roguePreviewGate("r4"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+});

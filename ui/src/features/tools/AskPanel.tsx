@@ -239,11 +239,18 @@ export default function AskPanel() {
       }
       // Plan 档协议：选中批准选项即在本地把胶囊同步为批准档位（后端在 ask 工具内切档）
       // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：兼容路径——批准命中后端下发的 approve_id；保留字面 / 正则兜底（旧载荷无 mode / 无 id 情形）
+      // **预览项先剔除**（[docs/preview-skill](../../../../docs/preview-skill.md)）：模型把预览项 id 自拟成含 approve / 执行方案
+      // 字样（真实形态：id=preview_approve、label 守约「先看预览」，previewOptionId 的 label 兜底认得出它）时，
+      // 宽松匹配会拿它的 id 当批准命中 → approved=true → planPath / switchToAutoEdit 通道把胶囊单边切到自动编辑档，
+      // 而后端 approved_hit 已剔除 preview_ids、preview_only 也不切档 → 用户可见结果就是**单边静默提权**。
+      // 与本条同批的收紧口径（后端）：候选集 = 批准类选项 − preview_option_ids。
+      // 注意 previewOnly 只在下方管「有效应答」轻量通道，管不到这条批准通道——故必须在此处过滤，不能靠它兜底。
+      const approveCandidates = previewOptionId == null ? sel : sel.filter((s) => s !== previewOptionId);
       if (
         !approved &&
-        (sel.includes("approve") ||
-          sel.some((s) => /approve|执行方案/i.test(s)) ||
-          (approveOptionId != null && sel.includes(approveOptionId)))
+        (approveCandidates.includes("approve") ||
+          approveCandidates.some((s) => /approve|执行方案/i.test(s)) ||
+          (approveOptionId != null && approveCandidates.includes(approveOptionId)))
       ) {
         approved = true;
       }
@@ -272,12 +279,17 @@ export default function AskPanel() {
     if (approved || answerEffective) {
       const { tabs, activeKey, updatePrefs } = useSessions.getState();
       const tab = tabs.find((t) => t.key === activeKey);
-      const planPath = approved && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
+      // 两条读 approved 的通道都要再乘 !previewOnly（与后端 `switch = !preview_only_answer && …` 同口径）：
+      // approved 只由「选中项带 mode」（结构化）或「命中批准候选」（兼容）得出，两者都挡不住
+      // 「模型违约给预览项挂 mode」——该载荷下 approved=true，planPath（plan 档或 switchToAutoEdit 标志）
+      // 与 modePath（approvedMode 非空）都会单边把胶囊切档，而后端 preview_only_answer 为真、根本不切 →
+      // 用户可见结果就是**单边静默提权**。lightPath 已由 answerEffective（含 !previewOnly）封住，无需再乘。
+      const planPath = approved && !previewOnly && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
       const lightPath =
         tab?.prefs.approval_mode === "confirm_each" && answerEffective && (!gateShape || approved);
       // [docs/mode-gate-and-subagent-sync]：结构化路径（选中的选项带 mode）优先且不看当前档位；
       // 旧形态（无 mode）走既有回落：仅 plan / confirm_each 两条路径同步，档位回落 auto_edit
-      const modePath = approvedMode != null;
+      const modePath = approvedMode != null && !previewOnly;
       if (tab && (modePath || planPath || lightPath)) {
         void updatePrefs(tab.key, { approval_mode: approvedMode ?? "auto_edit" });
       }

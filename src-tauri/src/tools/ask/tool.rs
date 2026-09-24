@@ -265,13 +265,18 @@ impl Tool for AskTool {
                 .filter(|o| is_approve_option(o) && !preview_ids.contains(o.id.as_str()))
                 .map(|o| o.id.as_str())
                 .collect();
-            // Plan 档协议：选中批准选项（或选项含 approve/execute 字样）即视为方案批准 → 切自动编辑档
+            // Plan 档协议：选中批准选项（或选项含 approve/execute 字样）即视为方案批准 → 切自动编辑档。
+            // 预览项 id 与 approve_ids 同口径剔除（[docs/preview-skill](../../../../docs/preview-skill.md)）：本通道按**选中项 id 的子串**
+            // 做宽松匹配，模型把「先看预览」的 id 自拟成含 approve 的形态（如 `preview_approve`）时，
+            // 「选先看预览」会被算成批准——与 preview 语义（不批准 / 不切档 / 不冻结基线）直接冲突；
+            // 前端的宽松匹配已剔除预览项，后端不剔除即「前端不切档、后端切档」的单边静默提权。
             let approved_hit = sel.iter().any(|s| {
-                s == "approve"
-                    || s.contains("approve")
-                    || s.contains("执行")
-                    || s.contains("Approve")
-                    || approve_ids.contains(s.as_str())
+                !preview_ids.contains(s.as_str())
+                    && (s == "approve"
+                        || s.contains("approve")
+                        || s.contains("执行")
+                        || s.contains("Approve")
+                        || approve_ids.contains(s.as_str()))
             });
             if approved_hit {
                 approved = true;
