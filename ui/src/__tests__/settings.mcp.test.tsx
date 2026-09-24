@@ -13,6 +13,7 @@ import "../i18n";
 import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
+import { useSessions } from "../stores/sessions";
 import type { ConfigState } from "../ipc/types";
 
 function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
@@ -72,7 +73,8 @@ async function baseInvoke(cmd: string, args?: any) {
       };
     case "mcp_save_config": return { saved: true, issues: [] };
     case "mcp_test": return testReply;
-    case "mcp_status": return JSON.parse(JSON.stringify(statusReply));
+    case "mcp_snapshot":
+      return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply)) };
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);
   }
@@ -98,11 +100,13 @@ afterEach(async () => {
   statusReply = [];
   configReply = MCP_CONFIG;
   testReply = { ok: true, tools: 2, error: null };
+  useSessions.setState({ activeKey: null });
 });
 
 /** 状态调用次数（刷新按钮「只重读、不重连」与「进页 refetch」都靠它断言） */
 function statusCalls(): number {
-  return calls.filter((c) => c === "mcp_status").length;
+  // mcp_snapshot 带参数（sessionId），记录形如 `mcp_snapshot:{...}`，故按前缀计数
+  return calls.filter((c) => c.startsWith("mcp_snapshot")).length;
 }
 
 function statusTable(): HTMLElement | null {
@@ -140,6 +144,9 @@ function buttonByText(text: string): HTMLElement {
 }
 
 async function openMcpTab() {
+  // 状态是**会话级**的（连接池按会话可见集 keyed）：没有活跃会话就没有可读的连接状态，
+  // 故这里先立一个活跃会话，再打开 MCP 页。
+  useSessions.setState({ activeKey: "s1" });
   useSettings.setState({ config: makeConfig(), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "mcp" });
   render(
@@ -250,18 +257,20 @@ describe("设置页 MCP 页：服务器状态表", () => {
       return el as HTMLElement;
     });
     const before = statusCalls();
-    const beforeConnect = calls.filter((c) => c.startsWith("connect_mcp")).length;
+    const beforeConnect = calls.filter((c) => c.startsWith("mcp_connect")).length;
     statusReply = [{ name: "fs", state: "ready", tools: 2 }];
     fireEvent.click(btn);
 
     await waitFor(() => expect(statusCalls()).toBeGreaterThan(before));
     await waitFor(() => expect(statusRows()[0]).toEqual({ name: "fs", state: "已连接", tools: "2" }));
     // 刷新只重读状态：前后 connect_mcp 调用数必须一致（用计数而非「全仓为空」，否则断言恒真）
-    expect(calls.filter((c) => c.startsWith("connect_mcp")).length).toBe(beforeConnect);
+    expect(calls.filter((c) => c.startsWith("mcp_connect")).length).toBe(beforeConnect);
   });
 
   it("切到 MCP 页时重读一次状态（mcp:status 事件只在 connect_mcp 后触发，久留会看到陈旧状态）", async () => {
     statusReply = [];
+    // 状态是会话级的：没有活跃会话就不会去读（也就没有「陈旧状态」可谈）
+    useSessions.setState({ activeKey: "s1" });
     useSettings.setState({ config: makeConfig(), loaded: true });
     // 先停在「界面」页：挂载时拉过一次状态，之后切页应再拉一次
     useUi.setState({ settingsOpen: true, settingsTab: "appearance" });
@@ -353,7 +362,7 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
 
   it("测试连接：调 mcp_test（带作用域与名称）并就地显示结果，绝不触发 connect_mcp", async () => {
     await openMcpTab();
-    const beforeConnect = calls.filter((c) => c.startsWith("connect_mcp")).length;
+    const beforeConnect = calls.filter((c) => c.startsWith("mcp_connect")).length;
     fireEvent.click(buttonByText("测试"));
 
     await waitFor(() => expect(calls.some((c) => c.startsWith("mcp_test"))).toBe(true));
@@ -366,7 +375,7 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
       ),
     );
     // 测试连接不改动正式状态
-    expect(calls.filter((c) => c.startsWith("connect_mcp")).length).toBe(beforeConnect);
+    expect(calls.filter((c) => c.startsWith("mcp_connect")).length).toBe(beforeConnect);
   });
 
   it("测试连接失败：就地显示失败原因", async () => {

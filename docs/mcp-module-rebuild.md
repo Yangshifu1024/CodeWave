@@ -113,29 +113,20 @@ MCP 工具纳入审批：server 级 `read_only` 或 `always_allow` 声明过则�
 结果形状确定性、会话可见集隔离、引用计数归零回收、LRU 只淘汰无引用条目、
 有引用条目不被淘汰、取消优先、进程树回收。
 
-## 四、未完成（后续批次）
+## 四、剩余项
 
-1. **前端 MCP 面板剩余可见项**：args/env **表格**化（当前是「一行一个」的无损文本框，
-   表格 UI 待做）、来源列（全局 / 项目 / 项目覆盖全局）、状态徽标扩展
-   （连接中 / 失败可展开 / 已淘汰 / 配置错 / PID）、单 server 断开与重连按钮。
-   > 已落地：`ui/src/utils/mcpConfig.ts` 的无损往返（28 个单测）接管配置读写——
-   > 手写配置的未识别键与未知 `transport` 取值不再在保存时丢失；
-   > 设置页已改用作用域化命令，**作用域切换（全局 / 项目）可用**（有未保存改动时禁用切换），
-   > 项目层不可用时明确提示「只使用全局配置」；
-   > 每张 server 卡片带「测试」按钮（`mcp_test`，临时起连、测完回收、不改动正式状态，
-   > 结果就地显示）；后端结构校验问题就地展示（error 级阻止落盘且基线不前移）。
-2. **旧命令适配器待下线**：新命令已就位，前端迁移后应移除 4 个旧适配器（当前为保持应用可用而保留）。
-3. **`tools/list_changed` 热更新**：rmcp 3.4 的 client handler 仍未订阅（当前工具列表在重连时刷新）。
-4. **结构化 content blocks**：图片/音频仍降级为 `[image <mime>]` 文本标记，
-   未走 `ToolOutcome.extra_model_content` 的多模态通道。
-5. **HTTP 请求头**：`headers` 已在配置层解析与校验，但尚未注入 rmcp 的
-   `StreamableHttpClientTransportConfig`（该版本字段名待确认）。
-6. **resources / prompts**：按决策列为非目标；sampling / elicitation 明确不支持。
-7. **文档漂移**：`technical-design.md` 的 MCP 命令名、`p1-plan.md` 的 `"transport":"sse"`
-   与 Job Object 承诺、`settings-search-and-advanced.md` 的页面归属、
-   `arch-orchestrator.md` 关于 `scripts/mcp-test-server.mjs` 不存在的断言，均待同步。
-8. **`code-review-findings.md` 的 M10 / L7 关闭标记**：M10（重连条件过宽）本次已由
-   结构化错误分类解决，L7（`save_mcp_config` 注释与行为不符）随命令重写解决，待登记关闭。
+1. **args / env 表格化**（UI 外观）：当前是「一行一个参数」「K=V 每行一条」的**无损**文本框
+   （已修掉旧的按空白切分与 trim 有损），表格 UI 待做。文本框无法表达「值里含换行」的
+   环境变量——行模型 `mcpConfig.ts` 已支持，表格化后即可覆盖。
+2. **resources / prompts**：按决策列为**非目标**；sampling / elicitation 明确不支持
+   （server 反向调模型/请求用户输入是重大安全面，与「纳入安全门」相冲）。
+
+已在本分支完成（原列于此的遗留）：前端面板重构（作用域切换、来源列、状态徽标、
+PID 与单 server 断开/重连、测试连接）、`tools/list_changed` 热更新、结构化 content blocks
+（图片走 `Content::Image` 进模型通道）、HTTP 请求头注入、旧 4 命令适配器下线、
+文档漂移同步（technical-design / p1-plan / arch-orchestrator / settings-search-and-advanced）、
+`code-review-findings` 关闭 M10 与 L7。
+
 
 ## 五、与批准方案的偏差（均有理由）
 

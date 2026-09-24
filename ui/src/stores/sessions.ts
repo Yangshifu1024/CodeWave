@@ -147,7 +147,7 @@ async function loadTabContent(tab: Tab): Promise<void> {
     .getTokenBreakdown(tab.sessionId)
     .then((b) => useRun.getState().setBreakdown(tab.sessionId, b))
     .catch(() => {});
-  void ipc.connectMcp(tab.sessionId).catch(() => {});
+  void ipc.mcpConnect(tab.sessionId).catch(() => {});
 }
 
 export const useSessions = create<SessionsState>((set, get) => ({
@@ -310,7 +310,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       };
       set((s) => ({ tabs: [...s.tabs, tab], activeKey: tab.key }));
       useRun.getState().initTab(tab.sessionId);
-      void ipc.connectMcp(tab.sessionId).catch(() => {});
+      void ipc.mcpConnect(tab.sessionId).catch(() => {});
       await get().refresh();
     } catch (e) {
       useUi.getState().toast(String(e)); // M-6：失败不再静默
@@ -337,7 +337,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       };
       set((s) => ({ tabs: [...s.tabs, tab], activeKey: tab.key }));
       useRun.getState().initTab(tab.sessionId);
-      void ipc.connectMcp(tab.sessionId).catch(() => {});
+      void ipc.mcpConnect(tab.sessionId).catch(() => {});
       await get().refresh();
     } catch (e) {
       useUi.getState().toast(String(e));

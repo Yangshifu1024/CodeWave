@@ -23,7 +23,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, McpServerView, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -447,8 +447,8 @@ export default function SettingsPage() {
       const proj = await ipc.mcpListConfig("project", sessionId ?? undefined).catch(() => null);
       setMcpProjectPath(proj?.path ?? null);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
-      const st = await ipc.mcpStatus().catch(() => []);
-      useUi.setState({ mcpStatus: st });
+      const st = await readMcpStatus();
+      useUi.setState({ mcpStatus: st ?? [] });
       // shell 探测失败不阻塞面板：仅回退「自动」选项 + 失败提示
       setShells(await ipc.listAvailableShells().catch(() => null));
       // 系统代理探测回显：失败不阻塞（null = 未检测到提示）
@@ -783,8 +783,9 @@ export default function SettingsPage() {
       setMcpOriginal(normalized);
       // 保存后自动重连（后端只重载受影响的连接，其它会话不受牵连）
       if (sessionId) {
-        await ipc.connectMcp(sessionId).catch(() => null);
-        useUi.setState({ mcpStatus: await ipc.mcpStatus().catch(() => []) });
+        await ipc.mcpConnect(sessionId).catch(() => null);
+        const st = await readMcpStatus();
+        if (st) useUi.setState({ mcpStatus: st });
       }
     } catch (e) {
       message.error(String(e));
@@ -838,14 +839,16 @@ export default function SettingsPage() {
   async function disconnectMcp(name: string) {
     if (!sessionId) return;
     await ipc.mcpDisconnect(sessionId, [name]).catch(() => null);
-    useUi.setState({ mcpStatus: await ipc.mcpStatus().catch(() => []) });
+    const st = await readMcpStatus();
+    if (st) useUi.setState({ mcpStatus: st });
   }
 
   /** 重连单个 server（后端会绕过淘汰防抖立即重拉） */
   async function reconnectMcp(name: string) {
     if (!sessionId) return;
     await ipc.mcpReconnect(sessionId, name).catch((e) => message.error(String(e)));
-    useUi.setState({ mcpStatus: await ipc.mcpStatus().catch(() => []) });
+    const st = await readMcpStatus();
+    if (st) useUi.setState({ mcpStatus: st });
   }
 
   /** 临时测试连接：起 → tools/list → 立即回收，不改动正式连接状态 */
@@ -866,13 +869,26 @@ export default function SettingsPage() {
     }));
   }
 
-  /** 刷新 MCP 状态：只重读 mcp_status（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
+  /**
+   * 读当前会话的 MCP 状态快照。
+   *
+   * 状态是**会话级**的（连接池按会话可见集 keyed），所以没有活跃会话时返回空列表
+   * 而不是留旧值——否则上一个会话的「已连接」会串到当前界面。
+   * 返回 `null` = 读失败（调用方保留旧值，避免把 IPC 抖动伪装成「都没连上」）。
+   */
+  async function readMcpStatus(): Promise<McpStatusPayload[] | null> {
+    if (!sessionId) return [];
+    const snap = await ipc.mcpSnapshot(sessionId).catch(() => null);
+    return snap ? snap.servers : null;
+  }
+
+  /** 刷新 MCP 状态：只重读状态（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
   async function refreshMcpStatus() {
     setMcpRefreshing(true);
     try {
       // 失败保留旧值：整份替成 [] 会把「一次 IPC 抖动」伪装成「所有服务器都没连接」，
       // 而「未连接」在本页是**正常态**文案（见状态表下方的说明），误导性最强
-      const st = await ipc.mcpStatus().catch(() => null);
+      const st = await readMcpStatus();
       if (st) useUi.setState({ mcpStatus: st });
       else message.error(t("settings.mcpStatusRefreshFailed"));
     } finally {

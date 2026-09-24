@@ -40,7 +40,7 @@
 - M7 每次 checkpoint 重置 created_at
 - M8 会话索引读改写竞态 + 损坏时静默覆盖（需 Mutex + 备份）
 - M9 service 输出泵顺序 read 双管道（stderr-only 服务假死）；表满 16 静默插入失败
-- M10 MCP 重连条件过宽（业务错误/超时也会重放非幂等工具）；stdio 命令构建死代码
+- M10 MCP 重连条件过宽（业务错误/超时也会重放非幂等工具）；stdio 命令构建死代码 —— **已关闭 2026-09-24**（[mcp-module-rebuild](./mcp-module-rebuild.md)：改为结构化错误分类，只有连接类错误允许重连且只重放只读调用；stdio 命令构建随 `mcp/process.rs` 重写）
 - M11 prompt cache：动态 system（lessons.md run 中被写）与单断点削弱 cache 收益（建议 run 级快照 + 滚动断点）
 - M12 terminate_tree 同步 sleep 阻塞 async worker；pid=0 时 kill(-0) 杀自身进程组
 - M13 SSRF：IPv4-mapped IPv6 逃逸；DNS rebinding 窗口
@@ -51,7 +51,7 @@
 
 ## Low / Nit（摘要）
 
-L1 get_or_create_session 竞态（用 dashmap entry）；L2 sanitized 尾 4 位字节切片（非 ASCII panic）+ unmask 按索引错位；L3 save_config 明文 key 不即时迁 keyring；L4 重试循环内反复读 keyring；L5 占位符/明文混合态误发占位符；L6 ChannelRegistry 只增不删；L7 save_mcp_config 注释与行为不符；L8 /etc canonicalize 等值判断失效；L9 trim 递归 O(n²)；L10 子代理/任务 usage 不入 stats；L11 subagent 并发 check-then-add 非原子；L12 command/service 标 ReadOnly 无写互斥；L13 anthropic 空 key 仍发头、openai 新模型需 max_completion_tokens、Responses 未 store:false；L14 fence fallback 下 L2 全失效（可故意语法错误绕过）；L15 stats 退出丢 60s 数据、skills 死代码。Nit：run_task_agent spawn+await 多余、call_key 来源不统一、`$(`白名单条件冗余、tauri 隔离纪律良好。
+L1 get_or_create_session 竞态（用 dashmap entry）；L2 sanitized 尾 4 位字节切片（非 ASCII panic）+ unmask 按索引错位；L3 save_config 明文 key 不即时迁 keyring；L4 重试循环内反复读 keyring；L5 占位符/明文混合态误发占位符；L6 ChannelRegistry 只增不删；L7 save_mcp_config 注释与行为不符（**已关闭 2026-09-24**：随命令重写为 `mcp_save_config`，注释与行为一致）；L8 /etc canonicalize 等值判断失效；L9 trim 递归 O(n²)；L10 子代理/任务 usage 不入 stats；L11 subagent 并发 check-then-add 非原子；L12 command/service 标 ReadOnly 无写互斥；L13 anthropic 空 key 仍发头、openai 新模型需 max_completion_tokens、Responses 未 store:false；L14 fence fallback 下 L2 全失效（可故意语法错误绕过）；L15 stats 退出丢 60s 数据、skills 死代码。Nit：run_task_agent spawn+await 多余、call_key 来源不统一、`$(`白名单条件冗余、tauri 隔离纪律良好。
 
 ## 测试盲区（审查确认）
 

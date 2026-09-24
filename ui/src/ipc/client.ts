@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpStatusPayload, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -153,13 +153,6 @@ export const ipc = {
     invoke<McpTestResult>("mcp_test", { scope, name, sessionId: sessionId ?? null }),
   /** 某会话的状态快照（断开 / 淘汰 / 批量停止后拉全量） */
   mcpSnapshot: (sessionId: string) => invoke<McpSnapshot>("mcp_snapshot", { sessionId }),
-
-  // 旧命令适配器（后端保留，前端迁移完成后删除）
-  getMcpConfig: () => invoke<string>("get_mcp_config"),
-  saveMcpConfig: (json: string) => invoke<void>("save_mcp_config", { json }),
-  connectMcp: (sessionId: string) =>
-    invoke<{ started: any[]; failed: any[] }>("connect_mcp", { sessionId }),
-  mcpStatus: () => invoke<McpStatusPayload[]>("mcp_status"),
 
   // Skills 技能扫描与启停
   listSkills: (sessionId: string | null) => invoke<SkillMeta[]>("list_skills", { sessionId }),
