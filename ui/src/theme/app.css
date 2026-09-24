@@ -348,20 +348,28 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
    百分比仍按占用分档着色（.ctx-label 的选择器前缀不变：composer.rate.style.test.ts 按字面选择器抓规则）。 */
 .composer-toolbar .toolbar-info { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0 4px; }
-.composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); white-space: nowrap; margin: 0 2px; }
+/* 窄窗口折行（[docs/composer-toolbar-context-hit-rate](../../../docs/composer-toolbar-context-hit-rate.md) §9）：信息段此前是 nowrap
+   且没有裁剪边界，左右栏拖宽后这串小字会**溢出绘制**到右侧模型选择器上（position/z-index 不参与，纯溢出）→ 完全不可读。
+   这里去掉 nowrap，改为在 <wbr> 处折行（完整可见、不截断）；min-width:0 允许 flex 收缩，overflow:hidden 兜住
+   「单个原子段仍比可用宽度更宽」时的残余溢出，不再压到邻居。 */
+.composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); min-width: 0; overflow: hidden; margin: 0 2px; }
+/* 折行只允许发生在 <wbr> 处：每个原子段内部仍不换行（否则「命中 50%」会被拆到两行） */
+.composer-toolbar .ctx-label .ctx-seg { white-space: nowrap; }
+/* 分隔符「 · 」也包成不可断单元：否则它本身就是一个断行机会，可能被单独甩到下一行行首 */
+.composer-toolbar .ctx-label .ctx-sep { white-space: nowrap; }
 /* 上下文占用档：够阈值 = 红（危险）/ 阈值 70% 以上 = 橙（需注意）/ 以下 = 默认（中性墨） */
 .composer-toolbar .ctx-label .ctx-pct { color: var(--ws-accent); }
 .composer-toolbar .ctx-label .ctx-pct.warn { color: var(--ws-warn); }
 .composer-toolbar .ctx-label .ctx-pct.danger { color: var(--ws-err); }
 /* 命中率档（四档）：≥99% 绿 / 95–99% 黄（中性墨，色板无独立黄色 token）/ 90–95% 橙 / <90% 红 */
-.composer-toolbar .ctx-label .ctx-hit { color: var(--ws-accent); }
+.composer-toolbar .ctx-label .ctx-hit { color: var(--ws-accent); white-space: nowrap; }
 .composer-toolbar .ctx-label .ctx-hit.ok { color: var(--ws-ok); }
 .composer-toolbar .ctx-label .ctx-hit.yellow { color: var(--ws-accent); }
 .composer-toolbar .ctx-label .ctx-hit.warn { color: var(--ws-warn); }
 .composer-toolbar .ctx-label .ctx-hit.danger { color: var(--ws-err); }
 /* 本轮生成速率段（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：与上下文/命中同行同段。
    铁律：色彩强度只映射风险等级 → 速率一律中性灰，不做分档着色（字号继承 .ctx-label 的 11.5px） */
-.composer-toolbar .ctx-label .ctx-rate { color: var(--ws-dim); }
+.composer-toolbar .ctx-label .ctx-rate { color: var(--ws-dim); white-space: nowrap; }
 /* 「在跑」心跳点：极淡跳动，只表示「还在生成」，信息不依赖动效 */
 .composer-toolbar .ctx-label .rate-dot {
   display: inline-block; width: 4px; height: 4px; margin-left: 4px;
