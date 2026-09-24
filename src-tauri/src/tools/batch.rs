@@ -457,8 +457,23 @@ async fn run_tool(
             match tokio::spawn(async move { mcp.call(&sid, &fname, args, &call_cancel).await })
                 .await
             {
-                Ok(Ok(o)) if o.is_error => ToolOutcome::err("E_MCP_TOOL", o.text),
-                Ok(Ok(o)) => ToolOutcome::ok(o.data),
+                Ok(Ok(o)) => {
+                    // server 侧 is_error 显式落成失败结果（不再折叠进 Ok 里丢掉语义）；
+                    // 多模态内容（图片等）走「仅注入给模型」的通道，不进前端 outcome JSON。
+                    let crate::mcp::McpCallOutput {
+                        data,
+                        text,
+                        is_error,
+                        blocks,
+                    } = o;
+                    let mut outcome = if is_error {
+                        ToolOutcome::err("E_MCP_TOOL", text)
+                    } else {
+                        ToolOutcome::ok(data)
+                    };
+                    outcome.extra_model_content = blocks;
+                    outcome
+                }
                 Ok(Err(e)) => ToolOutcome::err(
                     match e.kind {
                         crate::mcp::McpErrorKind::Cancelled => "E_MCP_CANCELLED",

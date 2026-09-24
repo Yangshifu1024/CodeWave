@@ -26,10 +26,12 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
+
+use crate::core::types::Content;
 
 use super::config::{McpServerConfig, McpTransport, Scope};
 use super::error::McpError;
@@ -130,7 +132,7 @@ struct ServerEntry {
     error: Option<McpError>,
     tools: Vec<McpTool>,
     tools_filtered: usize,
-    service: Option<Arc<RunningService<RoleClient, ()>>>,
+    service: Option<ClientService>,
     peer: Option<Peer<RoleClient>>,
     pid: Option<u32>,
     /// 引用该条目的会话集合
@@ -138,6 +140,8 @@ struct ServerEntry {
     /// 最近一次使用序号（LRU）
     last_used: u64,
     note: Option<String>,
+    /// `tools/list_changed` 脏标记（run 边界消费）
+    dirty: Option<Arc<AtomicBool>>,
     /// 最近一次被淘汰的时刻（重拉防抖）
     last_evict: Option<Instant>,
 }
@@ -162,13 +166,37 @@ impl Default for McpManager {
     }
 }
 
+/// 订阅 `tools/list_changed`：**只置脏标记**，绝不改共享状态。
+///
+/// 工具集变更由 [`McpManager::tool_defs_for`] 在 **run 边界**消费——若在通知回调里直接改，
+/// 一次 run 进行到一半工具集就变了，模型会拿旧 schema 去调新工具。
+#[derive(Clone)]
+struct ToolListWatcher {
+    dirty: Arc<AtomicBool>,
+}
+
+impl rmcp::ClientHandler for ToolListWatcher {
+    fn on_tool_list_changed(
+        &self,
+        _context: rmcp::service::NotificationContext<RoleClient>,
+    ) -> impl std::future::Future<Output = ()> + rmcp::service::MaybeSendFuture + '_ {
+        self.dirty.store(true, Ordering::SeqCst);
+        std::future::ready(())
+    }
+}
+
+/// 客户端服务句柄。handler 为 [`ToolListWatcher`]（订阅 `tools/list_changed`）。
+type ClientService = Arc<RunningService<RoleClient, ToolListWatcher>>;
+
 /// 建连完成的内部句柄。
 struct Ready {
     tools: Vec<McpTool>,
     filtered: usize,
-    service: Arc<RunningService<RoleClient, ()>>,
+    service: ClientService,
     peer: Peer<RoleClient>,
     pid: Option<u32>,
+    /// `tools/list_changed` 脏标记（run 边界消费）
+    dirty: Arc<AtomicBool>,
 }
 
 fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
@@ -274,7 +302,7 @@ impl McpManager {
             .into_iter()
             .filter(|k| !wanted.contains(k))
             .collect();
-        let mut to_close: Vec<Arc<RunningService<RoleClient, ()>>> = Vec::new();
+        let mut to_close: Vec<ClientService> = Vec::new();
         let mut closed_payloads: Vec<(PoolKey, McpStatusPayload)> = Vec::new();
         for key in removed {
             if let Some(e) = inner.entries.get_mut(&key) {
@@ -316,6 +344,7 @@ impl McpManager {
                             sessions: HashSet::from([session.to_string()]),
                             last_used: self.tick(),
                             note: None,
+                            dirty: None,
                             last_evict: None,
                         },
                     );
@@ -342,7 +371,7 @@ impl McpManager {
             let mut inner = self.inner.lock().await;
             inner.sessions.remove(session).unwrap_or_default()
         };
-        let mut to_close: Vec<Arc<RunningService<RoleClient, ()>>> = Vec::new();
+        let mut to_close: Vec<ClientService> = Vec::new();
         let mut payloads: Vec<McpStatusPayload> = Vec::new();
         {
             let mut inner = self.inner.lock().await;
@@ -401,7 +430,7 @@ impl McpManager {
         let (svcs, payloads) = {
             let mut inner = self.inner.lock().await;
             let keys: Vec<PoolKey> = inner.entries.keys().cloned().collect();
-            let mut svcs: Vec<Arc<RunningService<RoleClient, ()>>> = Vec::new();
+            let mut svcs: Vec<ClientService> = Vec::new();
             let mut payloads: Vec<McpStatusPayload> = Vec::new();
             for key in keys {
                 if let Some(e) = inner.entries.get_mut(&key) {
@@ -558,6 +587,7 @@ impl McpManager {
             service,
             peer,
             pid,
+            dirty,
         } = ready;
         let payload = {
             let mut inner = self.inner.lock().await;
@@ -569,6 +599,7 @@ impl McpManager {
             e.service = Some(service);
             e.peer = Some(peer);
             e.pid = pid;
+            e.dirty = Some(dirty);
             e.state = McpState::Ready;
             e.error = None;
             e.note = None;
@@ -604,6 +635,8 @@ impl McpManager {
     ) -> Result<Ready, McpError> {
         let transport = cfg.resolve_transport()?;
         let name = key.name.clone();
+        // tools/list_changed 只置位；实际刷新发生在 run 边界（tool_defs_for）
+        let dirty = Arc::new(AtomicBool::new(false));
         let connect = async {
             match transport {
                 McpTransport::Stdio => {
@@ -614,26 +647,45 @@ impl McpManager {
                                 .with_hint("检查 command 是否存在、cwd 是否有效、env 是否合法。")
                         })?;
                     let pid = child.id();
-                    let svc = ()
-                        .serve(child)
-                        .await
-                        .map_err(|e| McpError::handshake(format!("initialize 失败：{e}")))?;
-                    Ok::<(Arc<RunningService<RoleClient, ()>>, Option<u32>), McpError>((
-                        Arc::new(svc),
-                        pid,
-                    ))
+                    let svc = ToolListWatcher {
+                        dirty: dirty.clone(),
+                    }
+                    .serve(child)
+                    .await
+                    .map_err(|e| McpError::handshake(format!("initialize 失败：{e}")))?;
+                    Ok::<(ClientService, Option<u32>), McpError>((Arc::new(svc), pid))
                 }
                 McpTransport::StreamableHttp => {
                     let url = cfg.url.clone().unwrap_or_default();
                     if url.trim().is_empty() {
                         return Err(McpError::config("streamable_http transport 需要 url"));
                     }
-                    let worker = StreamableHttpClientWorker::new(
-                        http,
-                        StreamableHttpClientTransportConfig::with_uri(url),
-                    );
+                    // 鉴权与自定义请求头：远程 MCP 端点普遍需要
+                    // （旧实现只设 uri，带鉴权的端点根本无法配置）。
+                    let mut http_cfg = StreamableHttpClientTransportConfig::with_uri(url);
+                    for (k, v) in &cfg.headers {
+                        if k.eq_ignore_ascii_case("authorization") {
+                            http_cfg.auth_header = Some(v.clone());
+                            continue;
+                        }
+                        match (
+                            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                            reqwest::header::HeaderValue::from_str(v),
+                        ) {
+                            (Ok(hname), Ok(hvalue)) => {
+                                http_cfg.custom_headers.insert(hname, hvalue);
+                            }
+                            _ => tracing::warn!("MCP server {name} 的请求头 {k} 非法，已忽略"),
+                        }
+                    }
+                    let worker = StreamableHttpClientWorker::new(http, http_cfg);
                     let tp = WorkerTransport::spawn(worker);
-                    let svc = ().serve(tp).await.map_err(|e| {
+                    let svc = ToolListWatcher {
+                        dirty: dirty.clone(),
+                    }
+                    .serve(tp)
+                    .await
+                    .map_err(|e| {
                         McpError::handshake(format!("连接失败：{e}")).with_hint(
                             "确认服务端可达、鉴权头未过期；本地端点请确认代理未拦截 loopback。",
                         )
@@ -679,6 +731,7 @@ impl McpManager {
             service,
             peer,
             pid,
+            dirty,
         })
     }
 
@@ -687,13 +740,33 @@ impl McpManager {
     /// 只取该会话可见集内 `Ready` 条目的工具——这是「项目 A 的 MCP 工具不出现在
     /// 项目 B 请求里」的落地处。
     pub async fn tool_defs_for(&self, session: &str) -> Vec<McpToolDef> {
-        let tools = {
+        let (keys, dirty) = {
             let mut inner = self.inner.lock().await;
             let keys: Vec<PoolKey> = inner
                 .sessions
                 .get(session)
                 .map(|s| s.iter().cloned().collect())
                 .unwrap_or_default();
+            // 先把**所有**脏标记取走（含不在本会话可见集里的，否则永远清不掉），
+            // 再挑出本会话可见且已就绪的条目去刷新。
+            let mut dirty = Vec::new();
+            for (k, e) in inner.entries.iter_mut() {
+                let flagged = e
+                    .dirty
+                    .as_ref()
+                    .is_some_and(|d| d.swap(false, Ordering::SeqCst));
+                if flagged && e.state == McpState::Ready && keys.contains(k) {
+                    dirty.push((k.clone(), e.cfg.clone()));
+                }
+            }
+            (keys, dirty)
+        };
+        // run 边界刷新：工具集变更只在这里生效，绝不在通知回调里改共享状态
+        for (key, cfg) in dirty {
+            self.refresh_tools(&key, &cfg).await;
+        }
+        let tools = {
+            let mut inner = self.inner.lock().await;
             let tick = self.tick();
             let mut tools = Vec::new();
             for k in &keys {
@@ -708,6 +781,44 @@ impl McpManager {
         };
         let (defs, _) = build_tool_defs(&tools);
         defs
+    }
+
+    /// 重新列某条目的工具（`tools/list_changed` 后由 run 边界调用）。
+    ///
+    /// 失败只 `warn` 并保留旧列表——刷新失败不该把可用连接打成错误态。
+    async fn refresh_tools(&self, key: &PoolKey, cfg: &McpServerConfig) {
+        let peer = {
+            let inner = self.inner.lock().await;
+            inner.entries.get(key).and_then(|e| e.peer.clone())
+        };
+        let Some(peer) = peer else { return };
+        let raw = match tokio::time::timeout(INIT_TIMEOUT, peer.list_all_tools()).await {
+            Ok(Ok(t)) => t,
+            other => {
+                tracing::warn!(
+                    "MCP {} 的 tools/list_changed 刷新失败：{:?}",
+                    key.name,
+                    other.map(|r| r.map(|_| ()))
+                );
+                return;
+            }
+        };
+        let name = key.name.clone();
+        let all: Vec<McpTool> = raw
+            .iter()
+            .map(|t| McpTool {
+                server: name.clone(),
+                name: t.name.to_string(),
+                description: format!("[{name}] {}", t.description.as_deref().unwrap_or("")),
+                schema_json: normalize_schema(t.input_schema.as_ref()),
+            })
+            .collect();
+        let (tools, filtered) = filter_tools(&cfg.tools, &all);
+        let mut inner = self.inner.lock().await;
+        if let Some(e) = inner.entries.get_mut(key) {
+            e.tools = tools;
+            e.tools_filtered = filtered;
+        }
     }
 
     /// 该次调用是否需要审批：返回 `(server 名, 工具名)`；`read_only` / `always_allow` 声明过则 `None`。
@@ -869,6 +980,9 @@ pub struct McpCallOutput {
     pub text: String,
     /// server 侧 `is_error`（显式传递，不再折叠成 `Err` 丢掉语义）
     pub is_error: bool,
+    /// 给模型的**多模态**内容块：文本按原序，图片走 `Content::Image`。
+    /// 由批次层灌进 `ToolOutcome.extra_model_content`（不进前端 outcome JSON）。
+    pub blocks: Vec<Content>,
 }
 
 fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
@@ -883,6 +997,7 @@ fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
         pid: None,
         sessions: HashSet::new(),
         last_used: tick,
+        dirty: None,
         note: None,
         last_evict: None,
     }
@@ -906,18 +1021,52 @@ fn classify_service_error(e: rmcp::service::ServiceError) -> McpError {
 /// rmcp 的调用结果 → [`McpCallOutput`]。
 fn map_call_output(result: rmcp::model::CallToolResult) -> McpCallOutput {
     use rmcp::model::ContentBlock as B;
+    // `text` 是给人/前端看的纯文本投影（非文本块留可读标记）；
+    // `blocks` 是给模型的多模态内容（图片走 Image 块，不带标记）。
     let mut text = String::new();
+    let mut blocks: Vec<Content> = Vec::new();
     for block in &result.content {
         if !text.is_empty() {
-            text.push('\n');
+            text.push(char::from(10)); // 换行（不用字符字面量，避免转义）
         }
         match block {
-            B::Text(t) => text.push_str(&t.text),
-            B::Image(img) => text.push_str(&format!("[image {}]", img.mime_type)),
-            B::Audio(a) => text.push_str(&format!("[audio {}]", a.mime_type)),
-            B::Resource(_) => text.push_str("[embedded resource]"),
-            B::ResourceLink(_) => text.push_str("[resource link]"),
-            _ => text.push_str("[non-text content]"),
+            B::Text(t) => {
+                text.push_str(&t.text);
+                blocks.push(Content::Text {
+                    text: t.text.clone(),
+                });
+            }
+            B::Image(img) => {
+                text.push_str(&format!("[image {}]", img.mime_type));
+                blocks.push(Content::Image {
+                    media_type: img.mime_type.to_string(),
+                    data: img.data.to_string(),
+                });
+            }
+            B::Audio(a) => {
+                text.push_str(&format!("[audio {}]", a.mime_type));
+                blocks.push(Content::Text {
+                    text: format!("[audio {}]", a.mime_type),
+                });
+            }
+            B::Resource(_) => {
+                text.push_str("[embedded resource]");
+                blocks.push(Content::Text {
+                    text: "[embedded resource]".to_string(),
+                });
+            }
+            B::ResourceLink(_) => {
+                text.push_str("[resource link]");
+                blocks.push(Content::Text {
+                    text: "[resource link]".to_string(),
+                });
+            }
+            _ => {
+                text.push_str("[non-text content]");
+                blocks.push(Content::Text {
+                    text: "[non-text content]".to_string(),
+                });
+            }
         }
     }
     let is_error = result.is_error.unwrap_or(false);
@@ -930,6 +1079,7 @@ fn map_call_output(result: rmcp::model::CallToolResult) -> McpCallOutput {
         data,
         text,
         is_error,
+        blocks,
     }
 }
 
@@ -1022,6 +1172,59 @@ mod tests {
         assert!(c.is_error);
         assert_eq!(c.data["isError"], true);
         assert_eq!(c.text, "boom");
+    }
+
+    /// `tools/list_changed` 的脏标记必须在 **run 边界**被取走。
+    ///
+    /// 这里用一个起不来的 server（状态 Error）验证「标记照样清掉」——
+    /// 若只在就绪条目上清，坏连接的标记会永久残留、下次就绪时被误当成刚变更。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_boundary_clears_tool_list_dirty_flag() {
+        let mgr = Arc::new(McpManager::default());
+        let key = PoolKey::global("a");
+        mgr.warm(
+            "s",
+            vec![(key.clone(), bogus_cfg())],
+            reqwest::Client::new(),
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        {
+            let mut inner = mgr.inner.lock().await;
+            let e = inner.entries.get_mut(&key).expect("条目应已登记");
+            e.dirty = Some(Arc::new(AtomicBool::new(true)));
+        }
+        let _ = mgr.tool_defs_for("s").await;
+        let inner = mgr.inner.lock().await;
+        let e = inner.entries.get(&key).expect("条目仍在");
+        assert!(
+            !e.dirty.as_ref().expect("脏标记存在").load(Ordering::SeqCst),
+            "run 边界必须把 tools/list_changed 脏标记清掉"
+        );
+    }
+
+    /// 图片内容必须以 `Content::Image` 进模型通道（旧实现只留 `[image ...]` 文本标记，
+    /// 图片实际不可用）；文本块按原序保留。
+    #[test]
+    fn map_call_output_keeps_images_as_model_blocks() {
+        let v = json!({
+            "content": [
+                { "type": "text", "text": "see this" },
+                { "type": "image", "data": "QUFB", "mimeType": "image/png" },
+            ]
+        });
+        let result: rmcp::model::CallToolResult = serde_json::from_value(v).unwrap();
+        let out = map_call_output(result);
+        // 前端投影里图片留可读标记；模型通道里是真正的 Image 块
+        assert_eq!(
+            out.text,
+            format!("see this{}[image image/png]", char::from(10))
+        );
+        assert_eq!(out.blocks.len(), 2);
+        assert!(matches!(&out.blocks[0], Content::Text { text } if text == "see this"));
+        assert!(matches!(
+            &out.blocks[1],
+            Content::Image { media_type, data } if media_type == "image/png" && data == "QUFB"
+        ));
     }
 
     #[test]
