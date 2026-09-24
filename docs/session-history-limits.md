@@ -84,7 +84,7 @@ gz 超限
 
 ## 6. 与批2 的边界
 
-[session-restore-batch1](./session-restore-batch1.md) 的批2 范围里的「**取消** 8MB 硬上限」仍未做：本批保留上限与 `trim` 口径（不改度量、不重新定标），只把图片从计量里彻底摘出去。仍待批2 处理：历史 trim 双删与 256k 预算口径、checkpoint 粒度 → append-only JSONL、历史分页/虚拟滚动、旧格式清理入口。
+**批2 的存储重构已落地**（[session-history-storage](./session-history-storage.md)）：分段 append-only JSONL、取消 8MB 硬上限（改为软告警 200MB / 硬熔断 1GB）、历史 trim 双删与 256k 预算口径、按段分页、旧格式清理入口均已做完（虚拟滚动仍留待后续）。本文描述的上限阶梯里，「按轮降级」与「拒存」两级已随之**移除**，只保留「剥图」作为旧数据兜底；`HistoryStatus::Rejected` 不再产生。
 
 ## 7. 验证
 

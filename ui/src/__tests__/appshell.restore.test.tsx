@@ -51,6 +51,18 @@ const h = vi.hoisted(() => {
     { role: "user", content: [{ type: "text", text: "你好" }] },
     { role: "assistant", content: [{ type: "text", text: "你好！有什么可以帮你？" }] },
   ];
+  /** 首屏载荷（批2 P3：`load_session` 返回 `{ messages, paging }`）——legacy 口径：整份给出、无更早内容 */
+  const FIRST_PAGE = {
+    messages: MESSAGES,
+    paging: {
+      format: "legacy",
+      loaded_from_seq: 0,
+      segment_count: 1,
+      total_messages: MESSAGES.length,
+      bytes: 0,
+      has_more: false,
+    },
+  };
   /** 每次调用现读的桩值：uiState = get_ui_state 返回的快照，sessions = list_sessions 返回的会话列表 */
   const state = { uiState: null as unknown, sessions: [] as any[] };
   /** listen 捕获表：事件名 → 回调数组（bindEvents 的 29 键与 AppShell 直连的 notify:activate / menu:action 共用） */
@@ -63,7 +75,7 @@ const h = vi.hoisted(() => {
     setUiState: fn(async () => undefined),
     listSessions: fn(async () => state.sessions),
     listProjects: fn(async () => []),
-    loadSession: fn(async () => MESSAGES),
+    loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
     connectMcp: fn(async () => ({ started: [], failed: [] })),

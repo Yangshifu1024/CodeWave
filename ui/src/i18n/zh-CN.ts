@@ -156,6 +156,28 @@ export default {
     cleanupNeverRun: "还没有清理记录",
     cleanupLastRun: "{{time}} · 删除 {{n}} 个会话",
     cleanupLastFailed: "（{{n}} 个失败）",
+    // 旧格式历史清理（分段 JSONL 落地后的显式入口）：预览 / 执行 / 状态回显三段。
+    // 铁律：只有旧文件、没有新格式数据的历史是**唯一副本**，绝不删——界面必须把保留数说出来
+    legacyHistoryCleanup: "清理旧格式历史",
+    legacyHistoryHint: "旧格式历史在新格式落盘后可以安全删除；只有旧文件、没有新格式数据的会话会原样保留（那是该会话历史唯一的副本）。",
+    legacyHistoryPreview: "预览可回收",
+    legacyHistoryNow: "立即清理旧格式历史",
+    legacyHistoryStatus: "旧格式历史",
+    legacyHistoryStatusHint: "旧格式（单个 .json.gz 文件）与新格式（分段 JSONL 目录）并存时，只有前者是可回收的多余副本。",
+    legacyHistoryUnknown: "未取到旧格式历史的统计（打开设置时读取失败）",
+    legacyHistoryNone: "没有旧格式历史，无需清理",
+    legacyHistoryNoneCleanable: "暂无可回收的旧格式历史（{{n}} 个会话只有旧格式数据，已保留）",
+    legacyHistoryPreviewLine: "可回收 {{n}} 个会话的旧格式历史（约 {{size}}）",
+    legacyHistoryPreviewKeep: "；另有 {{n}} 个会话必须保留（无新格式数据）",
+    legacyHistoryPreviewDone: "可回收 {{n}} 个会话的旧格式历史，约 {{size}}",
+    legacyHistoryConfirmTitle: "清理旧格式历史？",
+    legacyHistoryConfirmDesc: "将删除 {{n}} 个会话的旧格式历史文件，释放约 {{size}}。只删已有新格式数据的那部分。",
+    legacyHistoryConfirmKeep: "另有 {{n}} 个会话的旧格式历史会保留（它们是唯一副本）。",
+    legacyHistoryConfirmOk: "清理旧格式历史",
+    legacyHistoryDone: "已清理 {{n}} 个会话的旧格式历史（{{m}} 个文件，释放 {{size}}）",
+    legacyHistoryKept: "{{n}} 个会话因无新格式数据已保留（唯一副本，未删）",
+    legacyHistoryFailed: "{{n}} 个旧格式历史文件未能删除（文件可能被占用，稍后可再试一次）",
+    legacyHistoryPreviewFailed: "旧格式历史预览失败，本次不清理",
     logLevelHint: "写入 ~/.codewave/logs 的全局诊断日志级别，保存后即时生效（RUST_LOG 环境变量存在时以其为准）",
     sessionVerboseHint: "开启后每次 LLM 请求/响应全文写入会话日志文件（体积与隐私敏感，仅排障时开启）",
     updates: "更新",
@@ -255,7 +277,13 @@ export default {
     showAdvanced: "显示进阶项（{{n}}）",
     advancedHint: "进阶项默认收起，该偏好会跨页跨会话记住",
   },
-  chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染" },
+  chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染",
+    // 分段历史分页（批2 P3）：逐段向前加载的入口、最早段终态、浏览上限与收起
+    loadEarlier: "加载更早的消息", earliest: "已到最早的消息", loadEarlierCap: "已达单次浏览上限（{{pages}} 段）", collapseEarlier: "收起更早的",
+    // 合并压缩边界的分隔线与坏段提示（批2 P2）
+    compactedBoundary: "此处上下文已压缩",
+    compactedBoundaryHint: "模型不再看到比这里更早的上下文；完整历史仍可向前翻页查看。",
+    badSegments: "有 {{n}} 段历史未能读取，其余内容正常。" },
   notice: {
     cancelled: "已取消",
     compactSummary: "（压缩摘要）",
@@ -266,6 +294,12 @@ export default {
     historyDegraded: "历史未完整保存：{{images}} 张图片、{{rounds}} 轮对话被省略（重开后可能看不到）。",
     historyRejected:
       "历史未能保存（超过 8MB 上限），磁盘上仍是上一次成功保存的内容。建议压缩上下文或新开会话。",
+    // P4 历史体积约束（软告警 200MB / 硬熔断 1GB）：与上面两条「未完整保存」**刻意区分**——
+    // 这里历史都在，只是快到 / 已到体积上线；体积用人类可读单位（MB / GB，前端格式化）
+    historySizeWarned:
+      "本会话历史已达 {{size}}（超过 {{threshold}} 后历史将停止增长）。建议压缩上下文或新开会话。",
+    historyFused:
+      "历史已停止增长（已达 {{size}} / 上限 {{threshold}}）。请压缩上下文或新开会话；已有历史未被删除。",
     runFailed: "运行失败",
     injected: "注入 {{n}} 条消息",
     compacting: "上下文压缩中…{{before}}",

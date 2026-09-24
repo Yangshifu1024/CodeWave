@@ -159,6 +159,28 @@ export default {
     cleanupNeverRun: "No cleanup yet",
     cleanupLastRun: "{{time}} · {{n}} session(s) deleted",
     cleanupLastFailed: " ({{n}} failed)",
+    // Legacy-format history cleanup (explicit entry point after segmented JSONL landed): preview / run / status row.
+    // Iron rule: a legacy file with no new-format data is the ONLY copy — never delete it, and say how many were kept
+    legacyHistoryCleanup: "Clean up legacy history",
+    legacyHistoryHint: "Legacy history can be safely deleted once it has been written in the new format; sessions that only have a legacy file are kept as-is (that file is the only copy of their history).",
+    legacyHistoryPreview: "Preview reclaimable",
+    legacyHistoryNow: "Clean up legacy history now",
+    legacyHistoryStatus: "Legacy history",
+    legacyHistoryStatusHint: "When the legacy format (a single .json.gz file) coexists with the new format (segmented JSONL folder), only the former is a redundant copy you can reclaim.",
+    legacyHistoryUnknown: "Legacy history stats unavailable (read failed when settings opened)",
+    legacyHistoryNone: "No legacy history; nothing to clean up",
+    legacyHistoryNoneCleanable: "Nothing reclaimable right now ({{n}} session(s) only have legacy data and were kept)",
+    legacyHistoryPreviewLine: "{{n}} session(s) of legacy history can be reclaimed (about {{size}})",
+    legacyHistoryPreviewKeep: "; {{n}} more must be kept (no new-format data)",
+    legacyHistoryPreviewDone: "{{n}} session(s) of legacy history can be reclaimed, about {{size}}",
+    legacyHistoryConfirmTitle: "Clean up legacy history?",
+    legacyHistoryConfirmDesc: "Legacy history files of {{n}} session(s) will be deleted, freeing about {{size}}. Only those that already have new-format data are removed.",
+    legacyHistoryConfirmKeep: "Legacy history of {{n}} session(s) will be kept (they are the only copy).",
+    legacyHistoryConfirmOk: "Clean up legacy history",
+    legacyHistoryDone: "Cleaned up legacy history of {{n}} session(s) ({{m}} file(s), {{size}} freed)",
+    legacyHistoryKept: "{{n}} session(s) kept — no new-format data, so their legacy file is the only copy",
+    legacyHistoryFailed: "{{n}} legacy history file(s) could not be deleted (files may be in use; try again later)",
+    legacyHistoryPreviewFailed: "Legacy history preview failed; nothing was cleaned up",
     logLevelHint: "Level of global diagnostic logs under ~/.codewave/logs; applies immediately on save (RUST_LOG env var takes precedence when set)",
     sessionVerboseHint: "Log full LLM request/response text into the session log file (size- and privacy-sensitive; enable only for troubleshooting)",
     updates: "Updates",
@@ -259,7 +281,13 @@ export default {
     showAdvanced: "Show advanced ({{n}})",
     advancedHint: "Advanced items are hidden by default; this preference is remembered across pages and sessions",
   },
-  chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized" },
+  chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized",
+    // Segmented history paging (batch 2 P3): load-earlier entry, oldest-end state, browse cap, collapse
+    loadEarlier: "Load earlier messages", earliest: "You've reached the oldest messages", loadEarlierCap: "Reached the browse limit for this session ({{pages}} segments)", collapseEarlier: "Collapse earlier",
+    // Compaction-boundary divider and bad-segment notice (batch 2 P2)
+    compactedBoundary: "Earlier context was compacted",
+    compactedBoundaryHint: "The model no longer sees context before this point; the full history is still available by loading earlier messages.",
+    badSegments: "{{n}} history segment(s) could not be read; the rest of the conversation is intact." },
   notice: {
     cancelled: "Cancelled",
     compactSummary: "(compaction summary)",
@@ -270,6 +298,13 @@ export default {
     historyDegraded: "History saved incompletely: {{images}} image(s) and {{rounds}} round(s) were dropped.",
     historyRejected:
       "History was not saved (over the 8 MB limit); the last successfully saved version is kept. Consider compacting the context or starting a new session.",
+    // P4 history size limits (soft 200 MB / hard fuse 1 GB): deliberately distinct from the two
+    // "incompletely saved" notices above - here the history is intact, it is just at / near the size line;
+    // sizes are rendered human-readable (MB / GB) on the front end
+    historySizeWarned:
+      "This session's history has reached {{size}} (past {{threshold}} it will stop growing). Consider compacting the context or starting a new session.",
+    historyFused:
+      "History has stopped growing ({{size}} of the {{threshold}} limit). Compact the context or start a new session; nothing already saved was deleted.",
     runFailed: "Run failed",
     injected: "Injected {{n}} message(s)",
     compacting: "Compacting context…{{before}}",

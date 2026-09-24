@@ -162,6 +162,75 @@ export interface DocumentBackupEntry {
   size: number;
 }
 
+// ---------- 会话历史分页（分段 append-only JSONL）----------
+
+/** 历史落盘格式（与后端 `segments::HistoryFormat` 同形）：`new` = 段式 JSONL（可逐段前翻）；
+ *  `legacy` = 旧 `.json.gz` 单文件（读兼容、不迁移——首屏即整份，没有更早内容）。 */
+export type HistoryFormat = "new" | "legacy";
+
+/** 上下文压缩边界触发来源（与后端 `segments::BoundarySource` 同形）：`compact` = 常规压缩；
+ *  `shrink` = 收缩。界面文案两者相同，`source` 只作排障保留（数据里不丢）。 */
+export type CompactBoundarySource = "compact" | "shrink";
+
+/** 上下文压缩边界（批2 P2）：模型不再看到该点之前的上下文，但完整历史仍可向前翻页查看。
+ *
+ *  `seq` = 边界所在的**段序号**（与转录稳定键 `s<段号>:<段内序>` 的段号同域）：
+ *  界面据此判断「分隔线插在哪一条消息之前」，后端**不给 display 下标**（下标会随分页前插漂移）。 */
+export interface HistoryBoundary {
+  /** 边界所在的段序号（1 起；legacy 会话不会有边界） */
+  seq: number;
+  source: CompactBoundarySource;
+  /** 边界产生时刻（ISO 字符串；排障用，不参与渲染判定） */
+  at: string;
+}
+
+/** 首屏分页信息（`load_session` 的 `paging` 字段；键名与后端 `SessionPaging` 逐字对应，**勿改名**）。 */
+export interface SessionPaging {
+  /** 落盘格式 */
+  format: HistoryFormat;
+  /** 本次 `messages` 覆盖的最早段序号（1 起；legacy / 无段 = 0） */
+  loaded_from_seq: number;
+  /** 段文件总数（含坏段；legacy = 1） */
+  segment_count: number;
+  /** 磁盘上的消息总数（display 口径：全部 message 记录，**不 trim**） */
+  total_messages: number;
+  /** 该会话历史占用的字节数（段文件总和；legacy = 该文件字节数） */
+  bytes: number;
+  /** 本次覆盖段范围内**跳过的坏段数**（0 = 全部可读）。可选：旧后端 / 测试夹具可能不给，
+   *  缺省按 0 处理（界面零打扰）。 */
+  bad_segments?: number;
+  /** 本次覆盖段范围内的压缩边界。可选：缺省 = 无边界（旧后端 / 从未压缩）→ 不渲染分隔线。 */
+  boundaries?: HistoryBoundary[];
+  /** 更早是否还有**可读**的段（false = 已到最早） */
+  has_more: boolean;
+}
+
+/** `load_session` 首屏返回值：**最近一段**消息 + 分页信息（批2 P2 起不再是裸 `Message[]`）。
+ *
+ *  `messages` 一律 **display 口径**：只用于界面渲染，**绝不**回填模型上下文——wire（模型所见）由后端自己装载；
+ *  拿 display 当上下文会让下一次检查点把整份历史改写成「只有最近一段」的基线段（时间线重置）。 */
+export interface LoadSessionPayload {
+  messages: Message[];
+  paging: SessionPaging;
+  /** 压缩边界（契约口径：与 `paging` 并列的**顶层**字段，只含本次覆盖段范围内的边界）。
+   *  可选 = 旧后端 / 无压缩历史。读取口径见 stores/sessions.ts 的 loadTabContent。 */
+  boundaries?: HistoryBoundary[];
+}
+
+/** `load_session_earlier` 返回值：严格早于 `before_seq` 的**最近一段**消息。
+ *  越界 / 已到最早 / 会话不存在 → `{ messages: [], from_seq: 0, has_more: false }`（**不报错**）。 */
+export interface EarlierPage {
+  messages: Message[];
+  /** 本次实际返回的段序号（0 = 没有更早内容，此时 `has_more` 必为 false） */
+  from_seq: number;
+  /** 更早是否还有**可读**的段 */
+  has_more: boolean;
+  /** 本次覆盖段范围内的压缩边界（可选：缺省 = 无边界 → 不渲染分隔线）。 */
+  boundaries?: HistoryBoundary[];
+  /** 本次跳过的坏段数（可选：契约暂不含此字段；回了就累加，缺省不影响已有累计值）。 */
+  bad_segments?: number;
+}
+
 /** 会话元数据（左栏导航 / 会话列表数据源）。
  *  契约锚点：project_id + roots 是创建时固化的快照，是 @ 提及 / git 聚合的唯一数据源，勿绕过回查项目注册表。 */
 export interface SessionMeta {
@@ -190,27 +259,30 @@ export interface SessionMeta {
   history_status?: HistoryStatus;
 }
 
-/** 历史未完整保存的状态（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
- *  `degraded` = 有损保存（剥掉图片 payload / 按轮丢弃历史），`rejected` = 超限拒存（磁盘上仍是上一次成功保存的历史）。 */
-export interface HistoryStatus {
-  kind: "degraded" | "rejected";
-  /** 被剥掉图片 payload 的张数（degraded 才有） */
-  stripped_images?: number;
-  /** 因超限被丢弃的轮数（degraded 才有） */
-  dropped_rounds?: number;
-  /** 状态产生时刻（RFC3339） */
-  at: string;
-  /** 拒存原因（rejected 才有） */
-  reason?: string;
-}
+/** 历史保存状态（[docs/session-history-limits](../../../docs/session-history-limits.md) + 批2 体积约束）：与后端
+ *  `HistoryStatus` **同一枚举**——`SessionMeta.history_status`（索引侧，重启后仍在）与 `run:done.history_save`
+ *  （当次保存结果）共用，前端两条链路因此共用一套文案。四个变体分两类语义，文案**刻意区分**：
+ *  - 未完整保存：`degraded` = 有损保存（剥掉图片 payload / 按轮丢弃历史）；`rejected` = 超限拒存
+ *    （磁盘上仍是上一次成功保存的历史）。`rejected` 自批2 P1 起**不再产生**（8MB 拒存分支已移除），
+ *    保留只为兼容旧索引里的存量状态——删掉会让旧数据少一条可见提示。
+ *  - 体积约束（批2 P4）：`warned` = 超软线（**照常写盘**）；`fused` = 超硬线（**停止 append** 但绝不删既有历史）。
+ *    两者都带 `bytes` / `threshold`：要能说清「多大 / 限到多少」，人类可读格式化（MB / GB）由前端做。 */
+export type HistoryStatus =
+  | { kind: "degraded"; stripped_images?: number; dropped_rounds?: number; at: string; reason?: string }
+  | { kind: "rejected"; at: string; reason?: string }
+  | { kind: "warned"; bytes: number; threshold: number; at: string }
+  | { kind: "fused"; bytes: number; threshold: number; at: string };
 
 /** 一次历史保存的结果（`run:done` 载荷的可选字段 `history_save`，**仅当保存不干净时后端才带上**）：
- *  `saved === false` = 拒存；`saved === true` 且有降级计数 = 有损保存；两者皆无 = 干净（前端零打扰）。 */
+ *  `saved === false` = 拒存；`saved === true` 且有降级计数 = 有损保存；两者皆无 = 干净（前端零打扰）。
+ *  `history_status`（批2 P4）与索引侧是**同一枚举**：体积裁决（warned / fused）随载荷一起来，
+ *  于是「当场提示」与「重启后恢复时提示」共用一套文案。 */
 export interface HistorySaveReport {
   saved: boolean;
   stripped_images: number;
   dropped_rounds: number;
   bytes: number;
+  history_status?: HistoryStatus | null;
 }
 
 /** 具名项目：名称 + 项目主目录（单目录语义）；
@@ -236,6 +308,23 @@ export interface CleanupOutcome { ids: string[]; deleted: number; failed: number
 
 /** 上次清理记录（存后端，重启后仍在；启动时的自动清理也计入） */
 export interface CleanupStatus { last_run_at: string | null; last_deleted: number; last_failed: number }
+
+// ---------- 「清理旧格式历史」（分段 JSONL 落地后的显式入口；[docs/session-history-limits]） ----------
+
+/** 旧格式历史清理预览（`preview_legacy_history_cleanup`）；纯读，不删任何文件。
+ *  `cleanable_*` = 已有新格式段数据、可以安全删的旧 `.json.gz`；
+ *  `keep_sessions` = **必须保留**的会话数（只有旧文件、没有新格式数据 = 该会话历史的唯一副本）。 */
+export interface LegacyCleanupPreview { cleanable_sessions: number; cleanable_bytes: number; keep_sessions: number }
+
+/** 旧格式历史清理结果：实际删除的会话 / 文件数与释放字节数，加上因「无新格式数据」被保留（跳过）的条数。
+ *  界面必须把 `kept_sessions` 说出来（用户点了一次清理，得知道有几份数据因为不能删而留着）。 */
+export interface LegacyCleanupOutcome {
+  deleted_sessions: number;
+  deleted_files: number;
+  freed_bytes: number;
+  kept_sessions: number;
+  failed: number;
+}
 
 // ---------- 高频 Channel 帧 ----------
 

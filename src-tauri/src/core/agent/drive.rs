@@ -213,7 +213,7 @@ pub async fn run_chat(
 
     match &result {
         Ok(_) => {
-            // 保存结果接入 run:done：不干净（拒存/剥图/丢轮）时带 JSON 载荷告知前端
+            // 保存结果接入 run:done：不干净（拒存 / 剥图 / 丢轮 / P4 的体积告警与熔断）时带 JSON 载荷告知前端
             let save = checkpoint(&core, &rt).await;
             session_log::info(
                 &rt,
@@ -231,7 +231,9 @@ pub async fn run_chat(
             if let Some(items) = suggest_out {
                 payload["suggestions"] = serde_json::json!(items);
             }
-            // 保存不干净才带上（干净路径零打扰，前端据此 push 会话内提示）
+            // 保存不干净才带上（干净路径零打扰，前端据此 push 会话内提示）。
+            // P4：体积状态（`warned` / `fused`）同样由 `is_clean()` 纳入——`SaveReport.history_status`
+            // 随 `to_value` 一起上 wire（形状与索引侧 `SessionMeta.history_status` 同源，前端共用一套文案）
             if let Some(r) = save.filter(|r| !r.is_clean()) {
                 payload["history_save"] = serde_json::to_value(&r).unwrap_or_default();
             }
@@ -1885,6 +1887,7 @@ mod tests {
             stripped_images: 0,
             dropped_rounds: 0,
             bytes: 4096,
+            history_status: None,
         };
         let saved: Option<SaveReport> = Some(clean);
         assert!(
@@ -1903,6 +1906,8 @@ mod tests {
             stripped_images: 2,
             dropped_rounds: 3,
             bytes: 1024,
+            // P4 新增字段：缺省不序列化（干净 / 旧形态的载荷仍是 4 个键）
+            history_status: None,
         };
         let r = Some(degraded)
             .filter(|r| !r.is_clean())
@@ -1917,6 +1922,59 @@ mod tests {
             Some(4),
             "字段形状固定为 4 个键（前端已按此实现）"
         );
+    }
+
+    /// P4：体积状态随载荷一起上 wire（键名 `history_status`，形状与索引侧同源），
+    /// 且**带体积与阈值**——前端据此格式化 MB / GB 并说清「多大 / 限到多少」。
+    #[test]
+    fn history_save_payload_carries_size_status() {
+        use crate::core::sessions::HistoryStatus;
+        let at = "2026-09-24T00:00:00+00:00".to_string();
+
+        // 软告警：saved 仍为 true，但必须进载荷（否则前端永远看不到提示）
+        let warned = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 300 * 1024 * 1024,
+            history_status: Some(HistoryStatus::Warned {
+                bytes: 300 * 1024 * 1024,
+                threshold: 200 * 1024 * 1024,
+                at: at.clone(),
+            }),
+        };
+        let r = Some(warned)
+            .filter(|r| !r.is_clean())
+            .expect("软告警必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["history_status"]["kind"], serde_json::json!("warned"));
+        assert_eq!(
+            v["history_status"]["bytes"],
+            serde_json::json!(300u64 * 1024 * 1024)
+        );
+        assert_eq!(
+            v["history_status"]["threshold"],
+            serde_json::json!(200u64 * 1024 * 1024)
+        );
+
+        // 硬熔断：同样进载荷，`saved` 仍是 true——熔断是「停写」而不是「保存失败」
+        let fused = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 1024 * 1024 * 1024,
+            history_status: Some(HistoryStatus::Fused {
+                bytes: 1024 * 1024 * 1024,
+                threshold: 1024 * 1024 * 1024,
+                at,
+            }),
+        };
+        let r = Some(fused)
+            .filter(|r| !r.is_clean())
+            .expect("熔断必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(true), "熔断不是保存失败");
+        assert_eq!(v["history_status"]["kind"], serde_json::json!("fused"));
     }
 
     /// 拒存（saved=false）同样算不干净——前端据此提示「历史未完整保存」。

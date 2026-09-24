@@ -3,7 +3,7 @@
 // 返回值原样透传（设置页据此弹确认框/报完成提示），saveConfig 的 skipCleanup 默认为 false。
 // 这一层测的就是 client.ts 自己，所以只能 mock 底层的 @tauri-apps/api/core（唯一 invoke 实现）。
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState } from "../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, LegacyCleanupOutcome, LegacyCleanupPreview } from "../ipc/types";
 
 const invokeMock = vi.hoisted(() =>
   vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => null),
@@ -43,6 +43,30 @@ describe("会话清理三个新命令", () => {
 
     await expect(ipc.getCleanupStatus()).resolves.toEqual(status);
     expect(invokeMock).toHaveBeenLastCalledWith("get_cleanup_status");
+  });
+});
+
+describe("旧格式历史清理两个命令（分段 JSONL 落地后的显式入口）", () => {
+  it("previewLegacyHistoryCleanup：命令名 preview_legacy_history_cleanup，无参数，返回可回收 / 必须保留的统计", async () => {
+    const preview: LegacyCleanupPreview = { cleanable_sessions: 4, cleanable_bytes: 1572864, keep_sessions: 2 };
+    invokeMock.mockResolvedValueOnce(preview);
+
+    await expect(ipc.previewLegacyHistoryCleanup()).resolves.toEqual(preview);
+    expect(invokeMock).toHaveBeenLastCalledWith("preview_legacy_history_cleanup");
+  });
+
+  it("runLegacyHistoryCleanup：命令名 run_legacy_history_cleanup，无参数，返回回收统计 + 被保留条数", async () => {
+    const outcome: LegacyCleanupOutcome = {
+      deleted_sessions: 4,
+      deleted_files: 4,
+      freed_bytes: 1572864,
+      kept_sessions: 2,
+      failed: 0,
+    };
+    invokeMock.mockResolvedValueOnce(outcome);
+
+    await expect(ipc.runLegacyHistoryCleanup()).resolves.toEqual(outcome);
+    expect(invokeMock).toHaveBeenLastCalledWith("run_legacy_history_cleanup");
   });
 });
 

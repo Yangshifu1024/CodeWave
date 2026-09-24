@@ -124,13 +124,20 @@ function dirName(p: string): string {
  *  meta 可选（[docs/session-history-limits](../../../docs/session-history-limits.md)）：历史保存状态（history_status）挂在会话索引上，
  *  重开/重启后仍可见——调用方没拿到 meta 时回退到本 store 的会话列表快照（不新增 IPC）。 */
 async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
-  const msgs = await ipc.loadSession(tab.sessionId, tab.workspace);
+  // 批2 P3：`load_session` 返回 `{ messages, paging }`——`messages` 只是**最近一段**（display 口径），
+  // 更早内容由用户点「加载更早的」时按段前翻（run.loadEarlier）。
+  const page = await ipc.loadSession(tab.sessionId, tab.workspace);
   const run = useRun.getState();
   run.initTab(tab.sessionId);
-  run.restoreFromMessages(tab.sessionId, msgs, {
+  run.restoreFromMessages(tab.sessionId, page.messages, {
     history_status:
       meta?.history_status ??
       useSessions.getState().sessions.find((m) => m.id === tab.sessionId)?.history_status,
+    // 分页游标：首屏段号即起点；缺省（旧后端只回 Message[]）时界面不显示「加载更早的」
+    paging: page.paging,
+    // 压缩边界（批2 P2）：契约口径是载荷**顶层** `boundaries`；为防后端把它内嵌到 `paging` 里，
+    // 两种形态任一存在即取（都缺 = 空 → 界面不渲染分隔线，也不报错）。
+    boundaries: page.boundaries ?? page.paging?.boundaries,
   });
   // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
   void ipc

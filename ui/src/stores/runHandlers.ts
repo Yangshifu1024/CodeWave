@@ -59,11 +59,27 @@ function markUnreadIfAway(session: string | undefined) {
   if (s.activeKey !== session) s.markUnread(session);
 }
 
-/** 历史未完整保存的会话内提示（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+/** 历史保存不干净的会话内提示（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
  *  ① `run:done.history_save`（当次保存结果，仅当保存不干净时后端才带上）——干净返回 null，零打扰；
- *  ② `SessionMeta.history_status`（挂在索引上，重启后仍在）——恢复历史时用同一套文案，保证两处口径一致。 */
+ *  ② `SessionMeta.history_status`（挂在索引上，重启后仍在）——恢复历史时用同一套文案，保证两处口径一致。
+ *
+ *  P4（历史体积约束）新增两个**体积**变体：`warned`（超软线，**照常写**）与 `fused`
+ *  （超硬线，**停止写入**但绝不删既有历史），两者都带 `bytes` / `threshold`。
+ *  四个变体同属 `ui/src/ipc/types.ts` 的 `HistoryStatus` 判别联合，按 `kind` 收窄即可。 */
+
+/** 字节 → 人类可读（KB / MB / GB，一位小数）。格式化在前端做：后端只给数字，不塞格式化字符串。 */
+function formatBytes(bytes?: number | null): string {
+  const n = typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
 export function historySaveNotice(h: HistorySaveReport): string | null {
   if (h.saved === false) return i18n.t("notice.historyRejected");
+  // P4：体积裁决随载荷一起来（`history_status`，与索引侧同源）→ 与恢复路径共用文案
+  if (h.history_status) return historyStatusNotice(h.history_status);
+  // 旧载荷 / 无状态：仍按计数文案兜底（剥图 / 丢轮）
   const images = h.stripped_images ?? 0;
   const rounds = h.dropped_rounds ?? 0;
   if (images > 0 || rounds > 0) return i18n.t("notice.historyDegraded", { images, rounds });
@@ -71,9 +87,19 @@ export function historySaveNotice(h: HistorySaveReport): string | null {
 }
 
 /** 索引里的历史状态 → 会话内提示文案（无状态 = 干净 = null）。语义同 historySaveNotice：
- *  rejected = 磁盘上仍是上一次成功保存的历史；degraded = 图片 / 轮次被省略。 */
+ *  rejected = 磁盘上仍是上一次成功保存的历史；degraded = 图片 / 轮次被省略；
+ *  warned / fused = P4 的体积提醒（超软线照常写 / 超硬线已停写）。 */
 export function historyStatusNotice(st?: HistoryStatus | null): string | null {
   if (!st) return null;
+  // 体积约束两条：与「未完整保存」**刻意区分**——这里说的是「历史还在，只是快长到头 / 已长到头」，
+  // 不是「内容被省略了」。字节格式化在前端做（后端只给数字）。
+  if (st.kind === "warned" || st.kind === "fused") {
+    const size = formatBytes(st.bytes);
+    const threshold = formatBytes(st.threshold);
+    return st.kind === "fused"
+      ? i18n.t("notice.historyFused", { size, threshold })
+      : i18n.t("notice.historySizeWarned", { size, threshold });
+  }
   return st.kind === "rejected"
     ? i18n.t("notice.historyRejected")
     : i18n.t("notice.historyDegraded", { images: st.stripped_images ?? 0, rounds: st.dropped_rounds ?? 0 });

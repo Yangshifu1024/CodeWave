@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -33,6 +33,12 @@ export const ipc = {
   /** 上次清理记录（设置页只读行数据源；存后端，重启后仍在） */
   getCleanupStatus: () => invoke<CleanupStatus>("get_cleanup_status"),
 
+  // ---------- 「清理旧格式历史」（分段 JSONL 落地后的显式入口）----------
+  /** 预览可回收的旧格式历史：可回收会话数 / 字节数 + **必须保留**的会话数（无新格式数据 = 唯一副本） */
+  previewLegacyHistoryCleanup: () => invoke<LegacyCleanupPreview>("preview_legacy_history_cleanup"),
+  /** 执行清理（只删已有新格式数据的旧文件）：返回回收统计与被保留（跳过）的条数 */
+  runLegacyHistoryCleanup: () => invoke<LegacyCleanupOutcome>("run_legacy_history_cleanup"),
+
   // shell 探测（设置面板 Shell 下拉数据源）
   listAvailableShells: () => invoke<ShellInfo[]>("list_available_shells"),
 
@@ -46,8 +52,15 @@ export const ipc = {
     }>("create_session", { projectId: projectId ?? null, workspace: workspace ?? null }),
   selectWorkspaceDir: () => invoke<string | null>("select_workspace_dir"),
   listSessions: () => invoke<SessionMeta[]>("list_sessions"),
+  /** 恢复会话首屏（批2 P2 起返回 `{ messages, paging }`，不再是裸 `Message[]`）：`messages` = **最近一段**的 display
+   *  口径转录（完整、不 trim）；更早内容由 `loadSessionEarlier` 按段前翻。命令名 `load_session` 不变。 */
   loadSession: (sessionId: string, workspace: string) =>
-    invoke<Message[]>("load_session", { sessionId, workspace }),
+    invoke<LoadSessionPayload>("load_session", { sessionId, workspace }),
+  /** 加载更早**一段**历史（分页前翻）：`beforeSeq` = 当前已加载到的最早段序号（首屏的 `paging.loaded_from_seq`）。
+   *  只读一个段文件，翻页代价与已加载内容量无关；越界 / 已到最早 / 会话不存在返回空数组 + `from_seq: 0`，
+   *  **不报错**（界面只需知道「没有更早内容了」，不当失败处理）。 */
+  loadSessionEarlier: (sessionId: string, beforeSeq: number) =>
+    invoke<EarlierPage>("load_session_earlier", { sessionId, beforeSeq }),
   // [docs/titlebar-logo-toggle](../../../docs/titlebar-logo-toggle.md)：子智能体过程历史（会话恢复后由过程抽屉按需重建消息流；未落盘时返回空）
   loadSubagentHistory: (sessionId: string, subId: string) =>
     invoke<Message[]>("load_subagent_history", { sessionId, subId }),

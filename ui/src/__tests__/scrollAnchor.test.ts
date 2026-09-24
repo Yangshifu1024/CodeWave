@@ -1,7 +1,8 @@
 // 滚动锚点（会话保存与恢复优化 · 批1）：
 // 一、纯函数不变量：itemSig 稳定性与区分度 / isAtBottom 阈值边界 / computeAnchor 定位与偏移 /
 //     pickTarget 命中与漂移回退 / collectNodes 打标收集 / restoreAnchor 命中与降级贴底 / capture → restore 往返。
-// 二、ChatMessages 接线（DOM 层）：消息行 data-sig/data-idx 标注 → 激活时按锚点还原 → 懒加载二次校正。
+// 二、ChatMessages 接线（DOM 层）：消息行 data-key/data-sig 标注 → 激活时按锚点还原 → 懒加载二次校正。
+//     批2 P3 追加：分页前插更早内容后视口锚点不漂（稳定键不变 ⇒ 位置不漂）。
 //     滚动记录走 uiState.scheduleAnchor（200ms 节流），用假计时器跑完整链路。
 //
 // happy-dom 没有真实布局：getBoundingClientRect / scrollHeight / clientHeight 全部手写桩。
@@ -13,9 +14,10 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { App } from "antd";
 import "../i18n";
 import ChatMessages from "../features/chat/ChatMessages";
-import { useRun } from "../stores/run";
+import { MAX_PAGED_PAGES, useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
 import type { TimelineSeg, UiItem } from "../stores/run.types";
+import type { Message } from "../ipc/types";
 import {
   BOTTOM_EPS,
   bottomScrollTarget,
@@ -24,6 +26,7 @@ import {
   computeAnchor,
   isAtBottom,
   isSelfScroll,
+  itemKeysOf,
   itemSig,
   pickTarget,
   restoreAnchor,
@@ -34,6 +37,9 @@ import { getScrollAnchor, reset as resetUiState, setScrollAnchor } from "../util
 // 唯一 invoke 入口必须 mock（不直接 mock @tauri-apps/api/core）——现场态落盘经由 uiState → ipc 走这里
 const ipcMock = vi.hoisted(() => ({
   setUiState: vi.fn(async (_state: unknown): Promise<void> => {}),
+  // 分页前翻（批2 P3）：默认「没有更早内容」，用例按需覆盖
+  loadSessionEarlier: vi.fn(async (): Promise<{ messages: Message[]; from_seq: number; has_more: boolean }> => ({ messages: [], from_seq: 0, has_more: false })),
+  loadToolOutcomes: vi.fn(async () => []),
 }));
 vi.mock("../ipc/client", () => ({ ipc: ipcMock }));
 
@@ -55,8 +61,9 @@ function defineRect(el: HTMLElement, topOf: () => number): void {
 }
 
 interface NodeSpec {
+  /** 稳定键（批2 P3 起锚点身份；ChatMessages 打在 data-key 上） */
+  key: string;
   sig: string;
-  idx: number;
   /** 该消息在滚动内容里的偏移 */
   top: number;
 }
@@ -77,14 +84,14 @@ function makeScroller(spec: ScrollerSpec): HTMLDivElement {
   defineSize(el, "clientHeight", spec.clientHeight);
   defineRect(el, () => 0);
   for (const top of spec.untaggedTops ?? []) {
-    const child = document.createElement("div"); // 无 data-sig：不可锚定
+    const child = document.createElement("div"); // 无 data-key：不可锚定
     defineRect(child, () => top - el.scrollTop);
     el.appendChild(child);
   }
   for (const n of spec.nodes) {
     const child = document.createElement("div");
     child.dataset.sig = n.sig;
-    child.dataset.idx = String(n.idx);
+    child.dataset.key = n.key;
     defineRect(child, () => n.top - el.scrollTop);
     el.appendChild(child);
   }
@@ -92,9 +99,9 @@ function makeScroller(spec: ScrollerSpec): HTMLDivElement {
   return el;
 }
 
-/** 造锚点拓扑：节点 i 的指纹 u<i>，内容偏移取自 tops（顺序即 DOM 顺序） */
+/** 造锚点拓扑：节点 i 的稳定键 k<i>、指纹 u<i>，内容偏移取自 tops（顺序即 DOM 顺序） */
 function tops(list: number[]): AnchorNode[] {
-  return list.map((top, idx) => ({ idx, sig: `u${idx}`, top }));
+  return list.map((top, i) => ({ key: `k${i}`, sig: `u${i}`, top }));
 }
 
 const geo = (scrollTop: number): AnchorGeometry => ({ scrollTop, scrollHeight: 1000, clientHeight: 400 });
@@ -194,59 +201,124 @@ describe("computeAnchor 计算锚点", () => {
   it("中途 ⇒ 取视口顶端之上最近的一条消息 + 段内像素偏移", () => {
     expect(computeAnchor(geo(250), tops([0, 100, 200, 300]))).toEqual({
       kind: "item",
-      idx: 2,
+      key: "k2",
       sig: "u2",
       offset: 50,
     });
   });
 
   it("视口顶端恰好落在某条消息上 ⇒ 偏移 0", () => {
-    expect(computeAnchor(geo(200), tops([0, 100, 200, 300]))).toEqual({ kind: "item", idx: 2, sig: "u2", offset: 0 });
+    expect(computeAnchor(geo(200), tops([0, 100, 200, 300]))).toEqual({ kind: "item", key: "k2", sig: "u2", offset: 0 });
   });
 
   it("消息全在视口下方（overscroll 到顶）⇒ 取第一条，偏移为负（由浏览器钳到 0）", () => {
-    expect(computeAnchor(geo(0), tops([20, 120]))).toEqual({ kind: "item", idx: 0, sig: "u0", offset: -20 });
+    expect(computeAnchor(geo(0), tops([20, 120]))).toEqual({ kind: "item", key: "k0", sig: "u0", offset: -20 });
+  });
+
+  it("分页前插更早内容：按稳定键重定位到同一条消息的同一相对位置（AC-13）", () => {
+    const before: AnchorNode[] = [
+      { key: "s1:0", sig: "u0", top: 0 },
+      { key: "s1:1", sig: "u1", top: 100 },
+    ];
+    const anchor = computeAnchor({ scrollTop: 130, scrollHeight: 1000, clientHeight: 600 }, before);
+    expect(anchor).toEqual({ kind: "item", key: "s1:1", sig: "u1", offset: 30 });
+    if (anchor.kind !== "item") throw new Error("预期消息锚点");
+
+    // 前插两段更早内容（+200px）：键不变，只有内容偏移变大
+    const after: AnchorNode[] = [
+      { key: "s0:0", sig: "x0", top: 0 },
+      { key: "s0:1", sig: "x1", top: 100 },
+      { key: "s1:0", sig: "u0", top: 200 },
+      { key: "s1:1", sig: "u1", top: 300 },
+    ];
+    const target = pickTarget(after, anchor)!;
+    expect(target.key).toBe("s1:1");
+    // 旧位置 130 + 前插高度 200 = 330：视口相对该消息的偏移仍为 30px，没有漂
+    expect(target.top + anchor.offset).toBe(330);
+  });
+});
+
+describe("itemKeysOf 稳定渲染键（AC-14）", () => {
+  it("恢复前缀用「段号 + 段内序号」，其余按到达顺序取 live 序数", () => {
+    const keys = itemKeysOf([user("a"), user("b"), user("c")], ["s2:0", "s2:1"]);
+    expect(keys).toEqual(["s2:0", "s2:1", "live:0"]);
+  });
+
+  it("无恢复前缀（新会话 / 未分页）⇒ 全部 live 序数，与下标一致且不重复", () => {
+    const keys = itemKeysOf([user("a"), user("b")]);
+    expect(keys).toEqual(["live:0", "live:1"]);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("前插更早内容（AC-14）：已有项的键一个不变（数组下标会整体漂移）", () => {
+    const older = [user("更早一"), user("更早二")];
+    const current = [user("第一句"), user("第二句")];
+    const before = itemKeysOf(current, ["s2:0", "s2:1"]);
+    // 前插：键表头部接上更早一段，已有项保持在原位
+    const after = itemKeysOf([...older, ...current], ["s1:0", "s1:1", "s2:0", "s2:1"]);
+    expect(after.slice(older.length)).toEqual(before);
+    expect(new Set(after).size).toBe(after.length);
+    // 反证：按下标作 key 时，同一条消息的 key 从 0/1 漂到了 2/3
+    expect(after.slice(older.length)).not.toEqual(["0", "1"]);
+  });
+
+  it("尾部追加（流式）：已有项的键同样不变", () => {
+    const items = [user("第一句"), user("第二句")];
+    const before = itemKeysOf(items, ["s0:0", "s0:1"]);
+    const after = itemKeysOf([...items, user("第三句")], ["s0:0", "s0:1"]);
+    expect(after.slice(0, 2)).toEqual(before);
+    expect(after[2]).toBe("live:0");
+  });
+
+  it("恢复前缀短于 items（尾部的 live 项）时前缀键仍逐位对应", () => {
+    expect(itemKeysOf([user("a"), user("b"), user("c")], ["s0:0"])).toEqual(["s0:0", "live:0", "live:1"]);
   });
 });
 
 describe("pickTarget 定位锚点目标", () => {
-  it("(sig, idx) 精确命中优先：同内容消息撞指纹时靠它区分", () => {
-    const a = { idx: 0, sig: "dup", top: 0 };
-    const b = { idx: 1, sig: "dup", top: 100 };
-    expect(pickTarget([a, b], { kind: "item", idx: 1, sig: "dup", offset: 3 })).toBe(b);
+  it("稳定键精确命中优先：同内容消息撞指纹时靠它区分", () => {
+    const a = { key: "kA", sig: "dup", top: 0 };
+    const b = { key: "kB", sig: "dup", top: 100 };
+    expect(pickTarget([a, b], { kind: "item", key: "kB", sig: "dup", offset: 3 })).toBe(b);
   });
 
-  it("sig 命中但 idx 漂移（列表前插/被裁）⇒ 退回 sig 命中", () => {
+  it("键已不存在（分页前插后键漂、或随「收起更早的」被丢弃）⇒ 退回指纹命中", () => {
     const nodes = tops([0, 100]);
-    expect(pickTarget(nodes, { kind: "item", idx: 9, sig: "u0", offset: 3 })).toBe(nodes[0]);
+    expect(pickTarget(nodes, { kind: "item", key: "k9", sig: "u0", offset: 3 })).toBe(nodes[0]);
   });
 
-  it("sig 已不存在（被裁/被删）⇒ null，调用方据此降级贴底", () => {
-    expect(pickTarget(tops([0, 100]), { kind: "item", idx: 0, sig: "gone", offset: 3 })).toBeNull();
+  it("批1 旧快照锚点（有 idx、无 key）：key 缺失不误命中，按指纹兜底", () => {
+    const nodes = tops([0, 100]);
+    const legacy = { kind: "item", sig: "u1", offset: 3 } as unknown as ScrollAnchor;
+    expect(pickTarget(nodes, legacy)).toBe(nodes[1]);
+  });
+
+  it("键与指纹都已不存在（被裁/被删）⇒ null，调用方据此降级贴底", () => {
+    expect(pickTarget(tops([0, 100]), { kind: "item", key: "k9", sig: "gone", offset: 3 })).toBeNull();
   });
 
   it("贴底锚点 / 空列表 ⇒ null", () => {
     expect(pickTarget(tops([0, 100]), { kind: "bottom" })).toBeNull();
-    expect(pickTarget([], { kind: "item", idx: 0, sig: "u0", offset: 0 })).toBeNull();
+    expect(pickTarget([], { kind: "item", key: "k0", sig: "u0", offset: 0 })).toBeNull();
   });
 });
 
 describe("collectNodes 收集可锚定节点", () => {
-  it("只收带 data-sig 的节点，未打标项（子代理卡）自然跳过；top 相对内容顶部，与当前 scrollTop 无关", () => {
+  it("只收带 data-key 的节点，未打标项（子代理卡）自然跳过；top 相对内容顶部，与当前 scrollTop 无关", () => {
     const el = makeScroller({
       scrollTop: 250,
       scrollHeight: 1000,
       clientHeight: 400,
       nodes: [
-        { sig: "u0", idx: 0, top: 0 },
-        { sig: "a1", idx: 1, top: 120 },
+        { key: "s1:0", sig: "u0", top: 0 },
+        { key: "s1:1", sig: "a1", top: 120 },
       ],
       untaggedTops: [60],
     });
     const at250 = collectNodes(el);
     expect(at250).toEqual([
-      { idx: 0, sig: "u0", top: 0 },
-      { idx: 1, sig: "a1", top: 120 },
+      { key: "s1:0", sig: "u0", top: 0 },
+      { key: "s1:1", sig: "a1", top: 120 },
     ]);
     el.scrollTop = 0; // 滚回顶部：内容坐标不该跟着漂
     expect(collectNodes(el)).toEqual(at250);
@@ -260,14 +332,14 @@ describe("captureAnchor 读现场锚点", () => {
       scrollHeight: 1000,
       clientHeight: 400,
       nodes: [
-        { sig: "u0", idx: 0, top: 0 },
-        { sig: "u1", idx: 1, top: 100 },
-        { sig: "u2", idx: 2, top: 200 },
-        { sig: "u3", idx: 3, top: 300 },
+        { key: "k0", sig: "u0", top: 0 },
+        { key: "k1", sig: "u1", top: 100 },
+        { key: "k2", sig: "u2", top: 200 },
+        { key: "k3", sig: "u3", top: 300 },
       ],
       untaggedTops: [150],
     });
-    expect(captureAnchor(el)).toEqual({ kind: "item", idx: 2, sig: "u2", offset: 50 });
+    expect(captureAnchor(el)).toEqual({ kind: "item", key: "k2", sig: "u2", offset: 50 });
     el.scrollTop = 600;
     expect(captureAnchor(el)).toEqual({ kind: "bottom" });
   });
@@ -280,22 +352,22 @@ describe("restoreAnchor 还原锚点", () => {
       scrollHeight: 1000,
       clientHeight: 400,
       nodes: [
-        { sig: "u0", idx: 0, top: 0 },
-        { sig: "u1", idx: 1, top: 100 },
-        { sig: "u2", idx: 2, top: 200 },
-        { sig: "u3", idx: 3, top: 300 },
+        { key: "k0", sig: "u0", top: 0 },
+        { key: "k1", sig: "u1", top: 100 },
+        { key: "k2", sig: "u2", top: 200 },
+        { key: "k3", sig: "u3", top: 300 },
       ],
     });
 
   it("命中消息锚 ⇒ 定位到「该消息 + 段内偏移」并返回 true", () => {
     const el = scroller();
-    expect(restoreAnchor(el, { kind: "item", idx: 2, sig: "u2", offset: 50 })).toBe(true);
+    expect(restoreAnchor(el, { kind: "item", key: "k2", sig: "u2", offset: 50 })).toBe(true);
     expect(el.scrollTop).toBe(250);
   });
 
   it("锚点消息已被裁/被删 ⇒ 返回 false 并降级贴底（content 已变，位置不再可信）", () => {
     const el = scroller();
-    const stale: ScrollAnchor = { kind: "item", idx: 7, sig: "gone", offset: 12 };
+    const stale: ScrollAnchor = { kind: "item", key: "k9", sig: "gone", offset: 12 };
     expect(restoreAnchor(el, stale)).toBe(false);
     expect(el.scrollTop).toBe(el.scrollHeight);
   });
@@ -313,7 +385,7 @@ describe("restoreAnchor 还原锚点", () => {
     const el = scroller();
     el.scrollTop = 250;
     const anchor = captureAnchor(el);
-    expect(anchor).toEqual({ kind: "item", idx: 2, sig: "u2", offset: 50 });
+    expect(anchor).toEqual({ kind: "item", key: "k2", sig: "u2", offset: 50 });
     el.scrollTop = 0; // 模拟切走后被别人滚过
     expect(restoreAnchor(el, anchor)).toBe(true);
     expect(el.scrollTop).toBe(250);
@@ -360,9 +432,10 @@ const ROW = 100;
 const SCROLL_HEIGHT = 1000;
 const CLIENT_HEIGHT = 600;
 
-function blankTab(items: UiItem[]) {
+function blankTab(items: UiItem[], itemKeys?: string[]) {
   return {
     items,
+    itemKeys,
     running: false,
     streamGen: 0,
     ask: null,
@@ -382,10 +455,10 @@ function blankTab(items: UiItem[]) {
   };
 }
 
-function seedTab(items: UiItem[], key = "s1"): void {
+function seedTab(items: UiItem[], key = "s1", itemKeys?: string[]): void {
   useSessions.setState({ activeKey: key });
   useRun.setState((s) => {
-    s.tabs[key] = blankTab(items);
+    s.tabs[key] = blankTab(items, itemKeys);
   });
 }
 
@@ -393,7 +466,7 @@ function seedTab(items: UiItem[], key = "s1"): void {
 const mount = () => render(createElement(App, null, createElement(ChatMessages)));
 
 describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => {
-  // 渲染期布局：.chat-messages 一屏 600px（内容 1000px），消息行按 data-idx × 100px 排布。
+  // 渲染期布局：.chat-messages 一屏 600px（内容 1000px），消息行按**兄弟顺序**每行 100px 排布。
   // 行 rect 必须随 scrollTop 现算（真实浏览器行为），否则二次校正会被自己的桩骗成「已经命中」。
   const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
   const savedRect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
@@ -404,10 +477,19 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
       configurable: true,
       value(this: HTMLElement) {
-        const idx = Number(this.dataset?.idx ?? NaN);
-        if (!Number.isNaN(idx)) {
-          const scroller = this.closest?.(".chat-messages") as HTMLElement | null;
-          return rect(idx * ROW - (scroller?.scrollTop ?? 0));
+        // 行高按**兄弟顺序**（DOM 顺序）排布：批2 P3 起锚点身份是稳定键，从 data-key 推不出像素位置；
+        // 按兄弟顺序算 = 前插更早内容后老行的内容偏移自然变大（正是真实的浏览器行为）。
+        // 容器视口顶恒为 0（见文件头约定）：少了这条短路，容器自己也会按「兄弟序号 × ROW - scrollTop」
+        // 编出一个假 rect，collectNodes 的 base 随之偏掉 -scrollTop，**所有消息的内容偏移整体漂移 scrollTop**
+        // （锚点会落到错的项上、位置全错）。
+        if (this.classList?.contains("chat-messages")) return rect(0);
+        const parent = this.parentElement;
+        if (parent) {
+          const at = [...parent.children].indexOf(this);
+          if (at >= 0) {
+            const scroller = this.closest?.(".chat-messages") as HTMLElement | null;
+            return rect(at * ROW - (scroller?.scrollTop ?? 0));
+          }
         }
         return rect(0);
       },
@@ -445,22 +527,22 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     resetUiState(); // uiState 是模块级单例：锚点表/计时器测试间不串味
   });
 
-  it("消息行带 data-sig/data-idx；激活时按锚点还原到「该消息 + 段内偏移」", () => {
+  it("消息行带 data-key/data-sig；激活时按锚点还原到「该消息 + 段内偏移」", () => {
     const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
-    seedTab(items);
+    seedTab(items, "s1", ["s1:0", "s1:1"]);
     // 上次离开在第 1 条消息（内容偏移 100）之下 30px
-    setScrollAnchor("s1", { kind: "item", idx: 1, sig: itemSig(items[1]), offset: 30 });
+    setScrollAnchor("s1", { kind: "item", key: "s1:1", sig: itemSig(items[1]), offset: 30 });
 
     const { container } = mount();
     const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
 
-    // 标注：指纹与 index 与 items 一一对应（collectNodes 的定位依据）
-    const rows = [...container.querySelectorAll<HTMLElement>(".msg[data-sig]")];
+    // 标注：恢复用的稳定键（段号 + 段内序号）打在 data-key；data-sig 作指纹兜底
+    const rows = [...container.querySelectorAll<HTMLElement>(".msg[data-key]")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["s1:0", "s1:1"]);
     expect(rows.map((r) => r.dataset.sig)).toEqual([itemSig(items[0]), itemSig(items[1])]);
-    expect(rows.map((r) => r.dataset.idx)).toEqual(["0", "1"]);
     expect(collectNodes(scroller)).toEqual([
-      { idx: 0, sig: itemSig(items[0]), top: 0 },
-      { idx: 1, sig: itemSig(items[1]), top: ROW },
+      { key: "s1:0", sig: itemSig(items[0]), top: 0 },
+      { key: "s1:1", sig: itemSig(items[1]), top: ROW },
     ]);
 
     // 还原：消息内容偏移 100 + 段内偏移 30；位置远未贴底 ⇒ 停掉跟随并显示「滚动到底部」
@@ -468,10 +550,138 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     expect(container.querySelector('button[aria-label="滚动到底部"]')).toBeTruthy();
   });
 
+  it("未分页（无 itemKeys）时回落 live 序数键，且互不重复", () => {
+    const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
+    seedTab(items);
+    const { container } = mount();
+    const rows = [...container.querySelectorAll<HTMLElement>(".msg[data-key]")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["live:0", "live:1"]);
+  });
+
+  it("分页前插更早内容（AC-13）：点「加载更早的消息」后视口仍锚在同一条消息上", async () => {
+    const later: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
+    const earlierRow: Message[] = [{ role: "user", content: [{ type: "text", text: "更早一" }] }];
+    // 前翻一页：真实后端只回消息，段号与项表由 store 生成
+    ipcMock.loadSessionEarlier.mockResolvedValue({ messages: earlierRow, from_seq: 1, has_more: false });
+    seedTab(later, "s1", ["s2:0", "s2:1"]);
+    useRun.setState((s) => {
+      s.tabs.s1.paging = {
+        format: "new", loadedFromSeq: 2, firstLoadedSeq: 2, hasMore: true,
+        totalMessages: 3, segmentCount: 2, loadedPages: 1, loading: false,
+      };
+    });
+
+    const { container } = mount();
+    const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
+    // 用户停在「第二句」上（内容偏移 100）之下 30px
+    act(() => {
+      scroller.scrollTop = 130;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+
+    const btn = [...container.querySelectorAll("button")].find((b) => (b.textContent ?? "").replace(/\s/g, "").includes("加载更早的消息"))!;
+    expect(btn).toBeTruthy();
+    await act(async () => {
+      btn.click();
+    });
+
+    // 更早一段到位：前插一条（键 s1:*），已有一段的键一字不变（s2:*）
+    const rows = [...container.querySelectorAll<HTMLElement>(".msg[data-key]")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["s1:0", "s2:0", "s2:1"]);
+    expect(useRun.getState().tabs.s1.paging!.loadedFromSeq).toBe(1);
+    // 视口没漂：同一行的内容偏移整体 +100（前插高度），scrollTop 同步 +100 ⇒ 相对偏移仍为 30px
+    expect(scroller.scrollTop).toBe(230);
+
+    // 终态组合（has_more 翻 false + 已经翻过页）：入口换成「已到最早的消息」，「收起更早的」仍在
+    // —— 分页条的门只看「是不是段式会话」，hasMore 翻 false 不该让整行消失（AC-12）
+    const strip = [...container.querySelectorAll("button")].map((b) => (b.textContent ?? "").replace(/\s/g, ""));
+    expect(strip.some((x) => x.includes("加载更早的消息"))).toBe(false);
+    expect(strip.some((x) => x.includes("收起更早的"))).toBe(true);
+    expect(container.querySelector(".paging-bar")?.textContent).toContain("已到最早的消息");
+  });
+
+  it("最早段终态：has_more 为 false 时不显示入口，改显「已到最早的消息」（AC-12）", () => {
+    const items: UiItem[] = [user("第一句", ISO)];
+    seedTab(items, "s1", ["s1:0"]);
+    useRun.setState((s) => {
+      s.tabs.s1.paging = {
+        format: "new", loadedFromSeq: 1, firstLoadedSeq: 1, hasMore: false,
+        totalMessages: 1, segmentCount: 1, loadedPages: 1, loading: false,
+      };
+    });
+    const { container } = mount();
+    const buttons = [...container.querySelectorAll("button")].map((b) => b.textContent ?? "").join("|");
+    expect(buttons).not.toContain("加载更早的消息");
+    expect(container.textContent).toContain("已到最早的消息");
+  });
+
+  it("分页上限：到 MAX_PAGED_PAGES 后不再给入口，改显上限说明（仍可收起更早的）", () => {
+    const items: UiItem[] = [user("第一句", ISO)];
+    seedTab(items, "s1", ["s1:0"]);
+    useRun.setState((s) => {
+      s.tabs.s1.paging = {
+        format: "new", loadedFromSeq: 1, firstLoadedSeq: 1, hasMore: true,
+        totalMessages: 900, segmentCount: MAX_PAGED_PAGES + 1, loadedPages: MAX_PAGED_PAGES, loading: false,
+      };
+    });
+    const { container } = mount();
+    const buttons = [...container.querySelectorAll("button")].map((b) => b.textContent ?? "").join("|");
+    expect(buttons).not.toContain("加载更早的消息");
+    expect(container.textContent).toContain(`已达单次浏览上限（${MAX_PAGED_PAGES} 段）`);
+    // 已翻过页（loadedPages > 1）⇒ 收起入口仍在，用户能把内存收回首屏那一段
+    expect(buttons).toContain("收起更早的");
+  });
+
+  it("legacy 会话：无分页入口、无异味（行为与改动前一致）", () => {
+    const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
+    seedTab(items, "s1", ["s0:0", "s0:1"]);
+    useRun.setState((s) => {
+      s.tabs.s1.paging = {
+        format: "legacy", loadedFromSeq: 0, firstLoadedSeq: 0, hasMore: false,
+        totalMessages: 2, segmentCount: 1, loadedPages: 1, loading: false,
+      };
+    });
+    const { container } = mount();
+    expect(container.querySelectorAll(".msg[data-key]")).toHaveLength(2);
+    expect(container.textContent).not.toContain("加载更早的消息");
+    expect(container.textContent).not.toContain("已到最早的消息");
+  });
+
+  it("未分页（无 paging / 旧后端）：不显示入口，既有转录照常渲染", () => {
+    const items: UiItem[] = [user("第一句", ISO)];
+    seedTab(items);
+    const { container } = mount();
+    expect(container.querySelectorAll(".msg[data-key]")).toHaveLength(1);
+    expect(container.textContent).not.toContain("加载更早的消息");
+  });
+
+  it("前翻失败：入口仍在（可重试），已有转录一字不动（AC-12 边界）", async () => {
+    const items: UiItem[] = [user("第一句", ISO)];
+    ipcMock.loadSessionEarlier.mockRejectedValue(new Error("network down"));
+    seedTab(items, "s1", ["s2:0"]);
+    useRun.setState((s) => {
+      s.tabs.s1.paging = {
+        format: "new", loadedFromSeq: 2, firstLoadedSeq: 2, hasMore: true,
+        totalMessages: 3, segmentCount: 2, loadedPages: 1, loading: false,
+      };
+    });
+    const { container } = mount();
+    await act(async () => {
+      await useRun.getState().loadEarlier("s1");
+    });
+    const t = useRun.getState().tabs.s1;
+    expect(t.items).toHaveLength(1);
+    expect(t.itemKeys).toEqual(["s2:0"]);
+    expect(t.paging!.failed).toBe(true);
+    expect(t.paging!.hasMore).toBe(true); // 仍可重试
+    const btn = [...container.querySelectorAll("button")].find((b) => (b.textContent ?? "").replace(/\s/g, "").includes("加载更早的消息"));
+    expect(btn).toBeTruthy();
+  });
+
   it("懒加载：首帧无内容不落位（不闪底部），消息到达后二次校正到锚点", async () => {
     const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
     seedTab([]);
-    setScrollAnchor("s1", { kind: "item", idx: 1, sig: itemSig(items[1]), offset: 30 });
+    setScrollAnchor("s1", { kind: "item", key: "s1:1", sig: itemSig(items[1]), offset: 30 });
 
     const { container } = mount();
     const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
@@ -491,7 +701,8 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     vi.useFakeTimers();
     try {
       const items: UiItem[] = [user("第一句", ISO), assistant([{ kind: "text", text: "第二句" }], ISO)];
-      seedTab(items);
+      // 段式会话（带恢复前缀）：锚点身份是稳定键，故这里必须给出与 items 对齐的键（段号 + 段内序号）
+      seedTab(items, "s1", ["s1:0", "s1:1"]);
       const { container } = mount();
       const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
       scroller.scrollTop = 160; // 用户滚到第 2 条消息（内容偏移 100）之下 60px
@@ -501,7 +712,7 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(250);
       });
-      expect(getScrollAnchor("s1")).toEqual({ kind: "item", idx: 1, sig: itemSig(items[1]), offset: 60 });
+      expect(getScrollAnchor("s1")).toEqual({ kind: "item", key: "s1:1", sig: itemSig(items[1]), offset: 60 });
     } finally {
       vi.useRealTimers();
     }
