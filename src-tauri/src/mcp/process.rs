@@ -15,7 +15,11 @@
 
 use std::process::Stdio;
 
-use process_wrap::tokio::{CommandWrap, CommandWrapper, JobObject, KillOnDrop};
+use process_wrap::tokio::CommandWrap;
+// `JobObject` 是 `cfg(all(windows, feature = "job-object"))`、`CreationFlags` 同理；
+// 在 unix 上导入它们会直接编译失败（CI 三平台矩阵抓到的第一处）。
+#[cfg(windows)]
+use process_wrap::tokio::{CommandWrapper, JobObject, KillOnDrop};
 use tokio::process::Command;
 
 use super::config::{McpServerConfig, McpTransport};
