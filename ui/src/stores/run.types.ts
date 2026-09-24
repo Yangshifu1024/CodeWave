@@ -1,5 +1,5 @@
 // 每个 Tab 运行态 store 的共享类型（run.ts、runFrames.ts 与 UI 组件共同消费）。
-import type { ApprovalMode, AskQuestionPayload, Breakdown, Todo } from "../ipc/types";
+import type { ApprovalMode, AskQuestionPayload, Breakdown, GoalState, Todo } from "../ipc/types";
 
 /** 工具卡视图模型：timeline 锚点（callKey）+ 卡体数据；progressTail 为流式进度尾迹 */
 export interface ToolView {
@@ -132,6 +132,12 @@ export interface TabRunState {
   /** 上下文 token 分布（null = 未知） */
   breakdown: Breakdown | null;
   todos: Todo[];
+  /** 目标模式（`ApprovalMode::Goal`）状态快照（`goal:update` 事件落地；null/缺省 = 无目标）。
+   *  可选：历史测试夹具的字面量可缺省，消费方一律用 `tab.goal ?? null` 归一。 */
+  goal?: GoalState | null;
+  /** 目标推送代际（`goal:update` 每次 +1）：`syncGoal` 的回读结果只在代际未变时落地——
+   *  推送永远更新，回读只补初值，绝不用更旧的值盖掉推送。 */
+  goalRev?: number;
   /** 运行结束后的建议追问 */
   suggestions: string[];
   /** 子代理卡片列表 */
@@ -152,6 +158,8 @@ export interface TabRunState {
   draftFromQueue: { text: string; images?: { mime: string; data: string }[] } | null;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：最近一次 run:done 的 run_id（对 suggest 双 done 去重；done1 同步出队并翻转 running 使旧守卫失效） */
   lastDoneRunId: string | null;
+  /** 最近一次起 run 的 run_id（`start_chat` / `resume_goal` 的返回值；缺省 = 本 Tab 尚未起过 run） */
+  runId?: string | null;
   /** 压缩进行中（run:compacting 与 run:compacted/failed 之间）：CompactButton loading + notice 去重 */
   compacting: boolean;
   /** 会话级用量累加（usage 帧此前被丢弃，工具条「命中」显示的唯一数据源）。

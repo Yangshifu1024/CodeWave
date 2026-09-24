@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, GoalState, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -70,6 +70,14 @@ export const ipc = {
   resolveAsk: (sessionId: string, askId: string, value: any) =>
     invoke<void>("resolve_ask", { sessionId, askId, value }),
   compactSession: (sessionId: string) => invoke<void>("compact_session", { sessionId }),
+
+  // ---------- 目标模式（`ApprovalMode::Goal`）----------
+  /** 暂停后继续推进（与 `start_chat` 同构：注册事件 channel 并返回本轮 run_id；
+   *  目标状态本身走 `goal:update` 事件——含起跑失败时的「执行中 → 已暂停」回滚） */
+  resumeGoal: (sessionId: string, onEvent: Channel) =>
+    invoke<string>("resume_goal", { sessionId, onEvent }),
+  /** 目标状态快照（会话恢复 / 右栏重挂载时拉取；null = 该会话当前无目标） */
+  getSessionGoal: (sessionId: string) => invoke<GoalState | null>("get_session_goal", { sessionId }),
 
   searchWorkspacePaths: (sessionId: string, query: string, limit?: number) =>
     invoke<string[]>("search_workspace_paths", { sessionId, query, limit }),

@@ -258,6 +258,26 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .chips-row .ant-btn .ant-btn-icon { color: var(--ws-dim); transition: color 0.2s; }
 .chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
 
+/* ---------- 目标模式提示条（`ApprovalMode::Goal`）---------- */
+/* 澄清阶段（中性墨：只解释语义）与执行阶段共用一条；色彩强度只映射风险等级：
+   澄清/执行 = 默认→橙（自主推进中，需注意）、已达成 = 绿、已中止 = 红。
+   外边距与 .composer 的 16px 对齐（与 .ask-wrap 同口径） */
+.goal-banner {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 16px 6px; padding: 6px 10px;
+  border: 1px solid var(--ws-border); border-radius: 10px;
+  background: var(--ws-panel);
+  font-size: 12px; line-height: 1.5; color: var(--ws-text-2);
+}
+.goal-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.goal-banner.st-executing,
+.goal-banner.st-paused { border-color: var(--ws-warn); color: var(--ws-warn); }
+.goal-banner.st-done { border-color: var(--ws-ok); color: var(--ws-ok); }
+.goal-banner.st-aborted { border-color: var(--ws-err); color: var(--ws-err); }
+/* 「继续推进」按钮：继承提示条颜色（暂停态 = 橙），悬停走通用 hover token */
+.goal-banner .goal-resume-btn { flex: none; color: inherit; border-radius: 999px; }
+.goal-banner .goal-resume-btn:hover { background: var(--ws-hover) !important; }
+
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
 /* 文件拖入提示条（[docs/office-and-pdf-support]）：只做视觉提示，接收拖放的是 Tauri 事件（见 ipc/dragdrop.ts）。
@@ -343,6 +363,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-toolbar .ant-btn-text.approval-confirm { color: var(--ws-accent) !important; }
 .composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
 .composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
+/* 目标模式胶囊：橙（warn = 需注意，与自动编辑同色系；不引入新色系） */
+.composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-warn) !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
 /* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原住在 .toolbar-right 里，被 margin-left:auto
    推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
@@ -390,6 +412,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ant-dropdown .menu-item-rich.approval-confirm > span:not(.desc) { color: var(--ws-accent); }
 .ant-dropdown .menu-item-rich.approval-auto    > span:not(.desc) { color: var(--ws-warn); }
 .ant-dropdown .menu-item-rich.approval-full    > span:not(.desc) { color: var(--ws-err); }
+.ant-dropdown .menu-item-rich.approval-goal   > span:not(.desc) { color: var(--ws-warn); }
 .vision-tag {
   font-size: 10px; line-height: 16px; margin-left: 6px; padding: 0 5px;
   border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);
@@ -1159,6 +1182,21 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-todo-dot.in_progress { color: var(--ws-accent); }
 .rb-todo-dot.completed { color: var(--ws-ok); }
 .rb-todo-done { color: var(--ws-dim); text-decoration: line-through; }
+/* 右栏「目标」段（`ApprovalMode::Goal`）：与「当前计划」段并列，只读展示。
+   色彩只映射风险等级：执行/暂停 = 橙、已达成 = 绿、已中止 = 红、澄清 = 中性墨 */
+.rb-goal-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.rb-goal-badge {
+  flex: none; font-size: 10.5px; line-height: 16px; padding: 0 5px;
+  border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);
+}
+.rb-goal-badge.st-executing,
+.rb-goal-badge.st-paused { border-color: var(--ws-warn); color: var(--ws-warn); }
+.rb-goal-badge.st-done { border-color: var(--ws-ok); color: var(--ws-ok); }
+.rb-goal-badge.st-aborted { border-color: var(--ws-err); color: var(--ws-err); }
+.rb-goal-text { font-size: 12px; color: var(--ws-text-2); line-height: 1.5; margin-bottom: 6px; overflow-wrap: anywhere; }
+.rb-goal-programs { font-family: var(--ws-font-mono); font-size: 11px; color: var(--ws-dim); overflow-wrap: anywhere; }
+/* 右栏「继续推进」：暂停态可点击；颜色与提示条上的同名按钮一致（橙 = 需注意） */
+.rb-goal-resume.ant-btn-text { color: var(--ws-warn); }
 /* 右栏「技能」段：只读展示，来源短标签**紧跟技能名**（与设置页 .skill-origin 同形态）、限宽省略，
    悬浮显示 description + 完整路径。
    注：早期这里用 margin-left:auto 把来源右对齐，但它被 45% 限宽 + 10.5px + dim 三重弱化后又推到行尾，

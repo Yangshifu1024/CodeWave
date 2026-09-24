@@ -147,10 +147,17 @@ pub async fn execute_batch(
         // plan 纪律硬门（批次层确定性落地）：实现类工作先建计划（E_PLAN_REQUIRED）；
         // 计划已全部完成后继续写入需先更新计划（E_PLAN_STALE）。与上面两道门同模式：
         // spawn 前拒绝不执行、终结性提示。豁免：非主会话（dev 等子代理被排除 plan 工具，
-        // 不豁免将无法写文件）；本批含 plan 调用（同批乐观豁免，见 batch_has_plan）。
+        // 不豁免将无法写文件）；本批含 plan 调用（同批乐观豁免，见 batch_has_plan）；
+        // **目标档执行期**（`goal_execute_phase`，两错误码一起豁免）——该阶段的提示块通篇讲账本与
+        // 验收标准、只字未提「必须先建计划」，叠这道门会让执行期第一次 edit 就被拒，与「零提问 +
+        // 自主推进」直接冲突：目标执行期的范围控制由账本承担（下面的 goal_write_gate），不叠本门。
         // 分工边界：command 工具的 shell 重定向写不经本门，归 fence/G3 范围门兜底（见 run_tool）。
         let is_write = core.tools.get(&call.name).map(|t| t.kind()) == Some(ToolKind::FileWrite);
-        if main_session && is_write && !batch_has_plan {
+        if main_session
+            && is_write
+            && !batch_has_plan
+            && !crate::core::agent::goal::goal_execute_phase(rt)
+        {
             if let Some(code) = plan_gate_verdict(&todos_snapshot, is_write) {
                 let message = if code == "E_PLAN_REQUIRED" {
                     format!(
@@ -164,6 +171,15 @@ pub async fn execute_batch(
                     )
                 };
                 let out = ToolOutcome::err(code, message);
+                emit_result(&sink, rt, run_id, &batch_id, call, &out, 0);
+                outcomes[i] = Some((out, Vec::new()));
+                continue;
+            }
+        }
+        // 目标档执行期账本硬门（判定见 core/agent/goal.rs 的 ledger_gate）：写入目标必须在
+        // 账本内——越界即拒（不弹审批、不问人），与 plan 门同模式：spawn 前拒绝、不真实执行。
+        if is_write {
+            if let Some(out) = goal_write_gate(core, rt, call) {
                 emit_result(&sink, rt, run_id, &batch_id, call, &out, 0);
                 outcomes[i] = Some((out, Vec::new()));
                 continue;
@@ -327,6 +343,8 @@ pub async fn execute_batch(
 /// - todos 为空且是写工具 → E_PLAN_REQUIRED（实现类工作开始前必须先建计划）；
 /// - todos 非空且全部 Completed 且是写工具 → E_PLAN_STALE（计划已收尾，继续写入属计划外工作）；
 /// - 其余（存在 Pending/InProgress，或非写工具）→ 放行。
+///
+/// 目标档执行期的豁免（`goal_execute_phase`）在调用点判定：本函数保持纯函数、不读会话状态。
 fn plan_gate_verdict(todos: &[crate::tools::plan::Todo], is_write: bool) -> Option<&'static str> {
     if !is_write {
         return None;
@@ -548,6 +566,9 @@ async fn run_tool(
             }
         };
         g3_applies
+            // 目标档显式关闭 G3（双保险：目标档批准路径本就不冻结 approved_plan 基线）：
+            // 执行期的范围控制由账本承担（越界即拒），不弹「计划外步骤确认」。
+            && ctx.approval_mode() != crate::core::prefs::ApprovalMode::Goal
             && ctx
                 .rt
                 .scope_expanded
@@ -808,6 +829,32 @@ fn emit_result(
             "duration_ms": duration_ms,
         }),
     );
+}
+
+/// 目标档执行期的写入账本门（判定 + 拒绝计数副作用）：任一写入目标越界即返回拒绝结果。
+/// 非目标档 / 澄清期一律 None（绝不干预其它档位）；未解析出目标路径时也放行
+///（参数畸形由工具自身报 E_ARGS）。
+///
+/// 判定用**账本作用域 runtime**（`goal_gate_rt`）：子代理 runtime 自身不持有目标状态，
+/// 直接读它会把「子代理在目标执行期写账本外路径」放行——目标状态一律取根会话。
+fn goal_write_gate(
+    core: &AgentCore,
+    rt: &Arc<SessionRuntime>,
+    call: &NormalizedCall,
+) -> Option<ToolOutcome> {
+    use crate::core::agent::goal::{
+        LedgerTarget, goal_execute_phase, goal_gate_rt, ledger_denial_message, ledger_gate,
+    };
+    let gov = goal_gate_rt(core, rt);
+    if !goal_execute_phase(&gov) {
+        return None;
+    }
+    for p in canonical_arg_paths(&rt.workspace, &call.args) {
+        if let Err(code) = ledger_gate(&gov, LedgerTarget::Path(&p)) {
+            return Some(ToolOutcome::err(code, ledger_denial_message(&gov, &p)));
+        }
+    }
+    None
 }
 
 /// 从工具入参中提取候选写路径（批次写冲突检测用）。
@@ -2259,6 +2306,389 @@ mod tests {
         assert!(
             edit_err.is_none(),
             "edit 不应被拦（豁免不看 plan 调用结果）：{edit_err:?}"
+        );
+    }
+
+    // ---------- 目标档执行期：写入账本门 + G3 关闭 ----------
+
+    /// 目标档夹具：工作区 f.txt（hello）+ 指定档位/阶段；账本 = 工作区，程序 = cargo。
+    /// 第二个 TempDir 是数据目录：调用方必须绑住它（边车落盘断言需要目录真实存在）。
+    fn goal_fixture(
+        session: &str,
+        mode: crate::core::prefs::ApprovalMode,
+        status: crate::core::agent::goal::GoalStatus,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Arc<AgentCore>,
+        Arc<SessionRuntime>,
+    ) {
+        use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState};
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            session,
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: mode,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        rt.set_goal(Some(GoalState {
+            text: "把 X 改成 Y".into(),
+            criteria: vec![GoalCriterion {
+                title: "改完 X".into(),
+                done: false,
+            }],
+            ledger: GoalLedger {
+                paths: vec![roots.workspace.to_string_lossy().into_owned()],
+                programs: vec!["cargo".into()],
+            },
+            status,
+            decisions: Vec::new(),
+            pending: Vec::new(),
+            blocked: Vec::new(),
+            rounds: 0,
+            stall_streak: 0,
+            ledger_denials: 0,
+        }));
+        // 目标档执行期由账本接管范围控制，不叠 plan 纪律门（`execute_batch` 的
+        // `goal_execute_phase` 豁免）：故这里**刻意不预置 todos**——本组用例同时钉死
+        // 「执行期第一次 edit 不会被 E_PLAN_REQUIRED 拦下」。
+        std::fs::write(ws.path().join("f.txt"), b"hello").unwrap();
+        (ws, dd, core, rt)
+    }
+
+    /// ①（接线）目标档执行期：账本内写入放行并真实执行；账本外拒绝且不落盘。
+    #[tokio::test]
+    async fn goal_write_gate_allows_inside_and_rejects_outside() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let (ws, _dd, core, rt) = goal_fixture("gwg1", ApprovalMode::Goal, GoalStatus::Executing);
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![edit_call()],
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error_text(&out).is_none(),
+            "{:?}",
+            first_error_text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(ws.path().join("f.txt"))
+                .unwrap()
+                .contains('X'),
+            "账本内写入应真实执行"
+        );
+
+        let outside = std::env::temp_dir().join("codewave-goal-outside-probe.txt");
+        let mut call = edit_call();
+        call.args = serde_json::json!({"files":[{"path": outside.to_string_lossy(), "changes":[{"lineRange":"1-1","newText":"X"}]}]});
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![call],
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run2",
+        )
+        .await;
+        let err = first_error_text(&out).expect("账本外写必须被拒");
+        assert!(err.contains("E_GOAL_OUTSIDE_LEDGER"), "{err}");
+        assert!(!outside.exists(), "被拒写不得落盘");
+        assert_eq!(rt.goal_snapshot().unwrap().ledger_denials, 1);
+    }
+
+    /// ②（🟡-1 接线）子代理 runtime 的写入同样过账本：作用域取根会话（父会话）的账本——
+    /// 修复前子 runtime 自身无目标 → 闸门直接放行，「账本 = 执行期唯一约束」在子代理下失效。
+    #[tokio::test]
+    async fn goal_write_gate_covers_subagent_runtime() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let (ws, dd, core, main) =
+            goal_fixture("gwg-sub", ApprovalMode::Goal, GoalStatus::Executing);
+        // 子代理 runtime：不持有目标状态、也非主会话（`new_sub` 语义）
+        let sub = SessionRuntime::new_sub(&main, "sub_gwg".to_string());
+        assert!(!sub.is_main_session);
+        assert!(sub.goal_snapshot().is_none(), "前提：子代理不持有目标状态");
+        // 账本内写入：放行并真实执行
+        let out = execute_batch(
+            &core,
+            &sub,
+            vec![edit_call()],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error_text(&out).is_none(),
+            "{:?}",
+            first_error_text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(ws.path().join("f.txt"))
+                .unwrap()
+                .contains('X'),
+            "账本内写入应真实执行"
+        );
+        // 账本外写入：拒（且不落盘）
+        let outside = std::env::temp_dir().join("codewave-goal-sub-outside-probe.txt");
+        let mut call = edit_call();
+        call.args = serde_json::json!({"files":[{"path": outside.to_string_lossy(), "changes":[{"lineRange":"1-1","newText":"X"}]}]});
+        let out = execute_batch(
+            &core,
+            &sub,
+            vec![call],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run2",
+        )
+        .await;
+        let err = first_error_text(&out).expect("子代理账本外写必须被拒");
+        assert!(err.contains("E_GOAL_OUTSIDE_LEDGER"), "{err}");
+        assert!(!outside.exists(), "被拒写不得落盘");
+        // 越界记在根会话（父会话）上（自停收敛口径一致），子代理不留目标边车（脏文件）
+        let g = main.goal_snapshot().unwrap();
+        assert_eq!(g.ledger_denials, 1);
+        assert!(
+            g.blocked.iter().any(|b| b.contains("账本外操作被拒")),
+            "{:?}",
+            g.blocked
+        );
+        let store = crate::core::sessions::SessionStore::new(dd.path().to_path_buf());
+        assert_eq!(
+            store.load_goal(&main.id).unwrap().ledger_denials,
+            1,
+            "越界应落根会话边车"
+        );
+        assert!(
+            !store.goal_path(&sub.id).exists(),
+            "子代理不得留下 sessions/sub_*.goal.json"
+        );
+    }
+
+    /// ③（接线，回归红线）非目标档 / 目标档澄清期完全不受账本门影响。
+    #[tokio::test]
+    async fn goal_write_gate_inert_outside_goal_execute() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        for (mode, status) in [
+            (ApprovalMode::AutoEdit, GoalStatus::Executing),
+            (ApprovalMode::Plan, GoalStatus::Executing),
+            (ApprovalMode::Goal, GoalStatus::Clarify),
+        ] {
+            let (_ws, _dd, core, rt) = goal_fixture("gwg2", mode, status);
+            let outside = std::env::temp_dir().join(format!("codewave-goal-out-{mode:?}.txt"));
+            let mut call = edit_call();
+            call.args = serde_json::json!({"files":[{"path": outside.to_string_lossy(), "changes":[{"lineRange":"1-1","newText":"X"}]}]});
+            let out = execute_batch(
+                &core,
+                &rt,
+                vec![call],
+                &[],
+                false,
+                true,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            )
+            .await;
+            // 工具自身可能因目标文件不存在而失败，但绝不能是账本拒绝
+            if let Some(err) = first_error_text(&out) {
+                assert!(
+                    !err.contains("E_GOAL_OUTSIDE_LEDGER"),
+                    "{mode:?}/{status:?} 被账本门误伤：{err}"
+                );
+            }
+            assert_eq!(
+                rt.goal_snapshot().unwrap().ledger_denials,
+                0,
+                "{mode:?}/{status:?} 不得记越界"
+            );
+        }
+    }
+
+    /// ⑧ 目标档执行期不叠 plan 纪律门（范围控制由账本承担）：todos 为空（第一次写）与
+    /// todos 全部完成（计划已收尾）两种情况写入都放行且真实执行——两个错误码一起豁免。
+    #[tokio::test]
+    async fn goal_execute_phase_exempts_plan_discipline_gate() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        // a：todos 为空 → 执行期第一次 edit 不被 E_PLAN_REQUIRED 拦下
+        let (ws, _dd, core, rt) =
+            goal_fixture("gplan-a", ApprovalMode::Goal, GoalStatus::Executing);
+        assert!(rt.todos.lock().unwrap().is_empty(), "夹具刻意不预置计划");
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![edit_call()],
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error_text(&out).is_none(),
+            "执行期首次写入不得被 plan 纪律门拦下：{:?}",
+            first_error_text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(ws.path().join("f.txt"))
+                .unwrap()
+                .contains('X'),
+            "账本内写入应真实执行"
+        );
+        // b：todos 全部完成 → 同样豁免 E_PLAN_STALE
+        let (ws, _dd, core, rt) =
+            goal_fixture("gplan-b", ApprovalMode::Goal, GoalStatus::Executing);
+        *rt.todos.lock().unwrap() = vec![plan_todo(
+            "已完成步骤",
+            crate::tools::plan::TodoStatus::Completed,
+        )];
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![edit_call()],
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error_text(&out).is_none(),
+            "计划全完成时执行期继续写入不得被 E_PLAN_STALE 拦下：{:?}",
+            first_error_text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(ws.path().join("f.txt"))
+                .unwrap()
+                .contains('X')
+        );
+    }
+
+    /// ⑨（反向，回归红线）非目标档不受该豁免影响：档位是 AutoEdit 时 plan 纪律门逐字不变
+    ///（目标即使已登记且「执行中」也不算——判定入口 `goal_execute_phase` = 目标档 ∧ 执行期）。
+    #[tokio::test]
+    async fn plan_gate_still_applies_when_not_in_goal_mode() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let (ws, _dd, core, rt) =
+            goal_fixture("gplan-c", ApprovalMode::AutoEdit, GoalStatus::Executing);
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![edit_call()],
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        let err = first_error_text(&out).expect("非目标档 + 无计划写文件必须仍被拒");
+        assert!(err.contains("E_PLAN_REQUIRED"), "{err}");
+        assert_eq!(
+            std::fs::read(ws.path().join("f.txt")).unwrap(),
+            b"hello",
+            "被拒写不应真实执行"
+        );
+    }
+
+    /// ⑦ 目标档下 G3（计划外步骤确认）不触发：即使人为造出 G3 前置，也不弹审批、不挂起。
+    #[tokio::test]
+    async fn goal_mode_disables_g3_scope_gate() {
+        use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
+        use crate::core::prefs::{ApprovalMode, SessionPrefs};
+        let (core, rt, log) = recording_core("gg3");
+        rt.set_prefs(SessionPrefs {
+            approval_mode: ApprovalMode::Goal,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        rt.set_goal(Some(GoalState {
+            text: "把 X 改成 Y".into(),
+            criteria: vec![GoalCriterion {
+                title: "改完 X".into(),
+                done: false,
+            }],
+            ledger: GoalLedger {
+                paths: vec![rt.workspace.to_string_lossy().into_owned()],
+                programs: vec![],
+            },
+            status: GoalStatus::Executing,
+            decisions: Vec::new(),
+            pending: Vec::new(),
+            blocked: Vec::new(),
+            rounds: 0,
+            stall_streak: 0,
+            ledger_denials: 0,
+        }));
+        rt.todos
+            .lock()
+            .unwrap()
+            .push(plan_todo("步骤", crate::tools::plan::TodoStatus::Pending));
+        // 人为制造 G3 前置（正常目标档批准路径不冻结基线，这里是双保险验证）
+        *rt.approved_plan.lock().unwrap() = Some(vec!["已批准的步骤".into()]);
+        rt.scope_expanded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        std::fs::write(rt.workspace.join("f.txt"), b"hello").unwrap();
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            execute_batch(
+                &core,
+                &rt,
+                vec![edit_call()],
+                &[],
+                false,
+                true,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("G3 在目标档必须关闭：否则会挂在审批等待上");
+        assert!(
+            first_error_text(&out).is_none(),
+            "{:?}",
+            first_error_text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(rt.workspace.join("f.txt"))
+                .unwrap()
+                .contains('X')
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|e| e.contains("ask:opened")),
+            "目标档不得产生审批请求：{:?}",
+            log.lock().unwrap()
         );
     }
 }

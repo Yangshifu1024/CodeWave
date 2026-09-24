@@ -47,51 +47,60 @@ fn text_turn_action_matrix() {
     use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
     // ① 主会话：纯文本回合即完成（行为不变）
     assert_eq!(
-        text_turn_action("答完了", true, false, 0),
+        text_turn_action("答完了", true, false, 0, false),
         TextTurnAction::Finish
     );
-    assert_eq!(text_turn_action("", true, false, 9), TextTurnAction::Finish);
+    assert_eq!(
+        text_turn_action("", true, false, 9, false),
+        TextTurnAction::Finish
+    );
     // ①’ 主会话 + 被拒调用 → 继续（**本缺陷的锚点**：[docs/rejected-call-silent-finish]）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, 0),
+        text_turn_action("下面是完整方案", true, true, 0, false),
         TextTurnAction::Continue
     );
     // ①’’ 被拒也受 MAX_TEXT_TURNS 硬上限约束（不无限续跑）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS),
+        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     // ①’’’ 被拒优先于 <report>：子代理「已写汇报但同回合有调用被拒」再多走一步
     //（有意取舍：被拒调用尚未被模型知晓；已登记为遗留）
     assert_eq!(
-        text_turn_action("<report>完成</report>", false, true, 0),
+        text_turn_action("<report>完成</report>", false, true, 0, false),
         TextTurnAction::Continue
     );
     // ② 非主会话 + <report> 标记 → 完成（不计数）
     assert_eq!(
-        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0),
+        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0, false),
         TextTurnAction::Finish
     );
     assert_eq!(
-        text_turn_action("回报如下 <report>x</report>", false, false, MAX_TEXT_TURNS),
+        text_turn_action(
+            "回报如下 <report>x</report>",
+            false,
+            false,
+            MAX_TEXT_TURNS,
+            false
+        ),
         TextTurnAction::Finish
     );
     // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
     assert_eq!(
-        text_turn_action("接下来我来改 AppShell", false, false, 0),
+        text_turn_action("接下来我来改 AppShell", false, false, 0, false),
         TextTurnAction::Continue
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS - 1),
+        text_turn_action("", false, false, MAX_TEXT_TURNS - 1, false),
         TextTurnAction::Continue
     );
     // ④ 触上限 → 显式失败（不伪装成功）
     assert_eq!(
-        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS),
+        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS + 5),
+        text_turn_action("", false, false, MAX_TEXT_TURNS + 5, false),
         TextTurnAction::StopWithLimit
     );
 }
@@ -597,7 +606,7 @@ async fn plan_mode_excludes_write_tools() {
         .lock()
         .unwrap()
         .push(crate::core::types::Message::user_text("hi"));
-    let params = main_drive_params(&rt.prefs());
+    let params = main_drive_params(&rt.prefs(), None);
     let (_, req) = build_stream_request(&core, &rt, &params).await.unwrap();
     let names: Vec<&str> = req.tools.iter().map(|d| d.name.as_str()).collect();
     for t in ["edit", "create", "delete"] {
@@ -608,7 +617,7 @@ async fn plan_mode_excludes_write_tools() {
     assert!(req.system_full().contains("plan-mode"));
     // 对照：AutoEdit 保留写工具
     rt.set_prefs(prefs_of(crate::core::prefs::ApprovalMode::AutoEdit, None));
-    let params = main_drive_params(&rt.prefs());
+    let params = main_drive_params(&rt.prefs(), None);
     let (_, req) = build_stream_request(&core, &rt, &params).await.unwrap();
     let names: Vec<&str> = req.tools.iter().map(|d| d.name.as_str()).collect();
     assert!(names.contains(&"edit"));
@@ -1594,7 +1603,7 @@ async fn step_timing_excludes_retry_backoff() {
 
 // ===== B1：子代理档位实时同步（每步从基座重建，不累积、不残留） =====
 
-/// 测试用子代理基座：内部 7 项 + explore（只读角色）纪律块。
+/// 测试用子代理基座：内部 8 项（含 `goal`）+ explore（只读角色）纪律块。
 fn test_sub_base(spawn_mode: crate::core::prefs::ApprovalMode) -> SubBase {
     test_sub_base_role("explore", spawn_mode)
 }
@@ -1612,7 +1621,7 @@ fn subagent_params_rebuild_from_base_on_mode_switch() {
     let base = test_sub_base_role("backend-dev", ApprovalMode::Plan);
 
     // 父档 Plan：写工具被排除 + 恰一个 <plan-mode> 块
-    let plan = subagent_drive_params(&base, &prefs_of(ApprovalMode::Plan, None));
+    let plan = subagent_drive_params(&base, &prefs_of(ApprovalMode::Plan, None), None);
     for t in ["edit", "create", "delete"] {
         assert!(
             plan.exclude_tools.iter().any(|e| e == t),
@@ -1625,7 +1634,7 @@ fn subagent_params_rebuild_from_base_on_mode_switch() {
     assert!(plan.exclude_mcp, "Plan 档排除 MCP");
 
     // 父档切 AutoEdit：写工具回归 + plan 块消失（从基座重建，旧档提示不残留）
-    let auto = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None));
+    let auto = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None), None);
     for t in ["edit", "create", "delete"] {
         assert!(
             !auto.exclude_tools.iter().any(|e| e == t),
@@ -1645,7 +1654,7 @@ fn subagent_params_rebuild_from_base_on_mode_switch() {
         ApprovalMode::AutoEdit,
         ApprovalMode::Plan,
     ] {
-        let next = subagent_drive_params(&base, &prefs_of(mode, None));
+        let next = subagent_drive_params(&base, &prefs_of(mode, None), None);
         assert_eq!(
             next.exclude_tools.len(),
             if mode == ApprovalMode::Plan {
@@ -1694,7 +1703,7 @@ async fn subagent_prefs_follow_parent_mode_without_touching_model() {
     // 可写角色：写工具只受父档控制，便于断言「档位变了工具集跟着变」
     let mut base = test_sub_base_role("backend-dev", ApprovalMode::Plan);
     base.root_session_id = sub.root_session_id.clone();
-    let mut params = subagent_drive_params(&base, &root.prefs());
+    let mut params = subagent_drive_params(&base, &root.prefs(), None);
     params.max_steps = 25;
     params.sub_base = Some(base);
     let before = sub.history.lock().unwrap().len();
@@ -1773,7 +1782,7 @@ async fn subagent_mode_refresh_degrades_when_parent_missing() {
     let mut base = test_sub_base(ApprovalMode::Plan);
     // 指向不存在的会话（父会话已删除）
     base.root_session_id = Some("ghost".into());
-    let mut params = subagent_drive_params(&base, &root.prefs());
+    let mut params = subagent_drive_params(&base, &root.prefs(), None);
     params.sub_base = Some(base);
     let before = sub.history.lock().unwrap().len();
 
@@ -1801,7 +1810,7 @@ async fn subagent_mode_refresh_degrades_when_parent_missing() {
 fn subagent_readonly_role_unlocked_under_full_access() {
     use crate::core::prefs::ApprovalMode;
     let base = test_sub_base(ApprovalMode::FullAccess);
-    let p = subagent_drive_params(&base, &prefs_of(ApprovalMode::FullAccess, None));
+    let p = subagent_drive_params(&base, &prefs_of(ApprovalMode::FullAccess, None), None);
     for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
         assert!(
             !p.exclude_tools.iter().any(|e| e == t),
@@ -1817,7 +1826,7 @@ fn subagent_readonly_role_unlocked_under_full_access() {
     assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly, "idle 策略与档位解耦");
 
     // 父档 AutoEdit（≠ 基座 spawn 档）：重新生成纪律块 → 回到只读约束
-    let q = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None));
+    let q = subagent_drive_params(&base, &prefs_of(ApprovalMode::AutoEdit, None), None);
     for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
         assert!(
             q.exclude_tools.iter().any(|e| e == t),
@@ -1855,7 +1864,7 @@ fn approval_mode_labels_cover_all_modes() {
 #[test]
 fn plan_mode_block_describes_two_approve_options() {
     use crate::core::prefs::ApprovalMode;
-    let p = main_drive_params(&prefs_of(ApprovalMode::Plan, None));
+    let p = main_drive_params(&prefs_of(ApprovalMode::Plan, None), None);
     assert!(p.system_extra.contains("switchToAutoEdit"), "保留锚点词");
     assert!(p.system_extra.contains("完全访问执行"));
     assert!(p.system_extra.contains("补充意见"));
@@ -1864,4 +1873,525 @@ fn plan_mode_block_describes_two_approve_options() {
     // 回落 AutoEdit →「完全访问执行」被静默降级）；措辞与 ask 工具 description / core/prompt.rs 的 S5 行对齐。
     assert!(p.system_extra.contains("mode=\"auto_edit\""));
     assert!(p.system_extra.contains("mode=\"full_access\""));
+}
+
+// ===== 目标模式（goal mode）驱动层：阶段工具集 / 文本轮语义 =====
+
+/// 测试用目标状态（两条验收标准、一条账本路径 + 一个程序）。
+fn goal_state(status: crate::core::agent::goal::GoalStatus) -> crate::core::agent::goal::GoalState {
+    use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState};
+    GoalState {
+        text: "把 X 改成 Y".into(),
+        criteria: vec![
+            GoalCriterion {
+                title: "改完 X".into(),
+                done: false,
+            },
+            GoalCriterion {
+                title: "测试通过".into(),
+                done: false,
+            },
+        ],
+        ledger: GoalLedger {
+            paths: vec![r"D:\Work\Proj\src".into()],
+            programs: vec!["cargo".into()],
+        },
+        status,
+        decisions: Vec::new(),
+        pending: Vec::new(),
+        blocked: Vec::new(),
+        rounds: 0,
+        stall_streak: 0,
+        ledger_denials: 0,
+    }
+}
+
+/// ① 澄清阶段（未登记 / 已登记未执行）：严格只读——排除写工具与 command/service/scheduled_task，
+/// 但 `ask`（提问）与 `goal`（登记）仍在。
+#[test]
+fn goal_mode_clarify_phase_is_readonly_and_keeps_ask() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    // 未登记（None）与已登记但未进入执行（Clarify）都是澄清阶段
+    for goal in [None, Some(goal_state(GoalStatus::Clarify))] {
+        let p = main_drive_params(&prefs_of(ApprovalMode::Goal, None), goal.as_ref());
+        for t in WRITE_TOOLS
+            .iter()
+            .copied()
+            .chain(["command", "service", "scheduled_task"])
+        {
+            assert!(
+                p.exclude_tools.iter().any(|e| e == t),
+                "澄清期应排除 {t}：{:?}",
+                p.exclude_tools
+            );
+        }
+        for t in ["ask", "goal", "read", "grep", "subagent"] {
+            assert!(
+                !p.exclude_tools.iter().any(|e| e == t),
+                "澄清期不应排除 {t}：{:?}",
+                p.exclude_tools
+            );
+        }
+        assert!(p.system_extra.contains("<goal-mode>"));
+        // 澄清期也必须 NudgeOnly：只读调研是澄清期的常态，默认 Stop 会在 14 批空转时误杀
+        assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly);
+    }
+}
+
+/// ② 执行阶段：排除 `ask`（「零提问」的机制保证），写工具与命令全部放开
+///（范围控制交给账本）；Paused 与 Executing 同属执行阶段。
+#[test]
+fn goal_mode_execute_phase_drops_ask_and_unlocks_writes() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    for status in [GoalStatus::Executing, GoalStatus::Paused] {
+        let p = main_drive_params(
+            &prefs_of(ApprovalMode::Goal, None),
+            Some(&goal_state(status)),
+        );
+        assert!(
+            p.exclude_tools.iter().any(|e| e == "ask"),
+            "执行期必须排除 ask：{:?}",
+            p.exclude_tools
+        );
+        for t in WRITE_TOOLS.iter().copied().chain(["command", "service"]) {
+            assert!(
+                !p.exclude_tools.iter().any(|e| e == t),
+                "执行期不应排除 {t}：{:?}",
+                p.exclude_tools
+            );
+        }
+        assert!(
+            !p.exclude_tools.iter().any(|e| e == "goal"),
+            "执行期保留 goal（勾选验收标准）"
+        );
+        assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly);
+        assert!(p.system_extra.contains("<goal-mode>"));
+    }
+    // 非目标档不受目标状态影响：既不排除 ask，也不注入目标块
+    let a = main_drive_params(
+        &prefs_of(ApprovalMode::AutoEdit, None),
+        Some(&goal_state(GoalStatus::Executing)),
+    );
+    assert!(!a.exclude_tools.iter().any(|e| e == "ask"));
+    assert!(!a.system_extra.contains("<goal-mode>"));
+}
+
+/// ③ 目标档执行期的纯文本回合 = 推进暂停（**不是**收尾）；
+/// 非目标档行为逐字不变（主会话纯文本即收尾 / 子代理 3 轮硬终止）。
+#[test]
+fn goal_execute_text_turn_continues_instead_of_finishing() {
+    use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
+    use crate::core::agent::goal::GOAL_TEXT_TURN_LIMIT;
+    // 主会话的 finish_on_text 恒为 true，故这一组直接钉死「目标档分支优先于主会话语义」
+    assert_eq!(
+        text_turn_action("我先说明一下思路", true, false, 0, true),
+        TextTurnAction::Continue
+    );
+    assert_eq!(
+        text_turn_action(
+            "我先说明一下思路",
+            true,
+            false,
+            GOAL_TEXT_TURN_LIMIT - 1,
+            true
+        ),
+        TextTurnAction::Continue
+    );
+    // 达上限先提醒一轮，下一轮仍纯文本才收尾
+    assert_eq!(
+        text_turn_action("我先说明一下思路", true, false, GOAL_TEXT_TURN_LIMIT, true),
+        TextTurnAction::ContinueWithReminder
+    );
+    assert_eq!(
+        text_turn_action(
+            "我先说明一下思路",
+            true,
+            false,
+            GOAL_TEXT_TURN_LIMIT + 1,
+            true
+        ),
+        TextTurnAction::Finish
+    );
+    // 显式汇报标记 → 收尾（与子代理同一标记语义）
+    assert_eq!(
+        text_turn_action("<report>做完了</report>", true, false, 0, true),
+        TextTurnAction::Finish
+    );
+    // 被拒调用仍优先于目标档分支，且上限与纯文本同源（同一个计数器，上限必须同源）
+    assert_eq!(
+        text_turn_action("方案如下", true, true, GOAL_TEXT_TURN_LIMIT - 1, true),
+        TextTurnAction::Continue
+    );
+    assert_eq!(
+        text_turn_action("方案如下", true, true, GOAL_TEXT_TURN_LIMIT, true),
+        TextTurnAction::StopWithLimit
+    );
+    // 非目标档：逐字不变
+    assert_eq!(
+        text_turn_action("答完了", true, false, 0, false),
+        TextTurnAction::Finish
+    );
+    assert_eq!(
+        text_turn_action("旁白", false, false, 0, false),
+        TextTurnAction::Continue
+    );
+    assert_eq!(
+        text_turn_action("旁白", false, false, MAX_TEXT_TURNS, false),
+        TextTurnAction::StopWithLimit
+    );
+}
+
+// ===== 目标模式驱动层：停滞 / 收尾 / 回落 / 瞬态 / 子代理 =====
+
+/// 测试用 core + 主会话 rt（目标模式用例共用；data_dir 与 workspace 各自独立临时目录）。
+fn goal_core_and_rt() -> (Arc<AgentCore>, Arc<SessionRuntime>) {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let core = test_support::make_core(&roots);
+    let rt = test_support::make_runtime(roots.workspace.clone(), roots.data_dir.clone(), vec![]);
+    (core, rt)
+}
+
+fn noop_sink() -> Arc<dyn EventSink> {
+    Arc::new(test_support::NoopSink)
+}
+
+/// ④ 停滞两段式：连续 5 步无实质进展 → 提醒（纠偏文案进历史）；连续 10 步 → 自停；
+/// 有非只读工具调用的那一步清零。
+#[tokio::test]
+async fn goal_stall_nudge_at_five_and_stop_at_ten() {
+    use crate::core::agent::goal::{GoalStatus, STALL_NUDGE_AT, STALL_STOP_AT, StallVerdict};
+    let (_core, rt) = goal_core_and_rt();
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    let sink = noop_sink();
+    // 预置基线快照：首次快照视为进展（不能把「刚登记目标」那一步算成停滞），
+    // 故这里手动置位，让计数从 0 起算
+    let mut key = Some(super::drive::goal_progress_key(
+        &rt.goal_snapshot().unwrap(),
+    ));
+    let step = |key: &mut Option<super::drive::GoalProgressKey>, progressed: bool| {
+        super::drive::goal_account_step(&sink, &rt, progressed, key)
+    };
+    for i in 0..STALL_NUDGE_AT - 1 {
+        assert_eq!(
+            step(&mut key, false),
+            StallVerdict::Continue,
+            "第 {} 步",
+            i + 1
+        );
+    }
+    let before = rt.history.lock().unwrap().len();
+    assert_eq!(step(&mut key, false), StallVerdict::Nudge);
+    assert_eq!(rt.goal_snapshot().unwrap().stall_streak, STALL_NUDGE_AT);
+    {
+        let h = rt.history.lock().unwrap();
+        assert_eq!(h.len(), before + 1, "Nudge 必须注入一条纠偏消息");
+        assert!(
+            h.last()
+                .unwrap()
+                .first_text()
+                .unwrap()
+                .contains("<goal-stall-notice>"),
+            "纠偏文案形态不符"
+        );
+    }
+    for _ in 0..STALL_STOP_AT - STALL_NUDGE_AT - 1 {
+        assert_eq!(step(&mut key, false), StallVerdict::Nudge);
+    }
+    assert_eq!(step(&mut key, false), StallVerdict::Stop);
+    assert_eq!(rt.goal_snapshot().unwrap().stall_streak, STALL_STOP_AT);
+    // 非只读工具调用 = 进展 → 清零
+    assert_eq!(step(&mut key, true), StallVerdict::Continue);
+    assert_eq!(rt.goal_snapshot().unwrap().stall_streak, 0);
+}
+
+/// ④’ 停滞与账本漂移只在**执行阶段**裁决：澄清期（含未登记）不设自停门。
+#[tokio::test]
+async fn goal_bookkeep_stall_gate_only_in_execute_phase() {
+    use crate::core::agent::goal::{GoalStatus, STALL_STOP_AT};
+    use crate::core::agent::supervise::BatchDigest;
+    let (core, rt) = goal_core_and_rt();
+    let sink = noop_sink();
+    let idle = BatchDigest::default();
+    // 澄清期：连续 12 批零进展也不得收尾（自停门只在执行期）
+    rt.set_goal(Some(goal_state(GoalStatus::Clarify)));
+    let mut key = None;
+    for i in 0..12 {
+        let out = super::drive::goal_bookkeep(&core, &rt, &sink, &idle, &mut key).await;
+        assert!(out.is_none(), "澄清期第 {} 批不得收尾：{out:?}", i + 1);
+    }
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+    assert_eq!(rt.goal_snapshot().unwrap().stall_streak, 0);
+    // 执行期：同样零进展，第 10 步自停并落 Paused
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    let mut key = Some(super::drive::goal_progress_key(
+        &rt.goal_snapshot().unwrap(),
+    ));
+    let mut closed = None;
+    for _ in 0..STALL_STOP_AT {
+        closed = super::drive::goal_bookkeep(&core, &rt, &sink, &idle, &mut key).await;
+        if closed.is_some() {
+            break;
+        }
+    }
+    let report = closed.expect("执行期连续 10 步无进展必须自停");
+    assert!(report.contains("连续无实质进展"), "{report}");
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+}
+
+/// ⑤ 用户取消 run：目标从「执行中」落「已暂停」并落边车（复用取消链路，
+/// 不新增事件键、`<run-cancelled/>` 语义不变）；非 Executing 的目标不被改写。
+#[tokio::test]
+async fn cancel_pauses_executing_goal() {
+    use crate::core::agent::goal::GoalStatus;
+    let (core, rt) = goal_core_and_rt();
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    super::drive::mark_cancelled(&core, &rt, "run_cancel").await;
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    assert_eq!(
+        core.store.load_goal(&rt.id).unwrap().status,
+        GoalStatus::Paused,
+        "暂停必须落边车（恢复会话后仍可回看）"
+    );
+    assert!(
+        rt.history
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.first_text() == Some("<run-cancelled/>")),
+        "取消标记语义不变"
+    );
+    // Done 存档不被改写（用户回看得到真实结局）
+    rt.set_goal(Some(goal_state(GoalStatus::Done)));
+    super::drive::mark_cancelled(&core, &rt, "run_cancel2").await;
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Done);
+}
+
+/// ⑤’ 档位兜底（主会话每步）：档位已不是目标档但目标仍停在「执行中」→ 置「已暂停」
+/// 并落边车（与 `transition_prefs` 同语义，覆盖不经 `set_session_prefs` 的档位变动）；
+/// 档位仍是目标档 / 目标不在执行中 / 未登记目标 → 不动。
+#[tokio::test]
+async fn mode_left_goal_pauses_executing_goal() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    let (core, rt) = goal_core_and_rt();
+    // 档位切走（如 ask 批准时用户选了非目标档）+ 目标执行中 → 置 Paused
+    rt.set_prefs(prefs_of(ApprovalMode::AutoEdit, None));
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    assert!(
+        super::drive::pause_goal_if_mode_left(&core, &rt),
+        "应发生迁移"
+    );
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    assert_eq!(
+        core.store.load_goal(&rt.id).unwrap().status,
+        GoalStatus::Paused,
+        "兜底迁移必须落边车"
+    );
+    // 幂等：再调一次不迁移（已不是执行中）
+    assert!(!super::drive::pause_goal_if_mode_left(&core, &rt));
+    // 档位仍是目标档 → 不动（执行中保持执行中）
+    rt.set_prefs(prefs_of(ApprovalMode::Goal, None));
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    assert!(!super::drive::pause_goal_if_mode_left(&core, &rt));
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
+    // 非执行中（澄清期）→ 不动
+    rt.set_prefs(prefs_of(ApprovalMode::AutoEdit, None));
+    rt.set_goal(Some(goal_state(GoalStatus::Clarify)));
+    assert!(!super::drive::pause_goal_if_mode_left(&core, &rt));
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+    // 未登记目标 → 不动、不凭空登记
+    rt.set_goal(None);
+    assert!(!super::drive::pause_goal_if_mode_left(&core, &rt));
+    assert!(rt.goal_snapshot().is_none());
+}
+
+/// ⑤’’ 取消主会话 run / 目标收尾必须连带取消**本会话**在跑的子代理（按父会话过滤，
+/// 绝不误杀其它会话的子代理——`core.subs` 是全进程注册表）。
+#[tokio::test]
+async fn cancel_and_goal_close_out_stop_only_this_sessions_subagents() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    use tokio_util::sync::CancellationToken;
+    let (core, rt) = goal_core_and_rt();
+    // 本会话的子代理（new_sub 把 root_session_id 置为父 id）
+    let mine = SessionRuntime::new_sub(&rt, "sub-mine".into());
+    // 另一会话的子代理：父 id 不同 → 不得被本会话的收尾误杀
+    let other_parent = SessionRuntime::new(
+        "other-session".into(),
+        rt.workspace.clone(),
+        rt.data_dir.clone(),
+    );
+    let theirs = SessionRuntime::new_sub(&other_parent, "sub-theirs".into());
+    let (mine_tok, theirs_tok) = (CancellationToken::new(), CancellationToken::new());
+    *mine.active_cancel.lock().unwrap() = Some(mine_tok.clone());
+    *theirs.active_cancel.lock().unwrap() = Some(theirs_tok.clone());
+    core.subs.insert("sub-mine".into(), mine.clone());
+    core.subs.insert("sub-theirs".into(), theirs.clone());
+
+    // ① 用户取消主 run → 本会话子代理被取消，其它会话不受影响
+    super::drive::mark_cancelled(&core, &rt, "run_cancel_sub").await;
+    assert!(mine_tok.is_cancelled(), "本会话子代理必须被取消");
+    assert!(!theirs_tok.is_cancelled(), "其它会话的子代理不得被误杀");
+
+    // ② 目标收尾（达成 / 硬停 / 账本漂移 / 停滞 / 文本轮超限五路共用）同样取消本会话子代理
+    rt.set_prefs(prefs_of(ApprovalMode::Goal, None));
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    let closing = SessionRuntime::new_sub(&rt, "sub-close".into());
+    let closing_tok = CancellationToken::new();
+    *closing.active_cancel.lock().unwrap() = Some(closing_tok.clone());
+    core.subs.insert("sub-close".into(), closing.clone());
+    super::drive::goal_close_out(&core, &rt, super::drive::GoalCloseCause::Done).await;
+    assert!(closing_tok.is_cancelled(), "目标收尾必须取消残留子代理");
+    assert!(!theirs_tok.is_cancelled(), "目标收尾同样不得误杀其它会话");
+}
+
+/// ⑥ 达成收尾后回落进入目标档前的档位；快照缺失（None）时回落全局默认
+///（`approval.enabled` → Plan / FullAccess）。
+#[tokio::test]
+async fn goal_done_falls_back_to_previous_mode() {
+    use crate::core::prefs::ApprovalMode;
+    // 纯函数面
+    let cfg = crate::core::config::ConfigState::default();
+    assert_eq!(
+        super::drive::fallback_mode(Some(ApprovalMode::AutoEdit), &cfg),
+        ApprovalMode::AutoEdit
+    );
+    assert_eq!(
+        super::drive::fallback_mode(None, &cfg),
+        ApprovalMode::from_global(cfg.approval.enabled)
+    );
+    assert_eq!(super::drive::fallback_mode(None, &cfg), ApprovalMode::Plan);
+
+    // 端到端：Done 收尾 → prefs 回落 + 快照清空
+    let (core, rt) = goal_core_and_rt();
+    rt.set_prefs(prefs_of(ApprovalMode::Goal, None));
+    rt.set_goal_prev_mode(Some(ApprovalMode::ConfirmEach));
+    rt.set_goal(Some(done_goal()));
+    let report = super::drive::goal_close_out(&core, &rt, super::drive::GoalCloseCause::Done).await;
+    assert!(report.contains("目标已达成"), "{report}");
+    assert_eq!(rt.prefs().approval_mode, ApprovalMode::ConfirmEach);
+    assert_eq!(
+        rt.goal_prev_mode(),
+        None,
+        "回落快照必须清空（否则下次进目标档会误用旧档）"
+    );
+    // 无快照：回落全局默认（默认 approval.enabled = true → Plan）
+    rt.set_prefs(prefs_of(ApprovalMode::Goal, None));
+    rt.set_goal(Some(done_goal()));
+    super::drive::goal_close_out(&core, &rt, super::drive::GoalCloseCause::Done).await;
+    assert_eq!(rt.prefs().approval_mode, ApprovalMode::Plan);
+}
+
+/// 全部验收标准已勾选、状态 Done 的目标（达成收尾用例用）。
+fn done_goal() -> crate::core::agent::goal::GoalState {
+    let mut g = goal_state(crate::core::agent::goal::GoalStatus::Done);
+    for c in g.criteria.iter_mut() {
+        c.done = true;
+    }
+    g
+}
+
+/// ⑦ 子代理：基座排除集含 `goal`（不得替父会话改验收合同），目标档下拿到的是**只读**目标上下文
+///（`<goal-context read-only="true">`），而非父会话的 `<goal-mode>` 块（后者含子代理做不到的指令）。
+#[test]
+fn subagent_excludes_goal_and_gets_readonly_goal_context() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    assert!(
+        crate::tools::subagent::SUB_BASE_EXCLUDES.contains(&"goal"),
+        "子代理基座必须排除 goal"
+    );
+    let base = test_sub_base_role("backend-dev", ApprovalMode::Goal);
+    let p = subagent_drive_params(
+        &base,
+        &prefs_of(ApprovalMode::Goal, None),
+        Some(&goal_state(GoalStatus::Executing)),
+    );
+    assert!(
+        p.exclude_tools.iter().any(|e| e == "goal"),
+        "子代理不得持有 goal 工具：{:?}",
+        p.exclude_tools
+    );
+    assert!(p.exclude_tools.iter().any(|e| e == "ask"));
+    assert!(
+        p.system_extra.contains("<goal-context read-only=\"true\">"),
+        "目标档子代理必须拿到只读目标上下文"
+    );
+    assert!(
+        !p.system_extra.contains("<goal-mode>"),
+        "父档 <goal-mode> 块必须被替换而非叠加：{}",
+        p.system_extra
+    );
+    assert!(p.system_extra.contains("把 X 改成 Y"), "目标正文未下发");
+    // 未登记目标：同样只读上下文（澄清期文案）
+    let q = subagent_drive_params(&base, &prefs_of(ApprovalMode::Goal, None), None);
+    assert!(q.system_extra.contains("<goal-context read-only=\"true\">"));
+    assert!(!q.system_extra.contains("<goal-mode>"));
+}
+
+/// ⑧ 推进指令是**瞬态**：只进本次请求的出网副本（作为末尾一条用户消息），
+/// 绝不写入持久化历史；重试重建请求时该尾部瞬态被保留。
+#[tokio::test]
+async fn goal_advance_transient_never_reaches_history() {
+    use crate::core::agent::goal::GoalStatus;
+    let (core, rt) = goal_core_and_rt();
+    rt.history
+        .lock()
+        .unwrap()
+        .push(Message::user_text("原始提问").stamped());
+    let advance = super::drive::render_goal_advance(&goal_state(GoalStatus::Executing), false);
+    assert!(advance.starts_with("<goal-advance"), "{advance}");
+    assert!(advance.contains("未达成的验收标准"), "{advance}");
+    assert!(advance.contains("不得向用户提问"), "{advance}");
+    let before = rt.history.lock().unwrap().clone();
+
+    // 无瞬态：出网副本不含推进指令
+    let plain = super::stream::messages_for_request(&rt, false, None);
+    assert!(!plain.iter().any(|m| {
+        m.first_text()
+            .map(|t| t.starts_with("<goal-advance"))
+            .unwrap_or(false)
+    }));
+    // 有瞬态：作为末尾用户消息附上，历史一字不改
+    let out = super::stream::messages_for_request(&rt, false, Some(&advance));
+    assert_eq!(out.last().unwrap().first_text(), Some(advance.as_str()));
+    assert!(matches!(out.last().unwrap().role, Role::User));
+    assert_eq!(
+        rt.history.lock().unwrap().as_slice(),
+        before.as_slice(),
+        "瞬态绝不写入 rt.history"
+    );
+
+    // 端到端：请求组装（DriveParams.goal_transient）→ 重试重建仍保留尾部瞬态
+    let params = DriveParams {
+        main_session: true,
+        goal_transient: Some(advance.clone()),
+        ..DriveParams::default()
+    };
+    let (_model, mut req) = super::stream::build_stream_request(&core, &rt, &params)
+        .await
+        .expect("测试 core 已配默认模型");
+    assert_eq!(
+        req.messages.last().unwrap().first_text(),
+        Some(advance.as_str())
+    );
+    super::stream::refresh_request_messages(&rt, &mut req, false);
+    assert_eq!(
+        req.messages.last().unwrap().first_text(),
+        Some(advance.as_str()),
+        "重试重建必须保留尾部瞬态（否则模型在重试那一轮失去推进指令）"
+    );
+    assert_eq!(
+        rt.history.lock().unwrap().as_slice(),
+        before.as_slice(),
+        "组装与重建均不得写历史"
+    );
 }

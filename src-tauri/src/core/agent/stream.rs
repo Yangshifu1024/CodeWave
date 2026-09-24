@@ -1,4 +1,4 @@
-use super::drive::{DriveParams, NormalizedCall};
+use super::drive::{DriveParams, GOAL_ADVANCE_TAG, NormalizedCall};
 use super::runtime::{AgentCore, EventSink, Frame, STREAM_THROTTLE_MS, SessionRuntime};
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, StreamRequest};
@@ -30,7 +30,14 @@ pub(super) const ERROR_CAP: usize = 500;
 /// 请求都不再回传」——否则每步新产的思考会重新带上线，每步各撞一次 400，而 BadRequest
 /// 按约定不重试，run 直接失败。粘性剥思考只作用于这份副本：`rt.history` 与落盘数据不动，
 /// 思考仍留在转录里，用户切回正常模型后仍可回传（`sanitize` 兜底则改写 `rt.history`，不落盘）。
-pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>, vision: bool) -> Vec<Message> {
+///
+/// `transient` = 目标模式推进指令（[docs/goal-mode]）：非空时作为**最后一条用户消息**附在副本末尾，
+/// 只进本次请求，绝不写入 `rt.history`（由 drive 层按一次性语义下发）。
+pub(super) fn messages_for_request(
+    rt: &Arc<SessionRuntime>,
+    vision: bool,
+    transient: Option<&str>,
+) -> Vec<Message> {
     let mut messages = rt.history.lock().unwrap().clone();
     // 新用户轮次的首个请求：附加当前计划瞬态快照（不落盘；Anthropic cache 断点
     // 落在其之前最后一条非瞬态消息上，保前缀缓存）
@@ -56,7 +63,13 @@ pub(super) fn messages_for_request(rt: &Arc<SessionRuntime>, vision: bool) -> Ve
     }
     // 工具读到的图片：搬进紧随其后的用户消息（或未勾选图片输入时剥掉）——见 route_tool_images
     route_tool_images(&mut messages, vision);
-    repair_before_send(messages)
+    let mut messages = repair_before_send(messages);
+    // 目标模式推进指令（**瞬态**）：只附在本次请求的出网副本末尾，绝不写入 `rt.history`。
+    // 放在 repair 之后：它是最后一条用户指令，不参与结构修复（也保证不被合并或丢弃）。
+    if let Some(t) = transient.filter(|t| !t.trim().is_empty()) {
+        messages.push(Message::user_text(t.to_string()));
+    }
+    messages
 }
 
 /// 出网副本剥思考（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
@@ -147,23 +160,33 @@ pub(super) fn refresh_request_messages(
     req: &mut StreamRequest,
     vision: bool,
 ) {
-    let transient = req
+    // 尾部瞬态（计划快照 + 目标推进指令）：`messages_for_request` 只在注入标志未置位时重建计划快照，
+    // 且**不**重建目标推进指令（那是 `DriveParams` 的一次性下发），故这里把原 body 尾部的瞬态
+    // 整体补回，使重试 body 是首次请求的延拓（否则模型在重试那一轮会莫名失去计划视图与推进指令）。
+    let mut tail: Vec<Message> = req
         .messages
-        .last()
-        .filter(|m| is_plan_transient(m))
-        .cloned();
-    req.messages = messages_for_request(rt, vision);
-    if let Some(t) = transient {
-        if !req.messages.last().map(is_plan_transient).unwrap_or(false) {
-            req.messages.push(t);
+        .iter()
+        .rev()
+        .take_while(|m| is_request_transient(m))
+        .cloned()
+        .collect();
+    tail.reverse();
+    let mut rebuilt = messages_for_request(rt, vision, None);
+    if !tail.is_empty() {
+        // 重建结果自带的尾部瞬态（本步新注入的计划快照）先摘掉，再整体拼回原 tail：顺序与首次请求一致
+        while rebuilt.last().map(is_request_transient).unwrap_or(false) {
+            rebuilt.pop();
         }
+        rebuilt.extend(tail);
     }
+    req.messages = rebuilt;
 }
 
-/// 是否为 `build_stream_request` 注入的尾部计划瞬态快照消息。
-fn is_plan_transient(m: &Message) -> bool {
+/// 是否为 `build_stream_request` / `messages_for_request` 注入的尾部瞬态消息
+///（计划快照 `<current-plan-transient>` 或目标模式推进指令 `<goal-advance …>`）。
+fn is_request_transient(m: &Message) -> bool {
     m.first_text()
-        .map(|t| t.starts_with("<current-plan-transient>"))
+        .map(|t| t.starts_with("<current-plan-transient>") || t.starts_with(GOAL_ADVANCE_TAG))
         .unwrap_or(false)
 }
 
@@ -251,7 +274,11 @@ pub(super) async fn build_stream_request(
             core
         }
     };
-    let messages = messages_for_request(rt, model.vision.unwrap_or(false));
+    let messages = messages_for_request(
+        rt,
+        model.vision.unwrap_or(false),
+        params.goal_transient.as_deref(),
+    );
     // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
     let mut tools: Vec<crate::provider::ToolDef> = core
         .tools
@@ -647,7 +674,7 @@ mod anchor_tests {
         *rt.history.lock().unwrap() = history.clone();
 
         // 标记未置位：出网副本仍带思考（今日行为不变）
-        let kept = super::messages_for_request(&rt, false);
+        let kept = super::messages_for_request(&rt, false, None);
         assert!(
             kept.iter()
                 .flat_map(|m| m.content.iter())
@@ -657,7 +684,7 @@ mod anchor_tests {
 
         // 标记置位：副本不含思考，转录原样不动
         rt.reasoning_rejected.store(true, Ordering::SeqCst);
-        let out = super::messages_for_request(&rt, false);
+        let out = super::messages_for_request(&rt, false, None);
         assert!(
             !out.iter()
                 .flat_map(|m| m.content.iter())

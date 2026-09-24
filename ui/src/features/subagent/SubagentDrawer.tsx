@@ -165,6 +165,7 @@ export default function SubagentDrawer() {
     confirm_each: t("composer.modeConfirmEach"),
     auto_edit: t("composer.modeAutoEdit"),
     plan: t("composer.modePlan"),
+    goal: t("composer.modeGoal"),
     full_access: t("composer.modeFullAccess"),
   };
   const modeLabel = sub?.approvalMode ? modeLabels[sub.approvalMode] : "";

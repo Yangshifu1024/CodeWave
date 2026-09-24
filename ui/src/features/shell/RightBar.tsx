@@ -10,14 +10,15 @@ import { App as AntApp, Button, Collapse, Segmented, Select, Switch, Tabs } from
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import type { LogFileEntry, SkillMeta } from "../../ipc/types";
+import type { LogFileEntry, SkillMeta, GoalState } from "../../ipc/types";
 import { originLabel } from "../../utils/skills";
+import { GOAL_STATUS_KEYS } from "../../utils/goal";
 import {
   readCollapsedSections,
   writeCollapsedSections,
   type CollapsibleSection,
 } from "../../utils/rightbarPrefs";
-import { useActiveRun } from "../../stores/run";
+import { useActiveRun, useRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import FilesPanel from "../files/FilesPanel";
@@ -72,8 +73,14 @@ function InfoPanel({ visible }: { visible: boolean }) {
   const project = tab?.projectId ? projects.find((p) => p.id === tab.projectId) : null;
   // 「项目目录」section 要打开的目标：项目会话 = 主目录；临时会话 = 工作区；无目标则不渲染图标按钮
   const dirToOpen = project?.directory ?? tab?.workspace ?? "";
-  // 折叠段集合：计划段仅在当前会话有计划时参与（避免「折叠了不存在的段」）
-  const allSections: CollapsibleSection[] = active.todos.length > 0 ? ["skills", "plan"] : ["skills"];
+  // 目标模式（`ApprovalMode::Goal`）：目标段仅在当前会话真有目标时参与（与计划段同口径）
+  const goal = active.goal ?? null;
+  // 折叠段集合：计划 / 目标段仅在当前会话有内容时参与（避免「折叠了不存在的段」）
+  const allSections: CollapsibleSection[] = [
+    "skills",
+    ...(active.todos.length > 0 ? (["plan"] as const) : []),
+    ...(goal ? (["goal"] as const) : []),
+  ];
   const openSections = allSections.filter((id) => !collapsedSections.has(id));
 
   const openInFileManager = (dir: string) => {
@@ -184,6 +191,8 @@ function InfoPanel({ visible }: { visible: boolean }) {
                 },
               ]
             : []),
+          // 目标段（`ApprovalMode::Goal`）：仅在当前会话有目标时出现，与计划段并列不互相覆盖
+          ...(goal ? [{ key: "goal", label: t("rightbar.goal"), children: <GoalSection goal={goal} sessionId={sessionId} /> }] : []),
         ]}
       />
       <SkillDetailModal skill={detail} sessionId={sessionId} onClose={() => setDetail(null)} />
@@ -191,6 +200,51 @@ function InfoPanel({ visible }: { visible: boolean }) {
   );
 }
 const TAIL_LINES = 300;
+
+/** 右栏「目标」段（`ApprovalMode::Goal`）：目标正文 / 达成标准（只读）/ 账本摘要 / 状态徽标 / 轮次。
+ *  与「当前计划」段并列渲染；暂停态给出「继续推进」（调 `resume_goal`）。 */
+function GoalSection({ goal, sessionId }: { goal: GoalState; sessionId: string | null }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <div className="rb-goal-head">
+        <span className={`rb-goal-badge st-${goal.status}`}>{t(GOAL_STATUS_KEYS[goal.status])}</span>
+        <span className="rb-dim">{t("rightbar.goalRounds", { n: goal.rounds })}</span>
+        {goal.status === "paused" && (
+          <Button
+            type="text"
+            size="small"
+            className="rb-goal-resume"
+            onClick={() => void useRun.getState().resumeGoal(sessionId)}
+          >
+            {t("rightbar.goalResume")}
+          </Button>
+        )}
+      </div>
+      <div className="rb-goal-text" title={goal.text}>{goal.text}</div>
+      {goal.criteria.length > 0 && (
+        <>
+          <div className="rb-label">{t("rightbar.goalCriteria")}</div>
+          {goal.criteria.map((c, i) => (
+            <div className="rb-todo" key={i}>
+              <span className={`rb-todo-dot ${c.done ? "completed" : "pending"}`}>
+                {c.done ? "✓" : "○"}
+              </span>
+              <span className={c.done ? "rb-todo-done" : ""}>{c.title}</span>
+            </div>
+          ))}
+        </>
+      )}
+      <div className="rb-label">{t("rightbar.goalLedger")}</div>
+      <div className="rb-dim">{t("rightbar.goalPaths", { n: goal.ledger.paths.length })}</div>
+      {goal.ledger.programs.length > 0 && (
+        <div className="rb-goal-programs" title={goal.ledger.programs.join(", ")}>
+          {goal.ledger.programs.join(" · ")}
+        </div>
+      )}
+    </>
+  );
+}
 const POLL_MS = 2000;
 
 /// 行级着色：同时兼容会话日志 `[WARN]` 与 tracing 文本 ` WARN ` 两种前缀

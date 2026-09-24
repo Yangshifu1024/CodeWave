@@ -62,6 +62,7 @@
 
 ## 编排与工作流
 
+- 2026-09-24 · [goal-mode.md](./goal-mode.md) — 目标模式（第五档 `ApprovalMode::Goal`）：**设定目标 → 澄清 → 一次批准 → 自主推进到达成**。澄清期只读（工具集排除写工具与 `command`/`service`/`scheduled_task`，保留 `ask`；方法论内置在档位提示块，不依赖用户侧技能）；澄清末尾唯一一次批准（复用 `plan` 字段 + 计划卡）把 `goal` 状态从 `clarify` 推到 `executing` 并记录**前档快照**（存 `SessionRuntime` 而非 `SessionPrefs`——后者是前端整体替换写的事实源）；执行期**把 `ask` 从工具集物理移除**（零提问不是承诺而是能力缺失）、纯文本收尾改为瞬态推进指令继续（不入历史，上限 8 轮；**非目标档仍是 3 轮**）、停滞检测 5 步提醒 / 10 步自停、看门狗改 `NudgeOnly`；放行依据是**账本**（路径 + 程序白名单，`ledger_allows`/`ledger_gate`，越界即拒且连续 3 次自停，L3 灾难/高危硬拦记 `blocked`），路径比较用「解析已存在最近祖先」的宽松归一化（修掉 Windows 8.3 短名与 `\\?\` verbatim 导致的同路径误判）；用户点停止 = **暂停**可续跑（`resume_goal`），切走档位也自动暂停，达成后自动回落前档；**G2 保留、G3 显式关闭**（后者会弹窗）；事件面 **29 → 30 键**（新增 `goal:update`）；标准工作流 S1–S5 的确认部分合并进澄清阶段，S6–S9 保留。验证：本地门禁 `pnpm prepr` **8/8 全绿**（`cargo test` **1111 passed / 0 failed**，+86 例）、`pnpm --dir ui test` **1109 passed / 95 文件**、`build` 通过。审查修复：目标执行期豁免 plan 纪律门（范围控制改由账本承担）、子代理写入同样过账本（判定作用域取根会话 + `mutate_goal` 持锁读改写）、停止/收尾时取消本会话在跑子代理（不误杀其它会话）、`resume_goal` 双层校验档位、越界项落 `blocked` 供收尾报告与后续修订
 - 2026-08-31 · [plan-mode-workflow.md](./plan-mode-workflow.md) — plan 档强制阶段流程（P0 分类 → 澄清 → P2 分析 → P3 方案 → 批准 → P4 执行 → P5 审查 → P6 汇报）
 - 2026-09-07 · [plan-discipline-host-enforcement.md](./plan-discipline-host-enforcement.md) — plan 纪律宿主强制：批次层两硬一软三门（E_PLAN_REQUIRED / E_PLAN_STALE / in_progress 软提醒）+ 子代理/同批双豁免 + wire 层 Tool 消息丢块语义钉死（含 read 图片注入同通道遗留缺陷记录）
 - 2026-08-31 · [arch-orchestrator.md](./arch-orchestrator.md) — 内置 arch 编排智能体：`$arch` 技能全流程编排 + 内置子代理角色注册表 + `.codewave/tasks/` 四文档产物契约

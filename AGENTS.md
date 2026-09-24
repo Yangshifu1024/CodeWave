@@ -31,8 +31,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（本地实测 **1025 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；**已知存量 warning**：`src/tools/postcheck.rs:305` 的 unused import（主工作区同样存在、非近期引入）——「0 warning」的表述与现状不符；CI 用 `cargo test --workspace` |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1076 passed / 93 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（本地实测 **1111 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；**已知存量 warning**：`src/tools/postcheck.rs:305` 的 unused import（主工作区同样存在、非近期引入）——「0 warning」的表述与现状不符；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1109 passed / 95 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
@@ -67,7 +67,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 ## 契约锚点（改前必读）
 
-- **事件面 29 键**：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（`lsp:server_missing` 已随 LSP 机制删除，见 [docs/post-write-check-plan](./docs/post-write-check-plan.md)）
+- **事件面 30 键**（`goal:update` 为目标模式新增，[docs/goal-mode](./docs/goal-mode.md)）：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名（`lsp:server_missing` 已随 LSP 机制删除，见 [docs/post-write-check-plan](./docs/post-write-check-plan.md)）
 - **文档工具与保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）**：`read_document` / `write_document` / `edit_document` 三个工具按扩展名分派表格、Word、PDF；保真修改一律走「解开压缩包 → 只替换目标内部文件 → 其余原样搬运重打包」，**绝不整份解析重建**（重建会丢图表、数据透视表、迷你图）；`read` 拒收二进制文档（按扩展名 + NUL 字节内容探测）并点名该用哪个工具；界面预览复用 `read_document` 的实现（`read_for_preview`），不给预览单写一套解析；最低 Rust 版本 **1.98**
 - **SessionMeta `project_id + roots` 快照**是 @ 提及 / git 聚合的唯一数据源，勿绕过回查注册表（左栏文件树已随 [docs/workspace-explorer-removal-and-chat-scrollbar](./docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除）
 - `create_session(project_id?, workspace?)` 双形态；`delete_project` 级联删除（先取消运行中会话）
@@ -79,6 +79,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - **子代理档位按 step 边界跟随根会话**（[docs/mode-gate-and-subagent-sync](./docs/mode-gate-and-subagent-sync.md)）：主会话档位变化在每个 LLM step 边界传播到在跑子代理（工具集 + `<plan-mode>` 系统块 + `sub_rt.prefs` 三处从**基座（`SubBase`）重建而非增量追加**——增量追加会让旧 `<plan-mode>` 块永久残留）；`model_id` / `reasoning_effort` 仍为 spawn 快照；嵌套子代理跟随根会话、父会话查不到时保持原档位不 panic；计划任务 runtime 独立且显式 FullAccess
 - **Composer 工具条数据面**（[docs/composer-token-rate](./docs/composer-token-rate.md)）：`Frame::Usage` 的载荷可**增可选字段**（serde default；事件键名 `usage` 不变，`events.contract.test.ts` 只守键名）；工具条三段的数据源分工是——上下文/命中段读**会话级** `TabRunState.usage`（跨 run 累加、不持久化），速率段读**本轮** `TabRunState.runMetrics`（`send()` 处归零）；统计面板总览的耗时三项必须**分子分母同域**（只取 `gen_ms > 0` 的 `by_kind` 桶），否则子代理/压缩的 output 会把速率抬到数倍
 - **Composer 触发符以光标为锚**（[docs/composer-trigger-caret](./docs/composer-trigger-caret.md)）：`/`、`$`、`@` 的判定与回填一律基于**光标前的片段**（`ui/src/features/chat/composerTriggers.ts` + `Composer` 的 `caretRef`），**勿再引入锚定整段末尾的正则**（`^/(\S*)$`、`@[^@\s]*$` 这类写法正是「正文里已有内容时拉不起菜单」的根因）；`/`、`$` 限「消息以它开头」是与模型侧点名契约绑定的（`src-tauri/src/skills/mod.rs` 的 `prompt_listing` 与 `core/prompt.rs` 的 `CORE_PROMPT` 都写死「以 … 开头」），要放宽必须同步改提示词
+- **目标模式（[docs/goal-mode](./docs/goal-mode.md)，第五档 `ApprovalMode::Goal`）**：阶段由 `goal` 状态派生（`clarify` = 澄清期只读 + `ask`；`executing`/`paused` = 执行期**工具集里没有 `ask`**、纯文本收尾改继续推进）；执行期放行依据是**账本**（路径 + 程序白名单，`core/agent/goal.rs` 的 `ledger_allows`/`ledger_gate`，越界即拒、连续 3 次判漂移自停，L3 灾难/高危硬拦 + 记 `blocked`）；**G2 保留、G3 显式关闭**（后者会弹窗要人批，与零提问直接冲突）；**前档快照放 `SessionRuntime::goal_prev_mode`，勿放 `SessionPrefs`**（prefs 是前端整体替换写的事实源，放进去会被补丁冲掉）；推进指令是**瞬态**（只进请求、不入会话历史）；路径判定用「解析已存在的最近祖先」的宽松归一化，纯文本前缀比较会因 Windows 8.3 短名 / `\\?\` verbatim 误判同一条路径
 
 ## 踩坑清单（勿再踩）
 

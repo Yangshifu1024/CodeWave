@@ -293,6 +293,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     ok &= remove_file_if_exists(&store.history_path(&meta.id));
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
+    ok &= remove_file_if_exists(&store.goal_path(&meta.id));
     ok &= remove_dir_if_exists(&store.sub_histories_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
         ok &= remove_file_if_exists(&p);
@@ -311,7 +312,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
 
 /// 清理索引之外的残留（超出索引条数上限被挤出、列表里已看不到的会话文件）：
 /// 只删「id 不在索引里」且「文件修改时间早于 cutoff」的 `histories/<id>.json.gz` 与
-/// `sessions/<id>.{artifacts,todos}.json`。
+/// `sessions/<id>.{artifacts,todos,goal}.json`。
 ///
 /// **索引不可信（缺失 / 损坏解析失败）时一个都不删**：`load_index()` 此时返回空索引，
 /// 与「用户真的没有会话」在返回值上无法区分——照常扫孤儿会把全部历史文件当孤儿删掉，
@@ -377,7 +378,8 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = name
                 .strip_suffix(".artifacts.json")
-                .or_else(|| name.strip_suffix(".todos.json"));
+                .or_else(|| name.strip_suffix(".todos.json"))
+                .or_else(|| name.strip_suffix(".goal.json"));
             let Some(id) = id else {
                 continue;
             };
@@ -619,6 +621,22 @@ mod tests {
 
     fn store_in(dir: &Path) -> SessionStore {
         SessionStore::new(dir.to_path_buf())
+    }
+
+    /// 目标模式边车的最小状态（只验证级联删除链与孤儿清理，内容不参与断言）。
+    fn goal_state() -> crate::core::agent::goal::GoalState {
+        crate::core::agent::goal::GoalState {
+            text: "目标".into(),
+            criteria: vec![],
+            ledger: crate::core::agent::goal::GoalLedger::default(),
+            status: crate::core::agent::goal::GoalStatus::Clarify,
+            decisions: vec![],
+            pending: vec![],
+            blocked: vec![],
+            rounds: 0,
+            stall_streak: 0,
+            ledger_denials: 0,
+        }
     }
 
     // ---------- 判定 ----------
@@ -909,10 +927,11 @@ mod tests {
         assert!(user_file.exists(), "用户项目文件绝不动");
         assert!(!store.artifacts_path(session).exists());
         assert!(!store.todos_path(session).exists());
+        assert!(!store.goal_path(session).exists());
         assert!(!store.history_path(session).exists());
     }
 
-    /// 历史 / 子代理过程历史目录都随会话删除。
+    /// 历史 / 子代理过程历史目录都随会话删除；目标模式边车同属级联链（todos 有的地方必须有 goal）。
     #[test]
     fn history_and_sub_histories_removed() {
         let dd = tempfile::tempdir().unwrap();
@@ -923,10 +942,13 @@ mod tests {
         let subs = store.sub_histories_dir(id).join("sub_1");
         std::fs::create_dir_all(&subs).unwrap();
         std::fs::write(subs.join("sub_1.json.gz"), b"x").unwrap();
+        store.save_goal(id, &Some(goal_state())).unwrap();
+        assert!(store.goal_path(id).exists());
 
         assert!(delete_session_files(&store, dd.path(), &meta(id, &ago(0))));
         assert!(!store.history_path(id).exists());
         assert!(!store.sub_histories_dir(id).exists());
+        assert!(!store.goal_path(id).exists(), "目标边车必须随会话级联删除");
     }
 
     /// 计划文件删除的路径白名单：必须同时是 `.md` 且位于托管的 `.codewave/tasks/` 下；
@@ -1218,24 +1240,28 @@ mod tests {
         let orphan_gz = old("histories/orphan-1.json.gz");
         let orphan_todos = old("sessions/orphan-1.todos.json");
         let orphan_artifacts = old("sessions/orphan-2.artifacts.json");
+        let orphan_goal = old("sessions/orphan-3.goal.json");
         let known_gz = old("histories/known.json.gz");
         let sub_gz = old("histories/sub_deadbeef.json.gz");
         let task_gz = old("histories/task_daily-1.json.gz");
         let task_todos = old("sessions/task_daily-1.todos.json");
+        let task_goal = old("sessions/task_daily-1.goal.json");
 
         // 索引写在最后（否则会被上面的占位文件覆盖）：known 在索引里 → 它不是孤儿
         store.upsert_meta(meta("known", &real_ago(0))).unwrap();
 
         let cutoff = Utc::now() - chrono::Duration::hours(24);
         let removed = remove_orphan_files(&store, cutoff);
-        assert_eq!(removed, 3, "孤儿 gz + 两个孤儿边车");
+        assert_eq!(removed, 4, "孤儿 gz + 三个孤儿边车");
         assert!(!orphan_gz.exists());
         assert!(!orphan_todos.exists());
         assert!(!orphan_artifacts.exists());
+        assert!(!orphan_goal.exists());
         assert!(known_gz.exists(), "索引里的会话不得被当孤儿删");
         assert!(sub_gz.exists(), "sub_ 前缀（子代理过程历史）不得误删");
         assert!(task_gz.exists(), "task_ 前缀（计划任务）不得误删");
         assert!(task_todos.exists());
+        assert!(task_goal.exists(), "task_ 前缀的目标边车同样不得误删");
         assert!(
             store.sessions_dir().join("index.json").exists(),
             "清理绝不碰 index.json"
@@ -1282,6 +1308,9 @@ mod tests {
             let old_todos = dd.path().join("sessions/x.todos.json");
             std::fs::write(&old_todos, "[]").unwrap();
             age_file(&old_todos, 30);
+            let old_goal = dd.path().join("sessions/x.goal.json");
+            std::fs::write(&old_goal, "null").unwrap();
+            age_file(&old_goal, 30);
             if let Some(bytes) = index_bytes {
                 std::fs::write(store.sessions_dir().join("index.json"), bytes).unwrap();
             }
@@ -1294,12 +1323,14 @@ mod tests {
             );
             assert!(old_hist.exists(), "{label}：旧历史必须原样保留");
             assert!(old_todos.exists(), "{label}：旧边车必须原样保留");
+            assert!(old_goal.exists(), "{label}：目标边车必须原样保留");
             // 预览与执行同一口径：不可信时报 0，绝不会出现「预览 0 条、执行却全删」
             assert_eq!(count_orphan_files(&store, cutoff), 0, "{label}");
             // 走完整清理路径同理（execute 里的孤儿扫描也受这道守卫保护）
             execute(&store, dd.path(), 1, &[]);
             assert!(old_hist.exists(), "{label}：execute 路径也不得删");
             assert!(old_todos.exists(), "{label}");
+            assert!(old_goal.exists(), "{label}");
         }
     }
 
@@ -1325,6 +1356,9 @@ mod tests {
         let todos = dd.path().join("sessions/x.todos.json");
         std::fs::write(&todos, "[]").unwrap();
         age_file(&todos, 60);
+        let goal = dd.path().join("sessions/x.goal.json");
+        std::fs::write(&goal, "null").unwrap();
+        age_file(&goal, 60);
 
         // ① 磁盘上索引损坏
         std::fs::write(store.sessions_dir().join("index.json"), b"{ not json").unwrap();
@@ -1356,6 +1390,7 @@ mod tests {
         assert_eq!(outcome.failed, 0);
         assert!(hist.exists(), "索引曾损坏 → 旧历史不得当孤儿删");
         assert!(todos.exists(), "索引曾损坏 → 旧边车不得当孤儿删");
+        assert!(goal.exists(), "索引曾损坏 → 目标边车不得当孤儿删");
         assert!(
             store.corrupt_index_backup_path().exists(),
             "保全证据不得被清理顺手删掉"

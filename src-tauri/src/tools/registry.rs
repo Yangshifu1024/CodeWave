@@ -35,6 +35,8 @@ impl ToolRegistry {
         reg!(crate::tools::wait::WaitTool);
         reg!(crate::tools::suggest::SuggestTool);
         reg!(crate::tools::plan::PlanTool);
+        // 目标模式批次：目标登记与执行期合同锁定
+        reg!(crate::tools::goal::GoalTool);
         reg!(crate::tools::batch_read::BatchReadTool);
         reg!(crate::tools::calculate::CalculateTool);
         reg!(crate::tools::render_html::RenderHtmlTool);
@@ -108,6 +110,7 @@ mod tests {
                 "delete",
                 "edit",
                 "edit_document",
+                "goal",
                 "grep",
                 "http_request",
                 "list_files",
@@ -154,7 +157,7 @@ mod tests {
         let reg = ToolRegistry::default_tools();
         let a = reg.schemas_token_estimate();
         let b = reg.schemas_token_estimate();
-        assert!(a > 0, "23 built-in tools yield a positive estimate");
+        assert!(a > 0, "24 built-in tools yield a positive estimate");
         assert_eq!(a, b, "estimate must be deterministic");
         assert_eq!(ToolRegistry::empty().schemas_token_estimate(), 0);
     }

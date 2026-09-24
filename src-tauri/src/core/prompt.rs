@@ -85,6 +85,18 @@ S9 收尾 — 总结各阶段结论 + 产物绝对路径 + 遗留事项。
 </standard-workflow>
 "#;
 
+/// 目标模式（goal mode）定位：与 `<standard-workflow>` 并列常驻第 1 层。
+/// 独立成段而不并入 `WORKFLOW_SECTION`，两个原因：① 后者已顶到预算上限（2000 字）；
+/// ② 目标模式与标准工作流是**档位互斥**的两套推进语义（目标模式下 S1–S5 的确认部分
+/// 合并进澄清阶段），混写会让两套流程互相污染。
+const GOAL_MODE_SECTION: &str = r#"<goal-mode-protocol priority="core">
+目标模式（会话档位 = 目标模式；界面目标卡可查看/登记目标）是「先定验收标准、再按账本执行」的推进方式，与标准工作流的 S1–S9 是两套互斥语义：
+- 澄清阶段（尚未登记目标，或已登记但未进入执行）：只读调研，然后用 goal 工具登记/修订目标（text 一句话目标、criteria 可判定的验收标准、ledger 本次允许触碰的路径与程序）。此阶段不修改工作区（写工具与 shell 不可用）。目标与验收标准的对齐就在这里做：有歧义用 ask 问清楚，不要带着模糊标准进入执行阶段。
+- 执行阶段（目标已登记并经用户确认）：按账本做达成目标所必需的**最小改动**，完成一条就用 goal 工具把该条 criteria 的 done 置 true，全部达成后把 status 置 done。**执行期零提问**：ask 工具已不可用，歧义自行按「最小惊讶 + 可回滚」判断并把决策追加进 goal 的 decisions；账本外路径与程序会被硬拦（累计 3 次硬停）；无法自行解决的阻塞记入 blocked 并停下报告；未达成全部验收标准前不要停下。
+- 与标准工作流的衔接：目标模式下 **S1–S5 的确认部分合并进澄清阶段**——调研、方案与批准门一次性在澄清阶段谈定（目标登记经用户确认即视为方案获批），不再另开一轮批准；**S6–S9 照常保留**（并行开发、审查、测试、收尾产物与落盘纪律不变），差别只是每一步都要落在账本范围内。
+</goal-mode-protocol>
+"#;
+
 /// 组装完整 system prompt。层序固定；列表排序固定。
 /// `skills_listing`/`memory_listing` 由调用方预算（缓存），保证字节稳定。
 #[allow(clippy::too_many_arguments)] // 参数即各 prompt 层，包成 struct 反而掩盖固定层序
@@ -107,6 +119,8 @@ pub fn assemble(
     // 标准工作流（原 arch 技能内置化，[docs/standard-workflow](../../../docs/standard-workflow.md)）：
     // 常驻第 1 层；编译期常量保证前缀字节稳定（缓存优先）。
     out.push_str(WORKFLOW_SECTION);
+    // 目标模式定位（档位互斥的另一条推进语义；见常量注释）
+    out.push_str(GOAL_MODE_SECTION);
     // 配置的回复语言（设置 → 通用 → AI 语言）：非空时以显式指令覆盖
     // 默认的「用用户语言回答」行为。
     if let Some(lang) = cfg
@@ -263,6 +277,10 @@ mod tests {
         assert!(a.contains("priority-order"));
         assert!(a.contains("<environment>"));
         assert!(a.contains("<standard-workflow"), "标准工作流常驻第 1 层");
+        assert!(
+            a.contains("<goal-mode-protocol"),
+            "目标模式定位常驻第 1 层（与标准工作流并列）"
+        );
 
         // 技能/记忆注入
         let c = assemble(

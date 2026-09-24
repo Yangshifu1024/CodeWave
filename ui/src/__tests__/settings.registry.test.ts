@@ -671,7 +671,10 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
   },
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
-  "chat/Composer.tsx": { "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）" },
+  "chat/Composer.tsx": {
+    "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）",
+    "t(GOAL_STATUS_KEYS[status])": "目标提示条的状态标签键由 GoalStatus 派生（utils/goal.ts 单表；composer.goalStatus* 五键已由 i18n 键集合用例断言）",
+  },
   "quota/QuotaSection.tsx": {
     "t(`rightbar.window.${k}`)": "窗口名键由 entry.key 派生（rolling/weekly/monthly 三键已由 i18n 键集合用例断言）",
     "t(reset.key, reset.params)": "重置倒计时文案的键与参数由 countdown() 组装",
@@ -680,6 +683,9 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
   "tools/ToolCallCard.tsx": {
     "t(key)": "工具动词键由 VERBS[tool.tool] 派生",
     "t(neutralErrKey)": "中性错误码（E_INTERRUPTED / E_ASK_*）→ 文案键由 NEUTRAL_ERR_KEYS 表派生（三键已由 i18n 键集合用例断言）",
+  },
+  "shell/RightBar.tsx": {
+    "t(GOAL_STATUS_KEYS[goal.status])": "右栏目标段的状态徐标与 Composer 提示条同源（utils/goal.ts 单表派生，避免两处标签漂移）",
   },
 };
 

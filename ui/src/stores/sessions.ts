@@ -113,11 +113,17 @@ interface SessionsState {
   cycleTab(dir: 1 | -1): void;
   /** 更新会话运行参数（本地乐观更新 + 后端镜像；失败回滚并 toast） */
   updatePrefs(key: string, patch: Partial<SessionPrefs>): Promise<void>;
+  /** 回读会话运行参数（服务端真值）：目标达成后的档位自动回落靠它同步（整体替换写，不丢其他字段） */
+  syncPrefs(key: string): Promise<void>;
 }
 
 function dirName(p: string): string {
   return baseName(p);
 }
+
+/** 档位回读的写入代际（key = sessionId）：`updatePrefs` 每次本地写入 +1，回读结果只在代际未变时落地——
+ *  用户刚切完档时，在途的旧回读不得把乐观更新盖回去。仅内存态，不进快照。 */
+const prefsSeq = new Map<string, number>();
 
 /** 拉取会话内容并回填运行态（从导航打开与惰性激活共用的唯一加载路径）。
  *  抛出交给调用方浮出（H-4：loadSession 失败不得静默） */
@@ -127,14 +133,9 @@ async function loadTabContent(tab: Tab): Promise<void> {
   run.initTab(tab.sessionId);
   run.restoreFromMessages(tab.sessionId, msgs);
   // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
-  void ipc
-    .getSessionPrefs(tab.sessionId)
-    .then((p) =>
-      useSessions.setState((s) => ({
-        tabs: s.tabs.map((t) => (t.sessionId === tab.sessionId ? { ...t, prefs: p } : t)),
-      })),
-    )
-    .catch(() => {});
+  void useSessions.getState().syncPrefs(tab.sessionId);
+  // 目标模式（`ApprovalMode::Goal`）：目标状态初值（推送 `goal:update` 仍是持续更新源，回读只补初值）
+  void useRun.getState().syncGoal(tab.sessionId);
   // M4：同进程关 Tab 不打断后端运行——重开时若仍在运行则恢复运行态
   void ipc
     .sessionRunning(tab.sessionId)
@@ -477,6 +478,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const prev = get().tabs.find((t) => t.key === key);
     if (!prev) return;
     const next: SessionPrefs = { ...prev.prefs, ...patch };
+    // 本地写入代际 +1：在途的服务端回读（syncPrefs）就此作废，不会被旧值盖回去
+    prefsSeq.set(key, (prefsSeq.get(key) ?? 0) + 1);
     // 乐观更新（Tab 切换天然隔离）；后端镜像失败则回滚并 toast
     set((s) => ({ tabs: s.tabs.map((t) => (t.key === key ? { ...t, prefs: next } : t)) }));
     try {
@@ -485,6 +488,18 @@ export const useSessions = create<SessionsState>((set, get) => ({
       set((s) => ({ tabs: s.tabs.map((t) => (t.key === key ? { ...t, prefs: prev.prefs } : t)) }));
       useUi.getState().toast(String(e));
     }
+  },
+
+  /** 回读会话运行参数（服务端真值）：目标达成后后端会把档位自动回落到「进入目标档前的档位」（改写 prefs），
+   *  而 `Tab.prefs` 是前端事实源——不回读则权限胶囊会显示「目标模式」而实际已是前档。
+   *  整体替换写（服务端返回的就是完整 prefs，不丢 model_id / reasoning_effort 等其他字段）。
+   *  守卫：回读期间用户又切过档（updatePrefs 已推进代际）则丢弃本次结果，保留更新的本地值。 */
+  async syncPrefs(key) {
+    const seq = prefsSeq.get(key) ?? 0;
+    const prefs = await ipc.getSessionPrefs(key).catch(() => null);
+    if (!prefs) return; // 回读失败保持现状（下次运行结束 / 重开会话还会再回读）
+    if ((prefsSeq.get(key) ?? 0) !== seq) return;
+    set((s) => ({ tabs: s.tabs.map((t) => (t.key === key ? { ...t, prefs } : t)) }));
   },
 }));
 

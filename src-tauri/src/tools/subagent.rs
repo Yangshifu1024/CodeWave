@@ -107,7 +107,9 @@ fn summarize_sub_tail(history: &[crate::core::types::Message]) -> (Option<String
     (last_tool, snippet)
 }
 
-/// 子代理基座排除集（B1）：spawn 时冻结的内部 7 项（交互类 / 元工具），与档位无关。
+/// 子代理基座排除集（B1）：spawn 时冻结的内部 8 项（交互类 / 元工具），与档位无关。
+/// `goal` 也在其中：目标登记与验收标准勾选只能由主会话做，子代理只拿只读目标上下文
+///（`drive::render_sub_goal_context`）。
 /// 父档派生（Plan 档的写工具 / 后台服务 / 计划任务）与角色派生（只读角色的写工具）
 /// 在 `subagent_drive_params` 重建时另加。
 pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
@@ -118,6 +120,7 @@ pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
     "scheduled_task",
     "suggest",
     "wait",
+    "goal",
 ];
 
 /// 组装子代理的 system_extra：公共纪律 + 注册表命中时的完整角色定义（<agent-definition>）。
@@ -380,7 +383,11 @@ impl Tool for SubagentTool {
         // 父 Plan 档的写排除 / MCP 排除 / plan 档提示由 subagent_drive_params 从基座合并进子参数，
         // 堵住「借子代理绕过 plan 档」的洞；只读角色的策略（含 FullAccess 下解锁写工具，B3）
         // 同样在其中按档位置位。spawn 与每步重算共用这一条装配路径，两处不会漂移。
-        let mut params = crate::core::agent::subagent_drive_params(&base, &parent_prefs);
+        let mut params = crate::core::agent::subagent_drive_params(
+            &base,
+            &parent_prefs,
+            ctx.rt.goal_snapshot().as_ref(),
+        );
         params.max_steps = max_steps;
         params.budget_notice = true;
         params.emit_events = false;

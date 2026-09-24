@@ -70,8 +70,8 @@ export interface FlatModel {
 
 // ---------- 会话级运行参数（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)，与 core/prefs.rs 一一对应） ----------
 
-/** 权限四档：逐条确认 / 自动编辑 / 计划 / 完全访问 */
-export type ApprovalMode = "confirm_each" | "auto_edit" | "plan" | "full_access";
+/** 权限五档：逐条确认 / 自动编辑 / 计划 / 目标 / 完全访问 */
+export type ApprovalMode = "confirm_each" | "auto_edit" | "plan" | "goal" | "full_access";
 /** 推理力度档位 */
 export type EffortLevel = "low" | "medium" | "high" | "max";
 export interface SessionPrefs {
@@ -86,6 +86,41 @@ export interface ImageIn { mime: string; data: string }
 
 /** 默认会话参数：plan 档 + 跟随全局模型与模型力度 */
 export const DEFAULT_PREFS: SessionPrefs = { approval_mode: "plan", model_id: null, reasoning_effort: null };
+
+// ---------- 目标模式（`ApprovalMode::Goal`）----------
+// 切档后下一条消息即目标：澄清（只读 + ask 结构化提问）→ 用户批准一次 → 执行（零提问、自主推进）
+// → 收尾报告 + 自动回落前档。前端只读展示，状态由后端单一事实源下发。
+
+/** 目标状态机：澄清 / 执行 / 暂停 / 达成 / 中止 */
+export type GoalStatus = "clarify" | "executing" | "paused" | "done" | "aborted";
+
+/** 达成标准条目（只读展示：done = 已满足） */
+export interface GoalCriterion { title: string; done: boolean }
+
+/** 目标账本：本轮目标已触及的路径与程序（右栏摘要展示） */
+export interface GoalLedger { paths: string[]; programs: string[] }
+
+/** 目标状态快照（`goal:update` 事件与 `get_session_goal` 命令共用同一形状） */
+export interface GoalState {
+  /** 目标正文（切档后收到的第一条消息） */
+  text: string;
+  /** 达成标准清单 */
+  criteria: GoalCriterion[];
+  ledger: GoalLedger;
+  status: GoalStatus;
+  /** 已记录的决策（后端维护，前端只读展示） */
+  decisions: string[];
+  /** 待办项 */
+  pending: string[];
+  /** 受阻项（需用户介入） */
+  blocked: string[];
+  /** 已推进轮次 */
+  rounds: number;
+  /** 连续无进展轮数（停滞检测） */
+  stall_streak: number;
+  /** 账本外写操作被拒次数 */
+  ledger_denials: number;
+}
 
 /** 审批门设置（fence 判定后的交互策略） */
 export interface ApprovalSettings { enabled: boolean; confirm_outside_create: boolean; confirm_git_push: boolean; /** docs/ask-ink-accent-and-composer-cover：无应答 5 分钟后自动确认推荐选项；false = 永不超时（无限等待） */ auto_confirm: boolean; command_allowlist: string[] }
@@ -316,6 +351,10 @@ export interface AgentMeta { name: string; description: string }
 
 /** 计划 todo 条目（plan:update 事件下发） */
 export interface Todo { title: string; status: "pending" | "in_progress" | "completed" }
+
+/** 目标状态事件（`goal:update`，事件面第 30 键）：`goal = null` 表示目标已清除 / 已回落前档。
+ *  只携带 session + goal 两个字段（键名一字不可改，events.contract.test.ts 双向守护）。 */
+export interface GoalUpdateEvent { session: string; goal: GoalState | null }
 
 // ---------- P2：计划任务 / 统计 ----------
 

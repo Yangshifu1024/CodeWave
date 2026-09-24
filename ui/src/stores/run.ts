@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
-import type { Breakdown, Message, ToolResultEvent, ToolStartEvent } from "../ipc/types";
+import type { Breakdown, GoalState, Message, ToolResultEvent, ToolStartEvent } from "../ipc/types";
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
@@ -47,7 +47,12 @@ export type {
 } from "./run.types";
 import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
 
-  /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 29 键事件面（唯一注册点）。 */export interface RunStore {
+/** 续跑目标时后端写进会话历史的用户可见标记。**刻意不做 i18n**：它是要落进持久化历史的标记，
+ *  必须与后端常量逐字一致（`src-tauri/src/host/commands/session.rs` 的 `RESUME_GOAL_TEXT`）——
+ *  国际化会让「实时视图」与「重开会话后从历史恢复」的两处文案漂移。 */
+const RESUME_GOAL_TEXT = "继续推进";
+
+  /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 30 键事件面（唯一注册点）。 */export interface RunStore {
   tabs: Record<string, TabRunState>;
   /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
   drafts: Record<string, ComposerDraft>;
@@ -62,6 +67,10 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   /** 子代理卡单独停止该子代理（主代理会收到 E_SUBAGENT_STOPPED 并询问用户是否重派） */
   stopSubagent(sessionId: string | null, subId: string): Promise<void>;
   resolveAsk(askId: string, value: any): Promise<void>;
+  /** 目标模式（`ApprovalMode::Goal`）：暂停后继续推进（调 `resume_goal`，与 `start_chat` 同构；状态走 `goal:update`） */
+  resumeGoal(sessionId?: string | null): Promise<void>;
+  /** 目标模式：回读目标状态初值（会话打开 / 惰性激活时；`goal:update` 推送仍是唯一的持续更新源） */
+  syncGoal(sessionId: string): Promise<void>;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复） */
   runQueueNext(sessionId: string): Promise<void>;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：队列项立即运行（运行中 = 先打断当前运行） */
@@ -200,7 +209,12 @@ export const useRun = create<RunStore>()(
         });
       };
       try {
-        await ipc.startChat(sessionId, text, images ?? [], channel);
+        const runId = await ipc.startChat(sessionId, text, images ?? [], channel);
+        // run_id 落进运行态（与 resumeGoal 同口径；失败路径不写）
+        set((s) => {
+          const t = s.tabs[sessionId];
+          if (t) t.runId = runId;
+        });
         return true;
       } catch (e) {
         set((s) => {
@@ -232,6 +246,79 @@ export const useRun = create<RunStore>()(
       await ipc.resolveAsk(sessionId, askId, value);
     },
 
+    /** 目标模式：暂停后继续推进。守卫取**语义**而非 running——暂停态下 running 本就为假，
+     *  用 running 守卫会让「继续推进」按钮永远点不动；只允许「已暂停」的目标续跑，
+     *  执行中重复 resume 无意义，已达成/已中止更不该被续跑。
+     *  调用形态与 `send()` 同构（后端 `resume_goal` 与 `start_chat` 同签名）：注册事件 channel、
+     *  本地置运行态、run_id 落进运行态；目标状态（含起跑失败的回滚）全由后端 `goal:update` 下发。 */
+    async resumeGoal(sessionId) {
+      const sid = sessionId ?? useSessions.getState().activeKey;
+      if (!sid) return;
+      if (get().tabs[sid]?.goal?.status !== "paused") return;
+      // 本地回显的落点（起跑失败时按位置撤回这一条）：期间的帧只会往后追加，不会挪动它
+      const echoAt = get().tabs[sid].items.length;
+      set((s) => {
+        const t = s.tabs[sid];
+        if (!t) return;
+        // 本地回显（同 send() 的用户项）：后端 `resume_goal` 会把 RESUME_GOAL_TEXT 写进会话历史再起 run，
+        // 这里同步补一条用户项——否则实时视图里只有助手输出、找不到对应的用户消息，
+        // 只有重开会话（从历史恢复）才会出现那条。文案见文件顶部 RESUME_GOAL_TEXT 的注释。
+        t.items.push({
+          kind: "user",
+          text: RESUME_GOAL_TEXT,
+          createdAt: new Date().toISOString(),
+        });
+        t.running = true;
+        // 新一轮 run 的计数从零重建（同 send()）：否则工具条速率段会带着上一轮的数字
+        t.suggestions = [];
+        t.runMetrics = { output: 0, genMs: 0, steps: 0, ttftMs: null, toolMs: 0 };
+      });
+      const channel = new Channel<any>();
+      channel.onmessage = (frame) => {
+        set((s) => {
+          const t = s.tabs[sid];
+          if (!t) return;
+          applyFrameToTab(t, frame);
+        });
+      };
+      try {
+        const runId = await ipc.resumeGoal(sid, channel);
+        set((s) => {
+          const t = s.tabs[sid];
+          if (t) t.runId = runId;
+        });
+      } catch (e) {
+        // 起跑失败（未配置模型等）：后端已把目标回滚为「已暂停」并下发 `goal:update`，此处只落错误
+        set((s) => {
+          const t = s.tabs[sid];
+          if (!t) return;
+          // 撤回本地回显：run 没起跑 = 后端没往历史里写这条标记，气泡留下就与「重开会话后的形态」不一致
+          if (t.items[echoAt]?.kind === "user") t.items.splice(echoAt, 1);
+          t.running = false;
+          t.items.push({ kind: "error", text: String(e) });
+        });
+      }
+    },
+
+    /** 目标状态初值回读（会话打开 / 惰性激活时；`goal:update` 推送仍是唯一的持续更新源）。
+     *  推送优先：回读期间收到推送（goalRev 已前进）则丢弃本次结果——回读只补初值，
+     *  不得用更旧的值盖掉推送（否则刚推进到「执行中」的目标会被读回的「澄清中」打回去）。 */
+    async syncGoal(sessionId) {
+      const rev = get().tabs[sessionId]?.goalRev ?? 0;
+      let goal: GoalState | null = null;
+      try {
+        goal = await ipc.getSessionGoal(sessionId);
+      } catch {
+        return; // 拉取失败保持现状：推送与后续运行仍会刷新
+      }
+      if ((get().tabs[sessionId]?.goalRev ?? 0) !== rev) return; // 期间有推送 → 本次结果已过期
+      set((s) => {
+        const t = s.tabs[sessionId];
+        if (!t) return; // 已关 Tab：不重建状态桶（M-1）
+        // null = 该会话当前无目标：写成 null 而不是留旧值（字段契约 `GoalState | null`）
+        t.goal = (goal ?? null) as any;
+      });
+    },
     // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复）
     async runQueueNext(sessionId) {
       const t = get().tabs[sessionId];
