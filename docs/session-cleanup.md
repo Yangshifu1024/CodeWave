@@ -25,9 +25,9 @@
 3. 会话元数据新增"最近打开时间"字段（可缺省、旧数据兼容），在**加载会话时刷新**；会话列表排序与行内时间显示保持现状（仍用 `updated_at`），因此点开会话不会被顶到列表最前。
 4. 时间戳无法解析的会话**不删**并记告警；未来时间戳不会被删。
 5. 正在运行的会话一律跳过（同时查索引标记与进程内运行集合）；删除后清运行态，避免在途写入把会话"复活"。
-6. 清理范围：会话索引行 + 历史文件 + 待办/产物边车 + 子代理过程历史 + **该会话的日志文件** + **该会话产生的计划文件**；临时会话（未绑项目）同样纳入。
+6. 清理范围：会话索引行 + 历史文件 + 待办/产物边车 + 子代理过程历史 + **工具结果原样 sidecar 目录（`sessions/<id>.toolres/`，[session-restore-fidelity](./session-restore-fidelity.md)）** + **图片外置 blob 目录（`sessions/<id>.imgblob/`，子代理为 `sessions/<父>__<sub>.imgblob/`，[session-history-limits](./session-history-limits.md)）** + **该会话的日志文件** + **该会话产生的计划文件**；临时会话（未绑项目）同样纳入。
 7. 会话日志位置分叉：项目会话在项目数据目录的 `logs/`，临时会话在全局数据目录的 `logs/`；项目已删除或文件不存在时视为成功。
-8. 一并清理**索引之外的残留**（超出索引条数上限被挤出、列表已看不到的会话文件），按文件时间判定。
+8. 一并清理**索引之外的残留**（超出索引条数上限被挤出、列表已看不到的会话文件，含 `sessions/<id>.toolres/` 与 `sessions/<id>.imgblob/` 目录，但子代理 blob 目录 `sessions/<父>__<sub>.imgblob/` 显式跳过），按文件时间判定。
 9. 绝不删边车中登记的用户项目文件；任务目录里由写入工具生成的文档（需求/方案/审查/报告）本次不连带删除。
 10. 计划文件做归属登记：落盘时登记进会话产物边车并加"种类"标记；右栏「文件」面板的数据源不再返回计划文件（现状本就不显示，属保持现状）。
 11. 触发时机：应用启动时一次（**异步**、不阻塞窗口显示）+ 设置页保存时一次 + 手动「立即清理」按钮；另有只读的"上次清理"信息可读取。
@@ -51,7 +51,7 @@
 
 ## 4. 现状事实（调研结论）
 
-- 会话索引与历史统一存在全局数据目录 `~/.codewave`：`sessions/index.json`（索引）、`histories/<id>.json.gz`（历史，单会话上限 8 MiB）、`sessions/<id>.todos.json` 与 `sessions/<id>.artifacts.json`（边车）、`histories/subs/<id>/`（子代理过程历史）。
+- 会话索引与历史统一存在全局数据目录 `~/.codewave`：`sessions/index.json`（索引）、`histories/<id>/`（历史：**分段 append-only JSONL**，`0001.jsonl…` + 水位边车 `.segmeta.json`；[session-history-storage](./session-history-storage.md)）、旧格式遗留 `histories/<id>.json.gz`（读兼容、不自动删，可由设置页的「清理旧格式历史」入口回收）、`sessions/<id>.todos.json` 与 `sessions/<id>.artifacts.json`（边车）、`histories/subs/<id>/`（子代理过程历史，同为段式）、`sessions/<id>.toolres/`（工具结果原样 sidecar）与 `sessions/<id>.imgblob/`（图片外置 blob，子代理为 `sessions/<父>__<sub>.imgblob/`；[session-history-limits](./session-history-limits.md)）。
 - `SessionMeta`（`src-tauri/src/core/sessions/store.rs`）字段：`id` / `title` / `workspace` / `model_id` / `created_at` / `updated_at` / `message_count` / `project_id` / `roots` / `running` / `interrupted`；时间戳为 RFC3339 字符串；`created_at` 在 upsert 时保留首见值，`updated_at` 只在会话落盘检查点时刷新，没有"最近打开时间"。
 - 现有唯一会话删除入口 `SessionStore::remove`：删索引行（持索引锁）+ 历史 + 两个边车 + 子代理历史目录；**不删**会话日志，**不删**计划文件；文件删除失败静默忽略。
 - 索引有条数上限 2000，超出按 `updated_at` 倒序截断，被截断的会话文件仍留在磁盘且没有重新入索引的生产路径（"索引外残留"由此产生）。

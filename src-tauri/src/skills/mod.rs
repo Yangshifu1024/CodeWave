@@ -128,6 +128,50 @@ whenToUse: Use when the user asks to transform or convert local text-based docum
 "#,
         ),
         (
+            "preview",
+            r#"---
+name: preview
+description: Render a visual HTML preview of the current plan (or the object under discussion) as a sandboxed widget.
+whenToUse: Use when the user asks to preview something (预览一下/看下效果/看看界面/mock 一下), or when the plan approval question offers「先看预览」and the user picks it.
+---
+# preview 工作流
+
+目标：把「要做的方案」变成一眼能看的东西（方案概览 / 界面示意），供用户在批准前理解与决策。
+产出统一经 `render_html`（自包含 HTML 小组件，1–50000 字符），前端以**大弹框**呈现（90vw × 85vh，
+弹框内可复制源码 / 重新加载 / 切浅深底色）——不要在聊天里贴 HTML 源码，也不要写文件。
+
+## 一、什么时候渲染
+渲染（两种入口）：
+1. 用户明确要求预览（预览一下 / 看下效果 / 看看界面 / mock 一下），且上下文里已有**成型方案**或**明确讨论对象**。
+2. 批准门里用户选了「先看预览」：先本技能，再渲染，然后**重新发起同一批准询问**。
+
+不渲染（先澄清，别硬渲）：
+- 没有可预览对象（纯问答、闲聊、方案还没讨论出来）→ 先问清「要预览哪一部分」。
+- 方案还在讨论中且用户没要求 → 不要自作主张打断讨论。
+
+## 二、形态选择
+- 默认 **A 方案概览**：目标 / 范围（文件级改动点）/ 关键流程或数据流 / 风险与回滚 / 验证方式。
+- 需求以**界面与交互**为主体时升 **B 界面示意**：画出关键界面的布局与状态（HTML/CSS 手绘即可）。
+- 两者都要时同卡分区（上 A 下 B）。B 形态**必须**在显著位置标注「示意稿 · 未实现」，避免被当成已完成的界面。
+
+## 三、渲染纪律
+- 自包含：只写内联 CSS 与内联 `<script>`；**不得**引外链 CSS/JS/字体、不得 fetch（沙箱无网络、无同源权限）。
+- 单次 ≤50000 字符：超限就精简（去掉次要区块）或拆成多张卡片（多次调用，每次 ≤50000），
+  **不得**因为超限就放弃预览，也不要只回一句「内容太长」。
+- 面向用户可读：中文叙述；表格与流程用排版表达（可用内联 SVG 或纯 CSS 画，不要引 mermaid CDN）。
+- 只呈现方案：不替代方案文本、不改方案内容、不写业务代码、不落盘。
+
+## 四、产出之后
+- 用一句话说明这张预览是什么，然后回到原任务：
+  - 处于批准门：**重新发起同一批准询问**（题干加一句「预览已更新，是否按计划执行？」）——
+    看预览不等于批准，绝不静默批准、绝不自行切档。
+  - 只是讨论中：问一句是否需要按此继续。
+- 同一方案连续 3 次预览后，重发询问时去掉预览项并说明原因（防来回空转）。
+- `render_html` 报错（如 E_TOO_LARGE）或不可用时：如实说明，并用聊天内 markdown 概览降级呈现；
+  **批准门照常存在**，不得因预览失败跳过批准。
+"#,
+        ),
+        (
             "xlsx",
             r#"---
 name: xlsx
@@ -658,6 +702,9 @@ mod tests {
             let s = parse_skill_md(body, name).unwrap();
             assert_eq!(s.meta.name, name);
             assert!(!s.meta.description.is_empty());
+            // whenToUse 进技能列表的「when: …」——preview 技能的两处触发场景全靠它，
+            // 缺失等于「模型不知道何时该加载这个技能」，故一并钉住
+            assert!(!s.meta.when_to_use.is_empty(), "{name} 缺 whenToUse");
         }
     }
 

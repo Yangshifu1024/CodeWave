@@ -927,7 +927,9 @@ async fn checkpoint_persists_main_session() {
     let metas = core.store.list();
     assert_eq!(metas.len(), 1);
     assert_eq!(metas[0].id, "main-1");
-    assert!(roots.data_dir.join("histories/main-1.json.gz").exists());
+    // 历史落在**分段 JSONL**目录里（histories/<id>/0001.jsonl）：本批存储布局变更后，
+    // 旧 `histories/<id>.json.gz` 单文件不再由保存路径产生
+    assert!(roots.data_dir.join("histories/main-1/0001.jsonl").exists());
     assert!(rt.is_main_session);
 }
 
@@ -1915,11 +1917,12 @@ fn goal_mode_clarify_phase_is_readonly_and_keeps_ask() {
     // 未登记（None）与已登记但未进入执行（Clarify）都是澄清阶段
     for goal in [None, Some(goal_state(GoalStatus::Clarify))] {
         let p = main_drive_params(&prefs_of(ApprovalMode::Goal, None), goal.as_ref());
-        for t in WRITE_TOOLS
-            .iter()
-            .copied()
-            .chain(["command", "service", "scheduled_task"])
-        {
+        for t in WRITE_TOOLS.iter().copied().chain([
+            "command",
+            "service",
+            "scheduled_task",
+            "http_request",
+        ]) {
             assert!(
                 p.exclude_tools.iter().any(|e| e == t),
                 "澄清期应排除 {t}：{:?}",
@@ -1934,6 +1937,9 @@ fn goal_mode_clarify_phase_is_readonly_and_keeps_ask() {
             );
         }
         assert!(p.system_extra.contains("<goal-mode>"));
+        assert!(p.exclude_mcp, "澄清期不得经 MCP 绕过只读工具集");
+        assert!(p.exclude_tools.iter().any(|e| e == "write_document"));
+        assert!(p.exclude_tools.iter().any(|e| e == "edit_document"));
         // 澄清期也必须 NudgeOnly：只读调研是澄清期的常态，默认 Stop 会在 14 批空转时误杀
         assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly);
     }
@@ -1966,6 +1972,8 @@ fn goal_mode_execute_phase_drops_ask_and_unlocks_writes() {
             !p.exclude_tools.iter().any(|e| e == "goal"),
             "执行期保留 goal（勾选验收标准）"
         );
+        assert!(p.exclude_mcp, "执行期 MCP 尚无账本判定，必须排除");
+        assert!(p.exclude_tools.iter().any(|e| e == "http_request"));
         assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly);
         assert!(p.system_extra.contains("<goal-mode>"));
     }

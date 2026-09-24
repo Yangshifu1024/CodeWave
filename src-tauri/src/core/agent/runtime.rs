@@ -503,6 +503,13 @@ impl AgentCore {
         text: String,
         images: Vec<crate::core::prefs::ImageIn>,
     ) -> anyhow::Result<String> {
+        if rt.prefs().approval_mode == crate::core::prefs::ApprovalMode::Goal
+            && self
+                .goal_view(&rt)
+                .is_some_and(|goal| goal.status == crate::core::agent::goal::GoalStatus::Paused)
+        {
+            anyhow::bail!("E_GOAL_PAUSED：目标已暂停，请使用「继续推进」显式续跑");
+        }
         if rt.running.swap(true, Ordering::SeqCst) {
             anyhow::bail!("该会话已有运行中的任务");
         }
@@ -801,6 +808,31 @@ mod tests {
     }
 
     // ---------- 续跑（Paused → Executing） ----------
+
+    #[test]
+    fn paused_goal_rejects_ordinary_chat_even_after_runtime_restore() {
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
+        let e = h
+            .core
+            .start_chat(h.rt.clone(), "继续".into(), vec![])
+            .unwrap_err();
+        assert!(e.to_string().contains("E_GOAL_PAUSED"));
+        assert!(!h.rt.running.load(Ordering::SeqCst));
+
+        h.core
+            .store
+            .save_goal(&h.rt.id, &h.rt.goal_snapshot())
+            .unwrap();
+        h.rt.set_goal(None);
+        let e = h
+            .core
+            .start_chat(h.rt.clone(), "继续".into(), vec![])
+            .unwrap_err();
+        assert!(e.to_string().contains("E_GOAL_PAUSED"));
+        assert!(!h.rt.running.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn resume_goal_requires_paused_and_flips_to_executing() {

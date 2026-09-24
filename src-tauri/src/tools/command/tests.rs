@@ -599,6 +599,58 @@ async fn goal_command_gate_and_confirm_skip() {
     assert_eq!(ctx_goal.rt.goal_snapshot().unwrap().ledger_denials, 0);
 }
 
+#[tokio::test]
+async fn goal_command_rejects_redirection_and_second_program() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    use crate::tools::Tool as _;
+    let (ws, ctx) = goal_ctx(
+        ApprovalMode::Goal,
+        GoalStatus::Executing,
+        vec![],
+        vec!["echo".into()],
+    );
+    let outside = ws.path().join("outside.txt");
+    for command in [
+        format!("echo x > {}", outside.display()),
+        "echo ok; cargo build".into(),
+    ] {
+        let out = CommandTool
+            .run(&ctx, serde_json::json!({"command": command}))
+            .await;
+        assert_eq!(
+            out.error.as_ref().map(|e| e.code.as_str()),
+            Some("E_GOAL_COMMAND_SHAPE")
+        );
+    }
+    assert!(!outside.exists());
+}
+
+#[tokio::test]
+async fn goal_command_checks_inside_write_even_without_user_confirmation() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    use crate::tools::Tool as _;
+    let (ws, ctx) = goal_ctx(
+        ApprovalMode::Goal,
+        GoalStatus::Executing,
+        vec![],
+        vec!["touch".into()],
+    );
+    let outside = ws.path().join("outside.txt");
+    let out = CommandTool
+        .run(
+            &ctx,
+            serde_json::json!({"command": format!("touch {}", outside.display())}),
+        )
+        .await;
+    assert_eq!(
+        out.error.as_ref().map(|e| e.code.as_str()),
+        Some("E_GOAL_OUTSIDE_LEDGER")
+    );
+    assert!(!outside.exists());
+}
+
 /// ③（回归红线）非目标档 / 澄清期：命令执行完全不受账本闸门影响。
 #[tokio::test]
 async fn goal_command_gate_inert_outside_goal_execute() {

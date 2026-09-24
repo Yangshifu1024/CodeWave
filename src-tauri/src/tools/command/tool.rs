@@ -611,12 +611,15 @@ impl Tool for CommandTool {
 
         // fence + 审批（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认弹窗，灾难级仍拦截）
         let mode = ctx.approval_mode();
-        let policy = ctx.fence_policy();
+        let mut policy = ctx.fence_policy();
         // 目标档执行期（判定见 core/agent/goal.rs 的 ledger_gate）：免确认的合法性由**账本**承担——
         // 账本内放行、账本外即拒，全程不问人（零提问）；灾难 / 高危级直接硬拦并请求硬停。
         // 账本判定的作用域 runtime：子代理不持有目标状态，判定取根会话的账本（见 goal_gate_rt）
         let goal_rt = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
         let goal_exec = crate::core::agent::goal::goal_execute_phase(&goal_rt);
+        if goal_exec {
+            policy.confirm_inside_writes = true;
+        }
         // 需确认级（工作区内写 / 工作区外新建）携带的写目标：免确认后仍要过账本
         let mut confirm_path: Option<String> = None;
         match crate::safety::fence::check_command_policy(&args.command, &cwd, &roots, policy) {
@@ -742,7 +745,10 @@ impl Tool for CommandTool {
         // 目标档执行期：账本判定（程序名 + 需确认级携带的写目标）——越界即拒，不弹审批
         if goal_exec {
             use crate::core::agent::goal::{LedgerTarget, ledger_denial_message, ledger_gate};
-            let program = crate::core::agent::goal::program_of_command(&args.command);
+            let program = match crate::core::agent::goal::goal_command_program(&args.command) {
+                Ok(program) => program,
+                Err(message) => return ToolOutcome::err("E_GOAL_COMMAND_SHAPE", message),
+            };
             let mut checks = vec![(LedgerTarget::Program(program.as_str()), program.clone())];
             if let Some(p) = confirm_path.as_deref() {
                 checks.push((LedgerTarget::Path(p), p.to_string()));

@@ -1,5 +1,5 @@
 // 每个 Tab 运行态 store 的共享类型（run.ts、runFrames.ts 与 UI 组件共同消费）。
-import type { ApprovalMode, AskQuestionPayload, Breakdown, GoalState, Todo } from "../ipc/types";
+import type { ApprovalMode, AskQuestionPayload, Breakdown, GoalState, HistoryBoundary, HistoryFormat, Todo } from "../ipc/types";
 
 /** 工具卡视图模型：timeline 锚点（callKey）+ 卡体数据；progressTail 为流式进度尾迹 */
 export interface ToolView {
@@ -118,6 +118,37 @@ export interface ComposerDraft {
   refs: string[];
 }
 
+/** 历史分页游标（分段 append-only JSONL · 批2 P3）：首屏 1 段 + 逐段前翻的界面状态。
+ *
+ *  与后端 `load_session` 的 `paging` 字段对应，但键名走前端惯例（camelCase），并多两个纯前端字段：
+ *  `loadedPages`（内存有界策略的计数依据）与 `loading`。
+ *
+ *  缺省（undefined / null）＝**未分页**：新建会话、尚未加载、旧后端只回 `Message[]`、legacy 会话
+ *  （首屏即整份，没有更早内容）——上述情形界面一律不显示「加载更早的」入口。 */
+export interface HistoryPaging {
+  /** 落盘格式：new = 段式 JSONL（可逐段前翻）；legacy = 旧单文件（无更早） */
+  format: HistoryFormat;
+  /** 已加载到的最早段序号（1 起；legacy / 无段 = 0）——下一次前翻的 `before_seq` */
+  loadedFromSeq: number;
+  /** 首屏段序号（**不随前翻变化**）：「收起更早的」据此把转录裁回首屏那一段 */
+  firstLoadedSeq: number;
+  /** 更早是否还有**可读**的段 */
+  hasMore: boolean;
+  /** 磁盘上的消息总数（display 口径；仅供展示） */
+  totalMessages: number;
+  /** 段文件总数 */
+  segmentCount: number;
+  /** 已加载页数（首屏 = 1，每成功前翻一页 +1）——内存有界（MAX_PAGED_PAGES）的计数依据 */
+  loadedPages: number;
+  /** 前翻请求进行中（入口 loading + 防重入） */
+  loading: boolean;
+  /** 已加载段范围内**跳过的坏段数**（首屏取 `paging.bad_segments`，前翻按回传值累加）——
+   *  转录顶部轻量提示的数据源（>0 才显，见 ChatMessages）。可选：旧后端 / 测试夹具缺省 = 0。 */
+  badSegments?: number;
+  /** 上一次前翻失败：入口保留可重试；已有转录一字不动 */
+  failed?: boolean;
+}
+
 /** 单个 Tab 的全部运行态（run store 的分桶单元，blank() 给出初值）。
  *  契约：帧 reducer（runFrames.ts）与事件 handler（runHandlers.ts）在此结构上就地变异（immer 草稿）。 */
 export interface TabRunState {
@@ -171,6 +202,22 @@ export interface TabRunState {
    *  与 `usage` 的关键差别是「不跨 run 累加」——`send()` 处归零，否则速率会跨轮累积失真。
    *  可选：缺省 = 本轮无 usage 数据（旧后端 / 重挂载后未收到帧）→ 速率段整体隐藏。 */
   runMetrics?: RunMetrics;
+  /** 历史分页游标（分段 append-only JSONL · 批2 P3）：缺省 = 未分页（不显示「加载更早的」入口）。
+   *  可选：仅首屏恢复（`load_session`）会建立它，既有测试夹具的字面量可缺省——
+   *  消费方（ChatMessages）已做缺省处理。 */
+  paging?: HistoryPaging | null;
+  /** 转录项的**稳定渲染键**（批2 P3 AC-14），与 `items` **头部对齐**：`itemKeys[i]` ↔ `items[i]`。
+   *
+   *  长度 ≤ `items.length`：超出部分是本次运行新产生的项，按到达顺序取 `live:<序数>`（见 utils/scrollAnchor 的
+   *  `itemKeysOf`）——恢复自磁盘的项用「段号 + 段内序号」（`s<段号>:<序>`），因此：
+   *  **前插更早内容**（分页）不动任何已有键，**尾部追加**（流式）也不动——只有数组下标会两头漂移。 */
+  itemKeys?: string[];
+  /** 上下文压缩边界（批2 P2）：按 `seq` 升序去重，只管**已加载段范围内**的边界。
+   *
+   *  缺省 = 无边界（旧后端 / legacy / 从未压缩过）——界面不渲染分隔线，也不报错。
+   *  渲染位置不存下标：由 [utils/scrollAnchor.boundaryAtIndexes] 在渲染时按稳定键的段号现算，
+   *  因为分页前插会整体挪动下标，而段号（`s<段号>:<段内序>` 的前半）不动。 */
+  boundaries?: HistoryBoundary[];
 }
 
 /** 本轮运行计数（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。派生展示口径全在

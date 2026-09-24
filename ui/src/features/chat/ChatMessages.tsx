@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Image, Tooltip } from "antd";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Alert, Button, Divider, Image, Tooltip } from "antd";
 import {
   CheckOutlined,
   CopyOutlined,
@@ -12,7 +12,7 @@ import {
   RightOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { useActiveRun, useRun } from "../../stores/run";
+import { MAX_PAGED_PAGES, useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import { upgradeDiagrams } from "../../utils/diagrams";
@@ -20,10 +20,12 @@ import type { UiItem } from "../../stores/run";
 // 滚动锚点（会话保存与恢复优化 · 批1）：锚点读写与现场态落盘的调用链见本文件「滚动锚点」一节。
 import {
   bottomScrollTarget,
+  boundaryAtIndexes,
   captureAnchor,
   collectNodes,
   isAtBottom,
   isSelfScroll,
+  itemKeysOf,
   itemSig,
   restoreAnchor,
 } from "../../utils/scrollAnchor";
@@ -47,11 +49,11 @@ function lastItem_kind(items: UiItem[]): string {
   return items.length ? items[items.length - 1].kind : "";
 }
 
-/** 消息行锚点标注：scrollAnchor.ts 的 collectNodes 按 data-sig / data-idx 收集可锚定节点。
+/** 消息行锚点标注：scrollAnchor.ts 的 collectNodes 按 data-key（稳定键，主）+ data-sig（指纹兜底）收集可锚定节点。
  *  仅作定位参考（不加样式、不改结构语义）；传字面量属性而非对象，避免 memo 因对象身份失效。 */
 interface AnchorAttrs {
+  anchorKey: string;
   anchorSig: string;
-  anchorIdx: number;
 }
 
 /** 用户消息：文本气泡 + 图片缩略（可预览）；悬停操作提供复制与「修改」（经 ws:composer-fill 回填 Composer，不自动发送）。 */
@@ -59,8 +61,8 @@ const UserMessage = memo(function UserMessage({
   text,
   createdAt,
   images,
+  anchorKey,
   anchorSig,
-  anchorIdx,
 }: {
   text: string;
   createdAt?: string;
@@ -86,7 +88,7 @@ const UserMessage = memo(function UserMessage({
     window.dispatchEvent(new CustomEvent("ws:composer-fill", { detail: { text, images } }));
   };
   return (
-    <div className="msg user" data-sig={anchorSig} data-idx={anchorIdx}>
+    <div className="msg user" data-key={anchorKey} data-sig={anchorSig}>
       <div className="role">
         <span className="ts">{ts(createdAt)}</span>
         <span>{t("chat.you")}</span>
@@ -130,15 +132,15 @@ const AssistantMessage = memo(function AssistantMessage({
   item,
   streaming,
   onUserToggle,
+  anchorKey,
   anchorSig,
-  anchorIdx,
 }: {
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
   onUserToggle?: () => void;
 } & AnchorAttrs) {
   return (
-    <div className="msg assistant" data-sig={anchorSig} data-idx={anchorIdx}>
+    <div className="msg assistant" data-key={anchorKey} data-sig={anchorSig}>
       <div className="role">
         <span>CodeWave</span>
         <span className="ts">{ts(item.createdAt)}</span>
@@ -153,6 +155,23 @@ const AssistantMessage = memo(function AssistantMessage({
         </span>
       )}
     </div>
+  );
+});
+
+/** 上下文压缩边界分隔线（批2 P2）：插在「段号 ≥ 边界 `seq` 的第一条消息」之前，语义是
+ *  「此前的上下文已被压缩——模型不再看到更早内容，但完整历史仍可向前翻页查看」。
+ *
+ *  轻量提示用 antd `Divider`（项目约定：组件样式一律 antd 接管，不手搓皮肤），悬停给出完整解释。
+ *  `source`（compact / shrink）两者文案相同，只落到 `data-boundary-source` 上供排障；`at` 留在 store 里。
+ *  根元素无 `data-key`：滚动锚点收集（collectNodes）天然跳过它，不参与锚点定位。 */
+const CompactionDivider = memo(function CompactionDivider({ seq, source }: { seq: number; source?: string }) {
+  const { t } = useTranslation();
+  return (
+    <Divider plain data-boundary-seq={seq} data-boundary-source={source ?? "compact"} style={{ margin: "10px 0" }}>
+      <Tooltip title={t("chat.compactedBoundaryHint")}>
+        <span style={{ fontSize: 12.5 }}>{t("chat.compactedBoundary")}</span>
+      </Tooltip>
+    </Divider>
   );
 });
 
@@ -412,44 +431,83 @@ export default function ChatMessages() {
     }
   };
 
+  // ---------- 历史分页（批2 P3）：入口显隐 / 逐段前翻 / 收起更早的 ----------
+  // 门 = 「段式会话」本身（`format === "new"`），不掺 hasMore / loadedPages：单段新格式会话顶部
+  // 也要给终态「已到最早的消息」——否则「确实没有更早内容」与「入口坏了」在界面上无法区分（AC-12），
+  // 「有没有更早内容」交给门内的 canLoadEarlier 决定。legacy 会话首屏即整份（format = legacy）、
+  // 旧后端不给 paging，两种情形都不出这一行。
+  const paging = active.paging ?? null;
+  const pagedEarlier = !!paging && paging.loadedPages > 1;
+  const atPageLimit = !!paging && paging.loadedPages >= MAX_PAGED_PAGES;
+  const canLoadEarlier = !!paging && paging.format === "new" && paging.hasMore && !atPageLimit;
+  const pagingBar = !!paging && paging.format === "new";
+  // 坏段提示（批2 P2）：>0 才渲染（0 / 缺字段时零打扰）；口径 = 已加载段范围内跳过的段数
+  const badSegments = paging?.badSegments ?? 0;
+
+  /** 前翻：先把当前阅读位置记成待还原锚点——更早一段前插后由「二次校正」effect 把它落回原处（AC-13）。
+   *  稳定键（data-key）保证锚点项在前插后仍能命中：这正是批1 的 idx 语义被分页破坏的那一环。
+   *  贴底锚点不登记：前插不动 scrollTop，视口自然停在更早内容那一侧（强行还原贴底反而被弹回最新处）。 */
+  const onLoadEarlier = () => {
+    const el = scroller.current;
+    if (!el || !activeKey) return;
+    const anchor = captureAnchor(el);
+    pendingAnchor.current = anchor.kind === "item" ? anchor : null;
+    suspendFollow();
+    void useRun.getState().loadEarlier(activeKey);
+  };
+
+  /** 收起更早的（AC-15 内存有界）：丢掉前翻加载的旧段，回首屏那一段 */
+  const onCollapseEarlier = () => {
+    if (activeKey) useRun.getState().collapseEarlier(activeKey);
+  };
+
   function pick(s: string) {
     void useRun.getState().send(s);
   }
 
-  const renderItem = (item: UiItem, i: number) => {
-    // 锚点指纹：scrollAnchor.collectNodes 按 data-sig（主）+ data-idx（精确提示）收集可锚定节点；
-    // sig 是字符串，memo 组件按值比较不受影响（不传对象，避免身份每次变化击穿 memo）。
+  /** 与 items 同序的稳定渲染键（AC-14）：恢复自磁盘的前缀用「段号 + 段内序号」，其余按 live 序数（见 itemKeysOf） */
+  const keys = itemKeysOf(active.items, active.itemKeys);
+
+  /** 压缩边界分隔线的落点（批2 P2）：由稳定键的段号现算（见 boundaryAtIndexes）——
+   *  前翻把更早段插到头部后位置自然跟随，store 侧不存任何下标。 */
+  const boundaryAt = boundaryAtIndexes(keys, active.boundaries);
+
+  /** 渲染一条转录项。`itemKey` = 稳定键（AC-14）：既作 React key，也打给 DOM 供滚动锚点定位——
+   *  用数组下标作 key 时，分页前插会让所有节点错位（同一条消息被重挂、局部状态丢失）。 */
+  const renderItem = (item: UiItem, itemKey: string) => {
+    // 锚点定位依据：scrollAnchor.collectNodes 按 data-key（主）+ data-sig（指纹兜底）收集；
+    // 两者都是字符串，memo 组件按值比较不受影响（不传对象，避免身份每次变化击穿 memo）。
     const anchorSig = itemSig(item);
     if (item.kind === "user") {
       return (
         <UserMessage
-          key={i}
+          key={itemKey}
           text={item.text}
           createdAt={item.createdAt}
           images={item.images}
+          anchorKey={itemKey}
           anchorSig={anchorSig}
-          anchorIdx={i}
         />
       );
     }
     if (item.kind === "assistant") {
       return (
         <AssistantMessage
-          key={i}
+          key={itemKey}
           item={item}
           streaming={item.streaming}
           onUserToggle={suspendFollow}
+          anchorKey={itemKey}
           anchorSig={anchorSig}
-          anchorIdx={i}
         />
       );
     }
     if (item.kind === "sub") {
-      return <SubagentItemCard key={item.subId} subId={item.subId} />;
+      return <SubagentItemCard key={itemKey} subId={item.subId} />;
     }
     if (item.kind === "notice") {
       return (
-        <div key={i} className="notice-line dim" data-sig={anchorSig} data-idx={i} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
+        <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
       );
     }
     if (item.kind === "error") {
@@ -463,7 +521,7 @@ export default function ChatMessages() {
         : null;
       return (
         <Alert
-          key={i}
+          key={itemKey}
           type="error"
           showIcon={false}
           style={{ margin: "8px 0" }}
@@ -510,7 +568,38 @@ export default function ChatMessages() {
             </div>
           </div>
         )}
-        {active.items.map(renderItem)}
+        {/* 坏段提示（批2 P2）：转录顶部一条轻量告警——有段读不出来，但其余内容正常；不打断阅读 */}
+        {badSegments > 0 && (
+          <Alert type="warning" showIcon style={{ margin: "8px 0" }} title={t("chat.badSegments", { n: badSegments })} />
+        )}
+        {/* 历史分页入口（批2 P3 AC-12）：随内容滚动，不打锚点标（collectNodes 自然跳过） */}
+        {pagingBar && (
+          <div className="paging-bar" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "4px 0" }}>
+            {canLoadEarlier ? (
+              <Button type="text" size="small" loading={paging!.loading} onClick={onLoadEarlier}>
+                {t("chat.loadEarlier")}
+              </Button>
+            ) : (
+              <span className="dim" style={{ fontSize: 12.5 }}>
+                {atPageLimit ? t("chat.loadEarlierCap", { pages: MAX_PAGED_PAGES }) : t("chat.earliest")}
+              </span>
+            )}
+            {pagedEarlier && (
+              <Button type="text" size="small" onClick={onCollapseEarlier}>
+                {t("chat.collapseEarlier")}
+              </Button>
+            )}
+          </div>
+        )}
+        {active.items.map((item, i) => (
+          // Fragment 只作分组（DOM 上不产生节点）：分隔线要与它那条消息同组，稳定键打在分组上
+          <Fragment key={keys[i]}>
+            {(boundaryAt.get(i) ?? []).map((b) => (
+              <CompactionDivider key={`bd:${b.seq}:${b.source ?? "compact"}`} seq={b.seq} source={b.source} />
+            ))}
+            {renderItem(item, keys[i])}
+          </Fragment>
+        ))}
 
         {active.suggestions.length > 0 && !active.running && (
           <div className="chips">

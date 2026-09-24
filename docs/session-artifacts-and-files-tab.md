@@ -16,6 +16,7 @@
   - `load_artifacts(id)`：无文件/损坏返回空（登记是辅助视图，不阻断会话；追加后自愈）；
   - `remove()` 级联删除 artifacts 边车，**顺带补删此前泄漏未清理的 `<id>.todos.json`**。
 - **登记点 = 工具体内部**（`tools/create.rs` / `tools/edit.rs`）：`atomic_write` 成功后调 `ctx.core.store.append_artifact(...)`。放工具体而非 batch 层的原因：`ToolCtx` 同时持有 `core` 与 `rt`，主会话与子代理两条执行路径天然全覆盖。三条护栏：登记路径先经 `canonical_best_effort` 归一（AI 相对/绝对路径混写同一文件仍去重为一条）；计划任务 runtime（`is_task_runtime`，产物登记无消费点）跳过登记防边车泄漏；登记失败仅 `tracing::warn`，不影响工具结果。edit 一次写多文件时逐个登记。
+- **相邻机制（[session-restore-fidelity](./session-restore-fidelity.md)）**：**工具结果原样 sidecar**（`sessions/<id>.toolres/<call_id>.json`）与本边车**不是一回事**——它按 provider 侧 `tool_use.id` 存「前端当时那份完整出参」，只在「模型侧文本被瘦身」时写入，供恢复时回填工具卡（大 html / grep 命中 / 网页正文 / 文档读取 / edit 列表 / ask 载荷）。它**不登记进产物边车、不进右栏「文件」面板**（面板数据源仍只放行 `kind == File`），随会话目录级联删除（与 `histories/subs/<parent>/` 同范式），并单独进入索引外残留扫描。
 - **新 IPC 命令**（`host/commands.rs` + `lib.rs` 注册）：
   - `list_session_files(session_id)`：读边车（子代理会话查归属 root）→ last_at 降序 → stat 补 `exists` / `size`（文件被外部删除时 exists=false）。主体逻辑独立为 `session_files_payload()` 便于测试；
   - `read_workspace_file_base64(session_id, path)`：与 `read_workspace_file` 同 `resolve_read` 根校验、同 1MB 上限，返回 base64（图片预览；文本通道是 UTF-8 lossy 读不了二进制）。主体独立为 `read_file_base64()`；

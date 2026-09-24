@@ -64,7 +64,7 @@ pub async fn execute_batch(
             );
             emit_result(&sink, rt, run_id, &batch_id, c, &out, 0);
             // vision 传 false：本路径（ask/wait/suggest 违反独占）只会产出错误结果，不可能带图片
-            results.push(model_content(core, c, &out, None, false));
+            results.push(model_content(core, rt, c, &out, None, false));
         }
         return BatchOutcome {
             results,
@@ -316,7 +316,7 @@ pub async fn execute_batch(
             Content::Text { text } => Some(text.clone()),
             _ => None,
         });
-        results.push(model_content(core, call, &out, hint, vision));
+        results.push(model_content(core, rt, call, &out, hint, vision));
         // 图片块（read 读图）跟在本条 ToolResult 之后进同一条工具消息：出网副本层
         // （agent/stream.rs::route_tool_images）再把它们搬进紧随其后的用户消息 —— 工具消息里的
         // 图片块两个协议的 convert_message 都会丢弃，而图片本体也绝不能挤进 ToolResult 文本
@@ -706,6 +706,7 @@ async fn run_tool(
 /// model_hint_non_empty：非空时追加到 content 尾部（plan 软提醒走 ToolResult 通道到达模型）。
 fn model_content(
     core: &Arc<AgentCore>,
+    rt: &crate::core::agent::SessionRuntime,
     call: &NormalizedCall,
     out: &ToolOutcome,
     model_hint_non_empty: Option<String>,
@@ -717,6 +718,14 @@ fn model_content(
         .map(|t| t.kind())
         .unwrap_or(ToolKind::Meta);
     let mut text = crate::tools::compact::compact_for_model(kind, &call.name, out, vision);
+    // 工具结果原样备份（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    // 历史里只有这份模型侧文本，**解析不了就说明恢复端拿不回全量**（头尾截断、失败结果的 [error …] 前缀）
+    // → 按 provider 侧 tool_use id 存一份整套 ToolOutcome，供前端恢复时按需回读。
+    // 判定必须在追加 model hint 之前（否则任何带提醒的结果都会被误判）。
+    if crate::core::sessions::tool_results::should_persist(&text, out) && !rt.is_task_runtime {
+        let owner = rt.root_session_id.clone().unwrap_or_else(|| rt.id.clone());
+        crate::core::sessions::tool_results::save(&core.store, &owner, &call.id, out, None);
+    }
     if let Some(hint) = model_hint_non_empty {
         text.push_str(&hint);
     }
@@ -885,6 +894,75 @@ fn canonical_arg_paths(workspace: &std::path::Path, args: &serde_json::Value) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 工具结果原样 sidecar 的**接线**回归（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    /// 只有「模型侧文本解析不了」的出参才落盘，且落在 `<data_dir>/sessions/<会话>.toolres/<call_id>.json`。
+    /// 守的是批次层那个调用点本身——删掉它、写错 owner、去掉 task-runtime 判断都会转红。
+    #[tokio::test]
+    async fn lossy_tool_result_is_persisted_and_parseable_one_is_not() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "wpersist",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let dir = core.store.tool_results_dir("wpersist");
+        let mk = |id: &str, html: String, index: usize| crate::core::agent::NormalizedCall {
+            id: id.into(),
+            name: "render_html".into(),
+            args: serde_json::json!({ "html": html, "title": "t" }),
+            index,
+        };
+
+        // 大 html（> HEAD 4KB + TAIL 8KB）→ 模型侧必被截断 → 落盘
+        execute_batch(
+            &core,
+            &rt,
+            vec![mk("call-big", "x".repeat(20_000), 0)],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        let saved = dir.join("call-big.json");
+        assert!(saved.exists(), "被截断的出参必须落盘（批次层接线）");
+        let rec: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+        assert_eq!(
+            rec["outcome"]["ok"],
+            serde_json::json!(true),
+            "存的是整套 ToolOutcome 信封"
+        );
+
+        // 小出参（模型侧可解析）→ 不落盘
+        execute_batch(
+            &core,
+            &rt,
+            vec![mk("call-small", "<b>hi</b>".into(), 0)],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run2",
+        )
+        .await;
+        assert!(
+            !dir.join("call-small.json").exists(),
+            "可解析的小出参不该落盘"
+        );
+    }
 
     /// 批次取消盲区修复回归：批次执行中途置位取消 → 收口 abort 全部在途任务，
     /// 所有未完成调用合成 E_CANCELLED 结果（批次必有完整结果，不留悬空 tool_use）。

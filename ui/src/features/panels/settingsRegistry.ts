@@ -160,6 +160,10 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "sessions.retention_days", labelKey: "settings.sessionRetention", page: "agent", width: "narrow", keywords: ["session", "retention", "cleanup", "会话保留期", "保留期", "清理", "自动清理", "删除会话"] },
   { id: "app.cleanup_now", labelKey: "settings.cleanupNow", page: "agent", keywords: ["cleanup", "清理", "立即清理", "clean up now", "删除会话"] },
   { id: "app.cleanup_status", labelKey: "settings.cleanupStatus", page: "agent", keywords: ["cleanup", "清理", "上次清理", "last cleanup", "清理记录"] },
+  // 旧格式历史清理（分段 JSONL 落地后的显式入口）：同样是动作 + 只读状态两项，`app.*` 无落盘字段；
+  // 铁律是「只删已有新格式段数据的旧 .json.gz」——见 src-tauri/src/core/sessions/cleanup.rs
+  { id: "app.legacy_history_cleanup", labelKey: "settings.legacyHistoryCleanup", page: "agent", keywords: ["legacy", "history", "cleanup", "旧格式", "旧格式历史", "清理旧格式历史", "回收空间", "reclaim", "history cleanup"] },
+  { id: "app.legacy_history_status", labelKey: "settings.legacyHistoryStatus", page: "agent", keywords: ["legacy", "history", "旧格式历史", "可回收", "保留", "reclaimable"] },
 
   // ---------- 日志 ----------
   { id: "log.level", labelKey: "settings.logLevel", page: "logs", width: "narrow", keywords: ["log", "日志", "级别", "debug"] },
@@ -224,6 +228,8 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
   "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
   "app.cleanup_status", // 整行只读信息项：标签 + extra 说明 + 「时间 · 删除条数」回显，无独立控件
+  "app.legacy_history_cleanup", // 动作行（预览 + 清理两个按钮 + 预览结果文本），宽度随文案
+  "app.legacy_history_status", // 整行只读信息项：标签 + 说明 + 「可回收 / 必须保留」回显，无独立控件
   "app.mcp_status", // 整行只读状态表：服务器名 / 状态 / 工具数三列（列宽由 app.css 网格定，无控件宽度档）
 
   // —— 关于页的只读信息与目录 / 许可证入口（批④）：整行「标签 + extra 说明 + 值/按钮」，无独立控件宽度 ——
@@ -521,6 +527,27 @@ export const SHELL_SETTING_KEYS: string[] = [
   "cleanupFailed", // → 清理后「N 个会话未能清理」的警示（手动 / 保存两条路径共用）
   "cleanupOrphanExtra", // → 会话与残留数据文件同时要删时，确认框里补的一句残留条数
   "cleanupDoneOrphans", // → 同一情形的完成提示后缀（另有 N 个残留数据文件）
+
+  // —— 旧格式历史清理的从属文案（项已登记：app.legacy_history_cleanup / app.legacy_history_status）
+  //    （分段 JSONL 落地后的显式入口；铁律「只删已有新格式数据的旧文件」）——
+  "legacyHistoryHint", // → app.legacy_history_cleanup 的说明（什么可以安全删）
+  "legacyHistoryPreview", // → 动作：预览可回收空间
+  "legacyHistoryNow", // → 动作：立即清理旧格式历史
+  "legacyHistoryStatusHint", // → app.legacy_history_status 的说明
+  "legacyHistoryUnknown", // → 预览结果未取到时的状态行回退
+  "legacyHistoryNone", // → 没有任何旧格式历史（无需清理）
+  "legacyHistoryNoneCleanable", // → 只有必须保留的那类（带 {{n}}）
+  "legacyHistoryPreviewLine", // → 状态行：可回收 N 个会话（约 SIZE）
+  "legacyHistoryPreviewKeep", // → 状态行后缀：另有 N 个必须保留（带 {{n}}）
+  "legacyHistoryPreviewDone", // → 预览成功的轻提示（带 {{n}} 与 {{size}}）
+  "legacyHistoryConfirmTitle", // → 清理确认框标题
+  "legacyHistoryConfirmDesc", // → 确认框说明（带 {{n}} 与 {{size}}）
+  "legacyHistoryConfirmKeep", // → 确认框里补一句保留条数（带 {{n}}，避免用户以为全清）
+  "legacyHistoryConfirmOk", // → 确认框的确认按钮
+  "legacyHistoryDone", // → 完成提示（删除 N 个会话 / M 个文件 / 释放 SIZE）
+  "legacyHistoryKept", // → 完成后的保留提示（带 {{n}}）
+  "legacyHistoryFailed", // → 清理失败条数的警示（带 {{n}}）
+  "legacyHistoryPreviewFailed", // → 预览失败的提示（本次不清理）
 
   // —— 日志的从属文案（项已登记：log.*） ——
   "logLevelHint", // → log.level 的说明

@@ -23,7 +23,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, LegacyCleanupPreview, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -117,6 +117,18 @@ function formatCleanupTime(raw: string): string {
 function cleanupPendingCount(preview: CleanupPreview): number {
   // 字段缺省兜底：老后端没有 orphan_count 时按 0 算，不因一个缺失字段让确认框永远弹不出来
   return (preview.count ?? 0) + (preview.orphan_count ?? 0);
+}
+
+/**
+ * 字节数的人类可读写法（**前端格式化**：后端只回字节数，绝不塞格式化字符串）。
+ * 四档与 `stores/runHandlers.ts` 的同类函数同形；0 字节回「0 B」而不是硬抬成「1 KB」。
+ */
+function formatBytes(bytes?: number | null): string {
+  const n = Math.max(0, Math.floor(bytes ?? 0));
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
 /** 搜索命中后的临时高亮时长（毫秒）：到点自动摘掉 .settings-item-hit */
@@ -331,6 +343,10 @@ export default function SettingsPage() {
    * 正常路径都是一次确认紧接一次完成提示；读取时顺手清零，避免陈旧值粘到下一条无关的完成提示上。
    */
   const confirmedOrphansRef = useRef(0);
+  /** 旧格式历史清理（P5）：预览结果（null = 未取到）。进入设置页拉一次，预览与每次清理后刷新 */
+  const [legacyPreview, setLegacyPreview] = useState<LegacyCleanupPreview | null>(null);
+  /** 旧格式历史的预览 / 执行共用的进行中标记：按钮转圈 + 防重复点击 */
+  const [legacyBusy, setLegacyBusy] = useState(false);
 
   // ---------- 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)） ----------
   /** 搜索查询串。trim 后非空即「搜索态」：结果列表替掉左导航 tablist（两套列表不同时存在） */
@@ -453,6 +469,8 @@ export default function SettingsPage() {
       setSysProxy(await ipc.resolveProxy().catch(() => null));
       // 上次清理记录（只读行数据源）：同样失败静默 —— 只读信息缺失不该阻断设置页
       setCleanupStatus(await ipc.getCleanupStatus().catch(() => null));
+      // 旧格式历史统计（旧格式清理只读行数据源）：同样失败静默
+      setLegacyPreview(await ipc.previewLegacyHistoryCleanup().catch(() => null));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -648,6 +666,135 @@ export default function SettingsPage() {
       message.error(String(e));
     } finally {
       setCleaning(false);
+    }
+  }
+
+  // ---------- 旧格式历史清理（分段 JSONL 落地后的显式入口；P5） ----------
+
+  /**
+   * 状态行文案（数据源 = 预览命令）：三种形态各有说法——
+   * 「完全没有旧格式历史」「有旧的但全在保留侧」「有可回收的」；
+   * 用户必须能一眼看出有没有事可做（点了没反应是最差的表现）。
+   */
+  function legacyStatusText(): string {
+    if (!legacyPreview) return t("settings.legacyHistoryUnknown");
+    const cleanable = legacyPreview.cleanable_sessions ?? 0;
+    const keep = legacyPreview.keep_sessions ?? 0;
+    if (cleanable === 0 && keep === 0) return t("settings.legacyHistoryNone");
+    if (cleanable === 0) return t("settings.legacyHistoryNoneCleanable", { n: keep });
+    const base = t("settings.legacyHistoryPreviewLine", {
+      n: cleanable,
+      size: formatBytes(legacyPreview.cleanable_bytes),
+    });
+    return keep > 0 ? `${base}${t("settings.legacyHistoryPreviewKeep", { n: keep })}` : base;
+  }
+
+  /** 「无事可做」的统一说法（预览与执行两条路径共用）：必须把「保留 N 个」说出来，
+   *  否则用户看到「不可回收」会以为我们静默失败 */
+  function reportNothingCleanable(preview: LegacyCleanupPreview) {
+    const keep = preview.keep_sessions ?? 0;
+    message.info(
+      keep > 0 ? t("settings.legacyHistoryNoneCleanable", { n: keep }) : t("settings.legacyHistoryNone"),
+    );
+  }
+
+  /** 预览可回收的旧格式历史：只读盘、不删任何文件；结果同时刷到只读行 */
+  async function previewLegacyHistory() {
+    if (legacyBusy) return;
+    setLegacyBusy(true);
+    try {
+      const preview = await ipc.previewLegacyHistoryCleanup();
+      setLegacyPreview(preview);
+      if ((preview.cleanable_sessions ?? 0) === 0) {
+        reportNothingCleanable(preview);
+        return;
+      }
+      message.info(
+        t("settings.legacyHistoryPreviewDone", {
+          n: preview.cleanable_sessions,
+          size: formatBytes(preview.cleanable_bytes),
+        }),
+      );
+    } catch {
+      message.error(t("settings.legacyHistoryPreviewFailed"));
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
+
+  /** 确认框内容：条数 + 体积 + 「另有 N 个会保留」——不说最后一句，用户会以为全都清了 */
+  function legacyConfirmContent(preview: LegacyCleanupPreview) {
+    const keep = preview.keep_sessions ?? 0;
+    return (
+      <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
+        <div>
+          {t("settings.legacyHistoryConfirmDesc", {
+            n: preview.cleanable_sessions,
+            size: formatBytes(preview.cleanable_bytes),
+          })}
+        </div>
+        {keep > 0 && <div className="dim">{t("settings.legacyHistoryConfirmKeep", { n: keep })}</div>}
+      </div>
+    );
+  }
+
+  /** 旧格式历史的确认框（与保留期清理同一形态：单一承诺、不双应答；确认按钮走危险色） */
+  function confirmLegacyCleanup(preview: LegacyCleanupPreview): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      modal.confirm({
+        title: t("settings.legacyHistoryConfirmTitle"),
+        content: legacyConfirmContent(preview),
+        okText: t("settings.legacyHistoryConfirmOk"),
+        cancelText: t("common.cancel"),
+        okButtonProps: { danger: true },
+        onOk: () => settle(true),
+        onCancel: () => settle(false),
+      });
+    });
+  }
+
+  /**
+   * 执行「清理旧格式历史」：先预览（确认框里的数就是将要删的数）→ 确认 → 执行 → 报回收统计。
+   * 无事可做（可回收 0 个）时只给轻提示：不弹确认框、不发执行命令。
+   * 后端只会删「已有新格式数据」的旧文件，其余按 `kept_sessions` 保留——保留数必须报出来，
+   * 否则用户会以为「点了一次清理但什么都没发生」。
+   * 执行后再拉一次预览：只读行不会留着过期的可回收数。
+   */
+  async function runLegacyHistoryCleanup() {
+    if (legacyBusy) return;
+    setLegacyBusy(true);
+    try {
+      const preview = await ipc.previewLegacyHistoryCleanup();
+      setLegacyPreview(preview);
+      if ((preview.cleanable_sessions ?? 0) === 0) {
+        reportNothingCleanable(preview);
+        return;
+      }
+      const ok = await confirmLegacyCleanup(preview);
+      if (!ok) return;
+      const outcome = await ipc.runLegacyHistoryCleanup();
+      message.success(
+        t("settings.legacyHistoryDone", {
+          n: outcome.deleted_sessions,
+          m: outcome.deleted_files,
+          size: formatBytes(outcome.freed_bytes),
+        }),
+      );
+      if ((outcome.kept_sessions ?? 0) > 0) {
+        message.info(t("settings.legacyHistoryKept", { n: outcome.kept_sessions }));
+      }
+      if ((outcome.failed ?? 0) > 0) message.warning(t("settings.legacyHistoryFailed", { n: outcome.failed }));
+      setLegacyPreview(await ipc.previewLegacyHistoryCleanup().catch(() => null));
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setLegacyBusy(false);
     }
   }
 
@@ -1833,6 +1980,32 @@ export default function SettingsPage() {
             <div className="setting-anchor" data-setting-id="app.cleanup_status">
               <span className="dim" style={{ fontSize: 12.5 }}>
                 {cleanupStatusText()}
+              </span>
+            </div>
+          </Form.Item>
+          {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：动作行 + 只读状态行，与保留期清理同一形态。
+              铁律「只删已有新格式段数据的旧文件」由后端把关（core/sessions/cleanup.rs），
+              界面负责把「必须保留 N 个」说出来 */}
+          <Form.Item label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
+            <div
+              className="setting-anchor"
+              data-setting-id="app.legacy_history_cleanup"
+              style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
+            >
+              <Button size="small" loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
+                {t("settings.legacyHistoryPreview")}
+              </Button>
+              <Button size="small" danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
+                {t("settings.legacyHistoryNow")}
+              </Button>
+            </div>
+          </Form.Item>
+          <Form.Item label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
+            {/* 只读信息项（数据源 = preview_legacy_history_cleanup）：同样**常驻渲染**，
+                没有旧格式历史时也有话说（不是空行） */}
+            <div className="setting-anchor" data-setting-id="app.legacy_history_status">
+              <span className="dim" style={{ fontSize: 12.5 }}>
+                {legacyStatusText()}
               </span>
             </div>
           </Form.Item>

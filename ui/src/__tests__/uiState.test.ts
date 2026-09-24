@@ -250,7 +250,7 @@ describe("快照往返（buildSnapshot → 磁盘 → loadUiState → 落 store�
       s.tabs.s1.todos = [{ title: "跑测试", status: "in_progress" }];
       s.tabs.s1.subDrawer = { open: true, subId: "sub-1" };
     });
-    setScrollAnchor("s1", { kind: "item", idx: 2, sig: "u:1:3:abc", offset: 12 });
+    setScrollAnchor("s1", { kind: "item", key: "s2:0", sig: "u:1:3:abc", offset: 12 });
     setTreeExpanded({ p1: true });
 
     const snap = await buildSnapshot();
@@ -265,7 +265,7 @@ describe("快照往返（buildSnapshot → 磁盘 → loadUiState → 落 store�
     expect(snap.queue.s2[0]).toEqual({ id: "q1", text: "排队任务", images: [{ mime: "image/png", data: "AAA" }] });
     expect(snap.panels.s1.todos).toEqual([{ title: "跑测试", status: "in_progress" }]);
     expect(snap.panels.s1.subDrawer).toEqual({ open: true, subId: "sub-1" });
-    expect(snap.scrollAnchors.s1).toEqual({ kind: "item", idx: 2, sig: "u:1:3:abc", offset: 12 });
+    expect(snap.scrollAnchors.s1).toEqual({ kind: "item", key: "s2:0", sig: "u:1:3:abc", offset: 12 });
     expect(snap.tree.expanded).toEqual({ p1: true });
     expect(snap.window).toEqual({ x: 50, y: 100, width: 800, height: 600 });
 
@@ -289,7 +289,7 @@ describe("快照往返（buildSnapshot → 磁盘 → loadUiState → 落 store�
     expect(sessions.activeKey).toBe("s1");
     expect(sessions.unread).toEqual({ s2: true });
     expect(getTreeExpanded()).toEqual({ p1: true });
-    expect(getScrollAnchor("s1")).toEqual({ kind: "item", idx: 2, sig: "u:1:3:abc", offset: 12 });
+    expect(getScrollAnchor("s1")).toEqual({ kind: "item", key: "s2:0", sig: "u:1:3:abc", offset: 12 });
     // 草稿/队列/面板按 Tab 打开时机回填
     expect(useRun.getState().drafts.s2.text).toBe("半段草稿");
     expect(useRun.getState().tabs.s2.queue[0].text).toBe("排队任务");
@@ -547,10 +547,10 @@ describe("滚动锚点 / 左栏树状态", () => {
   it("锚点只落盘仍打开的会话（关掉的 Tab 不留孤儿锚点）", async () => {
     seedTab("s1");
     setScrollAnchor("s1", { kind: "bottom" });
-    setScrollAnchor("closed", { kind: "item", idx: 0, sig: "u", offset: 5 });
+    setScrollAnchor("closed", { kind: "item", key: "s0:0", sig: "u", offset: 5 });
     const snap = await buildSnapshot();
     expect(snap.scrollAnchors).toEqual({ s1: { kind: "bottom" } });
-    expect(getScrollAnchor("closed")).toEqual({ kind: "item", idx: 0, sig: "u", offset: 5 }); // 内存仍在，只是不落盘
+    expect(getScrollAnchor("closed")).toEqual({ kind: "item", key: "s0:0", sig: "u", offset: 5 }); // 内存仍在，只是不落盘
     setScrollAnchor("s1", null);
     expect(getScrollAnchor("s1")).toBeNull();
   });
@@ -559,10 +559,10 @@ describe("滚动锚点 / 左栏树状态", () => {
     vi.useFakeTimers();
     seedTab("s1");
     // 防抖窗口内的后续调用直接丢弃（滚动高频回调不反复读布局），落盘的是首个 reader 的结果
-    scheduleAnchor("s1", () => ({ kind: "item", idx: 1, sig: "a", offset: 1 }));
-    scheduleAnchor("s1", () => ({ kind: "item", idx: 2, sig: "b", offset: 2 }));
+    scheduleAnchor("s1", () => ({ kind: "item", key: "s1:1", sig: "a", offset: 1 }));
+    scheduleAnchor("s1", () => ({ kind: "item", key: "s1:2", sig: "b", offset: 2 }));
     await advance(200);
-    expect(getScrollAnchor("s1")).toEqual({ kind: "item", idx: 1, sig: "a", offset: 1 });
+    expect(getScrollAnchor("s1")).toEqual({ kind: "item", key: "s1:1", sig: "a", offset: 1 });
 
     // reader 抛错（容器已卸载）：不把异常抛进事件循环，且防抖标志复位后仍能继续记录
     scheduleAnchor("s1", () => {

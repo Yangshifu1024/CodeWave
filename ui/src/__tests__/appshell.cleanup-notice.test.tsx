@@ -56,13 +56,25 @@ const h = vi.hoisted(() => {
   };
   const listeners = new Map<string, ((e: any) => void)[]>();
   const fn = (impl: (...args: any[]) => any = async () => null) => vi.fn(impl);
+  /** 首屏载荷（批2 P3：`load_session` 返回 `{ messages, paging }`）——legacy 口径：整份给出、无更早内容 */
+  const FIRST_PAGE = {
+    messages: MESSAGES,
+    paging: {
+      format: "legacy",
+      loaded_from_seq: 0,
+      segment_count: 1,
+      total_messages: MESSAGES.length,
+      bytes: 0,
+      has_more: false,
+    },
+  };
   const ipcMethods: Record<string, any> = {
     getConfig: fn(async () => CONFIG),
     getUiState: fn(async () => state.uiState),
     setUiState: fn(async () => undefined),
     listSessions: fn(async () => state.sessions),
     listProjects: fn(async () => []),
-    loadSession: fn(async () => MESSAGES),
+    loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
     connectMcp: fn(async () => ({ started: [], failed: [] })),

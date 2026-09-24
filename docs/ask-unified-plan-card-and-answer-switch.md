@@ -20,7 +20,7 @@
 | 计划文件落盘通用化 | 新增纯函数 `plan_text(questions)`（全部题干以 `\n\n` 拼接）；`save_plan_file` 对**所有** ask 执行（原仅 `arch_gate_shape` 形状）；失败以 `None` 降级不阻塞 ask |
 | 有效应答判定 | 新增纯函数 `has_valid_answer(questions, answer)`：≥1 项 selections 非空或 note trim 非空。与批准命中（`approved_hit` 含「执行方案」子串匹配）**两套独立判定显式分离**，防批准协议被应答语义污染 |
 | 切档判定扩展 | `wants_mode_switch(mode, approved, switch_flag, valid_answer)` 四参化：Plan = `approved`（协议零改动）；ConfirmEach = `switch_flag \|\| valid_answer`；AutoEdit/FullAccess = `false`（严格单级，无 FullAccess 路径） |
-| 双路切档 | **完整路径**（`switch && (Plan \|\| arch_flag)`）：G2/G3 gate 检查 → 冻结 todos 基线 → `run:inject`「按方案执行」→ `plan_approved`（既有行为不变）。**Light 路径**（ConfirmEach 有效应答）：仅 `set_prefs(AutoEdit)` + info 审计日志——不走 gate、不冻基线（`approved_plan` 留空 → batch.rs 范围确认天然不触发）、不注入 |
+| 双路切档 | **完整路径**（`switch && (Plan \|\| arch_flag)`）：G2/G3 gate 检查 → 冻结 todos 基线 → `run:inject`「按方案执行」→ `plan_approved`（既有行为不变）。**Light 路径**（ConfirmEach 有效应答）：仅 `set_prefs(AutoEdit)` + info 审计日志——不走 gate、不冻基线（`approved_plan` 留空 → batch.rs 范围确认天然不触发）、不注入。<br>**后续修订（[docs/preview-skill](./preview-skill.md) §3.4，2026-09-24）**：完整路径收紧为 `switch && (Plan \|\| (arch_flag && approved))`；并新增 `gate_shape = arch_gate_shape(questions)`（单题 + 含 `id="approve"`）条件——**批准闸上只有选中批准项才动档位**，选「补充意见」不再走完整路径也不再轻量切档；非闸形状询问的「任一有效应答即放开」语义不变 |
 | 单测 | `wants_mode_switch` 新矩阵（ConfirmEach 双通道 / Plan 不受 valid_answer 影响 / 宽松档恒 false）、`has_valid_answer` 三态（含空选 + 空 note 无效）、`plan_text` 拼接；既有 gate/形状/camelCase 用例全数保持 |
 
 ## 3. 前端变更（ui/）

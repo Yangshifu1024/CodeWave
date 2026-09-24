@@ -634,6 +634,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
+  "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
   "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
 };
 
@@ -880,5 +881,79 @@ describe("设置项注册表：会话保留期与清理的登记（[docs/session
     const retention = SETTINGS_ITEMS.find((i) => i.id === "sessions.retention_days")!;
     expect(matchSettings("保留期", zhT).map((i) => i.id)).toContain(retention.id);
     expect(matchSettings("清理", zhT).map((i) => i.id)).toContain("app.cleanup_now");
+  });
+});
+
+// ---------- 旧格式历史清理的登记（分段 JSONL 落地后的显式入口） ----------
+
+/**
+ * 旧格式历史清理界面的从属文案键（页内说明 / 两个按钮 / 状态行 / 确认框 / 完成与保留提示）：
+ * **不是**可配置项，故不进 SETTINGS_ITEMS，但必须逐把进 SHELL_SETTING_KEYS——
+ * 否则页体里的 t("settings.X") 会直接判红（引用闭包）。
+ */
+const LEGACY_SHELL_KEYS = [
+  "legacyHistoryHint",
+  "legacyHistoryPreview",
+  "legacyHistoryNow",
+  "legacyHistoryStatusHint",
+  "legacyHistoryUnknown",
+  "legacyHistoryNone",
+  "legacyHistoryNoneCleanable",
+  "legacyHistoryPreviewLine",
+  "legacyHistoryPreviewKeep",
+  "legacyHistoryPreviewDone",
+  "legacyHistoryConfirmTitle",
+  "legacyHistoryConfirmDesc",
+  "legacyHistoryConfirmKeep",
+  "legacyHistoryConfirmOk",
+  "legacyHistoryDone",
+  "legacyHistoryKept",
+  "legacyHistoryFailed",
+  "legacyHistoryPreviewFailed",
+];
+
+describe("设置项注册表：旧格式历史清理的登记", () => {
+  it("两项都是 app.* 动作 / 只读项（不进 PAGE_FIELDS）、带宽度豁免、不标进阶", () => {
+    for (const id of ["app.legacy_history_cleanup", "app.legacy_history_status"]) {
+      const item = SETTINGS_ITEMS.find((i) => i.id === id);
+      expect(item, `注册表缺 ${id}`).toBeTruthy();
+      expect(item!.page, `${id} 不在工作区与智能体页`).toBe("agent");
+      expect(item!.labelKey.startsWith("settings."), `${id} 的 labelKey 不在 settings 段`).toBe(true);
+      expect(
+        (PAGE_FIELDS.agent as string[]).includes(id),
+        `${id} 是 app.* 项（无落盘字段），不该进 PAGE_FIELDS`,
+      ).toBe(false);
+      expect(WIDTH_EXEMPT_ITEM_IDS, `${id} 未登记宽度豁免（无独立控件宽度）`).toContain(id);
+      expect(item!.advanced, `${id} 不该标进阶`).toBeFalsy();
+    }
+    // 进阶项总数不变（页级折叠不牵动旧格式清理界面）
+    expect(ADVANCED_ITEM_IDS.length).toBe(4);
+    expect(advancedCountByPage("agent")).toBe(0);
+  });
+
+  it("两个项名不得再进豁免清单（既是项也是豁免 = 清单重叠）", () => {
+    for (const labelKey of ["legacyHistoryCleanup", "legacyHistoryStatus"]) {
+      expect(SHELL_SETTING_KEYS, `${labelKey} 已是设置项名`).not.toContain(labelKey);
+    }
+  });
+
+  it("从属文案键逐把登记进 SHELL_SETTING_KEYS（未登记即被引用闭包判红）", () => {
+    for (const key of LEGACY_SHELL_KEYS) {
+      expect(SHELL_SETTING_KEYS, `${key} 未登记进 SHELL_SETTING_KEYS`).toContain(key);
+    }
+  });
+
+  it("中英文两套文案齐备（项名 + 全部从属文案）", () => {
+    for (const key of ["legacyHistoryCleanup", "legacyHistoryStatus", ...LEGACY_SHELL_KEYS]) {
+      expect(zhKeys.has(`settings.${key}`), `zh-CN 缺 settings.${key}`).toBe(true);
+      expect(enKeys.has(`settings.${key}`), `en-US 缺 settings.${key}`).toBe(true);
+    }
+  });
+
+  it("可被搜索命中（「旧格式历史」「回收」两个问法都能找到入口）", () => {
+    expect(matchSettings("旧格式历史", zhT).map((i) => i.id)).toContain("app.legacy_history_cleanup");
+    expect(matchSettings("旧格式历史", zhT).map((i) => i.id)).toContain("app.legacy_history_status");
+    expect(matchSettings("回收", zhT).map((i) => i.id)).toContain("app.legacy_history_cleanup");
+    expect(matchSettings("legacy history", enT).map((i) => i.id)).toContain("app.legacy_history_cleanup");
   });
 });

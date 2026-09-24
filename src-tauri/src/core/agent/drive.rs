@@ -15,6 +15,7 @@ use super::stream::{
 use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
 use crate::core::context::{self};
 use crate::core::session_log;
+use crate::core::sessions::SaveReport;
 use crate::core::sessions::repair;
 use crate::core::types::{Content, Message, Role};
 use crate::provider::dto::ProviderError;
@@ -234,7 +235,8 @@ pub async fn run_chat(
 
     match &result {
         Ok(_) => {
-            checkpoint(&core, &rt).await;
+            // 保存结果接入 run:done：不干净（拒存 / 剥图 / 丢轮 / P4 的体积告警与熔断）时带 JSON 载荷告知前端
+            let save = checkpoint(&core, &rt).await;
             session_log::info(
                 &rt,
                 &format!(
@@ -251,6 +253,12 @@ pub async fn run_chat(
             if let Some(items) = suggest_out {
                 payload["suggestions"] = serde_json::json!(items);
             }
+            // 保存不干净才带上（干净路径零打扰，前端据此 push 会话内提示）。
+            // P4：体积状态（`warned` / `fused`）同样由 `is_clean()` 纳入——`SaveReport.history_status`
+            // 随 `to_value` 一起上 wire（形状与索引侧 `SessionMeta.history_status` 同源，前端共用一套文案）
+            if let Some(r) = save.filter(|r| !r.is_clean()) {
+                payload["history_save"] = serde_json::to_value(&r).unwrap_or_default();
+            }
             sink.emit(&rt.id, "run:done", payload);
         }
         Err(ProviderError::Cancelled) => {
@@ -264,7 +272,7 @@ pub async fn run_chat(
             );
         }
         Err(e) => {
-            checkpoint(&core, &rt).await;
+            let _ = checkpoint(&core, &rt).await;
             session_log::error(&rt, &format!("run {run_id} 失败：{e}"));
             sink.emit(
                 &rt.id,
@@ -306,11 +314,17 @@ pub async fn run_chat(
     }
 }
 
-/// 写类工具名（三件套）：plan 档排除（`apply_plan_mode`）与只读子代理的额外排除
+/// 写类工具名：plan 档排除（`apply_plan_mode`）与只读子代理的额外排除
 /// （`tools::subagent::apply_role_policy`）共用同一份名单——两处各自内联会导致
 /// 「新增写工具」时漏改一处。经 `core::agent` re-export 为 `crate::core::agent::WRITE_TOOLS`。
 /// 注意：`command` 刻意不在其列（只读调研需要 git status 等命令，由 fence 逐条把关）。
-pub const WRITE_TOOLS: &[&str] = &["edit", "create", "delete"];
+pub const WRITE_TOOLS: &[&str] = &[
+    "edit",
+    "create",
+    "delete",
+    "write_document",
+    "edit_document",
+];
 
 /// 主会话 DriveParams：按会话审批档位追加排除项与提示文本（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）。
 /// Plan 档收紧（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）：排除写工具 / 后台服务 / 任务运行 + MCP；
@@ -352,7 +366,7 @@ pub(super) fn apply_plan_mode(params: &mut DriveParams, prefs: &crate::core::pre
     );
     params.exclude_mcp = true;
     params.system_extra =
-        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-mode-workflow），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：批准门为 ask 单题并携带 switchToAutoEdit=true，提供两个批准类选项——「执行方案」（切自动编辑档）与「完全访问执行」（切完全访问档）：批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（mode=\"auto_edit\" / mode=\"full_access\"，缺省回落 auto_edit）——不声明就会回落自动编辑档，用户选「完全访问执行」会被静默降级；系统按用户所选档位切档并指示你立即执行；有意见则选「补充意见」——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
+        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-mode-workflow），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：批准门为 ask 单题并携带 switchToAutoEdit=true，提供两个批准类选项——「以自动编辑档执行」（id=approve，切自动编辑档，recommended）与「以完全访问档执行」（id=approve_full，切完全访问档）：批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（mode=\"auto_edit\" / mode=\"full_access\"，缺省回落 auto_edit）——不声明就会回落自动编辑档，用户选「完全访问执行」会被静默降级；系统按用户所选档位切档并指示你立即执行；有意见则选「补充意见」（id=revise）——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问；要看效果则选「先看预览」（id=preview，不带 mode）：先加载 preview 技能渲染方案预览，再重发同一询问——看预览不是批准、不算有效应答，不切档也不计入修订轮次，绝不静默批准。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
             .into();
 }
 
@@ -391,13 +405,16 @@ pub(super) fn apply_goal_mode(
                 WRITE_TOOLS
                     .iter()
                     .copied()
-                    .chain(["command", "service", "scheduled_task"])
+                    .chain(["command", "service", "scheduled_task", "http_request"])
                     .map(String::from),
             );
+            params.exclude_mcp = true;
             params.idle_policy = IdlePolicy::NudgeOnly;
         }
         GoalPhase::Execute => {
             params.exclude_tools.push("ask".into());
+            params.exclude_tools.push("http_request".into());
+            params.exclude_mcp = true;
             params.idle_policy = IdlePolicy::NudgeOnly;
         }
     }
@@ -1649,7 +1666,7 @@ pub async fn drive_agent(
         }
 
         if step % CHECKPOINT_EVERY_STEPS == CHECKPOINT_EVERY_STEPS - 1 {
-            checkpoint(core, rt).await;
+            let _ = checkpoint(core, rt).await;
         }
     }
 
@@ -2246,7 +2263,11 @@ async fn sleep_backoff(attempt: u32) {
 fn batch_digest(calls: &[NormalizedCall]) -> BatchDigest {
     let mut d = BatchDigest::default();
     for c in calls {
-        let readonly = super::supervise::READONLY_TOOLS.contains(&c.name.as_str());
+        let goal_read = c.name == "goal"
+            && c.args
+                .as_object()
+                .is_some_and(|fields| fields.values().all(serde_json::Value::is_null));
+        let readonly = goal_read || super::supervise::READONLY_TOOLS.contains(&c.name.as_str());
         if !readonly {
             d.has_non_readonly = true;
         }
@@ -2333,6 +2354,7 @@ mod tests {
         NormalizedCall, Reasoning400, batch_digest, classify_reasoning_400, stalled,
         update_reasoning_sticky,
     };
+    use crate::core::sessions::SaveReport;
 
     /// 构造归一化工具调用（`batch_digest` 单测用）。
     fn call(name: &str, args: serde_json::Value) -> NormalizedCall {
@@ -2506,6 +2528,117 @@ mod tests {
         );
     }
 
+    // ---- run:done 的 history_save 载荷（保存不干净时的当场上报）----
+
+    /// 干净保存 = 零打扰：不带 history_save 键。
+    #[test]
+    fn history_save_key_absent_when_save_is_clean() {
+        let clean = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 4096,
+            history_status: None,
+        };
+        let saved: Option<SaveReport> = Some(clean);
+        assert!(
+            saved.filter(|r| !r.is_clean()).is_none(),
+            "干净保存不得进入载荷（前端不 push 提示）"
+        );
+        // None（非主会话）同样不带
+        assert!((None::<SaveReport>).filter(|r| !r.is_clean()).is_none());
+    }
+
+    /// 不干净保存 = 带上 history_save，字段名与前端契约一致。
+    #[test]
+    fn history_save_payload_shape_when_degraded() {
+        let degraded = SaveReport {
+            saved: true,
+            stripped_images: 2,
+            dropped_rounds: 3,
+            bytes: 1024,
+            // P4 新增字段：缺省不序列化（干净 / 旧形态的载荷仍是 4 个键）
+            history_status: None,
+        };
+        let r = Some(degraded)
+            .filter(|r| !r.is_clean())
+            .expect("降级保存必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(true));
+        assert_eq!(v["stripped_images"], serde_json::json!(2));
+        assert_eq!(v["dropped_rounds"], serde_json::json!(3));
+        assert_eq!(v["bytes"], serde_json::json!(1024));
+        assert_eq!(
+            v.as_object().map(|o| o.len()),
+            Some(4),
+            "字段形状固定为 4 个键（前端已按此实现）"
+        );
+    }
+
+    /// P4：体积状态随载荷一起上 wire（键名 `history_status`，形状与索引侧同源），
+    /// 且**带体积与阈值**——前端据此格式化 MB / GB 并说清「多大 / 限到多少」。
+    #[test]
+    fn history_save_payload_carries_size_status() {
+        use crate::core::sessions::HistoryStatus;
+        let at = "2026-09-24T00:00:00+00:00".to_string();
+
+        // 软告警：saved 仍为 true，但必须进载荷（否则前端永远看不到提示）
+        let warned = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 300 * 1024 * 1024,
+            history_status: Some(HistoryStatus::Warned {
+                bytes: 300 * 1024 * 1024,
+                threshold: 200 * 1024 * 1024,
+                at: at.clone(),
+            }),
+        };
+        let r = Some(warned)
+            .filter(|r| !r.is_clean())
+            .expect("软告警必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["history_status"]["kind"], serde_json::json!("warned"));
+        assert_eq!(
+            v["history_status"]["bytes"],
+            serde_json::json!(300u64 * 1024 * 1024)
+        );
+        assert_eq!(
+            v["history_status"]["threshold"],
+            serde_json::json!(200u64 * 1024 * 1024)
+        );
+
+        // 硬熔断：同样进载荷，`saved` 仍是 true——熔断是「停写」而不是「保存失败」
+        let fused = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 1024 * 1024 * 1024,
+            history_status: Some(HistoryStatus::Fused {
+                bytes: 1024 * 1024 * 1024,
+                threshold: 1024 * 1024 * 1024,
+                at,
+            }),
+        };
+        let r = Some(fused)
+            .filter(|r| !r.is_clean())
+            .expect("熔断必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(true), "熔断不是保存失败");
+        assert_eq!(v["history_status"]["kind"], serde_json::json!("fused"));
+    }
+
+    /// 拒存（saved=false）同样算不干净——前端据此提示「历史未完整保存」。
+    #[test]
+    fn history_save_payload_includes_rejected() {
+        let r = Some(SaveReport::rejected())
+            .filter(|r| !r.is_clean())
+            .expect("拒存必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(false));
+        assert_eq!(v["bytes"], serde_json::json!(0));
+    }
+
     // ---- 空转看门狗的批次摘要（[docs/subagent-idle-watchdog-misfire]）----
 
     /// `read` 的 wire 契约是 `{"files":[{"path":…}]}`（tools/read.rs 的 `Args::files` 即 schema
@@ -2574,6 +2707,20 @@ mod tests {
         assert!(command.has_non_readonly, "command 走进展信号 1");
         assert!(command.read_paths.is_empty());
     }
+
+    #[test]
+    fn batch_digest_does_not_count_document_or_goal_reads_as_progress() {
+        for (name, args) in [
+            ("read_document", serde_json::json!({"path": "report.pdf"})),
+            ("goal", serde_json::json!({})),
+        ] {
+            let digest = batch_digest(&[call(name, args)]);
+            assert!(!digest.has_non_readonly, "{name} 只读调用不得重置停滞计数");
+        }
+        assert!(
+            batch_digest(&[call("goal", serde_json::json!({"decisions": ["x"]}))]).has_non_readonly
+        );
+    }
 }
 
 /// 发 run:retry 事件（带 gen 代数与退避时延，前端据此丢弃旧帧并等待）。
@@ -2640,7 +2787,7 @@ pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntim
             emit_goal_update(&core.sink, rt);
         }
     }
-    checkpoint(core, rt).await;
+    let _ = checkpoint(core, rt).await;
     core.sink.emit(
         &rt.id,
         "run:cancelled",
@@ -2648,19 +2795,25 @@ pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntim
     );
 }
 
-/// 检查点保存（run 结束/取消/每 N 步）。
-pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) {
+/// 检查点保存（run 结束/取消/每 N 步）。返回本次保存结果：
+/// `None` = 非主会话（子代理 / 任务运行，本就不落主索引）；
+/// `Some(report)` = 尝试过保存（含 `SaveReport::rejected()` = 失败）。
+/// 调用方按需把它并入事件载荷向用户上报（run 成功路径）。
+pub(super) async fn checkpoint(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+) -> Option<SaveReport> {
     // H5：会话已删除（如 delete_project 级联）——迟到收尾不得回写索引复活幽灵会话
     if rt.zombie.load(Ordering::SeqCst) {
         tracing::info!("会话 {} 已删除，跳过迟到检查点", rt.id);
-        return;
+        return None;
     }
     // 非主会话（子代理 sub_* / 任务运行 task_*）绝不落主索引与主历史：子代理过程历史
     // 由 save_sub_history 边车接管（subagent 工具收尾时落盘，[docs/subagent-interaction-drawer]
     // （../../../docs/subagent-interaction-drawer.md）），任务运行无持久化语义——否则内部运行
     // 会以 untitled 幽灵会话形态泄漏进会话列表
     if !rt.is_main_session {
-        return;
+        return None;
     }
     let history = lock_ok(&rt.history).clone();
     let title = lock_ok(&rt.title).clone();
@@ -2670,7 +2823,7 @@ pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) 
         crate::core::prefs::effective_model(&cfg, &rt.prefs()).map(|m| m.id.clone())
     };
     let ws = rt.workspace.to_string_lossy().into_owned();
-    if let Err(e) = core.store.save_history(
+    match core.store.save_history(
         &rt.id,
         &title,
         &ws,
@@ -2679,7 +2832,12 @@ pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) 
         &rt.roots,
         &history,
     ) {
-        tracing::warn!("检查点保存失败：{e}");
+        Ok(report) => Some(report),
+        Err(e) => {
+            // 会话日志（不受全局日志级别过滤，恒开启）留痕，便于用户事后排查
+            session_log::warn(rt, &format!("检查点保存失败：{e}"));
+            Some(SaveReport::rejected())
+        }
     }
 }
 /// start_chat 的 IPC 请求体（host 层反序列化后转调 AgentCore::start_chat）。

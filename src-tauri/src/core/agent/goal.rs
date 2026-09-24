@@ -626,6 +626,44 @@ pub fn program_of_command(cmd: &str) -> String {
     s.split_whitespace().next().unwrap_or_default().to_string()
 }
 
+/// 目标档只接受单条简单命令。复合语句、重定向和嵌套 shell 会让“只检查首个程序”
+/// 及 fence 返回的单个写目标不足以证明账本约束；模型可拆成多次工具调用，逐次过闸。
+pub fn goal_command_program(cmd: &str) -> Result<String, &'static str> {
+    if cmd.trim().is_empty()
+        || cmd.chars().any(|c| {
+            matches!(
+                c,
+                ';' | '|' | '&' | '<' | '>' | '\n' | '\r' | '`' | '$' | '(' | ')' | '{' | '}'
+            )
+        })
+    {
+        return Err("目标模式只允许单条简单命令；请将复合命令拆开，并用文件工具完成写入");
+    }
+    let program = program_of_command(cmd);
+    let base = program.rsplit(['/', '\\']).next().unwrap_or(&program);
+    if program.is_empty()
+        || [
+            "sh",
+            "bash",
+            "dash",
+            "zsh",
+            "fish",
+            "pwsh",
+            "powershell",
+            "powershell.exe",
+            "cmd",
+            "cmd.exe",
+            "wsl",
+            "wsl.exe",
+        ]
+        .iter()
+        .any(|host| base.eq_ignore_ascii_case(host))
+    {
+        return Err("目标模式不允许嵌套 shell；请直接调用账本中列出的程序");
+    }
+    Ok(program)
+}
+
 /// 目标状态落边车（`ledger_gate` / `goal_hard_block` 手边只有 runtime，没有 `AgentCore`）：
 /// store 由 `rt.data_dir` 重建——与 `AgentCore::new` 用的是同一个 `sessions/` 目录。
 /// 失败只记 warn：边车是辅助视图，绝不阻断工具调用链。
@@ -1374,6 +1412,25 @@ mod tests {
         assert_eq!(
             prev_mode_to_record(ApprovalMode::Goal, ApprovalMode::AutoEdit, None),
             None
+        );
+    }
+
+    #[test]
+    fn goal_commands_reject_shell_composition_and_redirection() {
+        for cmd in [
+            "echo ok; cargo build",
+            "echo ok && cargo build",
+            "echo x > other.txt",
+            "echo x | cargo build",
+            "bash -c 'cargo build'",
+            "pwsh -Command 'cargo build'",
+            "echo $(cargo build)",
+        ] {
+            assert!(goal_command_program(cmd).is_err(), "{cmd}");
+        }
+        assert_eq!(
+            goal_command_program("cargo test --workspace"),
+            Ok("cargo".into())
         );
     }
 }
