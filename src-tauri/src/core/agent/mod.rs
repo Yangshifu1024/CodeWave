@@ -21,7 +21,8 @@ mod tests;
 ///（[docs/subagent-text-turn-premature-exit]）。
 pub(crate) use drive::split_report;
 pub use drive::{
-    DriveParams, NormalizedCall, WRITE_TOOLS, drive_agent, main_drive_params, run_task_agent,
+    DriveParams, NormalizedCall, SubBase, WRITE_TOOLS, drive_agent, run_task_agent,
+    subagent_drive_params,
 };
 pub(crate) use guards::{CompactingGuard, lock_ok};
 pub use runtime::{AgentCore, EventSink, Frame, SessionRuntime};

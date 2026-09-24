@@ -75,8 +75,11 @@
 - 2026-09-08 · [subagent-file-isolation.md](./subagent-file-isolation.md) — 子代理隔离与运行监督批次：文件写认领制（兄弟 runtime 写已认领路径 E_FILE_CLAIMED，主会话豁免）+ 取消级联（parent_cancel child_token）+ 子代理卡停止按钮（E_SUBAGENT_STOPPED → ask 询问重派）+ 派发失败重试硬化（E_ARGS alias/文案、BUSY 有界等待）+ 运行监督（重复失败纠偏/终止 + 流停滞看门狗 stall_timeout_seconds）+ 步数真实化（step_count 取代 history.len()）+ 主会话读预算（E_READ_TOO_BROAD 强制委派 explore）+ ask 多题分页提交修复
 
 - 2026-09-19 · [subagent-idle-watchdog-misfire.md](./subagent-idle-watchdog-misfire.md) — 缺陷修复：只读子代理被空转看门狗误杀（`batch_digest()` 把 `read`/`batch_read` 入参键写反 → 「首次读新文件即进展」信号从未生效，explore 第 14 步被硬终止、调研成果全丢）——进展信号改为按 `files` 数组解析（并保留顶层 `path` 兜底、补端到端回归）+ 只读角色策略 `IdlePolicy::NudgeOnly`（16 步纠偏、空转层不终止）+ `AgentDef.readonly` 与只读子代理强制排除 edit/create/delete
+
+- 2026-09-24 · [mode-gate-and-subagent-sync.md](./mode-gate-and-subagent-sync.md) — 批准门选档确认 + 子代理档位实时同步 + 计划任务档位修正（**完整流水线**）：S5 批准门从「批准即隐式切自动编辑档」改为**三选项显式选档**（`Option2` 新增 `mode` 字段声明目标档位，`skip_serializing_if` 保证 `None` 不下发；批准类判定改为 `mode.is_some()`，旧子串匹配降为兼容兜底；切档目标不再硬编码 `AutoEdit`；允许从计划档/逐项确认档**一次跨到完全访问档**；G2/G3 门禁一字未改；两档都可直提，胶囊同步按**实际选中档位**）；子代理档位从「spawn 冻结」改为**每个 LLM step 边界跟随根会话**（新增 `SubBase` 基座 + `subagent_drive_params` **从基座重建**——绝不增量追加，否则旧 `<plan-mode>` 块永久残留；工具集 + 系统块 + `sub_rt.prefs`（fence/审批）三处同步，`model_id`/`reasoning_effort` 仍为快照；档位真变化才注入 `[system]`；嵌套子代理跟随根会话、父会话缺失优雅降级；`sub:step` 载荷增 `approval_mode`，**事件面仍 29 键**）；**完全访问档下只读角色解锁写工具**（+ 正文追加覆盖声明消除自相矛盾，其余三档逐字不变）；顺带修复既有隐患——计划任务 runtime 因 `new_task` 不设 prefs 落在计划档却又不调 `main_drive_params`，形成「写文件放行 + 白名单外命令全锁」的矛盾，现**显式设为完全访问档**。修复一处实质缺陷：档位为 `auto_edit`/`full_access` 时批准门选档后前端**不同步胶囊**，而 `updatePrefs` 推全量 prefs 会把后端档位静默翻回。验证：`cargo test` 1025 passed / 3 ignored、`pnpm --dir ui test` 1076 passed / 93 文件、fmt/build/lint/scripts 全通过；遗留见文档 §6（真实 run 端到端未覆盖、worktree 位于数据目录内等）
+
+## 界面与交互
 
-## 界面与交互
 
 - 2026-08-31 · [composer-toolbar-batch-report.md](./composer-toolbar-batch-report.md) — Composer 工具条重构（权限四档 + 会话级模型/力度 + 附件/$技能 + 供应商分组与视觉标签）
 - 2026-09-08 · [slash-skills-and-dollar-agents.md](./slash-skills-and-dollar-agents.md) — 技能触发符 `/` 化（/ 纯技能菜单、/name 点名语义入 available-skills、命令入口移除）+ `$` 改为内置子代理点名（list_agents IPC + 回填 $role + 核心提示 $<role> 委派规则）+ 技能加载路径定稿（项目/全局 .codewave/skills > 工作区 .agents/skills、.claude/skills > ~/.claude/skills > 内置；含 rt.data_dir 恒为全局的语义钉子与漏扫缺陷修复）+ 列表显示排序（内置 > 项目 > 全局 > 其他）与点击详情弹层（共享 SkillDetailModal：右栏技能行 + composer / 菜单，get_skill IPC + SKILL.md 正文渲染），三候选乱序守卫补齐

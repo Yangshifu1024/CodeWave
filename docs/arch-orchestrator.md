@@ -18,7 +18,7 @@
 | **arch = 内置技能（`$arch`），主会话扮演编排者** | 子代理不能再派生子代理（subagent 工具对子代理排除，tools/subagent.rs 排除集），嵌套编排需改 runtime/事件路由，成本风险高；主会话天然持有 subagent 工具，技能即可承载编排剧本，零新 IPC/事件/前端 |
 | **role 从自由字符串升级为注册表角色** | 新增 `src-tauri/src/agents/mod.rs`；subagent 命中注册表时把角色定义全文注入子代理 system_extra（此前只有 role 名字符串，`.agents/agents/*.md` 只是开发期文档、运行时不读取） |
 | **四个 md 一律由 arch 主会话落盘** | 子代理审批弹窗不可达（ask:opened 以 sub_id 为 session，前端无对应 tab），ConfirmEach 档下子代理写文件会静默拒绝；且产物是跨阶段汇总文档，主会话持有全部子代理汇报 |
-| **S5 插入批准门，批准后自动切自动编辑档** | ConfirmEach 档下 dev 子代理写码审批不可达 = 流程死锁，切档是可行性前提；与 Plan 档「批准即切 AutoEdit」既有语义（ask.rs）一致；写入控制权保留在用户 |
+| **S5 插入批准门，批准后切到用户所选档位** | ConfirmEach 档下 dev 子代理写码审批不可达 = 流程死锁，切档是可行性前提；与 Plan 档「批准即切档」既有语义（ask.rs）一致；**切档目标现已不再硬编码自动编辑档**——批准门给三个选项（「执行方案」= `mode=auto_edit` / 「完全访问执行」= `mode=full_access` / 无 mode 的「补充意见」），目标档位由用户所选选项的 `mode` 决定（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）；写入控制权保留在用户 |
 | **并行 dev 单批 ≤4** | 全局子代理并发上限 MAX_CONCURRENT=4，超限直接报 E_SUBAGENT_BUSY（不排队）；批次内并发上限同为 4 |
 
 ## §2 改动清单
@@ -52,8 +52,9 @@
   `switchToAutoedit`，与 schema 键不一致，须显式对齐；default None）。
 - 新增纯函数 `wants_mode_switch(mode, approved, switch_flag)`：
   Plan 档批准即切（既有语义不变）；ConfirmEach 仅在携带 flag 时切；AutoEdit/FullAccess 不切。
+  **后续批次（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）新增 `mode_requested` 维度**：批准类选项携带 `mode` 时按该字段切档，允许从逐项确认档 / 计划档一次跨到完全访问档；`switchToAutoEdit` 作为机制锚点词保留（有测试钉死）。
 - 切档路径复用既有代码：`plan_approval_gate`（todos 非空 + analysis_done，arch 流程 S2 已满足，
-  后端兜底防跳步）→ 重置 G3 范围基线 → prefs 切 AutoEdit → `run:inject` 提示继续执行。
+  后端兜底防跳步）→ 重置 G3 范围基线 → prefs 切到所选选项 `mode` 指定的档位（缺省回落 `AutoEdit`）→ `run:inject` 提示继续执行。
 - Plan 档不传 flag 行为完全不变；普通会话不带 flag 的 ask 批准不切档（无行为外溢）。
 - **形状约束（审查 Y3）**：`arch_gate_shape()`——ConfirmEach 档的切档仅认可标准批准协议形状
   （单问题 + 选项含 id="approve"），防模型借任意 ask + flag 自由升档；Plan 档不受此限。
@@ -63,6 +64,7 @@
   后端 AutoEdit 静默改回（dev 写码审批不可达 → 流程无声卡死）。涉及
   `ui/src/ipc/types.ts`（AskOpenedEvent）、`ui/src/stores/run.ts`（AskState + ask:opened handler）、
   `ui/src/features/tools/AskPanel.tsx`（submit 同步条件）。
+- **后续批次补正（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）**：批准门改为三选项（两个批准类选项各带 `mode` 声明目标档位，批准类判定 = `mode.is_some()`），胶囊同步条件再加 `modePath = approvedMode != null` 且按**实际选中档位**同步（不再硬编码 `auto_edit`），修复 `auto_edit` / `full_access` 档下两条旧路径均为假、前端不发 `set_session_prefs` 而被后续 `updatePrefs` 静默翻回的缺陷；`switchToAutoEdit` 与 `id="approve"` 锚点保留。
 
 ### 2.4 `skills/mod.rs` 内置技能新增 `arch`
 
@@ -74,7 +76,7 @@
   与既有计划任务 JSON（`tasks/<id>.json` 平铺）共存互不感知。
 - **阶段流**：S1 explore(40) → S2 product-manager(30) → S3 落盘 requirement.md（关键歧义先 ask 澄清 ≤1 轮，
   选项文本不得含「执行/approve」以免误触批准信号）→ S4 arch 自写 plan.md + plan 登记 todos（含验证项）→
-  S5 ask 批准门（`switchToAutoEdit=true`；驳回修订上限 2 轮）→ S6 开发子代理并行（backend-dev/frontend-dev/app-dev 按技术栈选角，60/个，单批 ≤4，>4 分批，
+  S5 ask 批准门（三选项：「执行方案」`mode=auto_edit` / 「完全访问执行」`mode=full_access` / 无 mode 的「补充意见」；后端批准判定 = `mode.is_some()`，`switchToAutoEdit` 与 `id="approve"` 作为兼容兜底保留；驳回修订上限 2 轮）→ S6 开发子代理并行（backend-dev/frontend-dev/app-dev 按技术栈选角，60/个，单批 ≤4，>4 分批，
   E_SUBAGENT_BUSY 用 wait 重试）→ S7 reviewer(40) 对齐审查（🔴 返工 1 轮上限，复审不过标注「未对齐+遗留清单」
   继续推进）→ S8 tester(60) 实际执行测试 → S9 收尾汇报（各阶段结论 + 产物绝对路径 + 遗留事项）。
 - **纪律**：四个文档只由 arch 落盘；即产即存、阶段失败保留已有产物并如实汇报；AI 零 git；
@@ -122,7 +124,7 @@
 1. dev 运行，打开项目会话（普通档），Composer 输入 `$` 确认菜单出现 arch。
 2. 输入 `$arch <一个小需求>`：依序出现 explore → product-manager 子代理卡。
 3. 检查 `<主目录>/.codewave/tasks/<时间戳>-<slug>/` 下 requirement.md、plan.md 已生成且内容完整。
-4. S5 出现 ask 批准弹窗；选「批准开发」后权限胶囊自动变「自动编辑」（R1 修复点）。
+4. S5 出现 ask 批准弹窗（「执行方案」/「完全访问执行」/「补充意见」，完全访问项带内联风险说明）；选「执行方案」后权限胶囊变「自动编辑」，选「完全访问执行」则变「完全访问」（胶囊同步按**用户所选档位**，R1 修复点）。
 5. 多个开发子代理卡并行（≤4/批，角色与技术栈匹配），代码写入工作区成功。
 6. review.md、report.md 落盘；tester 阶段实际执行了测试命令（子代理卡展开可见 command 工具调用）。
 7. 驳回路径：S5 选「补充意见」→ arch 修订 plan.md 后再次询问（不切档）。

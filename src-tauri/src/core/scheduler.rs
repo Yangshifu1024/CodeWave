@@ -427,6 +427,19 @@ pub async fn trigger_now(core: Arc<crate::core::agent::AgentCore>, id: &str) -> 
 }
 
 /// 任务执行内核：调用方必须已持有 exec_lock；全新隔离上下文（独立 SessionRuntime）。
+/// 计划任务运行档位（C1）：无人值守 → 完全访问档。
+/// 任务需要写文件与执行命令，而审批弹窗无人应答；默认档（Plan）会把写工具排除、
+/// 并把白名单外的命令一律锁成 `E_PLAN_READONLY`——那与任务运行参数（`run_task_agent`
+/// 不排除写工具、也不弹审批）自相矛盾：写放行、命令全锁。改为 FullAccess 后，写能力与
+/// 现状一致，命令从「全被锁死」变为「正常执行」（灾难级命令仍被 fence 直接拦截）。
+/// 只动档位：模型 / 力度保持默认（跟随全局）。
+fn task_prefs() -> crate::core::prefs::SessionPrefs {
+    crate::core::prefs::SessionPrefs {
+        approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+        ..Default::default()
+    }
+}
+
 async fn run_task_locked(
     core: Arc<crate::core::agent::AgentCore>,
     task: ScheduledTask,
@@ -483,6 +496,9 @@ async fn run_task_locked(
             *r.extra_roots.lock().unwrap() = extra_roots;
         }
     }
+    // C1：任务运行档位显式置完全访问（无人值守，见 task_prefs 注释）——
+    // 不设则落到 `ApprovalMode::default()` = Plan，与任务参数（写工具未排除、不弹审批）矛盾
+    rt.set_prefs(task_prefs());
     let first_line: String = task
         .instruction
         .lines()
@@ -625,6 +641,36 @@ fn task_scope(core: &crate::core::agent::AgentCore, task: &ScheduledTask) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C1：计划任务运行档位 = 完全访问（无人值守，需写文件与执行命令）。
+    #[test]
+    fn task_runtime_prefs_are_full_access() {
+        let p = task_prefs();
+        assert_eq!(
+            p.approval_mode,
+            crate::core::prefs::ApprovalMode::FullAccess
+        );
+        // 模型 / 力度保持默认（跟随全局），只动档位
+        assert!(p.model_id.is_none());
+        assert!(p.reasoning_effort.is_none());
+        // 端到端：新建任务 runtime 默认落在 Plan（本改造前的矛盾源头），置位后为 FullAccess
+        let ws = tempfile::tempdir().unwrap();
+        let rt = SessionRuntime::new_task(
+            "task_t1".into(),
+            ws.path().to_path_buf(),
+            ws.path().to_path_buf(),
+            ws.path().to_path_buf(),
+        );
+        assert_eq!(
+            rt.prefs().approval_mode,
+            crate::core::prefs::ApprovalMode::Plan
+        );
+        rt.set_prefs(task_prefs());
+        assert_eq!(
+            rt.prefs().approval_mode,
+            crate::core::prefs::ApprovalMode::FullAccess
+        );
+    }
 
     #[test]
     fn every_interval_parse_bounds() {

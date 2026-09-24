@@ -2,7 +2,8 @@
 //! drive_agent 复用（排除集 + 低预算提示 + 强制汇报）；全局并发 4。
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
-use crate::core::agent::{DriveParams, SessionRuntime};
+use crate::core::agent::{DriveParams, SessionRuntime, SubBase};
+use crate::core::prefs::ApprovalMode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -106,20 +107,42 @@ fn summarize_sub_tail(history: &[crate::core::types::Message]) -> (Option<String
     (last_tool, snippet)
 }
 
+/// 子代理基座排除集（B1）：spawn 时冻结的内部 7 项（交互类 / 元工具），与档位无关。
+/// 父档派生（Plan 档的写工具 / 后台服务 / 计划任务）与角色派生（只读角色的写工具）
+/// 在 `subagent_drive_params` 重建时另加。
+pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
+    "ask",
+    "subagent",
+    "plan",
+    "skill",
+    "scheduled_task",
+    "suggest",
+    "wait",
+];
+
 /// 组装子代理的 system_extra：公共纪律 + 注册表命中时的完整角色定义（<agent-definition>）。
 /// 抽成纯函数便于单测；纪律块在前，保证追加角色正文不破坏既有前缀语义。
 /// 纪律块展示规范角色名（命中时），避免「PM」之类别名造成展示歧义。
-fn build_system_extra(
+///
+/// `mode` 只影响只读角色的两处文案（B3）：FullAccess 档下写工具已解锁，纪律块的提示句改为授权说明，
+/// 角色定义正文末尾另追加覆盖声明——否则仍会剩「提示说没有写工具 / 正文说不要写、事实上写得动」的自相矛盾。
+pub(crate) fn build_system_extra(
     role: &str,
     max_steps: usize,
     def: Option<&crate::agents::AgentDef>,
+    mode: ApprovalMode,
 ) -> String {
     let display_role = def.map(|d| d.name).unwrap_or(role);
     // 只读角色（explore/reviewer/code-reviewer）补一句可执行约束：写工具已在工具层被排除
     //（见 readonly_extra_excludes），这里让子代理知道自己写不了文件，把发现写进汇报，
     // 免得它反复试探被拒而白烧步数（[docs/subagent-idle-watchdog-misfire]）。
+    // FullAccess 档例外（B3）：写工具不再被排除，提示改为授权说明。
     let readonly_notice = if def.is_some_and(|d| d.readonly) {
-        "你是只读角色，没有写工具（edit/create/delete 不可用）：不要尝试写文件，把发现写进最终汇报。"
+        if mode == ApprovalMode::FullAccess {
+            "角色定位是只读调研，但当前会话为完全访问档，写工具（edit/create/delete）已解锁：确有必要时可以直接写文件。"
+        } else {
+            "你是只读角色，没有写工具（edit/create/delete 不可用）：不要尝试写文件，把发现写进最终汇报。"
+        }
     } else {
         ""
     };
@@ -128,12 +151,44 @@ fn build_system_extra(
         display_role, max_steps, readonly_notice
     );
     if let Some(d) = def {
+        // 只读角色的定义正文自身带只读禁令（explore「只读调研：不修改任何文件」、
+        // reviewer「只审查不修改代码」），与上面的授权说明直接打架 → FullAccess 档下在正文末尾
+        // 追加覆盖声明显式作废它；其余三档正文逐字不变（回归保护，测试钉死）。
+        let override_note = if d.readonly && mode == ApprovalMode::FullAccess {
+            "\n\n注意：当前会话为完全访问档，上述角色定义中的只读约束（不修改任何文件、不执行写操作）暂停，你可以直接写文件。"
+        } else {
+            ""
+        };
         s.push_str(&format!(
-            "\n<agent-definition name=\"{}\">\n{}\n</agent-definition>",
-            d.name, d.body
+            "\n<agent-definition name=\"{}\">\n{}{}\n</agent-definition>",
+            d.name, d.body, override_note
         ));
     }
     s
+}
+
+/// 角色纪律块的按档重建（B1 重建路径消费）：档位只影响只读提示句（B3）。
+pub(crate) fn base_extra(role: &str, max_steps: usize, mode: ApprovalMode) -> String {
+    build_system_extra(role, max_steps, crate::agents::find(role), mode)
+}
+
+/// 子代理档位基座（B1）的构造：spawn 时冻结一次，之后每步按父会话实时档位重建。
+/// `root_session_id` 由调用点回填（子 rt 建好后才拿到）。
+pub(crate) fn sub_base(
+    role: &str,
+    max_steps: usize,
+    def: Option<&crate::agents::AgentDef>,
+    spawn_mode: ApprovalMode,
+) -> SubBase {
+    SubBase {
+        root_session_id: None,
+        role: role.to_string(),
+        max_steps,
+        spawn_mode,
+        base_excludes: SUB_BASE_EXCLUDES.iter().map(|s| (*s).to_string()).collect(),
+        base_system_extra: build_system_extra(role, max_steps, def, spawn_mode),
+        idle_policy: idle_policy_for(role),
+    }
 }
 
 /// 只读角色判定：注册表 `readonly` 标记的单一事实源（explore/reviewer/code-reviewer = true）。
@@ -158,8 +213,10 @@ fn idle_policy_for(role: &str) -> crate::core::agent::IdlePolicy {
 /// 只读角色的额外工具排除集（写工具三件套 = 与 plan 档排除共用的
 /// `crate::core::agent::WRITE_TOOLS`）；非只读角色为空。
 /// 消费既有排除通路：暴露前过滤（stream.rs 按名过滤）+ 调用时硬拒（E_TOOL_BLOCKED）。
-fn readonly_extra_excludes(role: &str) -> Vec<&'static str> {
-    if is_readonly_role(role) {
+/// **FullAccess 档例外（B3）**：该档下只读角色不再排除写工具（父档已完全放行写入，
+/// 再锁子代理会与「完全访问」的语义矛盾）；`idle_policy` 不随之变（与档位解耦）。
+fn readonly_extra_excludes(role: &str, mode: ApprovalMode) -> Vec<&'static str> {
+    if is_readonly_role(role) && mode != ApprovalMode::FullAccess {
         crate::core::agent::WRITE_TOOLS.to_vec()
     } else {
         Vec::new()
@@ -167,11 +224,12 @@ fn readonly_extra_excludes(role: &str) -> Vec<&'static str> {
 }
 
 /// 子代理角色策略装配（[docs/subagent-idle-watchdog-misfire]）：一步到位置 `idle_policy`
-/// 并追加只读写工具排除——独立成函数以让调用点可被单测断言（后人重排参数构造时不致静默回归）。
+/// 并追加只读写工具排除（按档位：FullAccess 下不排除，B3）——独立成函数以让调用点可被单测断言
+///（后人重排参数构造时不致静默回归）。
 /// 对已有排除项去重，重复调用幂等（与父档位合并集同存一份，重复项本就无害）。
-fn apply_role_policy(params: &mut DriveParams, role: &str) {
+pub(crate) fn apply_role_policy(params: &mut DriveParams, role: &str, mode: ApprovalMode) {
     params.idle_policy = idle_policy_for(role);
-    for t in readonly_extra_excludes(role) {
+    for t in readonly_extra_excludes(role, mode) {
         if !params.exclude_tools.iter().any(|e| e == t) {
             params.exclude_tools.push(t.to_string());
         }
@@ -242,7 +300,8 @@ impl Tool for SubagentTool {
         }
         // 注册表命中 → 注入完整角色定义（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）；未命中保持自由字符串旧行为
         let agent_def = crate::agents::find(&args.role);
-        let system_extra = build_system_extra(&args.role, max_steps, agent_def);
+        // 父档位快照（spawn 时）：基座按它构造，之后每步由 drive 层按**实时**父档重建（B1）
+        let parent_prefs = ctx.rt.prefs();
 
         // 并发上限 4：先快速 CAS 抢位；满员则有界等待（≈30s×500ms 轮询，cancel 可中断）
         // 再快速失败——替代旧「立即 E_SUBAGENT_BUSY」白烧一步的行为（重试硬化批次）
@@ -312,47 +371,28 @@ impl Tool for SubagentTool {
                 args.role, args.task
             )));
 
-        let mut params = DriveParams {
-            max_steps,
-            // 空转策略与只读写工具排除由 apply_role_policy 按角色统一置位（见下方调用点；
-            // 该调用需晚于父档位集合并，以保持既有合并顺序）
-            idle_policy: crate::core::agent::IdlePolicy::default(),
-            exclude_tools: vec![
-                "ask".into(),
-                "subagent".into(),
-                "plan".into(),
-                "skill".into(),
-                "scheduled_task".into(),
-                "suggest".into(),
-                "wait".into(),
-            ],
-            exclude_mcp: false,
-            system_extra,
-            budget_notice: true,
-            emit_events: false,
-            force_report: true,
-            // 子代理：纯文本回合不等于完成（防止过程旁白被当成最终汇报提前退出，
-            // [docs/subagent-text-turn-premature-exit]）
-            finish_on_text: false,
-            main_session: false,
-            parent_cancel: None,
-        };
+        // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
+        // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——
+        // 子代理不再冻结在 spawn 时的档位上。
+        let mut base = sub_base(&args.role, max_steps, agent_def, parent_prefs.approval_mode);
+        base.root_session_id = sub_rt.root_session_id.clone();
         // 权限继承（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 收紧）：子代理权限 ⊆ 父会话权限。
-        // 父 Plan 档的写排除 / MCP 排除 / plan 档提示合并进子参数，堵住「借子代理绕过 plan 档」的洞。
-        let parent = crate::core::agent::main_drive_params(&ctx.rt.prefs());
-        params.exclude_tools.extend(parent.exclude_tools);
-        // 只读角色的策略装配（[docs/subagent-idle-watchdog-misfire]）：把「只读」从角色自律
-        // 变成可执行事实——idle_policy = NudgeOnly + 写工具三件套排除（暴露前过滤 + 调用时硬拒
-        // E_TOOL_BLOCKED）。command 刻意保留：只读调研仍需要 git status 等只读命令，由 fence
-        // 逐条把关。与父档位集合并存（重复项已由 apply_role_policy 去重）。
-        apply_role_policy(&mut params, &args.role);
-        params.exclude_mcp = params.exclude_mcp || parent.exclude_mcp;
-        if !parent.system_extra.is_empty() {
-            params.system_extra.push_str(&parent.system_extra);
-        }
+        // 父 Plan 档的写排除 / MCP 排除 / plan 档提示由 subagent_drive_params 从基座合并进子参数，
+        // 堵住「借子代理绕过 plan 档」的洞；只读角色的策略（含 FullAccess 下解锁写工具，B3）
+        // 同样在其中按档位置位。spawn 与每步重算共用这一条装配路径，两处不会漂移。
+        let mut params = crate::core::agent::subagent_drive_params(&base, &parent_prefs);
+        params.max_steps = max_steps;
+        params.budget_notice = true;
+        params.emit_events = false;
+        params.force_report = true;
+        // 子代理：纯文本回合不等于完成（防止过程旁白被当成最终汇报提前退出，
+        // [docs/subagent-text-turn-premature-exit]）
+        params.finish_on_text = false;
         // 取消级联：主会话停止（cancel_run）→ 父令牌取消 → 本子代理 child_token 取消，
         // LLM 流与审批等待随之中止（[docs/subagent-file-isolation]）
         params.parent_cancel = Some(ctx.cancel.clone());
+        // 档位重算基座：drive 层每步据此按父档重建（None = 不重算）
+        params.sub_base = Some(base);
 
         let core = ctx.core.clone();
         let sink = ctx.core.sink.clone();
@@ -374,7 +414,10 @@ impl Tool for SubagentTool {
                         detail,
                     )
                 };
-                sink.emit(&session, "sub:step", json!({ "session": session, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail }));
+                // 当前档位（B2）：子 rt 的 prefs 由 drive 层每步按父档同步，故此处即实时值。
+                // 载荷只**新增**字段，事件键名与 29 键契约不变（前端据它显示子代理卡档位）。
+                let approval_mode = step_rt.prefs().approval_mode;
+                sink.emit(&session, "sub:step", json!({ "session": session, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail, "approval_mode": approval_mode }));
             }
         });
 
@@ -644,7 +687,7 @@ mod tests {
     #[test]
     fn system_extra_injects_definition_for_known_role() {
         let def = crate::agents::find("backend-dev").unwrap();
-        let s = build_system_extra("backend-dev", 60, Some(def));
+        let s = build_system_extra("backend-dev", 60, Some(def), ApprovalMode::AutoEdit);
         assert!(s.contains("<subagent-discipline>"));
         assert!(s.contains("<agent-definition name=\"backend-dev\">"));
         assert!(s.contains("资深后端开发工程师"));
@@ -659,7 +702,7 @@ mod tests {
 
     #[test]
     fn system_extra_unknown_role_keeps_legacy_shape() {
-        let s = build_system_extra("my-custom-role", 25, None);
+        let s = build_system_extra("my-custom-role", 25, None, ApprovalMode::AutoEdit);
         assert!(s.contains("<subagent-discipline>"));
         assert!(s.contains("角色：my-custom-role"));
         assert!(!s.contains("<agent-definition"));
@@ -667,7 +710,7 @@ mod tests {
 
     #[test]
     fn system_extra_alias_shows_canonical_name() {
-        let s = build_system_extra("PM", 30, crate::agents::find("PM"));
+        let s = build_system_extra("PM", 30, crate::agents::find("PM"), ApprovalMode::AutoEdit);
         assert!(s.contains("角色：product-manager"));
         assert!(s.contains("<agent-definition name=\"product-manager\">"));
     }
@@ -739,7 +782,7 @@ mod tests {
             " code reviewer ",
         ];
         for role in readonly_roles {
-            let ex = readonly_extra_excludes(role);
+            let ex = readonly_extra_excludes(role, ApprovalMode::AutoEdit);
             for tool in ["edit", "create", "delete"] {
                 assert!(ex.contains(&tool), "{role} 应排除写工具 {tool}");
             }
@@ -760,8 +803,15 @@ mod tests {
             "",
         ] {
             assert!(
-                readonly_extra_excludes(role).is_empty(),
+                readonly_extra_excludes(role, ApprovalMode::AutoEdit).is_empty(),
                 "{role} 不应有额外排除"
+            );
+        }
+        // B3：FullAccess 档下只读角色不再排除写工具（父档已完全放行写入，再锁子代理自相矛盾）
+        for role in readonly_roles {
+            assert!(
+                readonly_extra_excludes(role, ApprovalMode::FullAccess).is_empty(),
+                "{role} 在完全访问档下不应再排除写工具"
             );
         }
     }
@@ -779,7 +829,7 @@ mod tests {
             "CODE_REVIEWER",
         ] {
             let mut p = DriveParams::default();
-            apply_role_policy(&mut p, role);
+            apply_role_policy(&mut p, role, ApprovalMode::AutoEdit);
             assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly, "{role} 应置只读策略");
             for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
                 assert!(
@@ -814,7 +864,7 @@ mod tests {
             "",
         ] {
             let mut p = DriveParams::default();
-            apply_role_policy(&mut p, role);
+            apply_role_policy(&mut p, role, ApprovalMode::AutoEdit);
             assert_eq!(p.idle_policy, IdlePolicy::Stop, "{role} 应保持默认策略");
             assert!(
                 p.exclude_tools.is_empty(),
@@ -830,9 +880,9 @@ mod tests {
         let mut p = DriveParams::default();
         // 模拟父档位已合并集（其中 edit 与只读写排除重叠）
         p.exclude_tools = vec!["ask".into(), "edit".into()];
-        apply_role_policy(&mut p, "explore");
+        apply_role_policy(&mut p, "explore", ApprovalMode::AutoEdit);
         let once = p.exclude_tools.clone();
-        apply_role_policy(&mut p, "explore");
+        apply_role_policy(&mut p, "explore", ApprovalMode::AutoEdit);
         assert_eq!(p.exclude_tools, once, "重复调用不得追加重复项");
         assert_eq!(
             once.iter().filter(|e| e.as_str() == "edit").count(),
@@ -848,7 +898,7 @@ mod tests {
     #[test]
     fn system_extra_marks_readonly_roles() {
         for role in ["explore", "reviewer", "code-reviewer"] {
-            let s = build_system_extra(role, 40, crate::agents::find(role));
+            let s = build_system_extra(role, 40, crate::agents::find(role), ApprovalMode::AutoEdit);
             assert!(
                 s.contains("你是只读角色，没有写工具"),
                 "{role} 缺只读提示句"
@@ -856,8 +906,111 @@ mod tests {
             assert!(s.contains("<subagent-discipline>"), "{role} 缺纪律块");
         }
         for role in ["backend-dev", "tester", "product-manager", "unknown-role"] {
-            let s = build_system_extra(role, 40, crate::agents::find(role));
+            let s = build_system_extra(role, 40, crate::agents::find(role), ApprovalMode::AutoEdit);
             assert!(!s.contains("你是只读角色"), "{role} 不应带只读提示句");
         }
+    }
+
+    /// B3：只读提示句随档位切换——FullAccess 下改为授权说明，
+    /// 否则会出现「提示说没有写工具、事实上写得动」的自相矛盾。
+    #[test]
+    fn system_extra_readonly_notice_follows_mode() {
+        for role in ["explore", "reviewer", "code-reviewer"] {
+            let unlocked = build_system_extra(
+                role,
+                40,
+                crate::agents::find(role),
+                ApprovalMode::FullAccess,
+            );
+            assert!(unlocked.contains("完全访问档"), "{role} 缺授权说明");
+            assert!(
+                !unlocked.contains("你是只读角色，没有写工具"),
+                "{role} 在完全访问档下不得再声称没有写工具"
+            );
+            // 🟡5 返工：角色定义正文自带只读禁令（explore「只读调研：不修改任何文件」等），
+            // 与授权说明打架 → 完全访问档下正文末尾必须带覆盖声明显式作废
+            assert!(
+                unlocked.contains("上述角色定义中的只读约束"),
+                "{role} 在完全访问档下缺正文覆盖声明（正文仍宣称只读）"
+            );
+            // 其余三档仍为只读约束
+            for mode in [
+                ApprovalMode::ConfirmEach,
+                ApprovalMode::AutoEdit,
+                ApprovalMode::Plan,
+            ] {
+                let s = build_system_extra(role, 40, crate::agents::find(role), mode);
+                assert!(
+                    s.contains("你是只读角色，没有写工具"),
+                    "{role} 在 {mode:?} 档应保留只读提示句"
+                );
+                assert!(
+                    !s.contains("上述角色定义中的只读约束"),
+                    "{role} 在 {mode:?} 档正文不得出现覆盖声明（文案须与改造前逐字一致）"
+                );
+            }
+        }
+        // 可写角色任何档位都不带授权/只读提示句
+        for mode in [ApprovalMode::AutoEdit, ApprovalMode::FullAccess] {
+            for role in ["backend-dev", "tester", "unknown-role"] {
+                let s = build_system_extra(role, 40, crate::agents::find(role), mode);
+                assert!(!s.contains("你是只读角色"), "{role} 不应带只读提示句");
+                assert!(!s.contains("完全访问档"), "{role} 不应带授权说明");
+                assert!(
+                    !s.contains("上述角色定义中的只读约束"),
+                    "{role} 不应带正文覆盖声明"
+                );
+            }
+        }
+    }
+
+    /// B3：完全访问档下只读角色解锁写能力（idle_policy 与档位解耦，保持 NudgeOnly）。
+    #[test]
+    fn full_access_unlocks_readonly_write_tools() {
+        let mut p = DriveParams::default();
+        apply_role_policy(&mut p, "explore", ApprovalMode::FullAccess);
+        for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
+            assert!(
+                !p.exclude_tools.iter().any(|e| e == t),
+                "完全访问档不应排除 {t}：{:?}",
+                p.exclude_tools
+            );
+        }
+        assert_eq!(p.idle_policy, crate::core::agent::IdlePolicy::NudgeOnly);
+        // 其余三档保持只读
+        for mode in [
+            ApprovalMode::ConfirmEach,
+            ApprovalMode::AutoEdit,
+            ApprovalMode::Plan,
+        ] {
+            let mut p = DriveParams::default();
+            apply_role_policy(&mut p, "explore", mode);
+            for t in crate::core::agent::WRITE_TOOLS.iter().copied() {
+                assert!(
+                    p.exclude_tools.iter().any(|e| e == t),
+                    "{mode:?} 档应排除 {t}"
+                );
+            }
+        }
+    }
+
+    /// B1 基座：内部 7 项与档位无关（冻结），root_session_id 由调用点回填，
+    /// 基座纪律块本身不含 `<plan-mode>`（父档块由重建时拼接）。
+    #[test]
+    fn sub_base_freezes_internal_excludes() {
+        let base = sub_base(
+            "explore",
+            25,
+            crate::agents::find("explore"),
+            ApprovalMode::Plan,
+        );
+        assert_eq!(base.base_excludes.len(), SUB_BASE_EXCLUDES.len());
+        for t in SUB_BASE_EXCLUDES {
+            assert!(base.base_excludes.iter().any(|e| e == t), "基座缺 {t}");
+        }
+        assert!(base.root_session_id.is_none());
+        assert_eq!(base.idle_policy, crate::core::agent::IdlePolicy::NudgeOnly);
+        assert!(base.base_system_extra.contains("<subagent-discipline>"));
+        assert!(!base.base_system_extra.contains("<plan-mode>"));
     }
 }

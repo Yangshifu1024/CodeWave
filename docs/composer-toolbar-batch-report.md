@@ -29,7 +29,7 @@ pub fn effective_model(cfg, prefs)  // override → 悬空回落 → 全局 acti
 ```
 
 - 挂 `SessionRuntime.prefs: Mutex<SessionPrefs>`（短临界区不跨 await；运行中切换安全）。新建会话按全局 `approval.enabled` 映射初始值（`true→AutoEdit`，`false→FullAccess`）——全局开关降级为「新会话初始值」。
-- `SessionRuntime::new_sub` 复制父 prefs：子代理与主会话同权限/模型/力度语义。
+- `SessionRuntime::new_sub` 复制父 prefs：子代理 spawn 时与主会话同权限/模型/力度语义；**该静态继承（「子代理权限 ⊆ 父会话权限」）已升级为动态跟随**（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）：在跑子代理每个 LLM step 边界从基座重建 `DriveParams` 并刷新子 rt 的 `approval_mode`，工具集 / 系统块 / fence 判定三处随根会话档位同步；`model_id` / `reasoning_effort` 仍为 spawn 快照。
 - 新 IPC：`set_session_prefs`（全量替换 + 校验 model_id 存在性）/ `get_session_prefs`（同进程重开 Tab 回读对齐）。**本轮为内存态**，应用重启回落默认（见 §5 限制）。
 
 ### 2.2 权限四档与 fence 接缝（安全语义表）
@@ -41,7 +41,7 @@ fence 新增 `FencePolicy { approval_enabled, confirm_outside_create, confirm_in
 | ConfirmEach 变更前确认 | **执行前弹审批**（batch 消费点） | **弹确认** | 按全局开关确认/放行 | 弹确认 | 弹确认 | 可用 |
 | AutoEdit 自动编辑（默认） | 自动放行 | 放行 | 按全局开关确认/放行 | 弹确认 | 弹确认 | 可用 |
 | Plan 计划模式 | **从工具集排除** | **弹确认** | 按全局开关确认/放行 | 弹确认 | 弹确认 | **全排除** + 系统提示词 `<plan-mode>` 约束 |
-| FullAccess 完全访问 | 自动放行 | 放行 | 放行（跳过弹窗） | **免确认执行** | **直接拦截** | 可用 |
+| FullAccess 完全访问 | 自动放行 | 放行 | 放行（跳过弹窗） | **免确认执行** | **直接拦截** | 可用（**只读子代理角色（explore / reviewer / code-reviewer）的写工具排除在本档下解除**，其只读提示文案同步换为授权说明；其余三档行为与文案逐字不变，[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)） |
 
 - FullAccess 的实现路径：fence 一律以 `approval_enabled=true` 产出 Confirm，在 command/service 两个消费点按模式跳过审批弹窗；灾难级 Confirm 防御性兜底为 Block。**不**把 `approval_enabled=false` 当 FullAccess 传（现行 false 语义是高危变 Block，更严）。
 - L1 删除黑名单（rm/xargs/find -delete）与符号链接逃逸 Block 在所有模式不变。
