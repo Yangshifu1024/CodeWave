@@ -450,6 +450,15 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpExtraKeys", // → mcp.servers 条目：表单未展示键的「保存时原样保留」提示
   "mcpIssuesHead", // → mcp.servers：保存前结构校验的问题清单标题
   "mcpSaveBlocked", // → 动作：error 级校验阻止保存
+  "mcpScopeGlobal", // → mcp 页：配置作用域切换（全局）
+  "mcpScopeProject", // → mcp 页：配置作用域切换（项目）
+  "mcpScopeNoProject", // → mcp 页：无项目目录时只读全局配置的提示
+  "mcpScopeDirtyHint", // → mcp 页：有未保存改动时禁止切换作用域的说明
+  "mcpConfigPath", // → mcp 页：当前作用域 mcp.json 路径回显
+  "mcpTest", // → 动作：单 server 临时测试连接
+  "mcpTestOk", // → mcp 页：测试成功结果
+  "mcpTestFail", // → mcp 页：测试失败结果
+  "mcpTestNoReply", // → mcp 页：测试无响应兜底文案
   "skillsHint", // → disabled_skills 的目录来源说明
   "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能

@@ -48,6 +48,12 @@ let calls: string[] = [];
 let statusReply: { name: string; state: unknown; tools: number }[] = [];
 /** mcp_list_config 的 json 字段（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
 let configReply = MCP_CONFIG;
+/** mcp_test 的返回值（临时测试连接：不改动正式状态） */
+let testReply: { ok: boolean; tools: number; error: null | { message: string } } = {
+  ok: true,
+  tools: 2,
+  error: null,
+};
 
 async function baseInvoke(cmd: string, args?: any) {
   calls.push(args ? `${cmd}:${JSON.stringify(args)}` : cmd);
@@ -56,8 +62,16 @@ async function baseInvoke(cmd: string, args?: any) {
     case "save_config": return null;
     case "list_available_shells": return [];
     case "mcp_list_config":
-      return { scope: "global", path: "C:/u/.codewave/mcp.json", json: configReply, servers: [], effective: [], issues: [] };
+      return {
+        scope: args?.scope ?? "global",
+        path: args?.scope === "project" ? "C:/proj/.codewave/mcp.json" : "C:/u/.codewave/mcp.json",
+        json: configReply,
+        servers: [],
+        effective: [],
+        issues: [],
+      };
     case "mcp_save_config": return { saved: true, issues: [] };
+    case "mcp_test": return testReply;
     case "mcp_status": return JSON.parse(JSON.stringify(statusReply));
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);
@@ -83,6 +97,7 @@ afterEach(async () => {
   calls = [];
   statusReply = [];
   configReply = MCP_CONFIG;
+  testReply = { ok: true, tools: 2, error: null };
 });
 
 /** 状态调用次数（刷新按钮「只重读、不重连」与「进页 refetch」都靠它断言） */
@@ -106,6 +121,14 @@ function statusRows(): { name: string; state: string; tools: string }[] {
       state: (r.querySelector(".mcp-status-state")?.textContent ?? "").trim(),
       tools: r.querySelector(".mcp-status-tools")?.textContent ?? "",
     }));
+}
+
+function segmentedItemByText(text: string): HTMLElement {
+  const el = Array.from(
+    document.querySelectorAll<HTMLElement>(".ant-segmented-item-label"),
+  ).find((n) => (n.textContent ?? "").trim() === text);
+  if (!el) throw new Error(`segmented item not found: ${text}`);
+  return el;
 }
 
 function buttonByText(text: string): HTMLElement {
@@ -293,5 +316,65 @@ describe("设置页 MCP 页：服务器状态表", () => {
 
     // 状态表：拿不到配置名单那一半按空处理 → 只列管理端已知的服务器
     expect(statusRows()).toEqual([{ name: "fs", state: "已连接", tools: "2" }]);
+  });
+});
+
+describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
+  it("默认编辑全局层，提示回显该层 mcp.json 路径", async () => {
+    await openMcpTab();
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("C:/u/.codewave/mcp.json"),
+    );
+    expect(calls.some((c) => c.includes('"scope":"global"'))).toBe(true);
+  });
+
+  it("切到项目层会重新拉该层配置（两层都可编辑；同名项目级胜出由后端合并）", async () => {
+    await openMcpTab();
+    fireEvent.click(segmentedItemByText("项目"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.includes('"scope":"project"'))).toBe(true),
+    );
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("C:/proj/.codewave/mcp.json"),
+    );
+  });
+
+  it("有未保存改动时禁用作用域切换（避免切层丢掉草稿）", async () => {
+    await openMcpTab();
+    // 改一个字段 → 脏
+    const nameInput = document.querySelector<HTMLInputElement>(".mcp-entry input")!;
+    fireEvent.change(nameInput, { target: { value: "fs-renamed" } });
+    await waitFor(() => {
+      const seg = document.querySelector<HTMLElement>(".mcp-scope .ant-segmented");
+      expect(seg?.classList.contains("ant-segmented-disabled")).toBe(true);
+    });
+    expect(document.body.textContent).toContain("保存或放弃后才能切换作用域");
+  });
+
+  it("测试连接：调 mcp_test（带作用域与名称）并就地显示结果，绝不触发 connect_mcp", async () => {
+    await openMcpTab();
+    const beforeConnect = calls.filter((c) => c.startsWith("connect_mcp")).length;
+    fireEvent.click(buttonByText("测试"));
+
+    await waitFor(() => expect(calls.some((c) => c.startsWith("mcp_test"))).toBe(true));
+    const call = calls.find((c) => c.startsWith("mcp_test"))!;
+    expect(call).toContain('"scope":"global"');
+    expect(call).toContain('"name":"fs"');
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "临时测试：握手成功，发现 2 个工具（未建立正式连接）",
+      ),
+    );
+    // 测试连接不改动正式状态
+    expect(calls.filter((c) => c.startsWith("connect_mcp")).length).toBe(beforeConnect);
+  });
+
+  it("测试连接失败：就地显示失败原因", async () => {
+    testReply = { ok: false, tools: 0, error: { message: "握手超时（30s）" } };
+    await openMcpTab();
+    fireEvent.click(buttonByText("测试"));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("临时测试失败：握手超时（30s）"),
+    );
   });
 });

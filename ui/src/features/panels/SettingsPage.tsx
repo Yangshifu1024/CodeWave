@@ -13,6 +13,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
   App, Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
+  Segmented,
 } from "antd";
 import {
   ApiOutlined, ArrowLeftOutlined, BgColorsOutlined, CheckSquareOutlined, DeleteOutlined, DeploymentUnitOutlined,
@@ -22,7 +23,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -301,6 +302,14 @@ export default function SettingsPage() {
   const [mcpOriginal, setMcpOriginal] = useState("");
   /** 保存前的结构校验问题（后端与运行时同一套规则；error 级会阻止落盘） */
   const [mcpIssues, setMcpIssues] = useState<McpConfigIssue[]>([]);
+  /** 当前编辑的 MCP 配置作用域（global = 用户级；project = 当前会话所属项目） */
+  const [mcpScope, setMcpScope] = useState<McpScope>("global");
+  /** 当前作用域 mcp.json 的绝对路径（来源诊断） */
+  const [mcpPath, setMcpPath] = useState("");
+  /** 项目层 mcp.json 路径；null = 当前会话没有项目目录（该作用域不可用） */
+  const [mcpProjectPath, setMcpProjectPath] = useState<string | null>(null);
+  /** 临时测试连接结果（按 server 名；不改动正式连接状态） */
+  const [mcpTests, setMcpTests] = useState<Record<string, { ok: boolean; text: string }>>({});
   /** MCP 运行时状态（useUi.mcpStatus：mcp:status 事件 upsert；打开设置页与进入 MCP 页各重读一次） */
   const mcpStatus = useUi((s) => s.mcpStatus);
   /** 状态刷新中：按钮转圈 + 防重复点击（只重读状态，不触发连接 / 重连） */
@@ -431,18 +440,10 @@ export default function SettingsPage() {
       const cloned: ConfigState = JSON.parse(JSON.stringify(config));
       cloned.ui.language = useUi.getState().language;
       setDraft(cloned);
-      const doc = await ipc.mcpListConfig("global", sessionId ?? undefined).catch(() => null);
-      const raw = doc?.json ?? "";
-      const parsed = parseMcpDoc(raw);
-      // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
-      const normalized = parsed ? serializeMcpDoc(parsed) : raw;
-      // null = 原 JSON 无法结构化编辑 → 进入「文本兜底模式」（只有 mcpDoc === null 才走那个分支）。
-      // 注意不能写成「解析失败就置空草稿」：那样兜底模式在真实使用中不可达——解析不了的 mcp.json
-      // 既不显示、点「保存」还会被空配置覆盖（数据丢失）。回归用例：settings.mcp.test.tsx。
-      setMcpDoc(parsed);
-      setMcpRaw(normalized);
-      setMcpOriginal(normalized);
-      setMcpIssues(doc?.issues ?? []);
+      await loadMcp("global");
+      // 项目层是否可用：探测一次（不可用则该作用域在切换器里禁用并给提示）
+      const proj = await ipc.mcpListConfig("project", sessionId ?? undefined).catch(() => null);
+      setMcpProjectPath(proj?.path ?? null);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
       const st = await ipc.mcpStatus().catch(() => []);
       useUi.setState({ mcpStatus: st });
@@ -767,7 +768,7 @@ export default function SettingsPage() {
     try {
       // 结构化模式：草稿 -> JSON（无损，含未识别键）；兜底模式：原文本原样保存
       const json = mcpDoc ? serializeMcpDoc(mcpDoc) : mcpRaw;
-      const res = await ipc.mcpSaveConfig("global", json, sessionId ?? undefined);
+      const res = await ipc.mcpSaveConfig(mcpScope, json, sessionId ?? undefined);
       setMcpIssues(res.issues);
       // 有 error 级问题时后端**不落盘**：不能报成功，也不能把基线前移
       if (!res.saved) {
@@ -807,6 +808,45 @@ export default function SettingsPage() {
     setMcpDoc((prev) =>
       prev ? { ...prev, servers: prev.servers.filter((_, i) => i !== idx) } : prev,
     );
+  }
+
+  /**
+   * 读取某作用域的 MCP 配置并重置草稿与基线。
+   *
+   * 解析失败（有内容但无法结构化编辑）→ 进「文本兜底模式」：既不显示结构化条目，
+   * 保存时也原样直存，避免拿空配置覆盖用户文件。回归用例：settings.mcp.test.tsx。
+   */
+  async function loadMcp(scope: McpScope) {
+    const doc = await ipc.mcpListConfig(scope, sessionId ?? undefined).catch(() => null);
+    const raw = doc?.json ?? "";
+    const parsed = parseMcpDoc(raw);
+    // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
+    const normalized = parsed ? serializeMcpDoc(parsed) : raw;
+    setMcpScope(scope);
+    setMcpDoc(parsed);
+    setMcpRaw(normalized);
+    setMcpOriginal(normalized);
+    setMcpIssues(doc?.issues ?? []);
+    setMcpPath(doc?.path ?? "");
+    setMcpTests({});
+  }
+
+  /** 临时测试连接：起 → tools/list → 立即回收，不改动正式连接状态 */
+  async function testMcpServer(name: string) {
+    const res = await ipc
+      .mcpTest(mcpScope, name, sessionId ?? undefined)
+      .catch(() => null);
+    setMcpTests((prev) => ({
+      ...prev,
+      [name]: res?.ok
+        ? { ok: true, text: t("settings.mcpTestOk", { n: res.tools }) }
+        : {
+            ok: false,
+            text: t("settings.mcpTestFail", {
+              message: res?.error?.message ?? t("settings.mcpTestNoReply"),
+            }),
+          },
+    }));
   }
 
   /** 刷新 MCP 状态：只重读 mcp_status（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
@@ -1332,6 +1372,30 @@ export default function SettingsPage() {
         <>
           {/* 服务器状态段：行由本页拼好（配置名单 ∪ 状态记录），展示与交互都在 McpStatusTable 里
               （两侧皆空时该组件自身返回 null）。 */}
+          {/* 配置作用域：全局（用户级）与项目两层都可编辑。
+              会话可见集 = 全局 ∪ 项目，同名项目级胜出（后端 merge_scopes）。 */}
+          <div className="mcp-scope">
+            <Segmented
+              size="small"
+              value={mcpScope}
+              disabled={mcpDirty}
+              options={[
+                { label: t("settings.mcpScopeGlobal"), value: "global" },
+                {
+                  label: t("settings.mcpScopeProject"),
+                  value: "project",
+                  disabled: mcpProjectPath === null,
+                },
+              ]}
+              onChange={(v) => void loadMcp(v as McpScope)}
+            />
+            <span className="hint">
+              {mcpProjectPath === null
+                ? t("settings.mcpScopeNoProject")
+                : t("settings.mcpConfigPath", { path: mcpPath })}
+            </span>
+          </div>
+          {mcpDirty && <div className="hint">{t("settings.mcpScopeDirtyHint")}</div>}
           <McpStatusTable rows={mcpStatusRows} refreshing={mcpRefreshing} onRefresh={() => void refreshMcpStatus()} />
           <div className="settings-subhead">{t("settings.mcpConfigHead")}</div>
           {mcpEntries === null ? (
@@ -1367,6 +1431,13 @@ export default function SettingsPage() {
                       onChange={(v) => patchMcpEntry(idx, { transportRaw: v })}
                     />
                     <div className="flex" />
+                    <Button
+                      size="small"
+                      disabled={!e.name.trim()}
+                      onClick={() => void testMcpServer(e.name.trim())}
+                    >
+                      {t("settings.mcpTest")}
+                    </Button>
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeMcpEntry(idx)} />
                   </div>
                   {draftTransport(e) === "stdio" ? (
@@ -1417,6 +1488,11 @@ export default function SettingsPage() {
                         n: extraKeysOf(e).length,
                         keys: extraKeysOf(e).join(", "),
                       })}
+                    </div>
+                  )}
+                  {mcpTests[e.name.trim()] && (
+                    <div className={mcpTests[e.name.trim()].ok ? "hint" : "hint mcp-test-fail"}>
+                      {mcpTests[e.name.trim()].text}
                     </div>
                   )}
                 </div>
