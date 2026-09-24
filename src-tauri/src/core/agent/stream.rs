@@ -203,12 +203,11 @@ pub(super) async fn build_stream_request(
         .filter(|d| !params.exclude_tools.contains(&d.name))
         .collect();
     if !params.exclude_mcp {
-        let mcp_tools = core.mcp.all_tools().await;
-        for mt in mcp_tools {
+        for d in core.mcp.tool_defs().await {
             tools.push(crate::provider::ToolDef {
-                name: crate::mcp::server_function_name(&mt.server, &mt.name),
-                description: mt.description,
-                schema_json: mt.schema_json,
+                name: d.function_name,
+                description: d.description,
+                schema_json: d.schema_json,
             });
         }
     }
