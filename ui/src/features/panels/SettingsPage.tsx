@@ -37,19 +37,17 @@ import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { AboutSettings } from "./AboutSettings";
 import McpStatusTable, { mcpStatusRow, type McpStatusRow } from "./McpStatusTable";
 import {
-  argsToText,
   draftTransport,
   emptyDraft,
-  envToText,
   extraKeysOf,
   normalizeMcpDoc,
   parseMcpDoc,
   serializeMcpDoc,
-  textToArgs,
-  textToEnv,
   type McpDraftDoc,
+  type McpKeyValueRow,
   type McpServerDraft,
 } from "../../utils/mcpConfig";
+import { McpArgTable, McpKvTable } from "./McpKvTable";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import {
@@ -792,6 +790,49 @@ export default function SettingsPage() {
     }
   }
 
+  /** 改草稿里某个 server（表格字段的增删改都经这里落到草稿）。 */
+  function patchMcpServer(idx: number, apply: (e: McpServerDraft) => McpServerDraft) {
+    setMcpDoc((prev) =>
+      prev ? { ...prev, servers: prev.servers.map((e, i) => (i === idx ? apply(e) : e)) } : prev,
+    );
+  }
+
+  /** 键值字段（env / headers）的类型安全写入。 */
+  function withKv(
+    e: McpServerDraft,
+    field: "env" | "headers",
+    rows: McpKeyValueRow[],
+  ): McpServerDraft {
+    return field === "env" ? { ...e, env: rows } : { ...e, headers: rows };
+  }
+
+  const mcpArgPatch = (idx: number, ri: number, value: string) =>
+    patchMcpServer(idx, (s) => ({
+      ...s,
+      args: s.args.map((r, j) => (j === ri ? { value } : r)),
+    }));
+  const mcpArgAdd = (idx: number) =>
+    patchMcpServer(idx, (s) => ({ ...s, args: [...s.args, { value: "" }] }));
+  const mcpArgRemove = (idx: number, ri: number) =>
+    patchMcpServer(idx, (s) => ({ ...s, args: s.args.filter((_, j) => j !== ri) }));
+  const mcpKvPatch = (
+    idx: number,
+    field: "env" | "headers",
+    ri: number,
+    patch: Partial<McpKeyValueRow>,
+  ) =>
+    patchMcpServer(idx, (s) =>
+      withKv(
+        s,
+        field,
+        s[field].map((r, j) => (j === ri ? { ...r, ...patch } : r)),
+      ),
+    );
+  const mcpKvAdd = (idx: number, field: "env" | "headers") =>
+    patchMcpServer(idx, (s) => withKv(s, field, [...s[field], { key: "", value: "" }]));
+  const mcpKvRemove = (idx: number, field: "env" | "headers", ri: number) =>
+    patchMcpServer(idx, (s) => withKv(s, field, s[field].filter((_, j) => j !== ri)));
+
   function patchMcpEntry(idx: number, patch: Partial<McpEntry>) {
     setMcpDoc((prev) =>
       prev
@@ -1496,36 +1537,56 @@ export default function SettingsPage() {
                           onChange={(ev) => patchMcpEntry(idx, { command: ev.target.value })}
                         />
                       </div>
-                      <div className="mcp-entry-row">
+                      <div className="mcp-entry-row mcp-entry-block">
                         <span className="mcp-label">{t("settings.mcpArgs")}</span>
-                        <Input
-                          size="small"
-                          value={argsToText(e.args)}
-                          onChange={(ev) =>
-                            patchMcpEntry(idx, { args: textToArgs(ev.target.value) })
-                          }
+                        <McpArgTable
+                          rows={e.args}
+                          deleteLabel={t("settings.mcpRowDelete")}
+                          addLabel={t("settings.mcpArgsAdd")}
+                          onPatch={(ri, value) => mcpArgPatch(idx, ri, value)}
+                          onAdd={() => mcpArgAdd(idx)}
+                          onRemove={(ri) => mcpArgRemove(idx, ri)}
                         />
                       </div>
-                      <div className="mcp-entry-row">
+                      <div className="mcp-entry-row mcp-entry-block">
                         <span className="mcp-label">{t("settings.mcpEnv")}</span>
-                        <TextArea
-                          rows={2}
-                          size="small"
-                          value={envToText(e.env)}
-                          onChange={(ev) => patchMcpEntry(idx, { env: textToEnv(ev.target.value) })}
+                        <McpKvTable
+                          rows={e.env}
+                          keyPlaceholder={t("settings.mcpTableKey")}
+                          valuePlaceholder={t("settings.mcpTableValue")}
+                          deleteLabel={t("settings.mcpRowDelete")}
+                          addLabel={t("settings.mcpEnvAdd")}
+                          onPatch={(ri, patch) => mcpKvPatch(idx, "env", ri, patch)}
+                          onAdd={() => mcpKvAdd(idx, "env")}
+                          onRemove={(ri) => mcpKvRemove(idx, "env", ri)}
                         />
                       </div>
                     </>
                   ) : (
-                    <div className="mcp-entry-row">
-                      <span className="mcp-label">{t("settings.mcpUrl")}</span>
-                      <Input
-                        size="small"
-                        value={e.url}
-                        placeholder="https://example.com/mcp"
-                        onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
-                      />
-                    </div>
+                    <>
+                      <div className="mcp-entry-row">
+                        <span className="mcp-label">{t("settings.mcpUrl")}</span>
+                        <Input
+                          size="small"
+                          value={e.url}
+                          placeholder="https://example.com/mcp"
+                          onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
+                        />
+                      </div>
+                      <div className="mcp-entry-row mcp-entry-block">
+                        <span className="mcp-label">{t("settings.mcpHeaders")}</span>
+                        <McpKvTable
+                          rows={e.headers}
+                          keyPlaceholder={t("settings.mcpTableName")}
+                          valuePlaceholder={t("settings.mcpTableValue")}
+                          deleteLabel={t("settings.mcpRowDelete")}
+                          addLabel={t("settings.mcpHeadersAdd")}
+                          onPatch={(ri, patch) => mcpKvPatch(idx, "headers", ri, patch)}
+                          onAdd={() => mcpKvAdd(idx, "headers")}
+                          onRemove={(ri) => mcpKvRemove(idx, "headers", ri)}
+                        />
+                      </div>
+                    </>
                   )}
                   {extraKeysOf(e).length > 0 && (
                     <div className="hint">

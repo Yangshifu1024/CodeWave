@@ -115,17 +115,24 @@ MCP 工具纳入审批：server 级 `read_only` 或 `always_allow` 声明过则�
 
 ## 四、剩余项
 
-1. **args / env 表格化**（UI 外观）：当前是「一行一个参数」「K=V 每行一条」的**无损**文本框
-   （已修掉旧的按空白切分与 trim 有损），表格 UI 待做。文本框无法表达「值里含换行」的
-   环境变量——行模型 `mcpConfig.ts` 已支持，表格化后即可覆盖。
-2. **resources / prompts**：按决策列为**非目标**；sampling / elicitation 明确不支持
-   （server 反向调模型/请求用户输入是重大安全面，与「纳入安全门」相冲）。
+**无功能遗留。** 明确非目标两项：
+
+1. **resources / prompts**：按决策列为非目标。
+2. **sampling / elicitation**：明确不支持（server 反向调模型 / 请求用户输入是重大安全面，
+   与「MCP 纳入安全门」相冲）。
 
 已在本分支完成（原列于此的遗留）：前端面板重构（作用域切换、来源列、状态徽标、
-PID 与单 server 断开/重连、测试连接）、`tools/list_changed` 热更新、结构化 content blocks
-（图片走 `Content::Image` 进模型通道）、HTTP 请求头注入、旧 4 命令适配器下线、
-文档漂移同步（technical-design / p1-plan / arch-orchestrator / settings-search-and-advanced）、
-`code-review-findings` 关闭 M10 与 L7。
+PID 与单 server 断开/重连、测试连接）、**args / env / headers 表格化**、
+`tools/list_changed` 热更新、结构化 content blocks（图片走 `Content::Image` 进模型通道）、
+HTTP 请求头注入、旧 4 命令适配器下线、文档漂移同步、`code-review-findings` 关闭 M10 与 L7。
+
+### 表格化的一个实现细节（值得记住）
+
+值列用的是**单行 `TextArea`** 而不是 `Input`：HTML 的 `<input>` **存不住换行**
+（浏览器/DOM 会把 `
+` 剥掉），含换行的环境变量（如内联 PEM）会在界面上被显示成
+拼接后的样子、且一编辑就丢换行。`textarea` 没有这个限制。用 `rows={1}` 而非
+`autoSize`——后者会在 DOM 里另放一个测量用 textarea（测试定位易踩）。
 
 
 ## 五、与批准方案的偏差（均有理由）
