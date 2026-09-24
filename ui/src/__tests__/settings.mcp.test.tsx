@@ -14,6 +14,7 @@ import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { useSessions } from "../stores/sessions";
+import { parseMcpDoc } from "../utils/mcpConfig";
 import type { ConfigState } from "../ipc/types";
 
 function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
@@ -385,5 +386,138 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
     await waitFor(() =>
       expect(document.body.textContent).toContain("临时测试失败：握手超时（30s）"),
     );
+  });
+});
+
+describe("设置页 MCP 页：args / env / headers 表格", () => {
+  /** 换行：表格（textarea 值列）能表达，旧的「一行一条」文本框做不到 */
+  const NL = String.fromCharCode(10);
+  const CFG = JSON.stringify({
+    mcpServers: {
+      fs: {
+        command: "npx",
+        args: ["-y", "D:/我的 项目/dir"],
+        env: { A: " padded ", B: "x=y" },
+      },
+      web: { url: "https://example.com/mcp", headers: { Authorization: "Bearer abc" } },
+    },
+  });
+
+  /** 某张 server 卡片里的第 n 张表格（stdio：0=参数 1=环境变量；http：0=请求头） */
+  function tableOf(entryIdx: number, tableIdx: number): HTMLElement {
+    const entry = document.querySelectorAll(".mcp-entry")[entryIdx];
+    const t = entry?.querySelectorAll(".mcp-table")[tableIdx];
+    if (!t) throw new Error("table not found");
+    return t as HTMLElement;
+  }
+
+  function rowOf(t: HTMLElement, i: number): Element {
+    const row = t.querySelectorAll(".mcp-table-row")[i];
+    if (!row) throw new Error("row not found: " + i);
+    return row;
+  }
+
+  /** 键列（键值表的键 / 请求头名称）——是 `input` */
+  function keyCell(row: Element): HTMLInputElement {
+    return row.querySelector("input") as HTMLInputElement;
+  }
+
+  /** 值列——参数表是 `input`，键值表是单行 `textarea`（textarea 才存得住换行） */
+  function valueCell(row: Element): HTMLInputElement | HTMLTextAreaElement {
+    return (row.querySelector("textarea") ?? row.querySelector("input")) as
+      | HTMLInputElement
+      | HTMLTextAreaElement;
+  }
+
+  /** 「＋ 添加」按钮 = 表格里最后一个按钮（避开按文本找时的空白差异） */
+  function addBtn(t: HTMLElement): HTMLElement {
+    const btns = t.querySelectorAll("button");
+    return btns[btns.length - 1] as HTMLElement;
+  }
+
+  /** 点保存并把落盘的 JSON 解析回草稿（断言端到端无损） */
+  async function saveAndParse() {
+    fireEvent.click(buttonByText("保存并重连"));
+    await waitFor(() => expect(calls.some((c) => c.startsWith("mcp_save_config"))).toBe(true));
+    const call = calls.find((c) => c.startsWith("mcp_save_config"))!;
+    const args = JSON.parse(call.slice("mcp_save_config:".length));
+    const doc = parseMcpDoc(args.json);
+    expect(doc).not.toBeNull();
+    return doc!;
+  }
+
+  it("参数表：一行一个参数，含空格的路径原样保留", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(0, 0);
+    expect(t.querySelectorAll(".mcp-table-row").length).toBe(2);
+    expect(valueCell(rowOf(t, 0)).value).toBe("-y");
+    expect(valueCell(rowOf(t, 1)).value).toBe("D:/我的 项目/dir");
+  });
+
+  it("参数表：可添加 / 删除行，保存后落到 JSON", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(0, 0);
+    fireEvent.click(addBtn(t));
+    expect(t.querySelectorAll(".mcp-table-row").length).toBe(3);
+    fireEvent.change(valueCell(rowOf(t, 2)), { target: { value: "--verbose" } });
+    // 删掉第一行（-y）
+    fireEvent.click(rowOf(t, 0).querySelector("button")!);
+    expect(t.querySelectorAll(".mcp-table-row").length).toBe(2);
+
+    const doc = await saveAndParse();
+    const fs = doc.servers.find((s) => s.name === "fs")!;
+    expect(fs.args.map((a) => a.value)).toEqual(["D:/我的 项目/dir", "--verbose"]);
+  });
+
+  it("环境变量表：值不裁剪、含 = 原样保留", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(0, 1);
+    expect(keyCell(rowOf(t, 0)).value).toBe("A");
+    expect(valueCell(rowOf(t, 0)).value).toBe(" padded ");
+    expect(keyCell(rowOf(t, 1)).value).toBe("B");
+    expect(valueCell(rowOf(t, 1)).value).toBe("x=y");
+  });
+
+  it("环境变量值含换行也能表达（旧的「一行一条」文本框做不到）", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(0, 1);
+    fireEvent.change(valueCell(rowOf(t, 0)), { target: { value: "a" + NL + "b" } });
+
+    const doc = await saveAndParse();
+    const fs = doc.servers.find((s) => s.name === "fs")!;
+    expect(fs.env.find((r) => r.key === "A")!.value).toBe("a" + NL + "b");
+  });
+
+  it("键为空的行在保存时丢弃（点了＋没填的行）", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(0, 1);
+    fireEvent.click(addBtn(t));
+    expect(t.querySelectorAll(".mcp-table-row").length).toBe(3);
+
+    const doc = await saveAndParse();
+    const fs = doc.servers.find((s) => s.name === "fs")!;
+    expect(fs.env.map((r) => r.key)).toEqual(["A", "B"]);
+  });
+
+  it("http 分支渲染请求头表格，可增删改并落到 JSON", async () => {
+    configReply = CFG;
+    await openMcpTab();
+    const t = tableOf(1, 0);
+    expect(keyCell(rowOf(t, 0)).value).toBe("Authorization");
+    expect(valueCell(rowOf(t, 0)).value).toBe("Bearer abc");
+
+    fireEvent.click(addBtn(t));
+    fireEvent.change(keyCell(rowOf(t, 1)), { target: { value: "X-Trace" } });
+    fireEvent.change(valueCell(rowOf(t, 1)), { target: { value: "1" } });
+    fireEvent.click(rowOf(t, 0).querySelector("button")!);
+
+    const doc = await saveAndParse();
+    const web = doc.servers.find((s) => s.name === "web")!;
+    expect(web.headers).toEqual([{ key: "X-Trace", value: "1" }]);
   });
 });
