@@ -5,7 +5,7 @@
 // 后端候选表第一个检测到的（本模块只记用户手动改选过的那一个）。
 
 /** 折叠的段落 id（值为「已折叠」集合；缺省 = 全展开） */
-export type CollapsibleSection = "skills" | "plan";
+export type CollapsibleSection = "skills" | "plan" | "goal";
 
 export const COLLAPSED_SECTIONS_KEY = "ws_rb_sections_collapsed";
 export const EXPANDED_QUOTA_KEY = "ws_rb_quota_expanded";
@@ -33,7 +33,7 @@ function writeIdSet(key: string, ids: Set<string>): void {
 export function readCollapsedSections(): Set<CollapsibleSection> {
   const all = readIdSet(COLLAPSED_SECTIONS_KEY);
   const out = new Set<CollapsibleSection>();
-  for (const id of ["skills", "plan"] as const) {
+  for (const id of ["skills", "plan", "goal"] as const) {
     if (all.has(id)) out.add(id);
   }
   return out;

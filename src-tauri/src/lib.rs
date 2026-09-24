@@ -369,6 +369,8 @@ pub fn run() {
             host::commands::session_running,
             host::commands::set_session_prefs,
             host::commands::get_session_prefs,
+            host::commands::get_session_goal,
+            host::commands::resume_goal,
             host::commands::inject_run_message,
             host::commands::resolve_ask,
             host::commands::compact_session,

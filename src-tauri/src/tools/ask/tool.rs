@@ -1,3 +1,4 @@
+use crate::core::agent::goal::GoalStatus;
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -71,6 +72,9 @@ pub struct Option2 {
 /// 承载 plan 档批准协议：批准形询问 + 选中批准类选项 → G2/G3 门校验 → 切到该选项声明的档位
 ///（mode 字段，缺省 AutoEdit）并注入「执行方案」；
 /// 计划文本自动落盘为计划文件供前端卡片查看。
+/// 目标档（goal mode）澄清期的批准走**独立分支**：校验已登记目标（text + criteria）→ 切到所选档位，
+/// 并**仅当最终档位是目标档**时把目标从澄清期推进到执行期（用户选了别的档 = 退出目标模式，状态不动）；
+/// **不冻结计划基线**（G3 的范围确认在目标档保持关闭），也不过 G2/G3 计划门。
 pub struct AskTool;
 
 /// O8 口令表（固定关键词，Q3=A）：最近一条用户消息命中任一关键词时 skipAnalysis 声明才被采信。
@@ -115,7 +119,7 @@ impl Tool for AskTool {
         "ask"
     }
     fn description(&self) -> &'static str {
-        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
+        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。目标档（goal mode）澄清期的批准询问：选项 mode 用 \"goal\"——批准后目标从澄清期进入执行期，按账本做最小改动，不冻结计划基线。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -146,7 +150,7 @@ impl Tool for AskTool {
                 "label": {"type": "string"},
                 "description": {"type": "string"},
                 "recommended": {"type": "boolean"},
-                "mode": {"type": "string", "enum": ["auto_edit", "full_access", "confirm_each", "plan"], "description": "批准类选项专用（C1）：该选项被选中时把会话切到该权限档；批准门的两个批准类选项用 auto_edit / full_access。非批准类选项（如补充意见）不要设置"}
+                "mode": {"type": "string", "enum": ["auto_edit", "full_access", "confirm_each", "plan", "goal"], "description": "批准类选项专用（C1）：该选项被选中时把会话切到该权限档；批准门的两个批准类选项用 auto_edit / full_access；目标档澄清期的批准选项用 goal。非批准类选项（如补充意见）不要设置"}
               }
             }
           },
@@ -337,6 +341,96 @@ impl Tool for AskTool {
             ),
         );
 
+        // 目标档批准分支（goal mode，独立于 plan 档批准协议）：打开 ask 时的档位是目标档，
+        // 或用户选中的档位就是目标档。目标档有自己的批准点与门禁（已登记目标 + 验收标准），
+        // **不冻结 approved_plan 基线**（G3 在目标档必须保持关闭），也不过 G2/G3 计划门。
+        // 状态迁移的口径：**只有最终档位落在目标档**才推进澄清期 → 执行期；用户选了非目标档
+        //（= 退出目标模式）时保持 `goal.status` 不动（目标留在澄清期：既无执行授权，也不会被
+        // 账本闸门误伤），避免「档位非目标档 + 目标 executing」的不一致。
+        // 分支判据（`goal_approval`）不看最终档位是有意为之：模型漏在选项里声明 mode 时
+        // 批准照常生效（取值见下 final_mode）。
+        if goal_approval(mode_at_open, switch_target, approved) {
+            // 没有合同的执行一律拒绝：未登记目标 / 没有验收标准 → 批准不生效
+            let Some(mut goal) = ctx.rt.goal_snapshot() else {
+                return ToolOutcome::err(
+                    "E_GOAL_NOT_REGISTERED",
+                    "目标模式批准未生效：尚未登记目标。请先用 goal 工具登记目标（text + criteria + ledger），再重新发起批准询问。",
+                );
+            };
+            if goal.criteria.is_empty() {
+                return ToolOutcome::err(
+                    "E_GOAL_NOT_REGISTERED",
+                    "目标模式批准未生效：目标没有验收标准。请先用 goal 工具补齐可判定的 criteria，再重新发起批准询问。",
+                );
+            }
+            // 最终档位：切档发生时取用户所选档位，否则保持打开 ask 时的档位
+            //（模型漏声明 mode → `switch=false`，会话仍在目标档，此时批准必须能推进阶段）。
+            let final_mode = if switch { switch_target } else { mode_at_open };
+            let entered_execute = final_mode == crate::core::prefs::ApprovalMode::Goal;
+            // 澄清期 → 执行期（落边车 + 发 goal:update：右栏目标卡与前端状态据此推进）：
+            // **仅当最终档位是目标档**；最终档位不是目标档时状态不动（目标留在澄清期）。
+            if entered_execute && goal.status != GoalStatus::Executing {
+                goal.status = GoalStatus::Executing;
+                ctx.rt.set_goal(Some(goal.clone()));
+                ctx.core.sink.emit(
+                    &ctx.rt.id,
+                    "goal:update",
+                    json!({ "session": ctx.rt.id, "goal": goal }),
+                );
+                let _ = ctx.core.store.save_goal(&ctx.rt.id, &Some(goal.clone()));
+            }
+            // 经 ask 从其它档位切进目标档：这条路径不过 `transition_prefs`，前档快照得在此补记
+            //（目标达成后按它回落；缺省会错误地回落全局默认）。已有快照 / 打开时已是目标档不补。
+            if let Some(prev) = crate::core::agent::goal::prev_mode_to_record(
+                mode_at_open,
+                switch_target,
+                ctx.rt.goal_prev_mode(),
+            ) {
+                ctx.rt.set_goal_prev_mode(Some(prev));
+            }
+            // 切到用户所选档位（目标档批准时选项声明的 mode 就是 goal；已是该档则无操作）
+            if switch {
+                let mut p = ctx.rt.prefs();
+                p.approval_mode = switch_target;
+                ctx.rt.set_prefs(p);
+            }
+            crate::core::session_log::info(
+                ctx.rt.as_ref(),
+                &format!(
+                    "目标批准 → {}（{} → {}），未冻结计划基线（G3 在目标档关闭）",
+                    if entered_execute {
+                        "进入执行期"
+                    } else {
+                        "未推进阶段（最终档位非目标档，目标留在澄清期）"
+                    },
+                    mode_label(mode_at_open),
+                    mode_label(final_mode)
+                ),
+            );
+            ctx.core.sink.emit(
+                &ctx.rt.id,
+                "run:inject",
+                serde_json::json!({ "session": ctx.rt.id, "count": 1 }),
+            );
+            // 注入文案按**最终档位**渲染（B4 口径）：未进入执行期时不得声称「已进入执行期」
+            //（模型据此误判自己已有执行授权，而工作区实际只读）。
+            let guidance = if entered_execute {
+                format!(
+                    "[system] 方案已批准：目标模式已进入执行期（{}），请立即按方案推进，不要再次询问。只改账本内路径、只跑账本内程序；每完成一条验收标准立即用 goal 工具把该条 done 置 true，全部完成后把 status 置 done。",
+                    mode_label(final_mode)
+                )
+            } else {
+                format!(
+                    "[system] 方案已批准：会话已切换到{}。目标**未**进入执行期（仍为澄清期，工作区只读）：如需按目标模式推进，请切回目标模式后重新发起批准询问。",
+                    mode_label(final_mode)
+                )
+            };
+            return ToolOutcome::ok(json!({
+                "summary": format!("{}\n{guidance}", lines.join("\n")),
+                "raw": answer,
+                "plan_approved": true,
+            }));
+        }
         // 完整切换路径（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) 协议 / [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) arch 闸）：G2/G3 门 → 冻结 todos 基线 →
         // 切档 → 注入「执行方案」→ 返回 plan_approved。
         // 条件收紧（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：ConfirmEach 档的 arch 闸标记**不再单独**开启完整路径——
@@ -417,6 +511,23 @@ impl Tool for AskTool {
             "raw": answer,
         }))
     }
+}
+
+/// 目标档批准判定（纯函数便于单测）：打开 ask 时的档位已是目标档，或用户选中的档位就是目标档。
+/// 后者覆盖「从其它档位一次切进目标档」的批准形询问——目标档有自己的门禁（已登记目标），
+/// 不得落进 plan 档批准协议（那会冻结 G3 基线，而 G3 在目标档必须保持关闭）。
+/// 非批准类应答（未批准）永不触发。
+///
+/// 本判据**只看档位、不看状态迁移**：最终档位不是目标档（用户选了别的档 = 退出目标模式）时
+/// 分支照走（批准照常生效），但分支内的 `goal.status` 迁移不发生（目标留在澄清期）。
+/// 这样「打开时已是目标档 + 模型漏声明 mode」也能正常批准（会话没切走，最终档位仍是目标档）。
+pub(super) fn goal_approval(
+    mode_at_open: crate::core::prefs::ApprovalMode,
+    switch_target: crate::core::prefs::ApprovalMode,
+    approved: bool,
+) -> bool {
+    use crate::core::prefs::ApprovalMode;
+    approved && (mode_at_open == ApprovalMode::Goal || switch_target == ApprovalMode::Goal)
 }
 
 /// arch 批准闸形态（Y3 加固）：单题且选项含 id="approve"（arch playbook S5 的标准批准协议形态）。
@@ -558,6 +669,7 @@ pub(super) fn mode_label(mode: crate::core::prefs::ApprovalMode) -> &'static str
         ApprovalMode::AutoEdit => "自动编辑",
         ApprovalMode::Plan => "计划",
         ApprovalMode::FullAccess => "完全访问",
+        ApprovalMode::Goal => "目标模式",
     }
 }
 
@@ -634,7 +746,8 @@ pub(super) fn wants_mode_switch(
         ApprovalMode::Plan => approved,
         ApprovalMode::ConfirmEach => switch_flag || valid_answer,
         // 显式选档优先（C5）：本就放开的档位也按用户所选目标切（含升级 auto_edit → full_access）
-        ApprovalMode::AutoEdit | ApprovalMode::FullAccess => mode_requested,
+        // 目标模式同理：它本就放开（工作区内写直通、审批由账本+阶段机制接管），按用户所选档切入
+        ApprovalMode::AutoEdit | ApprovalMode::FullAccess | ApprovalMode::Goal => mode_requested,
     }
 }
 

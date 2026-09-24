@@ -300,7 +300,7 @@ impl Default for SessionIndex {
     }
 }
 
-/// 会话持久化存储：历史（gzip）+ 索引（JSON）+ 边车（todos / 产物 / 子代理历史）。
+/// 会话持久化存储：历史（gzip）+ 索引（JSON）+ 边车（todos / goal / 产物 / 子代理历史）。
 /// 索引与产物是读-改-写全程持锁，并发检查点/删除/改名不得互相覆盖丢条目。
 pub struct SessionStore {
     /// 数据根目录（~/.codewave 或测试临时目录）
@@ -720,7 +720,7 @@ impl SessionStore {
         out
     }
 
-    /// 清理索引中的非会话条目（sub_*/task_* 前缀）及其 gz 与 todos/artifacts 边车。
+    /// 清理索引中的非会话条目（sub_*/task_* 前缀）及其 gz 与 todos/goal/artifacts 边车。
     /// 存量修复：checkpoint 曾把子代理/任务运行 upsert 进主索引（untitled 幽灵会话），
     /// 本方法在应用启动时一次性清扫；真会话 id 为 uuid，不与两类前缀冲突。幂等。
     pub fn purge_non_session_entries(&self) -> usize {
@@ -742,6 +742,7 @@ impl SessionStore {
             let _ = std::fs::remove_dir_all(self.history_dir(id));
             let _ = std::fs::remove_file(self.history_path(id));
             let _ = std::fs::remove_file(self.todos_path(id));
+            let _ = std::fs::remove_file(self.goal_path(id));
             let _ = std::fs::remove_file(self.artifacts_path(id));
             // 两个按会话分桶的托管目录（工具结果 sidecar / 图片 blob）：
             // 与 cleanup 路径同口径，幽灵条目不得留下目录
@@ -782,6 +783,7 @@ impl SessionStore {
         // 边车级联清理（todos 曾泄漏；此处一并修复）
         let _ = std::fs::remove_file(self.artifacts_path(id));
         let _ = std::fs::remove_file(self.todos_path(id));
+        let _ = std::fs::remove_file(self.goal_path(id));
         // 子代理过程历史目录级联清理（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）
         // 及其图片 blob（blob 归子历史自己，不在父会话的 blob 目录里）——
         // 子历史目录列必须**先**读，下一步就把该目录整个删了
@@ -1300,6 +1302,35 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
+    // ---------- 目标模式（goal mode）边车 ----------
+
+    /// goal 边车文件路径：sessions/<id>.goal.json（清理按同一路径删除）。
+    pub(crate) fn goal_path(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.goal.json"))
+    }
+
+    /// 持久化目标状态（原子写）。`None` 落盘为 JSON `null`（清除语义；读回仍是 None），
+    /// 保留文件而非删文件——删除只走 `remove` / 清理链，避免「清目标」与「删会话」两条语义混用。
+    pub fn save_goal(
+        &self,
+        id: &str,
+        goal: &Option<crate::core::agent::goal::GoalState>,
+    ) -> anyhow::Result<()> {
+        let bytes = serde_json::to_vec_pretty(goal)?;
+        atomic_write(&self.goal_path(id), &bytes)?;
+        Ok(())
+    }
+
+    /// 读目标状态；缺失/损坏/`null` 一律回 None（边车只是辅助视图，绝不阻断会话）。
+    pub fn load_goal(&self, id: &str) -> Option<crate::core::agent::goal::GoalState> {
+        std::fs::read(self.goal_path(id))
+            .ok()
+            .and_then(|b| {
+                serde_json::from_slice::<Option<crate::core::agent::goal::GoalState>>(&b).ok()
+            })
+            .flatten()
+    }
+
     // ---------- 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)） ----------
 
     /// 工具结果 sidecar 目录：sessions/<owner>.toolres/。
@@ -1637,3 +1668,89 @@ fn decode_legacy_history(
 }
 #[cfg(test)]
 mod tests;
+
+/// 目标模式边车测试（写在 store.rs 内，与 `store/tests.rs` 的同名模块并存）。
+#[cfg(test)]
+mod goal_sidecar_tests {
+    use super::*;
+    use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
+
+    fn sample() -> GoalState {
+        GoalState {
+            text: "把 X 改成 Y".into(),
+            criteria: vec![GoalCriterion {
+                title: "测试通过".into(),
+                done: true,
+            }],
+            ledger: GoalLedger {
+                paths: vec!["/work/proj/src".into()],
+                programs: vec!["cargo".into()],
+            },
+            status: GoalStatus::Executing,
+            decisions: vec!["用 A 方案".into()],
+            pending: vec!["补测试".into()],
+            blocked: vec![],
+            rounds: 2,
+            stall_streak: 1,
+            ledger_denials: 0,
+        }
+    }
+
+    #[test]
+    fn goal_sidecar_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        assert!(store.load_goal("s1").is_none(), "缺失时回 None");
+        store.save_goal("s1", &Some(sample())).unwrap();
+        assert!(dir.path().join("sessions/s1.goal.json").exists());
+        let back = store.load_goal("s1").expect("应能读回");
+        assert_eq!(back, sample());
+        // 会话隔离
+        assert!(store.load_goal("s2").is_none());
+        // 清除语义：写 None → 读回 None（文件仍在，但不再有目标）
+        store.save_goal("s1", &None).unwrap();
+        assert!(store.load_goal("s1").is_none());
+    }
+
+    #[test]
+    fn goal_sidecar_corrupt_or_null_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        std::fs::write(dir.path().join("sessions/bad.goal.json"), b"not json").unwrap();
+        std::fs::write(dir.path().join("sessions/nil.goal.json"), b"null").unwrap();
+        assert!(store.load_goal("bad").is_none());
+        assert!(store.load_goal("nil").is_none());
+    }
+
+    #[test]
+    fn remove_and_purge_cascade_goal_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        // remove 级联
+        store.save_goal("s1", &Some(sample())).unwrap();
+        store.remove("s1").unwrap();
+        assert!(!dir.path().join("sessions/s1.goal.json").exists());
+        // 启动清扫：sub_/task_ 前缀条目的 goal 边车同样要清（否则幽灵文件永久残留）
+        store.save_goal("sub_x", &Some(sample())).unwrap();
+        store
+            .upsert_meta(SessionMeta {
+                id: "sub_x".into(),
+                title: "t".into(),
+                workspace: "/w".into(),
+                model_id: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+                message_count: 0,
+                project_id: None,
+                roots: vec!["/w".into()],
+                running: false,
+                interrupted: None,
+                last_opened_at: None,
+                history_status: None,
+            })
+            .unwrap();
+        assert_eq!(store.purge_non_session_entries(), 1);
+        assert!(!dir.path().join("sessions/sub_x.goal.json").exists());
+    }
+}

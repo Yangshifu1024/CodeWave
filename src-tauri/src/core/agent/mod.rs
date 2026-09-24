@@ -12,6 +12,8 @@ mod runtime;
 mod stream;
 mod supervise;
 
+pub mod goal;
+
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]

@@ -292,15 +292,49 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
 
     // fence：后台服务走同一套安全检查（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认，灾难级仍拦截）
     let mode = ctx.approval_mode();
-    let policy = ctx.fence_policy();
+    let mut policy = ctx.fence_policy();
+    // 目标档执行期（判定见 core/agent/goal.rs 的 ledger_gate）：免确认的合法性由**账本**承担；
+    // 灾难 / 高危级直接硬拦并请求硬停（与 command 工具同一口径）。
+    // 账本判定的作用域 runtime：子代理不持有目标状态，判定取根会话的账本（见 goal_gate_rt）
+    let goal_rt = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
+    let goal_exec = crate::core::agent::goal::goal_execute_phase(&goal_rt);
+    if goal_exec {
+        policy.confirm_inside_writes = true;
+    }
+    let mut confirm_path: Option<String> = None;
     match crate::safety::fence::check_command_policy(&command, &cwd, &roots, policy) {
         crate::safety::fence::Verdict::Allow => {}
         crate::safety::fence::Verdict::Block { code, message } => {
+            if goal_exec {
+                crate::core::agent::goal::goal_hard_block(
+                    &goal_rt,
+                    format!("后台服务命令被安全围栏硬拦：{message}"),
+                );
+            }
             return ToolOutcome::err(&code, message);
         }
         crate::safety::fence::Verdict::Confirm(reason) => {
             use crate::safety::fence::ConfirmReason;
-            if mode == crate::core::prefs::ApprovalMode::FullAccess {
+            if goal_exec {
+                match &reason {
+                    ConfirmReason::Disaster(why) | ConfirmReason::HighRisk(why) => {
+                        crate::core::agent::goal::goal_hard_block(
+                            &goal_rt,
+                            format!("高危命令被硬拦：{why}"),
+                        );
+                        return ToolOutcome::err(
+                            "E_COMMAND_BLOCKED",
+                            format!(
+                                "目标档执行期高危命令已硬拦（{why}）：该命令不在本次目标的授权范围内。本轮执行已请求停止，请由用户确认后再继续。"
+                            ),
+                        );
+                    }
+                    // 需确认级：免确认，落回下方账本判定
+                    ConfirmReason::InsideWrite(t) | ConfirmReason::OutsideCreate(t) => {
+                        confirm_path = Some(t.clone());
+                    }
+                }
+            } else if mode == crate::core::prefs::ApprovalMode::FullAccess {
                 if let ConfirmReason::Disaster(why) = &reason {
                     return ToolOutcome::err(
                         "E_COMMAND_BLOCKED",
@@ -335,6 +369,24 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
                 if !ok.approved {
                     return ToolOutcome::err("E_APPROVAL_DENIED", "用户拒绝或未响应");
                 }
+            }
+        }
+    }
+
+    // 目标档执行期：账本判定（程序名 + 需确认级携带的写目标）——越界即拒，不弹审批
+    if goal_exec {
+        use crate::core::agent::goal::{LedgerTarget, ledger_denial_message, ledger_gate};
+        let program = match crate::core::agent::goal::goal_command_program(&command) {
+            Ok(program) => program,
+            Err(message) => return ToolOutcome::err("E_GOAL_COMMAND_SHAPE", message),
+        };
+        let mut checks = vec![(LedgerTarget::Program(program.as_str()), program.clone())];
+        if let Some(p) = confirm_path.as_deref() {
+            checks.push((LedgerTarget::Path(p), p.to_string()));
+        }
+        for (target, label) in checks {
+            if let Err(code) = ledger_gate(&goal_rt, target) {
+                return ToolOutcome::err(code, ledger_denial_message(&goal_rt, &label));
             }
         }
     }
@@ -533,6 +585,155 @@ mod tests {
         assert!(out.ok);
         let out = tool.run(&ctx, serde_json::json!({"action":"list"})).await;
         assert_eq!(out.data["services"].as_array().unwrap().len(), 0);
+    }
+
+    // ===== 目标档执行期：账本闸门（与 command 工具同构接线，🟡-2）=====
+
+    /// 目标档 ctx 夹具（工作区 / 数据目录 TempDir 随夹具存活，避免进程 cwd 失效）。
+    struct GoalSvcFixture {
+        _ws: tempfile::TempDir,
+        _dd: tempfile::TempDir,
+        ctx: ToolCtx,
+    }
+
+    fn goal_svc_fixture(
+        mode: crate::core::prefs::ApprovalMode,
+        status: crate::core::agent::goal::GoalStatus,
+        programs: Vec<String>,
+    ) -> GoalSvcFixture {
+        use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState};
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "goalsvc",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: mode,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        rt.set_goal(Some(GoalState {
+            text: "把 X 改成 Y".into(),
+            criteria: vec![GoalCriterion {
+                title: "改完 X".into(),
+                done: false,
+            }],
+            ledger: GoalLedger {
+                paths: vec![],
+                programs,
+            },
+            status,
+            decisions: Vec::new(),
+            pending: Vec::new(),
+            blocked: Vec::new(),
+            rounds: 0,
+            stall_streak: 0,
+            ledger_denials: 0,
+        }));
+        let ctx = ToolCtx {
+            core: core.clone(),
+            rt,
+            batch_id: "b".into(),
+            call_index: 0,
+            call_key: "b:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        GoalSvcFixture {
+            _ws: ws,
+            _dd: dd,
+            ctx,
+        }
+    }
+
+    /// ① 目标档执行期：程序名在账本内 → 放行（且不产生审批请求：预取消 token 未被消费）。
+    #[tokio::test]
+    async fn goal_service_gate_allows_ledger_program() {
+        use crate::core::prefs::ApprovalMode;
+        let f = goal_svc_fixture(
+            ApprovalMode::Goal,
+            crate::core::agent::goal::GoalStatus::Executing,
+            vec!["echo".into()],
+        );
+        // 预取消：若走了审批链路必然拿到 E_APPROVAL_DENIED（证明零提问）
+        f.ctx.cancel.cancel();
+        let out = ServiceTool
+            .run(
+                &f.ctx,
+                serde_json::json!({"action":"start","name":"echoer","command":"echo started"}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let g = f.ctx.rt.goal_snapshot().unwrap();
+        assert!(g.blocked.is_empty(), "{:?}", g.blocked);
+        assert_eq!(g.ledger_denials, 0);
+        assert!(!f.ctx.rt.take_goal_abort());
+        // 收尾：停掉刚起的服务（命令本身是 echo，会立即退出）
+        let id = out.data["id"].as_str().unwrap().to_string();
+        let _ = ServiceTool
+            .run(&f.ctx, serde_json::json!({"action":"stop","id":id}))
+            .await;
+    }
+
+    /// ② 目标档执行期：程序名在账本外 → 拒（不弹审批、不起进程）。
+    #[tokio::test]
+    async fn goal_service_gate_rejects_outside_program() {
+        use crate::core::prefs::ApprovalMode;
+        let f = goal_svc_fixture(
+            ApprovalMode::Goal,
+            crate::core::agent::goal::GoalStatus::Executing,
+            vec!["cargo".into()],
+        );
+        let out = ServiceTool
+            .run(
+                &f.ctx,
+                serde_json::json!({"action":"start","name":"lister","command":"ls -la"}),
+            )
+            .await;
+        assert_eq!(
+            out.error.as_ref().map(|e| e.code.as_str()),
+            Some("E_GOAL_OUTSIDE_LEDGER"),
+            "{:?}",
+            out.error
+        );
+        assert!(f.ctx.core.services.list().is_empty(), "被拒不得注册服务");
+        assert_eq!(f.ctx.rt.goal_snapshot().unwrap().ledger_denials, 1);
+    }
+
+    /// ③（回归红线）非目标档 / 目标档澄清期：账本闸门完全不受影响。
+    #[tokio::test]
+    async fn goal_service_gate_inert_outside_goal_execute() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        for (mode, status) in [
+            (ApprovalMode::AutoEdit, GoalStatus::Executing),
+            (ApprovalMode::Goal, GoalStatus::Clarify),
+        ] {
+            let f = goal_svc_fixture(mode, status, vec![]);
+            let out = ServiceTool
+                .run(
+                    &f.ctx,
+                    serde_json::json!({"action":"start","name":"lister","command":"ls -la"}),
+                )
+                .await;
+            assert!(out.ok, "{mode:?}/{status:?} 被账本闸门误伤：{out:?}");
+            assert_eq!(
+                f.ctx.rt.goal_snapshot().unwrap().ledger_denials,
+                0,
+                "{mode:?}/{status:?}"
+            );
+            assert!(!f.ctx.rt.take_goal_abort(), "{mode:?}/{status:?}");
+        }
     }
 
     #[test]

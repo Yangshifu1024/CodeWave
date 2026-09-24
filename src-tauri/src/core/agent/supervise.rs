@@ -57,6 +57,7 @@ pub enum IdlePolicy {
 pub(crate) const READONLY_TOOLS: &[&str] = &[
     "read",
     "batch_read",
+    "read_document",
     "grep",
     "calculate",
     "list_files",

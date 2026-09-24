@@ -101,6 +101,16 @@ pub struct SessionRuntime {
     pub extra_roots: Mutex<Vec<String>>,
     /// plan 工具的 todo 状态机（内存 + 边车持久化）
     pub todos: Mutex<Vec<crate::tools::plan::Todo>>,
+    /// 目标模式（goal mode）状态：None = 未登记（内存 + `sessions/<id>.goal.json` 边车）。
+    /// 阶段判定/账本判定是 `crate::core::agent::goal` 里的纯函数，读写入口是 `goal` 工具。
+    pub goal: Mutex<Option<crate::core::agent::goal::GoalState>>,
+    /// 目标模式硬停标记：L3 高危命令被硬拦时由工具层置位、驱动层 `take_goal_abort` 消费
+    ///（take 语义 = 读一次即复位，收尾只响应一次）。
+    pub goal_abort: AtomicBool,
+    /// 进入目标档前的档位快照（目标收尾自动回落用；None = 未记录 → 走全局默认语义）。
+    /// **刻意不放 `SessionPrefs`**：prefs 是前端整体替换写的事实源，纯后端运行时状态
+    /// 放进去会被前端补丁（如 AskPanel 的 updatePrefs）冲掉。
+    pub goal_prev_mode: Mutex<Option<crate::core::prefs::ApprovalMode>>,
     /// 运行中注入通道的发送端（run.ts 队列消息入此）
     pub inject_tx: mpsc::Sender<Message>,
     /// 注入通道接收端（run 期间被 drive_agent 取走消化）
@@ -195,6 +205,9 @@ impl SessionRuntime {
             history: Mutex::new(Vec::new()),
             extra_roots: Mutex::new(Vec::new()),
             todos: Mutex::new(Vec::new()),
+            goal: Mutex::new(None),
+            goal_abort: AtomicBool::new(false),
+            goal_prev_mode: Mutex::new(None),
             inject_tx: tx,
             inject_rx: Mutex::new(Some(rx)),
             run_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -232,6 +245,51 @@ impl SessionRuntime {
     /// 当前会话偏好的快照。
     pub fn prefs(&self) -> crate::core::prefs::SessionPrefs {
         self.prefs.lock().unwrap().clone()
+    }
+
+    /// 目标状态快照（None = 未登记）。
+    pub fn goal_snapshot(&self) -> Option<crate::core::agent::goal::GoalState> {
+        self.goal.lock().unwrap().clone()
+    }
+
+    /// 整体替换目标状态（None = 清除）。
+    pub fn set_goal(&self, g: Option<crate::core::agent::goal::GoalState>) {
+        *self.goal.lock().unwrap() = g;
+    }
+
+    /// 目标状态的**就地改写**（读-改-写全程持同一把锁），返回改写后的快照；目标缺席时返回 None。
+    ///
+    /// 为什么需要：账本闸门的拒绝计数与 `blocked` 追加由**根会话与并行子代理共享**同一份状态
+    ///（子代理经 `goal::goal_gate_rt` 取根会话），「snapshot → 改 → set」会互相覆盖——
+    /// 丢计数会让自停阈值延后触发（连续越界 3 次自停的保证因此不可靠）。
+    pub fn mutate_goal(
+        &self,
+        f: impl FnOnce(&mut crate::core::agent::goal::GoalState),
+    ) -> Option<crate::core::agent::goal::GoalState> {
+        let mut guard = self.goal.lock().unwrap();
+        let state = guard.as_mut()?;
+        f(state);
+        Some(state.clone())
+    }
+
+    /// 请求硬停（L3 高危命令被硬拦时由工具层调用；驱动层在 step 边界消费）。
+    pub fn request_goal_abort(&self) {
+        self.goal_abort.store(true, Ordering::SeqCst);
+    }
+
+    /// 消费硬停标记：返回是否曾被请求，并把标记复位（同一请求只响应一次）。
+    pub fn take_goal_abort(&self) -> bool {
+        self.goal_abort.swap(false, Ordering::SeqCst)
+    }
+
+    /// 进入目标档前的档位快照（None = 未记录）。
+    pub fn goal_prev_mode(&self) -> Option<crate::core::prefs::ApprovalMode> {
+        *self.goal_prev_mode.lock().unwrap()
+    }
+
+    /// 记录 / 清除进入目标档前的档位快照。
+    pub fn set_goal_prev_mode(&self, m: Option<crate::core::prefs::ApprovalMode>) {
+        *self.goal_prev_mode.lock().unwrap() = m;
     }
 
     /// 整体替换会话偏好（前端 set_session_prefs；前端 Tab.prefs 是事实源）。
@@ -308,7 +366,41 @@ impl SessionRuntime {
             t.cancel();
         }
     }
+
+    /// 用户显式切档的过渡点（host `set_session_prefs` 专用）：写 prefs + 目标档进出的状态迁移，
+    /// 返回是否发生了目标状态变更。本方法**只动内存**——落边车与 `goal:update` 事件由
+    /// `AgentCore::transition_prefs` 收尾。
+    ///
+    /// - 进目标档（旧档 != Goal 且新档 == Goal）：记下进入前的档位快照
+    ///   （`goal_prev_mode`，达成后自动回落用）；**快照已存在时不覆盖**。
+    /// - 离开目标档（旧档 == Goal 且新档 != Goal）且目标正在执行：置 `Paused`
+    ///   （**不锁档**——用户可自由切走，前端收到状态变化）。
+    pub fn transition_prefs(&self, new: crate::core::prefs::SessionPrefs) -> bool {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let old = self.prefs.lock().unwrap().approval_mode;
+        if old != ApprovalMode::Goal && new.approval_mode == ApprovalMode::Goal {
+            let mut prev = self.goal_prev_mode.lock().unwrap();
+            if prev.is_none() {
+                *prev = Some(old);
+            }
+        }
+        let leaving_goal = old == ApprovalMode::Goal && new.approval_mode != ApprovalMode::Goal;
+        let mut paused = false;
+        if leaving_goal {
+            let mut goal = self.goal.lock().unwrap();
+            if let Some(s) = goal.as_mut()
+                && s.status == GoalStatus::Executing
+            {
+                s.status = GoalStatus::Paused;
+                paused = true;
+            }
+        }
+        *self.prefs.lock().unwrap() = new;
+        paused
+    }
 }
+
 /// Agent 编排核心：配置 + 会话表 + 各子系统（工具注册表/存储/键池/MCP/统计/任务表）的聚合根，
 /// 由 host 层构造并以 Arc 全局共享。
 pub struct AgentCore {
@@ -411,6 +503,13 @@ impl AgentCore {
         text: String,
         images: Vec<crate::core::prefs::ImageIn>,
     ) -> anyhow::Result<String> {
+        if rt.prefs().approval_mode == crate::core::prefs::ApprovalMode::Goal
+            && self
+                .goal_view(&rt)
+                .is_some_and(|goal| goal.status == crate::core::agent::goal::GoalStatus::Paused)
+        {
+            anyhow::bail!("E_GOAL_PAUSED：目标已暂停，请使用「继续推进」显式续跑");
+        }
         if rt.running.swap(true, Ordering::SeqCst) {
             anyhow::bail!("该会话已有运行中的任务");
         }
@@ -458,5 +557,383 @@ impl AgentCore {
         let core = self.clone();
         tokio::spawn(run_chat(core, rt, user, run_id.clone()));
         Ok(run_id)
+    }
+    /// 用户显式切档的完整过渡（host `set_session_prefs` 的唯一入口）：core 内完成 prefs 写入 +
+    /// 目标档进出的状态迁移（`SessionRuntime::transition_prefs`）+ 状态变更的落边车与
+    /// `goal:update` 事件。返回是否发生了目标状态变更。
+    pub fn transition_prefs(
+        &self,
+        rt: &SessionRuntime,
+        new: crate::core::prefs::SessionPrefs,
+    ) -> bool {
+        let paused = rt.transition_prefs(new);
+        if paused {
+            self.persist_goal(rt);
+        }
+        paused
+    }
+
+    /// 目标状态视图（右栏目标卡 / 会话恢复时拉初始状态）：内存态优先，缺席时回退边车。
+    /// 刚重建的 runtime 内存里还没有目标（`run_chat` 起跑时才装回），只读内存会让目标卡
+    /// 在恢复会话后显示为空。
+    pub fn goal_view(&self, rt: &SessionRuntime) -> Option<crate::core::agent::goal::GoalState> {
+        rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id))
+    }
+
+    /// 续跑暂停中的目标（host `resume_goal` 的唯一入口）：校验档位 + 「已暂停」→ 置「执行中」
+    /// + 落边车 + 发 `goal:update`。状态不是「已暂停」时返回 Err（幂等保护，不重复起跑）。
+    /// 运行态缺席时从边车装回：重启后 runtime 刚重建、尚未跑过 run 时内存里还没有目标。
+    pub fn resume_goal(&self, rt: &SessionRuntime) -> anyhow::Result<()> {
+        use crate::core::agent::goal::GoalStatus;
+        // 档位自校验（纵深防御）：host 命令层（`goal_resume_mode_guard`）已有同一道门，但 core
+        // 不得依赖 host 的守卫——续跑会把目标置回执行期，而账本闸门的档位门读的是 prefs：
+        // 档位已切走时会把「非目标档 + 目标执行中 + 账本闸门关闭」的静默不一致固化下来。
+        // 文案与 host 共用同一份常量（绝不允许两套）。
+        if rt.prefs().approval_mode != crate::core::prefs::ApprovalMode::Goal {
+            anyhow::bail!("{}", crate::core::agent::goal::GOAL_RESUME_MODE_REQUIRED);
+        }
+        let current = rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id));
+        let Some(mut goal) = current else {
+            anyhow::bail!("尚未登记目标，无法续跑");
+        };
+        if goal.status != GoalStatus::Paused {
+            anyhow::bail!(
+                "目标当前状态为「{}」，只有暂停中的目标可以续跑",
+                goal.status.label()
+            );
+        }
+        goal.status = GoalStatus::Executing;
+        rt.set_goal(Some(goal));
+        self.persist_goal(rt);
+        Ok(())
+    }
+
+    /// 目标状态落盘 + `goal:update` 事件（core 侧改写目标状态后的统一收尾）。
+    fn persist_goal(&self, rt: &SessionRuntime) {
+        if let Some(goal) = rt.goal_snapshot() {
+            let _ = self.store.save_goal(&rt.id, &Some(goal.clone()));
+            self.sink.emit(
+                &rt.id,
+                "goal:update",
+                serde_json::json!({ "session": rt.id, "goal": goal }),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
+    use crate::core::prefs::{ApprovalMode, SessionPrefs};
+    use crate::core::types::SessionId;
+
+    /// 记录事件的测试 sink：断言 `goal:update` 的键名与载荷（其余事件不关心）。
+    #[derive(Default)]
+    struct RecSink {
+        events: Mutex<Vec<(String, String, serde_json::Value)>>,
+    }
+
+    impl EventSink for RecSink {
+        fn channel_frame(&self, _s: &SessionId, _f: &Frame) {}
+        fn emit(&self, s: &SessionId, e: &str, p: serde_json::Value) {
+            self.events
+                .lock()
+                .unwrap()
+                .push((s.clone(), e.to_string(), p));
+        }
+    }
+
+    /// 测试夹具：真实 store（边车落临时目录）+ 记录事件的 sink + 主会话 runtime。
+    struct Harness {
+        core: Arc<AgentCore>,
+        rt: Arc<SessionRuntime>,
+        sink: Arc<RecSink>,
+        _ws: tempfile::TempDir,
+        _dd: tempfile::TempDir,
+    }
+
+    fn harness() -> Harness {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let sink = Arc::new(RecSink::default());
+        let store = Arc::new(SessionStore::new(dd.path().to_path_buf()));
+        let core = Arc::new(AgentCore::new(
+            crate::core::config::ConfigState::default(),
+            sink.clone(),
+            store,
+            reqwest::Client::new(),
+            dd.path().to_path_buf(),
+        ));
+        let rt = core.get_or_create_session(
+            "goal-transition",
+            std::fs::canonicalize(ws.path()).unwrap(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        Harness {
+            core,
+            rt,
+            sink,
+            _ws: ws,
+            _dd: dd,
+        }
+    }
+
+    fn prefs_of(mode: ApprovalMode) -> SessionPrefs {
+        SessionPrefs {
+            approval_mode: mode,
+            model_id: None,
+            reasoning_effort: None,
+        }
+    }
+
+    fn goal_state(status: GoalStatus) -> GoalState {
+        GoalState {
+            text: "把 X 改成 Y".into(),
+            criteria: vec![GoalCriterion {
+                title: "改完 X".into(),
+                done: false,
+            }],
+            ledger: GoalLedger::default(),
+            status,
+            decisions: Vec::new(),
+            pending: Vec::new(),
+            blocked: Vec::new(),
+            rounds: 0,
+            stall_streak: 0,
+            ledger_denials: 0,
+        }
+    }
+
+    fn goal_events(h: &Harness) -> Vec<serde_json::Value> {
+        h.sink
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, e, _)| e == "goal:update")
+            .map(|(_, _, p)| p.clone())
+            .collect()
+    }
+
+    // ---------- 前档快照（切进目标档） ----------
+
+    #[test]
+    fn entering_goal_records_prev_mode_once() {
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::AutoEdit));
+        assert!(
+            !h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)),
+            "仅进档不产生目标状态变更"
+        );
+        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
+        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::Goal);
+        // 重复切进（目标档内再写同档）：快照不被覆盖
+        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)));
+        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
+        // 外部（非过渡路径）改档后再切进目标档：仍是首次记录（回落目标不得被改写）
+        h.rt.set_prefs(prefs_of(ApprovalMode::ConfirmEach));
+        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)));
+        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
+        assert!(goal_events(&h).is_empty(), "无目标状态变更则不发事件");
+    }
+
+    #[test]
+    fn entering_goal_from_plan_records_plan() {
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Plan));
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::Plan));
+    }
+
+    // ---------- 切走档位：执行中的目标自动暂停 ----------
+
+    #[test]
+    fn leaving_goal_pauses_executing_goal_and_persists() {
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+        assert!(
+            h.core
+                .transition_prefs(&h.rt, prefs_of(ApprovalMode::AutoEdit)),
+            "执行中切走档位应报告目标状态变更"
+        );
+        // 内存 + 边车都是已暂停；档位已切走（不锁档）
+        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            h.core.store.load_goal(&h.rt.id).unwrap().status,
+            GoalStatus::Paused,
+            "暂停迁移必须落边车"
+        );
+        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::AutoEdit);
+        // 事件：键名 + 载荷（session 与 goal）
+        let ev = goal_events(&h);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0]["session"], serde_json::json!("goal-transition"));
+        assert_eq!(ev[0]["goal"]["status"], serde_json::json!("paused"));
+    }
+
+    #[test]
+    fn leaving_goal_keeps_other_states_untouched() {
+        for status in [
+            GoalStatus::Clarify,
+            GoalStatus::Paused,
+            GoalStatus::Done,
+            GoalStatus::Aborted,
+        ] {
+            let h = harness();
+            h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+            h.rt.set_goal(Some(goal_state(status)));
+            assert!(
+                !h.core
+                    .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess)),
+                "{status:?} 不应发生暂停迁移"
+            );
+            assert_eq!(
+                h.rt.goal_snapshot().unwrap().status,
+                status,
+                "{status:?} 状态不得被改写"
+            );
+            assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::FullAccess);
+            assert!(goal_events(&h).is_empty(), "{status:?} 无变更不发事件");
+        }
+        // 未登记目标：切走档位不 panic、不产生状态变更
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Plan)));
+        assert!(h.rt.goal_snapshot().is_none());
+    }
+
+    // ---------- 续跑（Paused → Executing） ----------
+
+    #[test]
+    fn paused_goal_rejects_ordinary_chat_even_after_runtime_restore() {
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
+        let e = h
+            .core
+            .start_chat(h.rt.clone(), "继续".into(), vec![])
+            .unwrap_err();
+        assert!(e.to_string().contains("E_GOAL_PAUSED"));
+        assert!(!h.rt.running.load(Ordering::SeqCst));
+
+        h.core
+            .store
+            .save_goal(&h.rt.id, &h.rt.goal_snapshot())
+            .unwrap();
+        h.rt.set_goal(None);
+        let e = h
+            .core
+            .start_chat(h.rt.clone(), "继续".into(), vec![])
+            .unwrap_err();
+        assert!(e.to_string().contains("E_GOAL_PAUSED"));
+        assert!(!h.rt.running.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn resume_goal_requires_paused_and_flips_to_executing() {
+        let h = harness();
+        // 档位前提：续跑本身要过目标档校验（core 层纵深防御，见下一条用例）
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        // 未登记：拒绝
+        assert!(h.core.resume_goal(&h.rt).is_err());
+        // 澄清期 / 执行中 / 终态：拒绝（幂等保护）
+        for status in [
+            GoalStatus::Clarify,
+            GoalStatus::Executing,
+            GoalStatus::Done,
+            GoalStatus::Aborted,
+        ] {
+            h.rt.set_goal(Some(goal_state(status)));
+            let e = h.core.resume_goal(&h.rt).expect_err("非暂停不得续跑");
+            assert!(
+                e.to_string().contains(status.label()),
+                "{status:?} 的错误文案应点明当前状态：{e}"
+            );
+            assert_eq!(h.rt.goal_snapshot().unwrap().status, status);
+        }
+        // 暂停中：置回执行期 + 落边车 + 发事件
+        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
+        assert!(h.core.resume_goal(&h.rt).is_ok());
+        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
+        assert_eq!(
+            h.core.store.load_goal(&h.rt.id).unwrap().status,
+            GoalStatus::Executing
+        );
+        let ev = goal_events(&h);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0]["goal"]["status"], serde_json::json!("executing"));
+    }
+
+    #[test]
+    fn resume_goal_loads_paused_goal_from_sidecar() {
+        // 重启后 runtime 刚重建（内存无目标）、边车是暂停态：续跑仍应成功（从边车装回）
+        let h = harness();
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        h.core
+            .store
+            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
+            .unwrap();
+        assert!(h.core.resume_goal(&h.rt).is_ok());
+        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
+    }
+
+    /// 🟡-3 续跑的档位自校验（纵深防御）：host 命令层已有 `goal_resume_mode_guard`，core 层
+    /// 不得依赖它——非 host 调用方绕过时会留下「非目标档 + 目标执行中 + 账本闸门关闭」的
+    /// 静默不一致。文案与 host 同源（同一份常量）。
+    #[test]
+    fn resume_goal_requires_goal_mode() {
+        let h = harness();
+        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
+        for mode in [
+            ApprovalMode::ConfirmEach,
+            ApprovalMode::AutoEdit,
+            ApprovalMode::Plan,
+            ApprovalMode::FullAccess,
+        ] {
+            h.rt.set_prefs(prefs_of(mode));
+            let e = h.core.resume_goal(&h.rt).unwrap_err();
+            assert!(
+                e.to_string().contains("E_GOAL_MODE_REQUIRED"),
+                "{mode:?} 的错误文案应与 host 层同源：{e}"
+            );
+            // 拒绝时不动状态、不落边车、不发事件
+            assert_eq!(
+                h.rt.goal_snapshot().unwrap().status,
+                GoalStatus::Paused,
+                "{mode:?} 不得被置回执行期"
+            );
+            assert!(h.core.store.load_goal(&h.rt.id).is_none(), "{mode:?}");
+            assert!(goal_events(&h).is_empty(), "{mode:?} 无变更不发事件");
+        }
+        // 目标档：正常续跑
+        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
+        assert!(h.core.resume_goal(&h.rt).is_ok());
+        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
+    }
+
+    #[test]
+    fn goal_view_prefers_memory_and_falls_back_to_sidecar() {
+        let h = harness();
+        assert!(h.core.goal_view(&h.rt).is_none());
+        h.core
+            .store
+            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
+            .unwrap();
+        assert_eq!(
+            h.core.goal_view(&h.rt).unwrap().status,
+            GoalStatus::Paused,
+            "内存缺席时回退边车"
+        );
+        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+        assert_eq!(
+            h.core.goal_view(&h.rt).unwrap().status,
+            GoalStatus::Executing,
+            "内存态优先"
+        );
     }
 }

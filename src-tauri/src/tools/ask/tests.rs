@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
 use crate::tools::{Tool, ToolCtx, ToolOutcome};
 use serde_json::{Value, json};
 
@@ -1090,6 +1091,295 @@ async fn legacy_approve_without_mode_still_switches_to_auto_edit() {
         ctx.rt.prefs().approval_mode,
         crate::core::prefs::ApprovalMode::AutoEdit
     ));
+}
+
+// ---------- 目标档批准分支（goal mode）：澄清期的唯一批准点 ----------
+
+/// 目标状态（一条未达成的验收标准 + 非空账本）。
+fn goal_state(status: GoalStatus) -> GoalState {
+    GoalState {
+        text: "把 X 改成 Y".into(),
+        criteria: vec![GoalCriterion {
+            title: "改完 X".into(),
+            done: false,
+        }],
+        ledger: GoalLedger {
+            paths: vec!["/work/proj/src".into()],
+            programs: vec!["cargo".into()],
+        },
+        status,
+        decisions: Vec::new(),
+        pending: Vec::new(),
+        blocked: Vec::new(),
+        rounds: 0,
+        stall_streak: 0,
+        ledger_denials: 0,
+    }
+}
+
+/// 目标档 ctx：登记一个目标（默认澄清期）。
+fn goal_ctx(status: GoalStatus) -> ToolCtx {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::Goal);
+    ctx.rt.set_goal(Some(goal_state(status)));
+    ctx
+}
+
+/// 目标档批准形 ask（批准项声明 mode="goal"）。
+fn goal_approval_args() -> Value {
+    json!({
+        "questions": [{
+            "id": "approve_plan", "question": "目标与验收标准是否确认？", "single": true,
+            "options": [
+                { "id": "approve", "label": "确认并开始执行", "mode": "goal", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }]
+    })
+}
+
+#[test]
+fn goal_approval_verdict_matrix() {
+    use crate::core::prefs::ApprovalMode;
+    // 打开时已是目标档：批准才触发
+    assert!(goal_approval(ApprovalMode::Goal, ApprovalMode::Goal, true));
+    assert!(!goal_approval(
+        ApprovalMode::Goal,
+        ApprovalMode::Goal,
+        false
+    ));
+    // 从其它档位一次切进目标档：同样走目标档分支
+    assert!(goal_approval(ApprovalMode::Plan, ApprovalMode::Goal, true));
+    assert!(goal_approval(
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::Goal,
+        true
+    ));
+    // 非目标档的批准不受影响（走各自的既有路径）
+    assert!(!goal_approval(
+        ApprovalMode::Plan,
+        ApprovalMode::AutoEdit,
+        true
+    ));
+    assert!(!goal_approval(
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+        true
+    ));
+}
+
+#[tokio::test]
+async fn goal_approval_rejected_without_registered_goal() {
+    // 没有合同的执行一律拒绝：未登记目标 → 批准不生效
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::Goal);
+    let outcome = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert!(!outcome.ok);
+    assert_eq!(
+        outcome.error.expect("未登记目标应被拒").code,
+        "E_GOAL_NOT_REGISTERED"
+    );
+    assert!(ctx.rt.goal_snapshot().is_none(), "拒绝不得登记目标");
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Goal
+    ));
+    assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn goal_approval_rejected_without_criteria() {
+    // 验收标准为空 = 没有可判定的合同 → 同样拒绝
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::Goal);
+    let mut g = goal_state(GoalStatus::Clarify);
+    g.criteria.clear();
+    ctx.rt.set_goal(Some(g));
+    let outcome = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert!(!outcome.ok);
+    assert_eq!(
+        outcome.error.expect("无验收标准应被拒").code,
+        "E_GOAL_NOT_REGISTERED"
+    );
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Clarify,
+        "拒绝不得推进阶段"
+    );
+}
+
+#[tokio::test]
+async fn goal_approval_enters_execute_without_plan_baseline() {
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    // 登记 todos + 分析产物：若误入 plan 档批准协议，基线就会被冻结（G3 前置成立）
+    register_todos(&ctx, &["a", "b"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let outcome = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert_eq!(outcome.data["plan_approved"], json!(true));
+    // 澄清期 → 执行期（内存 + 边车）
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Executing
+    );
+    assert_eq!(
+        ctx.core.store.load_goal(&ctx.rt.id).unwrap().status,
+        GoalStatus::Executing,
+        "阶段推进必须落边车"
+    );
+    // G3 前置不成立：目标档批准不冻结计划基线（范围确认在目标档保持关闭）
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "目标档批准不得冻结 approved_plan 基线"
+    );
+    // 档位保持在用户所选的目标档
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Goal
+    ));
+    // 注入文案是目标模式语义（账本 + 勾标准），不是 plan 档原文
+    let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
+    assert!(summary.contains("[system] 方案已批准"), "{summary}");
+    assert!(summary.contains("执行期"), "{summary}");
+    assert!(summary.contains("账本"), "{summary}");
+    assert!(summary.contains("goal 工具"), "{summary}");
+}
+
+#[tokio::test]
+async fn goal_approval_with_arch_shape_skips_baseline_and_gate() {
+    // 目标档下的批准形询问即便满足 arch 闸形态（单题 + id="approve" + switchToAutoEdit），
+    // 也走目标档独立分支。不置 analysis_done：若误入 plan 档批准协议，G2 门会以
+    // E_PLAN_ANALYSIS_REQUIRED 拦下（本用例断言批准成功 = 未走计划门）。
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    register_todos(&ctx, &["a", "b"]);
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按此方案执行？", "single": true,
+            "options": [
+                { "id": "approve", "label": "以自动编辑档执行", "mode": "auto_edit", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }],
+        "switchToAutoEdit": true,
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve")).await;
+    assert!(outcome.ok, "{:?}", outcome.error);
+    // 最终档位不是目标档（用户选了自动编辑档 = 退出目标模式）：状态**不迁移**，
+    // 目标留在澄清期（既无执行授权，也不会被账本闸门误伤）。
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Clarify,
+        "最终档位非目标档时不得推进阶段"
+    );
+    assert!(
+        !matches!(
+            ctx.core.store.load_goal(&ctx.rt.id),
+            Some(crate::core::agent::goal::GoalState {
+                status: GoalStatus::Executing,
+                ..
+            })
+        ),
+        "边车同样不得出现 executing"
+    );
+    let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
+    assert!(
+        !summary.contains("已进入执行期"),
+        "未进入执行期时不得声称已进入执行期：{summary}"
+    );
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "G3 前置不成立：目标档批准不得冻结基线"
+    );
+    // 档位按用户所选切（mode 是结构化单一事实源）
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::AutoEdit
+    ));
+}
+
+/// 🟡3：状态迁移只看**最终档位**——打开时是目标档且模型漏声明 mode 时会话没被切走，
+/// 最终档位仍是目标档 → 批准必须推进执行期（这就是分支判据保留「打开时已是目标档」的意义）。
+#[tokio::test]
+async fn goal_approval_enters_execute_when_final_mode_stays_goal() {
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    // 选项未声明 mode（模型漏写）：selected_mode 为空 → switch=false，档位保持目标档
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "目标与验收标准是否确认？", "single": true,
+            "options": [
+                { "id": "approve", "label": "确认并开始执行", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }]
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve")).await;
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Goal
+    ));
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Executing,
+        "最终档位是目标档 → 必须推进执行期"
+    );
+}
+
+#[tokio::test]
+async fn plan_ask_choosing_goal_mode_enters_goal_execute() {
+    // 从 plan 档一次切进目标档：同样走目标档分支（不冻结基线，目标推进执行期）
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a", "b"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    ctx.rt.set_goal(Some(goal_state(GoalStatus::Clarify)));
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按此方案执行？", "single": true,
+            "options": [
+                { "id": "approve", "label": "以目标模式执行", "mode": "goal", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }]
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve")).await;
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Executing
+    );
+    assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Goal
+    ));
+}
+
+#[tokio::test]
+async fn goal_clarify_plain_question_keeps_status() {
+    // 澄清期的普通提问（非批准类选项）完全不受影响
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    let args = json!({
+        "questions": [{ "id": "q1", "question": "用哪种方案？", "options": [
+            { "id": "a", "label": "方案 A" },
+            { "id": "b", "label": "方案 B" }
+        ]}]
+    });
+    let answer = json!({ "answers": { "q1": { "selections": ["a"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert_eq!(
+        ctx.rt.goal_snapshot().unwrap().status,
+        GoalStatus::Clarify,
+        "普通提问不得推进阶段"
+    );
+    assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+    assert!(outcome.data["plan_approved"].is_null(), "普通提问不是批准");
+    let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
+    assert!(
+        !summary.contains("[system]"),
+        "普通提问不注入批准文案：{summary}"
+    );
 }
 
 // ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门第三选项「先看预览」 ----------
