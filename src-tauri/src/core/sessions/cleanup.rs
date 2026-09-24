@@ -266,7 +266,7 @@ pub fn session_log_candidates(data_dir: &Path, meta: &SessionMeta) -> Vec<PathBu
 /// 把整条会话卡在索引里）。
 ///
 /// 会话编号先过白名单（`is_safe_session_id`）：下面的路径全部由编号拼出来
-///（`histories/<id>.json.gz`、`sessions/<id>.*`、`histories/subs/<id>/`、`logs/<id>.log`），
+///（`histories/<id>.json.gz`、`sessions/<id>.*`、`histories/subs/<id>/`、`sessions/<id>.toolres/`、`logs/<id>.log`），
 /// 索引里的脏编号绝不能进拼接；编号非法时返回 false（本次不删、索引行保留、计入失败），
 /// 宁可删不掉也不让脏值变成目录穿越。
 pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &SessionMeta) -> bool {
@@ -294,6 +294,9 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
     ok &= remove_dir_if_exists(&store.sub_histories_dir(&meta.id));
+    // 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    // 目录随会话级联删除（与子代理过程历史同范式：路径由编号拼出、不做登记边车）
+    ok &= remove_dir_if_exists(&store.tool_results_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
         ok &= remove_file_if_exists(&p);
     }
@@ -324,7 +327,13 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
 pub fn remove_orphan_files(store: &SessionStore, cutoff: DateTime<Utc>) -> usize {
     let mut removed = 0usize;
     for path in orphan_candidates(store, cutoff) {
-        if remove_file_if_exists(&path) {
+        // 目录（sessions/<id>.toolres/）递归删，文件按文件删：两者共用同一份候选与预览口径
+        let removed_ok = if path.is_dir() {
+            remove_dir_if_exists(&path)
+        } else {
+            remove_file_if_exists(&path)
+        };
+        if removed_ok {
             tracing::info!("清理索引外残留：{}", path.display());
             removed += 1;
         }
@@ -379,6 +388,23 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
                 .strip_suffix(".artifacts.json")
                 .or_else(|| name.strip_suffix(".todos.json"));
             let Some(id) = id else {
+                continue;
+            };
+            if !is_safe_session_id(id) || known.contains(id) || is_non_session_id(id) {
+                continue;
+            }
+            let path = entry.path();
+            if modified_before(&path, cutoff) {
+                out.push(path);
+            }
+        }
+    }
+
+    // 工具结果 sidecar 目录（sessions/<id>.toolres/）：会话被挤出索引后整个目录随之成为残留
+    if let Ok(rd) = std::fs::read_dir(store.sessions_dir()) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(id) = name.strip_suffix(".toolres") else {
                 continue;
             };
             if !is_safe_session_id(id) || known.contains(id) || is_non_session_id(id) {
@@ -910,6 +936,28 @@ mod tests {
         assert!(!store.artifacts_path(session).exists());
         assert!(!store.todos_path(session).exists());
         assert!(!store.history_path(session).exists());
+    }
+
+    /// 工具结果原样 sidecar 目录（sessions/<id>.toolres/）随会话删除，且会被索引外扫描认作残留。
+    #[test]
+    fn tool_results_dir_removed_with_session() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let session = "with-toolres";
+        let dir = store.tool_results_dir(session);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("call-1.json"), b"{}").unwrap();
+        assert!(dir.exists());
+
+        let m = meta(session, &ago(30 * 24 * 3600));
+        assert!(delete_session_files(&store, dd.path(), &m));
+        assert!(!dir.exists(), "工具结果 sidecar 目录必须随会话删除");
+        // 会话还在索引里时不算残留（避免把正在用的数据当孤儿删掉）
+        assert!(
+            !orphan_candidates(&store, cutoff_at(Utc::now(), 7))
+                .iter()
+                .any(|p| p.ends_with("with-toolres.toolres"))
+        );
     }
 
     /// 历史 / 子代理过程历史目录都随会话删除。

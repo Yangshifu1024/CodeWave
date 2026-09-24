@@ -1,6 +1,6 @@
 // AskPanel refactor ([docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)): approval three options (incl. "always allow this project"), resolve payload / keyboard navigation / plan card
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import "../i18n"; // i18n init (nothing triggers it when rendering the component directly; otherwise t() returns the raw key)
 import AskPanel from "../features/tools/AskPanel";
 import { useSessions } from "../stores/sessions";
@@ -119,6 +119,133 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
     expect(payload.answers.q1.selections).toContain("approve");
+  });
+
+  it("批准门第三选项「先看预览」：点击即直提，且不把 ConfirmEach 会话切到自动编辑档", async () => {
+    seedAsk(
+      {
+        askId: "a4b", kind: "ask",
+        questions: [{
+          id: "q1", question: "是否按上述计划执行？",
+          options: [
+            { id: "approve", label: "执行方案", recommended: true },
+            { id: "revise", label: "补充意见" },
+            { id: "preview", label: "先看预览" },
+          ],
+        }],
+      },
+      "confirm_each",
+    );
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
+    expect(payload.answers.q1.selections).toEqual(["preview"]);
+    // 等一拍让 submitWith 里 await resolveAsk 之后的同步/微任务跑完再断言「没有提权」
+    //（否则 bug 版的 updatePrefs 可能晚于断言发生 → 假绿）
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // 「先看预览」既不是批准也不是有效应答：不得静默提权（后端 preview_only 同样排除）
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("预览 + 补充说明：仍是「只看预览」，不切档（后端同口径：补充说明不算表态）", async () => {
+    seedAsk(
+      {
+        askId: "a4d", kind: "ask",
+        questions: [{
+          id: "q1", question: "是否按上述计划执行？",
+          options: [
+            { id: "approve", label: "执行方案", recommended: true },
+            { id: "revise", label: "补充意见" },
+            { id: "preview", label: "先看预览" },
+          ],
+        }],
+      },
+      "confirm_each",
+    );
+    render(<AskPanel />);
+    fireEvent.change(screen.getByPlaceholderText("补充说明（可选）"), { target: { value: "顺便看下界面" } });
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
+    expect(payload.answers.q1.note).toBe("顺便看下界面");
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("三选项批准门点「执行方案」：照旧直提并切到自动编辑档（守门不得带坏正常批准路径）", async () => {
+    seedAsk(
+      {
+        askId: "a4c", kind: "ask",
+        questions: [{
+          id: "q1", question: "是否按上述计划执行？",
+          options: [
+            { id: "approve", label: "执行方案", recommended: true },
+            { id: "revise", label: "补充意见" },
+            { id: "preview", label: "先看预览" },
+          ],
+        }],
+      },
+      "confirm_each",
+    );
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("执行方案"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
+    expect(payload.answers.q1.selections).toEqual(["approve"]);
+    // 批准项照旧同步胶囊到自动编辑档（updatePrefs → set_session_prefs）
+    await waitFor(() => expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(true));
+  });
+
+  it("批准闸选「补充意见」：不切档（与后端同口径：闸形状上只有批准项才动档位）", async () => {
+    seedAsk(
+      {
+        askId: "a4e", kind: "ask",
+        questions: [{
+          id: "q1", question: "是否按上述计划执行？",
+          options: [
+            { id: "approve", label: "执行方案", recommended: true },
+            { id: "revise", label: "补充意见" },
+            { id: "preview", label: "先看预览" },
+          ],
+        }],
+      },
+      "confirm_each",
+    );
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("补充意见"));
+    // 非批准项不直提：选中后点「提交回答」
+    fireEvent.click(screen.getByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it("非闸形状询问：有效应答照旧轻量切档（既有语义不得被闸形状收紧带坏）", async () => {
+    seedAsk(
+      {
+        askId: "a4f", kind: "ask",
+        questions: [{
+          id: "q1", question: "选一个",
+          options: [{ id: "a", label: "甲" }, { id: "b", label: "乙" }],
+        }],
+      },
+      "confirm_each",
+    );
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText(/^乙/));
+    fireEvent.click(screen.getByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(true));
   });
 
   it("ask 非批准形仍需提交钮：选中「补充意见」不直提，点提交后载荷携带", async () => {

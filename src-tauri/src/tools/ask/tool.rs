@@ -107,7 +107,7 @@ impl Tool for AskTool {
         "ask"
     }
     fn description(&self) -> &'static str {
-        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问并提供两个选项：id=\"approve\"（label 执行方案/Approve plan）与 id=\"revise\"（label 补充意见/Request changes）。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到自动编辑模式并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
+        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问并提供三个选项：id=\"approve\"（label 执行方案/Approve plan）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first）；用户选 preview = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到自动编辑模式并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -141,7 +141,7 @@ impl Tool for AskTool {
               }
             }
           },
-          "single": {"type": "boolean", "description": "选项互斥（单选）：选中一项即替换之前的选择；仅用于二选一问题，真正的多选问题不要设置"}
+          "single": {"type": "boolean", "description": "选项互斥（单选）：选中一项即替换之前的选择；仅用于互斥选项（如批准门三选一），真正的多选问题不要设置"}
         }
       }
     },
@@ -235,6 +235,9 @@ impl Tool for AskTool {
         // 组装模型可读的应答文本
         let mut lines = Vec::new();
         let mut approved = false;
+        // 预览选项 id 集合（[docs/preview-skill](../../../../docs/preview-skill.md)）：既用于「只看预览」判定，
+        // 也用于把预览项从批准候选里剔除（万一模型把「先看预览」的 label 写成含「执行方案」，is_approve_option 会命中）
+        let preview_ids = preview_option_ids(&args.questions);
         for q in &args.questions {
             let ans = &answer["answers"][&q.id];
             let sel: Vec<String> = ans["selections"]
@@ -250,7 +253,7 @@ impl Tool for AskTool {
             let approve_ids: std::collections::HashSet<&str> = q
                 .options
                 .iter()
-                .filter(|o| is_approve_option(o))
+                .filter(|o| is_approve_option(o) && !preview_ids.contains(o.id.as_str()))
                 .map(|o| o.id.as_str())
                 .collect();
             // Plan 档协议：选中批准选项（或选项含 approve/execute 字样）即视为方案批准 → 切自动编辑档
@@ -282,10 +285,19 @@ impl Tool for AskTool {
         // 档看 arch 批准闸标记（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md)）或「任一有效应答」（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：至少一题 selections/note
         // 非空）；AutoEdit/FullAccess 无需切换。有效应答与批准命中（approved，匹配 execute/approve
         // 子串）是两个独立判定，分开持有以免批准协议被任意应答语义污染。
-        let valid_answer = has_valid_answer(&args.questions, &answer);
-        let arch_flag =
-            arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false);
-        let switch = wants_mode_switch(mode_at_open, approved, arch_flag, valid_answer);
+        // 预览-only 排除（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门的「先看预览」是第三种应答——
+        // 既非批准也非有效应答，故两条切档通道都要排除。
+        // 批准闸形状收紧（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：单题 + 含 id="approve" 的**批准闸**上，
+        // 只有真选中批准项才动档位——用户在闸上选「补充意见」是「别开工，我要改方案」，
+        // 既不该走完整路径，也不该走轻量切档（此前任一有效应答都会把档位抬到自动编辑档）。
+        // 非闸形状的普通 ConfirmEach 询问保持既有语义（任一有效应答 = 放开）。
+        let gate_shape = arch_gate_shape(&args.questions);
+        let preview_only_answer = preview_only(&args.questions, &answer);
+        let valid_answer = has_valid_answer(&args.questions, &answer) && !preview_only_answer;
+        let arch_flag = gate_shape && args.switch_to_autoedit.unwrap_or(false);
+        let switch = !preview_only_answer
+            && (!gate_shape || approved)
+            && wants_mode_switch(mode_at_open, approved, arch_flag, valid_answer);
         crate::core::session_log::info(
             ctx.rt.as_ref(),
             &format!(
@@ -295,8 +307,15 @@ impl Tool for AskTool {
         );
 
         // 完整切换路径（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) 协议 / [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) arch 闸）：G2/G3 门 → 冻结 todos 基线 →
-        // 切档 → 注入「执行方案」→ 返回 plan_approved
-        if switch && (matches!(mode_at_open, crate::core::prefs::ApprovalMode::Plan) || arch_flag) {
+        // 切档 → 注入「执行方案」→ 返回 plan_approved。
+        // 条件收紧（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：ConfirmEach 档的 arch 闸标记**不再单独**开启完整路径——
+        // 此前 arch_flag 本身即条件，于是「有效应答」也算批准：用户在完整流水线批准门选「补充意见」
+        // 会收到「方案已批准，请立即执行」并冻结基线（协议语义被污染）。现在只有真的选中批准项才走完整路径；
+        // 其余有效应答仍按 ConfirmEach 既有语义落到下面的轻量切档（不冻结基线、不注入、无 plan_approved）。
+        if switch
+            && (matches!(mode_at_open, crate::core::prefs::ApprovalMode::Plan)
+                || (arch_flag && approved))
+        {
             // G2/G3 硬门（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：批准生效前校验；失败则批准不生效（不切档、不注入）。
             if let Some(err) = plan_approval_gate(
                 ctx,
@@ -394,11 +413,73 @@ pub(super) fn approval_shape(questions: &[Question]) -> bool {
 
 /// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：首个批准选项的 id（前端直提检测用）；无批准项时返回 None
 ///（前端回退到严格检查）。
+/// 预览项从候选中剔除（[docs/preview-skill](../../../../docs/preview-skill.md)）：它的 label 万一含「执行方案/批准方案」，
+/// 宽松匹配会命中并把它当批准项下发给前端——前端据此把「先看预览」判成批准并真改档位（后端却因 preview_only 不切），
+/// 用户可见结果就是单边静默提权。
 pub(super) fn approve_option_id(questions: &[Question]) -> Option<String> {
+    let preview_ids = preview_option_ids(questions);
     questions
         .first()
-        .and_then(|q| q.options.iter().find(|o| is_approve_option(o)))
+        .and_then(|q| {
+            q.options
+                .iter()
+                .find(|o| is_approve_option(o) && !preview_ids.contains(o.id.as_str()))
+        })
         .map(|o| o.id.clone())
+}
+
+/// 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门单题询问的第三选项 `id="preview"`，
+/// 语义是「先看方案预览」——既不是批准（`is_approve_option` 不匹配），也不是**有效应答**：
+/// ConfirmEach 档的切档判定含 valid_answer，不排除它就会让用户点「先看预览」被静默切到自动编辑档。
+/// 只在批准形询问里认（普通澄清询问里的同名选项不受影响）。
+/// 识别与批准侧同策略：id 优先（大小写不敏感），**模型自拟 id 时按 label 兜底**
+///（[docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md) 记过「id 自拟、label 守约」的真实案例；
+/// 认不出预览项，它就会落回「有效应答」→ 批准门被静默切档）。
+pub(super) fn is_preview_option(o: &Option2) -> bool {
+    if o.id.eq_ignore_ascii_case("preview") {
+        return true;
+    }
+    let label = o.label.to_lowercase();
+    label.contains("先看预览") || label.contains("preview first")
+}
+
+pub(super) fn preview_option_ids(questions: &[Question]) -> std::collections::HashSet<&str> {
+    if !approval_shape(questions) {
+        return std::collections::HashSet::new();
+    }
+    questions[0]
+        .options
+        .iter()
+        .filter(|o| is_preview_option(o))
+        .map(|o| o.id.as_str())
+        .collect()
+}
+
+/// 「这次回答只是要看预览」：批准形询问里选中的项全是预览项（至少一个）。
+/// **补充说明不算表态**——决定意图的是选中的选项：用户在补充输入里写了备注再点「先看预览」，
+/// 意图仍是「先看预览」（审查 R1：早先把 note 非空当成「不是只看预览」，于是「预览 + 备注」落回
+/// 「有效应答」，在 ConfirmEach 批准门里触发静默批准与切档）。
+/// 用途见调用点——把这份应答从两条切档通道里摘出去。
+pub(super) fn preview_only(questions: &[Question], answer: &Value) -> bool {
+    let ids = preview_option_ids(questions);
+    if ids.is_empty() {
+        return false;
+    }
+    let mut saw_preview = false;
+    for q in questions {
+        let ans = &answer["answers"][&q.id];
+        let Some(sel) = ans["selections"].as_array() else {
+            continue;
+        };
+        for s in sel.iter().filter_map(Value::as_str) {
+            if ids.contains(s) {
+                saw_preview = true;
+            } else {
+                return false; // 选了别的项 → 不是「只看预览」
+            }
+        }
+    }
+    saw_preview
 }
 
 /// [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：把完整方案文本落盘为计划文件 `<workspace>/.codewave/tasks/plan-<UTC 时间戳>-<rand4>.md`。

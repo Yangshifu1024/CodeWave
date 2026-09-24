@@ -58,6 +58,10 @@ export default {
     imageLoading: "Loading image…", imageUnavailable: "Image unavailable (file may have been moved or deleted): {{path}}",
     imageNotSent: "This model has image input disabled — the image was not sent",
     rawData: "Raw data", notePrefix: "Note: ",
+    // render_html preview modal (see [docs/html-preview-modal](../../../docs/html-preview-modal.md))
+    preview: "Preview", previewUnavailable: "Preview content was not kept in history", previewChars: "{{n}} chars",
+    copyHtml: "Copy HTML", copied: "Copied", copyFailed: "Copy failed",
+    reload: "Reload", bgLight: "Light", bgDark: "Dark",
   },
   ask: {
     title: "Agent question", approval: "Safety confirmation", allow: "Allow", deny: "Deny",

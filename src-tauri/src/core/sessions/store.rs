@@ -630,6 +630,15 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
+    // ---------- 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)） ----------
+
+    /// 工具结果 sidecar 目录：sessions/<owner>.toolres/。
+    /// 与子代理历史同范式（`histories/subs/<parent>/`）：路径由编号拼出、随会话级联删除，
+    /// 不 upsert 会话索引、也不进右栏「文件」面板。
+    pub(crate) fn tool_results_dir(&self, owner: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{owner}.toolres"))
+    }
+
     // ---------- 会话产物登记边车（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)） ----------
 
     /// 产物边车文件路径：sessions/<id>.artifacts.json（清理按同一路径删除）。

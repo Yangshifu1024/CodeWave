@@ -4,6 +4,8 @@
 pub mod cleanup;
 pub mod interrupt;
 pub mod repair;
+// 工具结果原样 sidecar（历史里只有模型侧瘦身文本，恢复需要完整出参）
+pub mod tool_results;
 
 mod store;
 

@@ -57,6 +57,10 @@ export default {
     imageLoading: "图片加载中…", imageUnavailable: "图片无法显示（文件可能已被移动或删除）：{{path}}",
     imageNotSent: "当前模型未开启图片输入，图片未发送给模型",
     rawData: "原始数据", notePrefix: "补充：",
+    // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
+    preview: "预览", previewUnavailable: "历史未保留预览内容", previewChars: "{{n}} 字符",
+    copyHtml: "复制源码", copied: "已复制", copyFailed: "复制失败",
+    reload: "重新加载", bgLight: "浅色底", bgDark: "深色底",
   },
   ask: {
     title: "Agent 提问", approval: "安全确认", allow: "允许", deny: "拒绝",

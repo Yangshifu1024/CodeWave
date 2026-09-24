@@ -96,11 +96,25 @@ export default function AskPanel() {
   const approvalShape =
     ask.approval === true ||
     (questions.length === 1 && ((questions[0]?.options ?? []) as any[]).some((o) => o.id === "approve"));
+  // 批准闸形状（与后端 arch_gate_shape 同口径：单题 + 含 id="approve"）：该形状上只有选中批准项才动档位——
+  // 「补充意见」是「别开工，我要改方案」，不切档（免得前端把胶囊抬到自动编辑档而后端没动，两侧分叉）
+  const gateShape =
+    questions.length === 1 && ((questions[0]?.options ?? []) as any[]).some((o) => o.id === "approve");
   // 计划批准去重前置条件（下方 .q-text 渲染消费）：单题 + 批准形 + 带计划卡的 ask
   const planApprovalSingle = isPlan && questions.length === 1 && approvalShape;
   const approveId = ask.approveId ?? null;
   const approveOptionId =
     approveId ?? (((questions[0]?.options ?? []) as any[]).find((o) => o.id === "approve")?.id ?? null);
+  // 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门的第三选项，语义是「先看预览」——
+  // 既不是批准、也不算有效应答（后端 preview_only 同样排除），故既不触发切档，也不能被当成批准项
+  const previewOptionId =
+    ((questions[0]?.options ?? []) as any[]).find((o) => {
+      // 与后端 is_preview_option 同口径：id 优先（大小写不敏感），模型自拟 id 时按 label 兜底
+      // （认不出预览项，它就会落回「有效应答」→ ConfirmEach 档被静默切档）
+      const id = String(o?.id ?? "").toLowerCase();
+      const label = String(o?.label ?? "").toLowerCase();
+      return id === "preview" || label.includes("先看预览") || label.includes("preview first");
+    })?.id ?? null;
 
   function toggle(qid: string, optId: string) {
     setSelected((prev) => {
@@ -121,7 +135,9 @@ export default function AskPanel() {
   }
 
   function pickAndSubmitIfApprove(qid: string, optId: string) {
-    if (approvalShape && approveOptionId != null && optId === approveOptionId) {
+    // 批准项与预览项都「点击即提交」：三选项的批准门里，让用户为「先看预览」再点一次「提交回答」纯属多余；
+    // 预览项提交后不切档（后端 preview_only 排除），只是把「要看预览」这件事交给模型
+    if (approvalShape && (optId === approveOptionId || optId === previewOptionId)) {
       void submitWith({ [qid]: [optId] });
       return;
     }
@@ -156,10 +172,17 @@ export default function AskPanel() {
     let approved = false;
     // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：有效应答（≥1 题 selections 非空或有说明）与后端 has_valid_answer 对齐
     let anyAnswer = false;
+    // 预览-only（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准形询问里选中的项全是预览项、
+    // → 不算有效应答（与后端 preview_only 判定对齐；补充说明不算表态）。不排除它，ConfirmEach 档会因
+    // 「有效应答 / arch 闸标记」把会话静默切到自动编辑档并按方案开工
+    let allPreview = approvalShape && previewOptionId != null;
+    let sawPreview = false;
     for (const q of questions) {
       const sel = override[q.id] ?? selected[q.id] ?? [];
       const note = notesSrc[q.id] ?? "";
       answers[q.id] = { selections: sel, note };
+      if (previewOptionId != null && sel.includes(previewOptionId)) sawPreview = true;
+      if (sel.some((s) => s !== previewOptionId)) allPreview = false;
       // Plan 档协议：选中批准选项即在本地把胶囊同步为 auto_edit 档（后端在 ask 工具内切档）
       // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准命中优先后端下发的 approve_id；保留正则兜底（旧载荷 / 无 id 情形）
       if (
@@ -182,11 +205,15 @@ export default function AskPanel() {
     // 同步条件（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) R1 + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：后端即将切档时本地同步胶囊，使胶囊/前端状态/后端
     // 三方一致；否则后续全量 updatePrefs 覆盖会把后端的 AutoEdit 静默翻回——
     // (1) plan 档批准协议 / arch 批准闸（switchToAutoEdit）；(2) ConfirmEach 有效应答（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）
-    if (approved || anyAnswer) {
+    // 「只看预览」不算切档依据（后端 preview_only 同样封掉两条通道）；补充说明不算表态，只看选中的项
+    const previewOnly = allPreview && sawPreview;
+    if (approved || (anyAnswer && !previewOnly)) {
       const { tabs, activeKey, updatePrefs } = useSessions.getState();
       const tab = tabs.find((t) => t.key === activeKey);
       const planPath = approved && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
-      const lightPath = tab?.prefs.approval_mode === "confirm_each" && anyAnswer;
+      // 批准闸上只有批准项触发轻量切档（与后端 gate_shape 收紧同口径）；非闸形状询问保持既有语义
+      const lightPath =
+        tab?.prefs.approval_mode === "confirm_each" && anyAnswer && (!gateShape || approved);
       if (tab && (planPath || lightPath)) {
         void updatePrefs(tab.key, { approval_mode: "auto_edit" });
       }

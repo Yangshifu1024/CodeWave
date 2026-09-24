@@ -90,6 +90,116 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   bindGlobalHandlers(): Record<string, (p: any) => void>;
 }
 
+/** 恢复回填用的最小 set 契约（helper 定义在 store 之外，避免把 immer 的完整签名搬进来） */
+type RestoreSet = (fn: (s: any) => void) => void;
+/** `load_tool_outcomes` 的行形态（与 ipc/client.ts 的返回类型一致） */
+type ToolOutcomeRow = { call_id: string; outcome: any; duration_ms?: number | null };
+
+/** 「历史里那份模型侧文本取不回出参」的调用 id（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）。
+ *  判据与 restoredToolData 同源：文本在、却解析不出 JSON 对象（被头尾截断 / `[error E_XXX: …]` 前缀 / 其它非 JSON）——
+ *  这类调用在后端可能留有原样 sidecar（`tools/batch.rs` 的 should_persist 用同一判据）。
+ *  跳过 `[interrupted]`（后端 repair 补的中断文本，从未落盘）与整条结果缺失的调用；去重保序。 */
+export function lossyToolKeys(msgs: Message[]): string[] {
+  const results = scanToolResults(msgs);
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const m of msgs) {
+    if (m.role !== "assistant") continue;
+    for (const c of m.content) {
+      if (c.type !== "tool_use") continue;
+      const callKey = (c as any).id as string;
+      if (!callKey || seen.has(callKey)) continue;
+      const stored = results[callKey];
+      if (!stored || stored.content.trimStart().startsWith("[interrupted]")) continue;
+      const data = restoredToolData(stored.content) as any;
+      if (!data || data.restored !== true) continue;
+      seen.add(callKey);
+      keys.push(callKey);
+    }
+  }
+  return keys;
+}
+
+/** sidecar 行 → 工具卡：整套 ToolOutcome 直接换回（失败卡不再被当成成功卡）；
+ *  极老数据只存了 data 时按成功包裹。 */
+function applyToolOutcomes(map: Record<string, any>, rows: ToolOutcomeRow[]): void {
+  const byKey = new Map(rows.map((r) => [r.call_id, r]));
+  for (const tv of Object.values(map)) {
+    const row = byKey.get(tv.callKey);
+    if (!row) continue;
+    const o = row.outcome;
+    tv.outcome = o && typeof o === "object" && "ok" in o ? o : { ok: true, data: o };
+    tv.status = tv.outcome.ok === false ? "error" : "ok";
+    if (row.duration_ms != null) tv.durationMs = row.duration_ms;
+  }
+}
+
+/** 子代理卡改名：合成 key（`restored:<callKey>`，历史文本被截断时无从得知真实 sub_id）→ sidecar 里的真实 sub_id。
+ *  不改名抽屉就拉不到真实过程流（load_subagent_history 认真实 id）；顺带补回被父历史截断的 report。 */
+function renameRestoredSubs(t: TabRunState, rows: ToolOutcomeRow[], subByKey: Record<string, string>): void {
+  for (const row of rows) {
+    const from = subByKey[row.call_id];
+    if (!from || !from.startsWith("restored:")) continue;
+    const o = row.outcome;
+    const data = o && typeof o === "object" ? (o as any).data : null;
+    const to = data && typeof data === "object" ? data.sub_id : undefined;
+    if (typeof to !== "string" || !to) continue;
+    for (const item of t.items) {
+      if (item.kind !== "assistant") continue;
+      for (const seg of item.timeline) {
+        if (seg.kind === "sub" && seg.subId === from) seg.subId = to;
+      }
+    }
+    const sv = t.subs.find((x) => x.subId === from);
+    if (sv) {
+      sv.subId = to;
+      if (typeof data.report === "string") sv.report = data.report;
+    }
+    const st = t.subStreams[from];
+    if (st && !t.subStreams[to]) t.subStreams[to] = st;
+    delete t.subStreams[from];
+  }
+}
+
+/** 一次批量 IPC 拉回完整出参并回填：主会话卡片与子代理过程抽屉（subId）两处共用。
+ *  没有备份（旧会话 / 已被清理）或没有 Tauri 运行时（纯 store 测试）就静默保持占位——
+ *  卡片已给「历史未保留…」提示，不打扰用户。 */
+function backfillToolOutcomes(
+  set: RestoreSet,
+  sessionId: string,
+  keys: string[],
+  subId?: string,
+  subByKey?: Record<string, string>,
+): void {
+  if (keys.length === 0) return;
+  try {
+    void ipc
+      .loadToolOutcomes(sessionId, keys)
+      .then((rows) => {
+        if (!rows.length) return;
+        set((s: RunStore) => {
+          const t = s.tabs[sessionId];
+          if (!t) return;
+          if (subId) {
+            // 子代理过程抽屉：工具卡挂在子代理流上，不在主转录
+            const st = t.subStreams[subId];
+            if (st) applyToolOutcomes(st.toolsMap, rows);
+            return;
+          }
+          for (const item of t.items) {
+            if (item.kind === "assistant") applyToolOutcomes(item.toolsMap, rows);
+          }
+          if (subByKey) renameRestoredSubs(t, rows, subByKey);
+        });
+      })
+      .catch(() => {
+        /* 拉不到就保持占位 */
+      });
+  } catch {
+    /* 无 Tauri 运行时（纯 store 测试等）：保持占位 */
+  }
+}
+
 export const useRun = create<RunStore>()(
   immer((set, get) => ({
     tabs: {},
@@ -418,6 +528,11 @@ export const useRun = create<RunStore>()(
       const out: UiItem[] = [];
       // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：tool_use_id → 结果（从子代理 outcome 解析 sub_id/report）
       const toolResults = scanToolResults(msgs);
+      // [docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)：历史里存的是**模型侧瘦身文本**，
+      // 超阈值会被头尾截断 → 下面 restoredToolData 会退化成 {restored:true} 占位。
+      // 这类调用在后端有「原样 sidecar」（按 provider 侧 tool_use id）：恢复末尾由 lossyToolKeys 统一收集、
+      // 一次 IPC 批量补回完整出参（缺失就保持占位，卡片文案已覆盖）。子代理卡与过程抽屉走同一条通路。
+      const subByKey: Record<string, string> = {};
       const restoredSubs: SubView[] = [];
       const restoredStreams: Record<string, SubStream> = {};
       for (const m of msgs) {
@@ -456,6 +571,8 @@ export const useRun = create<RunStore>()(
                   /* 旧会话 outcome 被截断/缺失：回退合成 key；抽屉降级展示 task + report（无过程流） */
                 }
                 const key = subId ?? `restored:${callKey}`;
+                // 记下「callKey → 当前 sub key」：合成 key 待 sidecar 回填后改名成真实 sub_id（见 renameRestoredSubs）
+                subByKey[callKey] = key;
                 timeline.push({ kind: "sub", subId: key });
                 restoredSubs.push({
                   subId: key,
@@ -474,14 +591,31 @@ export const useRun = create<RunStore>()(
               } else {
                 timeline.push({ kind: "tool", callKey });
                 // 出参尽量还原（restoredToolData）：read 读图卡片的图片条目里只剩 path/kind/media_type，
-                // 卡片据此按路径重新加载图片；解析不出来才退回占位。
+                // 卡片据此按路径重新加载图片；解析不出来才退回占位（下面按需从 sidecar 回填）。
                 // 入参同样填上（safeArgsPreview）：摘要行、ask 问答行的题干、edit 的 diff 都靠它。
-                // 本次未处理：主会话历史恢复把无结果调用呈现为已使用，与子代理流的「已中断」语义不一致，留待后续
+                const stored = toolResults[callKey];
+                const data = stored ? restoredToolData(stored.content) : { restored: true };
+                // 「无结果 / 被中断」（后端 repair 补的 [interrupted] 文本，或整条结果缺失）与子代理流的
+                // 「已中断」语义对齐——此前一律按「已使用」呈现，与事实不符
+                //（[docs/tool-call-card-live-key](../../../docs/tool-call-card-live-key.md) 的既有遗留）。
+                // 注意不能用 is_error 当判据：它同样覆盖真实失败（E_EXIT_CODE 等），那些要走下面的错误码还原。
+                const interrupted =
+                  !stored || stored.content.trimStart().startsWith("[interrupted]");
+                // 失败结果：模型侧文本形如 `[error E_XXX: 说明]`，把错误码与说明还原到卡片上，
+                // 而不是留一个「已使用 + 空数据」的假象（原始 outcome 早已不在历史里）
+                const err = stored
+                  ? /^\[error ([A-Z_]+): ([\s\S]*)\]$/.exec(stored.content.trimStart())
+                  : null;
+                // 「取不回出参」（restored 占位）的调用由末尾的 lossyToolKeys 统一收集后批量补回
                 toolsMap[callKey] = {
                   callKey,
                   tool: (c as any).name,
-                  status: "ok",
-                  outcome: { ok: true, data: restoredToolData(toolResults[callKey]?.content) },
+                  status: interrupted || err ? "error" : "ok",
+                  outcome: interrupted
+                    ? { ok: false, error: { code: "E_INTERRUPTED", message: "" } }
+                    : err
+                      ? { ok: false, error: { code: err[1], message: err[2] } }
+                      : { ok: true, data },
                   argsPreview: safeArgsPreview((c as any).args),
                   progressTail: "",
                 };
@@ -502,6 +636,11 @@ export const useRun = create<RunStore>()(
           if (!s.tabs[sessionId].subStreams[k]) s.tabs[sessionId].subStreams[k] = v as any;
         }
       });
+
+      // 完整出参回填（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）：
+      // 只对「历史文本解析失败」的调用发起一次批量 IPC（lossyToolKeys 与 restoredToolData 同判据）；
+      // 子代理卡顺带把合成 key 改名成真实 sub_id 并补回被截断的 report。
+      backfillToolOutcomes(set, sessionId, lossyToolKeys(msgs), undefined, subByKey);
     },
 
     /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉。归档子代理（会话恢复 / 旧运行）首次打开时按需
@@ -531,6 +670,8 @@ export const useRun = create<RunStore>()(
           }
           stream.loaded = true;
         });
+        // 过程流里的工具卡同样按 sidecar 回填（子代理历史存的也是被截断的模型侧文本）
+        backfillToolOutcomes(set, sid, lossyToolKeys(msgs), subId);
       } catch {
         /* 拉取失败保持降级展示（task + 最终报告） */
       }
