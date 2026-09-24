@@ -1,5 +1,5 @@
 // 每个 Tab 运行态 store 的共享类型（run.ts、runFrames.ts 与 UI 组件共同消费）。
-import type { Breakdown, Todo } from "../ipc/types";
+import type { ApprovalMode, AskQuestionPayload, Breakdown, Todo } from "../ipc/types";
 
 /** 工具卡视图模型：timeline 锚点（callKey）+ 卡体数据；progressTail 为流式进度尾迹 */
 export interface ToolView {
@@ -39,7 +39,8 @@ export interface AskState {
   kind: "ask" | "approval";
   title?: string;
   detail?: string;
-  questions?: any[];
+  /** 问题列表（带 mode 的选项 = 批准类选项：选中即直提并把胶囊切到该档位；缺 mode = 非批准类） */
+  questions?: AskQuestionPayload[];
   /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档 */
   switchToAutoEdit?: boolean;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：命令审批显示「始终允许本项目」第三选项 */
@@ -79,6 +80,8 @@ export interface SubView {
   ended?: "report" | "budget" | "no_report";
   /** 运行摘录（sub:step 采样） */
   detail?: string;
+  /** 当前权限档位（sub:step 每步上报；归档 / 旧数据缺省 → 抽屉不渲染档位行） */
+  approvalMode?: ApprovalMode;
   /** 最终报告（sub:report，收尾前下发） */
   report?: string;
 }

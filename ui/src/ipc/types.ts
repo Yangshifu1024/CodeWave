@@ -283,13 +283,29 @@ export interface ToolStartEvent {
   phase: "waiting" | "running";
 }
 
+/** ask 选项载荷（ask:opened 的 questions[].options[]）：`mode` = 选中该选项时要切换到的权限档位；
+ *  缺省（无 mode）= 非批准类选项（如「补充意见」）。批准门下发两个批准类选项（auto_edit / full_access）。 */
+export interface AskOptionPayload {
+  id: string; label: string; description?: string; recommended?: boolean;
+  mode?: ApprovalMode;
+}
+
+/** ask 题目载荷（single = 单选题；options 见 AskOptionPayload） */
+export interface AskQuestionPayload {
+  id: string; question: string; single?: boolean; options?: AskOptionPayload[];
+}
+
 /** ask:opened payload：询问/审批卡数据 */
 export interface AskOpenedEvent {
   session: string; ask_id: string;
   kind: "ask" | "approval";
-  /** 问题列表（single = 单选题；options 带 recommended 推荐标记） */
-  questions?: { id: string; question: string; single?: boolean; options?: { id: string; label: string; description?: string; recommended?: boolean }[] }[];
+  /** 问题列表 */
+  questions?: AskQuestionPayload[];
   title?: string; detail?: string;
+  /** 计划文件路径（计划卡「查看完整计划」打开后端落盘的计划文件） */
+  plan_file?: string | null;
+  /** 命令审批「始终允许本项目」第三选项 */
+  allow_always?: boolean;
   /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */
   switch_to_auto_edit?: boolean;
   /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准形形状标记（后端宽松识别 = 单一事实源：单题 + id/label 命中批准协议） */
@@ -392,6 +408,8 @@ export interface SubagentEvent {
   steps_used?: number;
   /** 收尾原因（sub:done）：report = 按约定带 <report> 标记正常汇报；budget = 步数预算耗尽；no_report = 未按约定汇报即结束（疑似提前退出） */
   ended?: "report" | "budget" | "no_report";
+  /** 子代理当前权限档位（sub:step 每步上报；过程抽屉据此显示档位行，缺省 = 不显示） */
+  approval_mode?: ApprovalMode;
 }
 
 // ---------- 额度与余额 / 打开器（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）----------

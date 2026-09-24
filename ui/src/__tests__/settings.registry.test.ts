@@ -630,7 +630,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/RightBar.tsx": ["common.", "rightbar."], // rightbar.* 自有；common.builtin 与设置页共用的来源标签
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏
-  "subagent/SubagentDrawer.tsx": ["subagent."], // 子代理抽屉
+  "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
@@ -649,6 +649,9 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   },
   "shell/ProjectNav.tsx": {
     "tasks.": "左栏任务区展示的就是计划任务（与任务页共用 stores/tasks 单一数据源），状态/下次触发/历史等文案复用任务页的 tasks.* 段——两处说的是同一件事，另起一段反而会漂移",
+  },
+  "subagent/SubagentDrawer.tsx": {
+    "composer.": "抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",
   },
   "quota/QuotaSection.tsx": {
     "rightbar.": "额度段是本目录独立的组件（quota/）但渲染在右栏信息页里，文案沿用右栏段 rightbar.*",

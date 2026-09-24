@@ -470,6 +470,14 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpActionDisconnect", // → 动作：断开单个 server
   "mcpActionReconnect", // → 动作：重连单个 server
   "mcpToolsFiltered", // → app.mcp_status：工具数带「已过滤 N」标注
+  "mcpHeaders", // → mcp.servers：http 分支的请求头表格
+  "mcpArgsAdd", // → 动作：参数表「＋ 添加参数」
+  "mcpEnvAdd", // → 动作：环境变量表「＋ 添加变量」
+  "mcpHeadersAdd", // → 动作：请求头表「＋ 添加请求头」
+  "mcpRowDelete", // → 动作：表格行删除按钮的 aria-label
+  "mcpTableKey", // → 表格：键列占位
+  "mcpTableValue", // → 表格：值列占位
+  "mcpTableName", // → 表格：名称列占位（请求头）
   "skillsHint", // → disabled_skills 的目录来源说明
   "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能

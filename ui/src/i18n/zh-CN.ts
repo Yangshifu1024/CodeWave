@@ -77,6 +77,11 @@ export default {
     prevPage: "上一题", nextPage: "下一题",
     recommended: "推荐",
     switchHint: "提交后将切换到自动编辑档",
+    /* 批准门选档（[docs/mode-gate-and-subagent-sync]）：完全访问档选项的兜底风险说明——
+       与后端 description **并存**（叠在模型文案之后），模型自带 description 也顶不掉它 */
+    fullAccessRisk: "跳过所有审批弹窗，灾难级命令仍拦截",
+    /* 后端 description 与兜底风险文案之间的分隔（中文用全角分号，不放空格） */
+    fullAccessRiskSep: "；",
   },
   settings: {
     title: "设置",
@@ -205,7 +210,9 @@ export default {
     mcpStatusRefreshFailed: "读取 MCP 状态失败（显示的是上一次结果）",
     mcpHint: "编辑用户级 mcp.json（项目级放 <工作区>/.codewave/mcp.json，同名覆盖）。保存后自动重连。",
     mcpAdd: "添加服务器", mcpName: "服务器名称", mcpCommand: "命令",
-    mcpArgs: "参数（每行一个，含空格原样保留）", mcpEnv: "环境变量（K=V，每行一个；值不裁剪）", mcpUrl: "URL",
+    mcpArgs: "参数", mcpEnv: "环境变量", mcpUrl: "URL", mcpHeaders: "请求头",
+    mcpArgsAdd: "添加参数", mcpEnvAdd: "添加变量", mcpHeadersAdd: "添加请求头",
+    mcpRowDelete: "删除此行", mcpTableKey: "键", mcpTableValue: "值", mcpTableName: "名称",
     mcpExtraKeys: "此条目还含 {{n}} 个表单未展示的自定义键（{{keys}}）；保存时原样保留。",
     mcpIssuesHead: "配置问题（error 级会阻止保存）",
     mcpSaveBlocked: "配置未通过校验，已阻止保存",
@@ -383,6 +390,9 @@ export default {
     stop: "停止该子代理",
     endedEarly: "提前结束",
     endedBudget: "预算耗尽",
+    /* 抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）：mode = 档位名（复用 composer.mode* 键） */
+    modeLine: "权限模式：{{mode}}",
+    modeInherited: "（继承自主会话）",
   },
   diff: { title: "工作区变更（vs HEAD）", empty: "无变更" },
   git: { notConfigured: "未配置" },

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import "../i18n"; // i18n init (nothing triggers it when rendering the component directly; otherwise t() returns the raw key)
 import AskPanel from "../features/tools/AskPanel";
+import type { ApprovalMode } from "../ipc/types";
 import { useSessions } from "../stores/sessions";
 import { useRun } from "../stores/run";
 
@@ -21,7 +22,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const prefs = { approval_mode: "plan" as const, model_id: null, reasoning_effort: null };
 
-function seed(mode: "plan" | "confirm_each" = "plan") {
+function seed(mode: ApprovalMode = "plan") {
   useSessions.setState({
     tabs: [{ key: "s1", sessionId: "s1", workspace: "/tmp/ws", title: "s1", projectId: null, createdAt: "2026-09-01T00:00:00Z", prefs: { ...prefs, approval_mode: mode } }],
     activeKey: "s1",
@@ -29,7 +30,7 @@ function seed(mode: "plan" | "confirm_each" = "plan") {
   });
 }
 
-function seedAsk(ask: any, mode: "plan" | "confirm_each" = "plan") {
+function seedAsk(ask: any, mode: ApprovalMode = "plan") {
   seed(mode);
   useRun.setState((s) => {
     s.tabs["s1"] = {
@@ -864,5 +865,193 @@ describe("AskPanel 多题提交分页", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
     expect(payload.answers.q1.note).toBe("补充说明文字");
+  });
+});
+
+// ---------- 批准门选档（[docs/mode-gate-and-subagent-sync]）：选项带 mode 即直提 + 胶囊按实际档位同步 ----------
+
+describe("AskPanel 批准门选档（[docs/mode-gate-and-subagent-sync]）", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {}; s.drafts = {};
+    });
+  });
+
+  // 后端批准门形态：两个批准类选项各带目标档位（auto_edit / full_access）+ 一个非批准类选项
+  const gateAsk = (askId: string) => ({
+    askId, kind: "ask", approval: true, approveId: null,
+    planFile: "/ws/.codewave/tasks/plan-gate.md",
+    questions: [{
+      id: "q1", question: "【方案】第一步",
+      options: [
+        { id: "mode_auto", label: "以自动编辑档执行", mode: "auto_edit", recommended: true },
+        { id: "mode_full", label: "以完全访问档执行", mode: "full_access" },
+        { id: "revise", label: "补充意见" },
+      ],
+    }],
+  });
+
+  it("带 mode 的选项点一下就直提：自动编辑档选项直接提交且胶囊同步 auto_edit", async () => {
+    seedAsk(gateAsk("g1"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["mode_auto"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+  });
+
+  it("带 mode 的选项点一下就直提：完全访问档选项直接提交且胶囊同步 full_access（不再硬编码 auto_edit）", async () => {
+    seedAsk(gateAsk("g2"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以完全访问档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["mode_full"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("full_access");
+  });
+
+  it("非批准类选项（无 mode）不直提：点「补充意见」仍需提交钮，且不切档", async () => {
+    seedAsk(gateAsk("g3"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("补充意见"));
+    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false);
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["revise"]);
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+  });
+
+  it("完全访问档无 description：渲染兜底风险说明行（其余档位不补文案）", () => {
+    seedAsk(gateAsk("g4"));
+    render(<AskPanel />);
+    const optOf = (label: string) =>
+      Array.from(document.querySelectorAll(".ask-opt")).find((el) => el.textContent?.includes(label)) as HTMLElement;
+    expect(optOf("以完全访问档执行").querySelector(".desc")?.textContent).toBe("跳过所有审批弹窗，灾难级命令仍拦截");
+    expect(optOf("以自动编辑档执行").querySelector(".desc")).toBeNull();
+    expect(optOf("补充意见").querySelector(".desc")).toBeNull();
+  });
+
+  it("完全访问档带 description：后端文案在前，兜底风险说明恒定叠在其后（不被模型 description 顶掉）", () => {
+    seedAsk({
+      askId: "g5", kind: "ask", approval: true,
+      questions: [{
+        id: "q1", question: "【方案】",
+        options: [{ id: "mode_full", label: "以完全访问档执行", mode: "full_access", description: "模型自述的风险" }],
+      }],
+    });
+    render(<AskPanel />);
+    const desc = document.querySelector(".ask-opt .desc")?.textContent ?? "";
+    // 后端文案仍在前（不被覆盖），兜底风险文案恒定在后（提示注入式淡化无效）
+    expect(desc).toBe("模型自述的风险；跳过所有审批弹窗，灾难级命令仍拦截");
+  });
+
+  it("旧形态回归（无 mode、id=approve）：直提行为不变，胶囊回落 auto_edit", async () => {
+    seedAsk({
+      askId: "g6", kind: "ask", approval: true, approveId: "approve",
+      questions: [{
+        id: "q1", question: "选一个",
+        options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }],
+      }],
+    });
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("执行方案"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["approve"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+  });
+});
+
+// ---------- 档位已经是 auto_edit / full_access 时的胶囊同步（[docs/mode-gate-and-subagent-sync]） ----------
+// 缺陷复现：后端 wants_mode_switch 对 AutoEdit / FullAccess 档也返回 mode_requested（会切档），
+// 但前端同步条件曾只看当前档是不是 plan / confirm_each——两条路径全假 → 不发 set_session_prefs，
+// 于是胶囊与后端档位分叉，之后任意一次 prefs 全量写入又把后端档位静默翻回去（无测试守护）。
+describe("AskPanel 高档位下的胶囊同步", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {}; s.drafts = {};
+    });
+  });
+
+  const twoModeAsk = (askId: string) => ({
+    askId, kind: "ask", approval: true, approveId: null,
+    questions: [{
+      id: "q1", question: "【方案】下一步怎么做",
+      options: [
+        { id: "mode_auto", label: "以自动编辑档执行", mode: "auto_edit" },
+        { id: "mode_full", label: "以完全访问档执行", mode: "full_access" },
+      ],
+    }],
+  });
+
+  it("档位 auto_edit（无 switchToAutoEdit）+ 选 full_access：仍发 set_session_prefs 且档位 = full_access（升级方向）", async () => {
+    seedAsk(twoModeAsk("h1"), "auto_edit");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以完全访问档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["mode_full"]);
+    // 修理前：当前档位不是 plan / confirm_each 且 ask 未带 switchToAutoEdit → 不发 prefs（本断言失败）
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("full_access");
+    // 顺序契约：先 resolve_ask 再 set_session_prefs（颠倒会让后端误判「无需切档」）
+    expect(calls.findIndex((c) => c.cmd === "resolve_ask")).toBeLessThan(
+      calls.findIndex((c) => c.cmd === "set_session_prefs"),
+    );
+  });
+
+  it("档位 full_access + 选 auto_edit：同步为 auto_edit（降档方向也要覆盖）", async () => {
+    seedAsk(twoModeAsk("h2"), "full_access");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["mode_auto"]);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
+  });
+
+  it("档位 full_access + 非批准类选项（无 mode）：不直提也不切档（不误发 prefs）", async () => {
+    seedAsk({
+      askId: "h3", kind: "ask", approval: true, approveId: null,
+      questions: [{
+        id: "q1", question: "【方案】",
+        options: [{ id: "mode_full", label: "以完全访问档执行", mode: "full_access" }, { id: "revise", label: "补充意见" }],
+      }],
+    }, "full_access");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("补充意见"));
+    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false);
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["revise"]);
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
+  });
+
+  it("两题 ask：第一题已选甲、第二题点带 mode 选项直提 → 载荷同时包含两题答案（直提不丢其他题的已选）", async () => {
+    seedAsk({
+      askId: "n1", kind: "ask",
+      questions: [
+        { id: "q1", question: "第一步", options: [{ id: "a", label: "甲" }, { id: "b", label: "乙" }] },
+        { id: "q2", question: "第二步", options: [{ id: "mode_auto", label: "以自动编辑档执行", mode: "auto_edit" }] },
+      ],
+    }, "auto_edit");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText(/^甲/)); // 答第一题（不直提）
+    fireEvent.click(btnByText("下一题")); // 翻到第二题
+    fireEvent.click(screen.getByText("以自动编辑档执行")); // 直提
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
+    // 修理前：只带 { q2: ["mode_auto"] }，q1 的「甲」被丢弃
+    expect(payload.answers.q1.selections).toEqual(["a"]);
+    expect(payload.answers.q2.selections).toEqual(["mode_auto"]);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
   });
 });

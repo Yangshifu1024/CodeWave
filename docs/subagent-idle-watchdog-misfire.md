@@ -93,6 +93,7 @@ fn idle_step(paths: &[&str]) -> BatchDigest {
 - `AgentDef` 新增 `pub readonly: bool`（`agents/mod.rs:17-21`）：`explore`（`:50`）/ `reviewer`（`:150`）/ `code-reviewer`（`:207`）为 `true`，其余（`backend-dev` / `frontend-dev` / `app-dev` / `product-manager` / `tester` / `title`）为 `false`。选择标准写在代码注释里：这三个角色正文已声明「不修改文件」；`tester` 正文明确要跑测试命令、`product-manager` 正文无写权限表述，均不入选。`agents/mod.rs:395` 的 `readonly_roles_are_exactly_the_three_analysis_roles` 钉住该集合。
 - `tools/subagent.rs:146-156` `idle_policy_for(role)`：经 `is_readonly_role`（`subagent.rs:142-144`，走 `crate::agents::find` 单一事实源——别名 / 大小写 / 空格归一与角色注入同源）→ 只读角色 `NudgeOnly`，其余含未命中 / 空串 → `Stop`。接线统一走 `apply_role_policy(params, role)`（`subagent.rs:172-178`），调用点 `subagent.rs:351`——该装配函数独立成单元以便单测钉住（防后续重排参数构造时静默回归）。
 - 写工具排除集不再另立一份名单：`readonly_extra_excludes`（`subagent.rs:161-167`）直接取 `crate::core::agent::WRITE_TOOLS`（`drive.rs:277` = `["edit","create","delete"]`，Plan 档同源），并入 `params.exclude_tools`：**把「只读」从角色自律变成可执行事实**——暴露前过滤（`core/agent/stream.rs:199`）+ 调用时硬拒 `E_TOOL_BLOCKED`（`tools/batch.rs:106-117`），用的都是既有排除通路，无新机制。`command` 刻意保留（只读命令是合法进展信号与自救手段，且 fence 逐条把关）。
+- **完全访问档下写工具排除解除（后续批次 [docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）**：只读角色（`explore` / `reviewer` / `code-reviewer`）不再排除 `WRITE_TOOLS`，并在其 `<agent-definition>` 正文末尾追加「只读约束暂停」覆盖声明；档位每个 LLM step 边界跟随根会话；**`idle_policy` 仍为 `NudgeOnly`**（与档位解耦）；其余三档（`confirm_each` / `auto_edit` / `plan`）下行为与文案逐字不变。
 - `subagent.rs:121-125`：只读角色的 `<subagent-discipline>` 追加一句「你是只读角色，没有写工具（edit/create/delete 不可用）：不要尝试写文件，把发现写进最终汇报」，避免它反复试探被拒白烧步数。
 
 ## 4. 测试
@@ -137,7 +138,7 @@ fn idle_step(paths: &[&str]) -> BatchDigest {
 - **监督判定顺序不变**：先 `feed`（重复失败 / 重复调用）后 `feed_batch`（空转）（`drive.rs:812-854`）。
 - **主会话与任务运行零变化**：两者不置 `idle_policy`（`main_drive_params` 走 `DriveParams::default`，`drive.rs:285-292`；`run_task_agent` 显式用默认，`drive.rs:1370`）→ `Stop`，8/14 语义逐字不变（有单测钉住）。
 - **可写子代理零变化**：`backend-dev` / `frontend-dev` / `app-dev` / `tester` / `product-manager` 的策略与排除集都不变（`tester` 仍可跑测试命令）。
-- **新增的硬约束只有一条**：只读角色子代理不可用 `edit`/`create`/`delete`。这三个角色正文本就声明不写文件，属「自律 → 强制」的落实。
+- **新增的硬约束只有一条**：只读角色子代理不可用 `edit`/`create`/`delete`。这三个角色正文本就声明不写文件，属「自律 → 强制」的落实。后续批次中**该硬约束在完全访问档下解除**（与「写工具排除 + `NudgeOnly`」的前半句同源，`NudgeOnly` 不变，[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）。
 - 配置 schema、会话存储格式、前端契约零变化。
 
 ## 6. 验证

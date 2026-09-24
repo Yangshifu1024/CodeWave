@@ -285,37 +285,5 @@ export function transportIsExplicit(d: McpServerDraft): boolean {
   return d.transportRaw === "stdio" || d.transportRaw === "streamable_http";
 }
 
-// ---------- 文本编解码（供设置页的输入框用）----------
-// 注意：这层是「行」投影，值里含换行的环境变量无法用文本框表达（表格化 UI 落地后即可），
-// 行的 canonical 模型仍是上面的 rows，编解码只服务于当前的文本框编辑面。
-
-/** 参数行 → 文本（**一行一个参数**，不做空白切分：含空格的 Windows 路径原样保留）。 */
-export function argsToText(rows: McpArgRow[]): string {
-  return rows.map((r) => r.value).join("\n");
-}
-
-/** 文本 → 参数行（按行切分，空行丢弃）。 */
-export function textToArgs(text: string): McpArgRow[] {
-  return text
-    .split("\n")
-    .filter((v) => v !== "")
-    .map((value) => ({ value }));
-}
-
-/** 键值行 → 文本（`KEY=VALUE` 一行一条；值为空时只写 KEY；值不 trim）。 */
-export function envToText(rows: McpKeyValueRow[]): string {
-  return rows.map((r) => (r.value === "" ? r.key : r.key + "=" + r.value)).join("\n");
-}
-
-/** 文本 → 键值行（按首个 `=` 切分；值不 trim；键为空的行丢弃）。 */
-export function textToEnv(text: string): McpKeyValueRow[] {
-  return text
-    .split("\n")
-    .map((line) => {
-      const i = line.indexOf("=");
-      return i < 0
-        ? { key: line, value: "" }
-        : { key: line.slice(0, i), value: line.slice(i + 1) };
-    })
-    .filter((r) => r.key.trim() !== "");
-}
+// 注：args / env / headers 现在由设置页的**表格**直接编辑（行模型即草稿模型，零编解码），
+// 故此处不再提供「一行一个」的文本编解码函数——那层投影无法表达值里含换行的环境变量。

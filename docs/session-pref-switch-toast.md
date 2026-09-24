@@ -4,17 +4,18 @@
 
 ## 生效时机核查（后端，零改动）
 
-session prefs（approval_mode / model_id / reasoning_effort）存于 `SessionRuntime.prefs: Mutex<SessionPrefs>`（`core/agent/runtime.rs:109`，in-memory、前端为 source of truth），`set_session_prefs` 整把替换（runtime.rs:184-186），三个消费点全部**实时读取、无 run 开始快照**：
+session prefs（approval_mode / model_id / reasoning_effort）存于 `SessionRuntime.prefs: Mutex<SessionPrefs>`（`core/agent/runtime.rs`，in-memory、前端为 source of truth），`set_session_prefs` 整把替换，三个消费点全部**实时读取、无 run 开始快照**（代码行号易漂，定位见 [docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）：
 
 | 偏好 | 消费点 | 时机 |
 |---|---|---|
 | model_id | `core/agent/stream.rs:22-33` `build_stream_request` 每次 LLM 请求现读 `rt.prefs()` → `effective_model`（悬空 id 回落全局 active） | 每轮 turn；run 进行中切换 → 下一轮请求生效（当前正在流式的轮次不受影响，重试沿用本轮已解析模型） |
 | approval_mode / fence | `tools/tool.rs:115-128` `ToolCtx::approval_mode()`/`fence_policy()` 直接 lock 现读 | 每次工具调用（batch.rs / service.rs / command 消费点同） |
 | reasoning_effort | `stream.rs:36-41` 与 model 同处现读 → 三协议请求体 | 每轮 turn |
+| approval_mode（子代理侧） | `tools/subagent.rs` 的 `subagent_drive_params(base, parent_prefs)`：每步从基座（`SubBase`）重建工具集与系统块 + 刷新子 rt 的 `approval_mode`（fence / 写审批门据此判定） | 每个 LLM step 边界——跟随**根会话**当前档位；进行中的工具批次不追溯（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)） |
 
-Plan 档工具集排除与系统提示按步重算（`drive.rs:780-783`，main session 每步 `main_drive_params(&rt.prefs())`，ask 批准切 AutoEdit 即下一步生效的同一机制）；run 开始处 `drive.rs:126` 的 `effective_model` 仅用于日志、不影响请求。
+Plan 档工具集排除与系统提示按步重算（main session 每步 `main_drive_params(&rt.prefs())`，ask 批准切档即下一步生效的同一机制；该「按步重算」机制自 [docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md) 起也覆盖在跑子代理）；run 开始处的 `effective_model` 仅用于日志、不影响请求。
 
-**边界（快照冻结，切换不追溯）**：已派生的 subagent（`tools/subagent.rs:230` 派生时一次性固化 params）与 task run（`drive.rs:824-850`）不受中途切换影响；同一工具批次内切换从下一 step/批次生效。此为既有设计（[docs/long-file-split-and-edition-2024](./long-file-split-and-edition-2024.md) 注释），非本批缺陷。
+**边界（任务运行冻结、子代理实时跟随）**：task run（`run_task_agent` 自持 runtime，不读主会话 prefs）不受中途切换影响，此为既有设计（[docs/long-file-split-and-edition-2024](./long-file-split-and-edition-2024.md) 注释）；**子代理的 spawn 快照语义已作废**——在跑子代理现在于**每个 LLM step 边界**从基座（`SubBase`）重建 `DriveParams`，工具集、系统块（`<plan-mode>` 按当前档位重拼）与子 rt 的 `approval_mode`（fence / 写审批门据此判定）三处同步跟随**根会话**档位；只有 `model_id` / `reasoning_effort` 保持 spawn 快照。同一工具批次内切换仍从下一 step/批次生效（[docs/mode-gate-and-subagent-sync](./mode-gate-and-subagent-sync.md)）。
 
 ## 前端实现
 

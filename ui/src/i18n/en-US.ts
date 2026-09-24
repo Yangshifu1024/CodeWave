@@ -78,6 +78,11 @@ export default {
     prevPage: "Previous question", nextPage: "Next question",
     recommended: "Recommended",
     switchHint: "Submitting will switch to auto-edit mode",
+    /* Mode gate ([docs/mode-gate-and-subagent-sync]): fallback risk note for the full-access option —
+       appended **always**, after the backend description (a model-authored description cannot suppress it) */
+    fullAccessRisk: "Skips all approval prompts; disaster-level commands are still blocked",
+    /* Separator between the backend description and the fallback risk note */
+    fullAccessRiskSep: " — ",
   },
   settings: {
     title: "Settings",
@@ -208,7 +213,9 @@ export default {
     mcpStatusRefreshFailed: "Failed to read MCP status (showing the last known result)",
     mcpHint: "Edit user-level mcp.json (project-level: <workspace>/.codewave/mcp.json overrides). Auto-reconnects on save.",
     mcpAdd: "Add server", mcpName: "Server name", mcpCommand: "Command",
-    mcpArgs: "Args (one per line; spaces preserved)", mcpEnv: "Env (K=V, one per line; values kept as-is)", mcpUrl: "URL",
+    mcpArgs: "Args", mcpEnv: "Env", mcpUrl: "URL", mcpHeaders: "Headers",
+    mcpArgsAdd: "Add arg", mcpEnvAdd: "Add variable", mcpHeadersAdd: "Add header",
+    mcpRowDelete: "Delete row", mcpTableKey: "Key", mcpTableValue: "Value", mcpTableName: "Name",
     mcpExtraKeys: "This entry also has {{n}} keys not shown in the form ({{keys}}); they are preserved on save.",
     mcpIssuesHead: "Config issues (error level blocks saving)",
     mcpSaveBlocked: "Config failed validation; saving was blocked",
@@ -388,6 +395,9 @@ export default {
     stop: "Stop this subagent",
     endedEarly: "Ended early",
     endedBudget: "Budget exhausted",
+    /* Drawer header mode line ([docs/mode-gate-and-subagent-sync]): mode = label from composer.mode* keys */
+    modeLine: "Permission mode: {{mode}}",
+    modeInherited: " (inherited from the main session)",
   },
   diff: { title: "Workspace changes (vs HEAD)", empty: "No changes" },
   git: { notConfigured: "Not configured" },

@@ -266,39 +266,83 @@ fn args_deserialize_camel_case_switch_to_autoedit() {
 fn wants_mode_switch_matrix() {
     use crate::core::prefs::ApprovalMode;
     // Plan 档：批准即切换（既有语义；valid_answer 不改变 Plan 协议）
-    assert!(wants_mode_switch(ApprovalMode::Plan, true, false, false));
-    assert!(wants_mode_switch(ApprovalMode::Plan, true, true, true));
+    assert!(wants_mode_switch(
+        ApprovalMode::Plan,
+        true,
+        false,
+        false,
+        false
+    ));
+    assert!(wants_mode_switch(
+        ApprovalMode::Plan,
+        true,
+        true,
+        true,
+        false
+    ));
     // ConfirmEach：arch 标记或有效应答（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)），任一通道都切；标记通道无需批准命中
     assert!(wants_mode_switch(
         ApprovalMode::ConfirmEach,
         true,
         true,
+        false,
         false
     ));
     assert!(wants_mode_switch(
         ApprovalMode::ConfirmEach,
         false,
         false,
-        true
+        true,
+        false
     ));
     assert!(wants_mode_switch(
         ApprovalMode::ConfirmEach,
         false,
         true,
+        false,
         false
     ));
-    // 本就放开：不切
-    assert!(!wants_mode_switch(ApprovalMode::AutoEdit, true, true, true));
+    // 本就放开：无显式选档时不切
+    assert!(!wants_mode_switch(
+        ApprovalMode::AutoEdit,
+        true,
+        true,
+        true,
+        false
+    ));
     assert!(!wants_mode_switch(
         ApprovalMode::FullAccess,
         true,
         true,
+        true,
+        false
+    ));
+    // 显式选档（选中带 mode 的批准类选项）：跨档允许——含 auto_edit → full_access 升级
+    assert!(wants_mode_switch(
+        ApprovalMode::AutoEdit,
+        false,
+        false,
+        false,
         true
     ));
-    // 未批准、无有效应答、无标记：永不切
-    assert!(!wants_mode_switch(ApprovalMode::Plan, false, true, false));
+    assert!(wants_mode_switch(
+        ApprovalMode::FullAccess,
+        false,
+        false,
+        false,
+        true
+    ));
+    // 未批准、无有效应答、无标记、无选档：永不切
+    assert!(!wants_mode_switch(
+        ApprovalMode::Plan,
+        false,
+        true,
+        false,
+        false
+    ));
     assert!(!wants_mode_switch(
         ApprovalMode::ConfirmEach,
+        false,
         false,
         false,
         false
@@ -313,15 +357,23 @@ fn wants_mode_switch_valid_answer_docs35() {
         ApprovalMode::ConfirmEach,
         false,
         false,
-        true
+        true,
+        false
     ));
     assert!(!wants_mode_switch(
         ApprovalMode::ConfirmEach,
         false,
         false,
+        false,
         false
     ));
-    assert!(!wants_mode_switch(ApprovalMode::Plan, false, false, true));
+    assert!(!wants_mode_switch(
+        ApprovalMode::Plan,
+        false,
+        false,
+        true,
+        false
+    ));
 }
 
 #[test]
@@ -442,12 +494,14 @@ fn arch_gate_shape_requires_single_question_with_approve_option() {
             label: "批准开发".into(),
             description: None,
             recommended: true,
+            mode: None,
         },
         Option2 {
             id: "revise".into(),
             label: "补充意见".into(),
             description: None,
             recommended: false,
+            mode: None,
         },
     ];
     assert!(arch_gate_shape(&[approve_q.clone()]));
@@ -461,6 +515,7 @@ fn arch_gate_shape_requires_single_question_with_approve_option() {
         label: "甲".into(),
         description: None,
         recommended: false,
+        mode: None,
     }];
     assert!(!arch_gate_shape(&[no_approve]));
 }
@@ -474,6 +529,18 @@ fn opt(id: &str, label: &str) -> Option2 {
         label: label.into(),
         description: None,
         recommended: false,
+        mode: None,
+    }
+}
+
+/// 批准类选项（C1）：带 mode 声明「选中后切到哪档」。
+fn opt_mode(id: &str, label: &str, mode: crate::core::prefs::ApprovalMode) -> Option2 {
+    Option2 {
+        id: id.into(),
+        label: label.into(),
+        description: None,
+        recommended: false,
+        mode: Some(mode),
     }
 }
 
@@ -672,6 +739,7 @@ fn single_true_does_not_override_approval_shape() {
         single: true,
     };
     assert!(approval_shape(std::slice::from_ref(&approval_q)));
+    // 主批准项：无 recommended 标记时按声明顺序取首个（推荐项优先另有专门用例）
     assert_eq!(approve_option_id(&[approval_q]).as_deref(), Some("execute"));
     // 非批准问题标 single 仍是非批准（该标记从不制造批准语义）
     let plain_single = Question {
@@ -700,6 +768,322 @@ async fn label_matched_approve_still_switches_plan() {
     });
     let answer = json!({ "answers": { "q1": { "selections": ["execute"], "note": "" } } });
     let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok);
+    assert_eq!(outcome.data["plan_approved"], json!(true));
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::AutoEdit
+    ));
+}
+
+// ---------- 批准门选档确认（C1-C6）：mode 结构化字段取代子串猜测 + 硬编码 AutoEdit ----------
+
+/// 批准门标准形态（三选项）：两个批准类（带 mode）+ 补充意见；id="approve" 锚点保留。
+fn gate_question() -> Question {
+    use crate::core::prefs::ApprovalMode;
+    Question {
+        id: "approve_plan".into(),
+        question: "是否按此方案执行？".into(),
+        options: vec![
+            Option2 {
+                recommended: true,
+                ..opt_mode("approve", "以自动编辑档执行", ApprovalMode::AutoEdit)
+            },
+            opt_mode("approve_full", "以完全访问档执行", ApprovalMode::FullAccess),
+            opt("revise", "补充意见"),
+        ],
+        single: true,
+    }
+}
+
+/// 批准门 ask 入参（JSON 形态，走完整 run() 流程）：switch_flag 控制 switchToAutoEdit。
+fn approval_gate_args(switch_flag: bool) -> Value {
+    json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按此方案执行？", "single": true,
+            "options": [
+                {
+                    "id": "approve", "label": "以自动编辑档执行",
+                    "mode": "auto_edit", "recommended": true
+                },
+                { "id": "approve_full", "label": "以完全访问档执行", "mode": "full_access" },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }],
+        "switchToAutoEdit": switch_flag,
+    })
+}
+
+/// 批准门应答载荷（选中指定选项）。
+fn gate_answer(id: &str) -> Value {
+    json!({ "answers": { "approve_plan": { "selections": [id], "note": "" } } })
+}
+
+#[test]
+fn option_mode_serde_default_and_wire_value() {
+    // C1 向前兼容：旧载荷（无 mode）反序列化为 None
+    let raw = json!({ "id": "approve", "label": "批准开发" });
+    let legacy: Option2 = serde_json::from_value(raw).expect("无 mode 的旧载荷应可反序列化");
+    assert_eq!(legacy.mode, None);
+    // wire 值即 ApprovalMode 的 snake_case；回序列化保持同值
+    let raw = json!({ "id": "approve_full", "label": "完全访问", "mode": "full_access" });
+    let full: Option2 = serde_json::from_value(raw).expect("mode 应可反序列化");
+    assert_eq!(
+        full.mode,
+        Some(crate::core::prefs::ApprovalMode::FullAccess)
+    );
+    let back = serde_json::to_value(&full).unwrap();
+    assert_eq!(back["mode"], json!("full_access"));
+    // 未知档位值不静默降级（serde 拒绝）
+    let raw = json!({ "id": "x", "label": "x", "mode": "nope" });
+    assert!(serde_json::from_value::<Option2>(raw).is_err());
+}
+
+/// 🟡6（修 1）：`mode: None` 不得序列化出 `"mode": null`——前端声明是 `mode?: ApprovalMode`，
+/// 带 null 会让「mode !== undefined」这类判定误判（当前前端判定都是 truthy，行为对但类型在说谎）。
+#[test]
+fn option_mode_key_absent_when_none() {
+    use crate::core::prefs::ApprovalMode;
+    let plain = opt("revise", "补充意见");
+    let v = serde_json::to_value(&plain).unwrap();
+    assert!(v.get("mode").is_none(), "非批准类选项不得带 mode 键：{v}");
+    assert!(!serde_json::to_string(&v).unwrap().contains("\"mode\""));
+    // 批准类选项仍带 wire 值（ApprovalMode 的 snake_case）
+    for (id, mode, wire) in [
+        ("approve", ApprovalMode::AutoEdit, "auto_edit"),
+        ("approve_full", ApprovalMode::FullAccess, "full_access"),
+    ] {
+        let v = serde_json::to_value(opt_mode(id, "x", mode)).unwrap();
+        assert_eq!(v["mode"], json!(wire), "{id} 应带 mode");
+    }
+    // 忽略字段不破坏反序列化向后兼容
+    let back: Option2 = serde_json::from_value(serde_json::to_value(&plain).unwrap()).unwrap();
+    assert_eq!(back.mode, None);
+}
+
+#[test]
+fn mode_bearing_option_is_approve_class() {
+    use crate::core::prefs::ApprovalMode;
+    let full = opt_mode("approve_full", "以完全访问档执行", ApprovalMode::FullAccess);
+    assert!(is_approve_class(&full));
+    // label 未用协议措辞也认（结构化字段优先）
+    assert!(is_approve_option(&full));
+    // 无 mode 的修订项仍非批准项
+    assert!(!is_approve_class(&opt("revise", "补充意见")));
+    assert!(!is_approve_option(&opt("revise", "补充意见")));
+}
+
+#[test]
+fn approval_gate_shape_keeps_arch_anchor_and_primary_id() {
+    let q = gate_question();
+    // 批准形（前端渲染单选 + 批准项直提）；arch 闸形态靠保留的 id="approve" 锚点仍成立
+    assert!(approval_shape(std::slice::from_ref(&q)));
+    assert!(arch_gate_shape(std::slice::from_ref(&q)));
+    // 主批准项 = 推荐项优先
+    assert_eq!(
+        approve_option_id(std::slice::from_ref(&q)).as_deref(),
+        Some("approve")
+    );
+    assert_eq!(
+        mode_label(crate::core::prefs::ApprovalMode::FullAccess),
+        "完全访问"
+    );
+    assert_eq!(
+        mode_label(crate::core::prefs::ApprovalMode::AutoEdit),
+        "自动编辑"
+    );
+}
+
+#[test]
+fn approve_option_id_prefers_recommended_over_declaration_order() {
+    use crate::core::prefs::ApprovalMode;
+    // 完全访问档声明在前、自动编辑档（推荐）在后 → 主批准项仍是推荐项
+    let q = Question {
+        id: "approve_plan".into(),
+        question: "?".into(),
+        options: vec![
+            opt_mode("approve_full", "以完全访问档执行", ApprovalMode::FullAccess),
+            Option2 {
+                recommended: true,
+                ..opt_mode("approve", "以自动编辑档执行", ApprovalMode::AutoEdit)
+            },
+            opt("revise", "补充意见"),
+        ],
+        single: true,
+    };
+    assert_eq!(
+        approve_option_id(std::slice::from_ref(&q)).as_deref(),
+        Some("approve")
+    );
+}
+
+#[test]
+fn selected_target_mode_reads_selected_option_mode() {
+    use crate::core::prefs::ApprovalMode;
+    let q = gate_question();
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &gate_answer("approve_full")),
+        Some(ApprovalMode::FullAccess)
+    );
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &gate_answer("approve")),
+        Some(ApprovalMode::AutoEdit)
+    );
+    // 修订项无 mode → None（调用点回落 AutoEdit）
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &gate_answer("revise")),
+        None
+    );
+    // 旧形态（id=approve 无 mode）→ None：行为与改造前一致
+    let legacy = Question {
+        id: "q".into(),
+        question: "?".into(),
+        options: vec![opt("approve", "批准开发")],
+        single: false,
+    };
+    let legacy_answer = json!({ "answers": { "q": { "selections": ["approve"], "note": "" } } });
+    assert_eq!(selected_target_mode(&[legacy], &legacy_answer), None);
+}
+
+#[tokio::test]
+async fn full_access_choice_switches_to_full_access_in_plan_mode() {
+    // C3：目标档位按选中项声明（不再硬编码 AutoEdit）
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = approval_gate_args(true);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve_full")).await;
+    assert!(outcome.ok);
+    assert_eq!(outcome.data["plan_approved"], json!(true));
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::FullAccess
+    ));
+    let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
+    assert!(summary.contains("会话已切换到完全访问模式"), "{summary}");
+    assert!(summary.contains("请立即按方案执行"), "{summary}");
+}
+
+#[tokio::test]
+async fn auto_edit_choice_switches_to_auto_edit() {
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = approval_gate_args(true);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve")).await;
+    assert!(outcome.ok);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::AutoEdit
+    ));
+    let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
+    assert!(summary.contains("会话已切换到自动编辑模式"), "{summary}");
+}
+
+#[tokio::test]
+async fn cross_tier_confirm_each_full_access_choice_switches() {
+    // C5：ConfirmEach 档选中带 mode 的批准类选项 → 一次跳两档（Light 路径：不冻结基线）
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    let args = approval_gate_args(false);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve_full")).await;
+    assert!(outcome.ok);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::FullAccess
+    ));
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "Light 路径不冻结基线"
+    );
+}
+
+#[tokio::test]
+async fn confirm_each_arch_gate_full_access_freezes_baseline() {
+    // arch 闸形态 + switchToAutoEdit → 完整路径：过 G2/G3 门、冻结基线、切到所选档
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    register_todos(&ctx, &["a", "b"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = approval_gate_args(true);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve_full")).await;
+    assert!(outcome.ok);
+    assert_eq!(outcome.data["plan_approved"], json!(true));
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::FullAccess
+    ));
+    assert_eq!(
+        ctx.rt
+            .approved_plan
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|v| v.len()),
+        Some(2)
+    );
+}
+
+#[tokio::test]
+async fn full_access_choice_still_blocked_by_empty_todos() {
+    // C6：选完全访问档也仍要过批准门（G3 todos 非空）
+    let ctx = plan_ctx();
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = approval_gate_args(true);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve_full")).await;
+    assert!(!outcome.ok);
+    assert_eq!(
+        outcome.error.expect("空 todos 应被拒").code,
+        "E_PLAN_TODOS_REQUIRED"
+    );
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Plan
+    ));
+}
+
+#[tokio::test]
+async fn full_access_choice_still_blocked_without_analysis() {
+    // C6：选完全访问档也仍要过 G2 分析产物门
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    let args = approval_gate_args(true);
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve_full")).await;
+    assert!(!outcome.ok);
+    assert_eq!(
+        outcome.error.expect("无分析应被拒").code,
+        "E_PLAN_ANALYSIS_REQUIRED"
+    );
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Plan
+    ));
+}
+
+#[tokio::test]
+async fn legacy_approve_without_mode_still_switches_to_auto_edit() {
+    // 回归保护：旧形态（无 mode 字段）行为与改造前一致 → AutoEdit
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按此方案执行？",
+            "options": [
+                { "id": "approve", "label": "批准开发", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }]
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, gate_answer("approve")).await;
     assert!(outcome.ok);
     assert_eq!(outcome.data["plan_approved"], json!(true));
     assert!(matches!(

@@ -56,12 +56,20 @@ pub struct Option2 {
     /// 是否推荐项（前端展示「推荐」pill）。
     #[serde(default)]
     pub(super) recommended: bool,
+    /// 该选项被选中时要切换到的权限档位（批准类选项标记，C1）：`None` = 非批准类选项（如「补充意见」）。
+    /// wire 值即 ApprovalMode 的 snake_case（"auto_edit" / "full_access" 等）；批准门据此把会话切到
+    /// 用户所选档位，取代此前的子串猜测 + 硬编码 AutoEdit。
+    /// wire 上为 `None` 时不出现 `mode` 键（`skip_serializing_if`）：前端声明是 `mode?: ApprovalMode`，
+    /// 带 `"mode": null` 会让 `mode !== undefined` 这类判定误判（[docs/mode-gate-and-subagent-sync]）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) mode: Option<crate::core::prefs::ApprovalMode>,
 }
 
 /// ask 工具：暂停 run 并向用户提问，等待应答后继续。
 /// 入参为 questions 数组（每题 id/question/可选 options）；Interactive 分级——必须独占批次，
 /// 挂起期间 run 阻塞在应答通道上，取消/关闭即视为拒绝（E_ASK_CANCELLED）。
-/// 承载 plan 档批准协议：批准形询问 + 选中批准项 → G2/G3 门校验 → 切换 AutoEdit 并注入「执行方案」；
+/// 承载 plan 档批准协议：批准形询问 + 选中批准类选项 → G2/G3 门校验 → 切到该选项声明的档位
+///（mode 字段，缺省 AutoEdit）并注入「执行方案」；
 /// 计划文本自动落盘为计划文件供前端卡片查看。
 pub struct AskTool;
 
@@ -107,7 +115,7 @@ impl Tool for AskTool {
         "ask"
     }
     fn description(&self) -> &'static str {
-        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问并提供三个选项：id=\"approve\"（label 执行方案/Approve plan）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first）；用户选 preview = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到自动编辑模式并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
+        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -137,7 +145,8 @@ impl Tool for AskTool {
                 "id": {"type": "string"},
                 "label": {"type": "string"},
                 "description": {"type": "string"},
-                "recommended": {"type": "boolean"}
+                "recommended": {"type": "boolean"},
+                "mode": {"type": "string", "enum": ["auto_edit", "full_access", "confirm_each", "plan"], "description": "批准类选项专用（C1）：该选项被选中时把会话切到该权限档；批准门的两个批准类选项用 auto_edit / full_access。非批准类选项（如补充意见）不要设置"}
               }
             }
           },
@@ -295,9 +304,26 @@ impl Tool for AskTool {
         let preview_only_answer = preview_only(&args.questions, &answer);
         let valid_answer = has_valid_answer(&args.questions, &answer) && !preview_only_answer;
         let arch_flag = gate_shape && args.switch_to_autoedit.unwrap_or(false);
+        // 批准门选档确认（C1-C3）：选中批准类选项（mode 非空）= 批准，且目标档位由该选项声明；
+        // mode 是结构化单一事实源，宽松子串匹配（approved_hit）只作旧形态兜底。
+        // 预览项不带 mode → selected_mode 天然为 None，故选 preview 不会走到这里。
+        let selected_mode = selected_target_mode(&args.questions, &answer);
+        if selected_mode.is_some() {
+            approved = true;
+        }
+        // 未声明 mode 的批准/有效应答 → 回落 AutoEdit（改造前的固定行为）
+        let switch_target = selected_mode.unwrap_or(crate::core::prefs::ApprovalMode::AutoEdit);
+        // 切档判定：叠加 `!preview_only_answer` **同时封掉两条通道**（结构化的 selected_mode 路径天然被排除；
+        // 这里封的是 valid_answer 轻量通道与 arch_flag —— 否则用户点「先看预览」会被静默批准并按方案开工）。
         let switch = !preview_only_answer
             && (!gate_shape || approved)
-            && wants_mode_switch(mode_at_open, approved, arch_flag, valid_answer);
+            && wants_mode_switch(
+                mode_at_open,
+                approved,
+                arch_flag,
+                valid_answer,
+                selected_mode.is_some(),
+            );
         crate::core::session_log::info(
             ctx.rt.as_ref(),
             &format!(
@@ -345,12 +371,14 @@ impl Tool for AskTool {
                 .scope_denials
                 .store(0, std::sync::atomic::Ordering::SeqCst);
             let mut p = ctx.rt.prefs();
-            p.approval_mode = crate::core::prefs::ApprovalMode::AutoEdit;
+            p.approval_mode = switch_target;
             ctx.rt.set_prefs(p);
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
                 &format!(
-                    "方案批准 → 权限档切换 Plan/ConfirmEach → AutoEdit，冻结 {titles_count} 条 todos 基线"
+                    "方案批准 → 权限档切换 {} → {}，冻结 {titles_count} 条 todos 基线",
+                    mode_label(mode_at_open),
+                    mode_label(switch_target)
                 ),
             );
             ctx.core.sink.emit(
@@ -359,7 +387,7 @@ impl Tool for AskTool {
                 serde_json::json!({ "session": ctx.rt.id, "count": 1 }),
             );
             return ToolOutcome::ok(json!({
-                "summary": format!("{}\n[system] 方案已批准：会话已切换到自动编辑模式，请立即按方案执行，不要再次询问。执行中新增计划外步骤会触发范围确认。", lines.join("\n")),
+                "summary": format!("{}\n[system] 方案已批准：会话已切换到{}模式，请立即按方案执行，不要再次询问。执行中新增计划外步骤会触发范围确认。", lines.join("\n"), mode_label(switch_target)),
                 "raw": answer,
                 "plan_approved": true,
             }));
@@ -368,11 +396,15 @@ impl Tool for AskTool {
         // 不过门、不冻结基线（approved_plan 留空 → batch.rs 的范围确认不触发）、不注入。
         if switch {
             let mut p = ctx.rt.prefs();
-            p.approval_mode = crate::core::prefs::ApprovalMode::AutoEdit;
+            p.approval_mode = switch_target;
             ctx.rt.set_prefs(p);
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
-                "ask 应答确认 → 权限档切换 ConfirmEach → AutoEdit（Light 路径：不冻结基线/不注入）",
+                &format!(
+                    "ask 应答确认 → 权限档切换 {} → {}（Light 路径：不冻结基线/不注入）",
+                    mode_label(mode_at_open),
+                    mode_label(switch_target)
+                ),
             );
         }
         ToolOutcome::ok(json!({
@@ -389,15 +421,24 @@ pub(super) fn arch_gate_shape(questions: &[Question]) -> bool {
     questions.len() == 1 && questions[0].options.iter().any(|o| o.id == "approve")
 }
 
+/// C2：批准类选项判定（结构化单一事实源）——选项携带 mode 即批准类：选中它 = 批准 + 切到该档。
+/// 宽松子串匹配（is_approve_option）保留为旧形态兜底，mode 路径优先。
+pub(super) fn is_approve_class(o: &Option2) -> bool {
+    o.mode.is_some()
+}
+
 /// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准协议选项匹配（宽松）。id 命中 approve/execute 子串
 ///（既有 approved_hit 语义），或 label 含协议规定的计划批准措辞——label 才是模型
 /// 实际对齐协议文本的字段；id 自拟时 label 通常仍合规（真实案例：协议 label
 /// 保留、id 自拟）。label 匹配用完整两词短语而非裸动词，
 /// 避免「运行测试」之类选项被误判为批准项。
+/// 选档确认后（C1/C2）：mode 非空即批准类（结构化优先），子串规则保留作旧形态兜底。
 pub(super) fn is_approve_option(o: &Option2) -> bool {
     let id = o.id.to_lowercase();
     let label = o.label.to_lowercase();
-    id.contains("approve")
+    // C2：结构化 mode 字段优先（批准类选项即便 label 未用协议措辞也算批准项）
+    is_approve_class(o)
+        || id.contains("approve")
         || o.id.contains("执行")
         || o.label.contains("执行方案")
         || o.label.contains("批准方案")
@@ -411,7 +452,8 @@ pub(super) fn approval_shape(questions: &[Question]) -> bool {
     questions.len() == 1 && questions[0].options.iter().any(is_approve_option)
 }
 
-/// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：首个批准选项的 id（前端直提检测用）；无批准项时返回 None
+/// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：主批准选项的 id（前端直提检测用；无批准项时返回 None）。
+/// 选档确认后语义修正：不再是「首个」——推荐项优先，其次按声明顺序的首个批准项；无批准项时返回 None
 ///（前端回退到严格检查）。
 /// 预览项从候选中剔除（[docs/preview-skill](../../../../docs/preview-skill.md)）：它的 label 万一含「执行方案/批准方案」，
 /// 宽松匹配会命中并把它当批准项下发给前端——前端据此把「先看预览」判成批准并真改档位（后端却因 preview_only 不切），
@@ -421,14 +463,17 @@ pub(super) fn approve_option_id(questions: &[Question]) -> Option<String> {
     questions
         .first()
         .and_then(|q| {
+            // 选档确认后「首个」不再确定：推荐项优先（两个批准类选项并存时主批准项 = recommended 的那个）；
+            // 预览项先从候选中剔除（它万一 label 含「执行方案」会被宽松匹配命中并当批准项下发）
             q.options
                 .iter()
-                .find(|o| is_approve_option(o) && !preview_ids.contains(o.id.as_str()))
+                .filter(|o| is_approve_option(o) && !preview_ids.contains(o.id.as_str()))
+                .min_by_key(|o| u8::from(!o.recommended))
         })
         .map(|o| o.id.clone())
 }
 
-/// 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门单题询问的第三选项 `id="preview"`，
+/// 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门单题询问的第四选项 `id="preview"`，
 /// 语义是「先看方案预览」——既不是批准（`is_approve_option` 不匹配），也不是**有效应答**：
 /// ConfirmEach 档的切档判定含 valid_answer，不排除它就会让用户点「先看预览」被静默切到自动编辑档。
 /// 只在批准形询问里认（普通澄清询问里的同名选项不受影响）。
@@ -480,6 +525,35 @@ pub(super) fn preview_only(questions: &[Question], answer: &Value) -> bool {
         }
     }
     saw_preview
+}
+
+/// C2/C3：选中项声明的目标档位——遍历各题选中项，命中带 mode 的选项即取其 mode（先 id 后 label 兜底匹配）。
+/// 无批准类选项被选中时返回 None（调用点回落 AutoEdit，保持改造前行为）。
+/// 预览项不带 mode，选中它天然返回 None（调用点另有 preview_only 双保险）。
+pub(super) fn selected_target_mode(
+    questions: &[Question],
+    answer: &Value,
+) -> Option<crate::core::prefs::ApprovalMode> {
+    questions.iter().find_map(|q| {
+        let sel = answer["answers"][&q.id]["selections"].as_array()?;
+        sel.iter().filter_map(|s| s.as_str()).find_map(|s| {
+            q.options
+                .iter()
+                .find(|o| o.id == s || o.label == s)
+                .and_then(|o| o.mode)
+        })
+    })
+}
+
+/// 档位中文名（summary / 审计日志文案用；与前端权限胶囊的档位命名一致）。
+pub(super) fn mode_label(mode: crate::core::prefs::ApprovalMode) -> &'static str {
+    use crate::core::prefs::ApprovalMode;
+    match mode {
+        ApprovalMode::ConfirmEach => "逐条确认",
+        ApprovalMode::AutoEdit => "自动编辑",
+        ApprovalMode::Plan => "计划",
+        ApprovalMode::FullAccess => "完全访问",
+    }
 }
 
 /// [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：把完整方案文本落盘为计划文件 `<workspace>/.codewave/tasks/plan-<UTC 时间戳>-<rand4>.md`。
@@ -540,18 +614,22 @@ fn register_plan_artifact(ctx: &ToolCtx, resolved: &std::path::Path) {
 
 /// 切换判定（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) + [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：Plan 档仅批准命中才切（协议不变）；
 /// ConfirmEach 档看 arch 批准闸标记（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md)）或任一有效应答（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）；
-/// AutoEdit/FullAccess 本就放开，切换无意义。
+/// AutoEdit/FullAccess 本就放开，仅当用户显式选档（选中带 mode 的批准类选项）才切——跨档允许，
+/// 可从任意档位跳到用户所选档位（C5：confirm_each/plan 可一次跳两档到 full_access）。
 pub(super) fn wants_mode_switch(
     mode: crate::core::prefs::ApprovalMode,
     approved: bool,
     switch_flag: bool,
     valid_answer: bool,
+    // 用户选中的批准类选项是否声明了目标档位（mode 非空）
+    mode_requested: bool,
 ) -> bool {
     use crate::core::prefs::ApprovalMode;
     match mode {
         ApprovalMode::Plan => approved,
         ApprovalMode::ConfirmEach => switch_flag || valid_answer,
-        ApprovalMode::AutoEdit | ApprovalMode::FullAccess => false,
+        // 显式选档优先（C5）：本就放开的档位也按用户所选目标切（含升级 auto_edit → full_access）
+        ApprovalMode::AutoEdit | ApprovalMode::FullAccess => mode_requested,
     }
 }
 
