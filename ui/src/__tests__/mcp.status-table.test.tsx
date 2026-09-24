@@ -1,148 +1,234 @@
-// McpStatusTable 组件级单测（自 SettingsPage 抽出后新增，code-reviewer 建议）：
-// 与整页集成用例（settings.mcp.test.tsx：名单并集 / 空态 / 刷新接线 / 切页 refetch）分层——
-// 这里只喂 props，专注四态渲染、空表整段不渲染、失败行的展开（点击 + 键盘 Enter/Space）、刷新回调，
-// 以及纯函数 mcpStatusRow 的四态映射。
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
-import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：es/app 子路径会产生另一个 context
-import "../i18n"; // 直接挂载组件需显式初始化 i18next
-import McpStatusTable, { mcpStatusRow, type McpStatusRow } from "../features/panels/McpStatusTable";
+// MCP 服务器状态表（组件级）：六态映射、来源列、操作列与展开交互。
+//
+// 映射口径的取向：**未知或缺失状态一律落到「未连接」**，不当作故障——
+// 后端将来加新态（如 "stopping"）时不该在界面上被误报成错误。
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import "../i18n";
+import McpStatusTable, {
+  mcpStatusRow,
+  type McpStatusRow,
+} from "../features/panels/McpStatusTable";
+import type { McpStatusPayload } from "../ipc/types";
 
+// 组件测试之间必须清 DOM：否则上一用例的行会留在 document 里，
+// 让「逐行渲染」这类按序断言的用例读到累积结果。
 afterEach(() => cleanup());
 
-/** 三列分别取文本：行内是并列的 span（JSX 会吃掉元素间空白），拼 textContent 拼不出分隔符 */
-function bodyRows(): { name: string; state: string; tools: string }[] {
-  return Array.from(document.querySelectorAll<HTMLElement>(".mcp-status-row"))
-    .filter((r) => !r.classList.contains("mcp-status-row-head"))
-    .map((r) => ({
-      name: r.querySelector(".mcp-status-name")?.textContent ?? "",
-      state: (r.querySelector(".mcp-status-state")?.textContent ?? "").trim(),
-      tools: r.querySelector(".mcp-status-tools")?.textContent ?? "",
-    }));
+type StatusLike = Pick<
+  McpStatusPayload,
+  "state" | "tools" | "tools_filtered" | "pid" | "error" | "note"
+>;
+
+/** 造一条状态记录（缺省为已连接）。 */
+function st(patch: Partial<StatusLike> = {}): StatusLike {
+  return {
+    state: "ready",
+    tools: 0,
+    tools_filtered: 0,
+    pid: null,
+    error: null,
+    note: null,
+    ...patch,
+  } as StatusLike;
 }
 
-function renderTable(rows: McpStatusRow[], opts: { refreshing?: boolean; onRefresh?: () => void } = {}) {
+function renderTable(props: Partial<Parameters<typeof McpStatusTable>[0]> = {}) {
   return render(
-    <AntApp>
-      <McpStatusTable rows={rows} refreshing={opts.refreshing ?? false} onRefresh={opts.onRefresh ?? (() => {})} />
-    </AntApp>,
+    <McpStatusTable
+      rows={[]}
+      refreshing={false}
+      onRefresh={() => {}}
+      hasSession
+      {...props}
+    />,
   );
 }
 
-const REFRESH_LABEL = "刷新状态（不会重新连接）";
+function rows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(".mcp-status-row")).filter(
+    (r) => !r.classList.contains("mcp-status-row-head"),
+  );
+}
 
-describe("McpStatusTable：四态与空表", () => {
-  it("四态各按自己的形态渲染：已连接带工具数 / 连接中带 spinner / 失败红字 / 未连接灰字", () => {
-    renderTable([
-      mcpStatusRow("a", { state: "ready", tools: 7 }),
-      mcpStatusRow("b", { state: "starting", tools: 0 }),
-      mcpStatusRow("c", { state: { error: "boom" }, tools: 0 }),
-      mcpStatusRow("d", undefined),
-    ]);
-
-    expect(bodyRows()).toEqual([
-      { name: "a", state: "已连接", tools: "7" },
-      { name: "b", state: "连接中", tools: "—" },
-      { name: "c", state: "连接失败", tools: "—" },
-      { name: "d", state: "未连接", tools: "—" },
-    ]);
-    // 连接中才有 spinner
-    expect(document.querySelectorAll(".mcp-status-state .ant-spin")).toHaveLength(1);
-    // 表头 + 锚点 + 全局语义说明（说明承担「未连接是正常态」的解释职责）
-    expect(document.querySelector(".mcp-status-row-head")?.textContent).toContain("工具数");
-    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy();
-    expect(document.querySelector(".hint")?.textContent).toContain("连接在打开会话时建立");
+describe("mcpStatusRow 状态映射", () => {
+  it("ready / starting 直映，工具数只在 ready 时给出", () => {
+    expect(mcpStatusRow("a", st({ state: "ready", tools: 3 }))).toMatchObject({
+      kind: "ready",
+      tools: 3,
+    });
+    expect(mcpStatusRow("a", st({ state: "starting", tools: 3 }))).toMatchObject({
+      kind: "starting",
+      tools: 0,
+    });
   });
 
-  it("rows 为空时整段不渲染（空表会把「没配」与「没连」显示成同一个样子）", () => {
-    const { container } = renderTable([]);
-    expect(container.querySelector('[data-setting-id="app.mcp_status"]')).toBeNull();
-    expect(container.textContent).toBe("");
+  it("stopped → 未连接（主动断开是正常态，不是故障）", () => {
+    expect(mcpStatusRow("a", st({ state: "stopped" })).kind).toBe("disconnected");
+  });
+
+  it("evicted → 已淘汰态，并带上可见性提示", () => {
+    const r = mcpStatusRow("a", st({ state: "evicted", note: "已被淘汰（资源上限）" }));
+    expect(r.kind).toBe("evicted");
+    expect(r.note).toBe("已被淘汰（资源上限）");
+  });
+
+  it("失败态：error.kind = config → 配置错；其余 → 失败；都带原因与建议", () => {
+    const cfg = mcpStatusRow(
+      "a",
+      st({
+        state: { error: "不支持旧式 SSE" },
+        error: { kind: "config", message: "不支持旧式 SSE", hint: "改用 /mcp", server_message: null },
+      }),
+    );
+    expect(cfg.kind).toBe("config_error");
+    expect(cfg.error).toBe("不支持旧式 SSE");
+    expect(cfg.hint).toBe("改用 /mcp");
+
+    const fail = mcpStatusRow(
+      "a",
+      st({
+        state: { error: "握手超时" },
+        error: { kind: "handshake", message: "握手超时", hint: null, server_message: null },
+      }),
+    );
+    expect(fail.kind).toBe("error");
+    expect(fail.error).toBe("握手超时");
+  });
+
+  it("未知 / 缺失状态 → 未连接（不当故障）", () => {
+    expect(mcpStatusRow("a").kind).toBe("disconnected");
+    expect(mcpStatusRow("a", st({ state: "stopping" as never })).kind).toBe("disconnected");
+  });
+
+  it("携带工具过滤计数 / PID / 来源与被覆盖层", () => {
+    const r = mcpStatusRow(
+      "a",
+      st({ state: "ready", tools: 6, tools_filtered: 2, pid: 24188 }),
+      { source: "project", overridden: "global" },
+    );
+    expect(r.toolsFiltered).toBe(2);
+    expect(r.pid).toBe(24188);
+    expect(r.source).toBe("project");
+    expect(r.overridden).toBe("global");
   });
 });
 
-describe("McpStatusTable：失败行的展开与刷新", () => {
-  const failed = () => mcpStatusRow("c", { state: { error: "spawn npx ENOENT" }, tools: 0 });
-
-  it("只有失败行可点：带 role=button / tabIndex / aria-expanded", () => {
-    renderTable([mcpStatusRow("a", { state: "ready", tools: 1 }), failed()]);
-
-    const clickable = document.querySelectorAll<HTMLElement>(".mcp-status-row-clickable");
-    expect(clickable).toHaveLength(1);
-    expect(clickable[0].getAttribute("role")).toBe("button");
-    expect(clickable[0].tabIndex).toBe(0);
-    expect(clickable[0].getAttribute("aria-expanded")).toBe("false");
+describe("McpStatusTable 渲染", () => {
+  it("两侧皆空时整段不渲染（空表会把「没配」与「没连」显示成同一个样子）", () => {
+    const { container } = renderTable({ rows: [] });
+    expect(container.querySelector('[data-setting-id="app.mcp_status"]')).toBeFalsy();
   });
 
-  it("点击整行展开完整错误，再点收起", () => {
-    renderTable([failed()]);
-    const row = document.querySelector(".mcp-status-row-clickable") as HTMLElement;
-
-    fireEvent.click(row);
-    expect(document.querySelector(".mcp-status-error")?.textContent).toBe("spawn npx ENOENT");
-    expect(row.getAttribute("aria-expanded")).toBe("true");
-
-    fireEvent.click(row);
-    expect(document.querySelector(".mcp-status-error")).toBeNull();
-    expect(row.getAttribute("aria-expanded")).toBe("false");
+  it("六列表头齐备", () => {
+    renderTable({ rows: [mcpStatusRow("fs", st({ state: "ready" }))] });
+    expect(rows().length).toBe(1);
+    expect(document.body.textContent).toContain("来源");
+    expect(document.body.textContent).toContain("PID");
+    expect(document.body.textContent).toContain("操作");
   });
 
-  it("键盘可达：Enter 与 Space 都能展开 / 收起（组件级才方便覆盖）", () => {
-    renderTable([failed()]);
-    const row = document.querySelector(".mcp-status-row-clickable") as HTMLElement;
+  it("已连接行：工具数 / PID / 来源标注", () => {
+    renderTable({
+      rows: [
+        mcpStatusRow("fs", st({ state: "ready", tools: 6, tools_filtered: 2, pid: 24188 }), {
+          source: "project",
+          overridden: "global",
+        }),
+      ],
+    });
+    const row = rows()[0];
+    expect(row.querySelector(".mcp-status-state")?.textContent).toContain("已连接");
+    expect(row.querySelector(".mcp-status-tools")?.textContent).toBe("6（已过滤 2）");
+    expect(row.querySelector(".mcp-status-pid")?.textContent).toBe("24188");
+    expect(row.querySelector(".mcp-status-source")?.textContent).toBe("项目（覆盖全局）");
+  });
+
+  it("非 ready 行的工具数与 PID 显示为破折号", () => {
+    renderTable({ rows: [mcpStatusRow("fs", st({ state: "starting", pid: null }))] });
+    const row = rows()[0];
+    expect(row.querySelector(".mcp-status-tools")?.textContent).toBe("—");
+    expect(row.querySelector(".mcp-status-pid")?.textContent).toBe("—");
+  });
+
+  it("已淘汰行显示提示文案（橙色警告态）", () => {
+    renderTable({
+      rows: [mcpStatusRow("big", st({ state: "evicted", note: "已被淘汰（资源上限）；需要时会自动重拉" }))],
+    });
+    expect(document.body.textContent).toContain("已淘汰（资源上限）");
+    expect(document.body.textContent).toContain("需要时会自动重拉");
+  });
+
+  it("失败行整行可点展开（含键盘），显示原因与建议", () => {
+    renderTable({
+      rows: [
+        mcpStatusRow(
+          "remote",
+          st({
+            state: { error: "握手超时（30s）" },
+            error: { kind: "handshake", message: "握手超时（30s）", hint: "确认服务端可达", server_message: null },
+          }),
+        ),
+      ],
+    });
+    const row = rows()[0];
+    expect(row.classList.contains("mcp-status-row-clickable")).toBe(true);
+    expect(document.querySelector(".mcp-status-error")).toBeFalsy();
+
+    fireEvent.click(row);
+    expect(document.querySelector(".mcp-status-error")?.textContent).toContain("握手超时（30s）");
+    expect(document.querySelector(".mcp-status-error")?.textContent).toContain("确认服务端可达");
 
     fireEvent.keyDown(row, { key: "Enter" });
-    expect(document.querySelector(".mcp-status-error")).toBeTruthy();
-
-    fireEvent.keyDown(row, { key: " " });
-    expect(document.querySelector(".mcp-status-error")).toBeNull();
+    expect(document.querySelector(".mcp-status-error")).toBeFalsy();
   });
 
-  it("同时只展开一行：点第二行时第一行收起", () => {
-    renderTable([
-      mcpStatusRow("c", { state: { error: "A" }, tools: 0 }),
-      mcpStatusRow("e", { state: { error: "B" }, tools: 0 }),
-    ]);
-    const rows = document.querySelectorAll<HTMLElement>(".mcp-status-row-clickable");
-
-    fireEvent.click(rows[0]);
-    expect(document.querySelector(".mcp-status-error")?.textContent).toBe("A");
-    fireEvent.click(rows[1]);
-
-    const blocks = document.querySelectorAll(".mcp-status-error");
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].textContent).toBe("B");
+  it("非失败行不可展开", () => {
+    renderTable({ rows: [mcpStatusRow("fs", st({ state: "ready" }))] });
+    expect(rows()[0].classList.contains("mcp-status-row-clickable")).toBe(false);
+    expect(rows()[0].getAttribute("role")).toBeNull();
   });
 
-  it("刷新按钮：aria-label 说明「不会重新连接」，点击回调一次；refreshing 时呈 loading（防重复点）", () => {
+  it("无活跃会话时断开 / 重连禁用", () => {
+    renderTable({ rows: [mcpStatusRow("fs", st())], hasSession: false });
+    const btns = Array.from(rows()[0].querySelectorAll("button"));
+    expect(btns.length).toBe(2);
+    expect(btns.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  it("有活跃会话时断开 / 重连回调带上 server 名", () => {
+    const onDisconnect = vi.fn();
+    const onReconnect = vi.fn();
+    renderTable({ rows: [mcpStatusRow("fs", st())], onDisconnect, onReconnect });
+    const btns = Array.from(rows()[0].querySelectorAll("button"));
+    fireEvent.click(btns[0]);
+    fireEvent.click(btns[1]);
+    expect(onDisconnect).toHaveBeenCalledWith("fs");
+    expect(onReconnect).toHaveBeenCalledWith("fs");
+  });
+
+  it("刷新按钮：点击触发回调，且 aria-label 说明不会重连", () => {
     const onRefresh = vi.fn();
-    const rows = [mcpStatusRow("a", undefined)];
-    const { rerender } = renderTable(rows, { onRefresh });
-
-    const btn = document.querySelector(`button[aria-label="${REFRESH_LABEL}"]`) as HTMLButtonElement;
+    renderTable({ rows: [mcpStatusRow("fs", st())], onRefresh });
+    const btn = document.querySelector<HTMLElement>(
+      'button[aria-label="刷新状态（不会重新连接）"]',
+    )!;
     expect(btn).toBeTruthy();
     fireEvent.click(btn);
     expect(onRefresh).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <AntApp>
-        <McpStatusTable rows={rows} refreshing onRefresh={onRefresh} />
-      </AntApp>,
-    );
-    const loadingBtn = document.querySelector(`button[aria-label="${REFRESH_LABEL}"]`) as HTMLButtonElement;
-    expect(loadingBtn.className).toContain("ant-btn-loading");
   });
-});
 
-describe("mcpStatusRow：状态记录 → 展示行的映射", () => {
-  it("ready / starting / 失败枚举 / 记录缺失 四态，未知 state 值不猜（按未连接）", () => {
-    expect(mcpStatusRow("a", { state: "ready", tools: 9 })).toEqual({ name: "a", kind: "ready", tools: 9 });
-    expect(mcpStatusRow("a", { state: "starting", tools: 0 })).toEqual({ name: "a", kind: "starting", tools: 0 });
-    expect(mcpStatusRow("a", { state: { error: "boom" }, tools: 0 })).toEqual({
-      name: "a", kind: "error", tools: 0, error: "boom",
-    });
-    expect(mcpStatusRow("a", undefined)).toEqual({ name: "a", kind: "disconnected", tools: 0 });
-    // 后端将来加新态（如 "stopping"）：不当成故障显示，落到「未连接」
-    expect(mcpStatusRow("a", { state: "stopping", tools: 1 })).toEqual({ name: "a", kind: "disconnected", tools: 0 });
+  it("多行时逐行渲染且顺序保持", () => {
+    const list: McpStatusRow[] = [
+      mcpStatusRow("a", st({ state: "ready" })),
+      mcpStatusRow("b", st({ state: "starting" })),
+      mcpStatusRow("c", st({ state: "stopped" })),
+    ];
+    renderTable({ rows: list });
+    expect(rows().map((r) => r.querySelector(".mcp-status-name")?.textContent)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 });

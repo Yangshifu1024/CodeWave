@@ -176,3 +176,95 @@ mod tests {
         assert_eq!(v["required"], serde_json::json!([]));
     }
 }
+
+/// 按 server 的工具过滤策略过滤工具列表，返回（保留集，被过滤数）。
+///
+/// 被过滤数要透出到状态表（「6（已过滤 2）」），否则用户看不到自己的过滤规则生效了。
+pub(crate) fn filter_tools(
+    filter: &super::config::ToolFilter,
+    tools: &[McpTool],
+) -> (Vec<McpTool>, usize) {
+    let kept: Vec<McpTool> = tools
+        .iter()
+        .filter(|t| filter.allows(&t.name))
+        .cloned()
+        .collect();
+    let filtered = tools.len() - kept.len();
+    (kept, filtered)
+}
+
+/// 把 MCP 工具定义转成 provider 侧工具定义（字段 1:1）。
+///
+/// 放在这里而不是接线层：`provider::ToolDef` 与 [`McpToolDef`] 字段完全对应，
+/// 让 `core/agent/stream.rs` 的注入只多一行。
+pub fn to_provider_tool_defs(defs: &[McpToolDef]) -> Vec<crate::provider::ToolDef> {
+    defs.iter()
+        .map(|d| crate::provider::ToolDef {
+            name: d.function_name.clone(),
+            description: d.description.clone(),
+            schema_json: d.schema_json.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    use crate::mcp::config::{ToolFilter, ToolFilterMode};
+
+    fn tool(name: &str) -> McpTool {
+        McpTool {
+            server: "s".into(),
+            name: name.into(),
+            description: format!("[s] {name}"),
+            schema_json: "{}".into(),
+        }
+    }
+
+    #[test]
+    fn filter_all_keeps_everything() {
+        let tools = vec![tool("a"), tool("b")];
+        let (kept, filtered) = filter_tools(&ToolFilter::default(), &tools);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(filtered, 0);
+    }
+
+    #[test]
+    fn filter_allow_list_keeps_only_matches_and_counts() {
+        let tools = vec![tool("read_file"), tool("write_file"), tool("read_dir")];
+        let f = ToolFilter {
+            mode: ToolFilterMode::Allow,
+            list: vec!["read_*".into()],
+        };
+        let (kept, filtered) = filter_tools(&f, &tools);
+        let names: Vec<&str> = kept.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["read_file", "read_dir"]);
+        assert_eq!(filtered, 1);
+    }
+
+    #[test]
+    fn filter_deny_list_drops_matches() {
+        let tools = vec![tool("read_file"), tool("write_file")];
+        let f = ToolFilter {
+            mode: ToolFilterMode::Deny,
+            list: vec!["write_*".into()],
+        };
+        let (kept, filtered) = filter_tools(&f, &tools);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "read_file");
+        assert_eq!(filtered, 1);
+    }
+
+    #[test]
+    fn provider_defs_map_one_to_one() {
+        let defs = vec![McpToolDef {
+            function_name: "mcp__s__a".into(),
+            description: "desc".into(),
+            schema_json: "{\"type\":\"object\"}".into(),
+        }];
+        let out = to_provider_tool_defs(&defs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "mcp__s__a");
+        assert_eq!(out[0].description, "desc");
+    }
+}

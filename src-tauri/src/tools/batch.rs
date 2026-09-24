@@ -399,40 +399,90 @@ async fn run_tool(
 ) -> (ToolOutcome, Vec<Content>, u128) {
     // MCP 工具分发：mcp__<server>__<tool>
     if call.name.starts_with("mcp__") {
-        // MCP 分支无审批 / 范围门：取消 token 一旦置位即退，直接进 running 相
         emit_tool_start(core, rt, call, batch_id, index, "running");
         let started = Instant::now();
-        let args = call.args.clone();
-        let data_dir = rt.data_dir.clone();
-        let workspace = rt.workspace.clone();
-        let project_dir = rt.project_dir.clone();
-        let extra_roots = rt.extra_roots.lock().unwrap().clone();
-        let mcp = core.mcp.clone();
-        // streamable-http 重连路径复用代理感知 client（读锁 clone，std 锁不跨 await）
-        let http = core.client.read().unwrap().clone();
-        let fname = call.name.clone();
-        let out = match tokio::spawn(async move {
-            mcp.call(
-                &fname,
-                args,
-                &data_dir,
-                &workspace,
-                project_dir.as_deref(),
-                &extra_roots,
-                http,
+        // 审批门：server 未声明 read_only / always_allow 时逐次确认。
+        // 只阻塞该次 MCP 调用——其它会话与内置工具不受影响。
+        if let Some((server, tool_name)) = core.mcp.approval_target(&rt.id, &call.name).await {
+            emit_tool_start(core, rt, call, batch_id, index, "waiting");
+            let auto_confirm = core.cfg.read().unwrap().approval.auto_confirm;
+            let verdict = crate::safety::approval::confirm(
+                rt,
+                &core.sink,
+                crate::safety::approval::ApprovalRequest {
+                    title: format!("允许调用 MCP 工具 {tool_name}？"),
+                    detail: format!(
+                        "server：{server}\n工具：{tool_name}\n参数：{}",
+                        serde_json::to_string_pretty(&call.args).unwrap_or_default()
+                    ),
+                    allow_always: true,
+                    auto_confirm,
+                },
+                &cancel,
             )
-            .await
-        })
-        .await
-        {
-            Ok(Ok(text)) => {
-                let v: serde_json::Value =
-                    serde_json::from_str(&text).unwrap_or(serde_json::json!({ "text": text }));
-                ToolOutcome::ok(v)
+            .await;
+            if !verdict.approved {
+                return (
+                    ToolOutcome::err(
+                        "E_MCP_DENIED",
+                        format!("用户拒绝或未响应对 MCP 工具 {tool_name} 的调用"),
+                    ),
+                    Vec::new(),
+                    started.elapsed().as_millis(),
+                );
             }
-            Ok(Err(e)) => ToolOutcome::err("E_MCP", e),
-            Err(e) => ToolOutcome::err("E_TOOL_PANIC", format!("MCP 调用异常：{e}")),
-        };
+            // 「总是允许」：持久化到该 server 所在作用域的条目（粒度 = server）
+            if verdict.always {
+                if let Some(scope) = core.mcp.server_scope(&rt.id, &server).await {
+                    let sref = match scope {
+                        crate::mcp::Scope::Global => Some(crate::mcp::global_scope(&rt.data_dir)),
+                        crate::mcp::Scope::Project => {
+                            rt.project_dir.as_deref().map(crate::mcp::project_scope)
+                        }
+                    };
+                    if let Some(sref) = sref {
+                        if let Err(e) = crate::mcp::set_always_allow(&sref, &server, true) {
+                            tracing::warn!("写回 always_allow 失败：{e}");
+                        }
+                    }
+                }
+            }
+        }
+        let mcp = core.mcp.clone();
+        let sid = rt.id.clone();
+        let fname = call.name.clone();
+        let args = call.args.clone();
+        let call_cancel = cancel.clone();
+        let out =
+            match tokio::spawn(async move { mcp.call(&sid, &fname, args, &call_cancel).await })
+                .await
+            {
+                Ok(Ok(o)) => {
+                    // server 侧 is_error 显式落成失败结果（不再折叠进 Ok 里丢掉语义）；
+                    // 多模态内容（图片等）走「仅注入给模型」的通道，不进前端 outcome JSON。
+                    let crate::mcp::McpCallOutput {
+                        data,
+                        text,
+                        is_error,
+                        blocks,
+                    } = o;
+                    let mut outcome = if is_error {
+                        ToolOutcome::err("E_MCP_TOOL", text)
+                    } else {
+                        ToolOutcome::ok(data)
+                    };
+                    outcome.extra_model_content = blocks;
+                    outcome
+                }
+                Ok(Err(e)) => ToolOutcome::err(
+                    match e.kind {
+                        crate::mcp::McpErrorKind::Cancelled => "E_MCP_CANCELLED",
+                        _ => "E_MCP",
+                    },
+                    e.message,
+                ),
+                Err(e) => ToolOutcome::err("E_TOOL_PANIC", format!("MCP 调用异常：{e}")),
+            };
         return (out, Vec::new(), started.elapsed().as_millis());
     }
     let Some(tool) = core.tools.get(&call.name) else {

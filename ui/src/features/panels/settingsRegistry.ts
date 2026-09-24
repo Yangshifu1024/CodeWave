@@ -447,6 +447,29 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpUrl", // → mcp.servers 条目字段
   "mcpAdd", // → 动作：添加服务器
   "mcpSave", // → 动作：保存并重连（MCP 独立文件，不走页级保存）
+  "mcpExtraKeys", // → mcp.servers 条目：表单未展示键的「保存时原样保留」提示
+  "mcpIssuesHead", // → mcp.servers：保存前结构校验的问题清单标题
+  "mcpSaveBlocked", // → 动作：error 级校验阻止保存
+  "mcpScopeGlobal", // → mcp 页：配置作用域切换（全局）
+  "mcpScopeProject", // → mcp 页：配置作用域切换（项目）
+  "mcpScopeNoProject", // → mcp 页：无项目目录时只读全局配置的提示
+  "mcpScopeDirtyHint", // → mcp 页：有未保存改动时禁止切换作用域的说明
+  "mcpConfigPath", // → mcp 页：当前作用域 mcp.json 路径回显
+  "mcpTest", // → 动作：单 server 临时测试连接
+  "mcpTestOk", // → mcp 页：测试成功结果
+  "mcpTestFail", // → mcp 页：测试失败结果
+  "mcpTestNoReply", // → mcp 页：测试无响应兜底文案
+  "mcpColSource", // → app.mcp_status：来源列
+  "mcpColPid", // → app.mcp_status：PID 列
+  "mcpColActions", // → app.mcp_status：操作列
+  "mcpSourceGlobal", // → app.mcp_status：来源 = 全局
+  "mcpSourceProject", // → app.mcp_status：来源 = 项目
+  "mcpSourceProjectOverrides", // → app.mcp_status：来源 = 项目（覆盖全局）
+  "mcpStateEvicted", // → app.mcp_status：已淘汰（资源上限）
+  "mcpStateConfigError", // → app.mcp_status：配置错
+  "mcpActionDisconnect", // → 动作：断开单个 server
+  "mcpActionReconnect", // → 动作：重连单个 server
+  "mcpToolsFiltered", // → app.mcp_status：工具数带「已过滤 N」标注
   "skillsHint", // → disabled_skills 的目录来源说明
   "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能

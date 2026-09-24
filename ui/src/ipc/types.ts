@@ -445,3 +445,113 @@ export const DEFAULT_POST_WRITE_CHECK: PostWriteCheckSettings = {
   timeout_seconds: 30,
   tail_chars: 3000,
 };
+
+// ---------- MCP（[docs/mcp-module-rebuild](../../../docs/mcp-module-rebuild.md) §2.7）----------
+// 作用域只有两层：global（`<data_dir>/mcp.json`）与 project（`<project_dir>/mcp.json`）。
+
+/** MCP 配置作用域 */
+export type McpScope = "global" | "project";
+
+/** 传输形态（`unknown` = 无法推导，具体原因见 issues） */
+export type McpTransportKind = "stdio" | "streamable_http" | "unknown";
+
+/** 工具过滤模式 */
+export type McpToolFilterMode = "all" | "allow" | "deny";
+
+/** 连接状态。失败态是外部标签枚举形态 `{ error: "..." }`（serde 默认） */
+export type McpState = "starting" | "ready" | "stopped" | "evicted" | { error: string };
+
+/** 结构化错误类别（只有 `spawn` / `handshake` 属连接类，后端才允许自动重连） */
+export type McpErrorKind = "config" | "spawn" | "handshake" | "call" | "cancelled";
+
+/** 结构化错误载荷 */
+export interface McpErrorPayload {
+  kind: McpErrorKind;
+  message: string;
+  hint: string | null;
+  server_message: string | null;
+}
+
+/** 单 server 连接状态（`mcp_status` 命令与 `mcp:status` 事件共用） */
+export interface McpStatusPayload {
+  name: string;
+  scope: McpScope;
+  state: McpState;
+  /** 已注入的工具数（非 ready 时为 0） */
+  tools: number;
+  /** 因工具过滤而未注入的数量 */
+  tools_filtered: number;
+  /** 子进程 PID（http 传输为 null） */
+  pid: number | null;
+  /** 结构化错误（state 为失败态时非空） */
+  error: McpErrorPayload | null;
+  /** 可见性提示（「已被淘汰（资源上限）」「已禁用」等） */
+  note: string | null;
+}
+
+/** 单 server 的结构化视图（配置表单与来源诊断共用） */
+export interface McpServerView {
+  name: string;
+  transport: McpTransportKind;
+  /** true = 由 command/url 推导；false = 文件里显式声明 */
+  transport_inferred: boolean;
+  enabled: boolean;
+  read_only: boolean;
+  always_allow: boolean;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string | null;
+  url: string | null;
+  headers: Record<string, string>;
+  timeout_ms: number | null;
+  tools: { mode: McpToolFilterMode; list: string[] };
+  /** 表单未展示、保存时会原样保留的键名 */
+  extra_keys: string[];
+  /** 生效来源 */
+  source: McpScope;
+  /** 被它覆盖掉的下层（无则 null） */
+  overridden: McpScope | null;
+}
+
+/** 一条配置问题 */
+export interface McpConfigIssue {
+  server: string | null;
+  level: "error" | "warning";
+  kind: "parse" | "schema" | "name" | "ambiguous" | "unsupported";
+  message: string;
+  hint: string | null;
+}
+
+/** 某作用域的配置文档 */
+export interface McpConfigDoc {
+  scope: McpScope;
+  /** 该作用域 mcp.json 的绝对路径 */
+  path: string;
+  /** 该层原文（文本模式编辑用） */
+  json: string;
+  /** 该层文件里的条目（编辑用） */
+  servers: McpServerView[];
+  /** 合并后的生效条目（带来源 / 被覆盖信息） */
+  effective: McpServerView[];
+  issues: McpConfigIssue[];
+}
+
+/** 保存结果（`saved: false` 表示有 error 级问题、未落盘） */
+export interface McpSaveResult {
+  saved: boolean;
+  issues: McpConfigIssue[];
+}
+
+/** 临时测试连接结果（不改变正式连接状态） */
+export interface McpTestResult {
+  ok: boolean;
+  tools: number;
+  error: McpErrorPayload | null;
+}
+
+/** 某会话的状态快照 */
+export interface McpSnapshot {
+  session: string;
+  servers: McpStatusPayload[];
+}

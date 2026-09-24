@@ -103,9 +103,9 @@
 ## §4 验证结果
 
 - `cargo test`：200 通过 / 0 warning。**2 个既有失败与本次无关**：`mcp::tests::real_stdio_server_connect_list_call`
-  与 `real_streamable_http_server_connect_list_call` 依赖夹具脚本 `scripts/mcp-test-server.mjs`，该文件在仓库中
-  不存在（git 历史从无记录），属既有环境缺陷，mcp 模块本次未触碰。修复建议：补交该脚本或给两测试加
-  「脚本存在性」前置跳过（同 `node_available()` 模式）。
+  与 `real_streamable_http_server_connect_list_call` 依赖夹具脚本 `scripts/mcp-test-server.mjs`——**该文件实际存在**
+  （`.gitignore` 已放行 `!scripts/mcp-test-server.mjs`），本文当时的判断有误。两测试按既有 `node_available()`
+  模式在无 node 时跳过；2026-09-24 复跑全绿（[mcp-module-rebuild](./mcp-module-rebuild.md)）。
 - `core::agent::tests::running_flag_resets_after_run_ends` 在全量并发跑下偶发失败一次，隔离运行与
   后续两轮全量均通过（时序敏感抖动，本批未触碰该模块）。
 - `pnpm --dir ui test`：39/39 通过；`pnpm --dir ui build`：通过（含 AskPanel/run/types 胶囊同步改动）。

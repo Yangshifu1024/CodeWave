@@ -116,6 +116,13 @@ impl KeyPool {
 
 ## 4. C 组：MCP 完整（mcp/）
 
+> **后续变更（2026-09-24，[mcp-module-rebuild](./mcp-module-rebuild.md)）**：本节以下为 P1 当时的计划文本，与最终实现已有出入——
+> 配置改为**生态通用形状**（`transport` 可推导；`"sse"` 明确不支持并给定向报错；新增 `cwd` / `headers` / `enabled` / `timeout_ms` / `read_only` / `always_allow` / `tools` 过滤）；
+> 作用域简化为**两层**（全局 + 项目，移除工作区级兼容读取）；连接改为**按会话可见集 keyed 的连接池**（引用计数 + 上限 LRU 淘汰），
+> 不再「先停旧再起新」；Job Object **已落地**（`mcp/process.rs` 显式包裹 `JobObject` + `KillOnDrop`，并补回被覆盖的 `CREATE_NO_WINDOW`）；
+> 超时改为**按 server 可配**（`timeout_ms`，缺省 120s）；重连不再靠 invalid session 文本匹配，而是结构化错误分类且**只重放只读调用**；
+> 审批门**已纳入**（server 级 `read_only` 声明免审，否则逐次确认）；工具 schema 归一化只补 `type`/`required`/`additionalProperties`，未做递归。
+
 ### 4.1 配置
 ```
 ~/.codewave/mcp.json      {"mcpServers":{"name":{"transport":"stdio","command":"…","args":[…],"env":{…}}

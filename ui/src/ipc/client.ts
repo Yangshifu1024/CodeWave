@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EditorInfo, GitDiffFile, GitLogEntry, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -132,12 +132,27 @@ export const ipc = {
     invoke<{ name: string | null; email: string | null }>("git_user_info", { sessionId }),
   getTokenBreakdown: (sessionId: string) => invoke<any>("get_token_breakdown", { sessionId }),
 
-  // MCP 服务器配置与连接
-  getMcpConfig: () => invoke<string>("get_mcp_config"),
-  saveMcpConfig: (json: string) => invoke<void>("save_mcp_config", { json }),
-  connectMcp: (sessionId: string) =>
-    invoke<{ started: any[]; failed: any[] }>("connect_mcp", { sessionId }),
-  mcpStatus: () => invoke<{ name: string; state: any; tools: number }[]>("mcp_status"),
+  // ---------- MCP（[docs/mcp-module-rebuild](../../../docs/mcp-module-rebuild.md)）----------
+  // 作用域化命令：scope 为 "global" | "project"；项目级需要 sessionId（用于定位项目目录）
+  mcpListConfig: (scope: McpScope, sessionId?: string) =>
+    invoke<McpConfigDoc>("mcp_list_config", { scope, sessionId: sessionId ?? null }),
+  /** 保存某作用域配置。有 error 级 issue 时**不落盘**，返回值 `saved: false` + issues */
+  mcpSaveConfig: (scope: McpScope, json: string, sessionId?: string) =>
+    invoke<McpSaveResult>("mcp_save_config", { scope, json, sessionId: sessionId ?? null }),
+  /** 建连（并行、立即返回；状态走 mcp:status 事件）。names 省略 = 整个可见集 */
+  mcpConnect: (sessionId: string, names?: string[]) =>
+    invoke<void>("mcp_connect", { sessionId, names: names ?? null }),
+  /** 断开（names 省略 = 释放整个可见集） */
+  mcpDisconnect: (sessionId: string, names?: string[]) =>
+    invoke<void>("mcp_disconnect", { sessionId, names: names ?? null }),
+  /** 重连单个 server（含被淘汰条目，绕过防抖立即重拉） */
+  mcpReconnect: (sessionId: string, name: string) =>
+    invoke<void>("mcp_reconnect", { sessionId, name }),
+  /** 临时测试连接：起 → tools/list → 立即回收，**不并入连接池、不改正式状态** */
+  mcpTest: (scope: McpScope, name: string, sessionId?: string) =>
+    invoke<McpTestResult>("mcp_test", { scope, name, sessionId: sessionId ?? null }),
+  /** 某会话的状态快照（断开 / 淘汰 / 批量停止后拉全量） */
+  mcpSnapshot: (sessionId: string) => invoke<McpSnapshot>("mcp_snapshot", { sessionId }),
 
   // Skills 技能扫描与启停
   listSkills: (sessionId: string | null) => invoke<SkillMeta[]>("list_skills", { sessionId }),

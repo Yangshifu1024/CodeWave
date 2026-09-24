@@ -427,7 +427,7 @@ repair  ：剥离悬空 tool_use；丢弃孤儿 tool_result；tool_use id 配对
 | P0 | `git_status()` | git2 构建验证 + 最小功能 |
 | P0 | `get_token_breakdown(session)` | 上下文信息条 |
 | P1 | `switch_model(workspace, model_id)` / `list_models` | 多模型 |
-| P1 | `list_tools` / `get_mcp_servers` / `add_mcp_server` / `remove_mcp_server` / `reconnect_mcp` | MCP 管理 |
+| P1 | `mcp_list_config` / `mcp_save_config` / `mcp_connect` / `mcp_disconnect` / `mcp_reconnect` / `mcp_test` / `mcp_snapshot` | MCP 管理（作用域化；[mcp-module-rebuild](./mcp-module-rebuild.md)） |
 | P1 | `list_skills` / `toggle_skill(name, disabled)` | Skills |
 | P1 | `git_diff(path)` / `git_recent_log(n)` | git 只读 |
 | P1 | `start_service` / `stop_service` / `read_service_log` | 后台进程 |
