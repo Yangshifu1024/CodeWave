@@ -447,6 +447,9 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpUrl", // → mcp.servers 条目字段
   "mcpAdd", // → 动作：添加服务器
   "mcpSave", // → 动作：保存并重连（MCP 独立文件，不走页级保存）
+  "mcpExtraKeys", // → mcp.servers 条目：表单未展示键的「保存时原样保留」提示
+  "mcpIssuesHead", // → mcp.servers：保存前结构校验的问题清单标题
+  "mcpSaveBlocked", // → 动作：error 级校验阻止保存
   "skillsHint", // → disabled_skills 的目录来源说明
   "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能

@@ -6,12 +6,16 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  argsToText,
   draftTransport,
+  envToText,
   emptyDraft,
   extraKeysOf,
   normalizeMcpDoc,
   parseMcpDoc,
   serializeMcpDoc,
+  textToArgs,
+  textToEnv,
   transportIsExplicit,
   type McpServerDraft,
 } from "../utils/mcpConfig";
@@ -42,6 +46,12 @@ describe("parseMcpDoc 的输入容忍度", () => {
   it("非法 JSON 返回 null（调用方回退原文模式，不拿空配置覆盖）", () => {
     expect(parseMcpDoc("{ not json")).toBeNull();
     expect(normalizeMcpDoc("{ not json")).toBe("{ not json");
+  });
+
+  it("空文本按空文档处理（没有内容可丢，不进兜底模式）", () => {
+    expect(parseMcpDoc("")).toEqual({ servers: [], extraTop: {} });
+    expect(parseMcpDoc("  ")).toEqual({ servers: [], extraTop: {} });
+    expect(normalizeMcpDoc("")).toBe(JSON.stringify({ mcpServers: {} }, null, 2));
   });
 
   it("顶层不是对象返回 null", () => {
@@ -265,5 +275,32 @@ describe("draftTransport / emptyDraft", () => {
     expect(d.toolsMode).toBe("all");
     expect(d.args).toEqual([]);
     expect(d.extra).toEqual({});
+  });
+});
+
+describe("文本编解码（设置页输入框用）", () => {
+  it("参数一行一个：含空格的路径不被拆坏（旧实现按空白切分）", () => {
+    const rows = textToArgs("-y\npkg\nD:/我的 项目/dir");
+    expect(rows).toEqual([{ value: "-y" }, { value: "pkg" }, { value: "D:/我的 项目/dir" }]);
+    expect(argsToText(rows)).toBe("-y\npkg\nD:/我的 项目/dir");
+    // 空行丢弃
+    expect(textToArgs("a\n\nb")).toEqual([{ value: "a" }, { value: "b" }]);
+  });
+
+  it("键值编解码：值不 trim，含 = 的值保留，键为空的行丢弃", () => {
+    const rows = textToEnv("A= padded \nB=x=y\nC\n  =drop");
+    expect(rows).toEqual([
+      { key: "A", value: " padded " },
+      { key: "B", value: "x=y" },
+      { key: "C", value: "" },
+    ]);
+    expect(envToText(rows)).toBe("A= padded \nB=x=y\nC");
+  });
+
+  it("编解码往返稳定（幂等）", () => {
+    const text = "A=1\nB=2";
+    expect(envToText(textToEnv(text))).toBe(text);
+    const args = "x\ny";
+    expect(argsToText(textToArgs(args))).toBe(args);
   });
 });

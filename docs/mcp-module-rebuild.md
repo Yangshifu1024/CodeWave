@@ -115,10 +115,13 @@ MCP 工具纳入审批：server 级 `read_only` 或 `always_allow` 声明过则�
 
 ## 四、未完成（后续批次）
 
-1. **前端 MCP 面板重构**：作用域切换、args/env 表格化（替换有损文本域）、来源列、
-   状态徽标（连接中/失败可展开/已淘汰/配置错）、PID 与单 server 断开/重连/测试、
-   `mcp:snapshot` handler。`ui/src/utils/mcpConfig.ts` 纯函数与
-   `parseMcpEntries`/`serializeMcpEntries` 的有损往返（现状零测试）仍未处理。
+1. **前端 MCP 面板的可见部分**：作用域切换（Segmented）、args/env **表格**化
+   （当前是「一行一个」的无损文本框，表格 UI 待做）、来源列、状态徽标
+   （连接中 / 失败可展开 / 已淘汰 / 配置错）、PID 与单 server 断开/重连/测试按钮。
+   > 已落地的部分：`ui/src/utils/mcpConfig.ts` 的无损往返（28 个单测）已接管配置读写，
+   > 手写配置里的未识别键与未知 `transport` 取值**不再在保存时丢失**；
+   > 设置页已改用作用域化命令 `mcp_list_config` / `mcp_save_config`（当前固定 `global`），
+   > 并展示后端的结构校验问题（error 级阻止落盘）。
 2. **旧命令适配器待下线**：新命令已就位，前端迁移后应移除 4 个旧适配器（当前为保持应用可用而保留）。
 3. **`tools/list_changed` 热更新**：rmcp 3.4 的 client handler 仍未订阅（当前工具列表在重连时刷新）。
 4. **结构化 content blocks**：图片/音频仍降级为 `[image <mime>]` 文本标记，

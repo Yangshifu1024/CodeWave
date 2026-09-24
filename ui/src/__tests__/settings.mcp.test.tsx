@@ -46,7 +46,7 @@ const MCP_CONFIG = JSON.stringify({
 let calls: string[] = [];
 /** mcp_status 的返回值（每个用例自行设置；元素形态与 ipc/client.ts 的 mcpStatus 一致） */
 let statusReply: { name: string; state: unknown; tools: number }[] = [];
-/** get_mcp_config 的返回值（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
+/** mcp_list_config 的 json 字段（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
 let configReply = MCP_CONFIG;
 
 async function baseInvoke(cmd: string, args?: any) {
@@ -55,7 +55,9 @@ async function baseInvoke(cmd: string, args?: any) {
     case "get_config": return makeConfig();
     case "save_config": return null;
     case "list_available_shells": return [];
-    case "get_mcp_config": return configReply;
+    case "mcp_list_config":
+      return { scope: "global", path: "C:/u/.codewave/mcp.json", json: configReply, servers: [], effective: [], issues: [] };
+    case "mcp_save_config": return { saved: true, issues: [] };
     case "mcp_status": return JSON.parse(JSON.stringify(statusReply));
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);
@@ -286,8 +288,8 @@ describe("设置页 MCP 页：服务器状态表", () => {
 
     // 保存走原文直存。回归点：先前这一路径拿到的是空结构化列表，会把用户的 mcp.json 覆盖成 {"mcpServers":{}}
     fireEvent.click(buttonByText("保存并重连"));
-    await waitFor(() => expect(calls.some((c) => c.startsWith("save_mcp_config"))).toBe(true));
-    expect(calls.find((c) => c.startsWith("save_mcp_config"))).toContain("not-json");
+    await waitFor(() => expect(calls.some((c) => c.startsWith("mcp_save_config"))).toBe(true));
+    expect(calls.find((c) => c.startsWith("mcp_save_config"))).toContain("not-json");
 
     // 状态表：拿不到配置名单那一半按空处理 → 只列管理端已知的服务器
     expect(statusRows()).toEqual([{ name: "fs", state: "已连接", tools: "2" }]);
