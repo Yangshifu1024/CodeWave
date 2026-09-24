@@ -75,6 +75,9 @@ dom_smoothie = "0.18.0"
 # tokio-cron-scheduler 已移除（[docs/tasks-module-polish]）：调度器自始就走自写的 tick + cron crate
 # （core/scheduler.rs 的 ScheduleKind），该依赖从未被引用，白担一份构建与供应链成本。
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
+# MCP 子进程的进程树回收（Job Object / 进程组）：rmcp 的 transport-child-process 已以默认特性引入
+# 同一份 10.0.0，这里只是把它变成直接依赖以便显式包裹 CommandWrap（零新增下载）。
+process-wrap = "10"
 cron = "0.17.0"
 
 # Office 文档支持（docs/office-and-pdf-support）：

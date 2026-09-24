@@ -120,7 +120,16 @@ pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdow
         rt.project_dir.as_deref(),
     );
     let system_tokens = crate::util::token_est::est_tokens_text(&system);
-    let tool_schema_tokens = core.tools.schemas_token_estimate();
+    // MCP 工具的 schema 同样计入：一个 20 工具 server 的 schema 可达数千 token，
+    // 漏算会让「上下文占用」系统性偏低、自动压缩时机偏晚（只算内置注册表是旧口径）。
+    let mcp_schema_tokens: u64 = core
+        .mcp
+        .tool_defs_for(&rt.id)
+        .await
+        .iter()
+        .map(|d| crate::util::token_est::est_tokens_text(&d.schema_json))
+        .sum();
+    let tool_schema_tokens = core.tools.schemas_token_estimate() + mcp_schema_tokens;
 
     let history = rt.history.lock().unwrap();
     let mut history_tokens = 0u64;

@@ -260,13 +260,10 @@ pub(super) async fn build_stream_request(
         .filter(|d| !params.exclude_tools.contains(&d.name))
         .collect();
     if !params.exclude_mcp {
-        for d in core.mcp.tool_defs().await {
-            tools.push(crate::provider::ToolDef {
-                name: d.function_name,
-                description: d.description,
-                schema_json: d.schema_json,
-            });
-        }
+        // 只注入**本会话可见集**内的 MCP 工具（会话隔离；按名排序在下面统一做）
+        tools.extend(crate::mcp::to_provider_tool_defs(
+            &core.mcp.tool_defs_for(&rt.id).await,
+        ));
     }
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     // 历史代际断点锚点（滞回前移；历史不足 16 条不启用，压缩后 n 骤减自动重置）

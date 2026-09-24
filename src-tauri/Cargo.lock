@@ -726,6 +726,7 @@ dependencies = [
  "libc",
  "mac-notification-sys",
  "pdf-extract",
+ "process-wrap",
  "quick-xml 0.41.0",
  "reqwest",
  "rmcp",
