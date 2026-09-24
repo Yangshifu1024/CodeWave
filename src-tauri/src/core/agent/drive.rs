@@ -11,7 +11,7 @@ use super::stream::{
 use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
 use crate::core::context::{self};
 use crate::core::session_log;
-use crate::core::sessions::repair;
+use crate::core::sessions::{SaveReport, repair};
 use crate::core::types::Message;
 use crate::provider::dto::ProviderError;
 use crate::provider::retry;
@@ -208,7 +208,8 @@ pub async fn run_chat(
 
     match &result {
         Ok(_) => {
-            checkpoint(&core, &rt).await;
+            // 保存结果接入 run:done：不干净（拒存/剥图/丢轮）时带 JSON 载荷告知前端
+            let save = checkpoint(&core, &rt).await;
             session_log::info(
                 &rt,
                 &format!(
@@ -225,6 +226,10 @@ pub async fn run_chat(
             if let Some(items) = suggest_out {
                 payload["suggestions"] = serde_json::json!(items);
             }
+            // 保存不干净才带上（干净路径零打扰，前端据此 push 会话内提示）
+            if let Some(r) = save.filter(|r| !r.is_clean()) {
+                payload["history_save"] = serde_json::to_value(&r).unwrap_or_default();
+            }
             sink.emit(&rt.id, "run:done", payload);
         }
         Err(ProviderError::Cancelled) => {
@@ -238,7 +243,7 @@ pub async fn run_chat(
             );
         }
         Err(e) => {
-            checkpoint(&core, &rt).await;
+            let _ = checkpoint(&core, &rt).await;
             session_log::error(&rt, &format!("run {run_id} 失败：{e}"));
             sink.emit(
                 &rt.id,
@@ -871,7 +876,7 @@ pub async fn drive_agent(
         }
 
         if step % CHECKPOINT_EVERY_STEPS == CHECKPOINT_EVERY_STEPS - 1 {
-            checkpoint(core, rt).await;
+            let _ = checkpoint(core, rt).await;
         }
     }
 
@@ -1541,6 +1546,7 @@ mod tests {
         NormalizedCall, Reasoning400, batch_digest, classify_reasoning_400, stalled,
         update_reasoning_sticky,
     };
+    use crate::core::sessions::SaveReport;
 
     /// 构造归一化工具调用（`batch_digest` 单测用）。
     fn call(name: &str, args: serde_json::Value) -> NormalizedCall {
@@ -1714,6 +1720,61 @@ mod tests {
         );
     }
 
+    // ---- run:done 的 history_save 载荷（保存不干净时的当场上报）----
+
+    /// 干净保存 = 零打扰：不带 history_save 键。
+    #[test]
+    fn history_save_key_absent_when_save_is_clean() {
+        let clean = SaveReport {
+            saved: true,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 4096,
+        };
+        let saved: Option<SaveReport> = Some(clean);
+        assert!(
+            saved.filter(|r| !r.is_clean()).is_none(),
+            "干净保存不得进入载荷（前端不 push 提示）"
+        );
+        // None（非主会话）同样不带
+        assert!((None::<SaveReport>).filter(|r| !r.is_clean()).is_none());
+    }
+
+    /// 不干净保存 = 带上 history_save，字段名与前端契约一致。
+    #[test]
+    fn history_save_payload_shape_when_degraded() {
+        let degraded = SaveReport {
+            saved: true,
+            stripped_images: 2,
+            dropped_rounds: 3,
+            bytes: 1024,
+        };
+        let r = Some(degraded)
+            .filter(|r| !r.is_clean())
+            .expect("降级保存必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(true));
+        assert_eq!(v["stripped_images"], serde_json::json!(2));
+        assert_eq!(v["dropped_rounds"], serde_json::json!(3));
+        assert_eq!(v["bytes"], serde_json::json!(1024));
+        assert_eq!(
+            v.as_object().map(|o| o.len()),
+            Some(4),
+            "字段形状固定为 4 个键（前端已按此实现）"
+        );
+    }
+
+    /// 拒存（saved=false）同样算不干净——前端据此提示「历史未完整保存」。
+    #[test]
+    fn history_save_payload_includes_rejected() {
+        let r = Some(SaveReport::rejected())
+            .filter(|r| !r.is_clean())
+            .expect("拒存必须进载荷");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["saved"], serde_json::json!(false));
+        assert_eq!(v["bytes"], serde_json::json!(0));
+    }
+
     // ---- 空转看门狗的批次摘要（[docs/subagent-idle-watchdog-misfire]）----
 
     /// `read` 的 wire 契约是 `{"files":[{"path":…}]}`（tools/read.rs 的 `Args::files` 即 schema
@@ -1805,7 +1866,7 @@ pub(super) fn emit_retry(
 /// 取消收尾：历史落取消标记 + 检查点 + run:cancelled 事件。
 pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>, run_id: &str) {
     lock_ok(&rt.history).push(Message::user_text("<run-cancelled/>").stamped());
-    checkpoint(core, rt).await;
+    let _ = checkpoint(core, rt).await;
     core.sink.emit(
         &rt.id,
         "run:cancelled",
@@ -1813,19 +1874,25 @@ pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntim
     );
 }
 
-/// 检查点保存（run 结束/取消/每 N 步）。
-pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) {
+/// 检查点保存（run 结束/取消/每 N 步）。返回本次保存结果：
+/// `None` = 非主会话（子代理 / 任务运行，本就不落主索引）；
+/// `Some(report)` = 尝试过保存（含 `SaveReport::rejected()` = 失败）。
+/// 调用方按需把它并入事件载荷向用户上报（run 成功路径）。
+pub(super) async fn checkpoint(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+) -> Option<SaveReport> {
     // H5：会话已删除（如 delete_project 级联）——迟到收尾不得回写索引复活幽灵会话
     if rt.zombie.load(Ordering::SeqCst) {
         tracing::info!("会话 {} 已删除，跳过迟到检查点", rt.id);
-        return;
+        return None;
     }
     // 非主会话（子代理 sub_* / 任务运行 task_*）绝不落主索引与主历史：子代理过程历史
     // 由 save_sub_history 边车接管（subagent 工具收尾时落盘，[docs/subagent-interaction-drawer]
     // （../../../docs/subagent-interaction-drawer.md）），任务运行无持久化语义——否则内部运行
     // 会以 untitled 幽灵会话形态泄漏进会话列表
     if !rt.is_main_session {
-        return;
+        return None;
     }
     let history = lock_ok(&rt.history).clone();
     let title = lock_ok(&rt.title).clone();
@@ -1835,7 +1902,7 @@ pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) 
         crate::core::prefs::effective_model(&cfg, &rt.prefs()).map(|m| m.id.clone())
     };
     let ws = rt.workspace.to_string_lossy().into_owned();
-    if let Err(e) = core.store.save_history(
+    match core.store.save_history(
         &rt.id,
         &title,
         &ws,
@@ -1844,7 +1911,12 @@ pub(super) async fn checkpoint(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>) 
         &rt.roots,
         &history,
     ) {
-        tracing::warn!("检查点保存失败：{e}");
+        Ok(report) => Some(report),
+        Err(e) => {
+            // 会话日志（不受全局日志级别过滤，恒开启）留痕，便于用户事后排查
+            session_log::warn(rt, &format!("检查点保存失败：{e}"));
+            Some(SaveReport::rejected())
+        }
     }
 }
 /// start_chat 的 IPC 请求体（host 层反序列化后转调 AgentCore::start_chat）。

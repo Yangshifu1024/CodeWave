@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
-import type { Breakdown, Message, ToolResultEvent, ToolStartEvent } from "../ipc/types";
+import type { Breakdown, HistoryStatus, Message, ToolResultEvent, ToolStartEvent } from "../ipc/types";
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
@@ -28,6 +28,7 @@ import {
 import {
   askHandlers,
   compactHandlers,
+  historyStatusNotice,
   miscHandlers,
   runLifecycleHandlers,
   subHandlers,
@@ -82,7 +83,9 @@ import type { ComposerDraft, PendingImage, SubStream, SubView, TabRunState, Time
   onToolResult(sessionId: string, p: ToolResultEvent, ok: boolean): void;
   /** 工具开始（tool:start）：建/翻工具卡（waiting → running）；运行已结束的迟到开始事件一律丢弃 */
   onToolStart(sessionId: string, p: ToolStartEvent): void;
-  restoreFromMessages(sessionId: string, msgs: Message[]): void;
+  /** 恢复会话转录。meta 可选（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+   *  带 `history_status` 时在重建结果末尾补一条历史未完整保存的提示（重启后仍可见的落点） */
+  restoreFromMessages(sessionId: string, msgs: Message[], meta?: { history_status?: HistoryStatus }): void;
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
   openSubDrawer(sessionId: string | null, subId: string): Promise<void>;
   closeSubDrawer(sessionId?: string | null): void;
@@ -524,7 +527,7 @@ export const useRun = create<RunStore>()(
       });
     },
 
-    restoreFromMessages(sessionId, msgs) {
+    restoreFromMessages(sessionId, msgs, meta) {
       const out: UiItem[] = [];
       // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：tool_use_id → 结果（从子代理 outcome 解析 sub_id/report）
       const toolResults = scanToolResults(msgs);
@@ -628,6 +631,12 @@ export const useRun = create<RunStore>()(
       set((s) => {
         if (!s.tabs[sessionId]) s.tabs[sessionId] = blank();
         s.tabs[sessionId].items = out as any;
+        // [docs/session-history-limits](../../../docs/session-history-limits.md)：索引上的历史保存状态（重启后仍在）→ 转录末尾补一条提示。
+        // 与历史重建同批写入（不额外触发一次渲染）；后端下一次干净保存后 status 会清空，
+        // 但**已经 push 进转录的这条 notice 不会撒回**——要它消失得重开该会话（本次设计如此：
+        // 不做「已读」交互、不加本地持久化，只要状态还在就每次打开都显示）
+        const historyNotice = historyStatusNotice(meta?.history_status);
+        if (historyNotice) s.tabs[sessionId].items.push({ kind: "notice", text: historyNotice });
         // 注册归档子代理卡（流先留空，抽屉首次打开按需拉取过程流，防止重复导入）
         for (const sv of restoredSubs) {
           if (!s.tabs[sessionId].subs.some((x) => x.subId === sv.subId)) s.tabs[sessionId].subs.push(sv);

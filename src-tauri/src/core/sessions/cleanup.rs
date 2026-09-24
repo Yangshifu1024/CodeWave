@@ -9,7 +9,7 @@
 //!
 //! 文件 IO 集中在本模块的少数几个函数里，判定与挑选都是纯函数，便于单测。
 
-use super::store::{ArtifactKind, SessionMeta, SessionStore};
+use super::store::{ArtifactKind, SessionMeta, SessionStore, is_sub_blob_owner};
 use chrono::{DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -266,7 +266,8 @@ pub fn session_log_candidates(data_dir: &Path, meta: &SessionMeta) -> Vec<PathBu
 /// 把整条会话卡在索引里）。
 ///
 /// 会话编号先过白名单（`is_safe_session_id`）：下面的路径全部由编号拼出来
-///（`histories/<id>.json.gz`、`sessions/<id>.*`、`histories/subs/<id>/`、`sessions/<id>.toolres/`、`logs/<id>.log`），
+///（`histories/<id>.json.gz`、`sessions/<id>.*`、`histories/subs/<id>/`、`sessions/<id>.toolres/`、
+/// `sessions/<id>.imgblob/`、子历史的 `sessions/<父>__<sub>.imgblob/`、`logs/<id>.log`），
 /// 索引里的脏编号绝不能进拼接；编号非法时返回 false（本次不删、索引行保留、计入失败），
 /// 宁可删不掉也不让脏值变成目录穿越。
 pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &SessionMeta) -> bool {
@@ -293,10 +294,18 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     ok &= remove_file_if_exists(&store.history_path(&meta.id));
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
+    // 子代理过程历史目录（histories/subs/<id>/）及其图片 blob（blob 归子历史自己，
+    // owner 是 `<父会话 id>__<sub>`，不在父会话的 sessions/<id>.imgblob/ 里）——
+    // 目录列必须先读，下一步就把它删了
+    for sub in store.sub_history_ids(&meta.id) {
+        ok &= remove_dir_if_exists(&store.sub_image_blobs_dir(&meta.id, &sub));
+    }
     ok &= remove_dir_if_exists(&store.sub_histories_dir(&meta.id));
     // 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
     // 目录随会话级联删除（与子代理过程历史同范式：路径由编号拼出、不做登记边车）
     ok &= remove_dir_if_exists(&store.tool_results_dir(&meta.id));
+    // 图片 blob（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：同上
+    ok &= remove_dir_if_exists(&store.image_blobs_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
         ok &= remove_file_if_exists(&p);
     }
@@ -313,8 +322,11 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
 }
 
 /// 清理索引之外的残留（超出索引条数上限被挤出、列表里已看不到的会话文件）：
-/// 只删「id 不在索引里」且「文件修改时间早于 cutoff」的 `histories/<id>.json.gz` 与
-/// `sessions/<id>.{artifacts,todos}.json`。
+/// 只删「id 不在索引里」且「文件修改时间早于 cutoff」的 `histories/<id>.json.gz`、
+/// `sessions/<id>.{artifacts,todos}.json` 与 `sessions/<id>.{toolres,imgblob}/`。
+/// **子历史的 blob 目录（`sessions/<父>__<sub>.imgblob/`）不在范围内**：它的「id」不在会话索引里、
+/// 也不带 `sub_` 前缀，按「不在索引即孤儿」判定会被误删，而父会话的子历史还引用着那些图——
+/// 这类目录由级联删除路径负责（见 `is_sub_blob_owner`）。
 ///
 /// **索引不可信（缺失 / 损坏解析失败）时一个都不删**：`load_index()` 此时返回空索引，
 /// 与「用户真的没有会话」在返回值上无法区分——照常扫孤儿会把全部历史文件当孤儿删掉，
@@ -400,14 +412,24 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
         }
     }
 
-    // 工具结果 sidecar 目录（sessions/<id>.toolres/）：会话被挤出索引后整个目录随之成为残留
+    // 按会话分桶的托管目录（sessions/<id>.toolres/、sessions/<id>.imgblob/）：
+    // 会话被挤出索引后整个目录随之成为残留（`remove_orphan_files` 按 `path.is_dir()` 分流）
     if let Ok(rd) = std::fs::read_dir(store.sessions_dir()) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(id) = name.strip_suffix(".toolres") else {
+            let id = name
+                .strip_suffix(".toolres")
+                .or_else(|| name.strip_suffix(".imgblob"));
+            let Some(id) = id else {
                 continue;
             };
-            if !is_safe_session_id(id) || known.contains(id) || is_non_session_id(id) {
+            // `is_sub_blob_owner`：子历史的 blob 目录（sessions/<父>__<sub>.imgblob/）
+            // 既不在会话索引里也不带 `sub_` 前缀，不得当孤儿删（父会话还引用着那些图）
+            if !is_safe_session_id(id)
+                || known.contains(id)
+                || is_non_session_id(id)
+                || is_sub_blob_owner(id)
+            {
                 continue;
             }
             let path = entry.path();
@@ -613,6 +635,7 @@ mod tests {
             running: false,
             interrupted: None,
             last_opened_at: None,
+            history_status: None,
         }
     }
 
@@ -645,6 +668,18 @@ mod tests {
 
     fn store_in(dir: &Path) -> SessionStore {
         SessionStore::new(dir.to_path_buf())
+    }
+
+    /// 测试用：一条只含图片的 user 消息。
+    fn image(data: &str) -> crate::core::types::Message {
+        crate::core::types::Message {
+            role: crate::core::types::Role::User,
+            content: vec![crate::core::types::Content::Image {
+                media_type: "image/png".into(),
+                data: data.into(),
+            }],
+            created_at: None,
+        }
     }
 
     // ---------- 判定 ----------
@@ -958,6 +993,71 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("with-toolres.toolres"))
         );
+    }
+
+    /// 图片 blob 目录（[docs/session-history-limits](../../../../../docs/session-history-limits.md)）：
+    /// 会话自己的与子历史的（blob 归子历史自己）都随会话级联删除；会话不在索引里时
+    /// `.imgblob` 目录会被索引外扫描认作残留（与 `.toolres` 同口径）。
+    #[test]
+    fn image_blob_dirs_cascade_and_are_scanned_as_orphans() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let session = "with-blobs";
+        store
+            .upsert_meta(meta(session, &ago(30 * 24 * 3600)))
+            .unwrap();
+        // 会话自己的 blob（带图保存）+ 子历史（带自己的 blob）
+        store
+            .save_history(
+                session,
+                "t",
+                ".",
+                None,
+                None,
+                &["/ws".into()],
+                &[crate::core::types::Message::user_text("q"), image("AAAA")],
+            )
+            .unwrap();
+        store
+            .save_sub_history(session, "sub_1", &[image("BBBB")])
+            .unwrap();
+        assert!(store.image_blobs_dir(session).is_dir());
+        assert!(store.sub_image_blobs_dir(session, "sub_1").is_dir());
+
+        assert!(delete_session_files(
+            &store,
+            dd.path(),
+            &meta(session, &ago(0))
+        ));
+        assert!(
+            !store.image_blobs_dir(session).exists(),
+            "会话的 blob 目录必须随会话删除"
+        );
+        assert!(
+            !store.sub_image_blobs_dir(session, "sub_1").exists(),
+            "子历史的 blob 目录必须随父会话删除"
+        );
+
+        // 索引外残留扫描：`.imgblob` 目录被认（会话还在索引里时不算）
+        let ghost = "ghost-blobs";
+        let dir = store.image_blobs_dir(ghost);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mtime: DateTime<Utc> = std::fs::metadata(&dir).unwrap().modified().unwrap().into();
+        assert!(
+            !orphan_candidates(&store, cutoff_at(mtime, 0))
+                .iter()
+                .any(|p| p.ends_with("ghost-blobs.imgblob")),
+            "刚创建的目录不算残留（mtime 不早于 cutoff）"
+        );
+        let after = mtime + chrono::Duration::seconds(1);
+        assert!(
+            orphan_candidates(&store, cutoff_at(after, 0))
+                .iter()
+                .any(|p| p.ends_with("ghost-blobs.imgblob")),
+            "索引外的 .imgblob 目录应被认作残留"
+        );
+        assert_eq!(remove_orphan_files(&store, cutoff_at(after, 0)), 1);
+        assert!(!dir.exists(), "残留的 .imgblob 目录应被递归删除");
     }
 
     /// 历史 / 子代理过程历史目录都随会话删除。
@@ -1492,5 +1592,50 @@ mod tests {
         assert_eq!(items[0].kind, ArtifactKind::File);
         // 缺 kind 的条目不进计划文件删除范围 → 会话删除不会连带删它
         assert_eq!(store.load_file_artifacts("old").len(), 1);
+    }
+
+    /// 🔴 子历史的 blob 目录（sessions/<父>__<sub>.imgblob/）绝不参与索引外残留清理。
+    ///
+    /// 它的「id」（`<父>__<sub>`）既不在会话索引里、也不带 `sub_` 前缀，按「不在索引即孤儿」
+    /// 的旧判据会被当残留删掉——而父会话仍活着、其子历史还引用着那些图。
+    /// 子 blob 目录一律由级联删除路径负责（`remove` / `delete_session_files`）。
+    #[test]
+    fn sub_history_blob_dirs_are_never_orphans() {
+        // 判据本身
+        assert!(is_sub_blob_owner("parent-a__sub_deadbeef"));
+        assert!(is_sub_blob_owner("parent-a__task_daily-1"));
+        assert!(!is_sub_blob_owner("parent-a"), "没有分隔符 = 普通会话 id");
+        assert!(!is_sub_blob_owner("8f2c1a9e-1234-4abc-9def-001122334455"));
+        assert!(!is_sub_blob_owner("__sub_x"), "父会话编号为空不算");
+        assert!(
+            !is_sub_blob_owner("parent-a__other"),
+            "后缀不是 sub_/task_ 不算"
+        );
+
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        store.upsert_meta(meta("parent-a", &ago(0))).unwrap();
+        store
+            .save_sub_history("parent-a", "sub_deadbeef", &[image(&"A".repeat(64))])
+            .unwrap();
+        let blob_dir = store.sub_image_blobs_dir("parent-a", "sub_deadbeef");
+        assert!(blob_dir.is_dir());
+
+        // cutoff 取目录 mtime 之后 1 秒：若无守卫，这个目录正是「索引外 + 够旧」的残留
+        let mtime: DateTime<Utc> = std::fs::metadata(&blob_dir)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .into();
+        let cutoff = cutoff_at(mtime, 0) + chrono::Duration::seconds(1);
+        assert!(
+            !orphan_candidates(&store, cutoff)
+                .iter()
+                .any(|p| p == &blob_dir),
+            "子历史的 blob 目录不得被认作索引外残留"
+        );
+        assert_eq!(count_orphan_files(&store, cutoff), 0);
+        assert_eq!(remove_orphan_files(&store, cutoff), 0);
+        assert!(blob_dir.is_dir(), "子历史的 blob 目录不得被残留清理删掉");
     }
 }

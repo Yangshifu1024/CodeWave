@@ -2,7 +2,7 @@
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
-import type { McpStatusPayload, SubagentEvent } from "../ipc/types";
+import type { HistorySaveReport, HistoryStatus, McpStatusPayload, SubagentEvent } from "../ipc/types";
 import type { WritableDraft } from "immer";
 import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
@@ -11,6 +11,7 @@ import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
 import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
 import type { RunStore } from "./run";
+import type { UiItem } from "./run.types";
 
 /** immer set：对 store 草稿原地变异 */
 type SetFn = (fn: (s: WritableDraft<RunStore>) => void) => void;
@@ -52,6 +53,41 @@ function markUnreadIfAway(session: string | undefined) {
   if (s.activeKey !== session) s.markUnread(session);
 }
 
+/** 历史未完整保存的会话内提示（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+ *  ① `run:done.history_save`（当次保存结果，仅当保存不干净时后端才带上）——干净返回 null，零打扰；
+ *  ② `SessionMeta.history_status`（挂在索引上，重启后仍在）——恢复历史时用同一套文案，保证两处口径一致。 */
+export function historySaveNotice(h: HistorySaveReport): string | null {
+  if (h.saved === false) return i18n.t("notice.historyRejected");
+  const images = h.stripped_images ?? 0;
+  const rounds = h.dropped_rounds ?? 0;
+  if (images > 0 || rounds > 0) return i18n.t("notice.historyDegraded", { images, rounds });
+  return null;
+}
+
+/** 索引里的历史状态 → 会话内提示文案（无状态 = 干净 = null）。语义同 historySaveNotice：
+ *  rejected = 磁盘上仍是上一次成功保存的历史；degraded = 图片 / 轮次被省略。 */
+export function historyStatusNotice(st?: HistoryStatus | null): string | null {
+  if (!st) return null;
+  return st.kind === "rejected"
+    ? i18n.t("notice.historyRejected")
+    : i18n.t("notice.historyDegraded", { images: st.stripped_images ?? 0, rounds: st.dropped_rounds ?? 0 });
+}
+
+/** 越限提示的同文案去重（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+ *  会话长期越限时，降级只裁落盘用的局部副本、内存历史不变 → 之后每次 run 收尾仍然降级，`run:done` 于是逐 run
+ *  带着 `history_save` 来追加同文案 notice（`run_id` 幂等守卫只管同一 run 的迟到 done，跨 run 拦不住）。
+ *  口径：**从转录末尾往前找最近一条 notice**，其文案与本次要插的完全相同时才跳过。
+ *  为什么不用「转录里已存在同文案即跳过」：那样用户中途做了别的事（取消 / 重试 / 压缩等别的 notice 插在后面）
+ *  之后再越限就再也提示不到；只认「最近的 notice」则把连续多次降级（中间只隔着用户消息与助手回复这类非 notice 项）
+ *  视为重复打扰，被别的 notice 打断后仍会重新提示一次。其它 notice 的文案与越限文案不同，故本判据不会误伤它们。 */
+function hasTrailingNoticeText(items: readonly UiItem[], text: string): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "notice") return it.text === text;
+  }
+  return false;
+}
+
 /** 运行生命周期（10 键）：start/done/error/cancelled/inject/retry + 自动命名 + 计划任务 toast + 计划 todos */
 export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
@@ -83,6 +119,14 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
         closeRunningTools(t);
         if (p.suggestions) t.suggestions = p.suggestions;
+        // [docs/session-history-limits](../../../docs/session-history-limits.md)：历史保存不干净时向本会话转录补一条提示。
+        // 载荷仅在「拒存 / 有损保存」时才带 history_save（干净路径零打扰）；保存结果由后端在 run 收尾检查点上报，
+        // run_id 幂等守卫同上——两次 done 只提示一次。跨 run 的同文案去重见 hasTrailingNoticeText（最近一条 notice 同文案则不追加）。
+        // 本 handler 其余语义一概不动。
+        const historyNotice = p?.history_save ? historySaveNotice(p.history_save) : null;
+        if (historyNotice && !hasTrailingNoticeText(t.items, historyNotice)) {
+          t.items.push({ kind: "notice", text: historyNotice });
+        }
       });
       void get().refreshGit(p.session);
       const sessions = useSessions.getState();

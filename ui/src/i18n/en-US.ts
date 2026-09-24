@@ -258,6 +258,11 @@ export default {
     compactSummary: "(compaction summary)",
     needSession: "Create or select a session in the left nav first",
     taskDone: "Task completed",
+    // History 8 MB cap visibility ([docs/session-history-limits](../../../docs/session-history-limits.md)):
+    // lossy save / rejected save, shared by the run:done payload and SessionMeta.history_status on restore
+    historyDegraded: "History saved incompletely: {{images}} image(s) and {{rounds}} round(s) were dropped.",
+    historyRejected:
+      "History was not saved (over the 8 MB limit); the last successfully saved version is kept. Consider compacting the context or starting a new session.",
     runFailed: "Run failed",
     injected: "Injected {{n}} message(s)",
     compacting: "Compacting context…{{before}}",

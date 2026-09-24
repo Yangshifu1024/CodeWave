@@ -232,6 +232,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
         running: false,
         interrupted: None,
         last_opened_at: None,
+        history_status: None,
     };
     assert!(crate::core::sessions::cleanup::delete_session_files(
         &ctx.core.store,

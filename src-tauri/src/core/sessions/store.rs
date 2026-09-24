@@ -1,5 +1,5 @@
-use crate::core::sessions::repair;
-use crate::core::types::Message;
+use crate::core::sessions::{cleanup::is_safe_session_id, image_blobs, persist, repair};
+use crate::core::types::{Content, Message, Role};
 use crate::util::atomic::atomic_write;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,61 @@ pub const MAX_INDEX_ENTRIES: usize = 2000;
 pub const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 /// 保存/加载时 trim 的 token 预算。
 pub const TRIM_BUDGET_TOKENS: u64 = 256 * 1024;
+
+/// 一次历史保存的结果（供调用方上报用户）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SaveReport {
+    /// 是否落盘成功（false = 拒存，磁盘上仍是上一次成功的历史）
+    pub saved: bool,
+    /// 被剥掉图片 payload 的张数（旧数据兜底路径；图片外置后正常不再触发）
+    pub stripped_images: usize,
+    /// 因超限被丢弃的轮数（按轮降级）
+    pub dropped_rounds: usize,
+    /// 落盘字节数（saved = false 时为 0）
+    pub bytes: usize,
+}
+
+impl SaveReport {
+    /// 干净落盘：成功且没有剥图 / 丢轮。
+    pub fn is_clean(&self) -> bool {
+        self.saved && self.stripped_images == 0 && self.dropped_rounds == 0
+    }
+
+    /// 拒存（磁盘上仍是上一次成功的历史）。
+    pub fn rejected() -> Self {
+        Self {
+            saved: false,
+            stripped_images: 0,
+            dropped_rounds: 0,
+            bytes: 0,
+        }
+    }
+}
+
+/// 上次历史保存的状态（None = 干净）。
+///
+/// **挂在索引上**是刻意的：历史写失败时索引仍能写成功——这是「重启后仍可见」的唯一载体
+///（历史文件本身正是写不进去的那一个）。下次干净保存即自动清除。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HistoryStatus {
+    /// 落盘成功但有降级（剥了图 / 丢了轮）
+    Degraded {
+        /// 被剥掉图片 payload 的张数
+        stripped_images: usize,
+        /// 因超限被丢弃的轮数
+        dropped_rounds: usize,
+        /// 发生时刻（RFC3339）
+        at: String,
+    },
+    /// 拒存：历史超过上限，磁盘上仍是上一次成功的历史
+    Rejected {
+        /// 发生时刻（RFC3339）
+        at: String,
+        /// 原因（用户可见文案）
+        reason: String,
+    },
+}
 
 /// 会话索引元数据条目（index.json 的一行；左栏会话列表的直接数据源）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +105,11 @@ pub struct SessionMeta {
     /// 列表排序与行内时间仍用 updated_at（点开会话不会被顶到列表最前）。
     #[serde(default)]
     pub last_opened_at: Option<String>,
+    /// 上次历史保存状态（None = 干净；[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+    /// 由 `save_history` 显式裁决、`set_history_status` 独占维护；检查点（`upsert_meta`）
+    /// 沿用索引现值，绝不误清。serde default 向前兼容（旧索引无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_status: Option<HistoryStatus>,
 }
 
 /// 中断标记（批1，需求共识 20/23）：进程被强杀或用户中断退出时留下的痕迹，供前端展示与续跑提示。
@@ -128,6 +188,19 @@ impl Default for SessionIndex {
 pub struct SessionStore {
     /// 数据根目录（~/.codewave 或测试临时目录）
     root: PathBuf,
+    /// 历史保存互斥（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+    /// 串行化「外置 blob 写（快照）→ 写历史文件 → `upsert_meta` → `set_history_status` → `image_blobs::gc`」
+    /// 整段临界区。
+    ///
+    /// 为什么必须有：GC 的判据是**本次保存内存快照**的引用集合，而保存路径本身不串行——
+    /// A（旧快照）的 GC 若晚于 B（新快照，含新图）的历史写盘，A 就会删掉 B 仍引用的 blob，
+    /// 该会话重开后那张图只剩占位文本（不可逆数据丢失）。可达路径：
+    /// `host/commands/session.rs::rename_session`（不检查 running）与 run 内每 N 步的检查点并发。
+    ///
+    /// **锁序恒为 `save_lock → index_lock`**：临界区内会走 `upsert_meta` / `set_history_status`，
+    /// 它们各自取 `index_lock`；临界区内**绝不可反向再取 `save_lock`**（会死锁）。
+    /// 每次保存是毫秒级、检查点频率低，一把全局保存锁的串行化代价可接受。
+    save_lock: std::sync::Mutex<()>,
     /// M8：索引读-改-写互斥（并发 checkpoint/delete/rename 不得丢条目）
     index_lock: std::sync::Mutex<()>,
     /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：产物边车读-改-写互斥（并发工具写不得丢条目）
@@ -147,6 +220,7 @@ impl SessionStore {
     pub fn new(data_root: PathBuf) -> Self {
         SessionStore {
             root: data_root,
+            save_lock: std::sync::Mutex::new(()),
             index_lock: std::sync::Mutex::new(()),
             artifacts_lock: std::sync::Mutex::new(()),
             running: std::sync::Mutex::new(std::collections::HashSet::new()),
@@ -287,12 +361,16 @@ impl SessionStore {
             let last_opened_at = existing
                 .and_then(|s| s.last_opened_at.clone())
                 .or_else(|| meta.last_opened_at.clone());
+            // [docs/session-history-limits](../../../../docs/session-history-limits.md)：
+            // 历史保存状态同属易失标记，由 set_history_status 专管——检查点不得把它抹掉
+            let history_status = existing.and_then(|s| s.history_status.clone());
             idx.sessions.retain(|s| s.id != meta.id);
             let mut meta = meta.clone();
             meta.created_at = created_at;
             meta.running = running;
             meta.interrupted = interrupted;
             meta.last_opened_at = last_opened_at;
+            meta.history_status = history_status;
             idx.sessions.push(meta);
         })
     }
@@ -358,6 +436,30 @@ impl SessionStore {
             }
         })?;
         Ok(found)
+    }
+
+    /// 写「上次历史保存状态」（None = 干净；[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+    ///
+    /// 持 `index_lock`（与 `mark_*` / `clear_interrupted` 同范式），**只改既有条目**：
+    /// 索引里没有这个会话就什么都不做（不凭空造条目）。由 `save_history` 显式调用。
+    ///
+    /// **值未变时直接返回、不写盘**（与 `touch_session_open` 同一范式：先读现值再决定写不写）：
+    /// 本方法在 `save_history` 里紧跟 `upsert_meta`，两者各走一次 `mutate_index`（= 各 `save_index`
+    /// 落盘一遍 index.json），于是每个检查点都要多写一遍索引。索引是每次检查点都会重写的
+    /// 派生缓存，值没变时这次写盘纯属冗余。语义不变：该清还是清、该写还是写，只跳过同值写。
+    pub fn set_history_status(
+        &self,
+        id: &str,
+        status: Option<HistoryStatus>,
+    ) -> anyhow::Result<()> {
+        if self.get(id).map(|m| m.history_status) == Some(status.clone()) {
+            return Ok(());
+        }
+        self.mutate_index(|idx| {
+            if let Some(m) = idx.sessions.iter_mut().find(|m| m.id == id) {
+                m.history_status = status;
+            }
+        })
     }
 
     /// 批量中断收尾（崩溃恢复 / 退出中断）：一次索引写把给定会话标 `interrupted` 并清 `running`，
@@ -455,6 +557,20 @@ impl SessionStore {
             let _ = std::fs::remove_file(self.history_path(id));
             let _ = std::fs::remove_file(self.todos_path(id));
             let _ = std::fs::remove_file(self.artifacts_path(id));
+            // 两个按会话分桶的托管目录（工具结果 sidecar / 图片 blob）：
+            // 与 cleanup 路径同口径，幽灵条目不得留下目录
+            let _ = std::fs::remove_dir_all(self.tool_results_dir(id));
+            let _ = std::fs::remove_dir_all(self.image_blobs_dir(id));
+            // 子历史的 blob 目录（sessions/<父>__<sub>.imgblob/）：owner 带父会话前缀，
+            // 上面的 image_blobs_dir(id) 覆盖不到——目录列必须先读（ghost 条目的子历史同为死数据）。
+            // 编号先过白名单再拼路径（下面两处拼接全由编号拼出，脏编号绝不参与）
+            if is_safe_session_id(id) {
+                for sub in self.sub_history_ids(id) {
+                    if is_safe_session_id(&sub) {
+                        let _ = std::fs::remove_dir_all(self.sub_image_blobs_dir(id, &sub));
+                    }
+                }
+            }
         }
         let n = removed_ids.len();
         if n > 0 {
@@ -468,7 +584,7 @@ impl SessionStore {
         self.load_index().sessions.into_iter().find(|s| s.id == id)
     }
 
-    /// 删除会话：索引条目、历史文件与全部边车。
+    /// 删除会话：索引条目、历史文件与全部边车（含两个按会话分桶的托管目录）。
     pub fn remove(&self, id: &str) -> anyhow::Result<()> {
         self.mutate_index(|idx| idx.sessions.retain(|s| s.id != id))?;
         let _ = std::fs::remove_file(self.history_path(id));
@@ -476,17 +592,40 @@ impl SessionStore {
         let _ = std::fs::remove_file(self.artifacts_path(id));
         let _ = std::fs::remove_file(self.todos_path(id));
         // 子代理过程历史目录级联清理（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）
+        // 及其图片 blob（blob 归子历史自己，不在父会话的 blob 目录里）——
+        // 子历史目录列必须**先**读，下一步就把该目录整个删了
+        for sub in self.sub_history_ids(id) {
+            let _ = std::fs::remove_dir_all(self.sub_image_blobs_dir(id, &sub));
+        }
         let _ = std::fs::remove_dir_all(self.sub_histories_dir(id));
+        // 工具结果 sidecar 与图片 blob 目录：此前只删历史与边车，
+        // 与 cleanup 路径口径不一致 → 这两个目录会永久泄漏
+        let _ = std::fs::remove_dir_all(self.tool_results_dir(id));
+        let _ = std::fs::remove_dir_all(self.image_blobs_dir(id));
         Ok(())
     }
 
-    /// sanitize → trim → repair → gzip 落盘 + 索引更新。
-    /// 图片 payload 保留在历史中（重开后附件仍显示）；超 8MB 上限时优雅降级
-    /// 为「剥图 + 保留思考」后再存（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
-    /// 回退只为把转录压进上限，而思考块恰是 OpenAI 兼容 thinking 上游回传
-    /// `reasoning_content` 的唯一数据源——回退路径若顺手丢掉思考，该会话重启后每次
-    /// 多轮对话都必然 400 且不可自愈，因此回退只剥图片（`sanitize_keep_thinking`），
-    /// 绝不丢思考。剥图后仍超限才拒绝保存。
+    /// 历史保存：sanitize → trim → **图片外置** → gzip 落盘 + 索引更新。
+    ///
+    /// 落盘副本里的图片是 blob 引用（base64 原文在 `sessions/<id>.imgblob/`），因此历史文件
+    /// 恒定在几百 KB 量级、8MB 上限几乎不可达，图片也不再被剥
+    /// （[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+    /// **内存与 wire 零改动**：转换只发生在落盘 DTO（[`persist`]）里。
+    ///
+    /// 降级阶梯（越限才逐级下行，**不再整份丢弃**）：
+    /// ① 剥图重试（旧数据兜底）：`sanitize_keep_thinking` 只剥图片、**保留思考**——
+    ///    思考是 OpenAI 兼容 thinking 上游回传 `reasoning_content` 的唯一数据源，
+    ///    回退路径顺手丢掉思考会让该会话重启后每次多轮都必然 400 且不可自愈
+    ///    （[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）；
+    /// ② 按轮降级：只保最后一轮（`trim(.., 1)`），丢掉的轮数记进 [`SaveReport`]；
+    /// ③ 仍超 → **拒存**（`Err`，磁盘上仍是上一次成功的历史），并把
+    ///    [`HistoryStatus::Rejected`] 写进索引——索引独立于历史文件，此时仍能写成功，
+    ///    这是「重启后仍可见」的唯一载体。
+    ///
+    /// 顺序纪律：**先 trim 再外置**（被裁轮次的图片根本不写 blob）；
+    /// **GC 必须在历史写成功之后**（否则历史没落盘却已删 blob = 不可逆数据丢失）；
+    /// **只有历史文件写盘是致命步骤**，其后的索引写入（`upsert_meta` / `set_history_status`）
+    /// 失败只告警、不影响返回值（索引是派生缓存，详见下方注释）。
     #[allow(clippy::too_many_arguments)]
     pub fn save_history(
         &self,
@@ -497,36 +636,61 @@ impl SessionStore {
         project_id: Option<&str>,
         roots: &[String],
         msgs: &[Message],
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<SaveReport> {
+        // 保存串行化（见 `save_lock` 字段注释）：从**快照**（`to_persisted` 外置写 blob）起就持锁，
+        // 而不是只锁「写历史文件之后」——blob 写若落在锁外，A 的 GC 仍可能删掉 B 刚写下的图。
+        // 锁序恒为 save_lock → index_lock（临界区内的 upsert_meta / set_history_status 取后者）。
+        let _guard = self.save_lock.lock().unwrap();
         let mut prepared = repair::prepare_for_save(msgs.to_vec());
         repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 2);
-        let gz = gzip_history(&prepared)?;
-        // 大图片历史可能顶到上限：剥离图片 payload 但**保留思考块**后重试
-        // （附件退化为占位文本，会话仍可保存；思考是回传 reasoning_content 的数据源，
-        // 见函数文档注释）。
-        let gz = if gz.len() > MAX_HISTORY_BYTES {
-            let stripped_images = repair::sanitize_keep_thinking(&mut prepared);
-            let gz2 = gzip_history(&prepared)?;
-            if gz2.len() > MAX_HISTORY_BYTES {
-                anyhow::bail!("历史超过 8MB 上限，请新开会话");
+        let (mut persisted, mut referenced) = persist::to_persisted(self, id, &prepared);
+        let mut gz = gzip_history(&persisted)?;
+        let mut stripped_images = 0usize;
+        let mut dropped_rounds = 0usize;
+        if gz.len() > MAX_HISTORY_BYTES {
+            // ① 旧数据兜底：剥图（占位文本）后重试——图片外置后正常不再走到这里
+            let before_images = count_images(&prepared);
+            repair::sanitize_keep_thinking(&mut prepared);
+            stripped_images = before_images.saturating_sub(count_images(&prepared));
+            (persisted, referenced) = persist::to_persisted(self, id, &prepared);
+            gz = gzip_history(&persisted)?;
+            if gz.len() > MAX_HISTORY_BYTES {
+                // ② 按轮降级：只保最后一轮（此前是整份丢弃，用户会看到最近几轮消失）
+                let before_rounds = count_rounds(&prepared);
+                repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 1);
+                dropped_rounds = before_rounds.saturating_sub(count_rounds(&prepared));
+                (persisted, referenced) = persist::to_persisted(self, id, &prepared);
+                gz = gzip_history(&persisted)?;
+                if gz.len() > MAX_HISTORY_BYTES {
+                    // ③ 拒存：先把状态写进索引（索引独立于历史文件，可写成功）再报错
+                    self.set_history_status(
+                        id,
+                        Some(HistoryStatus::Rejected {
+                            at: Utc::now().to_rfc3339(),
+                            reason: "历史超过 8MB 上限".to_string(),
+                        }),
+                    )?;
+                    anyhow::bail!("历史超过 8MB 上限，请新开会话");
+                }
             }
             tracing::warn!(
-                "会话 {id} 历史含图片超上限，已剥离图片 payload（保留思考）保存：{stripped_images:?}"
+                "会话 {id} 历史超上限，已降级保存：剥图 {stripped_images} 张、丢弃 {dropped_rounds} 轮"
             );
-            gz2
-        } else {
-            gz
-        };
+        }
         atomic_write(&self.history_path(id), &gz)?;
 
+        // 其后的两步都只写**索引**（派生缓存），因此一律**非致命**：历史文件上面已经落盘，
+        // 若索引写失败就让本函数返回 Err，调用方（`core/agent/drive.rs::checkpoint`）会把它映射成
+        // `SaveReport::rejected()`，前端于是弹出「历史未能保存（超过 8MB 上限）」——可历史其实已经
+        // 写成功了，提示既错（其实已保存）又误导（原因也不对）。索引写失败只告警，返回值照实上报。
         let now = Utc::now().to_rfc3339();
-        self.upsert_meta(SessionMeta {
+        if let Err(e) = self.upsert_meta(SessionMeta {
             id: id.to_string(),
             title: title.to_string(),
             workspace: workspace.to_string(),
             model_id: model_id.map(|s| s.to_string()),
             created_at: now.clone(),
-            updated_at: now,
+            updated_at: now.clone(),
             message_count: prepared.len(),
             project_id: project_id.map(|s| s.to_string()),
             roots: roots.to_vec(),
@@ -536,11 +700,38 @@ impl SessionStore {
             interrupted: None,
             // 由 touch_session_open 独占维护，upsert_meta 以索引现值为准，此处仅占位
             last_opened_at: None,
-        })?;
-        Ok(prepared.len())
+            // 同理：由 set_history_status 独占维护，新值由下一行显式裁决
+            history_status: None,
+        }) {
+            tracing::warn!("会话 {id} 索引元数据更新失败（历史已落盘，本次保存仍算成功）：{e}");
+        }
+        let status = if stripped_images == 0 && dropped_rounds == 0 {
+            None
+        } else {
+            Some(HistoryStatus::Degraded {
+                stripped_images,
+                dropped_rounds,
+                at: now,
+            })
+        };
+        if let Err(e) = self.set_history_status(id, status) {
+            tracing::warn!("会话 {id} 历史状态写入索引失败（历史已落盘，本次保存仍算成功）：{e}");
+        }
+        // 只在历史写成功之后回收：本会话目录内、本次引用之外的 blob 才是真孤儿
+        image_blobs::gc(self, id, &referenced);
+        Ok(SaveReport {
+            saved: true,
+            stripped_images,
+            dropped_rounds,
+            bytes: gz.len(),
+        })
     }
 
-    /// gunzip → repair → trim。文件损坏返回 Err（调用方隔离该会话）。
+    /// gunzip → 落盘形态 → 读回 base64 → repair → trim。
+    ///
+    /// 文件损坏返回 Err（调用方隔离该会话）；**blob 缺失只降级为占位文本**
+    ///（不报错、不 panic、不阻断会话加载，[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）。
+    /// 旧数据的内联图片（tag 为 `image`）照常可读，无不可逆迁移。
     pub fn load_history(&self, id: &str) -> anyhow::Result<Vec<Message>> {
         let path = self.history_path(id);
         let raw = std::fs::read(&path)?;
@@ -548,8 +739,9 @@ impl SessionStore {
         let mut json = Vec::new();
         dec.read_to_end(&mut json)
             .map_err(|e| anyhow::anyhow!("历史文件损坏（{id}）：{e}"))?;
-        let mut msgs: Vec<Message> = serde_json::from_slice(&json)
+        let persisted: Vec<persist::PersistedMessage> = serde_json::from_slice(&json)
             .map_err(|e| anyhow::anyhow!("历史 JSON 解析失败（{id}）：{e}"))?;
+        let mut msgs = persist::from_persisted(self, id, persisted);
         repair::repair(&mut msgs);
         repair::trim(&mut msgs, TRIM_BUDGET_TOKENS, 2);
         Ok(msgs)
@@ -572,25 +764,61 @@ impl SessionStore {
     }
 
     /// 持久化子代理的完整执行历史（drive_agent 结束/异常路径调用）。
-    /// 复用主历史的 sanitize/trim/gzip 管线，但绝不触碰索引。
+    ///
+    /// 与主历史同一条阶梯（图片外置 / 剥图 / 按轮降级），但**不拒存**：子代理历史没有
+    /// UI 载体，压到只剩最后一轮后照写（越限只记日志，状态回传给调用方）。绝不触碰会话索引。
+    ///
+    /// blob 归子历史自己（owner = `<父会话 id>__<sub>`，见 [`sub_blob_owner`]）：与主历史共用
+    /// 一套内容寻址与 GC，且父会话的 GC 不会顺手删掉子历史还引用着的图片；目录随父会话级联删除
+    ///（见 `remove` / `cleanup::delete_session_files`）。
     pub fn save_sub_history(
         &self,
         parent: &str,
         sub: &str,
         msgs: &[Message],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<SaveReport> {
+        // 子历史同样有 blob 与 GC → 与主历史共用同一把保存锁（锁序同上）
+        let _guard = self.save_lock.lock().unwrap();
+        let owner = sub_blob_owner(parent, sub);
         let mut prepared = repair::prepare_for_save(msgs.to_vec());
         repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 2);
-        let gz = gzip_history(&prepared)?;
+        let (mut persisted, mut referenced) = persist::to_persisted(self, &owner, &prepared);
+        let mut gz = gzip_history(&persisted)?;
+        let mut stripped_images = 0usize;
+        let mut dropped_rounds = 0usize;
+        if gz.len() > MAX_HISTORY_BYTES {
+            let before_images = count_images(&prepared);
+            repair::sanitize_keep_thinking(&mut prepared);
+            stripped_images = before_images.saturating_sub(count_images(&prepared));
+            (persisted, referenced) = persist::to_persisted(self, &owner, &prepared);
+            gz = gzip_history(&persisted)?;
+            if gz.len() > MAX_HISTORY_BYTES {
+                let before_rounds = count_rounds(&prepared);
+                repair::trim(&mut prepared, TRIM_BUDGET_TOKENS, 1);
+                dropped_rounds = before_rounds.saturating_sub(count_rounds(&prepared));
+                (persisted, referenced) = persist::to_persisted(self, &owner, &prepared);
+                gz = gzip_history(&persisted)?;
+            }
+            tracing::warn!(
+                "子代理历史 {parent}/{sub} 超上限，已降级保存：剥图 {stripped_images} 张、丢弃 {dropped_rounds} 轮"
+            );
+        }
         let path = self.sub_history_path(parent, sub);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         atomic_write(&path, &gz)?;
-        Ok(())
+        image_blobs::gc(self, &owner, &referenced);
+        Ok(SaveReport {
+            saved: true,
+            stripped_images,
+            dropped_rounds,
+            bytes: gz.len(),
+        })
     }
 
     /// 读取子代理过程历史；文件缺失返回空（旧会话没有；前端优雅降级）。
+    /// 与主历史同一套落盘形态（blob 引用按 owner = `<父会话 id>__<sub>` 读回，缺失降级为占位文本）。
     pub fn load_sub_history(&self, parent: &str, sub: &str) -> anyhow::Result<Vec<Message>> {
         let path = self.sub_history_path(parent, sub);
         let raw = match std::fs::read(&path) {
@@ -602,10 +830,27 @@ impl SessionStore {
         let mut json = Vec::new();
         dec.read_to_end(&mut json)
             .map_err(|e| anyhow::anyhow!("子代理历史损坏（{parent}/{sub}）：{e}"))?;
-        let mut msgs: Vec<Message> = serde_json::from_slice(&json)
+        let persisted: Vec<persist::PersistedMessage> = serde_json::from_slice(&json)
             .map_err(|e| anyhow::anyhow!("子代理历史 JSON 解析失败（{parent}/{sub}）：{e}"))?;
+        let mut msgs = persist::from_persisted(self, &sub_blob_owner(parent, sub), persisted);
         repair::repair(&mut msgs);
         Ok(msgs)
+    }
+
+    /// 子代理历史 id 列表（`histories/subs/<parent>/` 下的文件名解析）。
+    /// 供级联清理子历史的图片 blob 目录用——blob 归子历史自己，
+    /// 不在父会话的 `sessions/<父>.imgblob/` 里。
+    pub(crate) fn sub_history_ids(&self, parent: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(self.sub_histories_dir(parent)) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some(sub) = name.strip_suffix(".json.gz").filter(|s| !s.is_empty()) {
+                    out.push(sub.to_string());
+                }
+            }
+        }
+        out
     }
 
     // ---------- 计划 todos 边车 ----------
@@ -637,6 +882,24 @@ impl SessionStore {
     /// 不 upsert 会话索引、也不进右栏「文件」面板。
     pub(crate) fn tool_results_dir(&self, owner: &str) -> PathBuf {
         self.sessions_dir().join(format!("{owner}.toolres"))
+    }
+
+    // ---------- 图片 blob（[docs/session-history-limits](../../../../docs/session-history-limits.md)） ----------
+
+    /// 图片 blob 目录：sessions/<owner>.imgblob/。
+    /// 与工具结果 sidecar 同范式：路径由编号拼出、随会话级联删除（cleanup 与 remove 两条
+    /// 删除路径同口径），不 upsert 会话索引、也不进右栏「文件」面板。
+    /// owner 通常是会话 id；子代理历史传 `<父会话 id>__<sub>`（见 [`sub_blob_owner`]，
+    /// 不能直接用 `sub`——不同父会话下的同名 sub 会共用目录）。
+    pub(crate) fn image_blobs_dir(&self, owner: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{owner}.imgblob"))
+    }
+
+    /// 子历史图片 blob 目录：sessions/<父会话 id>__<sub>.imgblob/。
+    /// 写（`save_sub_history`）/ 读（`load_sub_history`）/ GC / 级联删除四处共用它，
+    /// 保证 owner 命名只在这一处定义（[`sub_blob_owner`]）。
+    pub(crate) fn sub_image_blobs_dir(&self, parent: &str, sub: &str) -> PathBuf {
+        self.image_blobs_dir(&sub_blob_owner(parent, sub))
     }
 
     // ---------- 会话产物登记边车（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)） ----------
@@ -762,6 +1025,39 @@ impl SessionStore {
     }
 }
 
+/// 子历史图片 blob 的 owner 分隔符（见 [`sub_blob_owner`]）。
+const SUB_BLOB_OWNER_SEP: &str = "__";
+
+/// 子历史图片 blob 的 owner：`<父会话 id>__<sub id>`。
+///
+/// 为什么不直接用 `sub` 当 owner：`sub_id` 只是 uuid 前 8 位十六进制（32 bit，见
+/// `tools/subagent.rs`），两个**不同父会话**下出现同名 sub 并非不可能（生日碰撞）；
+/// 共用 `sessions/<sub>.imgblob/` 时，一方的 GC 会删掉另一方仍在引用的图片，
+/// 删一个父会话也会连带删掉另一个会话子历史的图。拼上父会话 id 后命名空间互不重叠。
+///
+/// 拼接形态过 [`is_safe_session_id`] 白名单：该白名单只禁 `/`、`\`、`.` 与首尾空白
+///（见 `projects::valid_id`），`_` 与 `__` 都不在其中。
+pub(crate) fn sub_blob_owner(parent: &str, sub: &str) -> String {
+    format!("{parent}{SUB_BLOB_OWNER_SEP}{sub}")
+}
+
+/// 反解判定：某个 blob owner 是不是子历史的目录名（`<父会话 id>__<sub_…>`）。
+///
+/// 供索引外残留扫描用（`cleanup::orphan_candidates`）：`sessions/<父>__<sub>.imgblob/` 的
+/// 「id」既不在会话索引里、也不带 `sub_` 前缀，照旧按「不在索引即孤儿」判定会被删掉——
+/// 而父会话仍活着、其子历史还引用着这些图。子 blob 目录一律由级联删除路径
+///（`remove` / `cleanup::delete_session_files` / `purge_non_session_entries`）负责，扫描不碰。
+///
+/// 只认 `sub_` / `task_` 前缀的段，避免把普通会话 id（uuid 不含 `_`）误判进来。
+pub(crate) fn is_sub_blob_owner(owner: &str) -> bool {
+    match owner.split_once(SUB_BLOB_OWNER_SEP) {
+        Some((parent, sub)) => {
+            !parent.is_empty() && (sub.starts_with("sub_") || sub.starts_with("task_"))
+        }
+        None => false,
+    }
+}
+
 /// 「最近打开时间」的落盘节流窗口（秒）：同一会话 10 分钟内不重复写索引
 ///（每次 `load_session` 都重写整份索引代价过高；精度损失对「天」级清理判定无影响）。
 pub const OPEN_TOUCH_THROTTLE_SECS: i64 = 600;
@@ -775,12 +1071,26 @@ pub fn needs_open_touch(last_opened_at: Option<&str>, now: chrono::DateTime<Utc>
     }
 }
 
-/// 历史序列化 + gzip（save_history 超上限降级重试时复用）。
-fn gzip_history(msgs: &[Message]) -> anyhow::Result<Vec<u8>> {
+/// 历史序列化 + gzip（主历史与子代理历史的超上限降级重试共用）。
+/// 泛型化：两侧的落盘形态都是 [`persist::PersistedMessage`] 列表，序列化只需要 `Serialize`。
+fn gzip_history<T: Serialize>(msgs: &T) -> anyhow::Result<Vec<u8>> {
     let json = serde_json::to_vec(msgs)?;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     std::io::Write::write_all(&mut enc, &json)?;
     Ok(enc.finish()?)
+}
+
+/// 历史里的图片块张数（降级阶梯的剥图计数用）。
+fn count_images(msgs: &[Message]) -> usize {
+    msgs.iter()
+        .flat_map(|m| m.content.iter())
+        .filter(|c| matches!(c, Content::Image { .. }))
+        .count()
+}
+
+/// 历史里的用户轮数（一轮 = 一条 User 消息及其后的 Assistant/Tool 消息，与 `repair::trim` 同口径）。
+fn count_rounds(msgs: &[Message]) -> usize {
+    msgs.iter().filter(|m| m.role == Role::User).count()
 }
 
 #[cfg(test)]

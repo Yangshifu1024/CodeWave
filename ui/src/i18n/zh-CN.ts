@@ -254,6 +254,11 @@ export default {
     compactSummary: "（压缩摘要）",
     needSession: "请先在左侧导航新建或选择一个会话",
     taskDone: "任务完成",
+    // 历史 8MB 上限的越限可见性（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+    // 有损保存 / 超限拒存两种口径，run:done 载荷与恢复时的 SessionMeta.history_status 共用
+    historyDegraded: "历史未完整保存：{{images}} 张图片、{{rounds}} 轮对话被省略（重开后可能看不到）。",
+    historyRejected:
+      "历史未能保存（超过 8MB 上限），磁盘上仍是上一次成功保存的内容。建议压缩上下文或新开会话。",
     runFailed: "运行失败",
     injected: "注入 {{n}} 条消息",
     compacting: "上下文压缩中…{{before}}",

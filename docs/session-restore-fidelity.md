@@ -11,7 +11,7 @@
 |---|---|---|
 | **工具卡全量出参（`ToolOutcome`）** | 完整 JSON 只走 `tool:result` 事件，**没有任何落盘通路**；历史里存的是 `compact_for_model` 产物（`src-tauri/src/tools/compact.rs`：通用分支 HEAD 4KB + TAIL 8KB 头尾截断） | 出参 >约 12KB 的卡片全部退化：`render_html`（大 html）、`grep` 大量命中、`web_fetch`/`http_request` 正文、`read_document`、`edit` 的 edited 列表、`ask` 载荷、子代理 `report` → 前端只拿到 `{restored:true}` 占位（`ui/src/stores/run.ts` 的 `restoredToolData`） |
 | 工具卡耗时 `durationMs` / `status: waiting` | 只在帧里，无落盘 | 历史卡无耗时；看不出「当时在等审批」 |
-| 图片 `data_url` | 刻意不入历史（恢复时按路径重读） | 文件被移动/删除即丢；历史 >8MB 时先剥图 |
+| 图片 `data_url` | 刻意不入历史（恢复时按路径重读） | 文件被移动/删除即丢；**附件图片已改为外置 blob**（不再进历史文件，8MB 上限不再被图片顶到，[session-history-limits](./session-history-limits.md)） |
 | 子代理 `report` | 走父历史工具结果文本（>12KB 被头尾截断） | 汇报正文中段被截（`sub_id` 因放 data 首位得以保住，关联不断）→ 已由 §2.4 的 sidecar 回填补全 |
 
 ### B. 结构与状态
@@ -83,12 +83,12 @@
 - **`durationMs` 采集未做**：sidecar 记录里字段已留（`duration_ms`），需要把每次调用的耗时一并带进批次层的结果向量（涉及 4 处同源赋值），列为 P1；因此回填后历史卡片仍无耗时（`duration_ms` 为 null 时前端不覆盖原值）。
 - **旧会话（本机制上线前）无备份**：`.toolres` 里没有文件，回读返回空 → 卡片保持占位文案（行为与接入前一致，不报错）。
 - 图片仍按路径重读（原设计）；`data_url` 不入历史。
-- 历史 trim / checkpoint 粒度 / 8MB 上限属于结构性话题，见 §4。
+- 历史 trim / checkpoint 粒度属于结构性话题，见 §4；**8MB 上限与图片外置已落地**（[session-history-limits](./session-history-limits.md)：附件图片搬出历史文件 + 越限可见 + 按轮降级，不再整份静默丢弃）。
 
 ## 4. 未做（分级）
 
 **P1**：空 assistant 保留（历史里保留、发送前再丢）；`SessionMeta.interrupted` 不再被加载即清（需先定义「何时算已读」）；会话级 usage 落盘（工具条跨重启）；thinking 耗时落盘；`durationMs` 采集；运行中会话的在途卡片/ask 重建。
-**P2（与 [session-restore-batch1](./session-restore-batch1.md) 的「批2 范围」重叠，建议单独批次）**：历史 trim 双删与 256k 预算口径；checkpoint 粒度 → append-only JSONL；8MB 上限与图片外置；后台服务重启清理；自由会话计划任务落盘。
+**P2（与 [session-restore-batch1](./session-restore-batch1.md) 的「批2 范围」重叠，建议单独批次）**：历史 trim 双删与 256k 预算口径；checkpoint 粒度 → append-only JSONL；后台服务重启清理；自由会话计划任务落盘。
 
 ## 5. 验证
 

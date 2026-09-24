@@ -1,5 +1,8 @@
 use super::*;
 use crate::core::types::{Content, Role};
+// 经 `core::sessions` 重导出引用（与 `core/agent/drive.rs` 等调用方同路径）：
+// 这同时钉住重导出存在——包 Y 的 checkpoint 返回值就靠它
+use crate::core::sessions::{HistoryStatus, SaveReport};
 
 fn meta(id: &str) -> SessionMeta {
     SessionMeta {
@@ -15,6 +18,7 @@ fn meta(id: &str) -> SessionMeta {
         running: false,
         interrupted: None,
         last_opened_at: None,
+        history_status: None,
     }
 }
 
@@ -279,6 +283,7 @@ fn index_lru_and_orphan_discovery() {
                 running: false,
                 interrupted: None,
                 last_opened_at: None,
+                history_status: None,
             })
             .unwrap();
     }
@@ -785,4 +790,632 @@ fn purge_non_session_entries_removes_ghosts_keeps_real() {
 
     // 幂等
     assert_eq!(store.purge_non_session_entries(), 0);
+}
+
+// ---------- 历史 8MB 上限：图片外置 / 越限状态 / 按轮降级 ----------
+// （[docs/session-history-limits](../../../../../docs/session-history-limits.md)）
+
+/// 测试用：一段 JSON 文本 gzip 落盘。
+fn gzip_bytes(s: &str) -> Vec<u8> {
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut enc, s.as_bytes()).unwrap();
+    enc.finish().unwrap()
+}
+
+/// 测试用：gunzip 成文本。
+fn gunzip_text(raw: &[u8]) -> String {
+    use std::io::Read as _;
+    let mut dec = flate2::read::GzDecoder::new(raw);
+    let mut s = String::new();
+    dec.read_to_string(&mut s).unwrap();
+    s
+}
+
+/// 测试用：某 owner 的 blob 文件数。
+fn blob_count(store: &SessionStore, owner: &str) -> usize {
+    match std::fs::read_dir(store.image_blobs_dir(owner)) {
+        Ok(rd) => rd.flatten().filter(|e| e.path().is_file()).count(),
+        Err(_) => 0,
+    }
+}
+
+/// 测试用：一条只含图片的 user 消息。
+fn image_msg(data: String) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![Content::Image {
+            media_type: "image/png".into(),
+            data,
+        }],
+        created_at: None,
+    }
+}
+
+/// 图片外置：历史文件里不再有 base64 原文、blob 目录里有一份，往返后图片原样回来，
+/// 且**不触发任何降级**（契约自洽：合法贴图不再必然降级）。
+#[test]
+fn save_history_externalizes_images_without_degrading() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let data = incompressible_b64(2 * 1024 * 1024);
+    let msgs = vec![Message::user_text("q"), image_msg(data.clone())];
+    let report = store
+        .save_history("s-ext", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    assert!(report.is_clean(), "外置后不该有任何降级：{report:?}");
+    assert_eq!((report.stripped_images, report.dropped_rounds), (0, 0));
+
+    // 历史文件：只有引用，没有 base64 原文；体积与图片本身无关（几百 KB 量级）
+    let raw = std::fs::read(store.history_path("s-ext")).unwrap();
+    let json = gunzip_text(&raw);
+    assert!(json.contains("image_blob"), "落盘形态应是引用：{json}");
+    assert!(!json.contains(&data[..1024]), "历史里不得内联 base64 原文");
+    assert!(
+        raw.len() < 64 * 1024,
+        "外置后历史文件应远小于 8MB：{}",
+        raw.len()
+    );
+    assert_eq!(report.bytes, raw.len());
+
+    // blob 目录：恰好一份，内容就是原 base64
+    let blobs: Vec<_> = std::fs::read_dir(store.image_blobs_dir("s-ext"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(std::fs::read_to_string(blobs[0].path()).unwrap(), data);
+
+    // 往返：图片原样回来；干净保存 → 索引里没有状态
+    let loaded = store.load_history("s-ext").unwrap();
+    assert!(matches!(&loaded[1].content[0], Content::Image { data: d, .. } if d == &data));
+    assert!(store.get("s-ext").unwrap().history_status.is_none());
+}
+
+/// 旧数据兜底路径：图片大到无法外置（超单图上限 → 保持内联）时仍是「剥图降级」，
+/// 但状态挂上索引（重启后可见）、剥图张数如实上报。
+#[test]
+fn save_history_degraded_strips_images_and_records_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    // 16M 字符 base64 > 单图外置上限 → 保持内联 → gz 必超 8MB → 剥图降级
+    let msgs = vec![
+        Message::user_text("q"),
+        image_msg(incompressible_b64(16 * 1024 * 1024)),
+    ];
+    let report = store
+        .save_history("s-degraded", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    assert!(report.saved && !report.is_clean());
+    assert_eq!(report.stripped_images, 1, "一张图片被剥：{report:?}");
+    assert_eq!(report.dropped_rounds, 0);
+    assert_eq!(blob_count(&store, "s-degraded"), 0, "内联的图不产生 blob");
+
+    let loaded = store.load_history("s-degraded").unwrap();
+    assert!(matches!(&loaded[1].content[0], Content::Text { text } if text.contains("omitted")));
+    assert!(matches!(
+        store.get("s-degraded").unwrap().history_status,
+        Some(HistoryStatus::Degraded {
+            stripped_images: 1,
+            dropped_rounds: 0,
+            ..
+        })
+    ));
+}
+
+/// 按轮降级：剥图后仍超限 → 只保最后一轮（**不再整份丢弃**），丢掉的轮数记进报告与索引。
+#[test]
+fn save_history_over_cap_drops_rounds_instead_of_discarding_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    // 两轮、每轮 ≈8M 不可压缩字符：合计 gzip 后 >8MB，单轮 ≈6MB 落在上限内。
+    // 初始 trim 的 keep_last=2 恰好不裁（`starts.len() == keep_last` 时 early-return），
+    // 因此这条路径正是「剥图无从减负 → 按轮降级」的真实触发条件。
+    let big = incompressible_b64(8 * 1024 * 1024);
+    let msgs = vec![
+        Message::user_text(format!("round1 {big}")),
+        Message::user_text(format!("round2 {big}")),
+    ];
+    let report = store
+        .save_history("s-rounds", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    assert!(report.saved, "按轮降级后应能落盘，而不是整份丢弃");
+    assert_eq!(report.stripped_images, 0, "全程无图片");
+    assert_eq!(report.dropped_rounds, 1, "应只保最后一轮：{report:?}");
+    assert!(matches!(
+        store.get("s-rounds").unwrap().history_status,
+        Some(HistoryStatus::Degraded {
+            dropped_rounds: 1,
+            stripped_images: 0,
+            ..
+        })
+    ));
+
+    // 读回：只剩最后一轮，且历史文件本身在
+    let loaded = store.load_history("s-rounds").unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded[0].text_joined().starts_with("round2"));
+}
+
+/// 拒存：剥图 + 按轮降级后仍超限 → `Err`（文案含 8MB）、不写历史、不留半成品；
+/// 索引里留下 `Rejected` 状态，而**上一次成功的历史与既有元数据一字未改**。
+#[test]
+fn save_history_rejected_marks_index_and_keeps_previous_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let id = "s-reject";
+    // 先成功存一份小的（索引条目与历史文件都在）
+    store
+        .save_history(
+            id,
+            "原标题",
+            ".",
+            None,
+            None,
+            &["/ws".into()],
+            &[Message::user_text("hi")],
+        )
+        .unwrap();
+    let before = std::fs::read(store.history_path(id)).unwrap();
+
+    // 单轮巨量文本（无图片、单轮 → 剥图与按轮降级都无从减负）
+    let msgs = vec![Message::user_text(incompressible_b64(16 * 1024 * 1024))];
+    let err = store
+        .save_history(id, "新标题", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap_err();
+    assert!(err.to_string().contains("8MB"), "错误必须点名 8MB：{err}");
+
+    // 历史文件与既有元数据未被破坏（仍是上一次成功的那一份）
+    assert_eq!(std::fs::read(store.history_path(id)).unwrap(), before);
+    assert_eq!(store.load_history(id).unwrap()[0].text_joined(), "hi");
+    let meta = store.get(id).unwrap();
+    assert_eq!(meta.title, "原标题", "拒存不得改动既有元数据");
+    assert!(
+        matches!(meta.history_status, Some(HistoryStatus::Rejected { .. })),
+        "拒存必须把状态挂上索引（重启后可见）：{:?}",
+        meta.history_status
+    );
+    // 拒存的报告形态（调用方用它判断「磁盘上仍是上一次成功的历史」）
+    assert!(!SaveReport::rejected().saved && !SaveReport::rejected().is_clean());
+}
+
+/// 状态自愈：下一次干净保存把 `Degraded` 清掉（否则提示会永远挂着）。
+#[test]
+fn clean_save_clears_degraded_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let big = incompressible_b64(8 * 1024 * 1024);
+    let heavy = vec![
+        Message::user_text(format!("round1 {big}")),
+        Message::user_text(format!("round2 {big}")),
+    ];
+    store
+        .save_history("s-heal", "t", ".", None, None, &["/ws".into()], &heavy)
+        .unwrap();
+    assert!(store.get("s-heal").unwrap().history_status.is_some());
+
+    // 再正常跑一轮（小历史）→ 状态清除
+    let report = store
+        .save_history(
+            "s-heal",
+            "t",
+            ".",
+            None,
+            None,
+            &["/ws".into()],
+            &[Message::user_text("短")],
+        )
+        .unwrap();
+    assert!(report.is_clean());
+    assert!(
+        store.get("s-heal").unwrap().history_status.is_none(),
+        "干净保存必须清除降级状态"
+    );
+    // 检查点（upsert_meta）不得误清状态：再存一次仍为 None（幂等）
+    store.upsert_meta(meta("s-heal")).unwrap();
+    assert!(store.get("s-heal").unwrap().history_status.is_none());
+}
+
+/// 修 1：`set_history_status` 在「传入值与索引现值相同」时**不产生任何磁盘写**。
+///
+/// 检查点路径里它紧跟 `upsert_meta`（已写一次索引），值没变时那次写盘纯属冗余；
+/// 语义不变——值变了照写、该清还是清。
+#[test]
+fn set_history_status_unchanged_value_skips_index_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("s1")).unwrap();
+    let index_path = dir.path().join("sessions/index.json");
+    let degraded = HistoryStatus::Degraded {
+        stripped_images: 2,
+        dropped_rounds: 1,
+        at: "2026-01-01T00:00:00+00:00".into(),
+    };
+
+    // 首次：None → Degraded 必须写盘
+    let writes = store.index_write_count();
+    store
+        .set_history_status("s1", Some(degraded.clone()))
+        .unwrap();
+    assert_eq!(store.index_write_count(), writes + 1, "值变了必须写盘");
+    let after_first = std::fs::read(&index_path).unwrap();
+    assert_eq!(
+        store.get("s1").unwrap().history_status,
+        Some(degraded.clone())
+    );
+
+    // 第二次同值：不得写盘（写次数不增、文件内容一字不改）
+    let writes = store.index_write_count();
+    store
+        .set_history_status("s1", Some(degraded.clone()))
+        .unwrap();
+    assert_eq!(store.index_write_count(), writes, "值未变不得写索引");
+    assert_eq!(std::fs::read(&index_path).unwrap(), after_first);
+    assert_eq!(store.get("s1").unwrap().history_status, Some(degraded));
+
+    // 值变了（清空）：照写——语义不变，该清还是清
+    let writes = store.index_write_count();
+    store.set_history_status("s1", None).unwrap();
+    assert_eq!(store.index_write_count(), writes + 1, "清除状态必须写盘");
+    assert!(store.get("s1").unwrap().history_status.is_none());
+
+    // 已是 None 再清：幂等，不写盘
+    let writes = store.index_write_count();
+    store.set_history_status("s1", None).unwrap();
+    assert_eq!(store.index_write_count(), writes, "幂等清除不得写索引");
+}
+
+/// 修 2：历史文件已写成功之后，**索引写失败不得被上报成「拒存」**。
+///
+/// 失败注入：把 `sessions/` 换成同名普通文件 → 索引（`sessions/index.json`）必然写失败，
+/// 而历史在 `histories/` 下不受影响。旧实现把索引错误 `?` 上抛，调用方
+/// （`core/agent/drive.rs::checkpoint`）映射成 `SaveReport::rejected()`，前端于是谎报
+/// 「历史未能保存（超过 8MB 上限）」——历史其实已经写成功了。
+#[test]
+fn index_write_failure_after_history_saved_still_reports_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sessions"), b"not a dir").unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let msgs = vec![Message::user_text("hi")];
+
+    let report = store
+        .save_history("s-idx-fail", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    assert!(
+        report.saved,
+        "历史已落盘，索引写失败不得上报拒存：{report:?}"
+    );
+    assert!(report.is_clean(), "无降级：{report:?}");
+    assert_eq!(
+        report.bytes,
+        std::fs::metadata(store.history_path("s-idx-fail"))
+            .unwrap()
+            .len() as usize,
+        "bytes 如实上报历史文件字节数"
+    );
+
+    // 数据本体在（历史可读回），派生缓存缺失（索引写失败只告警）
+    assert_eq!(
+        store.load_history("s-idx-fail").unwrap()[0].text_joined(),
+        "hi"
+    );
+    assert!(!dir.path().join("sessions/index.json").exists());
+}
+
+/// blob GC：历史写成功后回收本会话目录里**未被引用**的 blob（被裁轮次的图片不再占盘）；
+/// 目录里只剩最后一轮的图。
+#[test]
+fn save_history_gc_recycles_blobs_of_dropped_rounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let first = incompressible_b64(4096);
+    let second = incompressible_b64(8192);
+    let msgs = vec![
+        Message::user_text("r1"),
+        image_msg(first.clone()),
+        Message::user_text("r2"),
+        image_msg(second.clone()),
+    ];
+    store
+        .save_history("s-gc", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    assert_eq!(blob_count(&store, "s-gc"), 2);
+
+    // 只存最后一轮 → 第一轮的 blob 成为孤儿，应被回收
+    let keep = vec![Message::user_text("r2"), image_msg(second.clone())];
+    store
+        .save_history("s-gc", "t", ".", None, None, &["/ws".into()], &keep)
+        .unwrap();
+    assert_eq!(blob_count(&store, "s-gc"), 1, "被裁轮次的 blob 应被 GC");
+    let loaded = store.load_history("s-gc").unwrap();
+    assert!(matches!(&loaded[1].content[0], Content::Image { data, .. } if data == &second));
+}
+
+/// blob 缺失（被手工删掉 / 磁盘损坏）→ 该图降级为占位文本，会话仍能加载。
+#[test]
+fn load_history_with_missing_blob_degrades_without_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let msgs = vec![Message::user_text("q"), image_msg("AAAA".into())];
+    store
+        .save_history("s-miss", "t", ".", None, None, &["/ws".into()], &msgs)
+        .unwrap();
+    let blob_dir = store.image_blobs_dir("s-miss");
+    for e in std::fs::read_dir(&blob_dir).unwrap().flatten() {
+        std::fs::remove_file(e.path()).unwrap();
+    }
+
+    let loaded = store.load_history("s-miss").expect("blob 缺失不得阻断加载");
+    assert!(matches!(
+        &loaded[1].content[0],
+        Content::Text { text } if text == "[image image/png 丢失]"
+    ));
+    assert_eq!(loaded[0].text_joined(), "q", "其余内容完好");
+}
+
+/// 旧数据兼容：本批之前写下的历史（内联 `image` tag + base64 原文）照常可读，无不可逆迁移。
+#[test]
+fn load_history_reads_legacy_inline_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    std::fs::create_dir_all(store.histories_dir()).unwrap();
+    let json =
+        r#"[{"role":"user","content":[{"type":"image","media_type":"image/png","data":"AAAA"}]}]"#;
+    std::fs::write(store.history_path("s-legacy"), gzip_bytes(json)).unwrap();
+    let loaded = store.load_history("s-legacy").unwrap();
+    assert!(matches!(&loaded[0].content[0], Content::Image { data, .. } if data == "AAAA"));
+}
+
+/// 级联删除（`remove` 路径）：`.toolres/`、`.imgblob/` 与子历史的 blob 目录都随会话消失
+///（此前 `remove` 连 `.toolres/` 都没删，与 cleanup 路径口径不一致）。
+#[test]
+fn remove_cascades_toolres_and_image_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let id = "s-cascade";
+    store
+        .save_history(
+            id,
+            "t",
+            ".",
+            None,
+            None,
+            &["/ws".into()],
+            &[Message::user_text("q"), image_msg("AAAA".into())],
+        )
+        .unwrap();
+    // 手工造出工具结果 sidecar 目录与子历史（带自己的 blob）
+    std::fs::create_dir_all(store.tool_results_dir(id)).unwrap();
+    store
+        .save_sub_history(
+            id,
+            "sub_cascade",
+            &[Message::user_text("s"), image_msg("BBBB".into())],
+        )
+        .unwrap();
+    assert!(store.image_blobs_dir(id).is_dir());
+    assert!(store.tool_results_dir(id).is_dir());
+    assert!(store.sub_image_blobs_dir(id, "sub_cascade").is_dir());
+
+    store.remove(id).unwrap();
+    assert!(
+        !store.image_blobs_dir(id).exists(),
+        "会话 blob 目录应级联删除"
+    );
+    assert!(
+        !store.tool_results_dir(id).exists(),
+        "工具结果目录应级联删除"
+    );
+    assert!(
+        !store.sub_image_blobs_dir(id, "sub_cascade").exists(),
+        "子历史的 blob 目录应随父会话级联删除"
+    );
+    assert!(!store.sub_histories_dir(id).exists());
+}
+
+/// 幽灵条目清理同步删掉两个托管目录（否则 sub_*/task_* 的 blob 会永久泄漏）。
+#[test]
+fn purge_non_session_entries_removes_managed_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("sub_ghost")).unwrap();
+    std::fs::create_dir_all(store.image_blobs_dir("sub_ghost")).unwrap();
+    std::fs::create_dir_all(store.tool_results_dir("sub_ghost")).unwrap();
+    assert_eq!(store.purge_non_session_entries(), 1);
+    assert!(!store.image_blobs_dir("sub_ghost").exists());
+    assert!(!store.tool_results_dir("sub_ghost").exists());
+}
+
+/// 子代理历史同阶梯：图片同样外置、越限按轮降级，但**绝不拒存**（子代理没有 UI 载体）。
+#[test]
+fn sub_history_shares_ladder_but_never_rejects() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    // 图片外置：blob 归子历史自己（不在父会话的目录里）
+    let img = incompressible_b64(4096);
+    store
+        .save_sub_history("parent-1", "sub_img", &[image_msg(img.clone())])
+        .unwrap();
+    assert_eq!(
+        blob_count(&store, &sub_blob_owner("parent-1", "sub_img")),
+        1
+    );
+    assert_eq!(blob_count(&store, "parent-1"), 0);
+    let loaded = store.load_sub_history("parent-1", "sub_img").unwrap();
+    assert!(matches!(&loaded[0].content[0], Content::Image { data, .. } if data == &img));
+
+    // 单轮巨量文本：主历史会拒存，子历史必须仍然落盘（不拒存）
+    let heavy = vec![Message::user_text(incompressible_b64(16 * 1024 * 1024))];
+    let report = store
+        .save_sub_history("parent-1", "sub_heavy", &heavy)
+        .expect("子代理历史绝不拒存");
+    assert!(report.saved);
+    assert!(
+        !store
+            .load_sub_history("parent-1", "sub_heavy")
+            .unwrap()
+            .is_empty(),
+        "降级后仍应落盘"
+    );
+}
+
+// ---------- 并发保存：GC 不得删掉磁盘历史仍引用的 blob ----------
+// （[docs/session-history-limits](../../../../../docs/session-history-limits.md)）
+
+/// 测试用：从落盘历史 JSON 里取出全部图片 blob 引用（不依赖落盘 DTO 的可见性）。
+fn blob_refs(json: &str) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(b)) = map.get("blob") {
+                    out.push(b.clone());
+                }
+                for child in map.values() {
+                    walk(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|c| walk(c, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(
+        &serde_json::from_str(json).expect("历史 JSON 应可解析"),
+        &mut out,
+    );
+    out
+}
+
+/// 🔴 并发保存时，GC 绝不得删掉磁盘历史仍引用的 blob。
+///
+/// 竞态（修前）：`save_history` 的 GC 判据是**本次保存内存快照**的引用集合，而保存路径没有
+/// per-session 串行化——A（旧快照）的 GC 若晚于 B（新快照，含新图）的历史写盘，A 会删掉
+/// B 仍引用的 blob，该会话重开后那张图只剩占位文本（不可逆数据丢失）。
+/// 修法：`save_lock` 串行化「快照（外置 blob 写）→ 写历史 → upsert_meta → set_history_status → GC」。
+#[test]
+fn concurrent_saves_never_gc_blobs_referenced_by_disk_history() {
+    const ROUNDS: usize = 25;
+    let dir = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(SessionStore::new(dir.path().to_path_buf()));
+    std::thread::scope(|s| {
+        for t in 0..2usize {
+            let st = store.clone();
+            s.spawn(move || {
+                for r in 0..ROUNDS {
+                    // 两路图片内容互不相同（长度即内容种子）：任一方被误删都必现
+                    let data = incompressible_b64(16 * 1024 + t * 4096 + r);
+                    let msgs = vec![Message::user_text(format!("t{t}-r{r}")), image_msg(data)];
+                    st.save_history("s-race", "t", ".", None, None, &["/ws".into()], &msgs)
+                        .unwrap();
+                }
+            });
+        }
+    });
+
+    // 磁盘上历史文件引用的每个 blob 都必须存在（否则重开后那张图是占位文本）
+    let raw = std::fs::read(store.history_path("s-race")).unwrap();
+    let referenced = blob_refs(&gunzip_text(&raw));
+    assert!(!referenced.is_empty(), "历史里应有图片引用");
+    let blob_dir = store.image_blobs_dir("s-race");
+    for blob in &referenced {
+        assert!(
+            blob_dir.join(blob).is_file(),
+            "磁盘历史仍引用 {blob}，GC 不得删掉它（目录内容：{:?}）",
+            std::fs::read_dir(&blob_dir)
+                .map(|rd| rd.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
+        );
+    }
+    // 语义层：读回后没有任何图片被降级成占位文本
+    let loaded = store.load_history("s-race").unwrap();
+    assert!(
+        loaded.iter().all(|m| m
+            .content
+            .iter()
+            .all(|c| !matches!(c, Content::Text { text } if text.contains("丢失")))),
+        "并发保存后图片不得变成占位文本"
+    );
+}
+
+// ---------- 子历史 blob 的 owner 命名空间（<父会话 id>__<sub>） ----------
+
+/// 🔴 不同父会话下的**同名 sub** 必须各用各的 blob 目录。
+///
+/// `sub_id` 只是 uuid 前 8 位十六进制（32 bit，见 `tools/subagent.rs`），两个父会话下
+/// 同名并非不可能；共用 `sessions/<sub>.imgblob/` 时，后一次保存的 GC 会把前一次
+/// 仍引用的图删掉（读回即占位文本）。
+#[test]
+fn same_sub_name_under_different_parents_keeps_isolated_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let img_a = incompressible_b64(4096);
+    let img_b = incompressible_b64(8192);
+    store
+        .save_sub_history("parent-a", "sub_deadbeef", &[image_msg(img_a.clone())])
+        .unwrap();
+    store
+        .save_sub_history("parent-b", "sub_deadbeef", &[image_msg(img_b.clone())])
+        .unwrap();
+
+    // 两个目录互不重叠，且不再有裸 sub 命名的目录
+    let dir_a = store.sub_image_blobs_dir("parent-a", "sub_deadbeef");
+    let dir_b = store.sub_image_blobs_dir("parent-b", "sub_deadbeef");
+    assert_ne!(dir_a, dir_b, "同名 sub 在两个父会话下必须是两个目录");
+    assert_eq!(
+        blob_count(&store, &sub_blob_owner("parent-a", "sub_deadbeef")),
+        1
+    );
+    assert_eq!(
+        blob_count(&store, &sub_blob_owner("parent-b", "sub_deadbeef")),
+        1
+    );
+    assert!(
+        !store.image_blobs_dir("sub_deadbeef").exists(),
+        "不得再用裸 sub 当 owner"
+    );
+
+    // 各自读回自己的图（共用目录时后一次保存的 GC 已删掉先前的图 → 这里必现占位文本）
+    let a = store.load_sub_history("parent-a", "sub_deadbeef").unwrap();
+    assert!(matches!(&a[0].content[0], Content::Image { data, .. } if data == &img_a));
+    let b = store.load_sub_history("parent-b", "sub_deadbeef").unwrap();
+    assert!(matches!(&b[0].content[0], Content::Image { data, .. } if data == &img_b));
+}
+
+/// 🔴 删掉一个父会话，不得连带删掉另一个父会话下同名 sub 的图。
+#[test]
+fn removing_one_parent_keeps_other_parents_sub_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    store.upsert_meta(meta("parent-a")).unwrap();
+    store.upsert_meta(meta("parent-b")).unwrap();
+    let img_b = incompressible_b64(8192);
+    store
+        .save_sub_history(
+            "parent-a",
+            "sub_deadbeef",
+            &[image_msg(incompressible_b64(4096))],
+        )
+        .unwrap();
+    store
+        .save_sub_history("parent-b", "sub_deadbeef", &[image_msg(img_b.clone())])
+        .unwrap();
+
+    store.remove("parent-a").unwrap();
+
+    assert!(
+        !store
+            .sub_image_blobs_dir("parent-a", "sub_deadbeef")
+            .exists(),
+        "被删父会话的子历史 blob 目录应随之消失"
+    );
+    assert!(
+        store
+            .sub_image_blobs_dir("parent-b", "sub_deadbeef")
+            .is_dir(),
+        "另一个父会话的子历史 blob 目录必须原样保留"
+    );
+    assert_eq!(
+        blob_count(&store, &sub_blob_owner("parent-b", "sub_deadbeef")),
+        1
+    );
+    let b = store.load_sub_history("parent-b", "sub_deadbeef").unwrap();
+    assert!(matches!(&b[0].content[0], Content::Image { data, .. } if data == &img_b));
 }
