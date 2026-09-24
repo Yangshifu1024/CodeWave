@@ -894,19 +894,35 @@ export default function Composer() {
               <span className="ctx-label" title={ctxTitle}>
                 {active.breakdown ? (
                   <>
-                    {t("app.context")}{" "}
-                    <span className={ctxPctClass}>{contextPct}%</span>
-                    {`（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
-                    {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
-                    {"）"}
-                    {cacheHit != null && <span className={ctxHitClass}>{` · ${t("composer.cacheHit")} ${hitPct}`}</span>}
+                    {/* 首个原子段（上下文 + 阈值括号）内部不换行；窄窗口只在下面的 <wbr> 处折行
+                        （[docs/composer-toolbar-context-hit-rate](../../../../docs/composer-toolbar-context-hit-rate.md) §9） */}
+                    <span className="ctx-seg">
+                      {t("app.context")}{" "}
+                      <span className={ctxPctClass}>{contextPct}%</span>
+                      {`（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
+                      {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
+                      {"）"}
+                    </span>
+                    {/* 折行点：<wbr> 是零字符断点，textContent 逐字不变；分隔符包进 .ctx-sep（nowrap）后，
+                        断点只剩 <wbr> 一处——否则「 · 」本身也是断行机会、会被甩到下一行行首 */}
+                    {cacheHit != null && (
+                      <>
+                        <span className="ctx-sep">{" · "}</span>
+                        <wbr />
+                        <span className={ctxHitClass}>{`${t("composer.cacheHit")} ${hitPct}`}</span>
+                      </>
+                    )}
                     {rate != null && (
                       // 与上下文/命中同属一段小字（不新增控件、不抢位）；「在跑」点仅在运行中渲染，
                       // 运行结束后消失而数值保留（AC-7）
-                      <span className="ctx-rate" title={rateTitle}>
-                        {` · ${formatRate(rate)} tok/s`}
-                        {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
-                      </span>
+                      <>
+                        <span className="ctx-sep">{" · "}</span>
+                        <wbr />
+                        <span className="ctx-rate" title={rateTitle}>
+                          {`${formatRate(rate)} tok/s`}
+                          {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
+                        </span>
+                      </>
                     )}
                   </>
                 ) : (
