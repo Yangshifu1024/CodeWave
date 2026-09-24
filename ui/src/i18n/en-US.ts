@@ -58,6 +58,10 @@ export default {
     imageLoading: "Loading image…", imageUnavailable: "Image unavailable (file may have been moved or deleted): {{path}}",
     imageNotSent: "This model has image input disabled — the image was not sent",
     rawData: "Raw data", notePrefix: "Note: ",
+    // render_html preview modal (see [docs/html-preview-modal](../../../docs/html-preview-modal.md))
+    preview: "Preview", previewUnavailable: "Preview content was not kept in history", previewChars: "{{n}} chars",
+    copyHtml: "Copy HTML", copied: "Copied", copyFailed: "Copy failed",
+    reload: "Reload", bgLight: "Light", bgDark: "Dark",
   },
   ask: {
     title: "Agent question", approval: "Safety confirmation", allow: "Allow", deny: "Deny",
@@ -261,6 +265,11 @@ export default {
     compactSummary: "(compaction summary)",
     needSession: "Create or select a session in the left nav first",
     taskDone: "Task completed",
+    // History 8 MB cap visibility ([docs/session-history-limits](../../../docs/session-history-limits.md)):
+    // lossy save / rejected save, shared by the run:done payload and SessionMeta.history_status on restore
+    historyDegraded: "History saved incompletely: {{images}} image(s) and {{rounds}} round(s) were dropped.",
+    historyRejected:
+      "History was not saved (over the 8 MB limit); the last successfully saved version is kept. Consider compacting the context or starting a new session.",
     runFailed: "Run failed",
     injected: "Injected {{n}} message(s)",
     compacting: "Compacting context…{{before}}",

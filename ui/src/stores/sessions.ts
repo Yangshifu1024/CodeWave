@@ -120,12 +120,18 @@ function dirName(p: string): string {
 }
 
 /** 拉取会话内容并回填运行态（从导航打开与惰性激活共用的唯一加载路径）。
- *  抛出交给调用方浮出（H-4：loadSession 失败不得静默） */
-async function loadTabContent(tab: Tab): Promise<void> {
+ *  抛出交给调用方浮出（H-4：loadSession 失败不得静默）。
+ *  meta 可选（[docs/session-history-limits](../../../docs/session-history-limits.md)）：历史保存状态（history_status）挂在会话索引上，
+ *  重开/重启后仍可见——调用方没拿到 meta 时回退到本 store 的会话列表快照（不新增 IPC）。 */
+async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
   const msgs = await ipc.loadSession(tab.sessionId, tab.workspace);
   const run = useRun.getState();
   run.initTab(tab.sessionId);
-  run.restoreFromMessages(tab.sessionId, msgs);
+  run.restoreFromMessages(tab.sessionId, msgs, {
+    history_status:
+      meta?.history_status ??
+      useSessions.getState().sessions.find((m) => m.id === tab.sessionId)?.history_status,
+  });
   // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
   void ipc
     .getSessionPrefs(tab.sessionId)
@@ -369,7 +375,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       set((s) => ({ tabs: [...s.tabs, tab], activeKey: tab.key }));
       // 关 Tab 时选择「保留草稿」的内容在此回填（重开后草稿/队列原样回来）
       applyRetainedContent(tab.sessionId);
-      await loadTabContent(tab);
+      // meta 直接得自调用方（左栏/通知回跳的会话条目），历史保存状态一并带进恢复
+      await loadTabContent(tab, meta);
     } catch (e) {
       // H-4（迁移中遗失项）：loadSession 失败必须浮出，绝不静默成未处理的 rejection；
       // Tab 保留（骨架仍在），用户可重新从导航打开重试

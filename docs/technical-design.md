@@ -352,7 +352,8 @@ async fn request(&self, req: ApprovalRequest) -> ApprovalVerdict {
 ~/.codewave/
 ├── sessions/index.json        # 索引：{id, title, workspace, model, updated_at, …}，≤2000 条（LRU 淘汰）
 ├── sessions/<id>.snap.json.gz # 会话元信息快照，≤16MB
-├── histories/<id>.json.gz     # Message[] 的 gzip JSON，≤8MB
+├── histories/<id>.json.gz     # PersistedMessage[] 的 gzip JSON，≤8MB（图片以 blob 引用落盘）
+├── sessions/<id>.imgblob/     # 图片外置 blob（sha256 内容寻址去重；[session-history-limits](./session-history-limits.md)）
 ```
 
 原子写：`tempfile` + rename；Windows 先 `.bak` 备份。保存时机：run 结束 / 取消检查点 / 每 20 步。

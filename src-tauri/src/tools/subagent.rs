@@ -441,8 +441,23 @@ impl Tool for SubagentTool {
         // 过程抽屉在会话恢复后可重建完整消息流
         {
             let h = sub_rt.history.lock().unwrap();
-            if let Err(e) = ctx.core.store.save_sub_history(&ctx.rt.id, &sub_id, &h) {
-                tracing::warn!("子代理 [{sub_id}] 过程历史落盘失败：{e}");
+            match ctx.core.store.save_sub_history(&ctx.rt.id, &sub_id, &h) {
+                Ok(report) => {
+                    // 子代理不是会话、没有 UI 载体：越限/失败只走日志，不写索引也不发事件
+                    if !report.is_clean() {
+                        let line = format!(
+                            "子代理 [{sub_id}] 过程历史有损保存：剥离图片 {} 张 / 丢弃轮次 {} 轮",
+                            report.stripped_images, report.dropped_rounds
+                        );
+                        crate::core::session_log::warn(&ctx.rt, &line);
+                    }
+                }
+                Err(e) => {
+                    crate::core::session_log::warn(
+                        &ctx.rt,
+                        &format!("子代理 [{sub_id}] 过程历史落盘失败：{e}"),
+                    );
+                }
             }
         }
 
@@ -591,12 +606,28 @@ impl Drop for SubCleanupGuard {
         if self.armed {
             // panic 路同样尽力落盘已产生的过程历史（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
             let h = self.sub_rt.history.lock().unwrap();
-            if let Err(e) = self
+            match self
                 .core
                 .store
                 .save_sub_history(&self.session, &self.sub_id, &h)
             {
-                tracing::warn!("子代理 [{}] panic 路过程历史落盘失败：{e}", self.sub_id);
+                Ok(report) if !report.is_clean() => {
+                    // 子代理无 UI 载体：有损保存只走日志（不写索引、不发事件）
+                    crate::core::session_log::warn(
+                        &self.sub_rt,
+                        &format!(
+                            "子代理 [{}] 过程历史有损保存：剥离图片 {} 张 / 丢弃轮次 {} 轮",
+                            self.sub_id, report.stripped_images, report.dropped_rounds
+                        ),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    crate::core::session_log::warn(
+                        &self.sub_rt,
+                        &format!("子代理 [{}] panic 路过程历史落盘失败：{e}", self.sub_id),
+                    );
+                }
             }
             drop(h);
             self.core.sink.emit(

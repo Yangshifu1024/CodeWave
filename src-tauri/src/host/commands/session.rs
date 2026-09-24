@@ -6,6 +6,66 @@ use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 
+/// [docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)：按 provider 侧 tool_use id
+/// 批量回读「工具结果原样 sidecar」——历史里那份模型侧文本被截断时，前端据此把卡片补回完整内容
+/// （大 html、grep 大量命中、网页正文、文档读取、edit 列表、ask 载荷、子代理汇报）。
+/// 缺失 / 非法键 / 超限的条目静默跳过：返回的就是实际有的那些，前端无需区分「无备份」与「读失败」。
+#[tauri::command]
+pub async fn load_tool_outcomes(
+    core: Core<'_>,
+    session_id: String,
+    call_ids: Vec<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rt = core.session(&session_id).ok_or("会话不存在")?;
+    // 归属口诀与产物登记一致：子代理产生的卡片跟主会话走
+    let owner = rt.root_session_id.clone().unwrap_or_else(|| rt.id.clone());
+    Ok(tool_outcomes_payload(&core.store, &owner, &call_ids))
+}
+
+/// 响应体（独立成函数便于测试）：字段名与其它边车一致（snake_case）。
+fn tool_outcomes_payload(
+    store: &crate::core::sessions::SessionStore,
+    owner: &str,
+    call_ids: &[String],
+) -> Vec<serde_json::Value> {
+    crate::core::sessions::tool_results::load_many(store, owner, call_ids)
+        .into_iter()
+        .map(|(call_id, rec)| {
+            serde_json::json!({
+                "call_id": call_id,
+                "outcome": rec.outcome,
+                "duration_ms": rec.duration_ms,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tool_outcomes_tests {
+    use super::*;
+
+    #[test]
+    fn payload_maps_records_and_skips_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::core::sessions::SessionStore::new(dir.path().to_path_buf());
+        let out = crate::tools::ToolOutcome::ok(serde_json::json!({ "html": "<b>hi</b>" }));
+        crate::core::sessions::tool_results::save(&store, "s1", "call-1", &out, None);
+
+        let rows =
+            tool_outcomes_payload(&store, "s1", &["call-1".to_string(), "missing".to_string()]);
+        assert_eq!(rows.len(), 1, "缺失的键不进响应体");
+        assert_eq!(rows[0]["call_id"], "call-1");
+        // 存的是整套 ToolOutcome 信封（ok/data/...），前端据此连状态一起还原
+        assert_eq!(rows[0]["outcome"]["ok"], serde_json::json!(true));
+        assert_eq!(rows[0]["outcome"]["data"]["html"], "<b>hi</b>");
+        assert!(rows[0]["duration_ms"].is_null());
+
+        // 空入参 / 未知会话：空数组（不报错）
+        assert!(tool_outcomes_payload(&store, "s1", &[]).is_empty());
+        assert!(tool_outcomes_payload(&store, "nope", &["call-1".to_string()]).is_empty());
+    }
+}
+
 /// 创建会话：项目会话（快照固化主目录）或临时会话（免目录）双形态入口。
 #[tauri::command]
 pub async fn create_session(

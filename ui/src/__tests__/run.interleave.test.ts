@@ -126,7 +126,10 @@ describe("思考与工具穿插顺序", () => {
     expect((tl[2] as any).callKey).toBe("call-1");
     const a = tabOf(session).items.find((i) => i.kind === "assistant") as any;
     expect(a.toolsMap["call-1"].tool).toBe("read");
-    expect(a.toolsMap["call-1"].status).toBe("ok");
+    // 该 fixture 里这条 tool_use 没有任何配对结果（真实历史由后端 repair 保证配对）：
+    // 现在按「已中断」呈现，与子代理流一致（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）
+    expect(a.toolsMap["call-1"].status).toBe("error");
+    expect(a.toolsMap["call-1"].outcome.error.code).toBe("E_INTERRUPTED");
   });
 
   it("restoreFromMessages 还原 read 卡出参：图片条目带 path，供卡片按路径重新加载", () => {
@@ -180,7 +183,11 @@ describe("思考与工具穿插顺序", () => {
         ],
       },
     ] as any);
-    expect((toolCardsOf(session, "call-err")[0]!.outcome as any)?.data).toEqual({ restored: true });
+    // 失败结果（is_error: true）现在还原为真实错误卡：从模型侧 `[error E_XXX: …]` 文本里取回错误码，
+    // 而不是留一个「已使用 + 空数据」的假象（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）
+    const errCard = toolCardsOf(session, "call-err")[0]!;
+    expect(errCard.status).toBe("error");
+    expect((errCard.outcome as any)?.error?.code).toBe("E_EXIT_CODE");
   });
 
   it("run:retry 清空半截 timeline 无残留", () => {

@@ -232,6 +232,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
         running: false,
         interrupted: None,
         last_opened_at: None,
+        history_status: None,
     };
     assert!(crate::core::sessions::cleanup::delete_session_files(
         &ctx.core.store,
@@ -1089,4 +1090,718 @@ async fn legacy_approve_without_mode_still_switches_to_auto_edit() {
         ctx.rt.prefs().approval_mode,
         crate::core::prefs::ApprovalMode::AutoEdit
     ));
+}
+
+// ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门第三选项「先看预览」 ----------
+
+/// 批准门三选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准 / 补充意见 / 先看预览。
+fn preview_gate_question() -> Question {
+    Question {
+        id: "approve_plan".into(),
+        question: "是否按上述计划执行？".into(),
+        options: vec![
+            opt("approve", "执行方案"),
+            opt("revise", "补充意见"),
+            opt("preview", "先看预览"),
+        ],
+        single: true,
+    }
+}
+
+#[test]
+fn preview_option_is_not_an_approve_option() {
+    // 预览项不得被宽松批准匹配命中（命中即静默批准 + 切档）
+    assert!(!is_approve_option(&opt("preview", "先看预览")));
+    assert!(!is_approve_option(&opt("preview", "Preview first")));
+    // 三选项仍是批准形 / 批准闸形态（arch_gate_shape 只要求含 id="approve"）
+    assert!(approval_shape(&[preview_gate_question()]));
+    assert!(arch_gate_shape(&[preview_gate_question()]));
+}
+
+#[test]
+fn preview_only_detection_excludes_other_answers() {
+    let qs = vec![preview_gate_question()];
+    let preview_answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } });
+    assert!(has_valid_answer(&qs, &preview_answer)); // 通用判定仍是「有应答」
+    assert!(preview_only(&qs, &preview_answer)); // 但它是「只看预览」
+
+    // 选了别的项 / 预览+别的项：都不是「只看预览」→ 按普通有效应答处理
+    for other in [
+        json!({ "answers": { "approve_plan": { "selections": ["revise"], "note": "" } } }),
+        json!({ "answers": { "approve_plan": { "selections": ["preview", "revise"], "note": "" } } }),
+    ] {
+        assert!(!preview_only(&qs, &other));
+    }
+    // 审查 R1：预览 + 补充说明仍是「只看预览」（补充说明不是表态；否则 ConfirmEach 批准门会静默批准）
+    let preview_with_note =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "顺便看看" } } });
+    assert!(preview_only(&qs, &preview_with_note));
+
+    // 非批准形询问里的同名选项不受影响（普通澄清问题不会被当成预览项）
+    let plain = Question {
+        id: "pick".into(),
+        question: "选一个".into(),
+        options: vec![opt("preview", "先看预览")],
+        single: false,
+    };
+    let plain_answer = json!({ "answers": { "pick": { "selections": ["preview"], "note": "" } } });
+    assert!(!preview_only(&[plain], &plain_answer));
+}
+
+/// 完整流水线批准门（ConfirmEach + switchToAutoEdit=true）里选「先看预览」：两条切档通道
+///（arch 闸标记 / 有效应答）都不得生效——否则用户点预览会被静默批准并按方案开工。
+#[tokio::test]
+async fn preview_option_does_not_switch_mode_in_confirm_each_gate() {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{ "id": "approve_plan", "question": "是否按上述计划执行？", "options": [
+            { "id": "approve", "label": "执行方案", "recommended": true },
+            { "id": "revise", "label": "补充意见" },
+            { "id": "preview", "label": "先看预览" }
+        ]}],
+        "switchToAutoEdit": true
+    });
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null); // 不是批准
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::ConfirmEach
+    ));
+    // 模型侧文本如实记录「选定了 preview」，模型据此去加载 preview 技能
+    let summary = outcome.data["summary"].as_str().unwrap_or("");
+    assert!(summary.contains("preview"), "{summary}");
+}
+
+/// 对照：同一形状下选「执行方案」照旧切档（守门不得把正常批准路径改坏）。
+#[tokio::test]
+async fn approve_option_still_switches_mode_in_confirm_each_gate() {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{ "id": "approve_plan", "question": "是否按上述计划执行？", "options": [
+            { "id": "approve", "label": "执行方案", "recommended": true },
+            { "id": "revise", "label": "补充意见" },
+            { "id": "preview", "label": "先看预览" }
+        ]}],
+        "switchToAutoEdit": true
+    });
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["approve"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], json!(true));
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::AutoEdit
+    ));
+}
+
+/// 批准门三选项的入参（标准工作流 S5 的形状：单题 + 含 approve 选项 + switchToAutoEdit）。
+fn preview_gate_args() -> Value {
+    json!({
+        "questions": [{ "id": "approve_plan", "question": "是否按上述计划执行？", "options": [
+            { "id": "approve", "label": "执行方案", "recommended": true },
+            { "id": "revise", "label": "补充意见" },
+            { "id": "preview", "label": "先看预览" }
+        ]}],
+        "switchToAutoEdit": true
+    })
+}
+
+/// Plan 档：选「先看预览」不是批准（不切档、不 plan_approved、不注入）。
+#[tokio::test]
+async fn preview_option_is_not_approved_in_plan_mode() {
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, preview_gate_args(), answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Plan
+    ));
+}
+
+/// 审查 R1 回归：预览项 + 补充说明仍是「只看预览」——ConfirmEach 批准门不得静默批准与切档。
+#[tokio::test]
+async fn preview_with_note_does_not_switch_mode_in_confirm_each_gate() {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let answer = json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "顺便看下界面" } } });
+    let outcome = drive_ask_with_answer(&ctx, preview_gate_args(), answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::ConfirmEach
+    ));
+}
+
+/// 批准候选剔除专项：预览项即使 label 含「执行方案」（宽松批准匹配会命中），
+/// 也不得被当成批准项（既不能下发成 `approve_option_id`，也不能让 Plan 档静默批准）。
+#[tokio::test]
+async fn preview_option_with_approve_like_label_is_not_treated_as_approval() {
+    // 前提：这份 label 确实会被 is_approve_option 命中（所以必须靠剔除，而非靠措辞）
+    assert!(is_approve_option(&opt("preview", "执行方案预览")));
+    let mut q = preview_gate_question();
+    q.options = vec![
+        opt("preview", "执行方案预览"), // 排在前面：不剔除就会被选为「首个批准项」
+        opt("approve", "执行方案"),
+        opt("revise", "补充意见"),
+    ];
+    assert_eq!(
+        approve_option_id(std::slice::from_ref(&q)).as_deref(),
+        Some("approve"),
+        "预览项不得被选为批准候选"
+    );
+
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{ "id": "approve_plan", "question": "是否按上述计划执行？", "options": [
+            { "id": "preview", "label": "执行方案预览" },
+            { "id": "approve", "label": "执行方案", "recommended": true },
+            { "id": "revise", "label": "补充意见" }
+        ]}],
+        "switchToAutoEdit": true
+    });
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(matches!(
+        ctx.rt.prefs().approval_mode,
+        crate::core::prefs::ApprovalMode::Plan
+    ));
+}
+
+/// 预览项识别：id 大小写不敏感，且模型自拟 id 时按 label（「先看预览」/「Preview first」）兜底。
+#[test]
+fn preview_option_recognition_is_case_insensitive_and_label_backed() {
+    let mut q = preview_gate_question();
+    q.options = vec![opt("approve", "执行方案"), opt("Preview", "先看预览")];
+    let qs = vec![q];
+    assert!(preview_option_ids(&qs).contains("Preview"));
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["Preview"], "note": "" } } });
+    assert!(preview_only(&qs, &answer));
+
+    // 自拟 id + 合规 label：仍认得出（否则会落回有效应答 → 静默切档）
+    let mut q2 = preview_gate_question();
+    q2.options = vec![
+        opt("approve", "执行方案"),
+        opt("preview_plan", "先看预览"),
+        opt("preview_en", "Preview first"),
+    ];
+    let qs2 = vec![q2];
+    let ids = preview_option_ids(&qs2);
+    assert!(
+        ids.contains("preview_plan") && ids.contains("preview_en"),
+        "{ids:?}"
+    );
+    let a2 =
+        json!({ "answers": { "approve_plan": { "selections": ["preview_plan"], "note": "" } } });
+    assert!(preview_only(&qs2, &a2));
+}
+
+/// 相邻修复（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：批准闸（单题 + id="approve"）上只有真选中批准项
+/// 才动档位——选「补充意见」既不批准（无 plan_approved / 无「立即执行」注入 / 不冻结基线），也不切档。
+#[tokio::test]
+async fn revise_option_does_not_switch_mode_in_confirm_each_gate() {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let answer = json!({ "answers": { "approve_plan": { "selections": ["revise"], "note": "风险那节写细一点" } } });
+    let outcome = drive_ask_with_answer(&ctx, preview_gate_args(), answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null); // 不是批准
+    let summary = outcome.data["summary"].as_str().unwrap_or("");
+    assert!(!summary.contains("方案已批准"), "{summary}");
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "不得冻结 todos 基线"
+    );
+    assert!(
+        matches!(
+            ctx.rt.prefs().approval_mode,
+            crate::core::prefs::ApprovalMode::ConfirmEach
+        ),
+        "批准闸上选「补充意见」不得动档位"
+    );
+}
+
+// ---------- 融合后的批准门四选项（main 显式选档 × 本分支 preview 第四项）：交叉用例 ----------
+// 合并前两侧各自只测过三选项形态（main：approve / approve_full / revise；本分支：approve / revise / preview），
+// 融合后四选项并存——本节补「preview 与带 mode 的档位选项互不干扰」的交叉验证。
+
+/// 融合后的批准门标准形态（四选项）：approve(auto_edit, recommended) / approve_full(full_access) / revise / preview。
+fn fused_gate_question() -> Question {
+    use crate::core::prefs::ApprovalMode;
+    Question {
+        id: "approve_plan".into(),
+        question: "是否按上述计划执行？".into(),
+        options: vec![
+            Option2 {
+                recommended: true,
+                ..opt_mode("approve", "以自动编辑档执行", ApprovalMode::AutoEdit)
+            },
+            opt_mode("approve_full", "以完全访问档执行", ApprovalMode::FullAccess),
+            opt("revise", "补充意见"),
+            opt("preview", "先看预览"),
+        ],
+        single: true,
+    }
+}
+
+/// 四选项批准门的 ask 入参（JSON 形态，走完整 run() 流程）。
+fn fused_gate_args(switch_flag: bool) -> Value {
+    json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按上述计划执行？", "single": true,
+            "options": [
+                { "id": "approve", "label": "以自动编辑档执行", "mode": "auto_edit", "recommended": true },
+                { "id": "approve_full", "label": "以完全访问档执行", "mode": "full_access" },
+                { "id": "revise", "label": "补充意见" },
+                { "id": "preview", "label": "先看预览" }
+            ]
+        }],
+        "switchToAutoEdit": switch_flag,
+    })
+}
+
+/// 四选项批准门里的 preview 应答载荷。
+fn fused_preview_answer() -> Value {
+    json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } })
+}
+
+/// 交叉用例 1：四选项门里选 preview —— **两个起点档位各测一次**：既不批准（无 plan_approved、不冻结基线），
+/// 也不切档（档位与选前一致）。既有 preview 用例只覆盖三选项形态（preview_gate_args 里没有带 mode 的选项）。
+#[tokio::test]
+async fn preview_choice_neither_approves_nor_switches_from_either_mode() {
+    use crate::core::prefs::ApprovalMode;
+    for start in [ApprovalMode::ConfirmEach, ApprovalMode::Plan] {
+        let ctx = ask_ctx_mode(start);
+        // 门内条件齐备（todos + 分析产物）：若 preview 被误判成批准，会真的走到批准路径而不是被 G2/G3 拦住——
+        // 让「误批准」可观测（否则会被门拒掩盖成假绿）。
+        register_todos(&ctx, &["a"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome =
+            drive_ask_with_answer(&ctx, fused_gate_args(true), fused_preview_answer()).await;
+        assert!(outcome.ok, "{start:?}: {outcome:?}");
+        assert_eq!(
+            outcome.data["plan_approved"],
+            Value::Null,
+            "{start:?} 选 preview 不得批准"
+        );
+        assert!(
+            ctx.rt.approved_plan.lock().unwrap().is_none(),
+            "{start:?} 选 preview 不得冻结 todos 基线"
+        );
+        assert_eq!(
+            ctx.rt.prefs().approval_mode,
+            start,
+            "{start:?} 选 preview 不得动档位"
+        );
+        // 模型侧文本如实记录「选定了 preview」，模型据此去加载 preview 技能
+        let summary = outcome.data["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("preview"), "{start:?}: {summary}");
+    }
+}
+
+/// 交叉用例 2a：四选项门里 preview 不进批准候选——主批准项是带 mode 的推荐项 `approve`。
+#[test]
+fn fused_gate_primary_approve_id_skips_preview() {
+    let q = fused_gate_question();
+    assert!(approval_shape(std::slice::from_ref(&q)));
+    assert!(arch_gate_shape(std::slice::from_ref(&q)));
+    assert_eq!(
+        approve_option_id(std::slice::from_ref(&q)).as_deref(),
+        Some("approve"),
+        "四选项门的主批准项应是带 mode 的推荐项，而不是 preview"
+    );
+}
+
+/// 交叉用例 2b（异常形态）：把 preview 的 label 写成批准类措辞（宽松匹配会命中）并标 recommended、
+/// 且声明在首位——它仍不得被选为批准候选，也不得让 `approved` 为真。
+#[tokio::test]
+async fn fused_gate_preview_with_approve_like_label_never_becomes_approval() {
+    use crate::core::prefs::ApprovalMode;
+    // 前提：这份 label 确实会被宽松批准匹配命中（所以必须靠剔除，而非靠措辞）
+    assert!(is_approve_option(&opt("preview", "执行方案预览")));
+    let mut q = fused_gate_question();
+    q.options = vec![
+        // preview 声明在首位 + 也标 recommended：不剔除就会被 min_by_key 选为主批准项
+        Option2 {
+            recommended: true,
+            ..opt("preview", "执行方案预览")
+        },
+        Option2 {
+            recommended: true,
+            ..opt_mode("approve", "以自动编辑档执行", ApprovalMode::AutoEdit)
+        },
+        opt_mode("approve_full", "以完全访问档执行", ApprovalMode::FullAccess),
+        opt("revise", "补充意见"),
+    ];
+    assert_eq!(
+        approve_option_id(std::slice::from_ref(&q)).as_deref(),
+        Some("approve"),
+        "preview 即便 label 批准样 + recommended + 声明在首位，也不得成为批准候选"
+    );
+    // 选中它不产生批准意图（无 mode 声明 → selected_target_mode 为 None）
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &fused_preview_answer()),
+        None
+    );
+
+    // 完整流程复核（Plan 档，门内条件齐备）：选 preview 不批准、不切档、不冻结基线
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按上述计划执行？", "single": true,
+            "options": [
+                { "id": "preview", "label": "执行方案预览", "recommended": true },
+                { "id": "approve", "label": "以自动编辑档执行", "mode": "auto_edit", "recommended": true },
+                { "id": "approve_full", "label": "以完全访问档执行", "mode": "full_access" },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }],
+        "switchToAutoEdit": true
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, fused_preview_answer()).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "不得冻结 todos 基线"
+    );
+    assert_eq!(ctx.rt.prefs().approval_mode, ApprovalMode::Plan);
+}
+
+/// 交叉用例 3：preview 的识别仍限批准形询问——非批准形询问里的同名选项不被认作预览项。
+/// 单题普通询问已由 `preview_only_detection_excludes_other_answers`（本文件末尾之前一处）覆盖，
+/// 这里补多题形态（多题永不算批准形）。
+#[test]
+fn preview_recognition_stays_limited_to_approval_shape() {
+    let multi = vec![
+        Question {
+            id: "q1".into(),
+            question: "选一个".into(),
+            options: vec![opt("preview", "先看预览"), opt("a", "甲")],
+            single: false,
+        },
+        Question {
+            id: "q2".into(),
+            question: "再选一个".into(),
+            options: vec![opt("b", "乙")],
+            single: false,
+        },
+    ];
+    assert!(!approval_shape(&multi));
+    assert!(preview_option_ids(&multi).is_empty());
+    let answer = json!({ "answers": {
+        "q1": { "selections": ["preview"], "note": "" },
+        "q2": { "selections": ["b"], "note": "" }
+    }});
+    assert!(!preview_only(&multi, &answer));
+}
+
+/// 交叉用例 4：四选项门下 approve / approve_full / revise 三条对照——选带 mode 的项即批准且切到
+/// 该项声明的档位；选 revise 不批准、档位不变。
+#[tokio::test]
+async fn fused_gate_choices_match_declared_modes() {
+    use crate::core::prefs::ApprovalMode;
+    // (选中项, 期望档位, 是否批准)
+    for (choice, expect_mode, expect_approved) in [
+        ("approve", ApprovalMode::AutoEdit, true),
+        ("approve_full", ApprovalMode::FullAccess, true),
+        ("revise", ApprovalMode::Plan, false),
+    ] {
+        let ctx = plan_ctx();
+        register_todos(&ctx, &["a"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome = drive_ask_with_answer(&ctx, fused_gate_args(true), gate_answer(choice)).await;
+        assert!(outcome.ok, "{choice}: {outcome:?}");
+        if expect_approved {
+            assert_eq!(outcome.data["plan_approved"], json!(true), "{choice}");
+            assert!(
+                ctx.rt.approved_plan.lock().unwrap().is_some(),
+                "{choice} 应冻结 todos 基线"
+            );
+        } else {
+            assert_eq!(outcome.data["plan_approved"], Value::Null, "{choice}");
+            assert!(
+                ctx.rt.approved_plan.lock().unwrap().is_none(),
+                "{choice} 不得冻结 todos 基线"
+            );
+        }
+        assert_eq!(ctx.rt.prefs().approval_mode, expect_mode, "{choice}");
+    }
+}
+
+/// 疑点钉死：`approval_shape`（tool.rs:451-453）是宽松渲染标记，注释明确「无安全语义」，且**不剔除 preview**——
+/// preview 自身的 id/label 命中 `is_approve_option`（如 label 含「执行方案」）时，`approval` 标记会被它点亮。
+/// 这里把安全边界钉死：即便如此，preview 也 ① 不进批准候选（approve_id = None）、
+/// ② 不让 approved 为真（选它不批准、不切档、不冻结基线）。
+/// 注意：**不得**把 approval_shape 收紧成「剔除 preview」——`preview_option_ids`（tool.rs:491-494）以它为前置，
+/// 收紧会让「preview 是唯一批准样选项」这一形态失去预览识别 → preview_only 变假 →
+/// ConfirmEach 的 valid_answer 通道（tool.rs:318-326）会把档位静默抬到 AutoEdit。
+#[tokio::test]
+async fn preview_only_approve_like_option_never_becomes_approval() {
+    use crate::core::prefs::ApprovalMode;
+    // 前提：这份 label 确实会被宽松批准匹配命中
+    assert!(is_approve_option(&opt("preview", "执行方案预览")));
+    let q = Question {
+        id: "approve_plan".into(),
+        question: "是否按上述计划执行？".into(),
+        options: vec![
+            Option2 {
+                recommended: true,
+                ..opt("preview", "执行方案预览")
+            },
+            opt("revise", "补充意见"),
+        ],
+        single: true,
+    };
+    // 宽松渲染标记：单题 + 有批准样选项 → 批准形（前端据此渲染单选 + 直提；无安全语义）
+    assert!(approval_shape(std::slice::from_ref(&q)));
+    // 但 preview 不进批准候选 → 前端拿到的 approve_id 为 None（不会把 preview 当批准项直提）
+    assert_eq!(approve_option_id(std::slice::from_ref(&q)).as_deref(), None);
+    // 选中它也不产生批准意图
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview"], "note": "" } } });
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &answer),
+        None
+    );
+    assert!(preview_only(std::slice::from_ref(&q), &answer));
+
+    // 完整流程复核（Plan 档，门内条件齐备）：选 preview 不批准、不切档、不冻结基线
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["a"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let args = json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按上述计划执行？", "single": true,
+            "options": [
+                { "id": "preview", "label": "执行方案预览", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }],
+        "switchToAutoEdit": true
+    });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(
+        ctx.rt.approved_plan.lock().unwrap().is_none(),
+        "不得冻结 todos 基线"
+    );
+    assert_eq!(ctx.rt.prefs().approval_mode, ApprovalMode::Plan);
+}
+
+/// 非闸形状的普通 ConfirmEach 询问：任一有效应答照旧轻量切档（既有语义不得被上一处的收紧带坏）。
+#[tokio::test]
+async fn non_gate_ask_still_light_switches_in_confirm_each() {
+    let ctx = ask_ctx_mode(crate::core::prefs::ApprovalMode::ConfirmEach);
+    let args = json!({
+        "questions": [{ "id": "pick", "question": "选一个", "options": [
+            { "id": "a", "label": "甲" },
+            { "id": "b", "label": "乙" }
+        ]}]
+    });
+    let answer = json!({ "answers": { "pick": { "selections": ["b"], "note": "" } } });
+    let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+    assert!(outcome.ok, "{outcome:?}");
+    assert_eq!(outcome.data["plan_approved"], Value::Null);
+    assert!(
+        matches!(
+            ctx.rt.prefs().approval_mode,
+            crate::core::prefs::ApprovalMode::AutoEdit
+        ),
+        "非闸形状询问的有效应答仍应轻量切档"
+    );
+}
+
+// ---------- 宽松批准通道的预览剔除（安全：单边静默提权）----------
+// 批准判定有两条通道：结构化通道（选中项声明 mode → selected_target_mode）与宽松兜底通道
+// （选中项 id 子串匹配 approve/执行 + 批准候选 id）。`approve_ids` 已剔除预览项，宽松子串通道
+// 此前**没有**：模型把「先看预览」的 id 自拟成含 approve 的形态（如 `preview_approve`）时，
+// 「选先看预览」会被宽松通道算成批准，与 preview 语义（不批准 / 不切档 / 不冻结基线）直接冲突；
+// 前端的宽松匹配已剔除预览项，后端不剔除就是「前端不切档、后端切档」的单边静默提权。
+
+/// 自拟 id 的预览项批准门（label 守约「先看预览」，id 含 `approve` 子串 → 宽松子串匹配会命中）。
+fn preview_approve_like_gate_args(single: bool) -> Value {
+    json!({
+        "questions": [{
+            "id": "approve_plan", "question": "是否按上述计划执行？", "single": single,
+            "options": [
+                { "id": "preview_approve", "label": "先看预览" },
+                { "id": "approve", "label": "以自动编辑档执行", "mode": "auto_edit", "recommended": true },
+                { "id": "revise", "label": "补充意见" }
+            ]
+        }],
+        "switchToAutoEdit": true
+    })
+}
+
+/// 同上形态的 Question 视图（纯函数断言用）。
+fn preview_approve_like_question(single: bool) -> Question {
+    use crate::core::prefs::ApprovalMode;
+    Question {
+        id: "approve_plan".into(),
+        question: "是否按上述计划执行？".into(),
+        options: vec![
+            opt("preview_approve", "先看预览"),
+            opt_mode("approve", "以自动编辑档执行", ApprovalMode::AutoEdit),
+            opt("revise", "补充意见"),
+        ],
+        single,
+    }
+}
+
+/// 自拟 id 的预览项：选中它不批准、不切档、不冻结基线（逐项确认档 / 计划档两个起点各一次）。
+#[tokio::test]
+async fn preview_approve_like_id_choice_never_approves_from_either_mode() {
+    use crate::core::prefs::ApprovalMode;
+    // 前提：这份 id 会被宽松子串匹配命中（含 approve），label 兜底仍认它是预览项
+    assert!(is_approve_option(&opt("preview_approve", "先看预览")));
+    let q = preview_approve_like_question(true);
+    assert!(preview_option_ids(std::slice::from_ref(&q)).contains("preview_approve"));
+    let answer =
+        json!({ "answers": { "approve_plan": { "selections": ["preview_approve"], "note": "" } } });
+    assert!(preview_only(std::slice::from_ref(&q), &answer));
+    // 结构化通道天然不批准（预览项不带 mode）
+    assert_eq!(
+        selected_target_mode(std::slice::from_ref(&q), &answer),
+        None
+    );
+
+    for start in [ApprovalMode::ConfirmEach, ApprovalMode::Plan] {
+        let ctx = ask_ctx_mode(start);
+        // 门内条件齐备：万一被误判成批准会真的走到批准路径，而不是被 G2/G3 拦住掩盖成假绿
+        register_todos(&ctx, &["a"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome =
+            drive_ask_with_answer(&ctx, preview_approve_like_gate_args(true), answer.clone()).await;
+        assert!(outcome.ok, "{start:?}: {outcome:?}");
+        assert_eq!(
+            outcome.data["plan_approved"],
+            Value::Null,
+            "{start:?} 选先看预览不得批准"
+        );
+        assert!(
+            ctx.rt.approved_plan.lock().unwrap().is_none(),
+            "{start:?} 不得冻结 todos 基线"
+        );
+        assert_eq!(ctx.rt.prefs().approval_mode, start, "{start:?} 不得动档位");
+        let summary = outcome.data["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("preview_approve"), "{start:?}: {summary}");
+    }
+}
+
+/// **判别力用例**：预览项与别的项同时被选中 → `preview_only` 不成立，
+/// 此时唯一拦住「选先看预览被算成批准」的就是宽松通道里的预览剔除。
+/// 去掉剔除逻辑：ConfirmEach 起点会被轻量切到自动编辑档、Plan 起点会直接批准并冻结基线（本用例变红）。
+#[tokio::test]
+async fn preview_approve_like_id_with_other_selection_never_approves_from_either_mode() {
+    use crate::core::prefs::ApprovalMode;
+    let q = preview_approve_like_question(false);
+    let answer = json!({ "answers": { "approve_plan": { "selections": ["preview_approve", "revise"], "note": "" } } });
+    // 前提：多选载荷不算「只看预览」——preview_only 这道双保险在这里不生效
+    assert!(!preview_only(std::slice::from_ref(&q), &answer));
+    assert!(preview_only(
+        std::slice::from_ref(&q),
+        &json!({ "answers": { "approve_plan": { "selections": ["preview_approve"], "note": "" } } })
+    ));
+
+    for start in [ApprovalMode::ConfirmEach, ApprovalMode::Plan] {
+        let ctx = ask_ctx_mode(start);
+        register_todos(&ctx, &["a"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome =
+            drive_ask_with_answer(&ctx, preview_approve_like_gate_args(false), answer.clone())
+                .await;
+        assert!(outcome.ok, "{start:?}: {outcome:?}");
+        assert_eq!(
+            outcome.data["plan_approved"],
+            Value::Null,
+            "{start:?}：预览项不得借宽松子串通道被算成批准"
+        );
+        assert!(
+            ctx.rt.approved_plan.lock().unwrap().is_none(),
+            "{start:?} 不得冻结 todos 基线"
+        );
+        assert_eq!(ctx.rt.prefs().approval_mode, start, "{start:?} 不得动档位");
+    }
+}
+
+/// 对照（防过度剔除）：同一个门里选真正的批准项（带 mode 的 `approve`）仍照常批准 + 切到 auto_edit。
+#[tokio::test]
+async fn real_approve_option_still_approves_next_to_preview_approve_like_id() {
+    use crate::core::prefs::ApprovalMode;
+    for start in [ApprovalMode::ConfirmEach, ApprovalMode::Plan] {
+        let ctx = ask_ctx_mode(start);
+        register_todos(&ctx, &["a"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let answer =
+            json!({ "answers": { "approve_plan": { "selections": ["approve"], "note": "" } } });
+        let outcome =
+            drive_ask_with_answer(&ctx, preview_approve_like_gate_args(true), answer).await;
+        assert!(outcome.ok, "{start:?}: {outcome:?}");
+        assert_eq!(
+            outcome.data["plan_approved"],
+            json!(true),
+            "{start:?} 真批准项仍应批准"
+        );
+        assert!(
+            ctx.rt.approved_plan.lock().unwrap().is_some(),
+            "{start:?} 应冻结 todos 基线"
+        );
+        assert_eq!(
+            ctx.rt.prefs().approval_mode,
+            ApprovalMode::AutoEdit,
+            "{start:?} 应切到所选档位"
+        );
+    }
 }

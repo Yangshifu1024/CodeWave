@@ -92,6 +92,15 @@ export const ipc = {
   readWorkspaceFileBase64: (sessionId: string, path: string) =>
     invoke<{ path: string; size: number; content: string }>("read_workspace_file_base64", { sessionId, path }),
 
+  // [docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)：工具结果原样 sidecar 批量回读。
+  // 只应针对「历史里那份模型侧文本解析失败」的调用发起（那些才可能被瘦身/截断）；
+  // 缺失 / 非法键 / 超限的条目不会出现在返回里，故前端无需区分「无备份」与「读失败」。
+  loadToolOutcomes: (sessionId: string, callIds: string[]) =>
+    invoke<{ call_id: string; outcome: any; duration_ms?: number | null }[]>("load_tool_outcomes", {
+      sessionId,
+      callIds,
+    }),
+
   // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：文档预览取数
   /** 表格 / 文档 / PDF 的结构化预览数据（与 read_document 工具同一条解析路径；失败时 reject 的错误文本形如 "E_XXX: 说明"） */
   previewDocument: (

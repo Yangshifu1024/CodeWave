@@ -184,6 +184,33 @@ export interface SessionMeta {
   running: boolean;
   /** 上次运行被中断的标记（崩溃 = crash / 正常退出前中止 = quit；null = 无中断）；清除走 clear_session_interrupt */
   interrupted: { kind: "crash" | "quit"; at: string } | null;
+  /** 上次历史保存的状态（[docs/session-history-limits](../../../docs/session-history-limits.md)；缺省 = 干净）。
+   *  挂在索引上——历史写失败时索引仍能写成功，这是「重启后仍可见」的载体：只要状态在就每次打开该会话都提示，
+   *  后端下一次干净保存后自动清空（前端不做「已读」交互、不加本地持久化）。 */
+  history_status?: HistoryStatus;
+}
+
+/** 历史未完整保存的状态（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+ *  `degraded` = 有损保存（剥掉图片 payload / 按轮丢弃历史），`rejected` = 超限拒存（磁盘上仍是上一次成功保存的历史）。 */
+export interface HistoryStatus {
+  kind: "degraded" | "rejected";
+  /** 被剥掉图片 payload 的张数（degraded 才有） */
+  stripped_images?: number;
+  /** 因超限被丢弃的轮数（degraded 才有） */
+  dropped_rounds?: number;
+  /** 状态产生时刻（RFC3339） */
+  at: string;
+  /** 拒存原因（rejected 才有） */
+  reason?: string;
+}
+
+/** 一次历史保存的结果（`run:done` 载荷的可选字段 `history_save`，**仅当保存不干净时后端才带上**）：
+ *  `saved === false` = 拒存；`saved === true` 且有降级计数 = 有损保存；两者皆无 = 干净（前端零打扰）。 */
+export interface HistorySaveReport {
+  saved: boolean;
+  stripped_images: number;
+  dropped_rounds: number;
+  bytes: number;
 }
 
 /** 具名项目：名称 + 项目主目录（单目录语义）；

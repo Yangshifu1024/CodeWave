@@ -4,8 +4,19 @@
 pub mod cleanup;
 pub mod interrupt;
 pub mod repair;
+// 工具结果原样 sidecar（历史里只有模型侧瘦身文本，恢复需要完整出参）
+pub mod tool_results;
+// 图片外置存储与历史落盘 DTO（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+// 历史文件里只留 blob 引用，base64 原文落到 `sessions/<owner>.imgblob/`
+pub(crate) mod image_blobs;
+pub(crate) mod persist;
 
 mod store;
 
 pub use cleanup::{CleanupOutcome, CleanupPreview, CleanupStatus};
-pub use store::{ArtifactKind, ArtifactOp, SessionMeta, SessionStore};
+// `SaveReport` / `HistoryStatus` 是调用方契约（`core/agent/drive.rs` 的 checkpoint 返回值、
+// 前端 `SessionMeta.history_status` 的载荷）：定义在 store.rs、经本模块转出。
+// 转出是必要的（`mod store` 私有，外部只能走这里），而本 crate 的非测试代码尚未引用它们
+// （由调用方接线时使用），故显式 allow，不新增一条「未使用导入」噪音。
+#[allow(unused_imports)]
+pub use store::{ArtifactKind, ArtifactOp, HistoryStatus, SaveReport, SessionMeta, SessionStore};

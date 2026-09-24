@@ -106,16 +106,33 @@ export default function AskPanel() {
     void useRun.getState().resolveAsk(ask!.askId, { approved: option.approved, always: option.always });
   }
 
+  // [docs/mode-gate-and-subagent-sync]：带 mode 的选项 = 批准类选项——即便后端未下发 approval 标记也按批准形渲染
+  // （防契约漏字段导致点选不直提）。
   const approvalShape =
     ask.approval === true ||
-    // 带 mode 的选项 = 批准类选项：即便后端未下发 approval 标记也按批准形渲染（防契约漏字段导致点选不直提）
     modeById.size > 0 ||
     (questions.length === 1 && (questions[0]?.options ?? []).some((o) => o.id === "approve"));
+  // 批准闸形状（与后端 arch_gate_shape 同口径：单题 + 含 id="approve"）：该形状上只有选中批准项才动档位——
+  // 「补充意见」是「别开工，我要改方案」，不切档（免得前端把胶囊抬到自动编辑档而后端没动，两侧分叉）
+  const gateShape =
+    questions.length === 1 && ((questions[0]?.options ?? []) as any[]).some((o) => o.id === "approve");
   // 计划批准去重前置条件（下方 .q-text 渲染消费）：单题 + 批准形 + 带计划卡的 ask
   const planApprovalSingle = isPlan && questions.length === 1 && approvalShape;
   const approveId = ask.approveId ?? null;
   const approveOptionId =
     approveId ?? ((questions[0]?.options ?? []).find((o) => o.id === "approve")?.id ?? null);
+  // 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门的第四选项，语义是「先看预览」——
+  // 既不是批准、也不算有效应答（后端 preview_only 同样排除），故既不触发切档，也不能被当成批准项。
+  // 只在批准形询问里认（与后端 preview_option_ids 同口径；普通澄清询问里的同名选项不受影响）
+  const previewOptionId = approvalShape
+    ? ((questions[0]?.options ?? []) as any[]).find((o) => {
+        // 与后端 is_preview_option 同口径：id 优先（大小写不敏感），模型自拟 id 时按 label 兜底
+        // （认不出预览项，它就会落回「有效应答」→ ConfirmEach 档被静默切档）
+        const id = String(o?.id ?? "").toLowerCase();
+        const label = String(o?.label ?? "").toLowerCase();
+        return id === "preview" || label.includes("先看预览") || label.includes("preview first");
+      })?.id ?? null
+    : null;
 
   /** 选项说明行：后端下发的 description 优先；完全访问档**恒定**追加兜底风险说明
    *  （[docs/mode-gate-and-subagent-sync]：选它会跳过所有审批弹窗，必须就地说明代价）。
@@ -154,8 +171,14 @@ export default function AskPanel() {
    *  结构化路径 = 选项带 mode（批准门两个档位选项，都可直提）；兼容路径 = 旧形态按后端 approve_id。
    *  直提走**合并已选状态**的提交（多题场景下不丢其他题的已选答案）。 */
   function pickAndSubmitIfApprove(qid: string, optId: string) {
+    // 直提候选三选一：① 带 mode 的档位选项（结构化，两个档位都可直提）；② 兼容路径的批准项（approve_id）；
+    // ③ 批准门第四选项「先看预览」——四选项的批准门里，让用户为「先看预览」再点一次「提交回答」纯属多余；
+    // 预览项提交后不切档（后端 preview_only 排除），只是把「要看预览」这件事交给模型
     const direct =
-      approvalShape && (modeById.has(optId) || (approveOptionId != null && optId === approveOptionId));
+      approvalShape &&
+      (modeById.has(optId) ||
+        (approveOptionId != null && optId === approveOptionId) ||
+        (previewOptionId != null && optId === previewOptionId));
     if (direct) {
       // 合并已选状态后再直提（缺陷修复：此前只带当前题的答案，多题场景下其他题已选/已填的内容被丢弃；
       // 单题批准门是主路径，不受影响）——本次点击覆盖当前题，其余题保持已选值
@@ -195,10 +218,17 @@ export default function AskPanel() {
     let approvedMode: ApprovalMode | null = null;
     // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：有效应答（≥1 题 selections 非空或有说明）与后端 has_valid_answer 对齐
     let anyAnswer = false;
+    // 预览-only（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准形询问里选中的项全是预览项、
+    // → 不算有效应答（与后端 preview_only 判定对齐；补充说明不算表态）。不排除它，ConfirmEach 档会因
+    // 「有效应答 / arch 闸标记」把会话静默切到自动编辑档并按方案开工
+    let allPreview = approvalShape && previewOptionId != null;
+    let sawPreview = false;
     for (const q of questions) {
       const sel = override[q.id] ?? selected[q.id] ?? [];
       const note = notesSrc[q.id] ?? "";
       answers[q.id] = { selections: sel, note };
+      if (previewOptionId != null && sel.includes(previewOptionId)) sawPreview = true;
+      if (sel.some((s) => s !== previewOptionId)) allPreview = false;
       // 结构化判定（[docs/mode-gate-and-subagent-sync]）：选中带 mode 的选项即批准，并记下要切到的档位
       for (const s of sel) {
         const mode = modeById.get(s);
@@ -209,11 +239,18 @@ export default function AskPanel() {
       }
       // Plan 档协议：选中批准选项即在本地把胶囊同步为批准档位（后端在 ask 工具内切档）
       // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：兼容路径——批准命中后端下发的 approve_id；保留字面 / 正则兜底（旧载荷无 mode / 无 id 情形）
+      // **预览项先剔除**（[docs/preview-skill](../../../../docs/preview-skill.md)）：模型把预览项 id 自拟成含 approve / 执行方案
+      // 字样（真实形态：id=preview_approve、label 守约「先看预览」，previewOptionId 的 label 兜底认得出它）时，
+      // 宽松匹配会拿它的 id 当批准命中 → approved=true → planPath / switchToAutoEdit 通道把胶囊单边切到自动编辑档，
+      // 而后端 approved_hit 已剔除 preview_ids、preview_only 也不切档 → 用户可见结果就是**单边静默提权**。
+      // 与本条同批的收紧口径（后端）：候选集 = 批准类选项 − preview_option_ids。
+      // 注意 previewOnly 只在下方管「有效应答」轻量通道，管不到这条批准通道——故必须在此处过滤，不能靠它兜底。
+      const approveCandidates = previewOptionId == null ? sel : sel.filter((s) => s !== previewOptionId);
       if (
         !approved &&
-        (sel.includes("approve") ||
-          sel.some((s) => /approve|执行方案/i.test(s)) ||
-          (approveOptionId != null && sel.includes(approveOptionId)))
+        (approveCandidates.includes("approve") ||
+          approveCandidates.some((s) => /approve|执行方案/i.test(s)) ||
+          (approveOptionId != null && approveCandidates.includes(approveOptionId)))
       ) {
         approved = true;
       }
@@ -229,18 +266,30 @@ export default function AskPanel() {
     // 提交按钮看似失效）-> 改用 getState() 命令式读取
     // 同步条件（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) R1 + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：后端即将切档时本地同步胶囊，使胶囊/前端状态/后端
     // 三方一致；否则后续全量 updatePrefs 覆盖会把后端的 AutoEdit 静默翻回——
+
+    // 「只看预览」不算切档依据——补充说明不算表态，只看选中的项；后端 preview_only 同样封掉两条通道：
+    // ① 结构化选档（选中带 mode 的选项）② ConfirmEach 的有效应答 / arch 批准闸。
+    const previewOnly = allPreview && sawPreview;
+    const answerEffective = anyAnswer && !previewOnly;
     // (1) 批准门选档：只要本次应答带 mode 就同步（**与后端 wants_mode_switch 同源**，不看当前档位——
     //     档位已是 auto_edit / full_access 时后端照样会切档（含 auto_edit → full_access 升级），
     //     此前只在 plan / confirm_each 两条路径同步，正是「后端切了档、前端不跟」的根因）；
     // (2) plan 档批准协议 / arch 批准闸（switchToAutoEdit）；(3) ConfirmEach 有效应答
-    if (approved || anyAnswer) {
+    //     （批准闸上只有批准项触发轻量切档，与后端 gate_shape 收紧同口径；非闸形状询问保持既有语义）
+    if (approved || answerEffective) {
       const { tabs, activeKey, updatePrefs } = useSessions.getState();
       const tab = tabs.find((t) => t.key === activeKey);
-      const planPath = approved && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
-      const lightPath = tab?.prefs.approval_mode === "confirm_each" && anyAnswer;
+      // 两条读 approved 的通道都要再乘 !previewOnly（与后端 `switch = !preview_only_answer && …` 同口径）：
+      // approved 只由「选中项带 mode」（结构化）或「命中批准候选」（兼容）得出，两者都挡不住
+      // 「模型违约给预览项挂 mode」——该载荷下 approved=true，planPath（plan 档或 switchToAutoEdit 标志）
+      // 与 modePath（approvedMode 非空）都会单边把胶囊切档，而后端 preview_only_answer 为真、根本不切 →
+      // 用户可见结果就是**单边静默提权**。lightPath 已由 answerEffective（含 !previewOnly）封住，无需再乘。
+      const planPath = approved && !previewOnly && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
+      const lightPath =
+        tab?.prefs.approval_mode === "confirm_each" && answerEffective && (!gateShape || approved);
       // [docs/mode-gate-and-subagent-sync]：结构化路径（选中的选项带 mode）优先且不看当前档位；
       // 旧形态（无 mode）走既有回落：仅 plan / confirm_each 两条路径同步，档位回落 auto_edit
-      const modePath = approvedMode != null;
+      const modePath = approvedMode != null && !previewOnly;
       if (tab && (modePath || planPath || lightPath)) {
         void updatePrefs(tab.key, { approval_mode: approvedMode ?? "auto_edit" });
       }

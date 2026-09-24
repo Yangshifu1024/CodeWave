@@ -634,6 +634,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
+  "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
   "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
 };
 

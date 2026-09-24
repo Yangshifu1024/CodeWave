@@ -8,6 +8,7 @@ import { collapseDiff, type DiffLine } from "../../utils/diff";
 import { shortestUniqueLabels } from "../../utils/path";
 import CodeBlock from "../../components/CodeBlock";
 import { askAnswerRows } from "./askAnswerRows";
+import WidgetPreviewModal from "./WidgetPreviewModal";
 
 // 工具名 -> i18n 键映射（内置工具；mcp__ 前缀的工具名原样展示）
 const VERBS: Record<string, string> = {
@@ -36,8 +37,19 @@ const NEUTRAL_ERR_KEYS: Record<string, string> = {
 function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () => void }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  // render_html 的弹框预览开关（[docs/html-preview-modal](../../../../docs/html-preview-modal.md)）：
+  // 卡片内不再内嵌渲染 HTML，只留头部入口；状态放卡片本地——卡片卸载（切 Tab/会话、历史重建）即关闭，
+  // 不必为它动 ui store（也避开 store 单例在测试间残留的坑）
+  const [widgetOpen, setWidgetOpen] = useState(false);
 
   const data: any = useMemo(() => tool.outcome?.data ?? {}, [tool.outcome?.data]);
+  // 出参 html 才是「可预览」的判据：历史恢复时若工具结果被模型侧头尾压缩截断，
+  // data 会退化成 { restored: true } 占位 → 没有 html，此时入口不渲染、只给一行提示（不点了报错）
+  const widgetHtml: string = typeof data.html === "string" ? data.html : "";
+  const hasWidget = tool.tool === "render_html" && widgetHtml !== "";
+  // 「历史未保留预览内容」只在真·历史占位时出现：运行中（data 还是空对象）与失败（data 为 null）都不该说这句话
+  const restoredPlaceholder = tool.tool === "render_html" && !hasWidget && data?.restored === true;
+  const widgetTitle: string = typeof data.title === "string" ? data.title : "";
   const files: any[] = data.files ?? [];
   const isEditLike = ["edit", "create"].includes(tool.tool);
 
@@ -95,6 +107,8 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
       // 同名文件（a/ui.ts / b/ui.ts）向前扩段区分：同一天读到多个 index.ts 时头部摘要不再无从分辨
       return shortestUniqueLabels(paths).filter(Boolean).join(", ");
     }
+    // render_html：入参白名单里没有 title，出参的 title 才是「这个小组件叫什么」
+    if (tool.tool === "render_html") return widgetTitle;
     try {
       const args = JSON.parse(tool.argsPreview ?? "{}");
       if (args.url) return String(args.url).slice(0, 60);
@@ -199,6 +213,20 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
         <span className="verb">{verbLabel}</span>
         {tool.tool !== "?" && <code className="tool-name">{displayName}</code>}
         {summary && <span className="summary" title={summary}>{summary}</span>}
+        {/* render_html 入口：头部点击 = 展开/收起，按钮必须截断冒泡，否则点「预览」会顺带把卡片展开 */}
+        {hasWidget && (
+          <Button
+            size="small"
+            style={{ fontSize: 11 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setWidgetOpen(true);
+            }}
+          >
+            {t("tools.preview")}
+          </Button>
+        )}
+        {restoredPlaceholder && <span className="dim">{t("tools.previewUnavailable")}</span>}
         {tool.durationMs != null && <span className="dur">{(tool.durationMs / 1000).toFixed(1)}s</span>}
         <span className="chev">{expanded ? "▾" : "▸"}</span>
       </div>
@@ -302,13 +330,12 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
             </>
           ) : tool.tool === "render_html" ? (
             <>
-              <div className="kv dim">{data.title}</div>
-              <iframe
-                className="widget"
-                srcDoc={data.html}
-                sandbox="allow-scripts"
-                style={{ border: "1px solid var(--ws-border)", borderRadius: 8, width: "100%", maxHeight: 480 }}
-              />
+              {/* 卡片内不再内嵌渲染（弹框承载）；展开体只说明「是什么 + 多大」 */}
+              {widgetTitle !== "" && <div className="kv dim">{widgetTitle}</div>}
+              {hasWidget && (
+                <div className="kv dim">{t("tools.previewChars", { n: data.chars ?? widgetHtml.length })}</div>
+              )}
+              {restoredPlaceholder && <div className="kv dim">{t("tools.previewUnavailable")}</div>}
             </>
           ) : tool.tool === "ask" ? (
             <>
@@ -344,6 +371,16 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
             <div className="warn" key={`w${i}`}>{w}</div>
           ))}
         </div>
+      )}
+
+      {hasWidget && (
+        <WidgetPreviewModal
+          open={widgetOpen}
+          title={widgetTitle || t("tools.render_html")}
+          html={widgetHtml}
+          chars={data.chars}
+          onClose={() => setWidgetOpen(false)}
+        />
       )}
     </div>
   );

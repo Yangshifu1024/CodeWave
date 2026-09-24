@@ -159,6 +159,7 @@ mod tests {
             running: false,
             interrupted: None,
             last_opened_at: None,
+            history_status: None,
         }
     }
 

@@ -360,6 +360,7 @@ pub fn run() {
             host::commands::list_sessions,
             host::commands::load_session,
             host::commands::load_subagent_history,
+            host::commands::load_tool_outcomes,
             host::commands::delete_session,
             host::commands::rename_session,
             host::commands::start_chat,
