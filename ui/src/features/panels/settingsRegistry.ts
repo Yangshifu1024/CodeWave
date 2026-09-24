@@ -459,6 +459,17 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpTestOk", // → mcp 页：测试成功结果
   "mcpTestFail", // → mcp 页：测试失败结果
   "mcpTestNoReply", // → mcp 页：测试无响应兜底文案
+  "mcpColSource", // → app.mcp_status：来源列
+  "mcpColPid", // → app.mcp_status：PID 列
+  "mcpColActions", // → app.mcp_status：操作列
+  "mcpSourceGlobal", // → app.mcp_status：来源 = 全局
+  "mcpSourceProject", // → app.mcp_status：来源 = 项目
+  "mcpSourceProjectOverrides", // → app.mcp_status：来源 = 项目（覆盖全局）
+  "mcpStateEvicted", // → app.mcp_status：已淘汰（资源上限）
+  "mcpStateConfigError", // → app.mcp_status：配置错
+  "mcpActionDisconnect", // → 动作：断开单个 server
+  "mcpActionReconnect", // → 动作：重连单个 server
+  "mcpToolsFiltered", // → app.mcp_status：工具数带「已过滤 N」标注
   "skillsHint", // → disabled_skills 的目录来源说明
   "skillsEmpty", // → disabled_skills 的空态（批④ 修缺陷：不再借用 sessions.empty）
   "reloadSkills", // → 动作：重新加载技能

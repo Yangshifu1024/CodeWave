@@ -23,7 +23,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, McpConfigIssue, McpScope, McpServerView, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -310,6 +310,8 @@ export default function SettingsPage() {
   const [mcpProjectPath, setMcpProjectPath] = useState<string | null>(null);
   /** 临时测试连接结果（按 server 名；不改动正式连接状态） */
   const [mcpTests, setMcpTests] = useState<Record<string, { ok: boolean; text: string }>>({});
+  /** 合并后的生效条目（状态表的来源列 / 「项目覆盖全局」标注数据源） */
+  const [mcpEffective, setMcpEffective] = useState<McpServerView[]>([]);
   /** MCP 运行时状态（useUi.mcpStatus：mcp:status 事件 upsert；打开设置页与进入 MCP 页各重读一次） */
   const mcpStatus = useUi((s) => s.mcpStatus);
   /** 状态刷新中：按钮转圈 + 防重复点击（只重读状态，不触发连接 / 重连） */
@@ -828,7 +830,22 @@ export default function SettingsPage() {
     setMcpOriginal(normalized);
     setMcpIssues(doc?.issues ?? []);
     setMcpPath(doc?.path ?? "");
+    setMcpEffective(doc?.effective ?? []);
     setMcpTests({});
+  }
+
+  /** 断开单个 server（连接没了但引用还在，可随时重连） */
+  async function disconnectMcp(name: string) {
+    if (!sessionId) return;
+    await ipc.mcpDisconnect(sessionId, [name]).catch(() => null);
+    useUi.setState({ mcpStatus: await ipc.mcpStatus().catch(() => []) });
+  }
+
+  /** 重连单个 server（后端会绕过淘汰防抖立即重拉） */
+  async function reconnectMcp(name: string) {
+    if (!sessionId) return;
+    await ipc.mcpReconnect(sessionId, name).catch((e) => message.error(String(e)));
+    useUi.setState({ mcpStatus: await ipc.mcpStatus().catch(() => []) });
   }
 
   /** 临时测试连接：起 → tools/list → 立即回收，不改动正式连接状态 */
@@ -876,11 +893,16 @@ export default function SettingsPage() {
       const n = e.name.trim();
       if (n && !names.includes(n)) names.push(n);
     }
+    // 来源信息来自配置视图（状态记录本身只有连接信息，两者按 server 名拼在一起）
+    const meta = new Map<string, { source?: McpScope; overridden?: McpScope | null }>();
+    for (const v of mcpEffective) meta.set(v.name, { source: v.source, overridden: v.overridden });
     const byName = new Map(mcpStatus.map((s) => [s.name, s]));
-    const rows = names.map((n) => mcpStatusRow(n, byName.get(n)));
-    for (const s of mcpStatus) if (!names.includes(s.name)) rows.push(mcpStatusRow(s.name, s));
+    const rows = names.map((n) => mcpStatusRow(n, byName.get(n), meta.get(n)));
+    for (const s of mcpStatus) {
+      if (!names.includes(s.name)) rows.push(mcpStatusRow(s.name, s, meta.get(s.name)));
+    }
     return rows;
-  }, [mcpEntries, mcpStatus]);
+  }, [mcpEntries, mcpStatus, mcpEffective]);
 
   /**
    * 切到 MCP 页时重读一次状态：`mcp:status` 事件只在 connect_mcp 之后触发（开会话 / 保存配置），
@@ -1396,7 +1418,14 @@ export default function SettingsPage() {
             </span>
           </div>
           {mcpDirty && <div className="hint">{t("settings.mcpScopeDirtyHint")}</div>}
-          <McpStatusTable rows={mcpStatusRows} refreshing={mcpRefreshing} onRefresh={() => void refreshMcpStatus()} />
+          <McpStatusTable
+            rows={mcpStatusRows}
+            refreshing={mcpRefreshing}
+            onRefresh={() => void refreshMcpStatus()}
+            hasSession={!!sessionId}
+            onDisconnect={(n) => void disconnectMcp(n)}
+            onReconnect={(n) => void reconnectMcp(n)}
+          />
           <div className="settings-subhead">{t("settings.mcpConfigHead")}</div>
           {mcpEntries === null ? (
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失

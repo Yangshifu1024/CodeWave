@@ -2,7 +2,7 @@
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
-import type { SubagentEvent } from "../ipc/types";
+import type { McpStatusPayload, SubagentEvent } from "../ipc/types";
 import type { WritableDraft } from "immer";
 import { ipc } from "../ipc/client";
 import { titleOf, useSessions } from "./sessions";
@@ -378,15 +378,29 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
       useUi.setState({ exitRequest: { running: Array.isArray(p?.running) ? p.running : [] } });
     },
     "mcp:status": (p) => {
-      // 按 name upsert，绝不累积重复项
+      // 按 (作用域, server 名) upsert，绝不累积重复项。
+      // 只按 name 作键是旧实现的串场根因：全局层与项目层可以有同名 server，
+      // 两者是不同条目（后端池键含作用域），按名合并会让它们互相覆盖。
+      const next: McpStatusPayload = {
+        name: p.server,
+        scope: p.scope,
+        state: p.state,
+        tools: p.tools,
+        tools_filtered: p.tools_filtered ?? 0,
+        pid: p.pid ?? null,
+        error: p.error ?? null,
+        note: p.note ?? null,
+      };
       useUi.setState((s) => {
-        const i = s.mcpStatus.findIndex((m) => m.name === p.server);
+        const i = s.mcpStatus.findIndex(
+          (m) => m.name === next.name && m.scope === next.scope,
+        );
         if (i >= 0) {
           const list = s.mcpStatus.slice();
-          list[i] = { name: p.server, state: p.state, tools: p.tools };
+          list[i] = next;
           return { mcpStatus: list };
         }
-        return { mcpStatus: [...s.mcpStatus, { name: p.server, state: p.state, tools: p.tools }] };
+        return { mcpStatus: [...s.mcpStatus, next] };
       });
     },
     "service:update": (p) => {

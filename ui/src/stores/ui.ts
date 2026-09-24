@@ -1,5 +1,6 @@
 // UI 偏好：语言、主题、面板开关、通知堆栈（强调色锁定中性墨色，无自定义强调色）
 import { create } from "zustand";
+import type { McpStatusPayload } from "../ipc/types";
 import { clampNavWidth, clampRightBarWidth, NAV_W_DEFAULT, RB_W_DEFAULT } from "../utils/layout";
 // 设置页页 key 归一（旧页 key 别名 / 非法值回退）与默认页都住在注册表里（纯数据模块，无 React/store 依赖，
 // 所以 store 反向引用它不构成循环：[docs/settings-ia](../../../docs/settings-ia.md)）
@@ -91,7 +92,7 @@ interface UiState {
   showSettings(tab?: string): void;
   /** 空态引导：ProjectNav 监听此标志打开新建项目弹框（用完即复位） */
   createProjectRequested: boolean;
-  mcpStatus: { name: string; state: any; tools: number }[];
+  mcpStatus: McpStatusPayload[];
   /** 应用内通知堆栈；带 sessionId 时点击可回跳对应会话（通知点击回跳批次） */
   notifications: { id: number; title: string; body: string; sessionId?: string }[];
   setLanguage(lang: Lang): void;
