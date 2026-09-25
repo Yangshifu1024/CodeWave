@@ -128,7 +128,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "network.allow_private_network", labelKey: "settings.allowPrivate", page: "network", keywords: ["private", "内网", "局域网", "本地模型"] },
 
   // ---------- 安全与审批 ----------
-  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "危险命令", "弹窗", "审批"] },
+  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "计划模式", "新会话", "完全访问", "审批"] },
   { id: "approval.confirm_outside_create", labelKey: "settings.confirmOutside", page: "security", keywords: ["workspace", "工作区", "新建路径"] },
   { id: "approval.confirm_git_push", labelKey: "settings.confirmPush", page: "security", keywords: ["git", "push", "确认"] },
   { id: "approval.auto_confirm", labelKey: "settings.autoConfirm", page: "security", keywords: ["auto", "自动确认", "超时", "5 分钟"] },
@@ -177,7 +177,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "app.logs_dir", labelKey: "settings.aboutLogsDir", page: "about", keywords: ["log", "logs", "日志", "日志目录", "诊断日志"] },
   { id: "app.repo", labelKey: "settings.aboutRepo", page: "about", keywords: ["repo", "repository", "github", "仓库", "代码仓库", "源码"] },
   { id: "app.license", labelKey: "settings.aboutLicense", page: "about", keywords: ["license", "mit", "许可", "许可证", "开源"] },
-  { id: "ui.auto_update", labelKey: "settings.updates", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
+  { id: "ui.auto_update", labelKey: "settings.autoUpdateCheckbox", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
   { id: "app.check_updates", labelKey: "settings.checkForUpdates", page: "about", keywords: ["update", "更新", "检查更新"] },
 ];
 
@@ -223,7 +223,7 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   // —— 整行列表 / 复合容器 / 动作与只读标记 ——
   "approval.command_allowlist", // 整行命令列表（每行一条 + 删除按钮）
   "disabled_skills", // 整行技能行（名称 / 来源 / 开关 / 删除）
-  "providers", // 供应商列表/新增/编辑三视图复合容器：宽度由 maxWidth 420/560/640 定（本批明确非目标）
+  "providers", // 供应商卡片网格 + 单供应商弹框复合容器
   "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
   "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
@@ -349,16 +349,15 @@ export const SHELL_SETTING_KEYS: string[] = [
   "leaveDiscard", // 三选：放弃改动
   "leaveStay", // 三选：留在原地
 
-  // —— 搜索与进阶折叠的页壳文案（非可配置项；项由 SETTINGS_ITEMS 提供、开关状态存 localStorage） ——
+  // —— 搜索的页壳文案（非可配置项；项由 SETTINGS_ITEMS 提供） ——
   "searchPlaceholder", // 搜索框占位符
   "searchResults", // 结果列表的 aria-label（role=listbox）
   "searchEmpty", // 无命中空态
   "searchEmptyHint", // 无命中引导（动态条目在各自页面内查找）
-  "showAdvanced", // 页级开关文案（含 {{n}} 计数）
-  "advancedHint", // 进阶折叠说明（偏好跨页跨会话）
 
   // —— 界面页的从属文案（项已登记：ui.theme / ui.font_sans / ui.font_mono） ——
-  "themeHint", // → ui.theme 的选择说明
+  "fontGroup", // 界面页字体分组标题（不是独立设置项）
+  "languageHint", // → ui.language 的说明
   "themeSystem", // → ui.theme 选项
   "themeLight", // → ui.theme 选项
   "themeDark", // → ui.theme 选项
@@ -366,6 +365,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "fontReset", // → 字体槽的「恢复默认」按钮
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
+  "providerGeneral", // 模型与供应商页的通用分组标题
   "aiLanguageHint", // → ui.ai_language 的输入说明
   "aiLanguagePlaceholder", // → ui.ai_language 的占位符（批④ 拆出，不再借用 composer.effortDefault）
 
@@ -373,12 +373,17 @@ export const SHELL_SETTING_KEYS: string[] = [
   "addProvider", // 动作：添加供应商
   "addProviderHint", // 弹框说明
   "editProvider", // 动作：编辑供应商
+  "editProviderAction", // 卡片底部动作：编辑
+  "providerDone", // 编辑供应商弹框完成按钮
+  "backToProvider", // 模型编辑弹框内返回供应商表单
   "addModel", // 动作：添加模型
   "editModel", // 动作：编辑模型
+  "saveModel", // 模型编辑步骤的主操作
   "providerName", // 供应商表单字段（亦用于保存校验文案）
   "providerNamePh", // 同上，占位符
   "apiFormat", // 供应商表单字段
   "apiKeys", // 供应商表单字段
+  "apiEndpoint", // 卡片中显示供应商 API 地址的分区标题
   "baseUrl", // 供应商表单字段（亦用于保存校验文案）
   "modelId", // 模型表单字段
   "maxTokens", // 模型表单字段
@@ -393,6 +398,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "typeVideo", // 输入/输出类型选项
   "modelList", // 模型列表分组标题（亦用于保存校验文案）
   "modelsCount", // 模型数量徽标
+  "modelSummary", // 模型列表里的上下文与输出上限摘要
   "noModels", // 空态
   "noProviders", // 空态
   "providerNeedsModel", // 空态引导
@@ -410,6 +416,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "vSaveBlocked", // 保存被拦前缀
 
   // —— 网络与连接的从属文案（项已登记：network.proxy / network.allow_private_network） ——
+  "allowPrivateDesc", // → network.allow_private_network 的说明
   "proxyNone", // → network.proxy 模式卡片
   "proxySystem", // → network.proxy 模式卡片
   "proxyManual", // → network.proxy 模式卡片
@@ -423,14 +430,31 @@ export const SHELL_SETTING_KEYS: string[] = [
   "proxyUrlInvalid", // → network.proxy 的保存校验文案
 
   // —— 安全与审批的从属文案（项已登记：approval.*） ——
+  "approvalEnabledHint", // → approval.enabled 的新会话默认档位说明
   "autoConfirmHint", // → approval.auto_confirm 的说明
-  "cmdAllowlistCwd", // → approval.command_allowlist 的悬浮目录标注
+  "cmdAllowlistCwd", // → approval.command_allowlist 的生效目录
+  "cmdAllowlistCount", // → approval.command_allowlist 的条目数
+  "cmdAllowlistHint", // → approval.command_allowlist 的来源说明
+  "cmdAllowlistEmpty", // → approval.command_allowlist 的空态
+  "cmdAllowlistInvalid", // → approval.command_allowlist 的异常条目兜底
+  "cmdAllowlistShowAll", // → approval.command_allowlist 的展开动作
+  "cmdAllowlistCollapse", // → approval.command_allowlist 的收起动作
+  "cmdAllowlistClear", // → approval.command_allowlist 的全部删除动作
+  "cmdAllowlistClearConfirm", // → approval.command_allowlist 的清空确认标题
+  "cmdAllowlistClearDescription", // → approval.command_allowlist 的清空确认说明
 
   // —— 写入后检查与校验 / MCP / 技能 三页的从属文案（项已登记：post_write_check.* /
   //    mcp.servers / disabled_skills / app.mcp_status） ——
   "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
   "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
   "postWriteCommandPh", // → post_write_check.command 输入框占位
+  "skillsInstalled", // → disabled_skills 的列表分组标题
+  "skillWhen", // → disabled_skills 条目的适用场景前缀
+  "skillToggle", // → disabled_skills 条目的开关 aria-label
+  "agentShellSection", // → shell.selection 与 custom_prompt 的分组标题
+  "agentCompactionSection", // → compact_* 的分组标题
+  "agentCleanupSection", // → sessions.retention_days 与清理动作的分组标题
+  "agentLegacyCleanupSection", // → 旧格式历史清理与状态的分组标题
   "mcpConfigHead", // → MCP 页分段小标题：服务器配置（页名已由 PageKey 承担，段标题走轻量小标题）
   "mcpColState", // → 状态表列头：状态
   "mcpColTools", // → 状态表列头：工具数（该服务器暴露的工具个数）
@@ -452,6 +476,19 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpEnv", // → mcp.servers 条目字段
   "mcpUrl", // → mcp.servers 条目字段
   "mcpAdd", // → 动作：添加服务器
+  "mcpEdit", // → 动作：从配置概览进入编辑
+  "mcpNew",
+  "mcpNoServers",
+  "mcpDelete",
+  "mcpDeleteConfirm",
+  "mcpEditRaw",
+  "mcpEditorCreateTitle",
+  "mcpEditorEditTitle",
+  "mcpBasicSection",
+  "mcpConnectionSection",
+  "mcpTransport",
+  "mcpShowSecret",
+  "mcpHideSecret",
   "mcpSave", // → 动作：保存并重连（MCP 独立文件，不走页级保存）
   "mcpExtraKeys", // → mcp.servers 条目：表单未展示键的「保存时原样保留」提示
   "mcpIssuesHead", // → mcp.servers：保存前结构校验的问题清单标题
@@ -476,6 +513,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpActionDisconnect", // → 动作：断开单个 server
   "mcpActionReconnect", // → 动作：重连单个 server
   "mcpToolsFiltered", // → app.mcp_status：工具数带「已过滤 N」标注
+  "mcpToolCount",
+  "mcpToolNoDescription",
+  "mcpToolFullDescription",
+  "mcpToolsNotReady",
+  "mcpToolsEmpty",
+  "mcpToolsUnavailable",
+  "mcpInactiveScope",
   "mcpHeaders", // → mcp.servers：http 分支的请求头表格
   "mcpArgsAdd", // → 动作：参数表「＋ 添加参数」
   "mcpEnvAdd", // → 动作：环境变量表「＋ 添加变量」
@@ -506,6 +550,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   // —— 会话保留期与清理的从属文案（项已登记：sessions.retention_days / app.cleanup_now / app.cleanup_status）
   //    （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/25/26/27 条） ——
   "sessionRetentionHint", // → sessions.retention_days 的说明
+  "cleanupAction", // → 手动清理行的标题，动作仍由 app.cleanup_now 登记
   "cleanupNever", // → sessions.retention_days 选项：不清理（= null）
   "cleanupDays", // → sessions.retention_days 选项：N 天（带 {{n}}）
   "cleanupNeedRetention", // → 保留期为「不清理」时的按钮禁用原因（先选择保留期）
@@ -550,13 +595,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "legacyHistoryPreviewFailed", // → 预览失败的提示（本次不清理）
 
   // —— 日志的从属文案（项已登记：log.*） ——
+  "logRecordingSection", // → 日志记录分组标题
   "logLevelHint", // → log.level 的说明
   "sessionVerboseHint", // → log.session_verbose 的说明
 
   // —— 关于的从属文案（项已登记：ui.auto_update / app.check_updates / app.version / app.data_dir /
   // app.logs_dir / app.repo / app.license） ——
   "updatesHint", // → ui.auto_update 的说明
-  "autoUpdateCheckbox", // → ui.auto_update 的开关内联标签
   "aboutVersionHint", // → app.version 的说明
   "aboutSlogan", // → 身份块的一句简介（非设置项，无锚点）
   "aboutAppDataHint", // → app.data_dir 的说明
@@ -569,28 +614,10 @@ export const SHELL_SETTING_KEYS: string[] = [
   "aboutViewLicense", // → app.license 的动作按钮
 ];
 
-/**
- * 进阶项偏好（localStorage，全局单一偏好、默认收起、跨页跨会话记忆）：
- * 存 "1" = 展开、"0" / 缺省 = 收起。页级开关只影响显示，**不参与脏标记**（PAGE_FIELDS 语义不变）。
- */
-export const SETTINGS_ADVANCED_PREF_KEY = "ws_settings_show_advanced";
-
-/** 进阶项 id（`advanced: true` 的全部项；页级开关的计数与行内过滤都从这里派生） */
-export const ADVANCED_ITEM_IDS: string[] = SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id);
-
-/** 该页进阶项数量（页级开关文案「显示进阶项（N）」的计数；N = 0 时该行不渲染） */
-export function advancedCountByPage(page: PageKey): number {
-  return SETTINGS_ITEMS.filter((i) => i.page === page && i.advanced).length;
-}
-
-/**
- * 该页该组是否**整组皆为进阶项**（是 → 收起时整组隐藏，而不是逐行隐藏）。
- * 组不存在 / 页不匹配 / 组内有非进阶项 → false（逐行判断由 ADVANCED_ITEM_IDS 承担）。
- */
-export function isAdvancedOnlyGroup(page: PageKey, group: string): boolean {
-  const items = SETTINGS_ITEMS.filter((i) => i.page === page && i.group === group);
-  return items.length > 0 && items.every((i) => i.advanced);
-}
+// 2026-09 移除「显示进阶项」开关：所有项默认全部可见，
+// 进阶折叠相关导出（SETTINGS_ADVANCED_PREF_KEY / ADVANCED_ITEM_IDS / advancedCountByPage /
+// isAdvancedOnlyGroup）一并清除；注册表 SETTINGS_ITEMS 上的 `advanced: true` 标记保留为
+// 无害冗余（不影响行为），待后续清理。
 
 /** 项序（注册表原序）：结果排序的最后一级，保证稳定输出 */
 const ITEM_RANK = new Map<string, number>(SETTINGS_ITEMS.map((item, idx) => [item.id, idx]));

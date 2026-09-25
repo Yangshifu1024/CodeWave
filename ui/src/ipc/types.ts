@@ -656,6 +656,8 @@ export interface McpStatusPayload {
   state: McpState;
   /** 已注入的工具数（非 ready 时为 0） */
   tools: number;
+  /** 当前已注入的工具摘要（旧状态载荷可缺失） */
+  tool_details?: { name: string; description: string }[];
   /** 因工具过滤而未注入的数量 */
   tools_filtered: number;
   /** 子进程 PID（http 传输为 null） */

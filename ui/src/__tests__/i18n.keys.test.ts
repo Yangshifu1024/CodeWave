@@ -151,7 +151,7 @@ describe("i18n 键集合契约", () => {
     // 两侧集合逐把相等且数量写死——半途改名或只补一侧都会被这条拦住。
     const cleanup = (keys: Set<string>) => [...keys].filter((k) => k.startsWith("settings.cleanup")).sort();
     expect(cleanup(zhKeys)).toEqual(cleanup(enKeys));
-    expect(cleanup(zhKeys)).toHaveLength(23);
+    expect(cleanup(zhKeys)).toHaveLength(24);
     // 保留期本身的项名与说明另算（不合 cleanup* 前缀）
     for (const key of ["settings.sessionRetention", "settings.sessionRetentionHint"]) {
       expect(zhKeys.has(key), `zh 缺新键：${key}`).toBe(true);

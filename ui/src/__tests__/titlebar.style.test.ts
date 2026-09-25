@@ -8,8 +8,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
+const nativeCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/native.css"), "utf8");
+const tauriConfig = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../src-tauri/tauri.conf.json"), "utf8"));
 
 describe("自绘标题栏样式契约", () => {
+  it("插件控制按钮的样式来源获 CSP 放行，层级高于设置覆盖层", () => {
+    expect(tauriConfig.app.security.csp).toContain("style-src-elem 'self' 'unsafe-inline' tauri-plugin-decoration:");
+    expect(nativeCss).toContain("--tauri-plugin-decoration-z-index: 25;");
+  });
   it(".toolbar 必须定位（relative）——拖拽层的包含块", () => {
     expect(appCss).toMatch(/\.toolbar\s*\{[^}]*position:\s*relative/);
   });

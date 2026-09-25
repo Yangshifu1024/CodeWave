@@ -20,8 +20,8 @@ export default function ThemeBridge() {
     s.setProperty("--ws-bg", token.colorBgLayout);
     s.setProperty("--ws-panel", token.colorBgContainer);
     // 侧栏分色（[docs/rightbar-visual-batch](../../../docs/rightbar-visual-batch.md)）：左栏导航 #ececee、中右栏 #f8f8f8（仅亮色生效；暗色回退默认容器/布局色，与改动前观感一致）
-    s.setProperty("--ws-bg-nav", isDarkBase(token.colorBgBase) ? token.colorBgContainer : "#ececee");
-    s.setProperty("--ws-bg-main", isDarkBase(token.colorBgBase) ? token.colorBgLayout : "#f8f8f8");
+    s.setProperty("--ws-bg-nav", isDarkBase(token.colorBgBase) ? token.colorBgContainer : "#eef4f9");
+    s.setProperty("--ws-bg-main", isDarkBase(token.colorBgBase) ? token.colorBgLayout : "#FFFFFF");
     s.setProperty("--ws-code-bg", token.colorFillQuaternary);
     s.setProperty("--ws-border", token.colorBorderSecondary);
     s.setProperty("--ws-hover", token.colorFillTertiary);

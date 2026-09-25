@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { App, BorderBeam, Button, Dropdown, Image, Input, Popover } from "antd";
+import { App, BorderBeam, Button, Dropdown, Image, Input, Popover, Progress } from "antd";
 import type { MenuProps } from "antd";
 import {
   ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined,
@@ -17,7 +17,7 @@ import type { ApprovalMode, EffortLevel, GoalState, GoalStatus } from "../../ipc
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { baseName } from "../../utils/path";
 import { GOAL_STATUS_DEFAULT, GOAL_STATUS_KEYS } from "../../utils/goal";
-import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
+import { cacheHitRate, contextTier, type ContextTier } from "../../stores/runFrames";
 import { formatInt, formatMs, formatRate, tokPerSec } from "./composerMetrics";
 import { ipc } from "../../ipc/client";
 import { listenFileDrop } from "../../ipc/dragdrop";
@@ -35,8 +35,9 @@ import { addRefs, mergeRefs, recoverRefs } from "./composerRefs";
 
 const { TextArea } = Input;
 
-// Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）
-const MODE_ORDER: ApprovalMode[] = ["confirm_each", "auto_edit", "plan", "goal", "full_access"];
+// Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）：
+// plan（最安全）→ confirm_each（询问）→ auto_edit（自动）→ goal（自主）→ full_access（完全）
+const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "goal", "full_access"];
 
 /** Composer：底部输入区 + 工具条（左：+/权限/子代理 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
@@ -87,6 +88,13 @@ export default function Composer() {
   // / @ $ 菜单的宽度上限来源：输入卡片实测宽度（长 description 不再撑出视口，见下方 menuStyle）
   const cardRef = useRef<HTMLDivElement>(null);
   const [menuWidth, setMenuWidth] = useState(0);
+  // 工具条分级显示（[docs/composer-responsive-toolbar]）：根据 composer 卡片实测宽度切三档。
+  // 复用下方 ResizeObserver 测宽，零额外监听。
+  // 阈值：narrow < 600（常规非全宽窗口都进窄档，只显 +、模式图标、压缩、发送）；
+  //      medium 600-820（图标 + 模型名 + 力度文字 + 发送）；
+  //      normal ≥ 820（全显：toolbar-info + provider/model + chev）。
+  type ComposerWidth = "narrow" | "medium" | "normal";
+  const [composerWidth, setComposerWidth] = useState<ComposerWidth>("normal");
   // 光标位置（触发判定与回填的唯一锚点，[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)）：
   // onChange 拿事件里的 selectionStart；点击/方向键移光标不过 onChange，由 onSelect/onClick/onKeyUp 补同步。
   // ref 供事件回调读即时值，state 供**渲染期复验**（菜单开合要判「trigger 在当前位置是否仍成立」）
@@ -237,6 +245,8 @@ export default function Composer() {
     useRun.getState().consumeDraftFromQueue(targetKey);
     const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
     el?.focus?.();
+    // onTextReplaced 每次渲染都会重新创建；此处只按队列条目/Tab/图片回填变化执行。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftFromQueue, tab?.key, recalledImages]);
 
   // 会话生效模型：会话覆盖 -> 全局活跃（展示与发送守卫同一数据源，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)；摊平视图 [docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
@@ -482,11 +492,17 @@ export default function Composer() {
 
   // 菜单宽度上限 = 输入卡片实测宽度（技能 description 过长时不再撑破视口，与聊天框宽度一致）；
   // ResizeObserver 覆盖窗口缩放、侧栏宽度变化等一切来源（不依赖 window resize）；
-  // ask 态卡片卸载、恢复后依赖变化重测
+  // ask 态卡片卸载、恢复后依赖变化重测。
+  // 同步计算工具条分级显示（composerWidth）：< 240px → narrow（仅图标），240~360 → medium
+  // （隐藏 toolbar-info + provider），≥ 360 → normal（全部）。
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (!el) return;
-    const sync = () => setMenuWidth(el.getBoundingClientRect().width);
+    const sync = () => {
+      const w = el.getBoundingClientRect().width;
+      setMenuWidth(w);
+      setComposerWidth(w < 600 ? "narrow" : w < 820 ? "medium" : "normal");
+    };
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
@@ -497,27 +513,24 @@ export default function Composer() {
 
   // ---------- 工具条上下文/命中率显示 ----------
 
-  // 阈值合法性（与后端 clamp(0.05,0.95) 同域）：非法时不显示阈值段，且百分比保持中性色（不臆测风险）
+  // 阈值合法性（与后端 clamp(0.05,0.95) 同域）：非法时圈显示中性 ok（不臆测风险），popover 不显示阈值段
   const thresholdValid = Number.isFinite(compactThreshold) && compactThreshold > 0 && compactThreshold <= 1;
-  const ctxTier = thresholdValid && active.breakdown ? contextTier(active.breakdown.ratio, compactThreshold) : "low";
-  const hitTier = cacheHit != null ? hitRateTier(cacheHit) : null;
-  const ctxPctClass = ctxTier === "high" ? "ctx-pct danger" : ctxTier === "medium" ? "ctx-pct warn" : "ctx-pct";
-  const ctxHitClass = hitTier
-    ? `ctx-hit ${hitTier === "ok" ? "ok" : hitTier === "yellow" ? "yellow" : hitTier === "warn" ? "warn" : "danger"}`
-    : "ctx-hit";
+  const ctxTier: ContextTier = thresholdValid && active.breakdown
+    ? contextTier(active.breakdown.ratio, compactThreshold)
+    : "ok";
   const hitPct = cacheHit != null ? `${Math.round(cacheHit * 100)}%` : "";
-  // 悬浮说明：占用/阈值/命中率三项口径（title 是窄窗口截断时的全量信息兜底）
-  const ctxTitle = active.breakdown
-    ? `${t("composer.ctxTitle")}\n${t("app.context")}: ${contextPct}%（${active.breakdown.total_tokens} / ${active.breakdown.context_window} tokens）`
-      + (thresholdValid ? `\n${t("settings.compactThreshold")}: ${thresholdPct}%` : "")
-      + (cacheHit != null ? `\n${t("composer.cacheHit")}: ${hitPct}（${active.usage?.cacheRead ?? 0} / ${hitDenom}）` : "")
-    : t("app.context");
+  // 进度圈 strokeColor 按档取色（4 档全彩，红橙黄绿——与 AGENTS.md 「色彩强度映射风险等级」一致）
+  const ctxProgressColor =
+    ctxTier === "danger" ? "var(--ws-err)" :
+    ctxTier === "warn" ? "var(--ws-warn)" :
+    ctxTier === "yellow" ? "#fadb14" :  // 黄：antd 标准 yellow-5，与 RB 配额黄同源
+    "var(--ws-ok)";                       // ok：绿
 
   // ---------- 本轮生成速率（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)） ----------
 
   // 数据源是 run store 的 runMetrics（不是组件 state）：ask 弹窗遮住 Composer 导致卸载后恢复仍同值。
   // 无数据（从未发过本轮 / 本轮还没收到 usage 帧 / 整页重载回 blank 桶）时 rate 为 null → 整段不渲染，
-  // 上下文与命中段不受影响（AC-8）。速率只在工具条展示，不算入上方 ctxTitle（那是上下文口径）。
+  // 上下文与命中段不受影响（AC-8）。速率只在工具条展示。
   const metrics = active.runMetrics;
   const rate = tokPerSec(metrics);
   const toolMs = metrics?.toolMs ?? 0;
@@ -541,32 +554,31 @@ export default function Composer() {
   );
 
   const modeDescKeys: Record<ApprovalMode, string> = {
+    plan: "composer.modePlanDesc",
     confirm_each: "composer.modeConfirmEachDesc",
     auto_edit: "composer.modeAutoEditDesc",
-    plan: "composer.modePlanDesc",
     goal: "composer.modeGoalDesc",
     full_access: "composer.modeFullAccessDesc",
   };
   const modeLabels: Record<ApprovalMode, string> = {
+    plan: t("composer.modePlan"),
     confirm_each: t("composer.modeConfirmEach"),
     auto_edit: t("composer.modeAutoEdit"),
-    plan: t("composer.modePlan"),
     goal: t("composer.modeGoal"),
     full_access: t("composer.modeFullAccess"),
   };
   const modeIcons: Record<ApprovalMode, React.ReactNode> = {
+    plan: <FileTextOutlined />,
     confirm_each: <ExclamationCircleOutlined />,
     auto_edit: <CheckCircleOutlined />,
-    plan: <FileTextOutlined />,
     goal: <ThunderboltOutlined />,
     full_access: <SafetyCertificateOutlined />,
   };
-  // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：确认 = 蓝（primary）/ 自动编辑 = 橙 / 完全访问 = 红（危险）；plan 档不着色。
-  // 同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
+  // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：plan 不着色；
+  // confirm = 绿 / auto = 黄 / goal = 橙 / full = 红。同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
   const modeClass: Partial<Record<ApprovalMode, string>> = {
     confirm_each: "approval-confirm",
     auto_edit: "approval-auto",
-    // 目标模式 = 橙（warn 语义，与自动编辑同色系；不引入新色系）
     goal: "approval-goal",
     full_access: "approval-full",
   };
@@ -774,7 +786,7 @@ export default function Composer() {
           color="var(--ws-accent)"
           className={beamActive ? undefined : "composer-beam-idle"}
         >
-          <div className="composer-card" ref={cardRef}>
+          <div className="composer-card" ref={cardRef} data-narrow={composerWidth}>
           {(images.length > 0 || refs.length > 0) && (
             <div className="composer-attachments">
               {/* 缩略图点击打开大图预览（多图可切换），与会话内已发送图片同一交互；
@@ -857,7 +869,7 @@ export default function Composer() {
                   title={t("composer.modeShortcutHint")}
                 >
                   {modeIcons[prefs.approval_mode]}
-                  <span className="tb-label">{modeLabels[prefs.approval_mode]}</span>
+                  <span className="tb-label tb-mode-text">{modeLabels[prefs.approval_mode]}</span>
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
@@ -908,67 +920,95 @@ export default function Composer() {
               )}
             </div>
             {/* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原先住在 .toolbar-right 内，
-                被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。 */}
+                被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。
+                本轮把上下文/命中挪到进度圈 hover 的 Popover 里，.toolbar-info 只剩速率段；
+                进度圈 + 压缩按钮挪到 .toolbar-right 原压缩按钮处。 */}
             <div className="toolbar-info">
-              <span className="ctx-label" title={ctxTitle}>
-                {active.breakdown ? (
-                  <>
-                    {/* 首个原子段（上下文 + 阈值括号）内部不换行；窄窗口只在下面的 <wbr> 处折行
-                        （[docs/composer-toolbar-context-hit-rate](../../../../docs/composer-toolbar-context-hit-rate.md) §9） */}
-                    <span className="ctx-seg">
-                      {t("app.context")}{" "}
-                      <span className={ctxPctClass}>{contextPct}%</span>
-                      {`（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
-                      {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
-                      {"）"}
-                    </span>
-                    {/* 折行点：<wbr> 是零字符断点，textContent 逐字不变；分隔符包进 .ctx-sep（nowrap）后，
-                        断点只剩 <wbr> 一处——否则「 · 」本身也是断行机会、会被甩到下一行行首 */}
-                    {cacheHit != null && (
-                      <>
-                        <span className="ctx-sep">{" · "}</span>
-                        <wbr />
-                        <span className={ctxHitClass}>{`${t("composer.cacheHit")} ${hitPct}`}</span>
-                      </>
-                    )}
-                    {rate != null && (
-                      // 与上下文/命中同属一段小字（不新增控件、不抢位）；「在跑」点仅在运行中渲染，
-                      // 运行结束后消失而数值保留（AC-7）
-                      <>
-                        <span className="ctx-sep">{" · "}</span>
-                        <wbr />
-                        <span className="ctx-rate" title={rateTitle}>
-                          {`${formatRate(rate)} tok/s`}
-                          {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
-                        </span>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <>{t("app.context")} —</>
-                )}
-              </span>
+              {rate != null && (
+                // 「在跑」点仅在运行中渲染，运行结束后消失而数值保留（AC-7）
+                <span className="ctx-rate" title={rateTitle}>
+                  {`${formatRate(rate)} tok/s`}
+                  {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
+                </span>
+              )}
             </div>
             <div className="toolbar-right">
-              <CompactButton />
+              {/* 进度圈 = 上下文占用可视化入口（替换原 CompactButton 位），hover 弹 Popover 显示
+                  上下文 / 阈值 / 命中 / 压缩操作。圈心 % 数字，环 stroke 按 4 档（红橙黄绿）切色。 */}
+              <Popover
+                placement="top"
+                trigger="hover"
+                content={
+                  <div className="ctx-popover">
+                    {active.breakdown ? (
+                      <>
+                        <div className="ctx-popover-row">
+                          <span className="ctx-popover-label">{t("composer.ctxCurrent")}</span>
+                          <span className="ctx-popover-value">
+                            {`${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k (${contextPct}%)`}
+                          </span>
+                        </div>
+                        {cacheHit != null && (
+                          <div className="ctx-popover-row">
+                            <span className="ctx-popover-label">{t("composer.cacheHit")}</span>
+                            <span className="ctx-popover-value">{hitPct}</span>
+                            <span className="ctx-popover-meta">{`（${active.usage?.cacheRead ?? 0} / ${hitDenom}）`}</span>
+                          </div>
+                        )}
+                        {thresholdValid && (
+                          <div className="ctx-popover-row ctx-popover-threshold-row">
+                            <span className="ctx-popover-label">{`${t("settings.compactThreshold")} (${thresholdPct}%)`}</span>
+                            {/* 压缩按钮内联到阈值行尾部（不占独立行），省一行垂直空间 */}
+                            <CompactButton className="ctx-popover-compact-btn" />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="ctx-popover-empty">
+                        {t("app.context")} —
+                        <CompactButton className="ctx-popover-compact-btn" />
+                      </div>
+                    )}
+                  </div>
+                }
+              >
+                <span className="ctx-progress-wrap">
+                  <Progress
+                    type="dashboard"
+                    percent={contextPct}
+                    size={20}
+                    strokeColor={ctxProgressColor}
+                    showInfo={false}
+                    className={`ctx-progress ctx-tier-${ctxTier}`}
+                  />
+                </span>
+              </Popover>
               <Dropdown menu={modelMenu} trigger={["click"]}>
                 <Button
                   type="text"
+                  className="tb-model-select"
                   aria-label={t("app.model")}
                   title={effectiveModel ? `${effectiveModel.providerName} / ${effectiveModel.model}` : t("composer.goSettings")}
                 >
                   <span className="tb-label">
                     {effectiveModel
-                      ? (effectiveModel.providerName ? `${effectiveModel.providerName} / ${effectiveModel.model}` : effectiveModel.model)
-                      : t("composer.noModel")}
+                      ? (effectiveModel.providerName ? (
+                          <>
+                            <span className="tb-model-provider">{effectiveModel.providerName} / </span>
+                            <span className="tb-model-name">{effectiveModel.model}</span>
+                          </>
+                        ) : (
+                          <span className="tb-model-name">{effectiveModel.model}</span>
+                        ))
+                      : <span className="tb-model-name">{t("composer.noModel")}</span>}
                   </span>
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
               <Dropdown menu={effortMenu} trigger={["click"]}>
-                <Button type="text" title={t("settings.reasoning")}>
+                <Button type="text" className="tb-effort-select" title={t("settings.reasoning")}>
                   <BulbOutlined />
-                  <span className="tb-label">
+                  <span className="tb-label tb-effort-text">
                     {effortValue === "default" ? t("composer.effortDefault") : effortLabels[effortValue]}
                   </span>
                   <DownOutlined className="tb-chev" />

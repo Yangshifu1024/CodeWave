@@ -15,6 +15,14 @@
 
 ## 基准与方案
 
+- 2026-09-26 · [tasks-local-cron-time.md](./tasks-local-cron-time.md) — 修复计划任务 cron 按 UTC 而非本地时区计算，及存量下次触发时间的恢复校正。
+
+- 2026-09-26 · [tasks-page-layout-polish.md](./tasks-page-layout-polish.md) — 计划任务列表、编辑弹窗与左栏返回按钮收敛到设置页的排版与 antd 组件样式。
+
+- 2026-09-26 · [settings-remaining-pages-polish.md](./settings-remaining-pages-polish.md) — 写入后检查、技能、工作区与智能体、日志及关于五页收敛到共用分组与表单样式。
+
+- 2026-09-25 · [mcp-settings-layout-and-fullscreen-seam.md](./mcp-settings-layout-and-fullscreen-seam.md) — MCP 设置页排版、服务器卡片与工具说明、编辑弹框优化，以及全屏页顶栏和导航分界修复。
+
 - 2026-09-25 · [text-form-ask-fallback.md](./text-form-ask-fallback.md) — 缺陷修复：**模型把 ask 调用当正文 XML 透传时，提问不再丢失**。会话 5da292d8 实测（provider `MiniMax` @ `api.minimax.cn/anthropic`，非仓库记录的官方 CN 域名）：该轮**没有任何 `tool_use`**、正文末尾却漂着结构完整的 `<ask>…</ask>`，此前只被当普通 Markdown 渲染——不弹卡、无日志、无提示。新增 `core/agent/text_ask.rs` 纯函数解析（块必须**独占起始行 + 位于正文末尾 + 结构完整**，围栏内/多块/半截一律放弃；缺 id 的题与选项**逐项丢弃**；私有控制 token `]<]minimax[>[` 只从字段值里清，尾部 `[` / `<` 各自独立可选消费），`drive.rs` 按**四道门**（仅主会话 / `exclude_tools` 不含 ask / 本回合无调用 / 每 run 一次）就地剥正文并补等价 ask 调用，**后续零改动**直接走既有批次 → 真实 `AskTool`（G2/G3 门、`mode` 切档、`switchToAutoEdit`、plan 落盘、preview 三处排除全部复用）——「完全等价」由结构保证而非再实现一遍。前端因**流式帧不可回收 + 64ms 节流会把 `</ask>` 尾巴推到 `ask:opened` 之后**，改「当轮状态 + 每帧幂等补剥」（`ask:opened` 增可选字段 `text_recovered`，事件键名与 30 键不动；只剥一次必然漏）；另加 step 级响应形态日志（工具调用数取**兜底前**口径）回答「为什么模型没返回 tool_use」。反向纪律：绝不为 edit/command 等写类工具做文本兜底（会把「看不到问题」升级为任意代码执行）。验证：`cargo test` 1252 passed / 3 ignored、`pnpm --dir ui test` 1211 passed / 100 文件、`ui build` + `lint` 通过；两份审查（方案对齐 + 代码质量）无 🔴，🟡 全部闭环（含一处建议经实测证据**否决**：token 尾部成对消费会剩 `[`）。
 
 - 2026-09-24 · [goal-mode.md](./goal-mode.md) — 新增第五档「目标模式」：目标陈述、只读澄清、一次批准后按账本自主推进，支持暂停续跑与收尾报告。
@@ -92,6 +100,7 @@
 
 ## 界面与交互
 
+- 2026-09-25 · [settings-ui-unification.md](./settings-ui-unification.md) — 设置页视觉统一：用共享 antd 主题层、左右式设置行、统一分组卡片、响应式宽度与主题预览样式覆盖所有设置页和弹框。
 - 2026-08-31 · [composer-toolbar-batch-report.md](./composer-toolbar-batch-report.md) — Composer 工具条重构（权限四档 + 会话级模型/力度 + 附件/$技能 + 供应商分组与视觉标签）
 - 2026-09-08 · [slash-skills-and-dollar-agents.md](./slash-skills-and-dollar-agents.md) — 技能触发符 `/` 化（/ 纯技能菜单、/name 点名语义入 available-skills、命令入口移除）+ `$` 改为内置子代理点名（list_agents IPC + 回填 $role + 核心提示 $<role> 委派规则）+ 技能加载路径定稿（项目/全局 .codewave/skills > 工作区 .agents/skills、.claude/skills > ~/.claude/skills > 内置；含 rt.data_dir 恒为全局的语义钉子与漏扫缺陷修复）+ 列表显示排序（内置 > 项目 > 全局 > 其他）与点击详情弹层（共享 SkillDetailModal：右栏技能行 + composer / 菜单，get_skill IPC + SKILL.md 正文渲染），三候选乱序守卫补齐
 - 2026-08-31 · [composer-shift-tab-mode-cycle.md](./composer-shift-tab-mode-cycle.md) — Composer Shift+Tab 循环切换权限模式 + 权限胶囊按档位着色

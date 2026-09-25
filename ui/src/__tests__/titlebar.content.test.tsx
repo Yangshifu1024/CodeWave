@@ -9,6 +9,7 @@ import { useSessions, type Tab } from "../stores/sessions";
 import { useRun } from "../stores/run";
 import { useUi } from "../stores/ui";
 import { DEFAULT_PREFS } from "../ipc/types";
+import { fullscreenNavWidth } from "../utils/layout";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => []),
@@ -53,7 +54,7 @@ afterEach(() => {
   useRun.setState((s) => {
     s.tabs = {}; s.drafts = {};
   });
-  useUi.setState({ rightBarOpen: true });
+  useUi.setState({ rightBarOpen: true, settingsOpen: false, tasksOpen: false, navWidth: SIDER_W_OPEN });
   localStorage.removeItem("ws_right_bar_open");
   localStorage.removeItem("ws_explorer_open");
 });
@@ -99,6 +100,22 @@ describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
     expect(localStorage.getItem("ws_explorer_open")).toBe("1");
   });
 
+  it("设置和任务全屏页的顶栏分隔线跟随全屏导航宽度", () => {
+    useUi.setState({ navWidth: 480, settingsOpen: true });
+    const { rerender } = renderBar();
+    const left = () => document.querySelector(".tb-left-seg") as HTMLElement;
+    const fullWidth = fullscreenNavWidth(window.innerWidth);
+    expect(left().style.width).toBe(`${fullWidth}px`);
+    useSessions.setState({ explorerOpen: false });
+    useUi.setState({ settingsOpen: false, tasksOpen: true });
+    rerender(<App><TopBar /></App>);
+    expect(left().style.width).toBe(`${fullWidth}px`);
+    expect(left().classList.contains("tb-left-closed")).toBe(false);
+    useUi.setState({ tasksOpen: false });
+    rerender(<App><TopBar /></App>);
+    expect(left().style.width).toBe("0px");
+  });
+
   it("项目会话：标题 + 工作目录胶囊（basename + 完整路径 title）+ 分支胶囊", () => {
     useSessions.setState({
       tabs: [tab({ sessionId: "s1", title: "界面配色调整", projectId: "p1", workspace: "D:\\Code\\CodeWave" })],
@@ -112,6 +129,20 @@ describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
     expect(pills[0].querySelector(".tb-pill-text")?.textContent).toBe("CodeWave");
     expect(pills[0].getAttribute("title")).toBe("D:\\Code\\CodeWave");
     expect(pills[1].querySelector(".tb-pill-text")?.textContent).toBe("master");
+  });
+
+  it("打开设置时标题栏只显示设置，不显示会话和项目内容", () => {
+    useSessions.setState({
+      tabs: [tab({ sessionId: "s1", title: "会话标题", projectId: "p1", workspace: "D:\\Code\\CodeWave" })],
+      activeKey: "s1",
+    });
+    seedRun("s1", { repo: true, entries: [], branch: "main" });
+    useUi.setState({ settingsOpen: true });
+    renderBar();
+    const header = document.querySelector(".tb-main-seg")!;
+    expect(header.textContent?.trim()).toBe("设置");
+    expect(header.querySelectorAll(".tb-pill")).toHaveLength(0);
+    expect(header.querySelector(".tb-logo-toggle")).toBeFalsy();
   });
 
   it("临时会话胶囊文案；非 Git 仓库不渲染分支胶囊", () => {

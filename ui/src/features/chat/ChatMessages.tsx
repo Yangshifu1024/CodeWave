@@ -9,7 +9,7 @@ import {
   DownOutlined,
   LoadingOutlined,
   ThunderboltOutlined,
-  RightOutlined,
+  ArrowRightOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { MAX_PAGED_PAGES, useActiveRun, useRun } from "../../stores/run";
@@ -33,6 +33,7 @@ import type { ScrollAnchor } from "../../utils/scrollAnchor";
 import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/uiState";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
+import ChatScrollbar from "./ChatScrollbar";
 
 // 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/titlebar-content-batch](../../../../docs/titlebar-content-batch.md) 缺陷修复）
 function ts(iso: string | undefined): string {
@@ -194,6 +195,8 @@ export default function ChatMessages() {
   // 2.4：是否贴底（贴底 -> 自动下滚；未贴底 -> 显示「回到底部」按钮）
   const [atBottom, setAtBottom] = useState(true);
   const stickBottom = useRef(true);
+  // 滚动条显隐交给 ChatScrollbar 子组件（自定义 overlay，scroll 时显、停 1s 后隐）——见 ChatScrollbar.tsx。
+  // 这里不再持有 isScrolling/scrollIdleTimer。
   const progScroll = useRef(0); // 程序化滚动的豁免窗口：窗口内自家触发的滚动事件不参与贴底判定
   const progFrom = useRef(0); // 发起程序化滚动时的 scrollTop（豁免区间的下端）
   const progTarget = useRef(Infinity); // 程序化滚动的落点 scrollTop（豁免区间的上端，docs/thinking-scroll-fix §2.3）
@@ -415,6 +418,7 @@ export default function ChatMessages() {
     const nearBottom = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
     stickBottom.current = nearBottom;
     setAtBottom(nearBottom);
+    // 滚动条显隐交给 ChatScrollbar 子组件监听同一个 scroll 事件，这里不再维护
   };
 
   // 滚轮上滚 = 阅读意图：立即暂停跟随并清空程序化滚动豁免窗口（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。
@@ -544,6 +548,8 @@ export default function ChatMessages() {
   return (
     <div className="chat-body" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
       <div ref={scroller} className="chat-messages" onScroll={onScroll} onWheel={onWheel}>
+        {/* 自定义 overlay 滚动条：仿 MiniMax Code / Slack 范式，native 滚动条已隐藏（见 app.css） */}
+        <ChatScrollbar target={scroller} />
         {active.items.length === 0 && !hasSession && (
           <div className="chat-empty-guide">
             <div className="guide-icon"><MessageOutlined /></div>
@@ -614,7 +620,7 @@ export default function ChatMessages() {
                   shape="round"
                   variant="filled"
                   color="default"
-                  icon={<RightOutlined />}
+                  icon={<ArrowRightOutlined />}
                   iconPosition="end"
                   onClick={() => pick(s)}
                 >

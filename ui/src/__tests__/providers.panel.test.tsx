@@ -47,16 +47,23 @@ function buttonByText(text: string): HTMLButtonElement {
   return btn as HTMLButtonElement;
 }
 
+function providerModalPrimary(): HTMLButtonElement {
+  const btn = document.querySelector(".settings-provider-modal .ant-modal-footer .ant-btn-primary");
+  if (!(btn instanceof HTMLButtonElement)) throw new Error("provider modal primary button not found");
+  return btn;
+}
+
 function inputByPlaceholder(ph: string): HTMLInputElement {
   return screen.getByPlaceholderText(ph) as HTMLInputElement;
 }
 
 /** Click the Popconfirm trigger, then click Confirm */
-async function confirmPopconfirm(trigger: HTMLElement) {
+async function confirmPopconfirm(trigger: HTMLElement, expectDanger = false) {
   fireEvent.click(trigger);
   await new Promise((r) => setTimeout(r, 60));
   const ok = document.querySelector(".ant-popover .ant-btn-primary") as HTMLButtonElement;
   expect(ok).toBeTruthy();
+  if (expectDanger) expect(ok.classList.contains("ant-btn-dangerous")).toBe(true);
   fireEvent.click(ok);
   await new Promise((r) => setTimeout(r, 60));
 }
@@ -71,7 +78,7 @@ afterEach(() => {
 });
 
 describe("ProvidersPanel 供应商管理", () => {
-  it("添加供应商全流程：字段 + 添加模型弹窗 + 提交入 draft 并默认 active", async () => {
+  it("添加供应商全流程：字段 + 同弹框添加模型 + 提交入 draft 并默认 active", async () => {
     render(<Harness initial={makeConfig([], null)} />);
     // Empty list state → enter the add form
     expect(document.body.textContent ?? "").toContain("还没有供应商");
@@ -90,11 +97,22 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(idx("API 格式")).toBeGreaterThan(idx("名称"));
     expect(idx("Base URL")).toBeGreaterThan(idx("API 格式"));
     // Submit validation: submitting with no models → model list error and nothing enters the draft ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
-    fireEvent.click(buttonByText("添加供应商"));
+    fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     expect(document.querySelector(".provider-models-error")?.textContent).toContain("必填");
     expect(latest!.providers).toHaveLength(0);
     // Add model: fill the wire id in the modal + check the image input
+    fireEvent.click(buttonByText("添加模型"));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(document.querySelector(".settings-provider-modal .ant-modal-title")?.textContent).toBe("添加模型");
+    const modelFooterText = document.querySelector(".settings-provider-modal .ant-modal-footer")?.textContent?.replace(/\s/g, "") ?? "";
+    expect(modelFooterText).toContain("返回供应商");
+    expect(modelFooterText).toContain("保存模型");
+    expect(modelFooterText).not.toContain("添加供应商");
+    fireEvent.click(buttonByText("返回供应商"));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.querySelector(".settings-provider-modal .ant-modal-title")?.textContent).toBe("添加供应商");
+    expect(inputByPlaceholder("如：智谱 GLM").value).toBe("智谱 GLM");
     fireEvent.click(buttonByText("添加模型"));
     await new Promise((r) => setTimeout(r, 80));
     fireEvent.change(inputByPlaceholder("glm-4.7 / claude-sonnet-4-5 / gpt-4o"), { target: { value: "glm-4.7" } });
@@ -108,7 +126,10 @@ describe("ProvidersPanel 供应商管理", () => {
     await new Promise((r) => setTimeout(r, 80));
     // Model row appears in the form
     expect(document.body.textContent ?? "").toContain("glm-4.7");
-    fireEvent.click(buttonByText("添加供应商"));
+    expect(document.querySelector(".settings-provider-modal .ant-modal-title")?.textContent).toBe("添加供应商");
+    expect(document.querySelector(".settings-provider-modal .ant-modal-footer")?.textContent?.replace(/\s/g, ""))
+      .toContain("添加供应商");
+    fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     // Submit result: provider + model enter the draft, first model becomes the default active
     const p = latest!.providers[0];
@@ -126,7 +147,7 @@ describe("ProvidersPanel 供应商管理", () => {
     render(<Harness initial={makeConfig([], null)} />);
     fireEvent.click(buttonByText("添加供应商"));
     // Submit the empty form directly → required errors for name/Base URL/API Key
-    fireEvent.click(buttonByText("添加供应商"));
+    fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("必填");
     expect(latest!.providers).toHaveLength(0);
@@ -138,7 +159,7 @@ describe("ProvidersPanel 供应商管理", () => {
     // Valid name/URL but no key and no models → submit still blocked: errors on both API Key and the model list ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
     fireEvent.change(inputByPlaceholder("如：智谱 GLM"), { target: { value: "X" } });
     fireEvent.change(inputByPlaceholder("https://api.example.com/v1"), { target: { value: "https://api.example.com/v1" } });
-    fireEvent.click(buttonByText("添加供应商"));
+    fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     // Name/URL now valid: errors narrow to API Key (asserted via the field container — antd error leave
     // animations do not recycle nodes in happy-dom, so count assertions are unreliable) and the model list
@@ -160,7 +181,7 @@ describe("ProvidersPanel 供应商管理", () => {
       headers: [],
     };
     render(<Harness initial={makeConfig([provider], "m1")} />);
-    fireEvent.click(buttonByText("编辑供应商"));
+    fireEvent.click(buttonByText("编辑"));
     await new Promise((r) => setTimeout(r, 60));
     // Clear the name → required error
     fireEvent.change(screen.getByDisplayValue("P1") as HTMLInputElement, { target: { value: "" } });
@@ -171,17 +192,37 @@ describe("ProvidersPanel 供应商管理", () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(document.querySelectorAll(".ant-form-item-explain-error").length).toBeGreaterThanOrEqual(2);
     // Delete the only model → model list error ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
-    const del = document.querySelector(".ant-list-item button.ant-btn-dangerous") as HTMLButtonElement;
+    const del = document.querySelector(".settings-collection-row button.ant-btn-dangerous") as HTMLButtonElement;
     await confirmPopconfirm(del);
     expect(document.querySelector(".provider-models-error")?.textContent).toContain("必填");
+    // 供应商弹框内的删除先暂存；点完成后才进入页面设置草稿。
+    fireEvent.click(providerModalPrimary());
+    await new Promise((r) => setTimeout(r, 60));
+    expect(latest!.providers[0].models).toHaveLength(0);
   });
 
-  it("添加模型弹窗校验（docs/provider-form-validation）：空 wire id 点确定 → 必填红字且弹窗不关", async () => {
+  it("编辑供应商点取消会丢弃弹框内暂存的修改", async () => {
+    const provider: ProviderConfig = {
+      id: "p1", name: "P1", api_format: "openai_chat",
+      base_url: "https://a.example/v1", keys: ["sk-x"], models: [], headers: [],
+    };
+    render(<Harness initial={makeConfig([provider], null)} />);
+    fireEvent.click(buttonByText("编辑"));
+    await new Promise((r) => setTimeout(r, 60));
+    fireEvent.change(screen.getByDisplayValue("P1") as HTMLInputElement, { target: { value: "Changed" } });
+    expect(latest!.providers[0].name).toBe("P1");
+    const cancel = document.querySelector(".settings-provider-modal .ant-modal-footer .ant-btn-default") as HTMLButtonElement;
+    fireEvent.click(cancel);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(latest!.providers[0].name).toBe("P1");
+  });
+
+  it("模型内嵌编辑校验（docs/provider-form-validation）：空 wire id 点保存 → 必填红字且供应商弹框不关", async () => {
     render(<Harness initial={makeConfig([], null)} />);
     fireEvent.click(buttonByText("添加供应商"));
     fireEvent.click(buttonByText("添加模型"));
     await new Promise((r) => setTimeout(r, 80));
-    const okBtn = document.querySelector(".ant-modal .ant-btn-primary") as HTMLButtonElement;
+    const okBtn = providerModalPrimary();
     expect(okBtn.disabled).toBe(false); // no longer blocked by disabling; validated on click instead
     fireEvent.click(okBtn);
     await new Promise((r) => setTimeout(r, 80));
@@ -216,14 +257,17 @@ describe("ProvidersPanel 供应商管理", () => {
       headers: [],
     };
     render(<Harness initial={makeConfig([provider], "m2")} />);
-    fireEvent.click(buttonByText("编辑供应商"));
+    fireEvent.click(buttonByText("编辑"));
     await new Promise((r) => setTimeout(r, 60));
     // Delete button on the model-b (active) row
-    const row = Array.from(document.querySelectorAll(".ant-list-item")).find((x) =>
+    const row = Array.from(document.querySelectorAll(".settings-collection-row")).find((x) =>
       x.textContent?.includes("model-b"),
     )!;
     const del = row.querySelector("button.ant-btn-dangerous") as HTMLButtonElement;
     await confirmPopconfirm(del);
+    expect(latest!.providers[0].models.map((m) => m.id)).toEqual(["m1", "m2"]);
+    fireEvent.click(providerModalPrimary());
+    await new Promise((r) => setTimeout(r, 60));
     expect(latest!.providers[0].models.map((m) => m.id)).toEqual(["m1"]);
     expect(latest!.active_model_id).toBe("m1");
   });
@@ -239,8 +283,8 @@ describe("ProvidersPanel 供应商管理", () => {
     };
     render(<Harness initial={makeConfig([provider], "m1")} />);
     // Delete button on the list row (danger button, no text)
-    const del = document.querySelector(".ant-list-item button.ant-btn-dangerous") as HTMLButtonElement;
-    await confirmPopconfirm(del);
+    const del = document.querySelector(".settings-provider-card button.settings-provider-delete") as HTMLButtonElement;
+    await confirmPopconfirm(del, true);
     expect(latest!.providers).toHaveLength(0);
     expect(latest!.active_model_id).toBeNull();
   });
@@ -255,7 +299,7 @@ describe("ProvidersPanel 供应商管理", () => {
       headers: [{ name: "x-opencode-session", value: "${session_id}" }],
     };
     render(<Harness initial={makeConfig([provider], "m1")} />);
-    fireEvent.click(buttonByText("编辑供应商"));
+    fireEvent.click(buttonByText("编辑"));
     await new Promise((r) => setTimeout(r, 60));
     // 既有头回显
     expect((screen.getByDisplayValue("x-opencode-session") as HTMLInputElement).value).toBe("x-opencode-session");
@@ -269,6 +313,9 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(document.body.textContent ?? "").toContain("保留名");
     // 改为合法名 → 校验通过、随 draft 持久（antd 错误节点离场动画在 happy-dom 不回收，故以校验结果为准）
     fireEvent.change(blankName, { target: { value: "x-custom" } });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(latest!.providers[0].headers.map((h) => h.name)).toEqual(["x-opencode-session"]);
+    fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     expect(validateProvider(latest!.providers[0]).some((i) => i.field === "headers")).toBe(false);
     expect(latest!.providers[0].headers.map((h) => h.name)).toEqual(["x-opencode-session", "x-custom"]);

@@ -70,7 +70,13 @@ export interface UiState {
   /** 前端排队消息（key = sessionId） */
   queue: Record<string, { id: string; text: string; images?: { mime: string; data: string }[] }[]>;
   /** 左栏状态：会话树展开/项目区折叠/未读集合（未读语义 = 恢复上次的集合，不是启动全标未读） */
-  tree: { expanded: Record<string, boolean>; collapsed: boolean; unread: Record<string, boolean> };
+  tree: {
+    expanded: Record<string, boolean>;
+    /** 项目行点击折叠：完全隐藏该项目下所有会话（与 expanded「显示更多」语义正交） */
+    groupFolded: Record<string, boolean>;
+    collapsed: boolean;
+    unread: Record<string, boolean>;
+  };
   /** 面板级 UI 态（key = sessionId） */
   panels: Record<string, UiPanels>;
 }
@@ -178,6 +184,7 @@ export function normalizeUiState(raw: unknown): UiState | null {
     queue: isRecord(raw.queue) ? (raw.queue as UiState["queue"]) : {},
     tree: {
       expanded: isRecord(tree.expanded) ? tree.expanded : {},
+      groupFolded: isRecord(tree.groupFolded) ? tree.groupFolded : {},
       collapsed: tree.collapsed === true,
       unread: isRecord(tree.unread) ? tree.unread : {},
     },
@@ -230,7 +237,11 @@ export function applyUiStateToStores(): { activeKey: string | null; kept: string
   // 左栏树展开/折叠态推进 useUi store：ProjectNav 订阅的是 store，这一步 setState 会立刻唤起已挂载的左栏重渲染。
   // 这正是「不能把组件内 useState 换成模块内存读」的原因——hydrate 在本函数（异步读盘之后）才发生，
   // 首渲染时快照还没到货；只有 store 才能把「后到货的值」推给已挂载的组件
-  useUi.setState({ treeExpand: { ...st.tree.expanded }, treeCollapsed: st.tree.collapsed });
+  useUi.setState({
+    treeExpand: { ...st.tree.expanded },
+    treeCollapsed: st.tree.collapsed,
+    treeGroupFolded: { ...st.tree.groupFolded },
+  });
   // 内容回填：只有活下来的 Tab 才回填（被剔除的 Tab 其草稿一并丢弃，不留孤儿）
   for (const key of kept) applyRetainedContent(key);
   // 活跃 Tab 以 restoreTabs 的裁决为准（它含「同项目邻位优先 → 全局邻位 → 首个」的回落逻辑）：
@@ -367,7 +378,12 @@ export async function buildSnapshot(): Promise<UiState> {
     scrollAnchors: anchors,
     drafts,
     queue,
-    tree: { expanded: { ...ui.treeExpand }, collapsed: ui.treeCollapsed, unread },
+    tree: {
+      expanded: { ...ui.treeExpand },
+      groupFolded: { ...ui.treeGroupFolded },
+      collapsed: ui.treeCollapsed,
+      unread,
+    },
     panels,
   };
   pruneImages(state);
@@ -508,6 +524,16 @@ export function setTreeCollapsed(collapsed: boolean): void {
   scheduleFlush();
 }
 
+export function getTreeGroupFolded(): Record<string, boolean> {
+  // 返回副本：调用方改返回值不能污染 store
+  return { ...useUi.getState().treeGroupFolded };
+}
+
+export function setTreeGroupFolded(next: Record<string, boolean>): void {
+  useUi.setState({ treeGroupFolded: { ...next } });
+  scheduleFlush();
+}
+
 // ---------- 关 Tab：草稿/队列的保留与丢弃 ----------
 
 /** 该 Tab 是否有未发送内容（草稿文本/附件、前端队列）——关 Tab 二次确认的判据 */
@@ -607,7 +633,7 @@ export function reset(): void {
   flushPending = false;
   memory = freshMemory();
   // 树态住在 store 里，reset 必须一并清：否则测试间串味，且 buildSnapshot 会读到上一轮的展开态
-  useUi.setState({ treeExpand: {}, treeCollapsed: false });
+  useUi.setState({ treeExpand: {}, treeCollapsed: false, treeGroupFolded: {} });
   lastWritten = "";
   lastFailAt = 0;
   anchoring = false;

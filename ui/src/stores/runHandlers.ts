@@ -506,6 +506,7 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
         scope: p.scope,
         state: p.state,
         tools: p.tools,
+        tool_details: p.tool_details ?? [],
         tools_filtered: p.tools_filtered ?? 0,
         pid: p.pid ?? null,
         error: p.error ?? null,

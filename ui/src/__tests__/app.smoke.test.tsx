@@ -239,33 +239,44 @@ describe("App 渲染冒烟", () => {
         (x.textContent ?? "").trim(),
       ),
     ).toEqual(["外观与模型", "安全与能力", "诊断与其他"]);
-    // 表单一律 vertical（[docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)）：设置页内不得出现 horizontal 表单
-    expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeFalsy();
-    expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeTruthy();
+    // 设置页使用共享的左右分栏表单与公共视觉层（[docs/settings-ui-unification](../../../docs/settings-ui-unification.md)）
+    expect(document.querySelector(".settings-theme-root")).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeFalsy();
 
-    // 落地页「界面」：主题 / 界面语言两个 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
-    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(2);
+    // 落地页「界面」：主题预览卡、界面语言 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
+    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent ?? "").toContain("界面字体");
     expect(document.body.textContent ?? "").toContain("等宽字体");
     expect(document.querySelectorAll(".font-preview-row").length).toBe(2);
+    expect(Array.from(document.querySelectorAll(".settings-section-title")).map((node) => node.textContent)).toEqual(["界面语言", "主题", "字体"]);
+    expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
+    expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
 
     // 模型与供应商页（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：列表 + 编辑表单字段 + AI 回复语言
     await clickTab("模型与供应商");
     const providerTexts = document.body.textContent ?? "";
     expect(providerTexts).toContain("Test Provider"); // provider list row
     expect(providerTexts).toContain("test-model");    // model wire id
-    expect(providerTexts).toContain("1 个模型");
+    expect(providerTexts).toContain("API 地址");       // endpoint is grouped separately from models
+    expect(providerTexts).toContain("模型列表");
+    expect(document.querySelector(".settings-provider-endpoint-section .settings-provider-endpoint")?.textContent)
+      .toBe("https://api.example.com/v1");
+    expect(document.querySelector(".settings-provider-model-section .settings-provider-model-name")?.textContent)
+      .toBe("test-model");
+    expect(providerTexts).not.toContain("1 个模型");
     expect(providerTexts).toContain("AI 语言");        // 从旧「通用」页迁入
     // Catalog fill removed ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md): user input is the single source of truth)
     expect(providerTexts).not.toContain("从目录填充");
     // Enter edit: form fields render
-    await clickButton("编辑供应商");
+    await clickButton("编辑");
     const editTexts = document.body.textContent ?? "";
     expect(editTexts).toContain("Base URL"); // form label
     expect(editTexts).toContain("API Key");
     expect(editTexts).toContain("模型列表");
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     expect(inputs.some((i) => i.value === "https://api.example.com/v1")).toBe(true);
+    await clickButton("完成");
 
     // 网络与连接页：代理模式三张卡片 + 内网访问（批② 从「安全」迁入）
     await clickTab("网络与连接");
@@ -286,8 +297,8 @@ describe("App 渲染冒烟", () => {
     // MCP 页：服务器配置区（本组 fixture 未配服务器 → 状态表整段不渲染）
     await clickTab("MCP");
     expect(document.querySelector('[data-setting-id="mcp.servers"]')).toBeTruthy();
-    expect(document.body.textContent ?? "").toContain("添加服务器");
-    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeFalsy();
+    expect(document.body.textContent ?? "").toContain("新建");
+    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy();
 
     // 技能页：禁用清单
     await clickTab("技能");
@@ -321,7 +332,7 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector("[data-testid='settings-page']")).toBeTruthy();
     // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers page
     await clickTab("模型与供应商");
-    await clickButton("编辑供应商");
+    await clickButton("编辑");
     const urlInput = Array.from(document.querySelectorAll("input")).find(
       (i) => (i as HTMLInputElement).value === "https://api.example.com/v1",
     ) as HTMLInputElement;
@@ -329,6 +340,7 @@ describe("App 渲染冒烟", () => {
     fireEvent.change(urlInput, { target: { value: "" } });
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("必填");
+    await clickButton("完成");
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("供应商配置无效"));
     expect(useUi.getState().settingsOpen).toBe(true);
@@ -581,7 +593,7 @@ describe("App 渲染冒烟", () => {
     await clickIconBtn("设置");
     await clickTab("MCP");
     // Single-entry editing: add server → entry fields expand
-    await clickButton("添加服务器");
+    await clickButton("新建");
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);
@@ -658,30 +670,27 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     return document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu");
   }
 
-  it("工具条渲染：压缩/上下文/模型/力度/圆形发送钮，压缩与上下文在模型之前", async () => {
+  it("工具条渲染：进度圈/速率/模型/力度/圆形发送钮，进度圈在模型之前（替换原压缩按钮位）", async () => {
     seedTab();
     await mountApp();
     const toolbar = document.querySelector(".composer-toolbar");
     expect(toolbar).toBeTruthy();
     const text = toolbar?.textContent ?? "";
     expect(text).toContain("自动编辑"); // current permission mode
-    expect(text).toContain("上下文 "); // context label always visible (restored per user request)
     expect(text).toContain("test-model"); // model wire id always visible (docs/provider-management-refactor: wire id is the display name)
     expect(text).toContain("Test Provider / test-model"); // 模型区新增供应商名（providerName / model）
     expect(text).toContain("默认"); // default effort tier
-    // Compact icon button exists with a semantic label (formerly a standalone button, now iconified)
-    const compactBtn = toolbar?.querySelector('button[aria-label="压缩上下文"]');
-    expect(compactBtn).toBeTruthy();
-    // Order: the compact icon and the context label both precede the model icon button
-    const order = [
-      compactBtn!,
-      toolbar?.querySelector(".ctx-label") ?? null,
-      toolbar?.querySelector('button[aria-label="模型"]') ?? null,
-    ];
-    for (const el of order) expect(el).toBeTruthy();
+    // 进度圈替换原压缩按钮位：含 ctx-progress-wrap 与 .ant-progress（dashboard 半弧）
+    const progressWrap = toolbar?.querySelector(".ctx-progress-wrap");
+    expect(progressWrap).toBeTruthy();
+    expect(progressWrap?.querySelector(".ant-progress")).toBeTruthy();
+    // 压缩按钮本身已搬进 Popover，工具条不再有独立的 button[aria-label="压缩上下文"]
+    expect(toolbar?.querySelector('button[aria-label="压缩上下文"]')).toBeFalsy();
+    // 进度圈（替换原压缩按钮位）与模型按钮的先后顺序：进度圈在模型之前
+    const modelBtn = toolbar?.querySelector('button[aria-label="模型"]');
+    expect(modelBtn).toBeTruthy();
     const pos = toolbar!.innerHTML.indexOf.bind(toolbar!.innerHTML);
-    expect(pos((compactBtn as HTMLElement).outerHTML)).toBeLessThan(pos((order[2] as HTMLElement).outerHTML));
-    expect(pos((order[1] as HTMLElement).outerHTML)).toBeLessThan(pos((order[2] as HTMLElement).outerHTML));
+    expect(pos((progressWrap as HTMLElement).outerHTML)).toBeLessThan(pos((modelBtn as HTMLElement).outerHTML));
     const send = toolbar?.querySelector(".send-btn") as HTMLButtonElement;
     expect(send).toBeTruthy();
     expect(send.disabled).toBe(true); // disabled on empty text
@@ -700,10 +709,9 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(idleBeams()).toBe(3);
   });
 
-  it("上下文区：阈值 + 命中率显示（分母按协议），百分比按阈值分档着色", async () => {
+  it("上下文区：进度圈按 4 档分色（红橙黄绿），hover 弹 Popover 含上下文/阈值/命中 三行", async () => {
     seedTab();
-    // 占用 60% = 恰好达阈值（0.6）→ 危险档；命中率 500/1000 = 50% → 四档最低档（danger）。
-    // fixture 供应商 api_format = openai_chat → openai 语义（分母 = input）：旧统一公式会算成 33%
+    // 占用 60% = 恰好达阈值（0.6）→ 危险档（red）；fixture 供应商 api_format = openai_chat
     useRun.setState((s) => {
       s.tabs = { s1: blank() };
       s.tabs["s1"].breakdown = {
@@ -713,18 +721,66 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
       s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 500, cacheWrite: 0 };
     });
     await mountApp();
-    const label = document.querySelector(".ctx-label")!;
-    expect(label.textContent).toContain("上下文 60%");
-    expect(label.textContent).toContain("阈 60%"); // compact_threshold 0.6（fixture config）
-    expect(label.textContent).toContain("命中 50%"); // 分母 = input（openai 语义）
-    expect(label.querySelector(".ctx-pct")?.className).toContain("danger"); // ratio(=阈值) 转红
-    expect(label.querySelector(".ctx-hit")?.className).toContain("danger"); // 50% < 90%
-    expect((label.getAttribute("title") ?? "")).toContain("缓存命中率");
-    expect((label.getAttribute("title") ?? "")).toContain("500 / 1000"); // title 的分子/分母与显示值同源
-    // 命中率档位跟随数据：全部命中 → ≥99% → ok（绿）
-    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 1000, cacheWrite: 0 }; });
-    await waitFor(() => expect(document.querySelector(".ctx-label .ctx-hit")?.className).toContain("ok"));
-    // 同一份用量换成 anthropic 语义（input 不含缓存）→ 分母变 input+read+write：1400/2000 = 70%
+    const progress = document.querySelector(".ctx-progress")!;
+    expect(progress.className).toContain("ctx-tier-danger"); // ratio 0.6 = 阈值 → danger 档
+    // 触发 Popover：hover 进度圈
+    const wrap = document.querySelector(".ctx-progress-wrap") as HTMLElement;
+    fireEvent.mouseEnter(wrap);
+    await waitFor(() => expect(document.querySelector(".ctx-popover")).toBeTruthy());
+    const popover = document.querySelector(".ctx-popover")!;
+    expect(popover.textContent).toContain("60%"); // 当前上下文百分比（括号内）
+    expect(popover.textContent).toContain("76.8k / 128k"); // 当前上下文用量
+    expect(popover.textContent).toContain("60%"); // 压缩阈值（括号内，fixture config compact_threshold 0.6）
+    expect(popover.textContent).toContain("50%"); // 缓存命中率（500/1000）
+    expect(popover.textContent).toContain("500 / 1000"); // 分子/分母
+    // popover 三行顺序：当前上下文 → 缓存命中 → 压缩阈值（缓存命中单独一行，置于阈值上一行）
+    const rows = Array.from(popover.querySelectorAll(".ctx-popover-row")).map((r) => r.textContent ?? "");
+    expect(rows.length).toBe(3);
+    expect(rows[0]).toContain("当前上下文"); // 第 1 行：当前上下文
+    expect(rows[1]).toContain("命中");      // 第 2 行：缓存命中
+    expect(rows[2]).toContain("阈值");      // 第 3 行：压缩阈值
+    // 进度圈已无 tooltip（title 被移除，详情全在 popover 里）
+    expect(wrap.getAttribute("title")).toBeNull();
+    // 压缩按钮：内联到阈值行尾部（不再单独占行）
+    const compactBtn = popover.querySelector(".ctx-popover-compact-btn") as HTMLElement;
+    expect(compactBtn).toBeTruthy();
+    expect(compactBtn.closest(".ctx-popover-row")?.className ?? "").toContain("ctx-popover-threshold-row");
+    fireEvent.mouseLeave(wrap);
+    useRun.setState((s) => { s.tabs = {}; });
+  });
+
+  it("上下文区无 breakdown 时进度圈档位回退 ok，popover 显示空态文案", async () => {
+    seedTab();
+    await mountApp();
+    const progress = document.querySelector(".ctx-progress")!;
+    expect(progress.className).toContain("ctx-tier-ok"); // 无数据 → ok（不臆测风险）
+    const wrap = document.querySelector(".ctx-progress-wrap") as HTMLElement;
+    fireEvent.mouseEnter(wrap);
+    await waitFor(() => expect(document.querySelector(".ctx-popover")).toBeTruthy());
+    const popover = document.querySelector(".ctx-popover")!;
+    expect(popover.querySelector(".ctx-popover-empty")).toBeTruthy(); // 上下文 — 空态
+    fireEvent.mouseLeave(wrap);
+  });
+
+  it("上下文区：命中率档位跟随数据（≥99% 绿），popover 文字跟随更新", async () => {
+    seedTab();
+    useRun.setState((s) => {
+      s.tabs = { s1: blank() };
+      s.tabs["s1"].breakdown = {
+        system_tokens: 1, history_tokens: 1, tool_results_tokens: 0,
+        tool_schema_tokens: 1, total_tokens: 100, context_window: 128000, ratio: 0.001,
+      };
+      s.tabs["s1"].usage = { input: 1000, output: 0, cacheRead: 900, cacheWrite: 0 }; // 900/1000 = 90%（warn 档）
+    });
+    await mountApp();
+    const wrap = document.querySelector(".ctx-progress-wrap") as HTMLElement;
+    fireEvent.mouseEnter(wrap);
+    await waitFor(() => expect(document.querySelector(".ctx-popover")).toBeTruthy());
+    expect(document.querySelector(".ctx-popover")?.textContent).toContain("90%"); // 90% 命中率
+    // 命中率档位跟随数据：全部命中 → ≥99% → ok（绿）—— 但进度圈色由 ctxTier（占用档）决定，与 hitTier 独立
+    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 0, cacheRead: 1000, cacheWrite: 0 }; });
+    await waitFor(() => expect(document.querySelector(".ctx-popover")?.textContent).toContain("100%"));
+    // 同一份用量换成 anthropic 语义（input 不含缓存）→ 分母变 input+read+write：1000/4000 = 25%
     const openaiCfg = useSettings.getState().config!;
     useSettings.setState({
       config: {
@@ -732,42 +788,19 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
         providers: openaiCfg.providers.map((p) => ({ ...p, api_format: "anthropic_messages" as const })),
       },
     });
-    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 10, cacheRead: 1000, cacheWrite: 2000 }; });
-    await waitFor(() => expect(document.querySelector(".ctx-label")?.textContent).toContain("命中 25%"));
+    useRun.setState((s) => { s.tabs["s1"].usage = { input: 1000, output: 0, cacheRead: 1000, cacheWrite: 2000 }; });
+    await waitFor(() => expect(document.querySelector(".ctx-popover")?.textContent).toContain("25%"));
     useSettings.setState({ config: openaiCfg });
-    // 清空运行态：其余用例不应看到阈值/命中段
-    useRun.setState((s) => { s.tabs = {}; });
-  });
-
-  it("上下文区无 breakdown 时保持「—」且不渲染阈值/命中段", async () => {
-    seedTab();
-    await mountApp();
-    const label = document.querySelector(".ctx-label")!;
-    expect(label.textContent?.trim()).toBe("上下文 —");
-    expect(label.querySelector(".ctx-pct")).toBeFalsy();
-    expect(label.textContent).not.toContain("命中");
-  });
-
-  it("上下文区：生效模型语义解析不到时不显示命中段（不猜口径）", async () => {
-    seedTab();
-    // 有用量数据且能解析语义时命中段正常显示
-    useRun.setState((s) => {
-      s.tabs = { s1: blank() };
-      s.tabs["s1"].breakdown = {
-        system_tokens: 1, history_tokens: 1, tool_results_tokens: 0,
-        tool_schema_tokens: 1, total_tokens: 100, context_window: 128000, ratio: 0.001,
-      };
-      s.tabs["s1"].usage = { input: 1000, output: 0, cacheRead: 900, cacheWrite: 0 };
-    });
-    await mountApp();
-    expect(document.querySelector(".ctx-label")?.textContent).toContain("命中 90%");
-    // active_model_id 指向不存在的模型 → cacheSemanticsOf 返回 null → 命中段缺省（占用段照常）
+    // active_model_id 指向不存在的模型 → cacheSemanticsOf 返回 null → popover 不渲染命中行
     const cfg = useSettings.getState().config!;
     useSettings.setState({ config: { ...cfg, active_model_id: "missing-model" } });
-    await waitFor(() => expect(document.querySelector(".ctx-label")?.textContent).not.toContain("命中"));
-    expect(document.querySelector(".ctx-label .ctx-pct")).toBeTruthy();
+    await waitFor(() => {
+      const rows = document.querySelectorAll(".ctx-popover-row");
+      const texts = Array.from(rows).map((r) => r.textContent ?? "");
+      return !texts.some((txt) => txt.includes("命中"));
+    });
     useSettings.setState({ config: cfg });
-    useRun.setState((s) => { s.tabs = {}; });
+    fireEvent.mouseLeave(wrap);
   });
 
   it("发送按钮三态：运行中无输入=停止，输入后=提交，清空复归停止", async () => {
@@ -833,22 +866,23 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
     const modeText = () => document.querySelector(".composer-toolbar")?.textContent ?? "";
-    expect(modeText()).toContain("自动编辑"); // initial mode
-    expect(document.querySelector(".composer-toolbar .approval-auto")).toBeTruthy(); // auto edit = orange
+    // 循环顺序：plan → confirm_each → auto_edit → goal → full_access → plan
+    expect(modeText()).toContain("自动编辑"); // initial mode (prefs.approval_mode = auto_edit)
+    expect(document.querySelector(".composer-toolbar .approval-auto")).toBeTruthy(); // auto edit = yellow
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("计划模式")); // auto_edit → plan
-    await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：计划模式")); // switch toast (docs/session-pref-switch-toast)
-    expect(document.querySelector(".composer-toolbar .approval-plan")).toBeFalsy(); // plan mode gets no color
-    fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("目标模式")); // plan → goal（第五档）
-    expect(document.querySelector(".composer-toolbar .approval-goal")).toBeTruthy(); // goal = orange (warn tier)
+    await waitFor(() => expect(modeText()).toContain("目标模式")); // auto_edit → goal
+    await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：目标模式")); // switch toast (docs/session-pref-switch-toast)
+    expect(document.querySelector(".composer-toolbar .approval-goal")).toBeTruthy(); // goal = orange
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
     await waitFor(() => expect(modeText()).toContain("完全访问")); // goal → full_access
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeTruthy(); // red highlight in sync
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("变更前确认")); // full_access wraps around to confirm_each
+    await waitFor(() => expect(modeText()).toContain("计划模式")); // full_access → plan
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeFalsy();
-    expect(document.querySelector(".composer-toolbar .approval-confirm")).toBeTruthy(); // confirm mode = blue
+    expect(document.querySelector(".composer-toolbar .approval-plan")).toBeFalsy(); // plan mode gets no color
+    fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(modeText()).toContain("变更前确认")); // plan → confirm_each
+    expect(document.querySelector(".composer-toolbar .approval-confirm")).toBeTruthy(); // confirm mode = green
   });
 
   it("模型菜单：图标入口 + 供应商分组 + 视觉标签 + 管理供应商入口 + 切换镜像 prefs", async () => {

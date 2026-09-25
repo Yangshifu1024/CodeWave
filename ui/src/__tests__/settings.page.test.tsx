@@ -355,9 +355,11 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     // 批②：导航自建 → 导航列内的 antd Tabs 规则全部退场；组标题沿用 .nav-section-title 的度量
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
     expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
-    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-hover\)/);
-    // 写入后检查的两列网格类收回 app.css（不再用内联 style）
-    expect(appCss).toMatch(/\.postcheck-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(180px,\s*1fr\)\)/);
+    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-highlight\)/);
+    // 写入后检查改走共享表单行，不在半宽网格里再次压缩控件列。
+    expect(appCss).not.toContain(".postcheck-grid");
+    const settingsCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../features/panels/settings/settings-theme.css"), "utf8");
+    expect(settingsCss).toContain(".settings-row.settings-row-wide-control");
     // 已删除的 LSP 样式类不得残留
     expect(appCss).not.toContain(".lsp-budget-grid");
     expect(appCss).not.toContain(".validation-row");
@@ -637,10 +639,10 @@ describe("设置全屏页：逐页脏标记与深链", () => {
   it("即时生效项不打点：切界面语言不产生未保存状态", async () => {
     await mountWithSession();
     await openPage("界面");
-    // 界面页两个 Select：主题（第一个）与界面语言（第二个）——按 Form.Item 标签定位语言项；
-    // 标签含「（即时生效）」后缀（与关于·更新行同一形态）
+    // 界面语言是页面首组，选择后仍即时生效且不产生脏点。
     const languageItem = controlByLabel("界面语言");
-    expect(languageItem.querySelector(".ant-form-item-label")?.textContent).toContain("界面语言（即时生效）");
+    expect(languageItem.querySelector(".ant-form-item-label")?.textContent).toContain("界面语言");
+    expect(languageItem.querySelector(".settings-row-description")?.textContent).toBe("界面显示的语言");
     const select = languageItem.querySelector(".ant-select") as HTMLElement;
     expect(select).toBeTruthy();
     fireEvent.mouseDown(select);
@@ -716,12 +718,12 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
     // ④ MCP：条目（独立 mcp.json 的文本基线，不走 config）——拆页后脏点跟着 mcp 页走
     //   注意：空名条目会被序列化丢掉，所以要先填名字才真算改动
     clickNavTab("MCP");
-    fireEvent.click(buttonByText("添加服务器"));
+    fireEvent.click(buttonByText("新建"));
     const mcpName = document.querySelector(".mcp-entry input") as HTMLInputElement;
     fireEvent.change(mcpName, { target: { value: "fs" } });
     await waitFor(() => expect(navDot("mcp")).toBe(true));
     expect(navDotCount()).toBe(1);
-    fireEvent.click(document.querySelector(".mcp-entry .ant-btn-dangerous") as HTMLElement);
+    fireEvent.click(document.querySelector(".ant-modal-footer button") as HTMLElement);
     await waitFor(() => expect(navDotCount()).toBe(0));
 
     // ⑤ 工作区与智能体：自定义提示词（config.custom_prompt）
@@ -749,12 +751,8 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
     // 界面页：切主题（localStorage ws_theme，即时生效）
     clickNavTab("界面");
     await waitFor(() => expect(activeNavTabText()).toBe("界面"));
-    const themeSelect = controlByLabel("主题").querySelector(".ant-select") as HTMLElement;
-    fireEvent.mouseDown(themeSelect);
-    await waitFor(() => expect(document.querySelector(".ant-select-dropdown")).toBeTruthy(), { timeout: 3000 });
-    fireEvent.click(
-      Array.from(document.querySelectorAll(".ant-select-item-option")).find((o) => (o.textContent ?? "").trim() === "暗色") as HTMLElement,
-    );
+    const darkThemeOption = Array.from(document.querySelectorAll(".settings-theme-option")).find((o) => (o.textContent ?? "").includes("暗")) as HTMLElement;
+    fireEvent.click(darkThemeOption);
     await new Promise((r) => setTimeout(r, 80));
     expect(useUi.getState().theme).toBe("dark");
     expect(navDotCount()).toBe(0);
@@ -843,9 +841,9 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
     // 「更新」行只剩自动更新开关（按钮不再在该行）
     const updatesAnchor = document.querySelector('[data-setting-id="ui.auto_update"]')!;
     expect(updatesAnchor.parentElement?.querySelector('[data-setting-id="app.check_updates"]')).toBeNull();
-    // 「即时生效」改挂在标题的括号里：不再作为行尾标注（flex 行 + 标题的 margin-right:auto
-    // 会把它推到最右侧，实际没人会看到），行内也不再有 .settings-instant
-    expect(document.body.textContent ?? "").toContain("更新（即时生效）");
+    // 自动更新与其他设置行一致：标题在左、开关在右，不重复显示即时生效文案。
+    expect(updatesAnchor.closest(".settings-row")?.textContent).toContain("启动时自动检查更新");
+    expect(updatesAnchor.closest(".settings-row")?.textContent).not.toContain("即时生效");
   });
 
   it("数据目录 / 日志目录 / 代码仓库 / 许可证四个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
@@ -1146,13 +1144,6 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     return row;
   }
 
-  /** 页级进阶开关（该页进阶项数为 0 时不渲染） */
-  function advancedToggle(): HTMLElement {
-    return document.querySelector(
-      '[data-testid="settings-page"] .settings-advanced-toggle .ant-switch',
-    ) as HTMLElement;
-  }
-
   /** 播放 Esc（window 捕获链：先清空查询，清空后才回落「返回工作区」） */
   function pressEsc() {
     fireEvent.keyDown(window, { key: "Escape" });
@@ -1319,85 +1310,8 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     expect(cancelRunLog).toEqual([]);
   });
 
-  it("进阶折叠：默认收起、开关拨开可见、偏好落 localStorage 且跨页跨次打开都记得", async () => {
-    await mountWithSession();
-    await openPage("日志");
-
-    // 默认收起 + 开关文案带该页计数（本页 1 项）
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-    expect(document.querySelector(".settings-advanced-toggle")?.textContent ?? "").toContain("显示进阶项（1）");
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
-
-    fireEvent.click(advancedToggle());
-    await waitFor(() =>
-      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
-    );
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1");
-    // 折叠切换不产生未保存改动
-    expect(navDotCount()).toBe(0);
-
-    // 跨页记忆
-    clickNavTab("安全与审批");
-    await waitFor(() => expect(activeNavTabText()).toBe("安全与审批"));
-    expect(anchor("approval.command_allowlist")?.classList.contains("settings-advanced-hidden")).toBe(false);
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
-
-    // 跨次打开（离开设置页再进去）仍记得
-    fireEvent.click(buttonByText("返回工作区"));
-    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
-    await openSettings();
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
-  });
-
-  it("命中被折叠的进阶项：临时展开该页进阶行（不写 localStorage），离开该页回到手动值", async () => {
-    await mountWithSession();
-    await openPage("日志");
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-
-    await search("详细");
-    fireEvent.click(resultRows()[0]);
-    await waitFor(() =>
-      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
-    );
-    expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true);
-    // 临时展开不写偏好（开关仍反映手动值）
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
-    expect(
-      document.querySelector('[data-testid="settings-page"] .settings-advanced-toggle .ant-switch')?.getAttribute(
-        "aria-checked",
-      ),
-    ).toBe("false");
-
-    // 离开该页 → 回手动值（收起）
-    pressEsc();
-    await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
-    clickNavTab("界面");
-    await waitFor(() => expect(activeNavTabText()).toBe("界面"));
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-  });
-
-  it("进阶项改动仍正常亮脏点且可保存（折叠不影响 PAGE_FIELDS 语义）", async () => {
-    await mountWithSession();
-    await openPage("日志");
-    expect(navDotCount()).toBe(0);
-
-    fireEvent.click(advancedToggle());
-    await waitFor(() => expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1"));
-    expect(navDotCount()).toBe(0); // 展开本身不是改动
-
-    fireEvent.click(anchor("log.session_verbose")?.querySelector(".ant-switch") as HTMLElement);
-    await waitFor(() => expect(navDot("logs")).toBe(true));
-    expect(navDotCount()).toBe(1);
-
-    fireEvent.click(buttonByText("保存"));
-    await waitFor(() => expect(navDotCount()).toBe(0));
-  });
+  // 2026-09 移除「显示进阶项」开关，原三个进阶折叠相关用例（默认收起/偏好落 localStorage、
+  // 命中被折叠的进阶项临时展开、进阶项改动亮脏点）随之删除。
 
   it("搜索框 ARIA：combobox 语义与 aria-activedescendant 都挂在输入框上，listbox 只作投影", async () => {
     await mountWithSession();
@@ -1440,39 +1354,59 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(false);
   });
 
-  it("0 高度锚点退化：命中 approval.command_allowlist（白名单为空 → 锚点无高度）时高亮页体容器", async () => {
+  it("命中空白名单时定位到可见的空态卡片", async () => {
     await mountWithSession();
-    // 该锚点只在安全与审批页的页体里（每次只渲染当前页）→ 先上页再搜，命中项即在当前页
     await openPage("安全与审批");
     await search("白名单");
 
     const anchorEl = anchor("approval.command_allowlist")!;
     expect(anchorEl).toBeTruthy();
-    // happy-dom 无布局引擎：手工把该锚点伪装成真实浏览器里「白名单为空」时的 0 高度盒
-    Object.defineProperty(anchorEl, "offsetHeight", { value: 0, configurable: true });
-    Object.defineProperty(anchorEl, "getClientRects", { value: () => [], configurable: true });
+    expect(anchorEl.textContent).toContain("还没有始终允许的命令");
+    expect(anchorEl.textContent).not.toContain("全部删除");
+    // happy-dom 无布局引擎：模拟真实浏览器中空态卡片的可见盒。
+    Object.defineProperty(anchorEl, "offsetHeight", { value: 120, configurable: true });
 
     fireEvent.click(resultRow("命令白名单"));
-    await waitFor(() =>
-      expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(true),
-    );
-    expect(anchorEl.classList.contains("settings-item-hit")).toBe(false);
+    await waitFor(() => expect(anchorEl.classList.contains("settings-item-hit")).toBe(true));
+    expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(false);
   });
 
-  it("折叠 log.session_verbose：整行（Form.Item 与 label）都在隐藏容器内，不留孤立标签与空控制行", async () => {
+  it("命令白名单展示命令和目录，可展开、单条移除与确认后全部删除", async () => {
+    const entries = Array.from({ length: 6 }, (_, i) => `/project-${i}\u0001cargo test --case ${i}`);
+    const invoke = await invokeMock();
+    invoke.mockImplementation(async (cmd: string, args?: any) =>
+      cmd === "get_config"
+        ? { ...fixtureConfig, approval: { ...fixtureConfig.approval, command_allowlist: entries } }
+        : baseInvoke(cmd, args),
+    );
     await mountWithSession();
-    await openPage("日志");
+    await openPage("安全与审批");
 
-    const wrapper = anchor("log.session_verbose")!;
-    const row = wrapper.querySelector(".ant-form-item") as HTMLElement;
-    expect(row).toBeTruthy();
-    expect(row.querySelector(".ant-form-item-label")?.textContent).toContain("会话详细日志");
-    // antd 的 label 与 control 是兄弟节点：包层必须在 Form.Item **外部**，收起时整行一起消失
-    expect(row.closest(".settings-advanced-hidden")).toBe(wrapper);
-    expect(wrapper.classList.contains("settings-advanced-hidden")).toBe(true);
+    const list = anchor("approval.command_allowlist")!;
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    expect(list.textContent).toContain("cargo test --case 0");
+    expect(list.textContent).toContain("/project-0");
+    fireEvent.click(Array.from(list.querySelectorAll("button")).find((button) => button.textContent?.includes("展开全部"))!);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(6);
+    fireEvent.click(list.querySelector(".cmd-allowlist-row button")!);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    expect(list.textContent).not.toContain("cargo test --case 0");
+    expect(navDot("security")).toBe(true);
 
-    fireEvent.click(advancedToggle());
-    await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false));
+    const clear = Array.from(list.querySelectorAll("button")).find((button) => button.textContent?.includes("全部删除"));
+    expect(clear).toBeTruthy();
+    fireEvent.click(clear!);
+    const confirm = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(".ant-popconfirm-buttons .ant-btn-primary");
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    expect(confirm.classList.contains("ant-btn-dangerous")).toBe(true);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(0));
+    expect(list.textContent).toContain("还没有始终允许的命令");
+    expect(list.textContent).not.toContain("全部删除");
   });
 
   describe("命中跳转 × 三选拦截（三条离开路径的定位归属）", () => {
@@ -1784,7 +1718,7 @@ describe("设置页：会话保留期与清理", () => {
     await openPage("工作区与智能体");
 
     expect(buttonByText("立即清理").disabled).toBe(true);
-    expect(controlByLabel("立即清理").textContent).toContain("先选择保留期");
+    expect(controlByLabel("手动清理").textContent).toContain("先选择保留期");
     expect(calls.preview).toEqual([]); // 禁用态不可能发出预览
   });
 
@@ -1797,7 +1731,7 @@ describe("设置页：会话保留期与清理", () => {
     await pickRetention("30 天");
     await waitFor(() => expect(navDot("agent")).toBe(true));
     expect(buttonByText("立即清理").disabled).toBe(true);
-    expect(controlByLabel("立即清理").textContent).toContain("有未保存的改动，先保存");
+    expect(controlByLabel("手动清理").textContent).toContain("有未保存的改动，先保存");
 
     // 改回已保存值 → 恢复可点
     await pickRetention("7 天");

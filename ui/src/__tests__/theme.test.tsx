@@ -171,34 +171,20 @@ describe("effectiveDark 派生与 html.dark 同步", () => {
 });
 
 describe("设置 → 外观：主题选择即时生效", () => {
-  it("Select 切到暗色后 store/localStorage/html.dark 三处同步", async () => {
+  it("主题预览卡切到暗色后 store/localStorage/html.dark 三处同步", async () => {
     await mountApp();
     // seed 配置后 store 直驱打开设置弹窗并落在「外观」页签（既有惯例，见 shell.settings.test；
     // SettingsPage 的 Tabs 依赖 draft=useSettings.config，未 seed 时仅渲染空页）
     // 设置页全屏覆盖层已不再有 Modal 外壳（docs/settings-fullscreen-shell）：选择器锚 .settings-shell
     useSettings.setState({ config: JSON.parse(JSON.stringify(fixtureConfig)), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "appearance" });
-    // 外观页签唯一的 Select 即主题三档（字体项是 Input）；antd 6.6 需对 .ant-select 根元素 mouseDown 展开
-    const themeSelect = await waitFor(
-      () => {
-        const el = document.querySelector(".settings-shell .ant-select") as HTMLElement | null;
-        expect(el).toBeTruthy();
-        return el as HTMLElement;
-      },
-      { timeout: 3000 },
-    );
-    fireEvent.mouseDown(themeSelect);
-    await waitFor(() => expect(document.querySelector(".ant-select-dropdown")).toBeTruthy(), { timeout: 3000 });
-    const option = await waitFor(
-      () => {
-        const opts = Array.from(document.querySelectorAll(".ant-select-item-option"));
-        const found = opts.find((o) => o.textContent?.trim() === "暗色");
-        expect(found).toBeTruthy();
-        return found as HTMLElement;
-      },
-      { timeout: 3000 },
-    );
-    fireEvent.click(option);
+    const options = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll<HTMLElement>(".settings-theme-option"));
+      expect(found).toHaveLength(3);
+      return found;
+    }, { timeout: 3000 });
+    expect(document.body.textContent).not.toContain("选择界面亮暗外观");
+    fireEvent.click(options[2]);
     await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
     expect(useUi.getState().theme).toBe("dark");
     expect(localStorage.getItem("ws_theme")).toBe("dark");

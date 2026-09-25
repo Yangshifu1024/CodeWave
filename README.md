@@ -12,11 +12,11 @@ CodeWave 跑在你的本机（Windows / macOS / Linux）。打开一个项目目
 - **本地优先**：会话、配置、记忆、技能全部存于本机（`~/.codewave` 与项目内 `.codewave/`）；API Key 入系统钥匙串，配置文件不落明文；零遥测、零上报
 - **多供应商 BYOK**：OpenAI 兼容 / Anthropic / OpenAI Responses 三协议，多 Key 轮换，端点与模型完全自定义（无内置模型目录）
 - **项目 = 单目录**：选一个代码目录作为项目主目录，托管数据（任务/日志/记忆/技能）存于其下 `.codewave/`，数据随项目走；也支持免目录的临时会话直接开聊
-- **权限四档**：`plan`（只读）→ `confirm_each`（每写必问）→ `auto_edit`（自动编辑）→ `full_access`，Composer 里 Shift+Tab 循环切换
+- **权限五档**：`plan`（只读）→ `confirm_each`（每写必问）→ `auto_edit`（自动编辑）→ `full_access`，另有可持续执行目标的 `goal` 模式；Composer 里 Shift+Tab 切换
 - **命令安全围栏**：三层静态围栏（删除黑名单 → tree-sitter AST 写目标分析 → 高危模式审批）先于弹窗拦截危险命令；写操作全部圈定在会话可写根内
-- **20 个内置工具 + MCP 扩展**：文件读写、命令执行、grep、网络抓取、计划任务、后台服务管理等；rmcp 客户端接入 stdio / streamable-http MCP 服务器
+- **内置工具 + MCP 扩展**：文件读写、命令执行、grep、网络抓取、计划任务、后台服务管理、Office/PDF 文档处理等；rmcp 客户端接入 stdio / streamable-http MCP 服务器
 - **技能与子代理**：`/slash` 技能与 `$角色` 子代理委派；兼容 `.claude/skills`、`.agents/skills` 目录约定
-- **长会话友好**：token 明细统计、上下文自动压缩、会话自动命名、多 Tab 并行、运行队列
+- **长会话友好**：完整分段历史、图片外置存储、token 明细统计、上下文自动压缩、会话自动命名、多 Tab 并行、运行队列
 - **双语界面**：中文 / English 可切换；自绘标题栏，主题跟随系统
 
 ## 下载安装
@@ -26,10 +26,10 @@ CodeWave 跑在你的本机（Windows / macOS / Linux）。打开一个项目目
 | 平台 | 格式 |
 |---|---|
 | Windows | NSIS 安装包（`.exe`）/ MSI（`.msi`） |
-| macOS | `.dmg` / `.app.tar.gz`（当前未签名，首启需右键 → 打开绕过 Gatekeeper） |
+| macOS | `.dmg` / `.app.tar.gz`（签名与公证状态以对应版本的 Release 说明为准） |
 | Linux | `.AppImage` / `.deb` / `.rpm` |
 
-> 更新器已内置但默认停用（`updater.active: false`）；当前请通过 Releases 页面手动获取新版本。
+> 更新器已启用，签名更新包与版本信息由已发布的 GitHub Release 提供；也可从 Releases 页面手动下载安装包。
 
 ### 从旧版 WaveStudio 升级（0.2.0 前品牌版本）
 
@@ -43,7 +43,7 @@ CodeWave 跑在你的本机（Windows / macOS / Linux）。打开一个项目目
 
 前置依赖：
 
-- Rust stable（`rust-version = 1.85`）与平台构建链（Windows 需 MSVC Build Tools）
+- Rust stable（最低 1.98）与平台构建链（Windows 需 MSVC Build Tools）
 - Node.js 22+ 与 [pnpm](https://pnpm.io/)
 - Tauri 2 的[系统依赖](https://v2.tauri.app/start/prerequisites/)（Linux 需 WebKitGTK）
 
@@ -54,9 +54,10 @@ pnpm tauri dev              # 开发调试（仓库根执行）
 pnpm tauri build            # 打包产物
 
 # 测试（改哪边跑哪边，两边都动则都要过）
-cd src-tauri && cargo test  # 后端：全绿 / 0 warning 为基线
+cargo test --manifest-path src-tauri/Cargo.toml  # 后端测试
 pnpm --dir ui test          # 前端：vitest
 pnpm --dir ui build         # 前端：tsc --noEmit + vite build
+pnpm prepr                  # 开 PR 或发版前运行完整本地门禁
 ```
 
 ## 架构一览

@@ -1,9 +1,9 @@
-// 设置页 MCP 页（自「工具与集成」拆出）：服务器状态表 + 配置区共存。
+// 设置页 MCP 页（自「工具与集成」拆出）：服务器卡片 + 配置区共存。
 // 状态数据面（mcp_status 命令 / mcp:status 事件 / useUi.mcpStatus）早已存在，本页是它**唯一**的渲染方，
 // 所以本文件同时守护三件容易做错的事：
-//   ① 名单取「配置 ∪ 状态」并集——只取状态会在保存配置后（后端 stop_all、且无会话不重连）得到空表，
-//      看起来像「没配置服务器」；只取配置会漏掉「配置里已删、管理端仍持有连接」的服务器；
-//   ② 无配置服务器时整段不渲染（空表会把「没配」与「没连」显示成同一个样子）；
+//   ① 当前作用域配置决定卡片名单——只取状态会在保存配置后（后端 stop_all、且无会话不重连）得到空区，
+//      看起来像「没配置服务器」；原始配置回退模式则由状态记录提供可见服务器；
+//   ② 无配置服务器时保留新建入口与空态；
 //   ③ 刷新按钮只重读状态、**不会重连**（手动重连会打断其他会话正在跑的 MCP 调用，属非目标）。
 // 挂载方式与 settings.skills.test.tsx 同源（standalone + useUi 控制开关）。
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -15,7 +15,7 @@ import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { useSessions } from "../stores/sessions";
 import { parseMcpDoc } from "../utils/mcpConfig";
-import type { ConfigState } from "../ipc/types";
+import type { ConfigState, McpServerView } from "../ipc/types";
 
 function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
   return {
@@ -47,9 +47,12 @@ const MCP_CONFIG = JSON.stringify({
 
 let calls: string[] = [];
 /** mcp_status 的返回值（每个用例自行设置；元素形态与 ipc/client.ts 的 mcpStatus 一致） */
-let statusReply: { name: string; state: unknown; tools: number }[] = [];
+let statusReply: { name: string; state: unknown; tools: number; pid?: number | null; scope?: "global" | "project"; tool_details?: { name: string; description: string }[] }[] = [];
+let effectiveReply: Array<Pick<McpServerView, "name" | "source" | "overridden">> = [];
 /** mcp_list_config 的 json 字段（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
 let configReply = MCP_CONFIG;
+let saveAllowed = true;
+let projectLoadFails = false;
 /** mcp_test 的返回值（临时测试连接：不改动正式状态） */
 let testReply: { ok: boolean; tools: number; error: null | { message: string } } = {
   ok: true,
@@ -64,18 +67,19 @@ async function baseInvoke(cmd: string, args?: any) {
     case "save_config": return null;
     case "list_available_shells": return [];
     case "mcp_list_config":
+      if (args?.scope === "project" && projectLoadFails) throw new Error("read failed");
       return {
         scope: args?.scope ?? "global",
         path: args?.scope === "project" ? "C:/proj/.codewave/mcp.json" : "C:/u/.codewave/mcp.json",
         json: configReply,
         servers: [],
-        effective: [],
+        effective: effectiveReply,
         issues: [],
       };
-    case "mcp_save_config": return { saved: true, issues: [] };
+    case "mcp_save_config": return { saved: saveAllowed, issues: [] };
     case "mcp_test": return testReply;
     case "mcp_snapshot":
-      return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply)) };
+      return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply.map((s) => ({ scope: "global", ...s })))) };
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);
   }
@@ -95,10 +99,13 @@ async function invokeMock() {
 afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
-  useUi.setState({ settingsOpen: false, settingsTab: "appearance", mcpStatus: [], settingsHit: null });
+  useUi.setState({ settingsOpen: false, settingsTab: "appearance", mcpStatus: [], mcpActionPending: {}, settingsHit: null });
   useSettings.setState({ config: null, loaded: false });
   calls = [];
+  saveAllowed = true;
+  projectLoadFails = false;
   statusReply = [];
+  effectiveReply = [];
   configReply = MCP_CONFIG;
   testReply = { ok: true, tools: 2, error: null };
   useSessions.setState({ activeKey: null });
@@ -114,25 +121,21 @@ function statusTable(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-testid="settings-page"] [data-setting-id="app.mcp_status"]');
 }
 
-/**
- * 状态表的服务器行（表头行共用同一个类名，故按类名排除）。
- * 三列分别取文本：行内是并列的 span（JSX 会吃掉元素间的空白），拼 textContent 拼不出分隔符。
- */
+/** 卡片中的服务器名称、状态与工具计数。 */
 function statusRows(): { name: string; state: string; tools: string }[] {
-  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .mcp-status-row'))
-    .filter((r) => !r.classList.contains("mcp-status-row-head"))
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .mcp-server-card'))
     .map((r) => ({
-      name: r.querySelector(".mcp-status-name")?.textContent ?? "",
-      state: (r.querySelector(".mcp-status-state")?.textContent ?? "").trim(),
-      tools: r.querySelector(".mcp-status-tools")?.textContent ?? "",
+      name: r.querySelector(".mcp-server-name")?.textContent ?? "",
+      state: (r.querySelector(".ant-tag")?.textContent ?? "").trim(),
+      tools: Array.from(r.querySelectorAll(".mcp-server-meta span")).find((s) => /工具|过滤/.test(s.textContent ?? ""))?.textContent?.replace(" 个工具", "") ?? "—",
     }));
 }
 
-function segmentedItemByText(text: string): HTMLElement {
+function scopeTabByText(text: string): HTMLElement {
   const el = Array.from(
-    document.querySelectorAll<HTMLElement>(".ant-segmented-item-label"),
+    document.querySelectorAll<HTMLElement>(".mcp-scope .ant-tabs-tab"),
   ).find((n) => (n.textContent ?? "").trim() === text);
-  if (!el) throw new Error(`segmented item not found: ${text}`);
+  if (!el) throw new Error(`scope tab not found: ${text}`);
   return el;
 }
 
@@ -144,7 +147,7 @@ function buttonByText(text: string): HTMLElement {
   return btn as HTMLElement;
 }
 
-async function openMcpTab() {
+async function openMcpTab(edit = false, editIndex = 0) {
   // 状态是**会话级**的（连接池按会话可见集 keyed）：没有活跃会话就没有可读的连接状态，
   // 故这里先立一个活跃会话，再打开 MCP 页。
   useSessions.setState({ activeKey: "s1" });
@@ -155,10 +158,30 @@ async function openMcpTab() {
       <SettingsPage />
     </AntApp>,
   );
-  await waitFor(() => expect(document.querySelector('[data-setting-id="mcp.servers"]')).toBeTruthy());
+  await waitFor(() => expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy());
+  if (edit && document.querySelector('.mcp-server-card')) {
+    const editButtons = Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card button")).filter((button) => button.textContent?.replace(/\s/g, "") === "编辑配置");
+    fireEvent.click(editButtons[editIndex]);
+    await waitFor(() => expect(document.querySelector(".mcp-entry")).toBeTruthy());
+  }
 }
 
 describe("设置页 MCP 页：服务器状态表", () => {
+  it("作用域、工具数和 PID 位于卡片标题中间，正文直接显示工具列表", async () => {
+    effectiveReply = [{ name: "fs", source: "global", overridden: null }];
+    statusReply = [{ name: "fs", state: "ready", tools: 2, pid: 10548 }];
+    await openMcpTab();
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("已连接"));
+    const card = document.querySelector<HTMLElement>(".mcp-server-card")!;
+    const title = card.querySelector<HTMLElement>(".ant-card-head .mcp-server-title")!;
+    expect(Array.from(title.children).map((child) => child.className)).toEqual(["mcp-server-name", "mcp-server-meta", "mcp-server-state"]);
+    expect(title.querySelector(".mcp-server-meta")?.textContent).toContain("全局");
+    expect(title.querySelector(".mcp-server-meta")?.textContent).toContain("2 个工具");
+    expect(title.querySelector(".mcp-server-meta")?.textContent).toContain("PID 10548");
+    expect(card.querySelector(".ant-card-body .mcp-server-meta")).toBeNull();
+    expect(card.querySelector(".ant-card-body .mcp-server-tools")).toBeTruthy();
+  });
+
   it("有配置时渲染状态表：名称 / 状态 / 工具数 + 全局语义说明 + app.mcp_status 锚点", async () => {
     // fs 已连接（12 把工具）、web 连接失败、cfg-only 只在配置里（= 未连接）
     statusReply = [
@@ -175,10 +198,9 @@ describe("设置页 MCP 页：服务器状态表", () => {
       { name: "web", state: "连接失败", tools: "—" },
       { name: "cfg-only", state: "未连接", tools: "—" },
     ]);
-    // 表头三列（名称列复用 mcpName 文案）
-    expect(statusTable()?.querySelector(".mcp-status-row-head")?.textContent).toContain("工具数");
-    // 说明文案承担「未连接是正常态」的解释职责
-    expect(statusTable()?.textContent).toContain("连接在打开会话时建立");
+    expect(statusTable()?.textContent).toContain("工具数");
+    // 次要说明移入提示，状态表保留核心数据。
+    expect(statusTable()?.textContent).not.toContain("连接在打开会话时建立");
   });
 
   it("状态记录为空（没有会话驱动连接）时全部显示「未连接」——不是「没配置」", async () => {
@@ -192,7 +214,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     ]);
   });
 
-  it("状态里多出配置里已删的服务器也要列出来（否则状态凭空消失）", async () => {
+  it("状态里多出配置里已删的服务器时不显示陈旧行", async () => {
     statusReply = [{ name: "ghost", state: "ready", tools: 3 }];
     await openMcpTab();
 
@@ -200,7 +222,6 @@ describe("设置页 MCP 页：服务器状态表", () => {
     expect(statusRows()).toEqual([
       { name: "fs", state: "未连接", tools: "—" },
       { name: "web", state: "未连接", tools: "—" },
-      { name: "ghost", state: "已连接", tools: "3" },
     ]);
   });
 
@@ -209,7 +230,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     await openMcpTab();
 
     const row = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>('[data-testid="settings-page"] .mcp-status-row-clickable');
+      const el = document.querySelector<HTMLElement>('[data-testid="settings-page"] .mcp-server-diagnostic button');
       expect(el).toBeTruthy();
       return el as HTMLElement;
     });
@@ -232,7 +253,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     await openMcpTab();
 
     await waitFor(() => expect(statusTable()).toBeTruthy());
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-row-clickable')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-diagnostic')).toBeFalsy();
   });
 
   it("连接中（starting）：显示「连接中」+ spinner，且该行不可点（无错误可展开）", async () => {
@@ -244,8 +265,8 @@ describe("设置页 MCP 页：服务器状态表", () => {
       { name: "fs", state: "连接中", tools: "—" },
       { name: "web", state: "未连接", tools: "—" },
     ]);
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-state .ant-spin')).toBeTruthy();
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-row-clickable')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-title .ant-spin')).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-diagnostic')).toBeFalsy();
   });
 
   it("刷新按钮：带「不会重新连接」的 aria-label，点击只重读 mcp_status，绝不触发 connect_mcp", async () => {
@@ -287,22 +308,22 @@ describe("设置页 MCP 页：服务器状态表", () => {
     await waitFor(() => expect(statusCalls()).toBe(2));
   });
 
-  it("没有配置服务器、也没有状态记录：整段不渲染（只留配置区与添加引导）", async () => {
+  it("没有配置服务器、也没有状态记录：保留新建入口", async () => {
     configReply = JSON.stringify({ mcpServers: {} });
     statusReply = [];
     await openMcpTab();
 
-    expect(statusTable()).toBeFalsy();
-    expect(document.body.textContent ?? "").toContain("添加服务器");
+    expect(statusTable()).toBeTruthy();
+    expect(document.body.textContent ?? "").toContain("新建");
   });
 
-  it("没配置服务器但有状态记录（管理端仍持有连接）：照样列出该行，不静默吞掉状态", async () => {
+  it("没配置服务器但有状态记录时不显示陈旧行", async () => {
     configReply = JSON.stringify({ mcpServers: {} });
     statusReply = [{ name: "fs", state: "ready", tools: 2 }];
     await openMcpTab();
 
     await waitFor(() => expect(statusTable()).toBeTruthy());
-    expect(statusRows()).toEqual([{ name: "fs", state: "已连接", tools: "2" }]);
+    expect(statusRows()).toEqual([]);
   });
 
   it("mcp.json 解析失败改用文本兜底编辑：原文可见、保存直存原文（不被空配置覆盖）", async () => {
@@ -313,7 +334,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     // 兜底模式：显示说明文案 + JSON 原文（可直接改），而不是把解析不了的配置吞掉当「没有服务器」
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已回退为原始编辑模式"));
     const ta = await waitFor(() => {
-      const el = document.querySelector<HTMLTextAreaElement>('[data-testid="settings-page"] textarea');
+      const el = document.querySelector<HTMLTextAreaElement>('.mcp-json');
       expect(el).toBeTruthy();
       return el as HTMLTextAreaElement;
     });
@@ -330,39 +351,276 @@ describe("设置页 MCP 页：服务器状态表", () => {
 });
 
 describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
+  it("编辑弹框分区清楚，删除与取消、保存位于同一底栏", async () => {
+    await openMcpTab(true);
+    const modal = document.querySelector<HTMLElement>(".settings-mcp-editor-modal")!;
+    expect(modal.textContent).toContain("编辑 MCP 服务器");
+    expect(Array.from(modal.querySelectorAll(".mcp-editor-basics .mcp-label")).map((el) => el.textContent)).toEqual(["服务器名称", "传输方式"]);
+    expect(modal.querySelector(".mcp-editor-section-head")?.textContent).toContain("连接配置");
+    expect(modal.querySelector(".mcp-editor-section-head")?.textContent?.replace(/\s/g, "")).toContain("测试");
+    const footer = modal.querySelector<HTMLElement>(".mcp-editor-footer")!;
+    expect(Array.from(footer.querySelectorAll("button")).map((button) => button.textContent?.replace(/\s/g, ""))).toEqual(["删除服务器", "取消", "保存并重连"]);
+    expect(modal.querySelector(".mcp-editor-danger")).toBeNull();
+    expect(modal.querySelector(".mcp-entry-head")).toBeNull();
+    fireEvent.click(footer.querySelector<HTMLButtonElement>("button")!);
+    const confirm = document.querySelector<HTMLElement>(".ant-popconfirm")!;
+    expect(confirm.textContent).toContain("确认删除此服务器");
+    expect(confirm.querySelector(".ant-btn-primary")?.classList.contains("ant-btn-dangerous")).toBe(true);
+    expect(modal.querySelector(".mcp-entry")).toBeTruthy();
+    expect(footer.querySelectorAll("button")).toHaveLength(3);
+    fireEvent.click(Array.from(confirm.querySelectorAll("button")).find((button) => button.textContent?.replace(/\s/g, "") === "取消")!);
+    expect(modal.querySelector(".mcp-entry")).toBeTruthy();
+    expect(calls.some((call) => call.startsWith("mcp_save_config"))).toBe(false);
+  });
+
+  it("Popconfirm 确认删除后直接保存过滤后的配置", async () => {
+    await openMcpTab(true);
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".mcp-editor-footer > button")!);
+    const confirm = document.querySelector<HTMLElement>(".ant-popconfirm")!;
+    fireEvent.click(Array.from(confirm.querySelectorAll("button")).find((button) => button.textContent?.replace(/\s/g, "") === "删除服务器")!);
+    await waitFor(() => expect(calls.some((call) => call.startsWith("mcp_save_config"))).toBe(true));
+    const saveCall = calls.find((call) => call.startsWith("mcp_save_config:"))!;
+    const saved = parseMcpDoc(JSON.parse(saveCall.slice("mcp_save_config:".length)).json)!;
+    expect(saved.servers.map((server) => server.name)).toEqual(["web"]);
+    await waitFor(() => expect(document.querySelector(".settings-mcp-editor-modal")).toBeNull());
+  });
+
+  it("删除保存被拒时保留编辑弹框与原配置", async () => {
+    await openMcpTab(true);
+    saveAllowed = false;
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".mcp-editor-footer > button")!);
+    const confirm = document.querySelector<HTMLElement>(".ant-popconfirm")!;
+    fireEvent.click(Array.from(confirm.querySelectorAll("button")).find((button) => button.textContent?.replace(/\s/g, "") === "删除服务器")!);
+    await waitFor(() => expect(calls.some((call) => call.startsWith("mcp_save_config"))).toBe(true));
+    expect(document.querySelector(".mcp-entry")).toBeTruthy();
+    expect(document.querySelector(".mcp-server-card")?.textContent).toContain("fs");
+  });
+
+  it("默认只显示配置概览，编辑保存后收起表单且不展示变量值", async () => {
+    configReply = JSON.stringify({ mcpServers: { fs: { command: "npx", env: { TOKEN: "private-value" } } } });
+    await openMcpTab();
+    expect(statusRows().some((row) => row.name === "fs")).toBe(true);
+    expect(document.querySelector(".mcp-entry")).toBeFalsy();
+    expect(document.body.textContent).not.toContain("private-value");
+    fireEvent.click(buttonByText("编辑配置"));
+    expect(document.querySelector(".mcp-entry")).toBeTruthy();
+    fireEvent.click(buttonByText("保存并重连"));
+    await waitFor(() => expect(document.querySelector(".mcp-entry")).toBeFalsy());
+    expect(statusRows().some((row) => row.name === "fs")).toBe(true);
+  });
+
+  it("保存被拒时保留编辑表单和输入", async () => {
+    await openMcpTab(true);
+    const nameInput = document.querySelector<HTMLInputElement>(".mcp-entry input")!;
+    fireEvent.change(nameInput, { target: { value: "renamed" } });
+    saveAllowed = false;
+    fireEvent.click(buttonByText("保存并重连"));
+    await waitFor(() => expect(calls.some((c) => c.startsWith("mcp_save_config"))).toBe(true));
+    expect(document.querySelector(".mcp-entry")).toBeTruthy();
+    expect(document.querySelector<HTMLInputElement>(".mcp-entry input")?.value).toBe("renamed");
+  });
+
   it("默认编辑全局层，提示回显该层 mcp.json 路径", async () => {
     await openMcpTab();
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("C:/u/.codewave/mcp.json"),
-    );
+    await waitFor(() => expect(document.querySelector(".mcp-scope-info")?.getAttribute("aria-label")).toContain("C:/u/.codewave/mcp.json"));
     expect(calls.some((c) => c.includes('"scope":"global"'))).toBe(true);
   });
 
   it("切到项目层会重新拉该层配置（两层都可编辑；同名项目级胜出由后端合并）", async () => {
     await openMcpTab();
-    fireEvent.click(segmentedItemByText("项目"));
+    fireEvent.click(scopeTabByText("项目级"));
     await waitFor(() =>
       expect(calls.some((c) => c.includes('"scope":"project"'))).toBe(true),
     );
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("C:/proj/.codewave/mcp.json"),
-    );
+    await waitFor(() => expect(document.querySelector(".mcp-scope-info")?.getAttribute("aria-label")).toContain("C:/proj/.codewave/mcp.json"));
+  });
+
+  it("同名服务器按作用域展示各自的状态与工具说明", async () => {
+    statusReply = [
+      { name: "fs", scope: "global", state: "ready", tools: 1, tool_details: [{ name: "global_read", description: "全局说明" }] },
+      { name: "fs", scope: "project", state: "ready", tools: 1, tool_details: [{ name: "project_read", description: "项目说明" }] },
+    ];
+    await openMcpTab();
+    await waitFor(() => expect(statusTable()?.textContent).toContain("全局说明"));
+    expect(statusTable()?.textContent).not.toContain("项目说明");
+    fireEvent.click(scopeTabByText("项目级"));
+    await waitFor(() => expect(statusTable()?.textContent).toContain("项目说明"));
+    expect(statusTable()?.textContent).not.toContain("全局说明");
+  });
+
+  it("全局服务器被项目级同名配置覆盖时，卡片不能误操作项目连接", async () => {
+    effectiveReply = [{ name: "fs", source: "project", overridden: "global" }];
+    statusReply = [
+      { name: "fs", scope: "global", state: "stopped", tools: 0 },
+      { name: "fs", scope: "project", state: "ready", tools: 1 },
+    ];
+    await openMcpTab();
+    const globalCard = Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card")).find((card) => card.querySelector(".mcp-server-name")?.textContent === "fs")!;
+    expect(globalCard.textContent).toContain("非当前会话生效配置");
+    const reconnect = Array.from(globalCard.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent?.includes("重连"))!;
+    expect(reconnect.disabled).toBe(true);
+    fireEvent.click(reconnect);
+    expect(calls.some((c) => c.startsWith("mcp_reconnect"))).toBe(false);
+
+    fireEvent.click(scopeTabByText("项目级"));
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("已连接"));
+    const projectCard = document.querySelector<HTMLElement>(".mcp-server-card")!;
+    expect(projectCard.textContent).not.toContain("非当前会话生效配置");
+    const disconnect = Array.from(projectCard.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent?.includes("断开"))!;
+    expect(disconnect.disabled).toBe(false);
+  });
+
+  it.each([
+    { action: "mcp_reconnect", label: "重连", otherLabel: "断开", state: "stopped" },
+    { action: "mcp_disconnect", label: "断开", otherLabel: "重连", state: "ready" },
+  ])("$label 请求期间显示 loading，禁用同卡片操作并防止重复请求", async ({ action, label, otherLabel, state }) => {
+    effectiveReply = [
+      { name: "fs", source: "global", overridden: null },
+      { name: "web", source: "global", overridden: null },
+    ];
+    statusReply = [{ name: "fs", state, tools: 1 }, { name: "web", state, tools: 1 }];
+    let finishAction!: () => void;
+    const pending = new Promise<void>((resolve) => { finishAction = resolve; });
+    (await invokeMock()).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === action) {
+        calls.push(`${cmd}:${JSON.stringify(args)}`);
+        return pending;
+      }
+      return baseInvoke(cmd, args);
+    });
+    await openMcpTab();
+    const card = document.querySelector<HTMLElement>(".mcp-server-card")!;
+    const button = (text: string) => Array.from(card.querySelectorAll<HTMLButtonElement>("button"))
+      .find((item) => item.textContent?.replace(/\s/g, "") === text)!;
+    await waitFor(() => expect(button(label).disabled).toBe(false));
+
+    fireEvent.click(button(label));
+    expect(button(label).classList.contains("ant-btn-loading")).toBe(true);
+    expect(button(label).disabled).toBe(true);
+    expect(button(otherLabel).disabled).toBe(true);
+    const otherCard = Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card"))
+      .find((item) => item.querySelector(".mcp-server-name")?.textContent === "web")!;
+    expect(Array.from(otherCard.querySelectorAll<HTMLButtonElement>("button"))
+      .find((item) => item.textContent?.replace(/\s/g, "") === label)?.disabled).toBe(false);
+    fireEvent.click(button(label));
+    fireEvent.click(button(otherLabel));
+    expect(calls.filter((call) => call.startsWith(`${action}:`))).toHaveLength(1);
+
+    finishAction();
+    await waitFor(() => expect(button(label).classList.contains("ant-btn-loading")).toBe(false));
+    expect(button(label).disabled).toBe(false);
+  });
+
+  it("重连失败后清除 loading 并允许重试", async () => {
+    effectiveReply = [{ name: "fs", source: "global", overridden: null }];
+    statusReply = [{ name: "fs", state: "stopped", tools: 0 }];
+    let attempts = 0;
+    (await invokeMock()).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "mcp_reconnect") {
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new Error("connection failed")) : Promise.resolve();
+      }
+      return baseInvoke(cmd, args);
+    });
+    await openMcpTab();
+    const reconnect = Array.from(document.querySelectorAll<HTMLButtonElement>(".mcp-server-card button"))
+      .find((button) => button.textContent?.replace(/\s/g, "") === "重连")!;
+    await waitFor(() => expect(reconnect.disabled).toBe(false));
+    fireEvent.click(reconnect);
+    await waitFor(() => expect(attempts).toBe(1));
+    await waitFor(() => expect(reconnect.classList.contains("ant-btn-loading")).toBe(false));
+    expect(reconnect.disabled).toBe(false);
+    fireEvent.click(reconnect);
+    await waitFor(() => expect(attempts).toBe(2));
+  });
+
+  it("设置页关闭再打开时仍保留进行中的重连锁", async () => {
+    effectiveReply = [{ name: "fs", source: "global", overridden: null }];
+    statusReply = [{ name: "fs", state: "stopped", tools: 0 }];
+    let finishAction!: () => void;
+    const pending = new Promise<void>((resolve) => { finishAction = resolve; });
+    (await invokeMock()).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "mcp_reconnect") {
+        calls.push(`${cmd}:${JSON.stringify(args)}`);
+        return pending;
+      }
+      return baseInvoke(cmd, args);
+    });
+    useSessions.setState({ activeKey: "s1" });
+    useSettings.setState({ config: makeConfig(), loaded: true });
+    useUi.setState({ settingsOpen: true, settingsTab: "mcp" });
+    const first = render(<AntApp><SettingsPage /></AntApp>);
+    const reconnect = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".mcp-server-card button"))
+      .find((button) => button.textContent?.replace(/\s/g, "") === "重连")!;
+    await waitFor(() => expect(reconnect().disabled).toBe(false));
+    fireEvent.click(reconnect());
+    expect(calls.filter((call) => call.startsWith("mcp_reconnect:"))).toHaveLength(1);
+
+    first.unmount();
+    render(<AntApp><SettingsPage /></AntApp>);
+    await waitFor(() => expect(reconnect().classList.contains("ant-btn-loading")).toBe(true));
+    expect(reconnect().disabled).toBe(true);
+    fireEvent.click(reconnect());
+    expect(calls.filter((call) => call.startsWith("mcp_reconnect:"))).toHaveLength(1);
+
+    finishAction();
+    await waitFor(() => expect(reconnect().classList.contains("ant-btn-loading")).toBe(false));
+  });
+
+  it("旧的手动刷新结果不能覆盖重连后的新状态", async () => {
+    effectiveReply = [{ name: "fs", source: "global", overridden: null }];
+    statusReply = [{ name: "fs", state: "stopped", tools: 0 }];
+    await openMcpTab();
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("未连接"));
+    let releaseOldRefresh!: () => void;
+    const oldRefresh = new Promise<void>((resolve) => { releaseOldRefresh = resolve; });
+    let holdNextSnapshot = true;
+    (await invokeMock()).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "mcp_snapshot" && holdNextSnapshot) {
+        holdNextSnapshot = false;
+        return oldRefresh.then(() => ({ session: "s1", servers: [{ scope: "global", name: "fs", state: "stopped", tools: 0 }] }));
+      }
+      if (cmd === "mcp_reconnect") {
+        statusReply = [{ name: "fs", state: "ready", tools: 1 }];
+        return Promise.resolve();
+      }
+      return baseInvoke(cmd, args);
+    });
+    const refresh = document.querySelector<HTMLButtonElement>('.mcp-list-actions button[aria-label]')!;
+    fireEvent.click(refresh);
+    await waitFor(() => expect(refresh.classList.contains("ant-btn-loading")).toBe(true));
+    const reconnect = Array.from(document.querySelectorAll<HTMLButtonElement>(".mcp-server-card button"))
+      .find((button) => button.textContent?.replace(/\s/g, "") === "重连")!;
+    fireEvent.click(reconnect);
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("已连接"));
+    releaseOldRefresh();
+    await waitFor(() => expect(refresh.classList.contains("ant-btn-loading")).toBe(false));
+    expect(statusRows()[0]?.state).toBe("已连接");
+  });
+
+  it("作用域配置读取失败时保留当前列表和作用域", async () => {
+    await openMcpTab();
+    projectLoadFails = true;
+    fireEvent.click(scopeTabByText("项目级"));
+    await waitFor(() => expect(calls.some((c) => c.includes('"scope":"project"'))).toBe(true));
+    expect(statusRows().some((row) => row.name === "fs")).toBe(true);
+    expect(document.querySelector(".mcp-scope .ant-tabs-tab-active")?.textContent).toContain("用户级");
   });
 
   it("有未保存改动时禁用作用域切换（避免切层丢掉草稿）", async () => {
-    await openMcpTab();
+    await openMcpTab(true);
     // 改一个字段 → 脏
     const nameInput = document.querySelector<HTMLInputElement>(".mcp-entry input")!;
     fireEvent.change(nameInput, { target: { value: "fs-renamed" } });
     await waitFor(() => {
-      const seg = document.querySelector<HTMLElement>(".mcp-scope .ant-segmented");
-      expect(seg?.classList.contains("ant-segmented-disabled")).toBe(true);
+      const tab = scopeTabByText("项目级");
+      expect(tab.classList.contains("ant-tabs-tab-disabled")).toBe(true);
     });
     expect(document.body.textContent).toContain("保存或放弃后才能切换作用域");
   });
 
   it("测试连接：调 mcp_test（带作用域与名称）并就地显示结果，绝不触发 connect_mcp", async () => {
-    await openMcpTab();
+    await openMcpTab(true);
     const beforeConnect = calls.filter((c) => c.startsWith("mcp_connect")).length;
     fireEvent.click(buttonByText("测试"));
 
@@ -381,7 +639,7 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
 
   it("测试连接失败：就地显示失败原因", async () => {
     testReply = { ok: false, tools: 0, error: { message: "握手超时（30s）" } };
-    await openMcpTab();
+    await openMcpTab(true);
     fireEvent.click(buttonByText("测试"));
     await waitFor(() =>
       expect(document.body.textContent).toContain("临时测试失败：握手超时（30s）"),
@@ -404,8 +662,8 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
   });
 
   /** 某张 server 卡片里的第 n 张表格（stdio：0=参数 1=环境变量；http：0=请求头） */
-  function tableOf(entryIdx: number, tableIdx: number): HTMLElement {
-    const entry = document.querySelectorAll(".mcp-entry")[entryIdx];
+  function tableOf(_entryIdx: number, tableIdx: number): HTMLElement {
+    const entry = document.querySelectorAll(".mcp-entry")[0];
     const t = entry?.querySelectorAll(".mcp-table")[tableIdx];
     if (!t) throw new Error("table not found");
     return t as HTMLElement;
@@ -424,7 +682,7 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   /** 值列——参数表是 `input`，键值表是单行 `textarea`（textarea 才存得住换行） */
   function valueCell(row: Element): HTMLInputElement | HTMLTextAreaElement {
-    return (row.querySelector("textarea") ?? row.querySelector("input")) as
+    return (row.querySelector("textarea[placeholder]") ?? row.querySelector("input")) as
       | HTMLInputElement
       | HTMLTextAreaElement;
   }
@@ -448,7 +706,7 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   it("参数表：一行一个参数，含空格的路径原样保留", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true);
     const t = tableOf(0, 0);
     expect(t.querySelectorAll(".mcp-table-row").length).toBe(2);
     expect(valueCell(rowOf(t, 0)).value).toBe("-y");
@@ -457,7 +715,7 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   it("参数表：可添加 / 删除行，保存后落到 JSON", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true);
     const t = tableOf(0, 0);
     fireEvent.click(addBtn(t));
     expect(t.querySelectorAll(".mcp-table-row").length).toBe(3);
@@ -473,7 +731,7 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   it("环境变量表：值不裁剪、含 = 原样保留", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true);
     const t = tableOf(0, 1);
     expect(keyCell(rowOf(t, 0)).value).toBe("A");
     expect(valueCell(rowOf(t, 0)).value).toBe(" padded ");
@@ -483,7 +741,7 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   it("环境变量值含换行也能表达（旧的「一行一条」文本框做不到）", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true);
     const t = tableOf(0, 1);
     fireEvent.change(valueCell(rowOf(t, 0)), { target: { value: "a" + NL + "b" } });
 
@@ -492,9 +750,41 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
     expect(fs.env.find((r) => r.key === "A")!.value).toBe("a" + NL + "b");
   });
 
+  it("密钥型环境变量默认隐藏，可显隐且保存时保留原值", async () => {
+    configReply = JSON.stringify({ mcpServers: { fs: { command: "npx", env: { MINIMAX_API_KEY: "first" + NL + "second" } } } });
+    await openMcpTab(true);
+    const t = tableOf(0, 1);
+    const row = rowOf(t, 0);
+    expect(valueCell(row).value).toBe("••••••••");
+    expect((valueCell(row) as HTMLTextAreaElement).readOnly).toBe(true);
+    fireEvent.click(row.querySelector<HTMLButtonElement>('[aria-label="显示敏感值"]')!);
+    expect(valueCell(row).value).toBe("first" + NL + "second");
+    fireEvent.click(row.querySelector<HTMLButtonElement>('[aria-label="隐藏敏感值"]')!);
+    expect(valueCell(row).value).toBe("••••••••");
+    const doc = await saveAndParse();
+    expect(doc.servers[0].env[0].value).toBe("first" + NL + "second");
+  });
+
+  it("新建敏感变量时可连续输入，失焦后再隐藏", async () => {
+    configReply = JSON.stringify({ mcpServers: { fs: { command: "npx", env: {} } } });
+    await openMcpTab(true);
+    const t = tableOf(0, 1);
+    fireEvent.click(addBtn(t));
+    const row = rowOf(t, 0);
+    fireEvent.change(keyCell(row), { target: { value: "API_KEY" } });
+    const value = valueCell(row);
+    fireEvent.focus(value);
+    fireEvent.change(value, { target: { value: "new-secret" } });
+    expect(valueCell(row).value).toBe("new-secret");
+    fireEvent.blur(value);
+    expect(valueCell(row).value).toBe("••••••••");
+    const doc = await saveAndParse();
+    expect(doc.servers[0].env[0].value).toBe("new-secret");
+  });
+
   it("键为空的行在保存时丢弃（点了＋没填的行）", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true);
     const t = tableOf(0, 1);
     fireEvent.click(addBtn(t));
     expect(t.querySelectorAll(".mcp-table-row").length).toBe(3);
@@ -506,15 +796,17 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
 
   it("http 分支渲染请求头表格，可增删改并落到 JSON", async () => {
     configReply = CFG;
-    await openMcpTab();
+    await openMcpTab(true, 1);
     const t = tableOf(1, 0);
     expect(keyCell(rowOf(t, 0)).value).toBe("Authorization");
+    expect(valueCell(rowOf(t, 0)).value).toBe("••••••••");
+    fireEvent.click(rowOf(t, 0).querySelector<HTMLButtonElement>('[aria-label="显示敏感值"]')!);
     expect(valueCell(rowOf(t, 0)).value).toBe("Bearer abc");
 
     fireEvent.click(addBtn(t));
     fireEvent.change(keyCell(rowOf(t, 1)), { target: { value: "X-Trace" } });
     fireEvent.change(valueCell(rowOf(t, 1)), { target: { value: "1" } });
-    fireEvent.click(rowOf(t, 0).querySelector("button")!);
+    fireEvent.click(rowOf(t, 0).querySelector<HTMLButtonElement>('[aria-label="删除此行"]')!);
 
     const doc = await saveAndParse();
     const web = doc.servers.find((s) => s.name === "web")!;

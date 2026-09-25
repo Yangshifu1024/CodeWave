@@ -18,7 +18,7 @@ import {
 import { useTranslation } from "react-i18next";
 import topbarLogo from "../../assets/logo-topbar.png";
 import { baseName } from "../../utils/path";
-import { NAV_W_DEFAULT } from "../../utils/layout";
+import { NAV_W_DEFAULT, fullscreenNavWidth } from "../../utils/layout";
 import { useRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
@@ -41,28 +41,32 @@ export default function TopBar() {
   const tab = useActiveTab();
   const explorerOpen = useSessions((s) => s.explorerOpen);
   const rightBarOpen = useUi((s) => s.rightBarOpen);
-  // 左段宽度 = 左栏当前显示宽度（与 AppShell 的 Sider 同源，分隔线不断开）
-  const { nav: navWidth } = useDisplayWidths();
+  const settingsOpen = useUi((s) => s.settingsOpen);
+  // 工作区跟随 Sider；设置/任务全屏页跟随对应导航宽度，保证顶栏分界连续。
+  const { nav: navWidth, windowWidth } = useDisplayWidths();
+  const fullscreenOpen = useUi((s) => s.settingsOpen || s.tasksOpen);
+  const leftVisible = fullscreenOpen || explorerOpen;
+  const leftWidth = fullscreenOpen ? fullscreenNavWidth(windowWidth) : navWidth;
   const activeKey = useSessions((s) => s.activeKey);
   // gitEntries 上的窄选择器：流式 delta 更新不会改变该引用，避免顶栏逐帧重渲染
   const git = useRun((s) => s.tabs[activeKey ?? ""]?.gitEntries ?? null);
 
   return (
     <>
-      {/* 左段：纯背景带——与左栏同色同宽（宽度随 explorerOpen 内联，0.2s 过渡与 Sider 同步）；
+      {/* 左段：纯背景带——工作区跟随 Sider，全屏页跟随设置/任务导航；
           Logo 开关位于右段段首（docs/titlebar-logo-right-segment） */}
       <div
-        className={explorerOpen ? "tb-left-seg" : "tb-left-seg tb-left-closed"}
+        className={`tb-left-seg${leftVisible ? "" : " tb-left-closed"}${fullscreenOpen ? " tb-left-fullscreen" : ""}`}
         data-tauri-drag-region
-        style={{ width: explorerOpen ? `${navWidth}px` : `${SIDER_W_CLOSED}px` }}
+        style={{ width: leftVisible ? `${leftWidth}px` : `${SIDER_W_CLOSED}px` }}
       />
 
       {/* 右段：Logo 开关（左栏入口，docs/titlebar-logo-right-segment）+ 标题簇 + flex 中部（拖动窗口）+ 右簇；尾部 padding 为 Windows 控制条让位 */}
       <div
-        className={explorerOpen ? "tb-main-seg" : "tb-main-seg tb-main-cleared"}
+        className={leftVisible ? "tb-main-seg" : "tb-main-seg tb-main-cleared"}
         data-tauri-drag-region
       >
-        <Tooltip title={explorerOpen ? t("app.collapseLeft") : t("app.expandLeft")}>
+        {!settingsOpen && <Tooltip title={explorerOpen ? t("app.collapseLeft") : t("app.expandLeft")}>
           <button
             type="button"
             className="tb-logo-toggle"
@@ -76,8 +80,10 @@ export default function TopBar() {
               <MenuUnfoldOutlined className="tb-logo-swap" />
             )}
           </button>
-        </Tooltip>
-        {tab ? (
+        </Tooltip>}
+        {settingsOpen ? (
+          <span className="tb-title">{t("settings.title")}</span>
+        ) : tab ? (
           <>
             <span className="tb-title" title={tab.title}>
               {tab.title}
@@ -99,7 +105,7 @@ export default function TopBar() {
           <span className="tb-title tb-title-empty">CodeWave</span>
         )}
         <div className="tb-flex" data-tauri-drag-region />
-        <Tooltip title={rightBarOpen ? t("app.collapseRight") : t("app.expandRight")}>
+        {!settingsOpen && <Tooltip title={rightBarOpen ? t("app.collapseRight") : t("app.expandRight")}>
           <Button
             type="text"
             size="small"
@@ -109,7 +115,7 @@ export default function TopBar() {
             aria-label={rightBarOpen ? t("app.collapseRight") : t("app.expandRight")}
             onClick={() => useUi.getState().setRightBarOpen(!rightBarOpen)}
           />
-        </Tooltip>
+        </Tooltip>}
       </div>
     </>
   );

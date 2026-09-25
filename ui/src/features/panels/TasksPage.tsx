@@ -8,8 +8,8 @@
 //   · 三态分明：loading / error（保留旧列表）/ 空列表。
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { App, Button, Empty, Input, InputNumber, Modal, Popconfirm, Select, Spin, Switch, Tag } from "antd";
-import { ArrowLeftOutlined, PlusOutlined } from "@ant-design/icons";
+import { App, Button, Card, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Switch, Tag } from "antd";
+import { ArrowLeftOutlined, DeleteOutlined, DownOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import type { ScheduledTask } from "../../ipc/types";
@@ -112,6 +112,8 @@ export default function TasksPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [saving, setSaving] = useState(false);
+  const pendingTaskActions = useRef(new Set<string>());
+  const [pendingTaskActionKeys, setPendingTaskActionKeys] = useState<string[]>([]);
   /** 保存失败的后端原文（就地展示在弹窗里，不许吞成静默失败） */
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -170,19 +172,33 @@ export default function TasksPage() {
   }
 
   async function toggleEnabled(task: ScheduledTask, enabled: boolean) {
+    const key = `toggle:${task.id}`;
+    if (pendingTaskActions.current.has(key)) return;
+    pendingTaskActions.current.add(key);
+    setPendingTaskActionKeys([...pendingTaskActions.current]);
     try {
       upsertLocal(await ipc.setScheduledTaskEnabled(task.id, enabled));
     } catch (e) {
       message.error(t("tasks.saveFailed", { msg: String(e) }));
+    } finally {
+      pendingTaskActions.current.delete(key);
+      setPendingTaskActionKeys([...pendingTaskActions.current]);
     }
   }
 
   async function runNow(id: string) {
+    const key = `run:${id}`;
+    if (pendingTaskActions.current.has(key)) return;
+    pendingTaskActions.current.add(key);
+    setPendingTaskActionKeys([...pendingTaskActions.current]);
     try {
       // 手工触发是异步的：命令只表示「已开始」，行的「运行中」标记由 scheduled:fired 事件驱动
       await ipc.runScheduledTaskNow(id);
     } catch (e) {
       message.error(t("tasks.runRejected", { msg: String(e) }));
+    } finally {
+      pendingTaskActions.current.delete(key);
+      setPendingTaskActionKeys([...pendingTaskActions.current]);
     }
   }
 
@@ -346,7 +362,7 @@ export default function TasksPage() {
           宽与设置页左栏逐像素一致（同一个 fullscreenNavWidth）；工作区左栏另有一套夹取规则，不保证等宽 */}
       <nav className="tasks-nav" style={{ width: navWidth }}>
         <div className="tasks-nav-head">
-          <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={close}>
+          <Button type="text" block className="tasks-nav-back" icon={<ArrowLeftOutlined />} onClick={close}>
             {t("tasks.backToWorkspace")}
           </Button>
         </div>
@@ -364,10 +380,14 @@ export default function TasksPage() {
         </div>
       </nav>
 
-      <div className="tasks-body">
+      <main className="tasks-body">
+        <div className="tasks-body-inner">
+        <header className="tasks-page-header">
+          <h1>{t("tasks.title")}</h1>
+          <p>{t("tasks.unattendedApprovalHint")}</p>
+        </header>
         {/* 加载失败：错误行常驻 + 旧列表照旧显示（一次瞬时失败不该把列表擦成空态） */}
         {error && <div className="tasks-error">{t("tasks.loadFailed", { msg: error })}</div>}
-        <div className="hint">{t("tasks.unattendedApprovalHint")}</div>
 
         {loading && items.length === 0 && (
           <div className="tasks-loading">
@@ -376,7 +396,7 @@ export default function TasksPage() {
         )}
 
         {!loading && !error && items.length === 0 && (
-          <Empty description={t("tasks.empty")} style={{ marginTop: 24 }}>
+          <Empty className="tasks-empty" description={t("tasks.empty")}>
             <Button type="primary" icon={<PlusOutlined />} disabled={!canPersist} onClick={openCreate}>
               {t("tasks.newTask")}
             </Button>
@@ -387,9 +407,53 @@ export default function TasksPage() {
           const kind = statusKind(task.last_status);
           const running = runningIds.includes(task.id);
           const expanded = expandedId === task.id;
+          const toggling = pendingTaskActionKeys.includes(`toggle:${task.id}`);
+          const starting = pendingTaskActionKeys.includes(`run:${task.id}`);
           return (
-            <div className="task-row" key={task.id}>
-              {/* 主信息区整块可点展开历史（交互按钮在外层同级——不做 role=button 里嵌按钮的无效语义） */}
+            <Card
+              className="task-row"
+              key={task.id}
+              variant="outlined"
+              title={
+                <div className="task-row-heading">
+                  <strong className="task-row-name" title={task.name}>{task.name}</strong>
+                  {/* 色彩只映射风险：正常收尾为中性，失败为红。 */}
+                  {running && <Tag>{t("tasks.running")}</Tag>}
+                  {kind !== "none" && (
+                    <Tag color={kind === "error" ? "error" : undefined}>
+                      {statusLabel(task.last_status, t)}
+                    </Tag>
+                  )}
+                </div>
+              }
+              extra={
+                <span className="task-row-enabled">
+                  <span>{task.enabled ? t("tasks.enabled") : t("tasks.paused")}</span>
+                  <Switch
+                    size="small"
+                    checked={task.enabled}
+                    loading={toggling}
+                    disabled={toggling}
+                    aria-label={task.enabled ? t("tasks.pause") : t("tasks.resume")}
+                    onChange={(next) => void toggleEnabled(task, next)}
+                  />
+                </span>
+              }
+              actions={[
+                <Button key="run" type="text" block loading={starting} disabled={starting} icon={<PlayCircleOutlined />} onClick={() => void runNow(task.id)}>
+                  {t("tasks.runNow")}
+                </Button>,
+                <Button key="edit" type="text" block icon={<EditOutlined />} onClick={() => openEdit(task)}>
+                  {t("tasks.edit")}
+                </Button>,
+                <Popconfirm key="delete" title={`${t("common.delete")}?`} okButtonProps={{ danger: true }} onConfirm={() => void remove(task)}>
+                  <Button type="text" block danger icon={<DeleteOutlined />}>
+                    {t("common.delete")}
+                  </Button>
+                </Popconfirm>,
+              ]}
+            >
+              {/* 主信息区只负责展开历史；开关与操作都在其外，避免交互嵌套。 */}
               <div
                 className="task-row-main"
                 role="button"
@@ -404,40 +468,16 @@ export default function TasksPage() {
                   }
                 }}
               >
-                <b className="task-row-name">{task.name}</b>
-                <span className="task-row-sched">{describeExpr(task.schedule, t)}</span>
-                <span className="task-row-project dim">{projectLabel(task)}</span>
-                {/* 色彩强度只映射风险等级：正常收尾走中性标签，只有失败才是红 */}
-                {running && <Tag>{t("tasks.running")}</Tag>}
-                {kind !== "none" && (
-                  <Tag color={kind === "error" ? "error" : undefined}>
-                    {statusLabel(task.last_status, t)}
-                  </Tag>
-                )}
-                <span className="task-row-next dim" title={t("tasks.nextRun")}>
-                  {nextRunText(task)}
+                <p className="task-row-instruction" title={task.instruction}>{task.instruction}</p>
+                <div className="task-row-meta">
+                  <div><span>{t("tasks.period")}</span><strong className="task-row-sched">{describeExpr(task.schedule, t)}</strong></div>
+                  <div><span>{t("tasks.nextRun")}</span><strong className="task-row-next" title={nextRunText(task)}>{nextRunText(task)}</strong></div>
+                  <div><span>{t("tasks.project")}</span><strong className="task-row-project" title={projectLabel(task)}>{projectLabel(task)}</strong></div>
+                </div>
+                <span className="task-row-history-toggle">
+                  {t("tasks.history")} <DownOutlined rotate={expanded ? 180 : 0} />
                 </span>
               </div>
-              <div className="task-row-actions">
-                <Switch
-                  size="small"
-                  checked={task.enabled}
-                  aria-label={task.enabled ? t("tasks.pause") : t("tasks.resume")}
-                  onChange={(next) => void toggleEnabled(task, next)}
-                />
-                <Button size="small" onClick={() => void runNow(task.id)}>
-                  {t("tasks.runNow")}
-                </Button>
-                <Button size="small" onClick={() => openEdit(task)}>
-                  {t("tasks.edit")}
-                </Button>
-                <Popconfirm title={`${t("common.delete")}?`} onConfirm={() => void remove(task)}>
-                  <Button size="small" type="text" danger>
-                    {t("common.delete")}
-                  </Button>
-                </Popconfirm>
-              </div>
-
               {expanded && (
                 <div className="tasks-history">
                   {task.runs.length === 0 ? (
@@ -468,10 +508,11 @@ export default function TasksPage() {
                   )}
                 </div>
               )}
-            </div>
+            </Card>
           );
         })}
-      </div>
+        </div>
+      </main>
 
       {/* 新建 / 编辑：周期选择器 + 指令；保存失败把后端原文展示在弹窗内 */}
       <Modal
@@ -486,26 +527,37 @@ export default function TasksPage() {
         okButtonProps={{ disabled: !canSave }}
         okText={t("common.save")}
         cancelText={t("common.cancel")}
-        width={520}
+        width={680}
+        className="tasks-editor-modal"
       >
         {editor && preset && (
-          <div className="tasks-form">
-            <div className="tasks-field">
-              <label className="tasks-label" htmlFor="task-name">
-                {t("tasks.name")}
-              </label>
+          <Form className="tasks-form" layout="vertical" colon={false}>
+            <section className="tasks-form-section" aria-label={t("tasks.detailsSection")}>
+              <h3>{t("tasks.detailsSection")}</h3>
+            <Form.Item label={t("tasks.name")} htmlFor="task-name">
               <Input
                 id="task-name"
                 value={editor.name}
                 placeholder={t("tasks.name")}
                 onChange={(e) => updateEditor((ed) => ({ ...ed, name: e.target.value }))}
               />
-            </div>
+            </Form.Item>
+            <Form.Item label={t("tasks.instruction")} htmlFor="task-instruction">
+              <TextArea
+                id="task-instruction"
+                rows={4}
+                value={editor.instruction}
+                placeholder={t("tasks.instruction")}
+                onChange={(e) => updateEditor((ed) => ({ ...ed, instruction: e.target.value }))}
+              />
+            </Form.Item>
+            </section>
 
-            <div className="tasks-field">
-              <label className="tasks-label" htmlFor="task-period">
-                {t("tasks.period")}
-              </label>
+            <section className="tasks-form-section" aria-label={t("tasks.scheduleSection")}>
+              <h3>{t("tasks.scheduleSection")}</h3>
+              <div className="tasks-schedule-grid">
+
+            <Form.Item label={t("tasks.period")} htmlFor="task-period">
               <Select
                 id="task-period"
                 aria-label={t("tasks.period")}
@@ -513,14 +565,11 @@ export default function TasksPage() {
                 options={periodOptions}
                 onChange={changeKind}
               />
-            </div>
+            </Form.Item>
 
             {/* 周期参数按类型渲染：每天/每周/每月共用时间控件，自定义回落原表达式输入 */}
             {preset.kind === "daily" || preset.kind === "weekly" || preset.kind === "monthly" ? (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-time">
-                  {t("tasks.time")}
-                </label>
+              <Form.Item label={t("tasks.time")} htmlFor="task-time">
                 <Input
                   id="task-time"
                   type="time"
@@ -528,14 +577,11 @@ export default function TasksPage() {
                   value={preset.time}
                   onChange={(e) => setTime(e.target.value)}
                 />
-              </div>
+              </Form.Item>
             ) : null}
 
             {preset.kind === "weekly" && (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-weekday">
-                  {t("tasks.weekday")}
-                </label>
+              <Form.Item label={t("tasks.weekday")} htmlFor="task-weekday">
                 <Select
                   id="task-weekday"
                   mode="multiple"
@@ -544,14 +590,11 @@ export default function TasksPage() {
                   options={weekdayOptions}
                   onChange={(values: number[]) => setDows(values)}
                 />
-              </div>
+              </Form.Item>
             )}
 
             {preset.kind === "monthly" && (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-monthday">
-                  {t("tasks.monthDay")}
-                </label>
+              <Form.Item label={t("tasks.monthDay")} htmlFor="task-monthday">
                 <InputNumber
                   id="task-monthday"
                   aria-label={t("tasks.monthDay")}
@@ -560,14 +603,11 @@ export default function TasksPage() {
                   value={preset.day}
                   onChange={(v) => setMonthDay(typeof v === "number" ? v : 1)}
                 />
-              </div>
+              </Form.Item>
             )}
 
             {preset.kind === "every" && (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-interval">
-                  {t("tasks.periodEvery")}
-                </label>
+              <Form.Item label={t("tasks.periodEvery")} htmlFor="task-interval">
                 <div className="tasks-interval">
                   <InputNumber
                     id="task-interval"
@@ -588,14 +628,11 @@ export default function TasksPage() {
                     onChange={(unit: EveryUnit) => setEveryUnit(unit)}
                   />
                 </div>
-              </div>
+              </Form.Item>
             )}
 
             {preset.kind === "once" && (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-once">
-                  {t("tasks.periodOnce")}
-                </label>
+              <Form.Item label={t("tasks.periodOnce")} htmlFor="task-once">
                 <Input
                   id="task-once"
                   type="datetime-local"
@@ -603,14 +640,11 @@ export default function TasksPage() {
                   value={editor.onceText}
                   onChange={(e) => setOnceText(e.target.value)}
                 />
-              </div>
+              </Form.Item>
             )}
 
             {preset.kind === "custom" && (
-              <div className="tasks-field">
-                <label className="tasks-label" htmlFor="task-expr">
-                  {t("tasks.periodCustom")}
-                </label>
+              <Form.Item label={t("tasks.periodCustom")} htmlFor="task-expr">
                 <Input
                   id="task-expr"
                   aria-label={t("tasks.periodCustom")}
@@ -618,31 +652,20 @@ export default function TasksPage() {
                   placeholder="cron:0 9 * * *"
                   onChange={(e) => setCustomExpr(e.target.value)}
                 />
-              </div>
+              </Form.Item>
             )}
+              </div>
 
             {/* 语法说明常驻（原面板的教训：只当 placeholder 的话敲第一个字符就看不见了） */}
-            <div className="tasks-field">
+            <div className="tasks-schedule-hint">
               <span className="hint">{t("tasks.scheduleHint")}</span>
               {everyOverLimit && <span className="tasks-field-error">{t("tasks.intervalTooLarge")}</span>}
             </div>
-
-            <div className="tasks-field">
-              <label className="tasks-label" htmlFor="task-instruction">
-                {t("tasks.instruction")}
-              </label>
-              <TextArea
-                id="task-instruction"
-                rows={3}
-                value={editor.instruction}
-                placeholder={t("tasks.instruction")}
-                onChange={(e) => updateEditor((ed) => ({ ...ed, instruction: e.target.value }))}
-              />
-            </div>
+            </section>
 
             {!canSave && <div className="hint">{t("tasks.createDisabled")}</div>}
             {saveError && <div className="tasks-error">{t("tasks.saveFailed", { msg: saveError })}</div>}
-          </div>
+          </Form>
         )}
       </Modal>
     </div>
