@@ -239,33 +239,44 @@ describe("App 渲染冒烟", () => {
         (x.textContent ?? "").trim(),
       ),
     ).toEqual(["外观与模型", "安全与能力", "诊断与其他"]);
-    // 表单一律 vertical（[docs/settings-forms-vertical](../../../docs/settings-forms-vertical.md)）：设置页内不得出现 horizontal 表单
-    expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeFalsy();
-    expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeTruthy();
+    // 设置页使用共享的左右分栏表单与公共视觉层（[docs/settings-ui-unification](../../../docs/settings-ui-unification.md)）
+    expect(document.querySelector(".settings-theme-root")).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeFalsy();
 
-    // 落地页「界面」：主题 / 界面语言两个 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
-    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(2);
+    // 落地页「界面」：主题预览卡、界面语言 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
+    expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent ?? "").toContain("界面字体");
     expect(document.body.textContent ?? "").toContain("等宽字体");
     expect(document.querySelectorAll(".font-preview-row").length).toBe(2);
+    expect(Array.from(document.querySelectorAll(".settings-section-title")).map((node) => node.textContent)).toEqual(["界面语言", "主题", "字体"]);
+    expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
+    expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
 
     // 模型与供应商页（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：列表 + 编辑表单字段 + AI 回复语言
     await clickTab("模型与供应商");
     const providerTexts = document.body.textContent ?? "";
     expect(providerTexts).toContain("Test Provider"); // provider list row
     expect(providerTexts).toContain("test-model");    // model wire id
-    expect(providerTexts).toContain("1 个模型");
+    expect(providerTexts).toContain("API 地址");       // endpoint is grouped separately from models
+    expect(providerTexts).toContain("模型列表");
+    expect(document.querySelector(".settings-provider-endpoint-section .settings-provider-endpoint")?.textContent)
+      .toBe("https://api.example.com/v1");
+    expect(document.querySelector(".settings-provider-model-section .settings-provider-model-name")?.textContent)
+      .toBe("test-model");
+    expect(providerTexts).not.toContain("1 个模型");
     expect(providerTexts).toContain("AI 语言");        // 从旧「通用」页迁入
     // Catalog fill removed ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md): user input is the single source of truth)
     expect(providerTexts).not.toContain("从目录填充");
     // Enter edit: form fields render
-    await clickButton("编辑供应商");
+    await clickButton("编辑");
     const editTexts = document.body.textContent ?? "";
     expect(editTexts).toContain("Base URL"); // form label
     expect(editTexts).toContain("API Key");
     expect(editTexts).toContain("模型列表");
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     expect(inputs.some((i) => i.value === "https://api.example.com/v1")).toBe(true);
+    await clickButton("完成");
 
     // 网络与连接页：代理模式三张卡片 + 内网访问（批② 从「安全」迁入）
     await clickTab("网络与连接");
@@ -321,7 +332,7 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector("[data-testid='settings-page']")).toBeTruthy();
     // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers page
     await clickTab("模型与供应商");
-    await clickButton("编辑供应商");
+    await clickButton("编辑");
     const urlInput = Array.from(document.querySelectorAll("input")).find(
       (i) => (i as HTMLInputElement).value === "https://api.example.com/v1",
     ) as HTMLInputElement;
@@ -329,6 +340,7 @@ describe("App 渲染冒烟", () => {
     fireEvent.change(urlInput, { target: { value: "" } });
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("必填");
+    await clickButton("完成");
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("供应商配置无效"));
     expect(useUi.getState().settingsOpen).toBe(true);

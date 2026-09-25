@@ -1,17 +1,18 @@
 // 供应商管理面板（[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）：管理对象从模型改为供应商——端点 + 协议 + key 池 + 自有模型列表。
 // 模型定义完全以用户输入为准（无内置目录）；「添加模型」弹窗覆盖上下文窗口 / 最大输出 / 输入输出类型。
 // 注意：子组件必须定义在顶层（定义在组件内部会每次渲染重建组件类型，输入框每敲一键就失焦）。
-import { useEffect, useState } from "react";
-import { Button, Divider, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Tag } from "antd";
+import { useState } from "react";
+import { Button, Card, Divider, Empty, Flex, Input, InputNumber, Modal, Popconfirm, Select, Space, Tag } from "antd";
 import {
-  ArrowLeftOutlined, DeleteOutlined, EditOutlined, EyeOutlined, InfoCircleOutlined,
+  DeleteOutlined, EditOutlined, EyeOutlined,
   LockOutlined, PlusOutlined, VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { SettingsForm, SettingsFormItem, SettingsSection, SettingsThemeScope } from "./settings/SettingsTheme";
 import type { ApiFormat, ConfigState, HeaderPair, ProviderConfig, ProviderModel } from "../../ipc/types";
 
 const API_FORMAT_OPTIONS: { label: string; value: ApiFormat }[] = [
-  { label: "OpenAI Chat（兼容 Ollama/DeepSeek/one-api 等）", value: "openai_chat" },
+  { label: "OpenAI Chat", value: "openai_chat" },
   { label: "Anthropic Messages", value: "anthropic_messages" },
   { label: "OpenAI Responses", value: "openai_responses" },
 ];
@@ -96,105 +97,77 @@ export function validateProvider(p: ProviderConfig): ProviderFieldIssue[] {
   return issues;
 }
 
-/** 添加/编辑模型弹窗（[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md) 交互规格）：wire id + 上下文窗口 / 输出上限 + 输入类型标签 + 输出类型（文本，锁定）。 */
-function ModelModal(props: {
-  open: boolean;
-  initial: ProviderModel | null;
-  onOk: (m: ProviderModel) => void;
-  onCancel: () => void;
+/** 供应商弹框内的模型编辑区：模型 CRUD 与供应商字段共用同一层弹框。 */
+function ModelEditor(props: {
+  value: ProviderModel;
+  idError: boolean;
+  onChange: (patch: Partial<ProviderModel>) => void;
 }) {
-  const { open, initial, onOk, onCancel } = props;
+  const { value, idError, onChange } = props;
   const { t } = useTranslation();
-  const [form, setForm] = useState<ProviderModel>(initial ?? providerModelDefaults());
-  // 点击确定后才显示必填红字（打开即红太吵）；输入后自动消除
-  const [idError, setIdError] = useState(false);
+  const idEmpty = value.model.trim() === "";
 
-  useEffect(() => {
-    if (open) {
-      setForm(initial ?? providerModelDefaults());
-      setIdError(false);
-    }
-  }, [open, initial]);
-
-  const idTrimmed = form.model.trim();
   return (
-    <Modal
-      open={open}
-      title={initial ? t("settings.editModel") : t("settings.addModel")}
-      width={520}
-      okText={t("common.save")}
-      cancelText={t("common.cancel")}
-      onOk={() => {
-        if (!idTrimmed) {
-          setIdError(true);
-          return;
-        }
-        onOk({ ...form, model: idTrimmed });
-      }}
-      onCancel={onCancel}
-      destroyOnHidden
-    >
-      <Form layout="vertical" style={{ marginTop: 16 }}>
-        <Form.Item
+    <div className="settings-provider-model-editor">
+      <SettingsForm className="settings-provider-model-form">
+        <SettingsFormItem
           label={t("settings.modelId")}
           required
-          validateStatus={idError && !idTrimmed ? "error" : undefined}
-          help={idError && !idTrimmed ? t("settings.vRequired") : undefined}
+          className="settings-provider-model-field-wide"
+          validateStatus={idError && idEmpty ? "error" : undefined}
+          help={idError && idEmpty ? t("settings.vRequired") : undefined}
         >
           <Input
-            value={form.model}
+            value={value.model}
             placeholder="glm-4.7 / claude-sonnet-4-5 / gpt-4o"
-            onChange={(e) => setForm({ ...form, model: e.target.value })}
+            onChange={(e) => onChange({ model: e.target.value })}
           />
-        </Form.Item>
-        <Space size={16} wrap>
-          <Form.Item label={t("settings.contextWindow")} help={t("settings.contextWindowHint")} style={{ marginBottom: 0 }}>
-            <InputNumber
-              min={1000}
-              step={1000}
-              value={form.context_window}
-              onChange={(v) => setForm({ ...form, context_window: v ?? 128000 })}
-            />
-          </Form.Item>
-          <Form.Item label={t("settings.maxTokens")} help={t("settings.maxTokensHint")} style={{ marginBottom: 0 }}>
-            <InputNumber
-              min={256}
-              step={256}
-              value={form.max_tokens}
-              onChange={(v) => setForm({ ...form, max_tokens: v ?? 32768 })}
-            />
-          </Form.Item>
-        </Space>
-        <Form.Item label={t("settings.inputTypes")} style={{ marginTop: 20, marginBottom: 12 }}>
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.contextWindow")} help={t("settings.contextWindowHint")}>
+          <InputNumber
+            min={1000}
+            step={1000}
+            value={value.context_window}
+            onChange={(v) => onChange({ context_window: v ?? 128000 })}
+          />
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.maxTokens")} help={t("settings.maxTokensHint")}>
+          <InputNumber
+            min={256}
+            step={256}
+            value={value.max_tokens}
+            onChange={(v) => onChange({ max_tokens: v ?? 32768 })}
+          />
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.inputTypes")}>
           <Space size={8} wrap>
-            {/* 文本输入恒开启（锁定） */}
             <Tag.CheckableTag checked>
               <LockOutlined style={{ marginRight: 4 }} />{t("settings.typeText")}
             </Tag.CheckableTag>
-            <Tag.CheckableTag checked={form.vision} onChange={(c) => setForm({ ...form, vision: c })}>
+            <Tag.CheckableTag checked={value.vision} onChange={(c) => onChange({ vision: c })}>
               <EyeOutlined style={{ marginRight: 4 }} />{t("settings.typeImage")}
             </Tag.CheckableTag>
-            <Tag.CheckableTag checked={form.video} onChange={(c) => setForm({ ...form, video: c })}>
+            <Tag.CheckableTag checked={value.video} onChange={(c) => onChange({ video: c })}>
               <VideoCameraOutlined style={{ marginRight: 4 }} />{t("settings.typeVideo")}
             </Tag.CheckableTag>
           </Space>
-        </Form.Item>
-        <Form.Item label={t("settings.outputTypes")} style={{ marginBottom: 12 }}>
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.outputTypes")}>
           <Tag.CheckableTag checked>
             <LockOutlined style={{ marginRight: 4 }} />{t("settings.typeText")}
           </Tag.CheckableTag>
-        </Form.Item>
-        <Form.Item label={t("settings.reasoning")} style={{ marginBottom: 0 }}>
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.reasoning")} className="settings-provider-model-field-wide">
           <Select
             allowClear
             className="w-narrow"
-            value={form.reasoning_effort}
+            value={value.reasoning_effort}
             options={["low", "medium", "high", "max"].map((v) => ({ label: v, value: v }))}
-            onChange={(v) => setForm({ ...form, reasoning_effort: v ?? null })}
+            onChange={(v) => onChange({ reasoning_effort: v ?? null })}
           />
-        </Form.Item>
-      </Form>
-    </Modal>
+        </SettingsFormItem>
+      </SettingsForm>
+    </div>
   );
 }
 
@@ -202,49 +175,32 @@ function ModelModal(props: {
 function ModelListSection(props: {
   models: ProviderModel[];
   activeModelId: string | null;
+  disabled?: boolean;
   onAdd: () => void;
   onEdit: (m: ProviderModel) => void;
   onRemove: (m: ProviderModel) => void;
 }) {
-  const { models, activeModelId, onAdd, onEdit, onRemove } = props;
+  const { models, activeModelId, disabled, onAdd, onEdit, onRemove } = props;
   const { t } = useTranslation();
   if (models.length === 0) {
     return (
       <div style={{ border: "1px dashed", borderRadius: 8, padding: "18px 0", textAlign: "center" }}>
         <div className="dim" style={{ marginBottom: 12 }}>{t("settings.noModels")}</div>
-        <Button variant="dashed" icon={<PlusOutlined />} onClick={onAdd}>{t("settings.addModel")}</Button>
+        <Button disabled={disabled} variant="dashed" icon={<PlusOutlined />} onClick={onAdd}>{t("settings.addModel")}</Button>
       </div>
     );
   }
   return (
     <>
-      <List
-        size="small"
-        dataSource={models}
-        split={false}
-        renderItem={(m) => (
-          <List.Item
-            actions={[
-              <Button key="edit" size="small" type="text" icon={<EditOutlined />} onClick={() => onEdit(m)}>
-                {t("settings.editModel")}
-              </Button>,
-              <Popconfirm key="del" title={`${t("common.delete")}「${m.model}」?`} onConfirm={() => onRemove(m)}>
-                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-              </Popconfirm>,
-            ]}
-          >
+      <Flex vertical className="settings-collection-rows" gap={8}>
+        {models.map((m) => (
+          <div className="settings-collection-row" key={m.id}>
             <Space size={8} wrap>
               <code>{m.model}</code>
               {m.vision && <Tag style={{ marginInlineEnd: 0 }}>{t("settings.typeImage")}</Tag>}
               {m.video && <Tag style={{ marginInlineEnd: 0 }}>{t("settings.typeVideo")}</Tag>}
-              <span className="dim" style={{ fontSize: 12 }}>
-                {Math.round(m.context_window / 1000)}k · {Math.round(m.max_tokens / 1000)}k out
-              </span>
+              <span className="dim">{Math.round(m.context_window / 1000)}k · {Math.round(m.max_tokens / 1000)}k out</span>
               {activeModelId === m.id && (
-                /* [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md) 墨色化：去掉 preset 蓝（processing），改为与全应用强调色一致的描边墨色。
-                  锚点 data-setting-id = 注册表 id（批③ 搜索定位）。
-                  本标记**不是**进阶项（2026-09-19 用户反馈修正）：它只存在于「编辑/新建供应商」视图里，
-                  页级「显示进阶项」开关在列表视图对它无能为力（打开也没东西可变），故不再折叠 */
                 <span className="setting-anchor" data-setting-id="active_model_id">
                   <Tag style={{ marginInlineEnd: 0, background: "transparent", borderColor: "var(--ws-accent)", color: "var(--ws-accent)" }}>
                     {t("settings.active")}
@@ -252,10 +208,16 @@ function ModelListSection(props: {
                 </span>
               )}
             </Space>
-          </List.Item>
-        )}
-      />
-      <Button size="small" variant="dashed" block icon={<PlusOutlined />} onClick={onAdd} style={{ marginTop: 4 }}>
+              <Space>
+                <Button disabled={disabled} type="text" icon={<EditOutlined />} onClick={() => onEdit(m)}>{t("settings.editModel")}</Button>
+                <Popconfirm title={`${t("common.delete")}「${m.model}」?`} onConfirm={() => onRemove(m)}>
+                  <Button disabled={disabled} type="text" danger icon={<DeleteOutlined />}>{t("common.delete")}</Button>
+                </Popconfirm>
+              </Space>
+          </div>
+        ))}
+      </Flex>
+      <Button disabled={disabled} variant="dashed" block icon={<PlusOutlined />} onClick={onAdd} style={{ marginTop: 4 }}>
         {t("settings.addModel")}
       </Button>
     </>
@@ -282,8 +244,8 @@ function ProviderFields(props: {
   }
   return (
     <>
-      <Form layout="vertical">
-        <Form.Item
+      <SettingsForm className="settings-provider-form">
+        <SettingsFormItem
           label={t("settings.providerName")}
           required
           validateStatus={errors?.name ? "error" : undefined}
@@ -291,14 +253,15 @@ function ProviderFields(props: {
           style={{ marginBottom: 12 }}
         >
           <Input
+            className="w-wide"
             value={value.name}
             placeholder={t("settings.providerNamePh")}
             onChange={(e) => onPatch({ name: e.target.value })}
           />
-        </Form.Item>
-        <Form.Item label={t("settings.apiFormat")} required style={{ marginBottom: 12 }}>
+        </SettingsFormItem>
+        <SettingsFormItem label={t("settings.apiFormat")} required style={{ marginBottom: 12 }}>
           <Select
-            style={{ maxWidth: 420 }}
+            className="w-wide"
             value={value.api_format}
             options={API_FORMAT_OPTIONS}
             onChange={(v) => {
@@ -311,8 +274,8 @@ function ProviderFields(props: {
               onPatch(patch);
             }}
           />
-        </Form.Item>
-        <Form.Item
+        </SettingsFormItem>
+        <SettingsFormItem
           label={t("settings.baseUrl")}
           required
           validateStatus={errors?.base_url ? "error" : undefined}
@@ -320,12 +283,13 @@ function ProviderFields(props: {
           style={{ marginBottom: 12 }}
         >
           <Input
+            className="w-wide"
             value={value.base_url}
             placeholder="https://api.example.com/v1"
             onChange={(e) => onPatch({ base_url: e.target.value })}
           />
-        </Form.Item>
-        <Form.Item
+        </SettingsFormItem>
+        <SettingsFormItem
           label={t("settings.apiKeys")}
           required
           extra={t("settings.keyMaskedHint")}
@@ -334,12 +298,13 @@ function ProviderFields(props: {
           style={{ marginBottom: 0 }}
         >
           <Input.TextArea
+            className="w-wide"
             rows={2}
             value={value.keys.join("\n")}
             onChange={(e) => onPatch({ keys: e.target.value.split("\n").map((s) => s.trim()) })}
           />
-        </Form.Item>
-        <Form.Item
+        </SettingsFormItem>
+        <SettingsFormItem
           label={t("settings.customHeaders")}
           extra={t("settings.customHeadersHint")}
           validateStatus={errors?.headers ? "error" : undefined}
@@ -364,7 +329,7 @@ function ProviderFields(props: {
               </Space.Compact>
             ))}
             <Button
-              size="small"
+
               variant="dashed"
               icon={<PlusOutlined />}
               onClick={() => onPatch({ headers: [...headers, { name: "", value: "" }] })}
@@ -372,8 +337,8 @@ function ProviderFields(props: {
               {t("settings.addHeader")}
             </Button>
           </Space>
-        </Form.Item>
-      </Form>
+        </SettingsFormItem>
+      </SettingsForm>
       <Divider style={{ margin: "16px 0 8px" }}>{t("settings.modelList")}</Divider>
       {errors?.models && (
         <div className="provider-models-error">
@@ -390,25 +355,26 @@ interface Props {
   patchDraft(patch: Partial<ConfigState>): void;
 }
 
-/** 视图状态：列表 / 新增供应商（本地表单，提交时整体并入 draft）/ 编辑既有供应商（直接改 draft）。 */
+/** 视图状态：供应商列表，或在同一弹框中新增 / 编辑供应商。 */
 type View = { kind: "list" } | { kind: "add" } | { kind: "edit"; providerId: string };
 
-/** 供应商页签：列表 / 新增 / 编辑三视图。新增用本地表单（提交才并入 draft），编辑直接补丁 draft；
- *  模型增删改经 ModelModal，删除供应商/模型时回收 active_model_id。 */
+/** 供应商页签：新增供应商在确认后并入 draft；编辑直接补丁 draft；模型编辑内嵌在供应商弹框中。 */
 export default function ProvidersPanel({ draft, patchDraft }: Props) {
   const { t } = useTranslation();
   const [view, setView] = useState<View>({ kind: "list" });
   // 新增供应商的本地表单（提交前不并入 draft）
   const [addForm, setAddForm] = useState<ProviderConfig>(blankProvider);
+  // 编辑也先在弹框内暂存；完成时才写入页面草稿，取消时直接丢弃。
+  const [editForm, setEditForm] = useState<ProviderConfig | null>(null);
   // 字段校验展示时机（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)：字段变更后或点击提交才出红字；打开即红太吵）
   const [touched, setTouched] = useState<{ name?: boolean; base_url?: boolean; keys?: boolean }>({});
   const [submitTried, setSubmitTried] = useState(false);
-  // 添加/编辑模型弹窗：target 区分提交到新增表单还是 draft 中某供应商
-  const [modelModal, setModelModal] = useState<
-    { target: "add-form" | { providerId: string }; editing: ProviderModel | null } | null
+  // 模型步骤与供应商表单复用同一弹框；target 区分新增表单和既有供应商。
+  const [modelEditor, setModelEditor] = useState<
+    { target: "add-form" | { providerId: string }; value: ProviderModel; isNew: boolean; idError: boolean } | null
   >(null);
 
-  const editing = view.kind === "edit" ? draft.providers.find((p) => p.id === view.providerId) : null;
+  const editing = view.kind === "edit" && editForm?.id === view.providerId ? editForm : null;
 
   /** 新增表单字段错误文本（touched / 尝试提交后显示；模型列表与请求头无单列 touched，仅由提交尝试触发） */
   function addFieldError(field: "name" | "base_url" | "keys" | "models" | "headers"): string | undefined {
@@ -431,12 +397,6 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
     return t("settings.vBaseUrl");
   }
 
-  function patchProvider(id: string, patch: Partial<ProviderConfig>) {
-    patchDraft({
-      providers: draft.providers.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-    });
-  }
-
   function removeProvider(p: ProviderConfig) {
     const providers = draft.providers.filter((x) => x.id !== p.id);
     const removed = new Set(p.models.map((m) => m.id));
@@ -445,37 +405,53 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
     if (view.kind === "edit" && view.providerId === p.id) setView({ kind: "list" });
   }
 
-  function removeModel(providerId: string, modelId: string) {
-    const provider = draft.providers.find((p) => p.id === providerId);
-    if (!provider) return;
-    const models = provider.models.filter((m) => m.id !== modelId);
-    patchProvider(providerId, { models });
-    if (draft.active_model_id === modelId) {
-      const others = draft.providers.filter((p) => p.id !== providerId);
-      patchDraft({ active_model_id: models[0]?.id ?? firstModelId(others) });
-    }
+  function startAddProvider() {
+    setAddForm(blankProvider());
+    setEditForm(null);
+    setTouched({});
+    setSubmitTried(false);
+    setModelEditor(null);
+    setView({ kind: "add" });
   }
 
-  function commitModel(m: ProviderModel) {
-    const mm = modelModal;
-    if (!mm) return;
-    const { target } = mm;
+  function startAddModel(target: "add-form" | { providerId: string }) {
+    setModelEditor({ target, value: providerModelDefaults(), isNew: true, idError: false });
+  }
+
+  function startEditModel(target: "add-form" | { providerId: string }, model: ProviderModel) {
+    setModelEditor({ target, value: { ...model }, isNew: false, idError: false });
+  }
+
+  function removeModel(providerId: string, modelId: string) {
+    setEditForm((prev) => prev?.id === providerId
+      ? { ...prev, models: prev.models.filter((m) => m.id !== modelId) }
+      : prev);
+  }
+
+  function commitModel() {
+    const editor = modelEditor;
+    if (!editor) return;
+    const { target, isNew } = editor;
+    const model = { ...editor.value, model: editor.value.model.trim() };
+    if (!model.model) {
+      setModelEditor({ ...editor, idError: true });
+      return;
+    }
     if (target === "add-form") {
       setAddForm((prev) => ({
         ...prev,
-        models: mm.editing
-          ? prev.models.map((x) => (x.id === m.id ? m : x))
-          : [...prev.models, m],
+        models: isNew
+          ? [...prev.models, model]
+          : prev.models.map((x) => (x.id === model.id ? model : x)),
       }));
     } else {
-      const provider = draft.providers.find((p) => p.id === target.providerId);
-      if (!provider) return;
-      const models = mm.editing
-        ? provider.models.map((x) => (x.id === m.id ? m : x))
-        : [...provider.models, m];
-      patchProvider(target.providerId, { models });
+      if (!editing || editing.id !== target.providerId) return;
+      const models = isNew
+        ? [...editing.models, model]
+        : editing.models.map((x) => (x.id === model.id ? model : x));
+      setEditForm({ ...editing, models });
     }
-    setModelModal(null);
+    setModelEditor(null);
   }
 
   const addValid =
@@ -496,183 +472,238 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
     };
     const providers = [...draft.providers, provider];
     patchDraft({ providers, active_model_id: draft.active_model_id ?? provider.models[0]?.id ?? null });
+    setModelEditor(null);
+    setView({ kind: "list" });
+  }
+
+  const providerModalOpen = view.kind === "add" || (view.kind === "edit" && editing != null);
+  const modalProvider = view.kind === "add" ? addForm : editing;
+  const modelTarget = view.kind === "add" ? "add-form" : editing ? { providerId: editing.id } : null;
+
+  function closeProviderModal() {
+    setModelEditor(null);
+    setEditForm(null);
+    setView({ kind: "list" });
+  }
+
+  function finishProviderModal() {
+    if (view.kind === "add") {
+      submitAdd();
+      return;
+    }
+    if (view.kind === "edit" && editing) {
+      const original = draft.providers.find((provider) => provider.id === editing.id);
+      const normalizedOriginal = original && {
+        ...original,
+        keys: original.keys ?? [],
+        headers: original.headers ?? [],
+        models: original.models ?? [],
+      };
+      if (original && JSON.stringify(normalizedOriginal) !== JSON.stringify(editing)) {
+        const providers = draft.providers.map((provider) => provider.id === editing.id ? editing : provider);
+        const activeModelStillExists = draft.active_model_id == null || providers.some((provider) =>
+          provider.models.some((model) => model.id === draft.active_model_id));
+        patchDraft({
+          providers,
+          ...(activeModelStillExists ? {} : { active_model_id: firstModelId(providers) }),
+        });
+      }
+    }
+    closeProviderModal();
+  }
+
+  function startEditProvider(provider: ProviderConfig) {
+    setEditForm({
+      ...provider,
+      keys: [...(provider.keys ?? [])],
+      headers: (provider.headers ?? []).map((header) => ({ ...header })),
+      models: (provider.models ?? []).map((model) => ({ ...model })),
+    });
+    setModelEditor(null);
     setView({ kind: "edit", providerId: provider.id });
   }
 
-  const modelModalNode = (
-    <ModelModal
-      open={!!modelModal}
-      initial={modelModal?.editing ?? null}
-      onOk={commitModel}
-      onCancel={() => setModelModal(null)}
-    />
-  );
-
-  if (view.kind === "add") {
-    return (
-      <div className="setting-anchor" data-setting-id="providers" style={{ maxWidth: 560 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView({ kind: "list" })} />
-          <b>{t("settings.addProvider")}</b>
-        </div>
-        <div className="dim" style={{ marginBottom: 12, fontSize: 12.5 }}>{t("settings.addProviderHint")}</div>
-        <ProviderFields
-          value={addForm}
-          errors={{
-            name: addFieldError("name"),
-            base_url: addFieldError("base_url"),
-            keys: addFieldError("keys"),
-            models: addFieldError("models"),
-            headers: addFieldError("headers"),
-          }}
-          onPatch={(patch) => {
-            setAddForm((prev) => ({ ...prev, ...patch }));
-            if ("name" in patch) setTouched((tp) => ({ ...tp, name: true }));
-            if ("base_url" in patch) setTouched((tp) => ({ ...tp, base_url: true }));
-            if ("keys" in patch) setTouched((tp) => ({ ...tp, keys: true }));
-          }}
-        >
-          <ModelListSection
-            models={addForm.models}
-            activeModelId={draft.active_model_id}
-            onAdd={() => setModelModal({ target: "add-form", editing: null })}
-            onEdit={(m) => setModelModal({ target: "add-form", editing: m })}
-            onRemove={(m) => setAddForm((prev) => ({ ...prev, models: prev.models.filter((x) => x.id !== m.id) }))}
-          />
-        </ProviderFields>
-        <Divider style={{ margin: "16px 0 12px" }} />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span className="dim" style={{ fontSize: 12.5 }}>
-            <InfoCircleOutlined style={{ marginRight: 4 }} />
-            {t("settings.providerNeedsModel")}
-          </span>
-          <Button type="primary" onClick={submitAdd}>
+  // 列表视图（锚点 data-setting-id="providers"：搜索跳转落点；每个供应商独立成卡）。
+  return (
+    <div className="setting-anchor settings-collection" data-setting-id="providers">
+      <SettingsSection
+        title={t("settings.providers")}
+        className="settings-provider-section"
+        extra={(
+          <Button type="primary" icon={<PlusOutlined />} onClick={startAddProvider}>
             {t("settings.addProvider")}
           </Button>
-        </div>
-        {modelModalNode}
-      </div>
-    );
-  }
-
-  if (view.kind === "edit" && editing) {
-    return (
-      <div className="setting-anchor" data-setting-id="providers" style={{ maxWidth: 560 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView({ kind: "list" })} />
-          <b>{t("settings.editProvider")}</b>
-          <div className="flex" />
-          <Popconfirm
-            title={`${t("common.delete")}「${editing.name || editing.id}」?`}
-            onConfirm={() => removeProvider(editing)}
-          >
-            <Button size="small" type="text" danger icon={<DeleteOutlined />}>{t("common.delete")}</Button>
-          </Popconfirm>
-        </div>
-        <ProviderFields
-          value={editing}
-          errors={{
-            name: editFieldError("name"),
-            base_url: editFieldError("base_url"),
-            keys: editFieldError("keys"),
-            models: editFieldError("models"),
-            headers: editFieldError("headers"),
-          }}
-          onPatch={(patch) => patchProvider(editing.id, patch)}
-        >
-          <ModelListSection
-            models={editing.models}
-            activeModelId={draft.active_model_id}
-            onAdd={() => setModelModal({ target: { providerId: editing.id }, editing: null })}
-            onEdit={(m) => setModelModal({ target: { providerId: editing.id }, editing: m })}
-            onRemove={(m) => removeModel(editing.id, m.id)}
-          />
-        </ProviderFields>
-        {modelModalNode}
-      </div>
-    );
-  }
-
-  // 列表视图（锚点 data-setting-id="providers"：搜索跳转落点；容器宽度 maxWidth 640 不变——本批明确非目标）
-  return (
-    <div className="setting-anchor" data-setting-id="providers" style={{ maxWidth: 640 }}>
-      {draft.providers.length === 0 && (
-        <Empty description={t("settings.noProviders")} style={{ margin: "24px 0" }} />
-      )}
-      <List
-        dataSource={draft.providers}
-        split={false}
-        renderItem={(p) => (
-          <List.Item
-            /* 行级动态锚点：命名空间 `providers.<uuid>`（与三个视图根节点的 `providers`、
-               以及注册表项的静态锚点都不同名）。外部入口（额度灰行的「去设置」）靠它定位到具体一行；
-               类名沿用 `.setting-anchor` 包裹层约定（只补 min-width）。列表行为不变：整行点击仍进编辑视图。 */
-            className="setting-anchor"
-            data-setting-id={`providers.${p.id}`}
-            style={{ cursor: "pointer", padding: "10px 4px" }}
-            onClick={() => setView({ kind: "edit", providerId: p.id })}
-            actions={[
-              <Button
-                key="edit"
-                size="small"
-                type="text"
-                icon={<EditOutlined />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setView({ kind: "edit", providerId: p.id });
-                }}
-              >
-                {t("settings.editProvider")}
-              </Button>,
-              <Popconfirm
-                key="del"
-                title={`${t("common.delete")}「${p.name || p.id}」?`}
-                onConfirm={(e) => {
-                  e?.stopPropagation();
-                  removeProvider(p);
-                }}
-                onCancel={(e) => e?.stopPropagation()}
-              >
-                <Button
-                  size="small"
-                  type="text"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              </Popconfirm>,
-            ]}
-          >
-            <List.Item.Meta
-              title={
-                <Space size={8}>
-                  <b>{p.name || p.id}</b>
-                  <Tag style={{ marginInlineEnd: 0 }}>{apiFormatLabel(p.api_format)}</Tag>
-                </Space>
-              }
-              description={
-                <span>
-                  {p.base_url || "-"} · {t("settings.modelsCount", { n: p.models.length })}
-                </span>
-              }
-            />
-          </List.Item>
         )}
-      />
-      <Button
-        variant="dashed"
-        block
-        icon={<PlusOutlined />}
-        onClick={() => {
-          setAddForm(blankProvider());
-          setTouched({});
-          setSubmitTried(false);
-          setView({ kind: "add" });
-        }}
       >
-        {t("settings.addProvider")}
-      </Button>
-      {modelModalNode}
+        <div className="settings-provider-list">
+          {draft.providers.length === 0 ? (
+            <Empty description={t("settings.noProviders")} className="settings-provider-empty" />
+          ) : (
+            <div className="settings-provider-cards">
+              {draft.providers.map((p) => (
+                <Card
+                  key={p.id}
+                  size="small"
+                  variant="outlined"
+                  className="settings-provider-card setting-anchor"
+                  data-setting-id={`providers.${p.id}`}
+                  styles={{ header: { paddingBlock: 12 }, body: { padding: 16 } }}
+                  title={(
+                    <div className="settings-provider-title-row">
+                      <strong className="settings-provider-name">{p.name || p.id}</strong>
+                      <Tag className="settings-provider-api-tag">{apiFormatLabel(p.api_format)}</Tag>
+                    </div>
+                  )}
+                  actions={[
+                    <Button
+                      key="edit"
+                      type="text"
+                      className="settings-provider-action-button"
+                      icon={<EditOutlined />}
+                      onClick={() => startEditProvider(p)}
+                    >
+                      {t("settings.editProviderAction")}
+                    </Button>,
+                    <Popconfirm
+                      key="delete"
+                      title={`${t("common.delete")}「${p.name || p.id}」?`}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={(e) => { e?.stopPropagation(); removeProvider(p); }}
+                      onCancel={(e) => e?.stopPropagation()}
+                    >
+                      <Button
+                        type="text"
+                        danger
+                        className="settings-provider-action-button settings-provider-delete"
+                        icon={<DeleteOutlined />}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {t("common.delete")}
+                      </Button>
+                    </Popconfirm>,
+                  ]}
+                >
+                  <div className="settings-provider-card-content">
+                    <div className="settings-provider-endpoint-section">
+                      <span className="settings-provider-block-label">{t("settings.apiEndpoint")}</span>
+                      <span className="settings-provider-endpoint" title={p.base_url || undefined}>{p.base_url || "-"}</span>
+                    </div>
+                    <div className="settings-provider-model-section">
+                      <span className="settings-provider-block-label">{t("settings.modelList")}</span>
+                      <div className="settings-provider-model-list">
+                        {p.models.length > 0 ? p.models.map((model) => (
+                          <div className="settings-provider-model" key={model.id}>
+                            <div className="settings-provider-model-details">
+                              <span className="settings-provider-model-name">{model.model}</span>
+                              <span className="settings-provider-model-limits">
+                                {t("settings.modelSummary", {
+                                  context: `${Math.round(model.context_window / 1000)}k`,
+                                  output: `${Math.round(model.max_tokens / 1000)}k`,
+                                })}
+                              </span>
+                            </div>
+                            <Space size={6} wrap className="settings-provider-model-tags">
+                              {model.vision && <Tag className="settings-provider-model-tag">{t("settings.typeImage")}</Tag>}
+                              {model.video && <Tag className="settings-provider-model-tag">{t("settings.typeVideo")}</Tag>}
+                              {draft.active_model_id === model.id && (
+                                <Tag className="settings-provider-model-tag settings-provider-active-tag">{t("settings.active")}</Tag>
+                              )}
+                            </Space>
+                          </div>
+                        )) : (
+                          <span className="settings-provider-model-empty">{t("settings.noModels")}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </SettingsSection>
+      <Modal
+        className="settings-dialog settings-provider-modal"
+        open={providerModalOpen}
+        title={modelEditor
+          ? t(modelEditor.isNew ? "settings.addModel" : "settings.editModel")
+          : view.kind === "add" ? t("settings.addProvider") : t("settings.editProvider")}
+        width={860}
+        footer={(
+          <Space>
+            {modelEditor ? (
+              <>
+                <Button onClick={() => setModelEditor(null)}>{t("settings.backToProvider")}</Button>
+                <Button type="primary" onClick={commitModel}>{t("settings.saveModel")}</Button>
+              </>
+            ) : (
+              <>
+                <Button onClick={closeProviderModal}>{t("common.cancel")}</Button>
+                <Button type="primary" onClick={finishProviderModal}>
+                  {t(view.kind === "add" ? "settings.addProvider" : "settings.providerDone")}
+                </Button>
+              </>
+            )}
+          </Space>
+        )}
+        onCancel={closeProviderModal}
+        destroyOnHidden
+      >
+        <SettingsThemeScope className="settings-dialog-body">
+          {modelEditor ? (
+            <ModelEditor
+              value={modelEditor.value}
+              idError={modelEditor.idError}
+              onChange={(patch) => setModelEditor((prev) => prev ? {
+                ...prev,
+                value: { ...prev.value, ...patch },
+              } : prev)}
+            />
+          ) : (
+            <>
+              {view.kind === "add" && (
+                <div className="dim settings-provider-modal-hint">{t("settings.addProviderHint")}</div>
+              )}
+              {modalProvider && modelTarget && (
+                <ProviderFields
+                  value={modalProvider}
+                  errors={{
+                    name: view.kind === "add" ? addFieldError("name") : editFieldError("name"),
+                    base_url: view.kind === "add" ? addFieldError("base_url") : editFieldError("base_url"),
+                    keys: view.kind === "add" ? addFieldError("keys") : editFieldError("keys"),
+                    models: view.kind === "add" ? addFieldError("models") : editFieldError("models"),
+                    headers: view.kind === "add" ? addFieldError("headers") : editFieldError("headers"),
+                  }}
+                  onPatch={(patch) => {
+                    if (view.kind === "add") {
+                      setAddForm((prev) => ({ ...prev, ...patch }));
+                      if ("name" in patch) setTouched((tp) => ({ ...tp, name: true }));
+                      if ("base_url" in patch) setTouched((tp) => ({ ...tp, base_url: true }));
+                      if ("keys" in patch) setTouched((tp) => ({ ...tp, keys: true }));
+                    } else if (editing) {
+                      setEditForm((prev) => prev?.id === editing.id ? { ...prev, ...patch } : prev);
+                    }
+                  }}
+                >
+                  <ModelListSection
+                    models={modalProvider.models}
+                    activeModelId={draft.active_model_id}
+                    onAdd={() => startAddModel(modelTarget)}
+                    onEdit={(model) => startEditModel(modelTarget, model)}
+                    onRemove={(model) => {
+                      if (view.kind === "add") {
+                        setAddForm((prev) => ({ ...prev, models: prev.models.filter((x) => x.id !== model.id) }));
+                      } else if (editing) {
+                        removeModel(editing.id, model.id);
+                      }
+                    }}
+                  />
+                </ProviderFields>
+              )}
+            </>
+          )}
+        </SettingsThemeScope>
+      </Modal>
     </div>
   );
 }

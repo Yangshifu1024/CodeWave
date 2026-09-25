@@ -223,7 +223,7 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   // —— 整行列表 / 复合容器 / 动作与只读标记 ——
   "approval.command_allowlist", // 整行命令列表（每行一条 + 删除按钮）
   "disabled_skills", // 整行技能行（名称 / 来源 / 开关 / 删除）
-  "providers", // 供应商列表/新增/编辑三视图复合容器：宽度由 maxWidth 420/560/640 定（本批明确非目标）
+  "providers", // 供应商卡片网格 + 单供应商弹框复合容器
   "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
   "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
@@ -356,7 +356,8 @@ export const SHELL_SETTING_KEYS: string[] = [
   "searchEmptyHint", // 无命中引导（动态条目在各自页面内查找）
 
   // —— 界面页的从属文案（项已登记：ui.theme / ui.font_sans / ui.font_mono） ——
-  "themeHint", // → ui.theme 的选择说明
+  "fontGroup", // 界面页字体分组标题（不是独立设置项）
+  "languageHint", // → ui.language 的说明
   "themeSystem", // → ui.theme 选项
   "themeLight", // → ui.theme 选项
   "themeDark", // → ui.theme 选项
@@ -364,6 +365,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "fontReset", // → 字体槽的「恢复默认」按钮
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
+  "providerGeneral", // 模型与供应商页的通用分组标题
   "aiLanguageHint", // → ui.ai_language 的输入说明
   "aiLanguagePlaceholder", // → ui.ai_language 的占位符（批④ 拆出，不再借用 composer.effortDefault）
 
@@ -371,12 +373,17 @@ export const SHELL_SETTING_KEYS: string[] = [
   "addProvider", // 动作：添加供应商
   "addProviderHint", // 弹框说明
   "editProvider", // 动作：编辑供应商
+  "editProviderAction", // 卡片底部动作：编辑
+  "providerDone", // 编辑供应商弹框完成按钮
+  "backToProvider", // 模型编辑弹框内返回供应商表单
   "addModel", // 动作：添加模型
   "editModel", // 动作：编辑模型
+  "saveModel", // 模型编辑步骤的主操作
   "providerName", // 供应商表单字段（亦用于保存校验文案）
   "providerNamePh", // 同上，占位符
   "apiFormat", // 供应商表单字段
   "apiKeys", // 供应商表单字段
+  "apiEndpoint", // 卡片中显示供应商 API 地址的分区标题
   "baseUrl", // 供应商表单字段（亦用于保存校验文案）
   "modelId", // 模型表单字段
   "maxTokens", // 模型表单字段
@@ -391,6 +398,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "typeVideo", // 输入/输出类型选项
   "modelList", // 模型列表分组标题（亦用于保存校验文案）
   "modelsCount", // 模型数量徽标
+  "modelSummary", // 模型列表里的上下文与输出上限摘要
   "noModels", // 空态
   "noProviders", // 空态
   "providerNeedsModel", // 空态引导

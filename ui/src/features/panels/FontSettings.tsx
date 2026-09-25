@@ -4,9 +4,10 @@
 // 三组偏好均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮；
 // 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-ia](../../../../docs/settings-ia.md)）。
 import { useEffect, useRef, useState } from "react";
-import { Button, Form, Input, Select } from "antd";
+import { Button, Input, Radio, Select } from "antd";
 import { UndoOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { SettingsForm, SettingsFormItem, SettingsSection } from "./settings/SettingsTheme";
 import type { ConfigState } from "../../ipc/types";
 import { ipc } from "../../ipc/client";
 import { useUi, type ThemePref } from "../../stores/ui";
@@ -28,52 +29,59 @@ export function AppearanceSettings({ draft, patchDraft }: {
   const theme = useUi((s) => s.theme);
 
   return (
-    <Form layout="vertical">
-      <Form.Item label={t("settings.theme")} extra={t("settings.themeHint")}>
-        {/* 锚点 + 宽度档：批③ 搜索命中定位靠 data-setting-id，控件宽度走 .w-narrow（见 app.css） */}
-        <div className="setting-anchor" data-setting-id="ui.theme">
-          <Select
-            size="small"
-            className="w-narrow"
-            value={theme}
-            onChange={(v) => useUi.getState().setTheme(v as ThemePref)}
-            options={[
-              { label: t("settings.themeSystem"), value: "system" },
-              { label: t("settings.themeLight"), value: "light" },
-              { label: t("settings.themeDark"), value: "dark" },
-            ]}
-          />
-        </div>
-      </Form.Item>
+    <SettingsForm>
+      {draft && patchDraft && (
+        <SettingsSection title={t("settings.language")}>
+          <SettingsFormItem label={t("settings.language")} settingDescription={t("settings.languageHint")}>
+            {/* 即时生效：改完立即写 useUi.setLanguage（并镜像进 draft.ui.language），不参与脏标记。 */}
+            <div className="setting-anchor" data-setting-id="ui.language">
+              <Select
+                className="w-narrow"
+                value={draft.ui.language}
+                onChange={(v) => {
+                  patchDraft({ ui: { ...draft.ui, language: v } });
+                  useUi.getState().setLanguage(v as "zh-CN" | "en-US");
+                }}
+                options={[
+                  { label: "中文", value: "zh-CN" },
+                  { label: "English", value: "en-US" },
+                ]}
+              />
+            </div>
+          </SettingsFormItem>
+        </SettingsSection>
+      )}
+      <SettingsSection title={t("settings.theme")}>
+        <SettingsFormItem className="settings-theme-picker-row">
+          <div className="setting-anchor settings-theme-picker" data-setting-id="ui.theme">
+            <Radio.Group
+              className="settings-theme-options"
+              value={theme}
+              onChange={(e) => useUi.getState().setTheme(e.target.value as ThemePref)}
+            >
+              {([
+                ["system", t("settings.themeSystem"), "system"],
+                ["light", t("settings.themeLight"), "light"],
+                ["dark", t("settings.themeDark"), "dark"],
+              ] as const).map(([value, label, preview]) => (
+                <Radio key={value} value={value} className="settings-theme-option">
+                  <span className={`settings-theme-preview settings-theme-preview-${preview}`} aria-hidden="true">
+                    <span />
+                    <span />
+                  </span>
+                  <span className="settings-theme-option-label">{label}</span>
+                </Radio>
+              ))}
+            </Radio.Group>
+          </div>
+        </SettingsFormItem>
+      </SettingsSection>
       {/* 字体组：sans / mono 双槽 + 预览合成一张 section 卡片（[docs/settings-fullscreen-shell]，
           与参考图「浅色主题」组的圆角浅灰容器同构）。Form 上下文由外层 Form 提供。 */}
-      <div className="settings-section-card">
+      <SettingsSection title={t("settings.fontGroup")}>
         <FontSettings />
-      </div>
-      {/* 「即时生效」写在标题括号里（instantApplySuffix）：本行是 Form.Item 块布局，标注挂控件下方会跟
-          控件脱开、扫读时找不到（与关于·更新行同一形态）。 */}
-      {draft && patchDraft && (
-        <Form.Item label={<>{t("settings.language")}{t("settings.instantApplySuffix")}</>}>
-          {/* 即时生效：改完立即写 useUi.setLanguage（并镜像进 draft.ui.language），
-              因此不进脏标记（也就不会亮脏点） */}
-          <div className="setting-anchor" data-setting-id="ui.language">
-            <Select
-              size="small"
-              className="w-narrow"
-              value={draft.ui.language}
-              onChange={(v) => {
-                patchDraft({ ui: { ...draft.ui, language: v } });
-                useUi.getState().setLanguage(v as "zh-CN" | "en-US");
-              }}
-              options={[
-                { label: "中文", value: "zh-CN" },
-                { label: "English", value: "en-US" },
-              ]}
-            />
-          </div>
-        </Form.Item>
-      )}
-    </Form>
+      </SettingsSection>
+    </SettingsForm>
   );
 }
 
@@ -94,12 +102,13 @@ async function persistFontPrefsToBackend(prefs: FontPreferences): Promise<void> 
  * 为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
  * 「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
  * 界面看上去就是「字体没保存」。 */
-function FontField({ slot, label, hint, settingId, onApplied }: {
+function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
   slot: FontSlot;
   label: string;
   hint: string;
   /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
   settingId: string;
+  appliedFont: string;
   /** 提交生效后的回调（父组件刷新预览） */
   onApplied: () => void;
 }) {
@@ -158,9 +167,9 @@ function FontField({ slot, label, hint, settingId, onApplied }: {
   }, [slot]);
 
   return (
-    <Form.Item label={label} help={hint}>
-      {/* 字体槽是整行输入（不参与宽度三档，见 WIDTH_EXEMPT_ITEM_IDS）：只补锚点 */}
-      <div className="setting-anchor" data-setting-id={settingId}>
+    <SettingsFormItem className="settings-font-row" label={label} settingDescription={hint}>
+      {/* 字体槽占用半行宽度（不参与宽度三档，见 WIDTH_EXEMPT_ITEM_IDS）。 */}
+      <div className="setting-anchor settings-font-control" data-setting-id={settingId}>
         <Input
           value={draft}
           placeholder={DEFAULT_FONT_LEADS[slot]}
@@ -187,15 +196,18 @@ function FontField({ slot, label, hint, settingId, onApplied }: {
           }}
           suffix={
             <Button
-              type="text" size="small" title={t("settings.fontReset")}
+              type="text"  title={t("settings.fontReset")}
               aria-label={`${t("settings.fontReset")}・${label}`}
               icon={<UndoOutlined />}
               onClick={() => { edited.current = true; setDraft(""); commit(""); }}
             />
           }
         />
+        <div className="font-preview-row" style={{ fontFamily: previewFontFamily(appliedFont, slot) }}>
+          {PREVIEW_SAMPLE}
+        </div>
       </div>
-    </Form.Item>
+    </SettingsFormItem>
   );
 }
 
@@ -210,18 +222,8 @@ function FontSettings() {
 
   return (
     <>
-      <FontField slot="sans" label={t("settings.uiFont")} hint={t("settings.fontHint")} settingId="ui.font_sans" onApplied={() => setApplied(sanitizeStored())} />
-      <FontField slot="mono" label={t("settings.monoFont")} hint={t("settings.fontHint")} settingId="ui.font_mono" onApplied={() => setApplied(sanitizeStored())} />
-      <Form.Item>
-        <div className="font-preview">
-          <div className="font-preview-row" style={{ fontFamily: previewFontFamily(applied.sans, "sans") }}>
-            {PREVIEW_SAMPLE}
-          </div>
-          <div className="font-preview-row" style={{ fontFamily: previewFontFamily(applied.mono, "mono") }}>
-            {PREVIEW_SAMPLE}
-          </div>
-        </div>
-      </Form.Item>
+      <FontField slot="sans" label={t("settings.uiFont")} hint={t("settings.fontHint")} settingId="ui.font_sans" appliedFont={applied.sans} onApplied={() => setApplied(sanitizeStored())} />
+      <FontField slot="mono" label={t("settings.monoFont")} hint={t("settings.fontHint")} settingId="ui.font_mono" appliedFont={applied.mono} onApplied={() => setApplied(sanitizeStored())} />
     </>
   );
 }

@@ -94,6 +94,7 @@
 
 ## 界面与交互
 
+- 2026-09-25 · [settings-ui-unification.md](./settings-ui-unification.md) — 设置页视觉统一：用共享 antd 主题层、左右式设置行、统一分组卡片、响应式宽度与主题预览样式覆盖所有设置页和弹框。
 - 2026-08-31 · [composer-toolbar-batch-report.md](./composer-toolbar-batch-report.md) — Composer 工具条重构（权限四档 + 会话级模型/力度 + 附件/$技能 + 供应商分组与视觉标签）
 - 2026-09-08 · [slash-skills-and-dollar-agents.md](./slash-skills-and-dollar-agents.md) — 技能触发符 `/` 化（/ 纯技能菜单、/name 点名语义入 available-skills、命令入口移除）+ `$` 改为内置子代理点名（list_agents IPC + 回填 $role + 核心提示 $<role> 委派规则）+ 技能加载路径定稿（项目/全局 .codewave/skills > 工作区 .agents/skills、.claude/skills > ~/.claude/skills > 内置；含 rt.data_dir 恒为全局的语义钉子与漏扫缺陷修复）+ 列表显示排序（内置 > 项目 > 全局 > 其他）与点击详情弹层（共享 SkillDetailModal：右栏技能行 + composer / 菜单，get_skill IPC + SKILL.md 正文渲染），三候选乱序守卫补齐
 - 2026-08-31 · [composer-shift-tab-mode-cycle.md](./composer-shift-tab-mode-cycle.md) — Composer Shift+Tab 循环切换权限模式 + 权限胶囊按档位着色

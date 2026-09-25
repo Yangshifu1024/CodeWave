@@ -637,10 +637,10 @@ describe("设置全屏页：逐页脏标记与深链", () => {
   it("即时生效项不打点：切界面语言不产生未保存状态", async () => {
     await mountWithSession();
     await openPage("界面");
-    // 界面页两个 Select：主题（第一个）与界面语言（第二个）——按 Form.Item 标签定位语言项；
-    // 标签含「（即时生效）」后缀（与关于·更新行同一形态）
+    // 界面语言是页面首组，选择后仍即时生效且不产生脏点。
     const languageItem = controlByLabel("界面语言");
-    expect(languageItem.querySelector(".ant-form-item-label")?.textContent).toContain("界面语言（即时生效）");
+    expect(languageItem.querySelector(".ant-form-item-label")?.textContent).toContain("界面语言");
+    expect(languageItem.querySelector(".settings-row-description")?.textContent).toBe("界面显示的语言");
     const select = languageItem.querySelector(".ant-select") as HTMLElement;
     expect(select).toBeTruthy();
     fireEvent.mouseDown(select);
@@ -749,12 +749,8 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
     // 界面页：切主题（localStorage ws_theme，即时生效）
     clickNavTab("界面");
     await waitFor(() => expect(activeNavTabText()).toBe("界面"));
-    const themeSelect = controlByLabel("主题").querySelector(".ant-select") as HTMLElement;
-    fireEvent.mouseDown(themeSelect);
-    await waitFor(() => expect(document.querySelector(".ant-select-dropdown")).toBeTruthy(), { timeout: 3000 });
-    fireEvent.click(
-      Array.from(document.querySelectorAll(".ant-select-item-option")).find((o) => (o.textContent ?? "").trim() === "暗色") as HTMLElement,
-    );
+    const darkThemeOption = Array.from(document.querySelectorAll(".settings-theme-option")).find((o) => (o.textContent ?? "").includes("暗")) as HTMLElement;
+    fireEvent.click(darkThemeOption);
     await new Promise((r) => setTimeout(r, 80));
     expect(useUi.getState().theme).toBe("dark");
     expect(navDotCount()).toBe(0);

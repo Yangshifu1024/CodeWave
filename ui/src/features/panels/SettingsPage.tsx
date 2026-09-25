@@ -12,7 +12,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
-  App, Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
+  App, Button, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
   Tabs,
 } from "antd";
 import {
@@ -34,6 +34,7 @@ import { useRun } from "../../stores/run";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
 import { useDisplayWidths } from "../shell/useDisplayWidths";
+import { SettingsForm, SettingsFormItem, SettingsSection, SettingsThemeProvider, SettingsThemeScope } from "./settings/SettingsTheme";
 import { AboutSettings } from "./AboutSettings";
 import McpStatusTable, { mcpStatusRow, type McpStatusRow } from "./McpStatusTable";
 import {
@@ -223,7 +224,7 @@ function overlayOpen(): boolean {
 /**
  * 段二定位的落点：命中项锚点缺失、或存在但**没有布局盒**（0 高度锚点）时，退化为页体容器。
  *
- * 0 高度锚点的典型：`approval.command_allowlist` 的锚点容器常驻，但其内 `<Form.Item>` 只在白名单
+ * 0 高度锚点的典型：`approval.command_allowlist` 的锚点容器常驻，但其内 `<SettingsFormItem>` 只在白名单
  * 非空时才渲染（默认空）——只说「锚点存在」不够：`scrollIntoView` 与 1px 高亮双双落空，
  * 用户观感是「搜了没反应」。退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6。
  *
@@ -266,6 +267,14 @@ function resolveShellDisplay(selection: string | null | undefined, shells: Shell
  *  容器是全屏覆盖层（绝对定位贴在内层 Layout），工作区只隐藏不卸载——运行中会话的 DOM 与滚动容器不受影响。 */
 
 export default function SettingsPage() {
+  return (
+    <SettingsThemeProvider>
+      <SettingsPageController />
+    </SettingsThemeProvider>
+  );
+}
+
+function SettingsPageController() {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
   const language = useUi((s) => s.language);
@@ -369,7 +378,7 @@ export default function SettingsPage() {
   const activeHitId = results[hitIdx]?.id;
 
   /** 设置项锚点包裹层的类名（锚点值 = 注册表 id，2026-09 移除进阶折叠后无折叠类） */
-  function anchorCls(id: string): string {
+  function anchorCls(_id: string): string {
     return "setting-anchor";
   }
 
@@ -1377,26 +1386,27 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.providers,
       body: draft && (
         <>
-          <Form layout="vertical">
-            {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
-                经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
-            <Form.Item label={t("settings.aiLanguage")} extra={t("settings.aiLanguageHint")}>
-              {/* 锚点（= 注册表 id）+ 宽度档：批③ 搜索定位与三档宽度都从这里走 */}
-              <div className="setting-anchor" data-setting-id="ui.ai_language">
-                <Input
-                  size="small"
-                  className="w-mid"
-                  maxLength={40}
-                  placeholder={t("settings.aiLanguagePlaceholder")}
-                  value={draft.ui.ai_language ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    patchDraft({ ui: { ...draft.ui, ai_language: v.trim() === "" ? null : v } });
-                  }}
-                />
-              </div>
-            </Form.Item>
-          </Form>
+          <SettingsForm>
+            <SettingsSection title={t("settings.providerGeneral")}>
+              {/* AI 回复语言：自由输入；留空 = 跟随会话语言。
+                  经系统提示词 <reply-language> 指令下发（core/prompt.rs）。 */}
+              <SettingsFormItem label={t("settings.aiLanguage")} extra={t("settings.aiLanguageHint")}>
+                {/* 锚点（= 注册表 id）+ 宽度档：批③ 搜索定位与三档宽度都从这里走 */}
+                <div className="setting-anchor" data-setting-id="ui.ai_language">
+                  <Input
+                    className="w-mid"
+                    maxLength={40}
+                    placeholder={t("settings.aiLanguagePlaceholder")}
+                    value={draft.ui.ai_language ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      patchDraft({ ui: { ...draft.ui, ai_language: v.trim() === "" ? null : v } });
+                    }}
+                  />
+                </div>
+              </SettingsFormItem>
+            </SettingsSection>
+          </SettingsForm>
           <ProvidersPanel draft={draft} patchDraft={patchDraft} />
         </>
       ),
@@ -1405,11 +1415,11 @@ export default function SettingsPage() {
       key: "network",
       labelKey: PAGE_LABEL_KEY.network,
       body: draft && (
-        <Form layout="vertical">
+        <SettingsForm>
           {/* 代理模式组：模式三选一卡片 + 手动地址（同一项的子字段），合成一张 section 卡片
               （[docs/settings-fullscreen-shell]，[docs/network-proxy-settings]） */}
           <div className="settings-section-card">
-            <Form.Item label={t("settings.proxyMode")}>
+            <SettingsFormItem label={t("settings.proxyMode")}>
               {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
               <div className="setting-anchor" data-setting-id="network.proxy">
                 {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
@@ -1441,20 +1451,20 @@ export default function SettingsPage() {
                             label 与输入框是字段区自己的，不嵌在外层 label 里（label 不能嵌 label） */}
                         {mode === "manual" && proxyMode === "manual" && (
                           <div className="proxy-mode-field">
-                            <Form.Item
+                            <SettingsFormItem
                               label={t("settings.proxyUrl")}
                               extra={t("settings.proxyUrlHint")}
                               validateStatus={proxyUrlInvalid ? "error" : undefined}
                               help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
                             >
                               <Input
-                                size="small"
+
                                 className="w-wide"
                                 placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
                                 value={proxyUrl}
                                 onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
                               />
-                            </Form.Item>
+                            </SettingsFormItem>
                           </div>
                         )}
                       </div>
@@ -1462,53 +1472,55 @@ export default function SettingsPage() {
                   </div>
                 </Radio.Group>
               </div>
-            </Form.Item>
+            </SettingsFormItem>
           </div>
           {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
-          <Form.Item label={t("settings.allowPrivate")}>
-            <div className="setting-anchor" data-setting-id="network.allow_private_network">
-              <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
-            </div>
-          </Form.Item>
-        </Form>
+          <SettingsSection title={t("settings.allowPrivate")}>
+            <SettingsFormItem>
+              <div className="setting-anchor" data-setting-id="network.allow_private_network">
+                <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
+              </div>
+            </SettingsFormItem>
+          </SettingsSection>
+        </SettingsForm>
       ),
     },
     {
       key: "security",
       labelKey: PAGE_LABEL_KEY.security,
       body: draft && (
-        <Form layout="vertical">
+        <SettingsForm>
           {/* 审批策略组：4 个 Switch（总开关 + 三种确认策略 + 自动确认）合成一张 section 卡片
               （[docs/settings-fullscreen-shell]，[docs/ask-ink-accent-and-composer-cover]） */}
           <div className="settings-section-card">
-          <Form.Item label={t("settings.approvalEnabled")}>
+          <SettingsFormItem label={t("settings.approvalEnabled")}>
             <div className="setting-anchor" data-setting-id="approval.enabled">
               <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
             </div>
-          </Form.Item>
-          <Form.Item label={t("settings.confirmOutside")}>
+          </SettingsFormItem>
+          <SettingsFormItem label={t("settings.confirmOutside")}>
             <div className="setting-anchor" data-setting-id="approval.confirm_outside_create">
               <Switch checked={draft.approval.confirm_outside_create} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_outside_create: v } })} />
             </div>
-          </Form.Item>
-          <Form.Item label={t("settings.confirmPush")}>
+          </SettingsFormItem>
+          <SettingsFormItem label={t("settings.confirmPush")}>
             <div className="setting-anchor" data-setting-id="approval.confirm_git_push">
               <Switch checked={draft.approval.confirm_git_push} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_git_push: v } })} />
             </div>
-          </Form.Item>
+          </SettingsFormItem>
           {/* docs/ask-ink-accent-and-composer-cover：审批等待策略——勾选后 5 分钟无应答自动确认推荐选项（allowed），不勾 = 永不超时 */}
-          <Form.Item label={t("settings.autoConfirm")} extra={t("settings.autoConfirmHint")}>
+          <SettingsFormItem label={t("settings.autoConfirm")} extra={t("settings.autoConfirmHint")}>
             <div className="setting-anchor" data-setting-id="approval.auto_confirm">
               <Switch checked={draft.approval.auto_confirm} onChange={(v) => patchDraft({ approval: { ...draft.approval, auto_confirm: v } })} />
             </div>
-          </Form.Item>
+          </SettingsFormItem>
           </div>
           {/* docs/run-queue-and-ask-revamp：「始终允许本项目」命令白名单（审批时选择加入，此处管理/移除）。
               存储条目 = cwd \u{1} 完整命令文本（cwd 跟随项目 -> 白名单不跨项目生效），展示时拆开。
               advanced 项：包一层锚点容器，收起时整块（含 Form.Item 标签）加类隐藏 —— 零 DOM 搬迁 */}
           <div className={anchorCls("approval.command_allowlist")} data-setting-id="approval.command_allowlist">
             {(draft.approval.command_allowlist?.length ?? 0) > 0 && (
-              <Form.Item label={t("settings.cmdAllowlist")}>
+              <SettingsFormItem label={t("settings.cmdAllowlist")}>
                 <div className="cmd-allowlist">
                   {draft.approval.command_allowlist.map((entry, i) => {
                     const sep = entry.indexOf("\u0001");
@@ -1520,7 +1532,7 @@ export default function SettingsPage() {
                           {cmd}
                         </code>
                         <Button
-                          size="small"
+
                           type="text"
                           danger
                           onClick={() =>
@@ -1535,10 +1547,10 @@ export default function SettingsPage() {
                     );
                   })}
                 </div>
-              </Form.Item>
+              </SettingsFormItem>
             )}
           </div>
-        </Form>
+        </SettingsForm>
       ),
     },
     {
@@ -1548,7 +1560,7 @@ export default function SettingsPage() {
       // 重复（拆页后才出现的冗余），故去掉——页名已承担分段标题职责。
       body: draft && (
         <>
-          <Form layout="vertical">
+          <SettingsForm>
             {/* 写入后检查组：开关 + 命令 + 超时 + 输出尾字符 4 项合成一张 section 卡片
                 （[docs/settings-fullscreen-shell]，[docs/post-write-check-plan]）。hint 文本留在卡片外
                 （属于 section 标题性说明，不属于卡片内一组配置项） */}
@@ -1556,31 +1568,31 @@ export default function SettingsPage() {
             <div className="settings-section-card">
               {/* 开关：Switch 无宽度档，锚点挂整行 */}
               <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
-                <Form.Item style={{ marginBottom: 8 }}>
+                <SettingsFormItem style={{ marginBottom: 8 }}>
                   <Switch
                     checked={postWrite.enabled}
                     aria-label={t("settings.postWriteEnabled")}
                     onChange={(v) => patchPostWrite({ enabled: v })}
                   />
                   <span style={{ marginInlineStart: 8 }}>{t("settings.postWriteEnabled")}</span>
-                </Form.Item>
+                </SettingsFormItem>
               </div>
               {/* 命令：整行输入 + {file} 占位符与各技术栈示例说明 */}
               <div className={anchorCls("post_write_check.command")} data-setting-id="post_write_check.command">
-                <Form.Item label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
+                <SettingsFormItem label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
                   <Input
                     value={postWrite.command}
                     placeholder={t("settings.postWriteCommandPh")}
                     onChange={(e) => patchPostWrite({ command: e.target.value })}
                   />
-                </Form.Item>
+                </SettingsFormItem>
               </div>
               {/* 超时 / 输出尾部字符：两项都是进阶项（窄档；行内网格类收回 app.css） */}
               <div className="postcheck-grid">
-                <Form.Item label={t("settings.postWriteTimeout")}>
+                <SettingsFormItem label={t("settings.postWriteTimeout")}>
                   <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
                     <InputNumber
-                      size="small"
+
                       className="w-narrow"
                       min={1}
                       max={3600}
@@ -1588,11 +1600,11 @@ export default function SettingsPage() {
                       onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
                     />
                   </div>
-                </Form.Item>
-                <Form.Item label={t("settings.postWriteTailChars")}>
+                </SettingsFormItem>
+                <SettingsFormItem label={t("settings.postWriteTailChars")}>
                   <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
                     <InputNumber
-                      size="small"
+
                       className="w-narrow"
                       min={100}
                       max={100000}
@@ -1601,10 +1613,10 @@ export default function SettingsPage() {
                       onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
                     />
                   </div>
-                </Form.Item>
+                </SettingsFormItem>
               </div>
             </div>
-          </Form>
+          </SettingsForm>
         </>
       ),
     },
@@ -1622,7 +1634,7 @@ export default function SettingsPage() {
               会话可见集 = 全局 ∪ 项目，同名项目级胜出（后端 merge_scopes）。 */}
           <div className="mcp-scope">
             <Tabs
-              size="small"
+
               activeKey={mcpScope}
               items={[
                 { key: "global", label: t("settings.mcpScopeGlobal"), disabled: mcpDirty },
@@ -1631,7 +1643,7 @@ export default function SettingsPage() {
               onChange={(v) => void loadMcp(v as McpScope)}
             />
             <Tooltip title={mcpProjectPath === null ? t("settings.mcpScopeNoProject") : t("settings.mcpConfigPath", { path: mcpPath })}>
-              <Button type="text" size="small" className="mcp-scope-info" icon={<InfoCircleOutlined />} aria-label={mcpProjectPath === null ? t("settings.mcpScopeNoProject") : t("settings.mcpConfigPath", { path: mcpPath })} />
+              <Button type="text"  className="mcp-scope-info" icon={<InfoCircleOutlined />} aria-label={mcpProjectPath === null ? t("settings.mcpScopeNoProject") : t("settings.mcpConfigPath", { path: mcpPath })} />
             </Tooltip>
           </div>
           {mcpDirty && <div className="hint">{t("settings.mcpScopeDirtyHint")}</div>}
@@ -1649,6 +1661,7 @@ export default function SettingsPage() {
             onReconnect={(n) => void reconnectMcp(n)}
           />
           {mcpEditing && <Modal
+            className="settings-dialog"
             open={mcpEditing}
             title={mcpDeletePending ? t("settings.mcpDelete") : mcpCreating ? t("settings.mcpNew") : t("settings.mcpEdit")}
             onCancel={cancelMcpEditor}
@@ -1657,6 +1670,7 @@ export default function SettingsPage() {
             width={720}
             destroyOnHidden
           >
+          <SettingsThemeScope className="settings-dialog-body">
           {mcpDeletePending ? (
             <div className="hint">{t("settings.mcpDeleteConfirm")}</div>
           ) : mcpEntries === null ? (
@@ -1671,14 +1685,14 @@ export default function SettingsPage() {
                 <div className="mcp-entry" key={idx}>
                   <div className="mcp-entry-head">
                     <Input
-                      size="small"
+
                       className="w-narrow"
                       value={e.name}
                       placeholder={t("settings.mcpName")}
                       onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
                     />
                     <Select
-                      size="small"
+
                       className="w-narrow"
                       value={draftTransport(e)}
                       options={[
@@ -1689,20 +1703,20 @@ export default function SettingsPage() {
                     />
                     <div className="flex" />
                     <Button
-                      size="small"
+
                       disabled={!e.name.trim()}
                       onClick={() => void testMcpServer(e.name.trim())}
                     >
                       {t("settings.mcpTest")}
                     </Button>
-                    {!mcpCreating && <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t("settings.mcpDelete")} onClick={() => { removeMcpEntry(idx); setMcpDeletePending(true); }} />}
+                    {!mcpCreating && <Button  type="text" danger icon={<DeleteOutlined />} aria-label={t("settings.mcpDelete")} onClick={() => { removeMcpEntry(idx); setMcpDeletePending(true); }} />}
                   </div>
                   {draftTransport(e) === "stdio" ? (
                     <>
                       <div className="mcp-entry-row">
                         <span className="mcp-label">{t("settings.mcpCommand")}</span>
                         <Input
-                          size="small"
+
                           value={e.command}
                           placeholder="npx -y @modelcontextprotocol/server-fs"
                           onChange={(ev) => patchMcpEntry(idx, { command: ev.target.value })}
@@ -1738,7 +1752,7 @@ export default function SettingsPage() {
                       <div className="mcp-entry-row">
                         <span className="mcp-label">{t("settings.mcpUrl")}</span>
                         <Input
-                          size="small"
+
                           value={e.url}
                           placeholder="https://example.com/mcp"
                           onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
@@ -1791,6 +1805,7 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+          </SettingsThemeScope>
           </Modal>}
           </div>
         </>
@@ -1810,7 +1825,7 @@ export default function SettingsPage() {
             <div className="setting-anchor" data-setting-id="disabled_skills">
               <div className="skills-toolbar">
                 <div className="hint">{t("settings.skillsHint")}</div>
-                <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
+                <Button  loading={skillsBusy} onClick={() => void reloadSkills()}>
                   {t("settings.reloadSkills")}
                 </Button>
               </div>
@@ -1844,7 +1859,7 @@ export default function SettingsPage() {
                         >
                           <Button
                             type="text"
-                            size="small"
+
                             danger
                             aria-label={t("settings.deleteSkill")}
                             icon={<DeleteOutlined />}
@@ -1864,15 +1879,15 @@ export default function SettingsPage() {
       key: "agent",
       labelKey: PAGE_LABEL_KEY.agent,
       body: draft && (
-        <Form layout="vertical">
+        <SettingsForm>
           {/* 「Shell 与提示词」组：shell 选择器 + 自定义提示词合成一张 section 卡片
               （[docs/settings-fullscreen-shell]） */}
           <div className="settings-section-card">
-            <Form.Item label={t("settings.shell")} extra={t("settings.shellHint")}>
+            <SettingsFormItem label={t("settings.shell")} extra={t("settings.shellHint")}>
               {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
               <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
                 <Select
-                  size="small"
+
                   className="w-mid"
                   style={{ flexShrink: 0 }}
                   value={draft.shell?.selection ?? "auto"}
@@ -1931,8 +1946,8 @@ export default function SettingsPage() {
                   {t("settings.shellDetectFailed")}
                 </Typography.Text>
               )}
-            </Form.Item>
-            <Form.Item label={t("settings.customPrompt")}>
+            </SettingsFormItem>
+            <SettingsFormItem label={t("settings.customPrompt")}>
               {/* TextArea 整行（不参与宽度三档），只补锚点 */}
               <div className="setting-anchor" data-setting-id="custom_prompt">
                 <TextArea
@@ -1945,11 +1960,11 @@ export default function SettingsPage() {
                   }}
                 />
               </div>
-            </Form.Item>
+            </SettingsFormItem>
           </div>
           {/* 「压缩」组：压缩阈值 + 压缩超时（[docs/context-compaction]，[docs/settings-fullscreen-shell]） */}
           <div className="settings-section-card">
-            <Form.Item label={t("settings.compactThreshold")}>
+            <SettingsFormItem label={t("settings.compactThreshold")}>
               {/* Slider 是整行控件（不参与宽度三档）：批③ 去掉内联 320 像素宽，宽度随容器 */}
               <div className="setting-anchor" data-setting-id="compact_threshold">
                 <Slider
@@ -1960,8 +1975,8 @@ export default function SettingsPage() {
                   onChange={(v) => patchDraft({ compact_threshold: v })}
                 />
               </div>
-            </Form.Item>
-            <Form.Item label={t("settings.compactTimeout")}>
+            </SettingsFormItem>
+            <SettingsFormItem label={t("settings.compactTimeout")}>
               <div className="setting-anchor" data-setting-id="compact_timeout_seconds">
                 <InputNumber
                   className="w-narrow"
@@ -1972,15 +1987,15 @@ export default function SettingsPage() {
                   onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
                 />
               </div>
-            </Form.Item>
+            </SettingsFormItem>
           </div>
           {/* 「会话清理」组：保留期 + 立即清理 + 清理状态 + 旧格式清理 + 旧格式状态（[docs/session-cleanup]）。
               下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
           <div className="settings-section-card">
-            <Form.Item label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
+            <SettingsFormItem label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
               <div className="setting-anchor" data-setting-id="sessions.retention_days">
                 <Select
-                  size="small"
+
                   className="w-narrow"
                   value={draftRetention === null ? RETENTION_NEVER : String(draftRetention)}
                   onChange={patchRetention}
@@ -1990,15 +2005,15 @@ export default function SettingsPage() {
                   }))}
                 />
               </div>
-            </Form.Item>
-            <Form.Item label={t("settings.cleanupNow")}>
+            </SettingsFormItem>
+            <SettingsFormItem label={t("settings.cleanupNow")}>
               {/* 禁用原因写在按钮右侧而不是 Tooltip：两条禁用条件（未选保留期 / 未保存）都能一眼看到 */}
               <div
                 className="setting-anchor"
                 data-setting-id="app.cleanup_now"
                 style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
               >
-                <Button size="small" loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
+                <Button  loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
                   {t("settings.cleanupNow")}
                 </Button>
                 {cleanupBlock !== null && (
@@ -2007,33 +2022,33 @@ export default function SettingsPage() {
                   </Typography.Text>
                 )}
               </div>
-            </Form.Item>
-            <Form.Item label={t("settings.cleanupStatus")}>
+            </SettingsFormItem>
+            <SettingsFormItem label={t("settings.cleanupStatus")}>
               {/* 只读信息项（数据源 = get_cleanup_status）：**常驻渲染**，不因无记录而整行消失 */}
               <div className="setting-anchor" data-setting-id="app.cleanup_status">
                 <span className="dim" style={{ fontSize: 12.5 }}>
                   {cleanupStatusText()}
                 </span>
               </div>
-            </Form.Item>
+            </SettingsFormItem>
             {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：动作行 + 只读状态行，与保留期清理同一形态。
                 铁律「只删已有新格式段数据的旧文件」由后端把关（core/sessions/cleanup.rs），
                 界面负责把「必须保留 N 个」说出来 */}
-            <Form.Item label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
+            <SettingsFormItem label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
               <div
                 className="setting-anchor"
                 data-setting-id="app.legacy_history_cleanup"
                 style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
               >
-                <Button size="small" loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
+                <Button  loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
                   {t("settings.legacyHistoryPreview")}
                 </Button>
-                <Button size="small" danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
+                <Button  danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
                   {t("settings.legacyHistoryNow")}
                 </Button>
               </div>
-            </Form.Item>
-            <Form.Item label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
+            </SettingsFormItem>
+            <SettingsFormItem label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
               {/* 只读信息项（数据源 = preview_legacy_history_cleanup）：同样**常驻渲染**，
                   没有旧格式历史时也有话说（不是空行） */}
               <div className="setting-anchor" data-setting-id="app.legacy_history_status">
@@ -2041,40 +2056,40 @@ export default function SettingsPage() {
                   {legacyStatusText()}
                 </span>
               </div>
-            </Form.Item>
+            </SettingsFormItem>
           </div>
-        </Form>
+        </SettingsForm>
       ),
     },
     {
       key: "logs",
       labelKey: PAGE_LABEL_KEY.logs,
       body: draft && (
-        <Form layout="vertical">
-          <Form.Item label={t("settings.logLevel")} extra={t("settings.logLevelHint")}>
+        <SettingsForm>
+          <SettingsFormItem label={t("settings.logLevel")} extra={t("settings.logLevelHint")}>
             <div className="setting-anchor" data-setting-id="log.level">
               <Select
-                size="small"
+
                 className="w-narrow"
                 value={draft.log?.level ?? "info"}
                 onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
                 options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
               />
             </div>
-          </Form.Item>
+          </SettingsFormItem>
           {/* session_verbose 是进阶项：**整个 Form.Item** 包进锚点容器再加类隐藏（行留在原分组内）。
               不能在 Form.Item 内部加类：antd 的 label 与 control 是兄弟节点，只藏 control 会留下
               孤立标签 + 空控制行（与 approval.command_allowlist 同形） */}
           <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
-            <Form.Item label={t("settings.sessionVerbose")} extra={t("settings.sessionVerboseHint")}>
+            <SettingsFormItem label={t("settings.sessionVerbose")} extra={t("settings.sessionVerboseHint")}>
               <Switch
-                size="small"
+
                 checked={draft.log?.session_verbose ?? false}
                 onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
               />
-            </Form.Item>
+            </SettingsFormItem>
           </div>
-        </Form>
+        </SettingsForm>
       ),
     },
     {
@@ -2127,7 +2142,7 @@ export default function SettingsPage() {
               防御性写法：搜索框挂载时值恒为空、清除按钮不存在，故该保护当前不可构造验证 */}
           <Button
             type="text"
-            size="small"
+
             className="settings-nav-back"
             icon={<ArrowLeftOutlined />}
             aria-label={t("settings.backToWorkspace")}
@@ -2148,7 +2163,7 @@ export default function SettingsPage() {
             {/* combobox 语义挂在**输入框**上（aria-activedescendant 只有焦点元素会播报，挂无焦点的
                 listbox 上读屏不念）；结果列表只在搜索态存在，故 aria-expanded 直接跟 searching 走 */}
             <Input
-              size="small"
+
               allowClear
               role="combobox"
               aria-label={t("settings.searchPlaceholder")}
@@ -2239,7 +2254,7 @@ export default function SettingsPage() {
       <div className="settings-content">
         <div className="settings-actions">
           <span className="settings-actions-title">
-            {t("settings.title")} · {activePage ? t(activePage.labelKey) : ""}
+            {activePage ? t(activePage.labelKey) : t("settings.title")}
           </span>
           {anyDirty && <span className="settings-dirty-dot" title={t("settings.dirtyHint")} />}
           <div className="settings-actions-buttons">
@@ -2272,6 +2287,7 @@ export default function SettingsPage() {
       {/* 三选拦截：切页 / 返回工作区 / 页内 Esc（leaveIntent）与关窗退出（exitPending）共用这份文案与行为。
           Esc 走 antd Modal 默认行为 → onCancel = 留在原地（浮层优先，不平级返回）。 */}
       <Modal
+        className="settings-dialog"
         open={confirmOpen}
         title={t("settings.leaveTitle")}
         closable={false}
