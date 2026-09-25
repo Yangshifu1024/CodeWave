@@ -356,8 +356,10 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
     expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
     expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-highlight\)/);
-    // 写入后检查的两列网格类收回 app.css（不再用内联 style）
-    expect(appCss).toMatch(/\.postcheck-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(180px,\s*1fr\)\)/);
+    // 写入后检查改走共享表单行，不在半宽网格里再次压缩控件列。
+    expect(appCss).not.toContain(".postcheck-grid");
+    const settingsCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../features/panels/settings/settings-theme.css"), "utf8");
+    expect(settingsCss).toContain(".settings-row.settings-row-wide-control");
     // 已删除的 LSP 样式类不得残留
     expect(appCss).not.toContain(".lsp-budget-grid");
     expect(appCss).not.toContain(".validation-row");
@@ -839,9 +841,9 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
     // 「更新」行只剩自动更新开关（按钮不再在该行）
     const updatesAnchor = document.querySelector('[data-setting-id="ui.auto_update"]')!;
     expect(updatesAnchor.parentElement?.querySelector('[data-setting-id="app.check_updates"]')).toBeNull();
-    // 「即时生效」改挂在标题的括号里：不再作为行尾标注（flex 行 + 标题的 margin-right:auto
-    // 会把它推到最右侧，实际没人会看到），行内也不再有 .settings-instant
-    expect(document.body.textContent ?? "").toContain("更新（即时生效）");
+    // 自动更新与其他设置行一致：标题在左、开关在右，不重复显示即时生效文案。
+    expect(updatesAnchor.closest(".settings-row")?.textContent).toContain("启动时自动检查更新");
+    expect(updatesAnchor.closest(".settings-row")?.textContent).not.toContain("即时生效");
   });
 
   it("数据目录 / 日志目录 / 代码仓库 / 许可证四个入口走对应 IPC；失败就地提示且不离开设置页", async () => {
@@ -1716,7 +1718,7 @@ describe("设置页：会话保留期与清理", () => {
     await openPage("工作区与智能体");
 
     expect(buttonByText("立即清理").disabled).toBe(true);
-    expect(controlByLabel("立即清理").textContent).toContain("先选择保留期");
+    expect(controlByLabel("手动清理").textContent).toContain("先选择保留期");
     expect(calls.preview).toEqual([]); // 禁用态不可能发出预览
   });
 
@@ -1729,7 +1731,7 @@ describe("设置页：会话保留期与清理", () => {
     await pickRetention("30 天");
     await waitFor(() => expect(navDot("agent")).toBe(true));
     expect(buttonByText("立即清理").disabled).toBe(true);
-    expect(controlByLabel("立即清理").textContent).toContain("有未保存的改动，先保存");
+    expect(controlByLabel("手动清理").textContent).toContain("有未保存的改动，先保存");
 
     // 改回已保存值 → 恢复可点
     await pickRetention("7 天");

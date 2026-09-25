@@ -157,22 +157,14 @@ export function AboutSettings() {
           t("settings.aboutViewLicense"),
           () => void runAction("app.license", () => ipc.openUrl(LICENSE_URL)),
         )}
-        {/* 「即时生效」写进标题的括号里（instantApplySuffix）：本行是 flex 行、标题带 margin-right:auto，
-            标注挂行尾会被推到最右侧，看不见。 */}
-        <SettingsFormItem label={<>{t("settings.updates")}{t("settings.instantApplySuffix")}</>} extra={t("settings.updatesHint")}>
-          <div className="settings-update-row">
-            {/* 即时生效：开关直接写 localStorage（useAutoUpdateSetting），不进 draft 脏标记。
-                锚点（data-setting-id）供批③ 搜索定位：整行控件，不参与宽度三档。
-                手动「检查更新」按钮已上移到版本号一行（同一 flex 行样式）。 */}
-            <div className="setting-anchor" data-setting-id="ui.auto_update">
-              <Switch
-
-                checked={autoUpdate}
-                onChange={setAutoUpdate}
-                aria-label={t("settings.autoUpdateCheckbox")}
-              />
-            </div>
-            <span className="settings-update-label">{t("settings.autoUpdateCheckbox")}</span>
+        <SettingsFormItem label={t("settings.autoUpdateCheckbox")} extra={t("settings.updatesHint")}>
+          {/* 开关继续直接写 localStorage；文案与其他设置行一样放在左侧。 */}
+          <div className="setting-anchor" data-setting-id="ui.auto_update">
+            <Switch
+              checked={autoUpdate}
+              onChange={setAutoUpdate}
+              aria-label={t("settings.autoUpdateCheckbox")}
+            />
           </div>
         </SettingsFormItem>
       </SettingsForm>

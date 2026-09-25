@@ -126,18 +126,20 @@ export default {
     postWriteCommandPh: "e.g. npx eslint {file}",
     postWriteTimeout: "Timeout (seconds)",
     postWriteTailChars: "Output tail chars handed to the model",
+    agentShellSection: "Commands & prompts", agentCompactionSection: "Context compaction", agentCleanupSection: "Session cleanup", agentLegacyCleanupSection: "Legacy history",
     customPrompt: "Custom prompt (appended to system prompt)",
-    logLevel: "Log level", sessionVerbose: "Verbose session log",
-    shell: "Shell", shellHint: "Shell used to run commands; auto = detected at startup (cached in-process; restart the app after installing a new shell)",
+    logRecordingSection: "Logging", logLevel: "Log level", sessionVerbose: "Verbose session log",
+    shell: "Shell", shellHint: "Shell used to run commands. Auto detects it at startup; restart after installing a new Shell.",
     shellAuto: "Auto (recommended)", shellAutoWithDefault: "Auto (default: {{name}})",
     shellLimited: "(limited support)", shellDetectFailed: "Shell detection failed; only the auto option is shown",
     shellNotDetected: "The selected shell was not detected; execution will fall back to the auto-detected shell",
     shellNoPath: "This shell has no fixed executable path (e.g. WSL distros)",
     // Session retention and cleanup (docs/session-cleanup.md): dropdown / action button / read-only status row
     sessionRetention: "Session retention",
-    sessionRetentionHint: "Sessions older than this are cleaned up automatically (once at startup and once when settings are saved); last activity = last modified or last opened. Off by default.",
+    sessionRetentionHint: "Sessions past the retention period are cleaned up at startup and when settings are saved, based on the last open or modification time. Off by default.",
     cleanupNever: "Never",
     cleanupDays: "{{n}} days",
+    cleanupAction: "Manual cleanup",
     cleanupNow: "Clean up now",
     cleanupStatus: "Last cleanup",
     cleanupNeedRetention: "Choose a retention period first",
@@ -167,7 +169,7 @@ export default {
     // Legacy-format history cleanup (explicit entry point after segmented JSONL landed): preview / run / status row.
     // Iron rule: a legacy file with no new-format data is the ONLY copy — never delete it, and say how many were kept
     legacyHistoryCleanup: "Clean up legacy history",
-    legacyHistoryHint: "Legacy history can be safely deleted once it has been written in the new format; sessions that only have a legacy file are kept as-is (that file is the only copy of their history).",
+    legacyHistoryHint: "Only redundant legacy files with new-format data are removed; sole copies are kept.",
     legacyHistoryPreview: "Preview reclaimable",
     legacyHistoryNow: "Clean up legacy history now",
     legacyHistoryStatus: "Legacy history",
@@ -275,6 +277,7 @@ export default {
     mcpSave: "Save & reconnect",
     mcpTransportStdio: "stdio (local process)", mcpTransportHttp: "streamable_http (remote)",
     skillsHint: "Dirs: project .codewave/skills/ > user ~/.codewave/skills/, ~/.agents/skills/ & ~/.claude/skills/ > workspace .agents/skills/, .claude/skills/ > builtin",
+    skillsInstalled: "Installed skills", skillWhen: "When to use: ", skillToggle: "Enable skill {{name}}",
     reloadSkills: "Reload", skillsReloaded: "Reloaded, {{n}} skills in total", skillsReloadFailed: "Reload failed",
     // Skills empty state (batch ④ defect fix: it used to borrow sessions.empty, so an empty skill
     // list displayed “No sessions yet”)

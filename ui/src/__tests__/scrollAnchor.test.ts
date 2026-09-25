@@ -466,7 +466,7 @@ function seedTab(items: UiItem[], key = "s1", itemKeys?: string[]): void {
 const mount = () => render(createElement(App, null, createElement(ChatMessages)));
 
 describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => {
-  // 渲染期布局：.chat-messages 一屏 600px（内容 1000px），消息行按**兄弟顺序**每行 100px 排布。
+  // 渲染期布局：.chat-messages 一屏 600px（内容 1000px），参与文档流的消息行按**兄弟顺序**每行 100px 排布。
   // 行 rect 必须随 scrollTop 现算（真实浏览器行为），否则二次校正会被自己的桩骗成「已经命中」。
   const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
   const savedRect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
@@ -477,7 +477,8 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
     Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
       configurable: true,
       value(this: HTMLElement) {
-        // 行高按**兄弟顺序**（DOM 顺序）排布：批2 P3 起锚点身份是稳定键，从 data-key 推不出像素位置；
+        // 行高按**文档流中的兄弟顺序**排布：绝对定位的 overlay 滚动条不占行高；
+        // 批2 P3 起锚点身份是稳定键，从 data-key 推不出像素位置；
         // 按兄弟顺序算 = 前插更早内容后老行的内容偏移自然变大（正是真实的浏览器行为）。
         // 容器视口顶恒为 0（见文件头约定）：少了这条短路，容器自己也会按「兄弟序号 × ROW - scrollTop」
         // 编出一个假 rect，collectNodes 的 base 随之偏掉 -scrollTop，**所有消息的内容偏移整体漂移 scrollTop**
@@ -485,7 +486,10 @@ describe("ChatMessages 接线：标注 / 还原 / 懒加载二次校正", () => 
         if (this.classList?.contains("chat-messages")) return rect(0);
         const parent = this.parentElement;
         if (parent) {
-          const at = [...parent.children].indexOf(this);
+          const siblings = [...parent.children].filter((child) =>
+            !parent.classList.contains("chat-messages") || !child.classList.contains("chat-scrollbar"),
+          );
+          const at = siblings.indexOf(this);
           if (at >= 0) {
             const scroller = this.closest?.(".chat-messages") as HTMLElement | null;
             return rect(at * ROW - (scroller?.scrollTop ?? 0));

@@ -1616,25 +1616,20 @@ function SettingsPageController() {
       body: draft && (
         <>
           <SettingsForm>
-            {/* 写入后检查组：开关 + 命令 + 超时 + 输出尾字符 4 项合成一张 section 卡片
-                （[docs/settings-fullscreen-shell]，[docs/post-write-check-plan]）。hint 文本留在卡片外
-                （属于 section 标题性说明，不属于卡片内一组配置项） */}
-            <div className="hint" style={{ marginBottom: 10 }}>{t("settings.postWriteHint")}</div>
+            {/* 四项沿用设置页共用的左侧说明、右侧控件行；提示与开关一起阅读。 */}
             <div className="settings-section-card">
-              {/* 开关：Switch 无宽度档，锚点挂整行 */}
               <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
-                <SettingsFormItem style={{ marginBottom: 8 }}>
+                <SettingsFormItem label={t("settings.postWriteEnabled")} extra={t("settings.postWriteHint")}>
                   <Switch
                     checked={postWrite.enabled}
                     aria-label={t("settings.postWriteEnabled")}
                     onChange={(v) => patchPostWrite({ enabled: v })}
                   />
-                  <span style={{ marginInlineStart: 8 }}>{t("settings.postWriteEnabled")}</span>
                 </SettingsFormItem>
               </div>
-              {/* 命令：整行输入 + {file} 占位符与各技术栈示例说明 */}
+              {/* 命令使用宽控件列，保留 {file} 占位符说明。 */}
               <div className={anchorCls("post_write_check.command")} data-setting-id="post_write_check.command">
-                <SettingsFormItem label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
+                <SettingsFormItem className="settings-row-wide-control" label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
                   <Input
                     value={postWrite.command}
                     placeholder={t("settings.postWriteCommandPh")}
@@ -1642,34 +1637,30 @@ function SettingsPageController() {
                   />
                 </SettingsFormItem>
               </div>
-              {/* 超时 / 输出尾部字符：两项都是进阶项（窄档；行内网格类收回 app.css） */}
-              <div className="postcheck-grid">
-                <SettingsFormItem label={t("settings.postWriteTimeout")}>
-                  <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
-                    <InputNumber
-
-                      className="w-narrow"
-                      min={1}
-                      max={3600}
-                      value={postWrite.timeout_seconds}
-                      onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
-                    />
-                  </div>
-                </SettingsFormItem>
-                <SettingsFormItem label={t("settings.postWriteTailChars")}>
-                  <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
-                    <InputNumber
-
-                      className="w-narrow"
-                      min={100}
-                      max={100000}
-                      step={100}
-                      value={postWrite.tail_chars}
-                      onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
-                    />
-                  </div>
-                </SettingsFormItem>
-              </div>
+              {/* 数值项各占共享表单的一行，避免在半宽网格里再压缩控件列。 */}
+              <SettingsFormItem label={t("settings.postWriteTimeout")}>
+                <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
+                  <InputNumber
+                    className="w-narrow"
+                    min={1}
+                    max={3600}
+                    value={postWrite.timeout_seconds}
+                    onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
+                  />
+                </div>
+              </SettingsFormItem>
+              <SettingsFormItem label={t("settings.postWriteTailChars")}>
+                <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
+                  <InputNumber
+                    className="w-narrow"
+                    min={100}
+                    max={100000}
+                    step={100}
+                    value={postWrite.tail_chars}
+                    onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
+                  />
+                </div>
+              </SettingsFormItem>
             </div>
           </SettingsForm>
         </>
@@ -1898,34 +1889,33 @@ function SettingsPageController() {
       // （技能行：名称 / 来源 / 开关 / 删除）。
       body: draft && (
         <>
-          {/* 技能清单整张 section 卡片（[docs/settings-fullscreen-shell]）；锚点继续落在最外层
-              div 上，搜索命中定位与折叠收起都不受影响 */}
-          <div className="settings-section-card">
+          {/* 技能清单复用设置页的分组标题与卡片，保留搜索锚点及删除权限。 */}
+          <SettingsSection title={t("settings.skillsInstalled")} extra={
+            <Button loading={skillsBusy} onClick={() => void reloadSkills()}>{t("settings.reloadSkills")}</Button>
+          }>
             <div className="setting-anchor" data-setting-id="disabled_skills">
-              <div className="skills-toolbar">
-                <div className="hint">{t("settings.skillsHint")}</div>
-                <Button  loading={skillsBusy} onClick={() => void reloadSkills()}>
-                  {t("settings.reloadSkills")}
-                </Button>
-              </div>
-              {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} style={{ marginTop: 24 }} />}
+              <p className="settings-section-intro">{t("settings.skillsHint")}</p>
+              {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} className="settings-list-empty" />}
               {skills.map((s) => {
                 const builtin = s.origin === "<builtin>";
                 const label = originLabel(s.origin);
                 return (
                   <div className="skill-row" key={s.name}>
                     <div className="skill-info">
-                      <b>{s.name}</b>
-                      {builtin ? (
-                        <span className="skill-origin">{t("common.builtin")}</span>
-                      ) : (
-                        label && <span className="skill-origin" title={s.origin}>{label}</span>
-                      )}
-                      <span className="dim"> {s.description}</span>
-                      {s.whenToUse && <div className="dim small">when: {s.whenToUse}</div>}
+                      <div className="skill-info-head">
+                        <strong className="skill-name" title={s.name}>{s.name}</strong>
+                        {builtin ? (
+                          <span className="skill-origin">{t("common.builtin")}</span>
+                        ) : (
+                          label && <span className="skill-origin" title={s.origin}>{label}</span>
+                        )}
+                      </div>
+                      {s.description && <div className="skill-description" title={s.description}>{s.description}</div>}
+                      {s.whenToUse && <div className="skill-when" title={s.whenToUse}>{t("settings.skillWhen")}{s.whenToUse}</div>}
                     </div>
                     <div className="skill-actions">
                       <Switch
+                        aria-label={t("settings.skillToggle", { name: s.name })}
                         checked={!draft?.disabled_skills.includes(s.name)}
                         onChange={(v) => toggleSkill(s.name, !v)}
                       />
@@ -1933,16 +1923,15 @@ function SettingsPageController() {
                         <Popconfirm
                           title={t("settings.deleteSkillConfirm", { name: s.name })}
                           description={s.origin}
-                          okButtonProps={{ loading: deletingName === s.name }}
+                          okButtonProps={{ danger: true, loading: deletingName === s.name }}
                           onConfirm={() => void removeSkill(s.name)}
                         >
                           <Button
                             type="text"
-
                             danger
                             aria-label={t("settings.deleteSkill")}
                             icon={<DeleteOutlined />}
-                          />
+                          >{t("settings.deleteSkill")}</Button>
                         </Popconfirm>
                       )}
                     </div>
@@ -1950,7 +1939,7 @@ function SettingsPageController() {
                 );
             })}
             </div>
-          </div>
+          </SettingsSection>
         </>
       ),
     },
@@ -1958,73 +1947,60 @@ function SettingsPageController() {
       key: "agent",
       labelKey: PAGE_LABEL_KEY.agent,
       body: draft && (
-        <SettingsForm>
+        <SettingsForm className="settings-agent-form">
           {/* 「Shell 与提示词」组：shell 选择器 + 自定义提示词合成一张 section 卡片
               （[docs/settings-fullscreen-shell]） */}
-          <div className="settings-section-card">
+          <SettingsSection title={t("settings.agentShellSection")}>
             <SettingsFormItem label={t("settings.shell")} extra={t("settings.shellHint")}>
-              {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
-              <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
-                <Select
-
-                  className="w-mid"
-                  style={{ flexShrink: 0 }}
-                  value={draft.shell?.selection ?? "auto"}
-                  onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
-                  options={[
-                    {
-                      // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
-                      // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
-                      label:
-                        shells?.find((s) => s.auto)?.name !== undefined
-                          ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
-                          : t("settings.shellAuto"),
-                      value: "auto",
-                    },
-                    ...(shells ?? []).map((s) => ({
-                      label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
-                      value: s.id,
-                      title: s.path ?? s.name,
-                    })),
-                  ]}
-                />
-                {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
-                {(() => {
-                  const display = resolveShellDisplay(draft.shell?.selection ?? null, shells);
-                  if (!display) return null;
-                  return display.kind === "path" ? (
-                    <code
-                      title={display.text}
-                      style={{
-                        fontFamily: "var(--ws-font-mono)",
-                        fontSize: 12,
-                        color: "var(--ws-dim)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        minWidth: 0,
-                      }}
-                    >
-                      {display.text}
-                    </code>
-                  ) : (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t("settings.shellNoPath")}
-                    </Typography.Text>
-                  );
-                })()}
+              <div className="settings-field-stack">
+                {/* Shell 路径放在选择器下方，完整路径可换行查看。 */}
+                <div className="setting-anchor settings-shell-control" data-setting-id="shell.selection">
+                  <Select
+                    className="w-mid"
+                    value={draft.shell?.selection ?? "auto"}
+                    onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
+                    options={[
+                      {
+                        // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
+                        // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
+                        label:
+                          shells?.find((s) => s.auto)?.name !== undefined
+                            ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
+                            : t("settings.shellAuto"),
+                        value: "auto",
+                      },
+                      ...(shells ?? []).map((s) => ({
+                        label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
+                        value: s.id,
+                        title: s.path ?? s.name,
+                      })),
+                    ]}
+                  />
+                  {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
+                  {(() => {
+                    const display = resolveShellDisplay(draft.shell?.selection ?? null, shells);
+                    if (!display) return null;
+                    return display.kind === "path" ? (
+                      <code title={display.text} className="settings-shell-path">{display.text}</code>
+                    ) : (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {t("settings.shellNoPath")}
+                      </Typography.Text>
+                    );
+                  })()}
+                </div>
+                {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
+                {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
+                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                    {t("settings.shellNotDetected")}
+                  </Typography.Text>
+                )}
+                {shells === null && (
+                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                    {t("settings.shellDetectFailed")}
+                  </Typography.Text>
+                )}
               </div>
-              {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
-              {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                  {t("settings.shellNotDetected")}
-                </Typography.Text>
-              )}
-              {shells === null && (
-                <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                  {t("settings.shellDetectFailed")}
-                </Typography.Text>
-              )}
             </SettingsFormItem>
             <SettingsFormItem label={t("settings.customPrompt")}>
               {/* TextArea 整行（不参与宽度三档），只补锚点 */}
@@ -2040,12 +2016,12 @@ function SettingsPageController() {
                 />
               </div>
             </SettingsFormItem>
-          </div>
+          </SettingsSection>
           {/* 「压缩」组：压缩阈值 + 压缩超时（[docs/context-compaction]，[docs/settings-fullscreen-shell]） */}
-          <div className="settings-section-card">
+          <SettingsSection title={t("settings.agentCompactionSection")}>
             <SettingsFormItem label={t("settings.compactThreshold")}>
-              {/* Slider 是整行控件（不参与宽度三档）：批③ 去掉内联 320 像素宽，宽度随容器 */}
-              <div className="setting-anchor" data-setting-id="compact_threshold">
+              {/* Slider 与百分比共用右侧控件列。 */}
+              <div className="setting-anchor settings-slider-control" data-setting-id="compact_threshold">
                 <Slider
                   min={0.1}
                   max={0.9}
@@ -2053,6 +2029,7 @@ function SettingsPageController() {
                   value={draft.compact_threshold ?? 0.6}
                   onChange={(v) => patchDraft({ compact_threshold: v })}
                 />
+                <span className="settings-slider-value">{Math.round((draft.compact_threshold ?? 0.6) * 100)}%</span>
               </div>
             </SettingsFormItem>
             <SettingsFormItem label={t("settings.compactTimeout")}>
@@ -2067,10 +2044,10 @@ function SettingsPageController() {
                 />
               </div>
             </SettingsFormItem>
-          </div>
-          {/* 「会话清理」组：保留期 + 立即清理 + 清理状态 + 旧格式清理 + 旧格式状态（[docs/session-cleanup]）。
+          </SettingsSection>
+          {/* 「会话清理」组：保留期 + 立即清理 + 清理状态（[docs/session-cleanup]）。
               下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
-          <div className="settings-section-card">
+          <SettingsSection title={t("settings.agentCleanupSection")}>
             <SettingsFormItem label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
               <div className="setting-anchor" data-setting-id="sessions.retention_days">
                 <Select
@@ -2085,58 +2062,48 @@ function SettingsPageController() {
                 />
               </div>
             </SettingsFormItem>
-            <SettingsFormItem label={t("settings.cleanupNow")}>
-              {/* 禁用原因写在按钮右侧而不是 Tooltip：两条禁用条件（未选保留期 / 未保存）都能一眼看到 */}
-              <div
-                className="setting-anchor"
-                data-setting-id="app.cleanup_now"
-                style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
-              >
-                <Button  loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
-                  {t("settings.cleanupNow")}
-                </Button>
-                {cleanupBlock !== null && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {cleanupBlock === "none" ? t("settings.cleanupNeedRetention") : t("settings.cleanupUnsavedFirst")}
-                  </Typography.Text>
-                )}
+            <SettingsFormItem label={t("settings.cleanupAction")}>
+              <div className="settings-action-stack">
+                {/* 禁用原因紧随操作按钮；搜索锚点保持原有 id。 */}
+                <div className="setting-anchor settings-action-group" data-setting-id="app.cleanup_now">
+                  <Button loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
+                    {t("settings.cleanupNow")}
+                  </Button>
+                  {cleanupBlock !== null && (
+                    <Typography.Text type="secondary" className="settings-action-note">
+                      {cleanupBlock === "none" ? t("settings.cleanupNeedRetention") : t("settings.cleanupUnsavedFirst")}
+                    </Typography.Text>
+                  )}
+                </div>
+                <div className="setting-anchor settings-action-status" data-setting-id="app.cleanup_status" aria-live="polite">
+                  <span className="settings-action-status-label">{t("settings.cleanupStatus")}</span>
+                  <span>{cleanupStatusText()}</span>
+                </div>
               </div>
             </SettingsFormItem>
-            <SettingsFormItem label={t("settings.cleanupStatus")}>
-              {/* 只读信息项（数据源 = get_cleanup_status）：**常驻渲染**，不因无记录而整行消失 */}
-              <div className="setting-anchor" data-setting-id="app.cleanup_status">
-                <span className="dim" style={{ fontSize: 12.5 }}>
-                  {cleanupStatusText()}
-                </span>
-              </div>
-            </SettingsFormItem>
-            {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：动作行 + 只读状态行，与保留期清理同一形态。
+          </SettingsSection>
+          <SettingsSection title={t("settings.agentLegacyCleanupSection")}>
+            {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：操作与状态合在同一列。
                 铁律「只删已有新格式段数据的旧文件」由后端把关（core/sessions/cleanup.rs），
                 界面负责把「必须保留 N 个」说出来 */}
             <SettingsFormItem label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
-              <div
-                className="setting-anchor"
-                data-setting-id="app.legacy_history_cleanup"
-                style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
-              >
-                <Button  loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
-                  {t("settings.legacyHistoryPreview")}
-                </Button>
-                <Button  danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
-                  {t("settings.legacyHistoryNow")}
-                </Button>
+              <div className="settings-action-stack">
+                <div className="setting-anchor settings-action-group" data-setting-id="app.legacy_history_cleanup">
+                  <Button loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
+                    {t("settings.legacyHistoryPreview")}
+                  </Button>
+                  <Button danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
+                    {t("settings.legacyHistoryNow")}
+                  </Button>
+                </div>
+                {/* 只读预览状态常驻，并保持独立搜索锚点。 */}
+                <div className="setting-anchor settings-action-status" data-setting-id="app.legacy_history_status" title={t("settings.legacyHistoryStatusHint")} aria-live="polite">
+                  <span className="settings-action-status-label">{t("settings.legacyHistoryStatus")}</span>
+                  <span>{legacyStatusText()}</span>
+                </div>
               </div>
             </SettingsFormItem>
-            <SettingsFormItem label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
-              {/* 只读信息项（数据源 = preview_legacy_history_cleanup）：同样**常驻渲染**，
-                  没有旧格式历史时也有话说（不是空行） */}
-              <div className="setting-anchor" data-setting-id="app.legacy_history_status">
-                <span className="dim" style={{ fontSize: 12.5 }}>
-                  {legacyStatusText()}
-                </span>
-              </div>
-            </SettingsFormItem>
-          </div>
+          </SettingsSection>
         </SettingsForm>
       ),
     },
@@ -2145,29 +2112,27 @@ function SettingsPageController() {
       labelKey: PAGE_LABEL_KEY.logs,
       body: draft && (
         <SettingsForm>
-          <SettingsFormItem label={t("settings.logLevel")} extra={t("settings.logLevelHint")}>
-            <div className="setting-anchor" data-setting-id="log.level">
-              <Select
-
-                className="w-narrow"
-                value={draft.log?.level ?? "info"}
-                onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
-                options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
-              />
-            </div>
-          </SettingsFormItem>
-          {/* session_verbose 是进阶项：**整个 Form.Item** 包进锚点容器再加类隐藏（行留在原分组内）。
-              不能在 Form.Item 内部加类：antd 的 label 与 control 是兄弟节点，只藏 control 会留下
-              孤立标签 + 空控制行（与 approval.command_allowlist 同形） */}
-          <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
-            <SettingsFormItem label={t("settings.sessionVerbose")} extra={t("settings.sessionVerboseHint")}>
-              <Switch
-
-                checked={draft.log?.session_verbose ?? false}
-                onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
-              />
+          <SettingsSection title={t("settings.logRecordingSection")}>
+            <SettingsFormItem label={t("settings.logLevel")} extra={t("settings.logLevelHint")}>
+              <div className="setting-anchor" data-setting-id="log.level">
+                <Select
+                  className="w-narrow"
+                  value={draft.log?.level ?? "info"}
+                  onChange={(v) => patchDraft({ log: { ...draft.log, level: v } })}
+                  options={["trace", "debug", "info", "warn", "error"].map((v) => ({ label: v, value: v }))}
+                />
+              </div>
             </SettingsFormItem>
-          </div>
+            {/* 整个 Form.Item 保留在锚点容器里，使搜索命中覆盖标签与控件。 */}
+            <div className={anchorCls("log.session_verbose")} data-setting-id="log.session_verbose">
+              <SettingsFormItem label={t("settings.sessionVerbose")} extra={t("settings.sessionVerboseHint")}>
+                <Switch
+                  checked={draft.log?.session_verbose ?? false}
+                  onChange={(v) => patchDraft({ log: { ...draft.log, session_verbose: v } })}
+                />
+              </SettingsFormItem>
+            </div>
+          </SettingsSection>
         </SettingsForm>
       ),
     },
@@ -2221,7 +2186,7 @@ function SettingsPageController() {
               防御性写法：搜索框挂载时值恒为空、清除按钮不存在，故该保护当前不可构造验证 */}
           <Button
             type="text"
-
+            block
             className="settings-nav-back"
             icon={<ArrowLeftOutlined />}
             aria-label={t("settings.backToWorkspace")}

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
+const aboutSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../features/panels/AboutSettings.tsx"), "utf8");
 
 /** 取出选择器对应的规则体（[^}] 恰好停在规则右括号；选择器含空格时逐字面匹配） */
 function ruleBody(selector: string): string {
@@ -24,12 +25,15 @@ describe("辅助信息可见性：版式契约", () => {
     expect(body).toMatch(/color:\s*var\(--ws-dim\)/);
   });
 
-  it("设置·关于「更新」行标题不再带 auto margin（残留规则会让下一个加入的元素再次被推到最右）", () => {
-    expect(ruleBody(".settings-update-row .settings-update-label")).not.toMatch(/margin-right:\s*auto/);
+  it("设置·关于的自动更新说明位于共享表单标签，不被行尾边距推走", () => {
+    expect(aboutSrc).toContain('label={t("settings.autoUpdateCheckbox")}');
+    expect(aboutSrc).not.toContain("settings-update-label");
+    expect(appCss).not.toContain(".settings-update-label");
   });
 
-  it("「即时生效」行内标注类与规则已删除（形态改为项标题括号 settings.instantApplySuffix）", () => {
+  it("「即时生效」行内标注及关于页标题后缀均不再出现", () => {
     expect(appCss).not.toContain(".settings-instant");
+    expect(aboutSrc).not.toContain("instantApplySuffix");
   });
 
   it("统计摘要：容器可读（--ws-text-2），只有标签降级到 --ws-dim", () => {

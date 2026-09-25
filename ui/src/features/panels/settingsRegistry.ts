@@ -177,7 +177,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "app.logs_dir", labelKey: "settings.aboutLogsDir", page: "about", keywords: ["log", "logs", "日志", "日志目录", "诊断日志"] },
   { id: "app.repo", labelKey: "settings.aboutRepo", page: "about", keywords: ["repo", "repository", "github", "仓库", "代码仓库", "源码"] },
   { id: "app.license", labelKey: "settings.aboutLicense", page: "about", keywords: ["license", "mit", "许可", "许可证", "开源"] },
-  { id: "ui.auto_update", labelKey: "settings.updates", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
+  { id: "ui.auto_update", labelKey: "settings.autoUpdateCheckbox", page: "about", keywords: ["update", "auto update", "更新", "自动更新", "自动检查"] },
   { id: "app.check_updates", labelKey: "settings.checkForUpdates", page: "about", keywords: ["update", "更新", "检查更新"] },
 ];
 
@@ -448,6 +448,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
   "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
   "postWriteCommandPh", // → post_write_check.command 输入框占位
+  "skillsInstalled", // → disabled_skills 的列表分组标题
+  "skillWhen", // → disabled_skills 条目的适用场景前缀
+  "skillToggle", // → disabled_skills 条目的开关 aria-label
+  "agentShellSection", // → shell.selection 与 custom_prompt 的分组标题
+  "agentCompactionSection", // → compact_* 的分组标题
+  "agentCleanupSection", // → sessions.retention_days 与清理动作的分组标题
+  "agentLegacyCleanupSection", // → 旧格式历史清理与状态的分组标题
   "mcpConfigHead", // → MCP 页分段小标题：服务器配置（页名已由 PageKey 承担，段标题走轻量小标题）
   "mcpColState", // → 状态表列头：状态
   "mcpColTools", // → 状态表列头：工具数（该服务器暴露的工具个数）
@@ -543,6 +550,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   // —— 会话保留期与清理的从属文案（项已登记：sessions.retention_days / app.cleanup_now / app.cleanup_status）
   //    （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/25/26/27 条） ——
   "sessionRetentionHint", // → sessions.retention_days 的说明
+  "cleanupAction", // → 手动清理行的标题，动作仍由 app.cleanup_now 登记
   "cleanupNever", // → sessions.retention_days 选项：不清理（= null）
   "cleanupDays", // → sessions.retention_days 选项：N 天（带 {{n}}）
   "cleanupNeedRetention", // → 保留期为「不清理」时的按钮禁用原因（先选择保留期）
@@ -587,13 +595,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "legacyHistoryPreviewFailed", // → 预览失败的提示（本次不清理）
 
   // —— 日志的从属文案（项已登记：log.*） ——
+  "logRecordingSection", // → 日志记录分组标题
   "logLevelHint", // → log.level 的说明
   "sessionVerboseHint", // → log.session_verbose 的说明
 
   // —— 关于的从属文案（项已登记：ui.auto_update / app.check_updates / app.version / app.data_dir /
   // app.logs_dir / app.repo / app.license） ——
   "updatesHint", // → ui.auto_update 的说明
-  "autoUpdateCheckbox", // → ui.auto_update 的开关内联标签
   "aboutVersionHint", // → app.version 的说明
   "aboutSlogan", // → 身份块的一句简介（非设置项，无锚点）
   "aboutAppDataHint", // → app.data_dir 的说明
