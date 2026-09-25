@@ -35,3 +35,4 @@ stats/
 # 注意：git 取**最后匹配**的规则，故放行必须写在 `bin/` 之后（写前面会被覆盖）。
 !src-tauri/src/bin/
 !src-tauri/src/bin/**
+.agents/cache/
