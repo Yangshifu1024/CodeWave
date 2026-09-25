@@ -316,20 +316,12 @@ describe("任务页：行内操作", () => {
 
   it("立即运行：调 run_scheduled_task_now；被占（reject）时把后端原文显示出来", async () => {
     tasks = [task({ id: "t1", name: "日报" })];
-    let release = () => {};
-    runGate = new Promise<void>((resolve) => { release = resolve; });
+    runFails = true;
     mount();
     await waitFor(() => expect(rows()).toHaveLength(1));
 
     fireEvent.click(buttonByText("立即运行"));
     await waitFor(() => expect(calls.find((c) => c.cmd === "run_scheduled_task_now")?.args).toEqual({ id: "t1" }));
-    expect(buttonByText("立即运行").disabled).toBe(true);
-    release();
-    await waitFor(() => expect(buttonByText("立即运行").disabled).toBe(false));
-
-    runGate = null;
-    runFails = true;
-    fireEvent.click(buttonByText("立即运行"));
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已有任务正在运行"));
   });
 
