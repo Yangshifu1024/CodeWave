@@ -386,6 +386,8 @@ export default {
     contextThreshold: "thr",
     cacheHit: "hit",
     ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
+    // Popover detail (hover progress ring): current context / compression threshold / cache hit rate keys
+    ctxCurrent: "Current context",
     // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/composer-token-rate])
     rateRunning: "Running",
     rateTitle: "Generation rate (this run)",

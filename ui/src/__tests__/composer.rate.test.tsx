@@ -1,6 +1,6 @@
 // Composer 工具条速率段（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：
-// 与上下文/命中同行同段追加、顺序固定；「在跑」点随 running 显隐而终值保留；
-// 无数据（无 runMetrics / 本轮还没拿到耗时）整段不渲染——空态与命中态文本逐字不变。
+// 上下文/命中挪到进度圈 hover 的 Popover 后，速率独立住在 .toolbar-info 直接子级。
+// 「在跑」点随 running 显隐而终值保留；无数据（无 runMetrics / 本轮还没拿到耗时）整段不渲染。
 // Composer 独立挂载（与 composer.fileref.test.tsx 同一套环境种子）。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, act, cleanup, waitFor } from "@testing-library/react";
@@ -100,8 +100,8 @@ function seed(opts: {
   });
 }
 
-const label = () => document.querySelector(".ctx-label") as HTMLElement;
-const rateEl = () => document.querySelector(".ctx-label .ctx-rate") as HTMLElement | null;
+const toolbarInfo = () => document.querySelector(".toolbar-info") as HTMLElement;
+const rateEl = () => document.querySelector(".composer-toolbar .toolbar-info .ctx-rate") as HTMLElement | null;
 
 beforeAll(() => {
   Element.prototype.scrollTo = (Element.prototype as any).scrollTo ?? (() => {});
@@ -116,18 +116,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Composer 工具条速率段", () => {
-  it("命中段之后同行追加 ` · 18.2 tok/s`（同一段小字，不新增控件）", () => {
+describe("Composer 工具条速率段（搬到 .toolbar-info 直接子级）", () => {
+  it("有 breakdown + 命中 + 速率：速率渲染在 .toolbar-info 下，文本逐字不变", () => {
     seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 }, metrics: METRICS });
     render(<AntApp><Composer /></AntApp>);
 
-    expect(label().textContent).toContain("命中 50% · 18.2 tok/s");
-    // DOM 顺序：命中段在前、速率段在后（同一行内联）
-    const html = label().innerHTML;
-    expect(html.indexOf("ctx-hit")).toBeGreaterThan(-1);
-    expect(html.indexOf("ctx-hit")).toBeLessThan(html.indexOf("ctx-rate"));
-    // 速率段是 ctx-label 内的 span（不新增控件、不抢位）
-    expect(rateEl()?.tagName).toBe("SPAN");
+    const rate = rateEl();
+    expect(rate).toBeTruthy();
+    expect(rate?.parentElement?.className).toBe("toolbar-info");
+    expect(rate?.textContent).toContain("18.2 tok/s");
+    // 全局唯一（速率段不在 popover 内重复）
     expect(document.querySelectorAll(".composer-toolbar .ctx-rate").length).toBe(1);
   });
 
@@ -156,32 +154,30 @@ describe("Composer 工具条速率段", () => {
     const title = rateEl()?.getAttribute("title") ?? "";
     expect(title.split("\n")).toHaveLength(4);
     expect(title).not.toContain("工具等待");
-    expect(label().textContent).toContain("20.0 tok/s");
+    expect(rateEl()?.textContent).toContain("20.0 tok/s");
   });
 
   it("运行中数字旁有「在跑」点：结束后点消失而终值保留", async () => {
     seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 }, metrics: METRICS, running: true });
     render(<AntApp><Composer /></AntApp>);
 
-    expect(document.querySelector(".ctx-label .rate-dot")).toBeTruthy();
-    // 工具条内仍有任务在跑时不得残留运行态样式以外的差异：数字本身此刻就可见
-    expect(label().textContent).toContain("18.2 tok/s");
+    expect(document.querySelector(".composer-toolbar .toolbar-info .rate-dot")).toBeTruthy();
+    expect(rateEl()?.textContent).toContain("18.2 tok/s");
 
     act(() => {
       useRun.setState((s) => {
         s.tabs["s1"].running = false;
       });
     });
-    await waitFor(() => expect(document.querySelector(".ctx-label .rate-dot")).toBeFalsy());
-    expect(label().textContent).toContain("18.2 tok/s"); // 终值保留（不随 running 一起消失）
+    await waitFor(() => expect(document.querySelector(".composer-toolbar .toolbar-info .rate-dot")).toBeFalsy());
+    expect(rateEl()?.textContent).toContain("18.2 tok/s"); // 终值保留（不随 running 一起消失）
   });
 
-  it("无 breakdown（空态）与有命中但本轮无计数时都不出现 tok/s，空态文本逐字不变", () => {
+  it("无 breakdown（空态）时 .toolbar-info 为空，不出现 tok/s", () => {
     seed(); // 无 breakdown / 无 usage / 无 runMetrics
     const { unmount } = render(<AntApp><Composer /></AntApp>);
-    expect(label().textContent?.trim()).toBe("上下文 —");
-    expect(label().textContent).not.toContain("tok/s");
     expect(rateEl()).toBeFalsy();
+    expect(toolbarInfo()?.textContent?.trim() ?? "").toBe("");
     unmount();
 
     // 有明细与命中段、但本轮还没收到带耗时的 usage 帧（genMs = 0）→ 仍然不渲染速率段
@@ -191,8 +187,6 @@ describe("Composer 工具条速率段", () => {
       metrics: { output: 0, genMs: 0, steps: 0, ttftMs: null, toolMs: 0 },
     });
     render(<AntApp><Composer /></AntApp>);
-    expect(label().textContent).toContain("命中 50%");
-    expect(label().textContent).not.toContain("tok/s");
     expect(rateEl()).toBeFalsy();
   });
 
@@ -203,7 +197,6 @@ describe("Composer 工具条速率段", () => {
       metrics: { output: 0, genMs: 8000, steps: 1, ttftMs: 200, toolMs: 0 },
     });
     render(<AntApp><Composer /></AntApp>);
-    expect(label().textContent).not.toContain("tok/s");
     expect(rateEl()).toBeFalsy();
   });
 });

@@ -380,6 +380,8 @@ export default {
     contextThreshold: "阈",
     cacheHit: "命中",
     ctxTitle: "上下文占用 · 自动压缩阈值 · 缓存命中率",
+    // Popover 详情（hover 进度圈弹出）：当前上下文 / 压缩阈值 / 缓存命中 三行键
+    ctxCurrent: "当前上下文",
     // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/composer-token-rate]）
     rateRunning: "在跑",
     rateTitle: "本轮生成速率",

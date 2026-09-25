@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { App, BorderBeam, Button, Dropdown, Image, Input, Popover } from "antd";
+import { App, BorderBeam, Button, Dropdown, Image, Input, Popover, Progress } from "antd";
 import type { MenuProps } from "antd";
 import {
   ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined,
@@ -17,7 +17,7 @@ import type { ApprovalMode, EffortLevel, GoalState, GoalStatus } from "../../ipc
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { baseName } from "../../utils/path";
 import { GOAL_STATUS_DEFAULT, GOAL_STATUS_KEYS } from "../../utils/goal";
-import { cacheHitRate, contextTier, hitRateTier } from "../../stores/runFrames";
+import { cacheHitRate, contextTier, hitRateTier, type ContextTier } from "../../stores/runFrames";
 import { formatInt, formatMs, formatRate, tokPerSec } from "./composerMetrics";
 import { ipc } from "../../ipc/client";
 import { listenFileDrop } from "../../ipc/dragdrop";
@@ -511,21 +511,25 @@ export default function Composer() {
 
   // ---------- 工具条上下文/命中率显示 ----------
 
-  // 阈值合法性（与后端 clamp(0.05,0.95) 同域）：非法时不显示阈值段，且百分比保持中性色（不臆测风险）
+  // 阈值合法性（与后端 clamp(0.05,0.95) 同域）：非法时圈显示中性 ok（不臆测风险），popover 不显示阈值段
   const thresholdValid = Number.isFinite(compactThreshold) && compactThreshold > 0 && compactThreshold <= 1;
-  const ctxTier = thresholdValid && active.breakdown ? contextTier(active.breakdown.ratio, compactThreshold) : "low";
+  const ctxTier: ContextTier = thresholdValid && active.breakdown
+    ? contextTier(active.breakdown.ratio, compactThreshold)
+    : "ok";
   const hitTier = cacheHit != null ? hitRateTier(cacheHit) : null;
-  const ctxPctClass = ctxTier === "high" ? "ctx-pct danger" : ctxTier === "medium" ? "ctx-pct warn" : "ctx-pct";
-  const ctxHitClass = hitTier
-    ? `ctx-hit ${hitTier === "ok" ? "ok" : hitTier === "yellow" ? "yellow" : hitTier === "warn" ? "warn" : "danger"}`
-    : "ctx-hit";
   const hitPct = cacheHit != null ? `${Math.round(cacheHit * 100)}%` : "";
-  // 悬浮说明：占用/阈值/命中率三项口径（title 是窄窗口截断时的全量信息兜底）
+  // 悬浮说明（窄窗口截断时的全量信息兜底）
   const ctxTitle = active.breakdown
     ? `${t("composer.ctxTitle")}\n${t("app.context")}: ${contextPct}%（${active.breakdown.total_tokens} / ${active.breakdown.context_window} tokens）`
       + (thresholdValid ? `\n${t("settings.compactThreshold")}: ${thresholdPct}%` : "")
       + (cacheHit != null ? `\n${t("composer.cacheHit")}: ${hitPct}（${active.usage?.cacheRead ?? 0} / ${hitDenom}）` : "")
     : t("app.context");
+  // 进度圈 strokeColor 按档取色（4 档全彩，红橙黄绿——与 AGENTS.md 「色彩强度映射风险等级」一致）
+  const ctxProgressColor =
+    ctxTier === "danger" ? "var(--ws-err)" :
+    ctxTier === "warn" ? "var(--ws-warn)" :
+    ctxTier === "yellow" ? "#fadb14" :  // 黄：antd 标准 yellow-5，与 RB 配额黄同源
+    "var(--ws-ok)";                       // ok：绿
 
   // ---------- 本轮生成速率（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)） ----------
 
@@ -921,49 +925,68 @@ export default function Composer() {
               )}
             </div>
             {/* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原先住在 .toolbar-right 内，
-                被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。 */}
+                被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。
+                本轮把上下文/命中挪到进度圈 hover 的 Popover 里，.toolbar-info 只剩速率段；
+                进度圈 + 压缩按钮挪到 .toolbar-right 原压缩按钮处。 */}
             <div className="toolbar-info">
-              <span className="ctx-label" title={ctxTitle}>
-                {active.breakdown ? (
-                  <>
-                    {/* 首个原子段（上下文 + 阈值括号）内部不换行；窄窗口只在下面的 <wbr> 处折行
-                        （[docs/composer-toolbar-context-hit-rate](../../../../docs/composer-toolbar-context-hit-rate.md) §9） */}
-                    <span className="ctx-seg">
-                      {t("app.context")}{" "}
-                      <span className={ctxPctClass}>{contextPct}%</span>
-                      {`（${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
-                      {thresholdValid && <>{" · "}{t("composer.contextThreshold")} {thresholdPct}%</>}
-                      {"）"}
-                    </span>
-                    {/* 折行点：<wbr> 是零字符断点，textContent 逐字不变；分隔符包进 .ctx-sep（nowrap）后，
-                        断点只剩 <wbr> 一处——否则「 · 」本身也是断行机会、会被甩到下一行行首 */}
-                    {cacheHit != null && (
-                      <>
-                        <span className="ctx-sep">{" · "}</span>
-                        <wbr />
-                        <span className={ctxHitClass}>{`${t("composer.cacheHit")} ${hitPct}`}</span>
-                      </>
-                    )}
-                    {rate != null && (
-                      // 与上下文/命中同属一段小字（不新增控件、不抢位）；「在跑」点仅在运行中渲染，
-                      // 运行结束后消失而数值保留（AC-7）
-                      <>
-                        <span className="ctx-sep">{" · "}</span>
-                        <wbr />
-                        <span className="ctx-rate" title={rateTitle}>
-                          {`${formatRate(rate)} tok/s`}
-                          {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
-                        </span>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <>{t("app.context")} —</>
-                )}
-              </span>
+              {rate != null && (
+                // 「在跑」点仅在运行中渲染，运行结束后消失而数值保留（AC-7）
+                <span className="ctx-rate" title={rateTitle}>
+                  {`${formatRate(rate)} tok/s`}
+                  {active.running && <span className="rate-dot" title={t("composer.rateRunning")} />}
+                </span>
+              )}
             </div>
             <div className="toolbar-right">
-              <CompactButton className="tb-compact-btn" />
+              {/* 进度圈 = 上下文占用可视化入口（替换原 CompactButton 位），hover 弹 Popover 显示
+                  上下文 / 阈值 / 命中 / 压缩操作。圈心 % 数字，环 stroke 按 4 档（红橙黄绿）切色。 */}
+              <Popover
+                placement="top"
+                trigger="hover"
+                arrow={false}
+                content={
+                  <div className="ctx-popover">
+                    {active.breakdown ? (
+                      <>
+                        <div className="ctx-popover-row">
+                          <span className="ctx-popover-label">{t("composer.ctxCurrent")}</span>
+                          <span className="ctx-popover-value">
+                            {`${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
+                          </span>
+                          <span className="ctx-popover-pct">{contextPct}%</span>
+                        </div>
+                        {thresholdValid && (
+                          <div className="ctx-popover-row">
+                            <span className="ctx-popover-label">{t("settings.compactThreshold")}</span>
+                            <span className="ctx-popover-value">{`${thresholdPct}%`}</span>
+                          </div>
+                        )}
+                        {cacheHit != null && (
+                          <div className="ctx-popover-row">
+                            <span className="ctx-popover-label">{t("composer.cacheHit")}</span>
+                            <span className="ctx-popover-value">{hitPct}</span>
+                            <span className="ctx-popover-meta">{`（${active.usage?.cacheRead ?? 0} / ${hitDenom}）`}</span>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="ctx-popover-empty">{t("app.context")} —</div>
+                    )}
+                    <CompactButton className="ctx-popover-compact-btn" />
+                  </div>
+                }
+              >
+                <span className="ctx-progress-wrap" title={ctxTitle}>
+                  <Progress
+                    type="dashboard"
+                    percent={contextPct}
+                    size={20}
+                    strokeColor={ctxProgressColor}
+                    showInfo={false}
+                    className={`ctx-progress ctx-tier-${ctxTier}`}
+                  />
+                </span>
+              </Popover>
               <Dropdown menu={modelMenu} trigger={["click"]}>
                 <Button
                   type="text"

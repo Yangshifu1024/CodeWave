@@ -315,15 +315,18 @@ export function cacheHitRate(
   return denom > 0 ? u.cacheRead / denom : null;
 }
 
-/** 工具条上下文占用档（相对自动压缩阈值）：high = 已达阈值（红）/ medium = 阈值 70% 以上（橙）/ low = 默认。 */
-export type ContextTier = "low" | "medium" | "high";
+/** 工具条上下文占用档（相对自动压缩阈值，4 档映射颜色强度——红橙黄绿）：
+   ok = 阈值 50% 以下（绿，安全）/ yellow = 50-70%（黄，注意）/
+   warn = 70-100%（橙，需注意）/ danger = 已达阈值（红，危险）。 */
+export type ContextTier = "ok" | "yellow" | "warn" | "danger";
 
 /** 上下文占用分档：判定用原始 ratio（不用展示值），避免「显示 60% 却不显红」。 */
 export function contextTier(ratio: number, threshold: number): ContextTier {
-  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) return "low";
-  if (ratio >= threshold) return "high";
-  if (ratio >= threshold * 0.7) return "medium";
-  return "low";
+  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) return "ok";
+  if (ratio >= threshold) return "danger";
+  if (ratio >= threshold * 0.7) return "warn";
+  if (ratio >= threshold * 0.5) return "yellow";
+  return "ok";
 }
 
 /** 缓存命中率四档着色：ok ≥99% / yellow 95–99% / warn 90–95% / danger <90%。 */
