@@ -416,6 +416,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "vSaveBlocked", // 保存被拦前缀
 
   // —— 网络与连接的从属文案（项已登记：network.proxy / network.allow_private_network） ——
+  "allowPrivateDesc", // → network.allow_private_network 的说明
   "proxyNone", // → network.proxy 模式卡片
   "proxySystem", // → network.proxy 模式卡片
   "proxyManual", // → network.proxy 模式卡片

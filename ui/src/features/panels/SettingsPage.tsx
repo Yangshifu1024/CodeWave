@@ -1419,10 +1419,9 @@ function SettingsPageController() {
           {/* 代理模式组：模式三选一卡片 + 手动地址（同一项的子字段），合成一张 section 卡片
               （[docs/settings-fullscreen-shell]，[docs/network-proxy-settings]） */}
           <div className="settings-section-card">
-            <SettingsFormItem label={t("settings.proxyMode")}>
+            <SettingsFormItem label={t("settings.proxyMode")} className="settings-row-proxy-mode">
               {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
               <div className="setting-anchor" data-setting-id="network.proxy">
-                {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
                 <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
                   <div className="proxy-mode-list">
                     {([
@@ -1431,7 +1430,6 @@ function SettingsPageController() {
                       ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
                     ] as const).map(([mode, title, desc]) => (
                       <div key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
-                        {/* 整卡可点：主区（标题 + 说明 + 回显）是 label，点哪都能选中该模式 */}
                         <label className="proxy-mode-main">
                           <div className="proxy-mode-head">
                             <Radio value={mode} />
@@ -1447,41 +1445,40 @@ function SettingsPageController() {
                             </div>
                           )}
                         </label>
-                        {/* 自定义模式独有的地址输入：放进卡片**内部**（不再单独占一行漂在卡片下方）。
-                            label 与输入框是字段区自己的，不嵌在外层 label 里（label 不能嵌 label） */}
-                        {mode === "manual" && proxyMode === "manual" && (
-                          <div className="proxy-mode-field">
-                            <SettingsFormItem
-                              label={t("settings.proxyUrl")}
-                              extra={t("settings.proxyUrlHint")}
-                              validateStatus={proxyUrlInvalid ? "error" : undefined}
-                              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
-                            >
-                              <Input
-
-                                className="w-wide"
-                                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                                value={proxyUrl}
-                                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
-                              />
-                            </SettingsFormItem>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>
                 </Radio.Group>
+                {proxyMode === "manual" && (
+                  <div className="proxy-mode-field">
+                    <SettingsFormItem
+                      label={t("settings.proxyUrl")}
+                      extra={t("settings.proxyUrlHint")}
+                      validateStatus={proxyUrlInvalid ? "error" : undefined}
+                      help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
+                    >
+                      <Input
+                        className="w-wide"
+                        placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                        value={proxyUrl}
+                        onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+                      />
+                    </SettingsFormItem>
+                  </div>
+                )}
               </div>
             </SettingsFormItem>
           </div>
-          {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
-          <SettingsSection title={t("settings.allowPrivate")}>
-            <SettingsFormItem>
+          <div className="settings-section-card">
+            <SettingsFormItem
+              label={t("settings.allowPrivate")}
+              settingDescription={t("settings.allowPrivateDesc")}
+            >
               <div className="setting-anchor" data-setting-id="network.allow_private_network">
                 <Switch checked={draft.network.allow_private_network} onChange={(v) => patchDraft({ network: { allow_private_network: v } })} />
               </div>
             </SettingsFormItem>
-          </SettingsSection>
+          </div>
         </SettingsForm>
       ),
     },

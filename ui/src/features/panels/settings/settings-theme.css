@@ -230,6 +230,71 @@
 .settings-theme-option-label { color: var(--ws-text-1); font-size: var(--settings-field-title-size); }
 .settings-theme-root .settings-theme-option:has(.ant-radio-checked) { border-color: var(--ws-accent); }
 
+/* Proxy mode needs the full settings-row width: keep the label above its equal-width choices. */
+.settings-theme-root .settings-row.settings-row-proxy-mode > .ant-form-item-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+.settings-theme-root .settings-row.settings-row-proxy-mode > .ant-form-item-row > .ant-form-item-label,
+.settings-theme-root .settings-row.settings-row-proxy-mode > .ant-form-item-row > .ant-form-item-control {
+  width: 100%;
+  max-width: 100%;
+  flex: 0 0 100%;
+}
+.settings-theme-root .settings-row.settings-row-proxy-mode > .ant-form-item-row > .ant-form-item-control .ant-form-item-control-input-content {
+  justify-content: flex-start;
+}
+.settings-theme-root .proxy-mode-list {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.settings-theme-root .proxy-mode-card {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  min-height: 132px;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--ws-border);
+  border-radius: 12px;
+  background: var(--ws-bg-main);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.settings-theme-root .proxy-mode-card:hover:not(.active) { border-color: var(--ws-text-2); }
+.settings-theme-root .proxy-mode-card.active { background: var(--ws-panel); }
+.settings-theme-root .proxy-mode-main { display: block; flex: 1; }
+.settings-theme-root .proxy-mode-head { display: flex; align-items: center; gap: 10px; }
+.settings-theme-root .proxy-mode-title {
+  color: var(--ws-text-1);
+  font-size: var(--settings-field-title-size);
+  font-weight: 600;
+}
+.settings-theme-root .proxy-mode-desc {
+  margin: 8px 0 0 28px;
+  color: var(--ws-text-2);
+  font-size: var(--settings-field-description-size);
+  line-height: 1.45;
+}
+.settings-theme-root .proxy-mode-echo {
+  margin: 8px 0 0 28px;
+  overflow-wrap: anywhere;
+  color: var(--ws-text-2);
+  font-family: var(--ws-font-mono);
+  font-size: var(--settings-metadata-size);
+}
+.settings-theme-root .proxy-mode-field {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ws-border);
+}
+.settings-theme-root .proxy-mode-field .settings-row { margin: 0; padding: 0; border: 0; }
+.settings-theme-root .proxy-mode-field .ant-form-item-label { padding-bottom: 2px; }
+
 /* List rows share the same type scale and reserve space for actions. */
 .settings-theme-root .skill-row { min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--ws-border); }
 .settings-theme-root .skill-row:last-child { border-bottom: 0; }
@@ -482,4 +547,5 @@
   .settings-theme-root .settings-provider-model-details { width: 100%; flex-wrap: wrap; }
   .settings-theme-root .settings-provider-model-limits { white-space: normal; }
   .settings-theme-root .settings-provider-card .ant-card-actions > li > span { padding-inline: 6px; }
+  .settings-theme-root .proxy-mode-list { grid-template-columns: minmax(0, 1fr); }
 }

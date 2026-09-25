@@ -104,7 +104,7 @@ export default {
     fontReset: "Reset to default",
     approvalEnabled: "Dangerous command confirmation dialog", confirmOutside: "Confirm writes creating paths outside workspace",
     confirmPush: "Confirm before git push", autoConfirm: "Auto-confirm recommended option after 5 minutes", autoConfirmHint: "Checked: approvals auto-approve after 5 minutes without response; unchecked: wait for your choice indefinitely",
-    allowPrivate: "Allow private network access (local models/gateways)",
+    allowPrivate: "Allow private network access (local models/gateways)", allowPrivateDesc: "When enabled, the app can connect to model services and gateways on your local network.",
     proxyMode: "Proxy mode",
     proxyNone: "No proxy", proxyNoneDesc: "All app requests connect directly; no proxy (update checks still follow the system proxy for now)",
     proxySystem: "System proxy", proxySystemDesc: "Follow the operating system proxy settings (probed once on save)",

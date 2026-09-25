@@ -103,7 +103,7 @@ export default {
     approvalEnabled: "危险命令确认弹窗", confirmOutside: "工作区外新建路径时确认", confirmPush: "git push 前确认",
     autoConfirm: "5 分钟后自动确认推荐选项", autoConfirmHint: "勾选：审批 5 分钟无响应自动允许；不勾选：始终等待你的选择",
     cmdAllowlist: "命令白名单（始终允许的命令）", cmdAllowlistCwd: "生效目录",
-    allowPrivate: "允许访问内网地址（本地模型/网关）",
+    allowPrivate: "允许访问内网地址（本地模型/网关）", allowPrivateDesc: "启用后，应用可连接同一局域网内的模型服务和网关。",
     proxyMode: "代理模式",
     proxyNone: "无代理", proxyNoneDesc: "应用请求全部直连，不使用任何代理（更新检查暂仍跟随系统代理）",
     proxySystem: "系统代理", proxySystemDesc: "跟随操作系统的代理设置（保存时探测一次）",

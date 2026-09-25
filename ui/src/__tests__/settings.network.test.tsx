@@ -119,6 +119,18 @@ describe("设置页网络页签：代理模式", () => {
     expect(document.body.textContent ?? "").toContain("当前检测：http://127.0.0.1:9999");
   });
 
+  it("内网访问标题、说明和开关归在同一设置行，切换后正常保存", async () => {
+    await openNetworkTab();
+    const title = screen.getByText("允许访问内网地址（本地模型/网关）");
+    const row = title.closest(".settings-row");
+    expect(row?.textContent).toContain("启用后，应用可连接同一局域网内的模型服务和网关。");
+    const toggle = row?.querySelector('[role="switch"]');
+    expect(toggle).toBeTruthy();
+    fireEvent.click(toggle!);
+    await clickSaveAndSettle();
+    expect(savedConfigs[0].network.allow_private_network).toBe(true);
+  });
+
   it("切「无代理」保存 → proxy = { mode: none, url: '' }", async () => {
     await openNetworkTab();
     fireEvent.click(cardByTitle("无代理").querySelector(".ant-radio-input") as HTMLElement);

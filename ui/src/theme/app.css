@@ -1503,31 +1503,5 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 }
 .assistant .md .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
 
-/* ---------- 设置·网络：代理模式卡片（heroui radio-group 风格：整卡可点、选中描边） ---------- */
-.proxy-mode-list {
-  display: flex; flex-direction: column; gap: 8px; max-width: 560px;
-  /* [docs/proxy-mode-title-invisible](../../../docs/proxy-mode-title-invisible.md)：antd 6 在 `.ant-radio-group`
-     上设了 `font-size: 0`（消除 inline-block 空白间隙），本列表整棵子树都挂在它内 —— 不在这里还原字号，
-     凡未显式声明 font-size 的自定义内容（如 .proxy-mode-title）都会继承成 0 号字而肉眼看不出
-     （DOM 里有文本、DOM 断言因此全绿，只在真实渲染里消失）。 */
-  font-size: var(--ws-font-size);
-}
-.proxy-mode-card {
-  display: block; padding: 10px 12px; border: 1px solid var(--ws-border); border-radius: 8px;
-  cursor: pointer; transition: border-color 0.15s, background 0.15s;
-}
-.proxy-mode-card:hover { border-color: var(--ws-accent); }
-.proxy-mode-card.active { border-color: var(--ws-accent); background: var(--ws-panel); }
-.proxy-mode-head { display: flex; align-items: center; gap: 8px; }
-.proxy-mode-title { font-weight: 600; color: var(--ws-text-1); }
-.proxy-mode-desc { margin: 4px 0 0 24px; font-size: 12px; color: var(--ws-dim); }
-.proxy-mode-echo {
-  margin: 6px 0 0 24px; font-size: 12px; color: var(--ws-dim);
-  font-family: var(--ws-font-mono); word-break: break-all;
-}
-/* 卡片主区（标题 + 说明 + 回显）：整块可点选中该模式；子字段区在它**外面**（label 不能嵌 label） */
-.proxy-mode-main { display: block; }
-/* 自定义模式独有的代理地址区：留在卡片内部，与说明文字左对齐（缩进 24px 同 .proxy-mode-desc） */
-.proxy-mode-field { margin: 10px 0 0 24px; }
-.proxy-mode-field .ant-form-item { margin-bottom: 0; }
-.proxy-mode-field .ant-form-item-label { padding-bottom: 2px; }
+/* antd 6 sets radio-group font-size to zero to remove inline-block whitespace. Restore text sizing. */
+.proxy-mode-list { font-size: var(--ws-font-size); }
