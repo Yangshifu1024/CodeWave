@@ -164,6 +164,23 @@ describe("Composer 工具条上下文进度圈样式契约", () => {
     expect(appCss).not.toMatch(/\.ctx-pct\b/);
     expect(appCss).not.toMatch(/\.ctx-hit\b/);
   });
+
+  it(".toolbar-info 在 medium/narrow 下不被 display:none（上下文/命中迁到 Popover 后只剩速率段，整块折叠 = 速率消失；[fix/composer-toolbar-and-anthropic-cache]）", () => {
+    // 不能有任何 .composer-card[data-narrow=…] .toolbar-info { display: none } 这类规则
+    // ——“折叠整块”会被 happy-dom 看不到，但选择器文案还在 CSS 中同样会让「medium 档下速度“消失”」重演。
+    const re = /\.composer-card\[data-narrow="(medium|narrow)"\]\s+\.toolbar-info[^{]*\{\s*display:\s*none\s*[;}]/;
+    expect(appCss).not.toMatch(re);
+  });
+
+  it(".queue-panel 与 .composer 同公式的 15% 边距（[fix/queue-panel-width-and-drag]）", () => {
+    // 规则：.queue-panel { margin: 0 15% 8px; }—— 与 .composer 0 15% 同公式，宽度字面同步。
+    // 拒“0 16px”这种与 composer 不同公式的写法（窗口越宽越错位）。
+    const queuePanelBody = ruleBody(".queue-panel");
+    expect(queuePanelBody).toMatch(/margin:\s*0\s+15%\s+8px/);
+    // 反向钉死：不得出现以前那套“固定 16px”边距
+    const oldForm = /\.queue-panel\s*\{[^}]*margin:\s*0\s+16px/;
+    expect(appCss).not.toMatch(oldForm);
+  });
 });
 
 describe("Composer 工具条上下文进度圈结构契约", () => {
