@@ -516,6 +516,41 @@ describe("App 渲染冒烟", () => {
     expect((document.querySelector(".settings-nav") as HTMLElement).style.width).toBe(tasksNavWidth);
   });
 
+  it("设置/任务页顶沿与 Header 底沿对齐（AppShell 内层 Layout 改 flex:1 后回归）", async () => {
+    await mountApp();
+
+    // 拉满窗口宽度让 happy-dom 给出确定值：让左栏拖到非默认值（贴近边界的偏移值更能放大任何残余子像素误差）
+    useUi.setState({ navWidth: 480 });
+    await clickIconBtn("设置");
+    await waitFor(() => expect(document.querySelector(".settings-shell")).toBeTruthy());
+
+    const header = document.querySelector(".toolbar") as HTMLElement | null;
+    const shell = document.querySelector(".settings-shell") as HTMLElement | null;
+    expect(header).toBeTruthy();
+    expect(shell).toBeTruthy();
+    const headerRect = header!.getBoundingClientRect();
+    const shellRect = shell!.getBoundingClientRect();
+    // 顶部对齐断言：容差 1px（happy-dom 无 subpixel，多平台仍保留小窗口以应对 jsdom/CI 抖动）
+    expect(Math.abs(shellRect.top - headerRect.bottom)).toBeLessThanOrEqual(1);
+
+    // 任务页：覆盖页切换后顶沿仍贴 Header 底沿
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector(".settings-shell")).toBeFalsy());
+    useUi.setState({ tasksOpen: true });
+    await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeTruthy());
+    const tasksShell = document.querySelector(".tasks-shell") as HTMLElement | null;
+    const tasksRect = tasksShell!.getBoundingClientRect();
+    expect(Math.abs(tasksRect.top - headerRect.bottom)).toBeLessThanOrEqual(1);
+
+    // 默认左栏宽（280）再走一次：默认状态下也不该出现错位
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeFalsy());
+    useUi.setState({ navWidth: 280, settingsOpen: true });
+    await waitFor(() => expect(document.querySelector(".settings-shell")).toBeTruthy());
+    const shell2 = document.querySelector(".settings-shell") as HTMLElement | null;
+    expect(Math.abs(shell2!.getBoundingClientRect().top - headerRect.bottom)).toBeLessThanOrEqual(1);
+  });
+
   it("设置：MCP 页的结构化编辑器与技能页的列表各自渲染（拆页后不再同页）", async () => {
     await mountApp();
     await clickIconBtn("设置");

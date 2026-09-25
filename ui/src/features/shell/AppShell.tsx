@@ -440,7 +440,7 @@ export default function AppShell() {
         <TopBar />
       </Header>
 
-      <Layout style={{ height: "calc(100% - var(--ws-titlebar-h))", position: "relative" }}>
+      <Layout style={{ flex: 1, minHeight: 0, position: "relative" }}>
         {/* Sider 外壳两态恒保留：antd 以真实 Sider 子组件判定 has-sider 水平布局，
             换成普通 div 会让内层 Layout 翻成垂直排布、内容区被压成 0（docs/sidebar-toggle-buttons 缺陷修复）。
             docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
