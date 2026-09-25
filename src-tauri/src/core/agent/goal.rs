@@ -10,6 +10,7 @@
 //! → 完成（Done）/ 中止（Aborted）。Done/Aborted 之后再登记即视为开新目标。
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// 同一目标的澄清轮次上限（超出由驱动层提示收敛，不再无限追问）。
 pub const GOAL_TEXT_TURN_LIMIT: u32 = 8;
@@ -179,7 +180,18 @@ pub const SYSTEM_PATH_PREFIXES: &[&str] = &[
 
 /// 账本白名单判定：路径前缀匹配、程序名匹配；**根路径 / 家目录本身 / 系统路径一律拒绝**
 /// （无论账本怎么写）。账本里的非法条目同样不生效（纵深防御：脏条目不会变成整盘授权）。
-pub fn ledger_allows(ledger: &GoalLedger, target: LedgerTarget<'_>) -> LedgerVerdict {
+///
+/// `workspace` 是会话主目录，用于把**相对账本条目**锚定成绝对形态（见
+/// [`absolutize_ledger_entry`]）：账本端若写相对路径（如搭骨架场景的 `Cargo.toml` /
+/// `crates/common-config/`），而目标端走 `canonical_arg_paths` 后是绝对路径（带
+/// `\\?\` verbatim 前缀），不锚定就纯文本 vs 绝对路径做前缀比较，必败 —— 整个账本的
+/// 相对条目会全部被判为账本外，3 次即自停。绝对账本条目不受影响（直接进
+/// `normalize_existing`），程序侧不涉及路径语义，workspace 不消费。
+pub fn ledger_allows(
+    ledger: &GoalLedger,
+    target: LedgerTarget<'_>,
+    workspace: &Path,
+) -> LedgerVerdict {
     match target {
         LedgerTarget::Path(p) => {
             if is_forbidden_path(p) {
@@ -188,10 +200,15 @@ pub fn ledger_allows(ledger: &GoalLedger, target: LedgerTarget<'_>) -> LedgerVer
             // 两侧都先做「宽松归一化」（解析已存在的最近祖先）：账本条目与工具目标路径可能来自
             // 不同解析链（一侧 canonicalize 过、一侧没有），只做文本比较会把同一条路径判成越界。
             let cand = normalize_existing(p);
-            let hit = ledger
-                .paths
-                .iter()
-                .any(|a| !is_forbidden_path(a) && path_prefix_match(&normalize_existing(a), &cand));
+            let hit = ledger.paths.iter().any(|a| {
+                if is_forbidden_path(a) {
+                    return false;
+                }
+                // 相对账本条目按 workspace 锚定成绝对形态后再做归一化（与目标端对称）。
+                // 绝对条目直接走 normalize_existing（不消耗 canonicalize）。
+                let allowed_abs = absolutize_ledger_entry(a, workspace);
+                path_prefix_match(&normalize_existing(&allowed_abs), &cand)
+            });
             verdict(hit)
         }
         LedgerTarget::Program(p) => {
@@ -202,6 +219,52 @@ pub fn ledger_allows(ledger: &GoalLedger, target: LedgerTarget<'_>) -> LedgerVer
             verdict(hit)
         }
     }
+}
+
+/// 把账本条目归一成 canonical 形态以便与目标端对齐：
+/// - 绝对路径（Windows `C:\...` / Unix `/...`）：原样返回（让 `normalize_existing` 解析）。
+/// - 相对路径：按会话 workspace 拼接后做 best-effort 规范化（文件不存在时向上退到
+///   最近的现存祖先，与目标端 `canonical_arg_paths` 同口径），得到与目标端同形态的
+///   绝对路径（可能带 `\\?\` verbatim 前缀，由 `normalize_existing` 在外层剥除）。
+/// - 空 / 纯空白：原样返回（让上游 `is_forbidden_path` 与 `normalize_existing` 处理）。
+///
+/// **顺序契约**：`is_forbidden_path` 必须在调用本函数前先跑。
+/// 原因：本函数只做「相对→绝对」形态转换，不做禁用路径检查；空 `..` 逃逸、系统路径、
+/// 裸盘符都靠 `is_forbidden_path` 拒。本函数绝对路径分支会原样返回 [`"c:"`] 这样的
+/// 裸盘符文本（由 `normalize_existing` 自行解决）—— `is_forbidden_path` 的顺序不能反。
+fn absolutize_ledger_entry(entry: &str, workspace: &Path) -> String {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return entry.to_string();
+    }
+    let norm = normalize_path(trimmed);
+    // 已是绝对形态：原样交还（含盘符 Windows `c:/...` 或 Unix `/...`）
+    if is_absolute_norm(&norm) {
+        return entry.to_string();
+    }
+    // 相对路径：拼到 workspace 后 best-effort 规范化
+    // ——`./` 前缀按 `canonical_arg_paths` (batch.rs) 同口径剥除，避免 Path::join
+    // 把 `./` 当字面 component 保留；`..` 组件仍由上游 `is_forbidden_path` 拒掉
+    let cleaned = trimmed.trim_start_matches("./");
+    let joined = workspace.join(cleaned);
+    crate::tools::pathutil::canonical_best_effort(&joined)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 归一化形态的绝对路径判定（兼容 Windows 盘符与 Unix 根）。
+/// **刻意比 [`is_forbidden_path`] 的裸盘符检查宽松**：这里只问「有盘符就是绝对」，
+/// 裸盘符（如 `c:`）仍被 `is_forbidden_path` 在账本端预检拒掉，两层分工不重叠。
+fn is_absolute_norm(norm: &str) -> bool {
+    if norm.is_empty() {
+        return false;
+    }
+    // Windows：`c:` / `c:/...` —— 第二字节是 `:` 即视为绝对
+    if norm.as_bytes().get(1) == Some(&b':') {
+        return true;
+    }
+    // Unix：以 `/` 开头即绝对
+    norm.starts_with('/')
 }
 
 /// 命中 → Allowed，未命中 → Outside。
@@ -520,7 +583,7 @@ pub fn ledger_gate(
     let Some(state) = rt.goal_snapshot() else {
         return Ok(());
     };
-    if ledger_allows(&state.ledger, target) == LedgerVerdict::Allowed {
+    if ledger_allows(&state.ledger, target, &rt.workspace) == LedgerVerdict::Allowed {
         return Ok(());
     }
     // 越界记账：计数 +1（自停阈值依据）**并记下越界了什么**——收尾报告与汇总的「阻塞」
@@ -711,6 +774,14 @@ mod tests {
         }
     }
 
+    /// 测试用的默认 workspace 锚点。账本用绝对路径时 workspace 不参与匹配（绝对条目
+    /// 由 `is_absolute_norm` 走原样返回分支），传 `"/"` 不会污染断言；相对条目与目标端
+    /// 同形态比较时才需要真实 workspace（这种场景在「专项测试」里传具体路径）。
+    fn test_workspace() -> &'static Path {
+        static WS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        WS.get_or_init(|| std::path::PathBuf::from("/"))
+    }
+
     // ---------- 状态与阶段 ----------
 
     #[test]
@@ -805,11 +876,19 @@ mod tests {
             programs: vec![],
         };
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Path(r"d:\work\proj\src\a.rs")),
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(r"d:\work\proj\src\a.rs"),
+                test_workspace()
+            ),
             LedgerVerdict::Allowed
         );
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Path(r"D:\Work\Proj\docs\a.md")),
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(r"D:\Work\Proj\docs\a.md"),
+                test_workspace()
+            ),
             LedgerVerdict::Outside
         );
     }
@@ -841,12 +920,16 @@ mod tests {
                 programs: vec![],
             };
             assert_eq!(
-                ledger_allows(&ledger, LedgerTarget::Path("/etc/passwd")),
+                ledger_allows(&ledger, LedgerTarget::Path("/etc/passwd"), test_workspace()),
                 LedgerVerdict::Outside,
                 "账本条目 {entry} 不得放行 /etc/passwd"
             );
             assert_eq!(
-                ledger_allows(&ledger, LedgerTarget::Path("C:\\Users\\x\\a.txt")),
+                ledger_allows(
+                    &ledger,
+                    LedgerTarget::Path("C:\\Users\\x\\a.txt"),
+                    test_workspace()
+                ),
                 LedgerVerdict::Outside,
                 "账本条目 {entry} 不得放行盘上任意文件"
             );
@@ -871,7 +954,11 @@ mod tests {
             programs: vec![],
         };
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Path(&format!("{sub}/a.rs"))),
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(&format!("{sub}/a.rs")),
+                test_workspace()
+            ),
             LedgerVerdict::Allowed
         );
     }
@@ -895,22 +982,23 @@ mod tests {
             programs: vec!["cargo".into()],
         };
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Program("cargo")),
+            ledger_allows(&ledger, LedgerTarget::Program("cargo"), test_workspace()),
             LedgerVerdict::Allowed
         );
         assert_eq!(
             ledger_allows(
                 &ledger,
-                LedgerTarget::Program(r"C:\Users\x\.cargo\bin\cargo.exe")
+                LedgerTarget::Program(r"C:\Users\x\.cargo\bin\cargo.exe"),
+                test_workspace()
             ),
             LedgerVerdict::Allowed
         );
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Program("rm")),
+            ledger_allows(&ledger, LedgerTarget::Program("rm"), test_workspace()),
             LedgerVerdict::Outside
         );
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Program("")),
+            ledger_allows(&ledger, LedgerTarget::Program(""), test_workspace()),
             LedgerVerdict::Outside
         );
         // 全路径条目也能匹配裸程序名
@@ -919,7 +1007,7 @@ mod tests {
             programs: vec![r"C:\Python\python.exe".into()],
         };
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Program("python")),
+            ledger_allows(&ledger, LedgerTarget::Program("python"), test_workspace()),
             LedgerVerdict::Allowed
         );
         assert!(!program_match("cargo", "cargo-clippy"));
@@ -929,12 +1017,133 @@ mod tests {
     fn empty_ledger_rejects_everything() {
         let ledger = GoalLedger::default();
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Path("/w/a.rs")),
+            ledger_allows(&ledger, LedgerTarget::Path("/w/a.rs"), test_workspace()),
             LedgerVerdict::Outside
         );
         assert_eq!(
-            ledger_allows(&ledger, LedgerTarget::Program("cargo")),
+            ledger_allows(&ledger, LedgerTarget::Program("cargo"), test_workspace()),
             LedgerVerdict::Outside
+        );
+    }
+
+    // ---------- 账本：相对路径锚定（[fix/goal-ledger-relative-path]）----------
+
+    /// 复现用户会话 fb7ba54f-…的 4 条 blocked：相对账本条目（`Cargo.toml` / `rust-toolchain.toml`
+    /// / `.gitignore` / `crates/common-config/`）在 workspace 锚定后能匹配目标端绝对路径。
+    #[test]
+    fn ledger_relative_path_anchored_to_workspace_matches_absolute_target() {
+        let workspace = std::path::PathBuf::from(r"D:\Work\SideProjects\ChargePilot");
+        let ledger = GoalLedger {
+            paths: vec![
+                "Cargo.toml".into(),
+                "rust-toolchain.toml".into(),
+                ".gitignore".into(),
+                "crates/common-config/".into(),
+                "README.md".into(),
+            ],
+            programs: vec![],
+        };
+        // 目标端以 `\\?\` verbatim 形态传入（与 `canonical_arg_paths` 输出一致）
+        for (i, target) in [
+            r"\\?\D:\Work\SideProjects\ChargePilot\Cargo.toml",
+            r"\\?\D:\Work\SideProjects\ChargePilot\rust-toolchain.toml",
+            r"\\?\D:\Work\SideProjects\ChargePilot\.gitignore",
+            r"\\?\D:\Work\SideProjects\ChargePilot\crates\common-config\src\lib.rs",
+            r"\\?\D:\Work\SideProjects\ChargePilot\README.md",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let allowed = &ledger.paths[i];
+            assert_eq!(
+                ledger_allows(&ledger, LedgerTarget::Path(target), &workspace),
+                LedgerVerdict::Allowed,
+                "账本 {allowed} 应当被 workspace 锚定后命中目标 {target}"
+            );
+        }
+    }
+
+    /// 反向：账本是 workspace A 的相对条目，但目标位于 workspace B —— 不得命中
+    /// （防止「相对账本条目意外击穿跨项目越界」）。
+    #[test]
+    fn ledger_relative_path_not_anchored_to_workspace_still_rejected() {
+        let workspace = std::path::PathBuf::from(r"D:\Work\SideProjects\ChargePilot");
+        let ledger = GoalLedger {
+            paths: vec!["Cargo.toml".into()],
+            programs: vec![],
+        };
+        // 另一个项目的同名文件（绝对路径传入）
+        assert_eq!(
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(r"\\?\D:\Work\OtherProject\Cargo.toml"),
+                &workspace
+            ),
+            LedgerVerdict::Outside,
+            "跨 workspace 的同名文件不得被 workspace 锚定误命中"
+        );
+    }
+
+    /// 绝对账本条目不受 workspace 参数影响（回归）。
+    #[test]
+    fn ledger_absolute_path_still_matches() {
+        let workspace = std::path::PathBuf::from(r"D:\Unrelated\Workspace");
+        let ledger = GoalLedger {
+            paths: vec![r"D:\Work\Proj\src".into()],
+            programs: vec![],
+        };
+        assert_eq!(
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(r"D:\Work\Proj\src\a.rs"),
+                &workspace
+            ),
+            LedgerVerdict::Allowed
+        );
+    }
+
+    /// 相对账本条目在文件已存在的场景下也能匹配（与不存在场景同口经
+    /// `canonical_best_effort` 向上退祖先，不改变输出形态）。
+    #[test]
+    fn ledger_relative_path_with_existing_file_resolves_to_absolute() {
+        // 实际仓库存有 `examples/`，作为「已存在」场景的临时试金石
+        // ——但此处用临时目录更独立，避免仓库布局变动带翻测试。
+        let tmp = std::env::temp_dir().join(format!("cwgoal-relpath-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let existing = tmp.join("Cargo.toml");
+        std::fs::write(&existing, "").unwrap();
+        let ledger = GoalLedger {
+            paths: vec!["Cargo.toml".into()],
+            programs: vec![],
+        };
+        assert_eq!(
+            ledger_allows(
+                &ledger,
+                LedgerTarget::Path(&existing.to_string_lossy()),
+                &tmp
+            ),
+            LedgerVerdict::Allowed,
+            "已存在的相对账本条目应该被 workspace 锚定后命中"
+        );
+        let _ = std::fs::remove_file(&existing);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    /// 钉死顺序契约：相对账本条目含 `..` 逃逸组件时，必须被 `is_forbidden_path` 拒
+    /// ——不能因为 `absolutize_ledger_entry` 拼到 workspace 后路径被合法化而漏过
+    /// （batch.rs 的 `canonical_arg_paths` 同样会 `trim_start_matches("./")` 但不拒绝
+    /// `..`，靠账本闸门先判。闸门顺序必须靠后被插到账本端）。
+    #[test]
+    fn ledger_relative_path_with_parent_traversal_is_rejected() {
+        let workspace = std::path::PathBuf::from(r"D:\Work\SideProjects\ChargePilot");
+        let ledger = GoalLedger {
+            paths: vec!["crates/../etc/passwd".into()],
+            programs: vec![],
+        };
+        assert_eq!(
+            ledger_allows(&ledger, LedgerTarget::Path("/etc/passwd"), &workspace),
+            LedgerVerdict::Outside,
+            "含 `..` 组件的相对账本条目必须被禁用路径表拒，与绝对路径检查口径一致"
         );
     }
 

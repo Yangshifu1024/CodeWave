@@ -96,6 +96,7 @@
 8. **子代理账本作用域取根会话，而非给子 runtime 继承快照**：快照会与「工具集按父档每步实时重建」脱节（父在澄清期 spawn、随后进执行期时，子拿到写工具但快照仍是澄清期 → 缺口只是变窄没消失）；改为判定点直接解析根会话目标。同时新增 `SessionRuntime::mutate_goal`（读-改-写全程持锁），否则父会话与并行子代理改同一份目标会丢计数、自停阈值永不触发。
 9. **停止 / 收尾时取消本会话在跑的子代理**：`cancel_run` 只取消主会话 token，子代理的 `parent_cancel` 只在 spawn 内派生 → 原先会出现「UI 显示已停止、子代理还在写文件」（目标档下更糟：目标已暂停而子代理仍按执行期账本动工作区）。现 `mark_cancelled` 与 `goal_close_out`（覆盖全部 5 种收尾原因，含达成）都会**按根会话过滤**后取消（`core.subs` 是全进程注册表，不过滤会误杀其它会话）。
 10. **`goal_approval` 只让「最终档位是目标档」的批准推进状态**：否则「打开时是目标档、用户却选了自动编辑档」会留下「档位非目标档 + 目标 executing」的不一致（判据保留宽松以免模型漏声明 `mode` 时批准失效，迁移收紧）。
+11. **相对账本路径以会话 workspace 为锚**（`fix/goal-ledger-relative-path`）：`ledger_allows` 接受 `&Path` workspace，账本端相对条目先 `workspace.join(entry) + canonical_best_effort` 拿到绝对形态再走归一化，与目标端 `canonical_arg_paths` 输出口径一致。补这个错是因为「搭骨架」场景下账本全是「要创建的项目文件」（`Cargo.toml` / `crates/common-config/` 等），原实现中相对账本条目走 `normalize_existing` 会在 `parent()==""` 时退化为纯文本形态，与目标端绝对路径前缀比较必败——累计 3 次即 `LedgerDrift` 自停，表现为「账本里明明有、被拒」。`ledger_gate` 零外部调用点改动（始终在内部取 `&rt.workspace`）。澄清期提示块同步补了一条账本写法说明（[§2.2 提示文案]）。
 
 ## 5. 验证
 
