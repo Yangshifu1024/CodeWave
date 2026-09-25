@@ -1,9 +1,10 @@
 //! MiniMax Token Plan（国际 / 中国两套端点，同一份解析逻辑）。
 //! - 国际：`GET https://api.minimax.io/v1/api/openplatform/coding_plan/remains`
-//! - 中国：`GET https://api.minimaxi.com/v1/token_plan/remains`
+//! - 中国：`GET https://www.minimax.cn/v1/token_plan/remains`
 //!
 //! 两者的**计数语义相反**：国际响应里的 `current_*_usage_count` 实为「剩余」，
 //! 中国响应里是「已用」（与上游实现一致，勿按字段名直觉修改）。
+//! `*_remaining_percent` 始终是「剩余」，由兜底分支处理——不要动计数语义。
 
 use super::super::{AuthStyle, QuotaEntry, fetch_json};
 use super::{FetchFailure, number, text};
@@ -12,7 +13,7 @@ use serde_json::Value;
 use std::cmp::Ordering;
 
 const INTERNATIONAL_URL: &str = "https://api.minimax.io/v1/api/openplatform/coding_plan/remains";
-const CHINA_URL: &str = "https://api.minimaxi.com/v1/token_plan/remains";
+const CHINA_URL: &str = "https://www.minimax.cn/v1/token_plan/remains";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Endpoint {
@@ -31,7 +32,7 @@ impl Endpoint {
     fn label(self) -> &'static str {
         match self {
             Self::International => "MiniMax API",
-            // 两家共用一份解析，错误文案必须能区分是哪套端点（中国端点用 minimaxi.com）
+            // 两家共用一份解析，错误文案必须能区分是哪套端点（中国站用 minimax.cn）
             Self::China => "MiniMax API (CN)",
         }
     }
@@ -88,10 +89,11 @@ fn has_reset_hint(model: &Value) -> bool {
     number(model, "remains_time").is_some() || number(model, "weekly_remains_time").is_some()
 }
 
-/// 只统计编码类模型（`minimax-m*` 与通用桶 `general`）。
+/// 只统计套餐内的额度模型（`minimax-m*` 与通用桶 `general`/`video`）。
+/// `video` 为 `.cn` 响应里的额外视频额度模型，不收会被静默丢弃。
 fn is_coding_model(model: &Value) -> bool {
     let name = model_name(model);
-    name.starts_with("minimax-m") || name == "general"
+    name.starts_with("minimax-m") || matches!(name.as_str(), "general" | "video")
 }
 
 /// 单窗口的剩余百分比（供模型择优使用）。
