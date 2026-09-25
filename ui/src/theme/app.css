@@ -265,22 +265,26 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 0.9em; line-height: 1;
   width: 1em; height: 1em; flex: none;
 }
-/* 追问建议区：列表样式（垂直行项）+ 背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
+/* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
    列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/tool-card-frame]）。
-   容器背景与列表项边框形成「色块+卡片」层级：色块是上下文（建议区），卡片是单项可点元素。 */
-.chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-bg-nav); }
+   容器与列表项交换色：色块是上下文（建议区）= 工具调用同款面板色；卡片是单项可点元素 = 左栏背景色（前景）。 */
+.chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-panel); }
 .chips-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); margin-bottom: 8px; }
 .chips-row { display: flex; flex-direction: column; gap: 6px; }
 .chips-row .ant-btn {
   display: flex !important; width: 100% !important; justify-content: space-between !important; align-items: center !important;
   padding: 6px 10px !important; height: auto !important; line-height: 1.5 !important; text-align: left !important;
   border: 1px solid var(--ws-border) !important; border-radius: 8px !important; /* 工具调用同款：1px 边框 + 8px 圆角。!important 盖过 antd 6 css-in-js 内联样式 */
+  background: var(--ws-bg-nav) !important; /* 列表项填充 = 左栏背景：与容器背景反相，使每项视觉上浮起 */
 }
 /* antd 6 SVG：<svg fill="currentColor"> 但 <path> 不继承——path 默认 fill: black，
    强制 path 用 currentColor 让 color 能传到 fill。 */
 .composer-toolbar .ant-btn-text .anticon svg path { fill: currentColor !important; }
 .chips-row .ant-btn .ant-btn-icon { color: var(--ws-text-1); transition: color 0.2s; }
-.chips-row .ant-btn:hover { background: var(--ws-hover); }
+/* 高亮色：从 --ws-bg-nav 派生「深一点点」的色（color-mix 与 --ws-text-1 混 12%），
+   亮色模式下确实稍深；暗色模式下文字色变浅、效果翻为「与左栏反相更强」——同样达成「高亮」意图。
+   写死 #hex 会与亮暗自适应契约打架，故用 color-mix 跟基底走。 */
+.chips-row .ant-btn:hover { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%) !important; } /* !important 盖过基底的 --ws-bg-nav */
 .chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
 
 /* ---------- 目标模式提示条（`ApprovalMode::Goal`）---------- */
@@ -826,8 +830,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   height: 28px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
   font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
 }
-.session-nav-row:hover { background: var(--ws-hover); }
-.session-nav-row.active { background: var(--ws-hover); color: var(--ws-text-1); }
+/* 会话行高亮：与「后续建议」每项 hover 同款——从 --ws-bg-nav 派生「深一点点」的色，
+   让侧栏与建议区两处「同背景容器的高亮」视觉上对齐。亮色确实稍深；暗色文字色翻浅、效果翻为反相更强，仍是高亮意图。
+   .row-actions 的 --ws-hover 背景是「遮住底下时间文本」的覆盖层，与高亮语义不同，不动。 */
+.session-nav-row:hover { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%); }
+.session-nav-row.active { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%); color: var(--ws-text-1); }
 /* 运行指示定槽：恒渲染的占位保证每行标题对齐 */
 .session-nav-row .session-run-slot {
   flex: none; width: 12px; height: 12px;
