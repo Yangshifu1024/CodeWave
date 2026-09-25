@@ -15,7 +15,7 @@ import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
-import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm } from "./runFrames";
+import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, stripRecoveredInTab } from "./runFrames";
 import type { RunStore } from "./run";
 import type { UiItem } from "./run.types";
 
@@ -143,6 +143,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.running = false;
+        // 文本形态 ask 的待剥状态只在本轮有效（[docs/text-form-ask-fallback]）：清空后下一轮的增量不再被剥
+        t.textRecovered = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
         // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
         // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
@@ -350,6 +352,21 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return; // M-1：不重建桶——避免无人能应答的幽灵审批
+        // 文本形态 ask 兜底（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：后端剥的是**落盘历史**，
+        // 而这段协议原文早已随流式帧进了**当轮气泡**（帧已下发、无法回收）——这里补剥当轮气泡。
+        // 剥离实现与后端 `text_ask::strip_block`（`replacen(block, "", 1)` + `trim_end()`）同口径，统一在
+        // runFrames.stripRecoveredText / stripRecoveredInTab：找不到就什么也不做（跨段切分 / 已被裁剪 / 已剥过
+        // 都不报错、保持原样）。
+        // **为什么要留下待剥字符串**：正文经 64ms 节流下发，`</ask>` 尾巴常在 ask:opened **之后**才作为 delta_text
+        // 到达——只在这里剥一次，后到的帧会把尾巴又追加回去。待剥状态 `t.textRecovered` 由 applyFrameToTab 的
+        // 每帧文本落地消费，`run:done` 清空（标记只在本轮有效）。
+        // 纪律：这是**流式文本**的清理，绝不改 `t.ask` 内容、不给卡片加来源标注（产品决定：不标注，
+        // 免得用户以为提问不可信）。
+        const recovered = p.text_recovered;
+        if (recovered) {
+          t.textRecovered = recovered;
+          stripRecoveredInTab(t); // 帧先到齐的常见序：此刻就剥一次，不等下一帧
+        }
         t.ask = {
           askId: p.ask_id,
           kind: p.kind,

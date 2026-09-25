@@ -190,23 +190,26 @@ impl Tool for AskTool {
         // 顺序拼接（plan_text）。Plan 档没有写工具，落盘是系统行为；失败返回 None 优雅降级，不阻塞 ask。
         // 内容源：显式 plan 字段优先（批准形契约），缺失/空白回退题干拼接（历史行为兼容）。
         let plan_file = save_plan_file(ctx, &plan_body(args.plan.as_deref(), &args.questions));
-        ctx.core.sink.emit(
-            &ctx.rt.id,
-            "ask:opened",
-            json!({
-                "session": ctx.rt.id, "ask_id": ask_id, "kind": "ask",
-                "questions": args.questions,
-                // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
-                "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
-                // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败为 None）
-                "plan_file": plan_file,
-                // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形标记（后端宽松检测 = 单一事实源）；
-                // 前端据此渲染单选 + 批准项直提，不再猜测 id === "approve"
-                //（此前 id 自拟会使面板回退为多选切换）
-                "approval": approval_shape(&args.questions),
-                "approve_id": approve_option_id(&args.questions),
-            }),
-        );
+        let mut ask_opened = json!({
+            "session": ctx.rt.id, "ask_id": ask_id, "kind": "ask",
+            "questions": args.questions,
+            // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
+            "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
+            // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败为 None）
+            "plan_file": plan_file,
+            // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形标记（后端宽松检测 = 单一事实源）；
+            // 前端据此渲染单选 + 批准项直提，不再猜测 id === "approve"
+            //（此前 id 自拟会使面板回退为多选切换）
+            "approval": approval_shape(&args.questions),
+            "approve_id": approve_option_id(&args.questions),
+        });
+        // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
+        // 原文一并下发，前端据此从当轮气泡文本里剔掉它（流式帧已下发，前端无法自行回收）。
+        // 取走即清（take）：同一 run 内后续的真实 ask 不该再带这个字段。
+        if let Some(block) = ctx.rt.text_ask_block.lock().unwrap().take() {
+            ask_opened["text_recovered"] = json!(block);
+        }
+        ctx.core.sink.emit(&ctx.rt.id, "ask:opened", ask_opened);
 
         let answer = tokio::select! {
             _ = ctx.cancel.cancelled() => None,

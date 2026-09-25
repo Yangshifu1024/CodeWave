@@ -11,6 +11,7 @@ mod guards;
 mod runtime;
 mod stream;
 mod supervise;
+mod text_ask;
 
 pub mod goal;
 

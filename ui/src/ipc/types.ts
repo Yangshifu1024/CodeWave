@@ -438,6 +438,10 @@ export interface AskOpenedEvent {
   approve_id?: string | null;
   /** 子代理审批（2026-09-11 tester 卡死修复）：事件挂主会话下发后，来源子代理 id；null = 主会话审批 */
   sub_id?: string | null;
+  /** [docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)：文本形态 ask 兜底时从正文里剥离的
+   *  `<ask>…</ask>` 原文。流式帧早已把这段协议原文送到前端且无法回收，前端据此从**当轮气泡**里精确剔除它；
+   *  真实工具调用发起的 ask（普通路径）不出现该键。 */
+  text_recovered?: string;
 }
 
 /** git status 行条目：index/worktree 两区 × new/modified/deleted/renamed 状态位 */
