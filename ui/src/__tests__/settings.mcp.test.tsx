@@ -1,9 +1,9 @@
-// 设置页 MCP 页（自「工具与集成」拆出）：服务器状态表 + 配置区共存。
+// 设置页 MCP 页（自「工具与集成」拆出）：服务器卡片 + 配置区共存。
 // 状态数据面（mcp_status 命令 / mcp:status 事件 / useUi.mcpStatus）早已存在，本页是它**唯一**的渲染方，
 // 所以本文件同时守护三件容易做错的事：
-//   ① 名单取「配置 ∪ 状态」并集——只取状态会在保存配置后（后端 stop_all、且无会话不重连）得到空表，
-//      看起来像「没配置服务器」；只取配置会漏掉「配置里已删、管理端仍持有连接」的服务器；
-//   ② 无配置服务器时整段不渲染（空表会把「没配」与「没连」显示成同一个样子）；
+//   ① 当前作用域配置决定卡片名单——只取状态会在保存配置后（后端 stop_all、且无会话不重连）得到空区，
+//      看起来像「没配置服务器」；原始配置回退模式则由状态记录提供可见服务器；
+//   ② 无配置服务器时保留新建入口与空态；
 //   ③ 刷新按钮只重读状态、**不会重连**（手动重连会打断其他会话正在跑的 MCP 调用，属非目标）。
 // 挂载方式与 settings.skills.test.tsx 同源（standalone + useUi 控制开关）。
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -15,7 +15,7 @@ import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { useSessions } from "../stores/sessions";
 import { parseMcpDoc } from "../utils/mcpConfig";
-import type { ConfigState } from "../ipc/types";
+import type { ConfigState, McpServerView } from "../ipc/types";
 
 function makeConfig(overrides: Partial<ConfigState> = {}): ConfigState {
   return {
@@ -47,7 +47,8 @@ const MCP_CONFIG = JSON.stringify({
 
 let calls: string[] = [];
 /** mcp_status 的返回值（每个用例自行设置；元素形态与 ipc/client.ts 的 mcpStatus 一致） */
-let statusReply: { name: string; state: unknown; tools: number }[] = [];
+let statusReply: { name: string; state: unknown; tools: number; scope?: "global" | "project"; tool_details?: { name: string; description: string }[] }[] = [];
+let effectiveReply: Array<Pick<McpServerView, "name" | "source" | "overridden">> = [];
 /** mcp_list_config 的 json 字段（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
 let configReply = MCP_CONFIG;
 let saveAllowed = true;
@@ -72,13 +73,13 @@ async function baseInvoke(cmd: string, args?: any) {
         path: args?.scope === "project" ? "C:/proj/.codewave/mcp.json" : "C:/u/.codewave/mcp.json",
         json: configReply,
         servers: [],
-        effective: [],
+        effective: effectiveReply,
         issues: [],
       };
     case "mcp_save_config": return { saved: saveAllowed, issues: [] };
     case "mcp_test": return testReply;
     case "mcp_snapshot":
-      return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply)) };
+      return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply.map((s) => ({ scope: "global", ...s })))) };
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);
   }
@@ -104,6 +105,7 @@ afterEach(async () => {
   saveAllowed = true;
   projectLoadFails = false;
   statusReply = [];
+  effectiveReply = [];
   configReply = MCP_CONFIG;
   testReply = { ok: true, tools: 2, error: null };
   useSessions.setState({ activeKey: null });
@@ -119,17 +121,13 @@ function statusTable(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-testid="settings-page"] [data-setting-id="app.mcp_status"]');
 }
 
-/**
- * 状态表的服务器行（表头行共用同一个类名，故按类名排除）。
- * 三列分别取文本：行内是并列的 span（JSX 会吃掉元素间的空白），拼 textContent 拼不出分隔符。
- */
+/** 卡片中的服务器名称、状态与工具计数。 */
 function statusRows(): { name: string; state: string; tools: string }[] {
-  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .mcp-status-row'))
-    .filter((r) => !r.classList.contains("mcp-status-row-head"))
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="settings-page"] .mcp-server-card'))
     .map((r) => ({
-      name: r.querySelector(".mcp-status-name")?.textContent ?? "",
-      state: (r.querySelector(".mcp-status-state")?.textContent ?? "").trim(),
-      tools: r.querySelector(".mcp-status-tools")?.textContent ?? "",
+      name: r.querySelector(".mcp-server-name")?.textContent ?? "",
+      state: (r.querySelector(".ant-tag")?.textContent ?? "").trim(),
+      tools: Array.from(r.querySelectorAll(".mcp-server-meta span")).find((s) => /工具|过滤/.test(s.textContent ?? ""))?.textContent?.replace(" 个工具", "") ?? "—",
     }));
 }
 
@@ -161,8 +159,8 @@ async function openMcpTab(edit = false, editIndex = 0) {
     </AntApp>,
   );
   await waitFor(() => expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy());
-  if (edit && document.querySelector('.mcp-status-row:not(.mcp-status-row-head)')) {
-    const editButtons = Array.from(document.querySelectorAll<HTMLElement>(".mcp-status-row:not(.mcp-status-row-head) button")).filter((button) => button.textContent?.replace(/\s/g, "") === "编辑配置");
+  if (edit && document.querySelector('.mcp-server-card')) {
+    const editButtons = Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card button")).filter((button) => button.textContent?.replace(/\s/g, "") === "编辑配置");
     fireEvent.click(editButtons[editIndex]);
     await waitFor(() => expect(document.querySelector(".mcp-entry")).toBeTruthy());
   }
@@ -185,8 +183,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
       { name: "web", state: "连接失败", tools: "—" },
       { name: "cfg-only", state: "未连接", tools: "—" },
     ]);
-    // 表头三列（名称列复用 mcpName 文案）
-    expect(statusTable()?.querySelector(".mcp-status-row-head")?.textContent).toContain("工具数");
+    expect(statusTable()?.textContent).toContain("工具数");
     // 次要说明移入提示，状态表保留核心数据。
     expect(statusTable()?.textContent).not.toContain("连接在打开会话时建立");
   });
@@ -218,7 +215,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     await openMcpTab();
 
     const row = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>('[data-testid="settings-page"] .mcp-status-row-clickable');
+      const el = document.querySelector<HTMLElement>('[data-testid="settings-page"] .mcp-server-diagnostic button');
       expect(el).toBeTruthy();
       return el as HTMLElement;
     });
@@ -241,7 +238,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     await openMcpTab();
 
     await waitFor(() => expect(statusTable()).toBeTruthy());
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-row-clickable')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-diagnostic')).toBeFalsy();
   });
 
   it("连接中（starting）：显示「连接中」+ spinner，且该行不可点（无错误可展开）", async () => {
@@ -253,8 +250,8 @@ describe("设置页 MCP 页：服务器状态表", () => {
       { name: "fs", state: "连接中", tools: "—" },
       { name: "web", state: "未连接", tools: "—" },
     ]);
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-state .ant-spin')).toBeTruthy();
-    expect(document.querySelector('[data-testid="settings-page"] .mcp-status-row-clickable')).toBeFalsy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-title .ant-spin')).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-page"] .mcp-server-diagnostic')).toBeFalsy();
   });
 
   it("刷新按钮：带「不会重新连接」的 aria-label，点击只重读 mcp_status，绝不触发 connect_mcp", async () => {
@@ -376,6 +373,41 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
       expect(calls.some((c) => c.includes('"scope":"project"'))).toBe(true),
     );
     await waitFor(() => expect(document.querySelector(".mcp-scope-info")?.getAttribute("aria-label")).toContain("C:/proj/.codewave/mcp.json"));
+  });
+
+  it("同名服务器按作用域展示各自的状态与工具说明", async () => {
+    statusReply = [
+      { name: "fs", scope: "global", state: "ready", tools: 1, tool_details: [{ name: "global_read", description: "全局说明" }] },
+      { name: "fs", scope: "project", state: "ready", tools: 1, tool_details: [{ name: "project_read", description: "项目说明" }] },
+    ];
+    await openMcpTab();
+    await waitFor(() => expect(statusTable()?.textContent).toContain("全局说明"));
+    expect(statusTable()?.textContent).not.toContain("项目说明");
+    fireEvent.click(scopeTabByText("项目级"));
+    await waitFor(() => expect(statusTable()?.textContent).toContain("项目说明"));
+    expect(statusTable()?.textContent).not.toContain("全局说明");
+  });
+
+  it("全局服务器被项目级同名配置覆盖时，卡片不能误操作项目连接", async () => {
+    effectiveReply = [{ name: "fs", source: "project", overridden: "global" }];
+    statusReply = [
+      { name: "fs", scope: "global", state: "stopped", tools: 0 },
+      { name: "fs", scope: "project", state: "ready", tools: 1 },
+    ];
+    await openMcpTab();
+    const globalCard = Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card")).find((card) => card.querySelector(".mcp-server-name")?.textContent === "fs")!;
+    expect(globalCard.textContent).toContain("非当前会话生效配置");
+    const reconnect = Array.from(globalCard.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent?.includes("重连"))!;
+    expect(reconnect.disabled).toBe(true);
+    fireEvent.click(reconnect);
+    expect(calls.some((c) => c.startsWith("mcp_reconnect"))).toBe(false);
+
+    fireEvent.click(scopeTabByText("项目级"));
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("已连接"));
+    const projectCard = document.querySelector<HTMLElement>(".mcp-server-card")!;
+    expect(projectCard.textContent).not.toContain("非当前会话生效配置");
+    const disconnect = Array.from(projectCard.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent?.includes("断开"))!;
+    expect(disconnect.disabled).toBe(false);
   });
 
   it("作用域配置读取失败时保留当前列表和作用域", async () => {

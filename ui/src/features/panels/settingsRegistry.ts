@@ -499,6 +499,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpActionDisconnect", // → 动作：断开单个 server
   "mcpActionReconnect", // → 动作：重连单个 server
   "mcpToolsFiltered", // → app.mcp_status：工具数带「已过滤 N」标注
+  "mcpToolCount",
+  "mcpToolNoDescription",
+  "mcpToolFullDescription",
+  "mcpToolsNotReady",
+  "mcpToolsEmpty",
+  "mcpToolsUnavailable",
+  "mcpInactiveScope",
   "mcpHeaders", // → mcp.servers：http 分支的请求头表格
   "mcpArgsAdd", // → 动作：参数表「＋ 添加参数」
   "mcpEnvAdd", // → 动作：环境变量表「＋ 添加变量」

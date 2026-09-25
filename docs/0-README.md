@@ -15,7 +15,7 @@
 
 ## 基准与方案
 
-- 2026-09-25 · [mcp-settings-layout-and-fullscreen-seam.md](./mcp-settings-layout-and-fullscreen-seam.md) — MCP 设置页六列状态与配置表格重排，修复全屏页顶栏和导航分界错位。
+- 2026-09-25 · [mcp-settings-layout-and-fullscreen-seam.md](./mcp-settings-layout-and-fullscreen-seam.md) — MCP 设置页排版、后续卡片式服务器与工具说明展示，修复全屏页顶栏和导航分界错位。
 
 - 2026-09-25 · [text-form-ask-fallback.md](./text-form-ask-fallback.md) — 缺陷修复：**模型把 ask 调用当正文 XML 透传时，提问不再丢失**。会话 5da292d8 实测（provider `MiniMax` @ `api.minimax.cn/anthropic`，非仓库记录的官方 CN 域名）：该轮**没有任何 `tool_use`**、正文末尾却漂着结构完整的 `<ask>…</ask>`，此前只被当普通 Markdown 渲染——不弹卡、无日志、无提示。新增 `core/agent/text_ask.rs` 纯函数解析（块必须**独占起始行 + 位于正文末尾 + 结构完整**，围栏内/多块/半截一律放弃；缺 id 的题与选项**逐项丢弃**；私有控制 token `]<]minimax[>[` 只从字段值里清，尾部 `[` / `<` 各自独立可选消费），`drive.rs` 按**四道门**（仅主会话 / `exclude_tools` 不含 ask / 本回合无调用 / 每 run 一次）就地剥正文并补等价 ask 调用，**后续零改动**直接走既有批次 → 真实 `AskTool`（G2/G3 门、`mode` 切档、`switchToAutoEdit`、plan 落盘、preview 三处排除全部复用）——「完全等价」由结构保证而非再实现一遍。前端因**流式帧不可回收 + 64ms 节流会把 `</ask>` 尾巴推到 `ask:opened` 之后**，改「当轮状态 + 每帧幂等补剥」（`ask:opened` 增可选字段 `text_recovered`，事件键名与 30 键不动；只剥一次必然漏）；另加 step 级响应形态日志（工具调用数取**兜底前**口径）回答「为什么模型没返回 tool_use」。反向纪律：绝不为 edit/command 等写类工具做文本兜底（会把「看不到问题」升级为任意代码执行）。验证：`cargo test` 1252 passed / 3 ignored、`pnpm --dir ui test` 1211 passed / 100 文件、`ui build` + `lint` 通过；两份审查（方案对齐 + 代码质量）无 🔴，🟡 全部闭环（含一处建议经实测证据**否决**：token 尾部成对消费会剩 `[`）。
 

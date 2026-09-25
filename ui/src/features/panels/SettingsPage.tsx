@@ -1109,9 +1109,9 @@ function SettingsPageController() {
   }
 
   /**
-   * 状态表行 = 配置名单 ∪ 状态记录：
+   * 状态卡片 = 当前作用域配置名单 ∪ 状态记录：
    *  · 只取配置名单会漏掉「管理端仍持有连接、但配置里已删掉」的服务器；
-   *  · 只取状态记录则会在保存配置后（后端 stop_all 清空、且无会话不重连）得到空表，
+   *  · 只取状态记录则会在保存配置后（后端 stop_all 清空、且无会话不重连）得到空卡片区，
    *    看起来像「没配置服务器」——故两侧取并集，并把没记录的一律显示为「未连接」。
    */
   const mcpStatusRows = useMemo<McpStatusRow[]>(() => {
@@ -1121,14 +1121,21 @@ function SettingsPageController() {
       const n = e.name.trim();
       if (n && !names.includes(n)) names.push(n);
     }
-    // 来源信息来自配置视图（状态记录本身只有连接信息，两者按 server 名拼在一起）
+    // 配置作用域决定连接池键；项目级与用户级允许同名，不能只按名称取运行态。
     const meta = new Map<string, { source?: McpScope; overridden?: McpScope | null }>();
     for (const v of mcpEffective) meta.set(v.name, { source: v.source, overridden: v.overridden });
-    const byName = new Map(mcpStatus.map((s) => [s.name, s]));
+    const byScopeAndName = new Map(mcpStatus.map((s) => [`${s.scope}\u0000${s.name}`, s]));
     return mcpEntries === null
-      ? mcpStatus.map((s) => mcpStatusRow(s.name, s, meta.get(s.name)))
-      : names.map((n) => mcpStatusRow(n, byName.get(n), meta.get(n)));
-  }, [mcpEntries, mcpStatus, mcpEffective]);
+      ? mcpStatus.filter((s) => s.scope === mcpScope).map((s) => mcpStatusRow(s.name, s, { source: s.scope, actionable: meta.get(s.name)?.source === s.scope }))
+      : names.map((n) => {
+          const info = meta.get(n);
+          return mcpStatusRow(n, byScopeAndName.get(`${mcpScope}\u0000${n}`), {
+            source: mcpScope,
+            overridden: mcpScope === "project" ? info?.overridden : null,
+            actionable: info?.source === mcpScope,
+          });
+        });
+  }, [mcpEntries, mcpStatus, mcpEffective, mcpScope]);
 
   /**
    * 切到 MCP 页时重读一次状态：`mcp:status` 事件只在 connect_mcp 之后触发（开会话 / 保存配置），
@@ -1651,13 +1658,12 @@ function SettingsPageController() {
     {
       key: "mcp",
       labelKey: PAGE_LABEL_KEY.mcp,
-      // MCP 页（[docs/settings-ia](../../../../docs/settings-ia.md)）：上段「服务器状态」、下段「服务器配置」。
+      // MCP 页（[docs/settings-ia](../../../../docs/settings-ia.md)）：服务器状态卡片与配置编辑弹框。
       // 状态段的数据源是既有的 mcp_status 命令 + mcp:status 事件（此前只写不读）；配置段不在 config 内
       // （独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它）。
       body: draft && (
         <>
-          {/* 服务器状态段：行由本页拼好（配置名单 ∪ 状态记录），展示与交互都在 McpStatusTable 里
-              （两侧皆空时该组件自身返回 null）。 */}
+          {/* 服务器卡片由本页按当前作用域拼合配置名单与连接状态。 */}
           {/* 配置作用域：全局（用户级）与项目两层都可编辑。
               会话可见集 = 全局 ∪ 项目，同名项目级胜出（后端 merge_scopes）。 */}
           <div className="mcp-scope">

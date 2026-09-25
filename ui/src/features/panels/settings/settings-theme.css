@@ -517,11 +517,32 @@
 .settings-theme-root .about-slogan,
 .settings-theme-root .about-version,
 .settings-theme-root .settings-update-label { font-size: var(--settings-field-description-size); }
-.settings-theme-root .mcp-status-row { font-size: var(--settings-field-title-size); }
-.settings-theme-root .mcp-status-row-head,
 .settings-theme-root .mcp-entry-row .mcp-label { font-size: var(--settings-metadata-size); }
 .settings-theme-root .mcp-pane .mcp-json textarea,
 .settings-theme-root .mcp-status-error { font-size: var(--settings-metadata-size); }
+.settings-theme-root .settings-mcp-section > .settings-section-card { padding: 0; border: 0; background: transparent; }
+.settings-theme-root .mcp-list-actions { display: flex; align-items: center; gap: 8px; }
+.settings-theme-root .mcp-server-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; min-width: 0; }
+.settings-theme-root .mcp-server-card { display: flex; flex-direction: column; min-width: 0; height: 100%; border-radius: 10px; }
+.settings-theme-root .mcp-server-card .ant-card-head,
+.settings-theme-root .mcp-server-card .ant-card-head-title { min-width: 0; }
+.settings-theme-root .mcp-server-card .ant-card-body { flex: 1; min-width: 0; }
+.settings-theme-root .mcp-server-title { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.settings-theme-root .mcp-server-title .ant-tag { flex: none; margin: 0; }
+.settings-theme-root .mcp-server-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--settings-field-title-size); }
+.settings-theme-root .mcp-server-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ws-text-2); font-size: var(--settings-metadata-size); }
+.settings-theme-root .mcp-server-tools { display: flex; flex-direction: column; min-width: 0; gap: 8px; margin-top: 16px; }
+.settings-theme-root .mcp-tool-list { display: flex; flex-direction: column; gap: 0; min-width: 0; max-height: 240px; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
+.settings-theme-root .mcp-tool-item { display: flex; flex-direction: column; min-width: 0; gap: 2px; padding: 8px 0; border-top: 1px solid var(--ws-border); }
+.settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--ws-font-mono); color: var(--ws-text-1); }
+.settings-theme-root .mcp-tool-description-line { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.settings-theme-root .mcp-tool-description { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); font-size: var(--settings-metadata-size); }
+.settings-theme-root .mcp-tool-description-empty { color: var(--ws-dim); }
+.settings-theme-root .mcp-tool-help { flex: none; min-width: 24px; height: 24px; color: var(--ws-text-2); }
+.settings-theme-root .mcp-tool-placeholder { font-size: var(--settings-metadata-size); }
+.settings-theme-root .mcp-server-diagnostic { margin-top: 8px; }
+.settings-theme-root .mcp-server-diagnostic .ant-btn { padding-inline: 0; }
+.settings-theme-root .mcp-status-error { margin: 4px 0 0; }
 .settings-dialog .ant-modal-content { border-radius: 12px; }
 .settings-dialog .ant-modal-body { font-family: var(--ws-font-sans); }
 .settings-provider-modal .ant-modal-body { max-height: calc(100vh - 200px); overflow-y: auto; }

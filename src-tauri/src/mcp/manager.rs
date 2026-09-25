@@ -101,6 +101,14 @@ impl PoolKey {
     }
 }
 
+/// 设置页可见的 MCP 工具摘要。
+#[derive(Debug, Clone, Serialize)]
+pub struct McpStatusTool {
+    pub name: String,
+    /// 面向用户的原始说明，不含模型侧用于消歧的 `[server]` 前缀。
+    pub description: String,
+}
+
 /// 状态事件载荷（`mcp:status` 与 `mcp_status` 命令共用）。
 #[derive(Debug, Clone, Serialize)]
 pub struct McpStatusPayload {
@@ -112,6 +120,9 @@ pub struct McpStatusPayload {
     pub state: McpState,
     /// 已注入的工具数
     pub tools: usize,
+    /// 当前已注入的工具名称与说明；未就绪时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_details: Vec<McpStatusTool>,
     /// 因工具过滤而未注入的数量
     pub tools_filtered: usize,
     /// 子进程 PID（http 传输为 None）
@@ -201,6 +212,26 @@ struct Ready {
 }
 
 fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
+    let tool_details = if e.state == McpState::Ready {
+        let prefix = format!("[{}] ", key.name);
+        let mut details: Vec<McpStatusTool> = e
+            .tools
+            .iter()
+            .map(|tool| McpStatusTool {
+                name: tool.name.clone(),
+                description: tool
+                    .description
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&tool.description)
+                    .trim()
+                    .to_string(),
+            })
+            .collect();
+        details.sort_by(|a, b| a.name.cmp(&b.name));
+        details
+    } else {
+        Vec::new()
+    };
     McpStatusPayload {
         name: key.name.clone(),
         scope: key.scope,
@@ -210,6 +241,7 @@ fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
         } else {
             0
         },
+        tool_details,
         tools_filtered: e.tools_filtered,
         pid: e.pid,
         error: e.error.clone(),
@@ -1149,6 +1181,33 @@ mod tests {
 
     fn bogus_cfg() -> McpServerConfig {
         serde_json::from_value(json!({ "command": "definitely-not-a-real-binary-xyz" })).unwrap()
+    }
+
+    #[test]
+    fn status_payload_exposes_ready_tool_descriptions_without_model_prefix() {
+        let key = PoolKey::global("fs");
+        let mut entry = blank_entry(&bogus_cfg(), 1);
+        entry.state = McpState::Ready;
+        entry.tools = vec![McpTool {
+            server: "fs".to_string(),
+            name: "read_file".to_string(),
+            description: "[fs] Read a file from disk".to_string(),
+            schema_json: "{}".to_string(),
+        }];
+        let payload = payload_of(&key, &entry);
+        assert_eq!(payload.tools, 1);
+        assert_eq!(payload.tool_details[0].name, "read_file");
+        assert_eq!(payload.tool_details[0].description, "Read a file from disk");
+
+        entry.state = McpState::Stopped;
+        let stopped = payload_of(&key, &entry);
+        assert!(stopped.tool_details.is_empty());
+        assert!(
+            serde_json::to_value(stopped)
+                .unwrap()
+                .get("tool_details")
+                .is_none()
+        );
     }
 
     fn node_available() -> bool {

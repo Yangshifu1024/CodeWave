@@ -1123,21 +1123,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   margin: 2px 0 8px; font-size: 12px; color: var(--ws-dim);
 }
 
-/* 六列与 McpStatusTable 的 DOM 一一对应；窄窗由页体横向滚动承接。 */
-.mcp-status { display: flex; flex-direction: column; margin-bottom: 8px; min-width: 740px; }
-.mcp-status-row {
-  display: grid; grid-template-columns: minmax(150px, 2fr) 90px 100px 70px 70px 180px;
-  align-items: center; gap: 12px; min-height: 36px; padding: 4px 10px;
-  border-radius: 6px; font-size: 12.5px; color: var(--ws-text-2);
-}
-.mcp-status-row-head { min-height: 28px; font-size: 11px; color: var(--ws-dim); border-bottom: 1px solid var(--ws-border); }
-.mcp-status-row-clickable { cursor: pointer; }
-.mcp-status-row-clickable:hover { background: var(--ws-highlight); }
-.mcp-status-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcp-status-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.mcp-status-tools, .mcp-status-pid { color: var(--ws-dim); }
-.mcp-status-actions { display: flex; gap: 2px; white-space: nowrap; }
-.mcp-status-actions .ant-btn { padding-inline: 4px; }
 /* 展开的完整错误（含 stderr）：等宽小字 + 换行保留 + 限高滚动，不撑破布局 */
 .mcp-status-error {
   margin: 0 8px 6px; padding: 8px 10px; border-radius: 6px; background: var(--ws-bg-nav);
