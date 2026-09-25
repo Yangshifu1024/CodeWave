@@ -276,13 +276,12 @@ export default {
     leaveTitle: "Unsaved settings changes",
     leaveDesc: "Choose what to do with these changes before leaving; the cancel button discards everything without asking again.",
     leaveSave: "Save and leave", leaveDiscard: "Discard changes", leaveStay: "Stay here",
-    // Batch ③ search & advanced collapse ([docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md))
+    // Batch ③ search ([docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md));
+    // 2026-09 removed the "Show advanced" toggle, so showAdvanced / advancedHint keys are dropped
     searchPlaceholder: "Search settings…",
     searchResults: "Search results",
     searchEmpty: "No matching settings",
     searchEmptyHint: "Provider / model, MCP server and skill entries live on their own pages, not in search",
-    showAdvanced: "Show advanced ({{n}})",
-    advancedHint: "Advanced items are hidden by default; this preference is remembered across pages and sessions",
   },
   chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized",
     // Segmented history paging (batch 2 P3): load-earlier entry, oldest-end state, browse cap, collapse

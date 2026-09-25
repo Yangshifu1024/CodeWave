@@ -20,7 +20,6 @@ import { fileURLToPath } from "node:url";
 import zh from "../i18n/zh-CN";
 import en from "../i18n/en-US";
 import {
-  ADVANCED_ITEM_IDS,
   DEFAULT_PAGE,
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
@@ -29,14 +28,11 @@ import {
   PAGE_GROUPS,
   PAGE_LABEL_KEY,
   PAGE_ORDER,
-  SETTINGS_ADVANCED_PREF_KEY,
   SETTINGS_ITEMS,
   SHELL_SETTING_KEYS,
   WIDTH_CLASS,
   WIDTH_EXEMPT_ITEM_IDS,
   WIDTH_TIERS,
-  advancedCountByPage,
-  isAdvancedOnlyGroup,
   matchSettings,
   normalizePageKey,
 } from "../features/panels/settingsRegistry";
@@ -376,9 +372,8 @@ describe("宽度档：app.css 类与页体（批③）", () => {
     }
   });
 
-  it("进阶折叠的隐藏类在 app.css 里是 display:none（只加类、不搬 DOM）", () => {
-    expect(css).toMatch(/\.settings-advanced-hidden\s*\{\s*display:\s*none/);
-  });
+  // 2026-09 移除「显示进阶项」开关，原 CSS 守护用例（`.settings-advanced-hidden { display: none }`）
+// 随之删除 —— 样式本身已一并清除。
 });
 
 // ---------- 动态行级锚点（额度灰行「去设置」） ----------
@@ -466,36 +461,9 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
   });
 });
 
-describe("设置项注册表：进阶项派生（批③）", () => {
-  it("进阶项共 4 项（写入后检查 2 + 命令白名单 + 会话详细日志），与注册表 advanced 标记同源", () => {
-    expect(ADVANCED_ITEM_IDS.length).toBe(4);
-    expect(new Set(ADVANCED_ITEM_IDS).size).toBe(ADVANCED_ITEM_IDS.length);
-    expect(new Set(ADVANCED_ITEM_IDS)).toEqual(new Set(SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id)));
-  });
-
-  it("advancedCountByPage 逐页统计，拾起来恰好 4", () => {
-    expect(PAGE_ORDER.map((p) => advancedCountByPage(p)).reduce((a, b) => a + b, 0)).toBe(4);
-    expect(advancedCountByPage("tools")).toBe(2); // 写入后检查：超时 / 输出尾部字符
-    expect(advancedCountByPage("security")).toBe(1); // 命令白名单
-    // 模型与供应商页：0——该页唯一候选 active_model_id 的锚点只在编辑视图，页级开关对它无意义
-    expect(advancedCountByPage("providers")).toBe(0);
-    expect(advancedCountByPage("logs")).toBe(1); // 会话详细日志
-    expect(advancedCountByPage("appearance")).toBe(0);
-    expect(advancedCountByPage("network")).toBe(0);
-    expect(advancedCountByPage("about")).toBe(0);
-  });
-
-  it("整组皆为进阶项：写入后检查组含非进阶的开关与命令，故不是整组折叠", () => {
-    expect(isAdvancedOnlyGroup("tools", "settings.postWriteCheck")).toBe(false);
-    expect(isAdvancedOnlyGroup("tools", "settings.mcp")).toBe(false);
-    expect(isAdvancedOnlyGroup("tools", "settings.skills")).toBe(false);
-    expect(isAdvancedOnlyGroup("tools", "settings.nope")).toBe(false);
-  });
-
-  it("折叠偏好键固定为 ws_settings_show_advanced（全局单一偏好，不得静默改名）", () => {
-    expect(SETTINGS_ADVANCED_PREF_KEY).toBe("ws_settings_show_advanced");
-  });
-});
+// 2026-09 移除「显示进阶项」开关，ADVANCED_ITEM_IDS / advancedCountByPage / isAdvancedOnlyGroup /
+// SETTINGS_ADVANCED_PREF_KEY 一并清除；原 describe("进阶项派生（批③）") 4 个 it 整体删除。
+// 注册表 SETTINGS_ITEMS 上的 `advanced: true` 标记保留为无害冗余，不影响行为。
 
 // ---------- 批④：术语与 i18n 键统一（[docs/settings-terminology](../../../docs/settings-terminology.md)） ----------
 
@@ -862,12 +830,10 @@ describe("设置项注册表：会话保留期与清理的登记（[docs/session
     }
   });
 
-  it("三个新项都不标进阶（进阶项总数保持 4，页级折叠不牵动清理界面）", () => {
+  it("三个新项都不标进阶（保留项的 `advanced` 标记默认为 falsy）", () => {
     for (const id of ["sessions.retention_days", "app.cleanup_now", "app.cleanup_status"]) {
       expect(SETTINGS_ITEMS.find((i) => i.id === id)?.advanced, `${id} 不该标进阶`).toBeFalsy();
     }
-    expect(ADVANCED_ITEM_IDS.length).toBe(4);
-    expect(advancedCountByPage("agent"), "工作区与智能体页进阶项数不应因清理界面变化").toBe(0);
   });
 
   it("清理的从属文案键逐把登记进 SHELL_SETTING_KEYS（未登记即被引用闭包判红）", () => {
@@ -929,9 +895,6 @@ describe("设置项注册表：旧格式历史清理的登记", () => {
       expect(WIDTH_EXEMPT_ITEM_IDS, `${id} 未登记宽度豁免（无独立控件宽度）`).toContain(id);
       expect(item!.advanced, `${id} 不该标进阶`).toBeFalsy();
     }
-    // 进阶项总数不变（页级折叠不牵动旧格式清理界面）
-    expect(ADVANCED_ITEM_IDS.length).toBe(4);
-    expect(advancedCountByPage("agent")).toBe(0);
   });
 
   it("两个项名不得再进豁免清单（既是项也是豁免 = 清单重叠）", () => {

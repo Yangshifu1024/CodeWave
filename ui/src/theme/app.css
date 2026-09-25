@@ -1026,7 +1026,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 导航项图标：Outlined 线性图标——**不设 color**，跟随 .settings-nav-label 的文本色（无彩色约定） */
 .settings-nav-icon { font-size: 16px; flex: none; }
 
-/* ---------- 设置页批③：搜索 + 进阶折叠 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ---------- */
+/* ---------- 设置页批③：搜索 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ----------
+   2026-09 移除「显示进阶项」开关后，进阶折叠相关 CSS 与导出（.settings-advanced-toggle /
+   .settings-advanced-label / .settings-advanced-hidden）一并清除，所有项默认全部可见。 */
 /* 控件宽度三档（窄 180 / 中 240 / 宽 360）：都带 max-width:100% —— 窄窗下宽档被 max-width 兜住
    → 变 100% 且不横向溢出。页体内**不得**再写像素内联 width（测试正则守护）。
    注：antd 自带宽度规则（.ant-input 100%、.ant-input-number 90px）与下面的单类规则同权重，
@@ -1061,11 +1063,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-search-empty { padding: 6px 8px; }
 .settings-search-empty .settings-search-empty-title { font-size: 12.5px; color: var(--ws-text-2); margin-bottom: 4px; }
 
-/* 页体顶部的进阶开关行（该页进阶项数 N = 0 时不渲染；切换不产生未保存改动） */
-.settings-advanced-toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 0 10px; }
-.settings-advanced-toggle .settings-advanced-label { font-size: 12.5px; color: var(--ws-text-2); }
-/* 进阶行/组收起：只加类隐藏，**零 DOM 搬迁**（行仍留在原分组内，展开后在原位重现） */
-.settings-advanced-hidden { display: none; }
+/* 进阶折叠相关样式（.settings-advanced-toggle / .settings-advanced-hidden 等）已随 2026-09
+   移除「显示进阶项」开关一并清除。 */
 
 /* 设置项锚点包裹层（data-setting-id 挂在这里）：供搜索命中定位与临时高亮 */
 .setting-anchor { min-width: 0; }
@@ -1087,9 +1086,27 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .settings-actions-buttons { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .settings-pane { flex: 1; min-height: 0; overflow: auto; }
-/* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点） */
+/* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点）。
+   外层 .settings-pane-body 只承担「保底 + 内边距」，不参与居中 —— 居中语义独立到
+   .settings-pane-inner，页体自身不再耦合对齐方式。 */
 .settings-pane-body { min-width: 480px; padding: 14px 16px 24px; }
-.settings-pane-body-mcp { box-sizing: border-box; width: 100%; max-width: 960px; margin: 0; }
+/* 中间内容居中容器：占右栏宽度 50%，左右各 25% 留白（box-sizing:border-box 让 padding 不撑破 50%）。
+   max-width:100% 防窄窗溢出，由父级 .settings-pane 的 overflow:auto 兜底横向滚动。
+   **只承担居中职责，不携带视觉外壳**——section 级别的卡片样式由 .settings-section-card 工具类承担，
+   page renderer 按需对分组显式加 className（参考图：每组相关设置项共用一张圆角浅灰卡片）。 */
+.settings-pane-inner { box-sizing: border-box; width: 50%; max-width: 100%; margin: 0 auto; }
+/* Section 卡片工具类（参考 IDE 设置页视觉，[docs/settings-fullscreen-shell]）：一组相关设置项共享
+   一个圆角浅灰容器，section 标题（如"浅色主题"）与单卡片组留在卡片外。颜色与左导航同色
+   （--ws-bg-nav，亮色 #eef4f9 / 暗色 antd 容器色），统一观感。 */
+.settings-section-card {
+  background: var(--ws-bg-nav);
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+.settings-section-card:last-child { margin-bottom: 0; }
+/* MCP 页：保留 960px 上限，避免超宽屏下状态表被拉得过宽不好读；上限挂在 inner 上与普通页同构 */
+.settings-pane-body-mcp .settings-pane-inner { max-width: 960px; }
 
 /* 脏圆点：导航项与操作条共用；只换前景色，不当背景块用 */
 .settings-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); flex: none; display: inline-block; }
@@ -1167,8 +1184,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .hint { color: var(--ws-dim); font-size: 12px; }
 /* 外观页签字体预览（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）：两行分别以 sans/mono 槽渲染同一段文本 */
 .font-preview { display: flex; flex-direction: column; gap: 4px; }
+/* 预览块：section 卡片（浅灰 --ws-bg-nav）内嵌预览块用主背景色 --ws-bg-main 与卡片底色形成对比，
+   避免 dashed 边框在浅灰底上"飘"看不见边界（[docs/settings-fullscreen-shell]） */
 .font-preview-row {
   padding: 6px 10px; border: 1px dashed var(--ws-border); border-radius: 8px;
+  background: var(--ws-bg-main);
   color: var(--ws-text-2); font-size: 13px;
 }
 .skill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--ws-border); }

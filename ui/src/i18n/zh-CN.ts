@@ -272,13 +272,12 @@ export default {
     leaveTitle: "有未保存的设置改动",
     leaveDesc: "离开前请选择如何处理这些改动；取消按钮会直接放弃全部未保存改动。",
     leaveSave: "保存并离开", leaveDiscard: "放弃改动", leaveStay: "留在原地",
-    // 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)）
+    // 批③ 搜索（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)）；
+    // 2026-09 移除「显示进阶项」开关，showAdvanced / advancedHint 文案一并清除
     searchPlaceholder: "搜索设置项…",
     searchResults: "搜索结果",
     searchEmpty: "没有匹配的设置项",
     searchEmptyHint: "供应商 / 模型、MCP 服务器、技能等条目请在各自页面内查找",
-    showAdvanced: "显示进阶项（{{n}}）",
-    advancedHint: "进阶项默认收起，该偏好会跨页跨会话记住",
   },
   chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染",
     // 分段历史分页（批2 P3）：逐段向前加载的入口、最早段终态、浏览上限与收起
