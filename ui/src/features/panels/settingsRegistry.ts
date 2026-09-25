@@ -475,6 +475,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpDelete",
   "mcpDeleteConfirm",
   "mcpEditRaw",
+  "mcpEditorCreateTitle",
+  "mcpEditorEditTitle",
+  "mcpBasicSection",
+  "mcpConnectionSection",
+  "mcpTransport",
+  "mcpShowSecret",
+  "mcpHideSecret",
   "mcpSave", // → 动作：保存并重连（MCP 独立文件，不走页级保存）
   "mcpExtraKeys", // → mcp.servers 条目：表单未展示键的「保存时原样保留」提示
   "mcpIssuesHead", // → mcp.servers：保存前结构校验的问题清单标题

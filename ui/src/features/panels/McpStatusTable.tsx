@@ -52,6 +52,7 @@ export function mcpStatusRow(name: string, st?: StatusLike, meta?: { source?: Mc
 interface Props {
   rows: McpStatusRow[];
   refreshing: boolean;
+  pendingAction?: (name: string) => "disconnect" | "reconnect" | undefined;
   onRefresh: () => void;
   onCreate?: () => void;
   rawConfig?: boolean;
@@ -84,7 +85,7 @@ function ToolDescription({ name, description }: McpToolSummary) {
   </div>;
 }
 
-export default function McpStatusTable({ rows, refreshing, onRefresh, onCreate, rawConfig, onEdit, editableNames, hasSession, onDisconnect, onReconnect }: Props) {
+export default function McpStatusTable({ rows, refreshing, pendingAction, onRefresh, onCreate, rawConfig, onEdit, editableNames, hasSession, onDisconnect, onReconnect }: Props) {
   const { t } = useTranslation();
   const [expandedName, setExpandedName] = useState<string | null>(null);
   const stateText = (kind: McpStatusKind) => {
@@ -109,17 +110,21 @@ export default function McpStatusTable({ rows, refreshing, onRefresh, onCreate, 
           const failed = row.kind === "error" || row.kind === "config_error";
           const expanded = failed && expandedName === row.name;
           const source = sourceText(row);
+          const actionPending = pendingAction?.(row.name);
           return <Card key={row.name} size="small" variant="outlined" className="mcp-server-card" styles={{ header: { paddingBlock: 12 }, body: { padding: 16 } }}
-            title={<div className="mcp-server-title"><span className="mcp-server-name" title={row.name}>{row.name}</span>{row.kind === "starting" && <Spin size="small" />}
-              <Tag color={row.kind === "ready" ? "success" : failed ? "error" : row.kind === "evicted" || row.kind === "starting" ? "warning" : "default"}>{stateText(row.kind)}</Tag></div>}
+            title={<div className="mcp-server-title">
+              <span className="mcp-server-name" title={row.name}>{row.name}</span>
+              <div className="mcp-server-meta">{source && <span className={row.overridden ? "mcp-source-override" : ""}>{source}</span>}
+                {row.kind === "ready" && <span>{row.toolsFiltered > 0 ? t("settings.mcpToolsFiltered", { n: row.tools, m: row.toolsFiltered }) : t("settings.mcpToolCount", { count: row.tools })}</span>}
+                {row.pid != null && <span>PID {row.pid}</span>}{row.actionable === false && <span>{t("settings.mcpInactiveScope")}</span>}</div>
+              <span className="mcp-server-state">{row.kind === "starting" && <Spin size="small" />}
+                <Tag color={row.kind === "ready" ? "success" : failed ? "error" : row.kind === "evicted" || row.kind === "starting" ? "warning" : "default"}>{stateText(row.kind)}</Tag></span>
+            </div>}
             actions={[
               ...(onEdit && editableNames?.has(row.name) ? [<Button key="edit" type="text" onClick={() => onEdit(row.name)}>{t("settings.mcpEdit")}</Button>] : []),
-              <Button key="disconnect" type="text" disabled={!hasSession || row.actionable === false || row.kind === "disconnected"} onClick={() => onDisconnect?.(row.name)}>{t("settings.mcpActionDisconnect")}</Button>,
-              <Button key="reconnect" type="text" disabled={!hasSession || row.actionable === false || row.kind === "ready" || row.kind === "starting"} onClick={() => onReconnect?.(row.name)}>{t("settings.mcpActionReconnect")}</Button>,
+              <Button key="disconnect" type="text" loading={actionPending === "disconnect"} disabled={!!actionPending || !hasSession || row.actionable === false || row.kind === "disconnected"} onClick={() => onDisconnect?.(row.name)}>{t("settings.mcpActionDisconnect")}</Button>,
+              <Button key="reconnect" type="text" loading={actionPending === "reconnect"} disabled={!!actionPending || !hasSession || row.actionable === false || row.kind === "ready" || row.kind === "starting"} onClick={() => onReconnect?.(row.name)}>{t("settings.mcpActionReconnect")}</Button>,
             ]}>
-            <div className="mcp-server-meta">{source && <span className={row.overridden ? "mcp-source-override" : ""}>{source}</span>}
-              {row.kind === "ready" && <span>{row.toolsFiltered > 0 ? t("settings.mcpToolsFiltered", { n: row.tools, m: row.toolsFiltered }) : t("settings.mcpToolCount", { count: row.tools })}</span>}
-              {row.pid != null && <span>PID {row.pid}</span>}{row.actionable === false && <span>{t("settings.mcpInactiveScope")}</span>}</div>
             <div className="mcp-server-tools"><Typography.Text strong>{t("settings.mcpColTools")}</Typography.Text>
               {row.kind === "ready" && row.toolDetails.length > 0 ? <ul className="mcp-tool-list">{row.toolDetails.map((tool) => <li key={tool.name} className="mcp-tool-item"><span className="mcp-tool-name" title={tool.name}>{tool.name}</span><ToolDescription {...tool} /></li>)}</ul>
                 : <Typography.Text type="secondary" className="mcp-tool-placeholder">{row.kind !== "ready" ? t("settings.mcpToolsNotReady") : row.tools === 0 ? t("settings.mcpToolsEmpty") : t("settings.mcpToolsUnavailable")}</Typography.Text>}

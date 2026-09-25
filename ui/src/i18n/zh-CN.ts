@@ -231,8 +231,11 @@ export default {
     // MCP 独立页：状态表（服务器状态）+ 配置两段。mcpStatus 既是 app.mcp_status 的项名（搜索 / 锚点），
     // 也是状态段的段标题——同一个概念只留一把键。
     mcpStatus: "服务器列表", mcpConfigHead: "服务器配置",
-    mcpNew: "新建", mcpNoServers: "暂无服务器", mcpDelete: "删除服务器", mcpDeleteConfirm: "确认删除此服务器？保存后生效。",
+    mcpNew: "新建", mcpNoServers: "暂无服务器", mcpDelete: "删除服务器", mcpDeleteConfirm: "删除后将更新 MCP 配置并重新连接。确认删除此服务器？",
     mcpEditRaw: "编辑原始配置",
+    mcpEditorCreateTitle: "添加 MCP 服务器", mcpEditorEditTitle: "编辑 MCP 服务器",
+    mcpBasicSection: "基本信息", mcpConnectionSection: "连接配置", mcpTransport: "传输方式",
+    mcpShowSecret: "显示敏感值", mcpHideSecret: "隐藏敏感值",
     mcpColState: "状态", mcpColTools: "工具数",
     mcpStateReady: "已连接", mcpStateStarting: "连接中", mcpStateError: "连接失败", mcpStateDisconnected: "未连接",
     mcpStatusRefresh: "刷新状态（不会重新连接）", mcpStatusToggleError: "展开 / 收起错误详情",

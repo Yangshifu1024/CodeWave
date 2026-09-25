@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const theme = readFileSync(join(here, "../features/panels/settings/SettingsTheme.tsx"), "utf8");
 const css = readFileSync(join(here, "../features/panels/settings/settings-theme.css"), "utf8");
-const appCss = readFileSync(join(here, "../theme/app.css"), "utf8");
 
 describe("设置页共享视觉契约（settings-ui-unification）", () => {
   it("所有面板共享一个 antd 主题层与左右式 Form", () => {
@@ -47,8 +46,8 @@ describe("设置页共享视觉契约（settings-ui-unification）", () => {
     expect(css).toMatch(/\.ant-form-item-row\s*\{\s*display:\s*flex;\s*flex-direction:\s*column/);
   });
 
-  it("MCP 的键值编辑项仍保持标签在上方", () => {
-    expect(appCss).toMatch(/\.mcp-entry-row\s*\{[^}]*flex-direction:\s*column/);
-    expect(appCss).not.toMatch(/\.mcp-entry-row \.mcp-label\s*\{[^}]*width:/);
+  it("MCP 编辑弹框字段标签在上方，窄屏键值行自动堆叠", () => {
+    expect(css).toMatch(/\.mcp-editor-field,\s*\.settings-theme-root \.mcp-entry-row\s*\{[^}]*flex-direction:\s*column/);
+    expect(css).toMatch(/@container settings-content \(max-width: 540px\)[\s\S]*?\.mcp-kv-table \.mcp-table-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 34px/);
   });
 });

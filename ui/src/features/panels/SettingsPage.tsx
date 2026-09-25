@@ -247,6 +247,9 @@ function hitTargetOf(root: HTMLElement, id: string): HTMLElement | null {
 //  旧实现会在保存时把它们丢掉，未知 transport 取值也会被静默改写成 stdio）。
 type McpEntry = McpServerDraft;
 
+// 设置页可在请求未完成时关闭重开；较早发起的快照不得覆盖较新的操作结果。
+let latestMcpSnapshotRequest = 0;
+
 /** Shell 路径回显三态：path = 可执行文件绝对路径；placeholder = 所选 shell 无固定路径（如 WSL）；
  *  null = 不显示回显（探测失败 / 所选 shell 已卸载 / auto 探测项无 path，均有既有警示文案兜底）。 */
 type ShellDisplay = { kind: "path"; text: string } | { kind: "placeholder" } | null;
@@ -312,7 +315,6 @@ function SettingsPageController() {
   const [mcpEditing, setMcpEditing] = useState(false);
   const [mcpEditorIndex, setMcpEditorIndex] = useState<number | null>(null);
   const [mcpCreating, setMcpCreating] = useState(false);
-  const [mcpDeletePending, setMcpDeletePending] = useState(false);
   /** 当前作用域 mcp.json 的绝对路径（来源诊断） */
   const [mcpPath, setMcpPath] = useState("");
   /** 项目层 mcp.json 路径；null = 当前会话没有项目目录（该作用域不可用） */
@@ -325,6 +327,7 @@ function SettingsPageController() {
   const mcpStatus = useUi((s) => s.mcpStatus);
   /** 状态刷新中：按钮转圈 + 防重复点击（只重读状态，不触发连接 / 重连） */
   const [mcpRefreshing, setMcpRefreshing] = useState(false);
+  const mcpActionPending = useUi((state) => state.mcpActionPending);
   // shell 探测：null = 探测失败（仅显示「自动」+ 失败提示），[] = 探测成功但无可用项
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
@@ -434,8 +437,11 @@ function SettingsPageController() {
       const proj = await ipc.mcpListConfig("project", sessionId ?? undefined).catch(() => null);
       setMcpProjectPath(proj?.path ?? null);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
+      const snapshotRequest = ++latestMcpSnapshotRequest;
       const st = await readMcpStatus();
-      useUi.setState({ mcpStatus: st ?? [] });
+      if (snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === sessionId) {
+        useUi.setState({ mcpStatus: st ?? [] });
+      }
       // shell 探测失败不阻塞面板：仅回退「自动」选项 + 失败提示
       setShells(await ipc.listAvailableShells().catch(() => null));
       // 系统代理探测回显：失败不阻塞（null = 未检测到提示）
@@ -884,10 +890,10 @@ function SettingsPageController() {
     }
   }
 
-  async function saveMcp() {
+  async function saveMcp(replacementDoc?: McpDraftDoc) {
     try {
       // 结构化模式：草稿 -> JSON（无损，含未识别键）；兜底模式：原文本原样保存
-      const json = mcpDoc ? serializeMcpDoc(mcpDoc) : mcpRaw;
+      const json = replacementDoc ? serializeMcpDoc(replacementDoc) : mcpDoc ? serializeMcpDoc(mcpDoc) : mcpRaw;
       const res = await ipc.mcpSaveConfig(mcpScope, json, sessionId ?? undefined);
       setMcpIssues(res.issues);
       // 有 error 级问题时后端**不落盘**：不能报成功，也不能把基线前移
@@ -899,15 +905,18 @@ function SettingsPageController() {
       const normalized = normalizeMcpDoc(json);
       setMcpRaw(normalized);
       setMcpOriginal(normalized);
+      if (replacementDoc) setMcpDoc(replacementDoc);
       setMcpEditing(false);
       setMcpEditorIndex(null);
       setMcpCreating(false);
-      setMcpDeletePending(false);
       // 保存后自动重连（后端只重载受影响的连接，其它会话不受牵连）
       if (sessionId) {
         await ipc.mcpConnect(sessionId).catch(() => null);
+        const snapshotRequest = ++latestMcpSnapshotRequest;
         const st = await readMcpStatus();
-        if (st) useUi.setState({ mcpStatus: st });
+        if (st && snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === sessionId) {
+          useUi.setState({ mcpStatus: st });
+        }
       }
     } catch (e) {
       message.error(String(e));
@@ -972,10 +981,10 @@ function SettingsPageController() {
     }));
   }
 
-  function removeMcpEntry(idx: number) {
-    setMcpDoc((prev) =>
-      prev ? { ...prev, servers: prev.servers.filter((_, i) => i !== idx) } : prev,
-    );
+  function deleteMcpEntry(idx: number) {
+    const savedDoc = parseMcpDoc(mcpOriginal);
+    if (!savedDoc) return Promise.resolve();
+    return saveMcp({ ...savedDoc, servers: savedDoc.servers.filter((_, i) => i !== idx) });
   }
 
   function openMcpCreate() {
@@ -986,7 +995,6 @@ function SettingsPageController() {
       return;
     }
     setMcpEditorIndex(mcpEntries?.length ?? 0);
-    setMcpDeletePending(false);
     setMcpCreating(true);
     addMcpEntry();
     setMcpEditing(true);
@@ -996,7 +1004,6 @@ function SettingsPageController() {
     const index = mcpEntries?.findIndex((entry) => entry.name.trim() === name) ?? -1;
     if (index < 0) return;
     setMcpEditorIndex(index);
-    setMcpDeletePending(false);
     setMcpCreating(false);
     setMcpEditing(true);
   }
@@ -1006,7 +1013,6 @@ function SettingsPageController() {
     setMcpRaw(mcpOriginal);
     setMcpEditing(false);
     setMcpEditorIndex(null);
-    setMcpDeletePending(false);
     setMcpCreating(false);
   }
 
@@ -1031,7 +1037,6 @@ function SettingsPageController() {
     setMcpScope(scope);
     setMcpEditing(parsed === null && raw.trim().length > 0);
     setMcpEditorIndex(null);
-    setMcpDeletePending(false);
     setMcpCreating(false);
     setMcpDoc(parsed);
     setMcpRaw(normalized);
@@ -1042,25 +1047,38 @@ function SettingsPageController() {
     setMcpTests({});
   }
 
-  /** 断开单个 server（连接没了但引用还在，可随时重连） */
-  async function disconnectMcp(name: string) {
-    if (!sessionId) return;
-    try {
-      await ipc.mcpDisconnect(sessionId, [name]);
-    } catch (e) {
-      message.error(String(e));
-      return;
-    }
-    const st = await readMcpStatus();
-    if (st) useUi.setState({ mcpStatus: st });
+  /** 同一会话、作用域和服务器的断开/重连互斥；状态快照刷新后再结束 loading。 */
+  function mcpActionKey(activeSessionId: string, scope: McpScope, name: string) {
+    return `${activeSessionId}\u0000${scope}\u0000${name}`;
   }
 
-  /** 重连单个 server（后端会绕过淘汰防抖立即重拉） */
-  async function reconnectMcp(name: string) {
+  async function runMcpAction(name: string, action: "disconnect" | "reconnect") {
     if (!sessionId) return;
-    await ipc.mcpReconnect(sessionId, name).catch((e) => message.error(String(e)));
-    const st = await readMcpStatus();
-    if (st) useUi.setState({ mcpStatus: st });
+    const activeSessionId = sessionId;
+    const key = mcpActionKey(activeSessionId, mcpScope, name);
+    if (useUi.getState().mcpActionPending[key]) return;
+    useUi.setState((state) => ({ mcpActionPending: { ...state.mcpActionPending, [key]: action } }));
+    ++latestMcpSnapshotRequest;
+    try {
+      if (action === "disconnect") await ipc.mcpDisconnect(activeSessionId, [name]);
+      else await ipc.mcpReconnect(activeSessionId, name);
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      try {
+        const snapshotRequest = ++latestMcpSnapshotRequest;
+        const st = await readMcpStatus();
+        if (st && snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === activeSessionId) {
+          useUi.setState({ mcpStatus: st });
+        }
+      } finally {
+        useUi.setState((state) => {
+          const next = { ...state.mcpActionPending };
+          delete next[key];
+          return { mcpActionPending: next };
+        });
+      }
+    }
   }
 
   /** 临时测试连接：起 → tools/list → 立即回收，不改动正式连接状态 */
@@ -1097,10 +1115,12 @@ function SettingsPageController() {
   /** 刷新 MCP 状态：只重读状态（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
   async function refreshMcpStatus() {
     setMcpRefreshing(true);
+    const snapshotRequest = ++latestMcpSnapshotRequest;
     try {
       // 失败保留旧值：整份替成 [] 会把「一次 IPC 抖动」伪装成「所有服务器都没连接」，
       // 而「未连接」在本页是**正常态**文案（见状态表下方的说明），误导性最强
       const st = await readMcpStatus();
+      if (snapshotRequest !== latestMcpSnapshotRequest || useSessions.getState().activeKey !== sessionId) return;
       if (st) useUi.setState({ mcpStatus: st });
       else message.error(t("settings.mcpStatusRefreshFailed"));
     } finally {
@@ -1685,29 +1705,47 @@ function SettingsPageController() {
           <McpStatusTable
             rows={mcpStatusRows}
             refreshing={mcpRefreshing}
+            pendingAction={(name) => sessionId ? mcpActionPending[mcpActionKey(sessionId, mcpScope, name)] : undefined}
             onRefresh={() => void refreshMcpStatus()}
             onCreate={openMcpCreate}
             rawConfig={mcpDoc === null}
             onEdit={openMcpEdit}
             editableNames={new Set((mcpEntries ?? []).map((entry) => entry.name.trim()))}
             hasSession={!!sessionId}
-            onDisconnect={(n) => void disconnectMcp(n)}
-            onReconnect={(n) => void reconnectMcp(n)}
+            onDisconnect={(n) => void runMcpAction(n, "disconnect")}
+            onReconnect={(n) => void runMcpAction(n, "reconnect")}
           />
           {mcpEditing && <Modal
-            className="settings-dialog"
+            className="settings-dialog settings-mcp-editor-modal"
             open={mcpEditing}
-            title={mcpDeletePending ? t("settings.mcpDelete") : mcpCreating ? t("settings.mcpNew") : t("settings.mcpEdit")}
+            title={mcpCreating ? t("settings.mcpEditorCreateTitle") : t("settings.mcpEditorEditTitle")}
             onCancel={cancelMcpEditor}
             onOk={() => void saveMcp()}
+            cancelText={t("common.cancel")}
             okText={t("settings.mcpSave")}
-            width={720}
+            footer={(_originNode, { OkBtn, CancelBtn }) => <div className="mcp-editor-footer">
+              {!mcpCreating && mcpEntries !== null && mcpEditorIndex !== null && (
+                <Popconfirm
+                  title={t("settings.mcpDelete")}
+                  description={t("settings.mcpDeleteConfirm")}
+                  okText={t("settings.mcpDelete")}
+                  okButtonProps={{ danger: true }}
+                  cancelText={t("common.cancel")}
+                  onConfirm={() => mcpEditorIndex === null ? undefined : deleteMcpEntry(mcpEditorIndex)}
+                >
+                  <Button danger icon={<DeleteOutlined />}>{t("settings.mcpDelete")}</Button>
+                </Popconfirm>
+              )}
+              <div className="mcp-editor-footer-actions">
+                <CancelBtn />
+                <OkBtn />
+              </div>
+            </div>}
+            width={680}
             destroyOnHidden
           >
           <SettingsThemeScope className="settings-dialog-body">
-          {mcpDeletePending ? (
-            <div className="hint">{t("settings.mcpDeleteConfirm")}</div>
-          ) : mcpEntries === null ? (
+          {mcpEntries === null ? (
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               <div className="hint">{t("settings.mcpRawHint")}</div>
@@ -1717,40 +1755,41 @@ function SettingsPageController() {
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               {mcpEntries.map((e, idx) => idx === mcpEditorIndex && (
                 <div className="mcp-entry" key={idx}>
-                  <div className="mcp-entry-head">
-                    <Input
-
-                      className="w-narrow"
-                      value={e.name}
-                      placeholder={t("settings.mcpName")}
-                      onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
-                    />
-                    <Select
-
-                      className="w-narrow"
-                      value={draftTransport(e)}
-                      options={[
-                        { label: t("settings.mcpTransportStdio"), value: "stdio" },
-                        { label: t("settings.mcpTransportHttp"), value: "streamable_http" },
-                      ]}
-                      onChange={(v) => patchMcpEntry(idx, { transportRaw: v })}
-                    />
-                    <div className="flex" />
-                    <Button
-
-                      disabled={!e.name.trim()}
-                      onClick={() => void testMcpServer(e.name.trim())}
-                    >
-                      {t("settings.mcpTest")}
-                    </Button>
-                    {!mcpCreating && <Button  type="text" danger icon={<DeleteOutlined />} aria-label={t("settings.mcpDelete")} onClick={() => { removeMcpEntry(idx); setMcpDeletePending(true); }} />}
-                  </div>
+                  <section className="mcp-editor-section">
+                    <h3 className="mcp-editor-section-title">{t("settings.mcpBasicSection")}</h3>
+                    <div className="mcp-editor-basics">
+                      <label className="mcp-editor-field">
+                        <span className="mcp-label">{t("settings.mcpName")}</span>
+                        <Input
+                          value={e.name}
+                          placeholder={t("settings.mcpName")}
+                          onChange={(ev) => patchMcpEntry(idx, { name: ev.target.value })}
+                        />
+                      </label>
+                      <label className="mcp-editor-field">
+                        <span className="mcp-label">{t("settings.mcpTransport")}</span>
+                        <Select
+                          value={draftTransport(e)}
+                          aria-label={t("settings.mcpTransport")}
+                          options={[
+                            { label: t("settings.mcpTransportStdio"), value: "stdio" },
+                            { label: t("settings.mcpTransportHttp"), value: "streamable_http" },
+                          ]}
+                          onChange={(v) => patchMcpEntry(idx, { transportRaw: v })}
+                        />
+                      </label>
+                    </div>
+                  </section>
+                  <section className="mcp-editor-section">
+                    <div className="mcp-editor-section-head">
+                      <h3 className="mcp-editor-section-title">{t("settings.mcpConnectionSection")}</h3>
+                      <Button disabled={!e.name.trim()} onClick={() => void testMcpServer(e.name.trim())}>{t("settings.mcpTest")}</Button>
+                    </div>
                   {draftTransport(e) === "stdio" ? (
                     <>
                       <div className="mcp-entry-row">
                         <span className="mcp-label">{t("settings.mcpCommand")}</span>
                         <Input
-
                           value={e.command}
                           placeholder="npx -y @modelcontextprotocol/server-fs"
                           onChange={(ev) => patchMcpEntry(idx, { command: ev.target.value })}
@@ -1775,6 +1814,9 @@ function SettingsPageController() {
                           valuePlaceholder={t("settings.mcpTableValue")}
                           deleteLabel={t("settings.mcpRowDelete")}
                           addLabel={t("settings.mcpEnvAdd")}
+                          showSecretLabel={t("settings.mcpShowSecret")}
+                          hideSecretLabel={t("settings.mcpHideSecret")}
+                          maskSensitive
                           onPatch={(ri, patch) => mcpKvPatch(idx, "env", ri, patch)}
                           onAdd={() => mcpKvAdd(idx, "env")}
                           onRemove={(ri) => mcpKvRemove(idx, "env", ri)}
@@ -1786,7 +1828,6 @@ function SettingsPageController() {
                       <div className="mcp-entry-row">
                         <span className="mcp-label">{t("settings.mcpUrl")}</span>
                         <Input
-
                           value={e.url}
                           placeholder="https://example.com/mcp"
                           onChange={(ev) => patchMcpEntry(idx, { url: ev.target.value })}
@@ -1800,6 +1841,9 @@ function SettingsPageController() {
                           valuePlaceholder={t("settings.mcpTableValue")}
                           deleteLabel={t("settings.mcpRowDelete")}
                           addLabel={t("settings.mcpHeadersAdd")}
+                          showSecretLabel={t("settings.mcpShowSecret")}
+                          hideSecretLabel={t("settings.mcpHideSecret")}
+                          maskSensitive
                           onPatch={(ri, patch) => mcpKvPatch(idx, "headers", ri, patch)}
                           onAdd={() => mcpKvAdd(idx, "headers")}
                           onRemove={(ri) => mcpKvRemove(idx, "headers", ri)}
@@ -1820,6 +1864,7 @@ function SettingsPageController() {
                       {mcpTests[e.name.trim()].text}
                     </div>
                   )}
+                  </section>
                 </div>
               ))}
               {mcpIssues.length > 0 && (

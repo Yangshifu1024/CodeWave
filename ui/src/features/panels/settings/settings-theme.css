@@ -523,15 +523,22 @@
 .settings-theme-root .settings-mcp-section > .settings-section-card { padding: 0; border: 0; background: transparent; }
 .settings-theme-root .mcp-list-actions { display: flex; align-items: center; gap: 8px; }
 .settings-theme-root .mcp-server-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; min-width: 0; }
-.settings-theme-root .mcp-server-card { display: flex; flex-direction: column; min-width: 0; height: 100%; border-radius: 10px; }
+.settings-theme-root .mcp-server-card { display: flex; flex-direction: column; min-width: 0; height: 100%; border-radius: 10px; container: mcp-card / inline-size; }
 .settings-theme-root .mcp-server-card .ant-card-head,
 .settings-theme-root .mcp-server-card .ant-card-head-title { min-width: 0; }
+.settings-theme-root .mcp-server-card .ant-card-head-title { white-space: normal; }
 .settings-theme-root .mcp-server-card .ant-card-body { flex: 1; min-width: 0; }
-.settings-theme-root .mcp-server-title { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.settings-theme-root .mcp-server-title .ant-tag { flex: none; margin: 0; }
-.settings-theme-root .mcp-server-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--settings-field-title-size); }
-.settings-theme-root .mcp-server-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ws-text-2); font-size: var(--settings-metadata-size); }
-.settings-theme-root .mcp-server-tools { display: flex; flex-direction: column; min-width: 0; gap: 8px; margin-top: 16px; }
+.settings-theme-root .mcp-server-title { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; width: 100%; min-width: 0; gap: 8px; }
+.settings-theme-root .mcp-server-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--settings-field-title-size); }
+.settings-theme-root .mcp-server-meta { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; max-width: 440px; gap: 4px 12px; color: var(--ws-text-2); font-size: var(--settings-metadata-size); font-weight: 400; }
+.settings-theme-root .mcp-server-state { display: flex; justify-self: end; align-items: center; gap: 6px; }
+.settings-theme-root .mcp-server-state .ant-tag { margin: 0; }
+@container mcp-card (max-width: 720px) {
+  .settings-theme-root .mcp-server-title { grid-template-columns: minmax(0, 1fr) auto; }
+  .settings-theme-root .mcp-server-meta { grid-column: 1 / -1; grid-row: 2; max-width: 100%; }
+  .settings-theme-root .mcp-server-state { grid-column: 2; grid-row: 1; }
+}
+.settings-theme-root .mcp-server-tools { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
 .settings-theme-root .mcp-tool-list { display: flex; flex-direction: column; gap: 0; min-width: 0; max-height: 240px; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
 .settings-theme-root .mcp-tool-item { display: flex; flex-direction: column; min-width: 0; gap: 2px; padding: 8px 0; border-top: 1px solid var(--ws-border); }
 .settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--ws-font-mono); color: var(--ws-text-1); }
@@ -546,6 +553,41 @@
 .settings-dialog .ant-modal-content { border-radius: 12px; }
 .settings-dialog .ant-modal-body { font-family: var(--ws-font-sans); }
 .settings-provider-modal .ant-modal-body { max-height: calc(100vh - 200px); overflow-y: auto; }
+.settings-mcp-editor-modal .ant-modal-body { max-height: calc(100vh - 200px); overflow-y: auto; }
+.settings-theme-root .mcp-entry { display: flex; min-width: 0; flex-direction: column; gap: 22px; }
+.settings-theme-root .mcp-editor-section { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.settings-theme-root .mcp-editor-section + .mcp-editor-section { padding-top: 20px; border-top: 1px solid var(--ws-border); }
+.settings-theme-root .mcp-editor-section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-theme-root .mcp-editor-section-title { margin: 0; color: var(--ws-text-1); font-size: var(--settings-section-title-size); font-weight: 500; line-height: 1.45; }
+.settings-theme-root .mcp-editor-basics { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.settings-theme-root .mcp-editor-field,
+.settings-theme-root .mcp-entry-row { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.settings-theme-root .mcp-editor-field .ant-input,
+.settings-theme-root .mcp-editor-field .ant-select,
+.settings-theme-root .mcp-entry-row > .ant-input { width: 100%; min-width: 0; }
+.settings-theme-root .mcp-entry-row .mcp-label,
+.settings-theme-root .mcp-editor-field .mcp-label { color: var(--ws-text-1); font-size: var(--settings-field-title-size); font-weight: 500; }
+.settings-theme-root .mcp-table { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.settings-theme-root .mcp-table-row { display: grid; min-width: 0; align-items: start; gap: 8px; }
+.settings-theme-root .mcp-arg-table .mcp-table-row { grid-template-columns: 24px minmax(0, 1fr) 34px; }
+.settings-theme-root .mcp-kv-table .mcp-table-row { grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.6fr) 34px; }
+.settings-theme-root .mcp-table-row .ant-input,
+.settings-theme-root .mcp-table-row .ant-input-textarea { width: 100%; min-width: 0; }
+.settings-theme-root .mcp-table-idx { color: var(--ws-text-2); text-align: end; line-height: 36px; }
+.settings-theme-root .mcp-table-value { position: relative; min-width: 0; }
+.settings-theme-root .mcp-table-value textarea { resize: vertical; }
+.settings-theme-root .mcp-table-value:has(.mcp-table-reveal) textarea { padding-inline-end: 42px; }
+.settings-theme-root .mcp-table-reveal { position: absolute; inset-block-start: 1px; inset-inline-end: 1px; z-index: 1; }
+.settings-theme-root .mcp-table-add { align-self: flex-start; margin-top: 2px; }
+.settings-mcp-editor-modal .mcp-editor-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.settings-mcp-editor-modal .mcp-editor-footer-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
+@container settings-content (max-width: 540px) {
+  .settings-theme-root .mcp-editor-basics { grid-template-columns: minmax(0, 1fr); }
+  .settings-theme-root .mcp-kv-table .mcp-table-row { grid-template-columns: minmax(0, 1fr) 34px; }
+  .settings-theme-root .mcp-kv-table .mcp-table-key { grid-column: 1; grid-row: 1; }
+  .settings-theme-root .mcp-kv-table .mcp-table-value { grid-column: 1 / -1; grid-row: 2; }
+  .settings-theme-root .mcp-kv-table .mcp-table-row > .ant-btn { grid-column: 2; grid-row: 1; }
+}
 .settings-theme-root .settings-provider-modal-hint {
   margin-bottom: 16px;
   font-size: var(--settings-field-description-size);

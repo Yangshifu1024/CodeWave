@@ -234,8 +234,11 @@ export default {
     // MCP page: status table (server status) + configuration. mcpStatus names both the app.mcp_status item
     // (search / anchor) and that section's heading — one key per concept.
     mcpStatus: "Server list", mcpConfigHead: "Server configuration",
-    mcpNew: "New", mcpNoServers: "No servers", mcpDelete: "Delete server", mcpDeleteConfirm: "Delete this server? The change takes effect when saved.",
+    mcpNew: "New", mcpNoServers: "No servers", mcpDelete: "Delete server", mcpDeleteConfirm: "Deleting will update MCP configuration and reconnect. Delete this server?",
     mcpEditRaw: "Edit raw config",
+    mcpEditorCreateTitle: "Add MCP server", mcpEditorEditTitle: "Edit MCP server",
+    mcpBasicSection: "Basic information", mcpConnectionSection: "Connection settings", mcpTransport: "Transport",
+    mcpShowSecret: "Show sensitive value", mcpHideSecret: "Hide sensitive value",
     mcpColState: "Status", mcpColTools: "Tools",
     mcpStateReady: "Connected", mcpStateStarting: "Connecting", mcpStateError: "Failed", mcpStateDisconnected: "Not connected",
     mcpStatusRefresh: "Refresh status (does not reconnect)", mcpStatusToggleError: "Toggle error details",

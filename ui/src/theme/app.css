@@ -1142,18 +1142,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .mcp-summary-transport { flex: none; font-size: 12px; color: var(--ws-dim); }
 .mcp-summary > .ant-btn { align-self: flex-start; }
 .mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: 12px; }
-.mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-.mcp-entry-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--ws-border); }
-.mcp-entry-row { display: flex; flex-direction: column; gap: 3px; } /* label 在上（[docs/settings-forms-vertical](../../../docs/docs/settings-forms-vertical.md)） */
-.mcp-entry-row .mcp-label { flex: none; font-size: 12px; color: var(--ws-dim); }
-.mcp-entry-row .ant-input { flex: 1; }
-.mcp-table { display: flex; flex-direction: column; gap: 6px; }
-.mcp-table-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.mcp-table-row > .ant-input, .mcp-table-row > .ant-input-textarea { flex: 1; min-width: 0; }
-.mcp-table-row .mcp-table-key { flex: 0 0 34%; }
-.mcp-table-idx { flex: none; width: 20px; text-align: right; line-height: 24px; color: var(--ws-dim); }
-.mcp-table-row > .ant-btn { flex: none; }
-.mcp-table > .ant-btn { align-self: flex-start; }
 /* 写入后检查（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：命令 + 两个进阶数值项；
    LSP 行/徽标/引导卡的样式已随机制删除（旧类零引用，勿再复活） */
 .postcheck-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 0 20px; }
