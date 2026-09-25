@@ -98,7 +98,7 @@ export default {
     providers: "Providers", mcp: "MCP", skills: "Skills",
     language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language",
     // Batch ④: the placeholder used to borrow composer.effortDefault (cross-segment key); now its own key (same value)
-    aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
+    aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeHint: "Choose the light/dark appearance; “Follow system” tracks the OS in real time", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
     uiFont: "UI font", monoFont: "Monospace font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter/blur",
     fontReset: "Reset to default",
@@ -385,7 +385,6 @@ export default {
     // Composer toolbar: context usage tiering + threshold/hit-rate micro-labels
     contextThreshold: "thr",
     cacheHit: "hit",
-    ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
     // Popover detail (hover progress ring): current context / compression threshold / cache hit rate keys
     ctxCurrent: "Current context",
     // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/composer-token-rate])

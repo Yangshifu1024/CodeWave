@@ -716,13 +716,23 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     fireEvent.mouseEnter(wrap);
     await waitFor(() => expect(document.querySelector(".ctx-popover")).toBeTruthy());
     const popover = document.querySelector(".ctx-popover")!;
-    expect(popover.textContent).toContain("60%"); // 当前上下文百分比
+    expect(popover.textContent).toContain("60%"); // 当前上下文百分比（括号内）
     expect(popover.textContent).toContain("76.8k / 128k"); // 当前上下文用量
-    expect(popover.textContent).toContain("60%"); // 压缩阈值（fixture config compact_threshold 0.6）
+    expect(popover.textContent).toContain("60%"); // 压缩阈值（括号内，fixture config compact_threshold 0.6）
     expect(popover.textContent).toContain("50%"); // 缓存命中率（500/1000）
     expect(popover.textContent).toContain("500 / 1000"); // 分子/分母
-    // 压缩操作按钮仍在 popover 内
-    expect(popover.querySelector(".ctx-popover-compact-btn")).toBeTruthy();
+    // popover 三行顺序：当前上下文 → 缓存命中 → 压缩阈值（缓存命中单独一行，置于阈值上一行）
+    const rows = Array.from(popover.querySelectorAll(".ctx-popover-row")).map((r) => r.textContent ?? "");
+    expect(rows.length).toBe(3);
+    expect(rows[0]).toContain("当前上下文"); // 第 1 行：当前上下文
+    expect(rows[1]).toContain("命中");      // 第 2 行：缓存命中
+    expect(rows[2]).toContain("阈值");      // 第 3 行：压缩阈值
+    // 进度圈已无 tooltip（title 被移除，详情全在 popover 里）
+    expect(wrap.getAttribute("title")).toBeNull();
+    // 压缩按钮：内联到阈值行尾部（不再单独占行）
+    const compactBtn = popover.querySelector(".ctx-popover-compact-btn") as HTMLElement;
+    expect(compactBtn).toBeTruthy();
+    expect(compactBtn.closest(".ctx-popover-row")?.className ?? "").toContain("ctx-popover-threshold-row");
     fireEvent.mouseLeave(wrap);
     useRun.setState((s) => { s.tabs = {}; });
   });

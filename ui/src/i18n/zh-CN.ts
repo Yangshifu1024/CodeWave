@@ -96,7 +96,7 @@ export default {
     providers: "供应商", mcp: "MCP", skills: "技能",
     language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言",
     // 批④：占位符原先借用 composer.effortDefault（跨段借键），本批拆出独立键（值不变）
-    aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
+    aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值", compactTimeout: "压缩请求超时（秒，30–3600）",
     theme: "主题", themeHint: "选择界面亮暗外观；「跟随系统」时随系统亮暗实时切换", themeSystem: "跟随系统", themeLight: "亮色", themeDark: "暗色",
     uiFont: "界面字体", monoFont: "等宽字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车或失焦生效",
     fontReset: "恢复默认",
@@ -379,7 +379,6 @@ export default {
     // Composer 工具条：上下文占用百分比分档 + 阈值/命中率小字标签
     contextThreshold: "阈",
     cacheHit: "命中",
-    ctxTitle: "上下文占用 · 自动压缩阈值 · 缓存命中率",
     // Popover 详情（hover 进度圈弹出）：当前上下文 / 压缩阈值 / 缓存命中 三行键
     ctxCurrent: "当前上下文",
     // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/composer-token-rate]）

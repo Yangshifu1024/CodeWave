@@ -518,12 +518,6 @@ export default function Composer() {
     : "ok";
   const hitTier = cacheHit != null ? hitRateTier(cacheHit) : null;
   const hitPct = cacheHit != null ? `${Math.round(cacheHit * 100)}%` : "";
-  // 悬浮说明（窄窗口截断时的全量信息兜底）
-  const ctxTitle = active.breakdown
-    ? `${t("composer.ctxTitle")}\n${t("app.context")}: ${contextPct}%（${active.breakdown.total_tokens} / ${active.breakdown.context_window} tokens）`
-      + (thresholdValid ? `\n${t("settings.compactThreshold")}: ${thresholdPct}%` : "")
-      + (cacheHit != null ? `\n${t("composer.cacheHit")}: ${hitPct}（${active.usage?.cacheRead ?? 0} / ${hitDenom}）` : "")
-    : t("app.context");
   // 进度圈 strokeColor 按档取色（4 档全彩，红橙黄绿——与 AGENTS.md 「色彩强度映射风险等级」一致）
   const ctxProgressColor =
     ctxTier === "danger" ? "var(--ws-err)" :
@@ -535,7 +529,7 @@ export default function Composer() {
 
   // 数据源是 run store 的 runMetrics（不是组件 state）：ask 弹窗遮住 Composer 导致卸载后恢复仍同值。
   // 无数据（从未发过本轮 / 本轮还没收到 usage 帧 / 整页重载回 blank 桶）时 rate 为 null → 整段不渲染，
-  // 上下文与命中段不受影响（AC-8）。速率只在工具条展示，不算入上方 ctxTitle（那是上下文口径）。
+  // 上下文与命中段不受影响（AC-8）。速率只在工具条展示。
   const metrics = active.runMetrics;
   const rate = tokPerSec(metrics);
   const toolMs = metrics?.toolMs ?? 0;
@@ -943,7 +937,6 @@ export default function Composer() {
               <Popover
                 placement="top"
                 trigger="hover"
-                arrow={false}
                 content={
                   <div className="ctx-popover">
                     {active.breakdown ? (
@@ -951,16 +944,9 @@ export default function Composer() {
                         <div className="ctx-popover-row">
                           <span className="ctx-popover-label">{t("composer.ctxCurrent")}</span>
                           <span className="ctx-popover-value">
-                            {`${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k`}
+                            {`${Math.round(active.breakdown.total_tokens / 100) / 10}k / ${Math.round(active.breakdown.context_window / 100) / 10}k (${contextPct}%)`}
                           </span>
-                          <span className="ctx-popover-pct">{contextPct}%</span>
                         </div>
-                        {thresholdValid && (
-                          <div className="ctx-popover-row">
-                            <span className="ctx-popover-label">{t("settings.compactThreshold")}</span>
-                            <span className="ctx-popover-value">{`${thresholdPct}%`}</span>
-                          </div>
-                        )}
                         {cacheHit != null && (
                           <div className="ctx-popover-row">
                             <span className="ctx-popover-label">{t("composer.cacheHit")}</span>
@@ -968,15 +954,24 @@ export default function Composer() {
                             <span className="ctx-popover-meta">{`（${active.usage?.cacheRead ?? 0} / ${hitDenom}）`}</span>
                           </div>
                         )}
+                        {thresholdValid && (
+                          <div className="ctx-popover-row ctx-popover-threshold-row">
+                            <span className="ctx-popover-label">{`${t("settings.compactThreshold")} (${thresholdPct}%)`}</span>
+                            {/* 压缩按钮内联到阈值行尾部（不占独立行），省一行垂直空间 */}
+                            <CompactButton className="ctx-popover-compact-btn" />
+                          </div>
+                        )}
                       </>
                     ) : (
-                      <div className="ctx-popover-empty">{t("app.context")} —</div>
+                      <div className="ctx-popover-empty">
+                        {t("app.context")} —
+                        <CompactButton className="ctx-popover-compact-btn" />
+                      </div>
                     )}
-                    <CompactButton className="ctx-popover-compact-btn" />
                   </div>
                 }
               >
-                <span className="ctx-progress-wrap" title={ctxTitle}>
+                <span className="ctx-progress-wrap">
                   <Progress
                     type="dashboard"
                     percent={contextPct}

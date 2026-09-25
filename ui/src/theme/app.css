@@ -123,21 +123,33 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    padding 用百分比响应中栏宽度——窄窗（< ~320px）按内容/上下文需要仍可走 min() 兜底，但 antd Layout
    已保证中栏 ≥ 480px（utils/layout CHAT_W_MIN），实际场景不会触发极窄。 */
 .chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 15%; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
-/* 聊天区滚动条主题化（[docs/chat-scrollbar-autohide]）：macOS 风格——thumb 默认透明，滚动时显色；
-   去掉头尾的箭头（::-webkit-scrollbar-button）。轨道透明贴合背景，thumb 用主题 token。
-   .is-scrolling 由 ChatMessages onScroll 节流 1s 加/移——见 [docs/chat-scrollbar-autohide]。 */
-.chat-messages { scrollbar-width: thin; scrollbar-color: var(--ws-border) transparent; }
-.chat-messages::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
-.chat-messages::-webkit-scrollbar-track { background: transparent; }
-/* thumb 默认透明——滚动条占位但不挡内容；滚动时显色，1s 后回到透明（由 .is-scrolling 切换） */
-.chat-messages::-webkit-scrollbar-thumb {
-  background: transparent; border-radius: 4px;
-  transition: background-color 0.25s ease;
+/* 自定义 overlay 滚动条（仿 MiniMax Code / Slack / Discord 范式）：
+   native 滚动条全部隐藏（webkit + Firefox），由 ChatScrollbar React 组件按 scroll 位置渲染细 thumb，
+   滚动时显、停 1s 后隐。native 滚动条在 Windows「始终显示滚动条」系统设置下会画出带箭头的 native widget——
+   那种 widget 不受 CSS 控制，所以这条路走不通，改用 React 自绘。 */
+.chat-messages { scrollbar-width: none; }
+.chat-messages::-webkit-scrollbar { width: 0; height: 0; background: transparent; }
+.chat-messages::-webkit-scrollbar-track,
+.chat-messages::-webkit-scrollbar-thumb { display: none; }
+
+/* ChatScrollbar 组件挂载在 .chat-messages 内第一个子元素，绝对定位贴右边缘。
+   默认透明（无内容感），滚动时由组件切 visible 类显色——0.25s 透明度过渡贴合 macOS overlay。 */
+.chat-scrollbar {
+  position: absolute; top: 0; right: 4px; bottom: 0; width: 10px;
+  pointer-events: auto; opacity: 0; transition: opacity 0.25s ease;
+  z-index: 5;
 }
-.chat-messages.is-scrolling::-webkit-scrollbar-thumb { background: var(--ws-border); transition: none; }
-.chat-messages.is-scrolling::-webkit-scrollbar-thumb:hover { background: var(--ws-dim); }
-/* 去掉首尾箭头按钮（webkit 默认在两端渲染上/下三角） */
-.chat-messages::-webkit-scrollbar-button { display: none; }
+.chat-scrollbar.visible { opacity: 1; }
+.chat-scrollbar-track {
+  position: relative; width: 100%; height: 100%; cursor: pointer;
+}
+.chat-scrollbar-thumb {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: 6px; border-radius: 3px;
+  background: var(--ws-border);
+  transition: background 0.15s ease, width 0.15s ease;
+}
+.chat-scrollbar-thumb:hover { background: var(--ws-dim); width: 8px; }
 /* 空态引导：居中卡片 + 两个入口（新建临时会话 / 新建项目） */
 .chat-empty-guide {
   margin-top: 26vh; display: flex; flex-direction: column; align-items: center; gap: 10px;
@@ -354,6 +366,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   border: 1px solid var(--ws-border); border-radius: 14px;
   background: var(--ws-panel);
   padding: 6px 10px 4px;
+  /* 阴影：与面板色配合的极淡阴影——给输入框视觉重量，不抢焦点（BorderBeam 是聚焦时的反馈） */
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
 }
 /* 输入框自身无边框（含 focus/hover 态）：浏览器 UA 的 focus outline 不受 antd borderless 管辖，
    必须显式压制；聚焦反馈由流光边框承担（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)：原 :focus-within 强调色边框取消，
@@ -441,16 +455,18 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ctx-progress.ant-progress { margin: 0; }
 .ctx-progress .ant-progress-circle-rail { stroke: var(--ws-border); }
 
-/* Popover 详情卡（hover 进度圈弹出）：三行键值 + 压缩操作按钮
+/* Popover 详情卡（hover 进度圈弹出）：当前上下文 / 缓存命中 / 压缩阈值 三行 + 压缩操作按钮
    视觉与现有 .ask-card、.right-bar 等面板同源：背景 --ws-panel + 边框 --ws-border + 8-12px 圆角。 */
 .ctx-popover { display: flex; flex-direction: column; gap: 4px; min-width: 220px; padding: 2px 0; }
 .ctx-popover-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.6; }
+/* 阈值行：label flex 自适应，压缩按钮紧贴右侧（margin-left:auto） */
+.ctx-popover-row.ctx-popover-threshold-row { gap: 12px; }
+.ctx-popover-row.ctx-popover-threshold-row .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
 .ctx-popover-label { flex: none; color: var(--ws-dim); min-width: 56px; }
 .ctx-popover-value { flex: 1; min-width: 0; color: var(--ws-text-1); font-family: var(--ws-font-mono); }
-.ctx-popover-pct { flex: none; color: var(--ws-text-1); font-weight: 500; }
 .ctx-popover-meta { flex: none; color: var(--ws-dim); font-size: 11.5px; }
-.ctx-popover-empty { color: var(--ws-dim); font-size: 12px; padding: 2px 0; }
-.ctx-popover-compact-btn.ant-btn { margin-top: 4px; align-self: stretch; }
+.ctx-popover-empty { display: flex; align-items: center; gap: 12px; color: var(--ws-dim); font-size: 12px; padding: 2px 0; }
+.ctx-popover-empty .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
 .composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }
@@ -814,6 +830,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .project-row {
   display: flex; align-items: center; gap: 6px; padding: 4px 8px;
   font-size: 13px; font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+  cursor: pointer; user-select: none;
 }
 .project-row .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-nav-row {

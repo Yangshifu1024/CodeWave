@@ -192,7 +192,7 @@ describe("normalizeUiState 结构归一", () => {
     expect(st.drafts).toEqual({});
     expect(st.queue).toEqual({});
     expect(st.panels).toEqual({});
-    expect(st.tree).toEqual({ expanded: {}, collapsed: false, unread: {} });
+    expect(st.tree).toEqual({ expanded: {}, groupFolded: {}, collapsed: false, unread: {} });
   });
 
   it("item 类型不符（workspace 非字符串）→ 该 Tab 与 order 一并剔除；缺字段按默认补齐", () => {
@@ -311,7 +311,7 @@ describe("失效引用剔除（与 sessions.restoreTabs 协作）", () => {
   function loadState(patch: {
     tabs?: { order: string[]; activeKey: string | null; items: Record<string, Partial<UiTabSnapshot>> };
     activeProject?: string | null;
-    tree?: { expanded: Record<string, boolean>; collapsed: boolean; unread: Record<string, boolean> };
+    tree?: { expanded: Record<string, boolean>; groupFolded: Record<string, boolean>; collapsed: boolean; unread: Record<string, boolean> };
   }): unknown {
     const base: UiState = {
       schema: UI_STATE_SCHEMA,
@@ -321,7 +321,7 @@ describe("失效引用剔除（与 sessions.restoreTabs 协作）", () => {
       scrollAnchors: {},
       drafts: {},
       queue: {},
-      tree: { expanded: {}, collapsed: false, unread: {} },
+      tree: { expanded: {}, groupFolded: {}, collapsed: false, unread: {} },
       panels: {},
     };
     return { ...base, ...patch };
@@ -417,7 +417,7 @@ describe("失效引用剔除（与 sessions.restoreTabs 协作）", () => {
           activeKey: "s1",
           items: { s1: { workspace: "/tmp/s1" }, s2: { workspace: "/tmp/s2" } },
         },
-        tree: { expanded: {}, collapsed: true, unread: { s1: true, s2: true, gone: true } },
+        tree: { expanded: {}, groupFolded: {}, collapsed: true, unread: { s1: true, s2: true, gone: true } },
       }),
     );
     await loadUiState();
@@ -516,7 +516,7 @@ describe("关 Tab：内容保留 / 丢弃 / 回填", () => {
     ipcMock.getUiState.mockResolvedValue({
       schema: UI_STATE_SCHEMA,
       tabs: { order: ["s1"], activeKey: "s1", items: { s1: { workspace: "/tmp/s1" } } },
-      tree: { expanded: {}, collapsed: false, unread: {} },
+      tree: { expanded: {}, groupFolded: {}, collapsed: false, unread: {} },
       drafts: { s1: { text: "老草稿", images: [] } }, // 后加字段前的快照形状
     });
     await loadUiState();
