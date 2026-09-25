@@ -1352,23 +1352,59 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     expect(anchor("log.level")?.classList.contains("settings-item-hit")).toBe(false);
   });
 
-  it("0 高度锚点退化：命中 approval.command_allowlist（白名单为空 → 锚点无高度）时高亮页体容器", async () => {
+  it("命中空白名单时定位到可见的空态卡片", async () => {
     await mountWithSession();
-    // 该锚点只在安全与审批页的页体里（每次只渲染当前页）→ 先上页再搜，命中项即在当前页
     await openPage("安全与审批");
     await search("白名单");
 
     const anchorEl = anchor("approval.command_allowlist")!;
     expect(anchorEl).toBeTruthy();
-    // happy-dom 无布局引擎：手工把该锚点伪装成真实浏览器里「白名单为空」时的 0 高度盒
-    Object.defineProperty(anchorEl, "offsetHeight", { value: 0, configurable: true });
-    Object.defineProperty(anchorEl, "getClientRects", { value: () => [], configurable: true });
+    expect(anchorEl.textContent).toContain("还没有始终允许的命令");
+    expect(anchorEl.textContent).not.toContain("全部删除");
+    // happy-dom 无布局引擎：模拟真实浏览器中空态卡片的可见盒。
+    Object.defineProperty(anchorEl, "offsetHeight", { value: 120, configurable: true });
 
     fireEvent.click(resultRow("命令白名单"));
-    await waitFor(() =>
-      expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(true),
+    await waitFor(() => expect(anchorEl.classList.contains("settings-item-hit")).toBe(true));
+    expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(false);
+  });
+
+  it("命令白名单展示命令和目录，可展开、单条移除与确认后全部删除", async () => {
+    const entries = Array.from({ length: 6 }, (_, i) => `/project-${i}\u0001cargo test --case ${i}`);
+    const invoke = await invokeMock();
+    invoke.mockImplementation(async (cmd: string, args?: any) =>
+      cmd === "get_config"
+        ? { ...fixtureConfig, approval: { ...fixtureConfig.approval, command_allowlist: entries } }
+        : baseInvoke(cmd, args),
     );
-    expect(anchorEl.classList.contains("settings-item-hit")).toBe(false);
+    await mountWithSession();
+    await openPage("安全与审批");
+
+    const list = anchor("approval.command_allowlist")!;
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    expect(list.textContent).toContain("cargo test --case 0");
+    expect(list.textContent).toContain("/project-0");
+    fireEvent.click(Array.from(list.querySelectorAll("button")).find((button) => button.textContent?.includes("展开全部"))!);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(6);
+    fireEvent.click(list.querySelector(".cmd-allowlist-row button")!);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    expect(list.textContent).not.toContain("cargo test --case 0");
+    expect(navDot("security")).toBe(true);
+
+    const clear = Array.from(list.querySelectorAll("button")).find((button) => button.textContent?.includes("全部删除"));
+    expect(clear).toBeTruthy();
+    fireEvent.click(clear!);
+    const confirm = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(".ant-popconfirm-buttons .ant-btn-primary");
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    expect(confirm.classList.contains("ant-btn-dangerous")).toBe(true);
+    expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(5);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(list.querySelectorAll(".cmd-allowlist-row")).toHaveLength(0));
+    expect(list.textContent).toContain("还没有始终允许的命令");
+    expect(list.textContent).not.toContain("全部删除");
   });
 
   describe("命中跳转 × 三选拦截（三条离开路径的定位归属）", () => {

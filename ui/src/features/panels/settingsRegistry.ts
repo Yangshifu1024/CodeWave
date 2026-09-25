@@ -128,7 +128,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "network.allow_private_network", labelKey: "settings.allowPrivate", page: "network", keywords: ["private", "内网", "局域网", "本地模型"] },
 
   // ---------- 安全与审批 ----------
-  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "危险命令", "弹窗", "审批"] },
+  { id: "approval.enabled", labelKey: "settings.approvalEnabled", page: "security", keywords: ["approval", "确认", "计划模式", "新会话", "完全访问", "审批"] },
   { id: "approval.confirm_outside_create", labelKey: "settings.confirmOutside", page: "security", keywords: ["workspace", "工作区", "新建路径"] },
   { id: "approval.confirm_git_push", labelKey: "settings.confirmPush", page: "security", keywords: ["git", "push", "确认"] },
   { id: "approval.auto_confirm", labelKey: "settings.autoConfirm", page: "security", keywords: ["auto", "自动确认", "超时", "5 分钟"] },
@@ -430,8 +430,18 @@ export const SHELL_SETTING_KEYS: string[] = [
   "proxyUrlInvalid", // → network.proxy 的保存校验文案
 
   // —— 安全与审批的从属文案（项已登记：approval.*） ——
+  "approvalEnabledHint", // → approval.enabled 的新会话默认档位说明
   "autoConfirmHint", // → approval.auto_confirm 的说明
-  "cmdAllowlistCwd", // → approval.command_allowlist 的悬浮目录标注
+  "cmdAllowlistCwd", // → approval.command_allowlist 的生效目录
+  "cmdAllowlistCount", // → approval.command_allowlist 的条目数
+  "cmdAllowlistHint", // → approval.command_allowlist 的来源说明
+  "cmdAllowlistEmpty", // → approval.command_allowlist 的空态
+  "cmdAllowlistInvalid", // → approval.command_allowlist 的异常条目兜底
+  "cmdAllowlistShowAll", // → approval.command_allowlist 的展开动作
+  "cmdAllowlistCollapse", // → approval.command_allowlist 的收起动作
+  "cmdAllowlistClear", // → approval.command_allowlist 的全部删除动作
+  "cmdAllowlistClearConfirm", // → approval.command_allowlist 的清空确认标题
+  "cmdAllowlistClearDescription", // → approval.command_allowlist 的清空确认说明
 
   // —— 写入后检查与校验 / MCP / 技能 三页的从属文案（项已登记：post_write_check.* /
   //    mcp.servers / disabled_skills / app.mcp_status） ——

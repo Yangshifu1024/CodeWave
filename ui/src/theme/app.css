@@ -670,15 +670,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .queue-ops { flex: none; display: inline-flex; align-items: center; gap: 2px; }
 .queue-paused { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px; }
 .queue-paused-hint { color: var(--ws-dim); font-size: 11.5px; }
-/* 设置页命令白名单（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)） */
-.cmd-allowlist { display: flex; flex-direction: column; gap: 4px; }
-.cmd-allowlist-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.cmd-allowlist-cmd {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--ws-font-mono); font-size: 11.5px;
-  background: var(--ws-code-bg); border-radius: 5px; padding: 2px 6px;
-}
-
 /* ---------- 上下文压缩按钮（原 ContextInfoBar 区块并入 Composer 工具条） ---------- */
 
 /* ---------- SubagentItemCard（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：单行可点击卡片；点击打开过程抽屉） ---------- */

@@ -283,6 +283,7 @@ function SettingsPageController() {
   const { windowWidth } = useDisplayWidths();
 
   const [draft, setDraft] = useState<ConfigState | null>(null);
+  const [showAllCommands, setShowAllCommands] = useState(false);
   const [saving, setSaving] = useState(false);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   // 技能区异步操作 loading：reloadSkills 全局、删除按行（Popconfirm 确认按钮 loading）
@@ -1374,6 +1375,7 @@ function SettingsPageController() {
   }, []);
 
   /** 10 页清单：页名键与页序来自注册表，页体按当前页渲染到右列（不做数据驱动渲染） */
+  const commandAllowlist = draft?.approval.command_allowlist ?? [];
   const pages: { key: PageKey; labelKey: string; body: ReactNode }[] = [
     {
       key: "appearance",
@@ -1487,10 +1489,9 @@ function SettingsPageController() {
       labelKey: PAGE_LABEL_KEY.security,
       body: draft && (
         <SettingsForm>
-          {/* 审批策略组：4 个 Switch（总开关 + 三种确认策略 + 自动确认）合成一张 section 卡片
-              （[docs/settings-fullscreen-shell]，[docs/ask-ink-accent-and-composer-cover]） */}
+          {/* 审批策略组：新会话默认档位与三项确认策略。 */}
           <div className="settings-section-card">
-          <SettingsFormItem label={t("settings.approvalEnabled")}>
+          <SettingsFormItem label={t("settings.approvalEnabled")} extra={t("settings.approvalEnabledHint")}>
             <div className="setting-anchor" data-setting-id="approval.enabled">
               <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
             </div>
@@ -1512,29 +1513,52 @@ function SettingsPageController() {
             </div>
           </SettingsFormItem>
           </div>
-          {/* docs/run-queue-and-ask-revamp：「始终允许本项目」命令白名单（审批时选择加入，此处管理/移除）。
-              存储条目 = cwd \u{1} 完整命令文本（cwd 跟随项目 -> 白名单不跨项目生效），展示时拆开。
-              advanced 项：包一层锚点容器，收起时整块（含 Form.Item 标签）加类隐藏 —— 零 DOM 搬迁 */}
+          {/* 「始终允许本项目」在审批时加入；此处查看完整命令与生效目录，并从草稿移除。 */}
           <div className={anchorCls("approval.command_allowlist")} data-setting-id="approval.command_allowlist">
-            {(draft.approval.command_allowlist?.length ?? 0) > 0 && (
-              <SettingsFormItem label={t("settings.cmdAllowlist")}>
+            <SettingsSection
+              title={t("settings.cmdAllowlist")}
+              extra={(
+                <div className="cmd-allowlist-header-actions">
+                  <span>{t("settings.cmdAllowlistCount", { count: commandAllowlist.length })}</span>
+                  {commandAllowlist.length > 0 && (
+                    <Popconfirm
+                      title={t("settings.cmdAllowlistClearConfirm")}
+                      description={t("settings.cmdAllowlistClearDescription", { count: commandAllowlist.length })}
+                      okText={t("settings.cmdAllowlistClear")}
+                      cancelText={t("common.cancel")}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => {
+                        setShowAllCommands(false);
+                        patchDraft({ approval: { ...draft.approval, command_allowlist: [] } });
+                      }}
+                    >
+                      <Button type="text" size="small" danger>{t("settings.cmdAllowlistClear")}</Button>
+                    </Popconfirm>
+                  )}
+                </div>
+              )}
+              className="settings-allowlist-section"
+            >
+              <p className="cmd-allowlist-hint">{t("settings.cmdAllowlistHint")}</p>
+              {commandAllowlist.length === 0 ? (
+                <div className="cmd-allowlist-empty">{t("settings.cmdAllowlistEmpty")}</div>
+              ) : (
                 <div className="cmd-allowlist">
-                  {draft.approval.command_allowlist.map((entry, i) => {
+                  {commandAllowlist.slice(0, showAllCommands ? undefined : 5).map((entry, i) => {
                     const sep = entry.indexOf("\u0001");
                     const cwd = sep >= 0 ? entry.slice(0, sep) : "";
                     const cmd = sep >= 0 ? entry.slice(sep + 1) : entry;
                     return (
                       <div className="cmd-allowlist-row" key={`${i}-${cmd}`}>
-                        <code className="cmd-allowlist-cmd" title={cwd ? `${cmd}\n${t("settings.cmdAllowlistCwd")}: ${cwd}` : cmd}>
-                          {cmd}
-                        </code>
+                        <div className="cmd-allowlist-details">
+                          <code className="cmd-allowlist-cmd">{cmd.trim() || t("settings.cmdAllowlistInvalid")}</code>
+                          {cwd && <div className="cmd-allowlist-cwd"><span>{t("settings.cmdAllowlistCwd")}</span><code>{cwd}</code></div>}
+                        </div>
                         <Button
-
                           type="text"
-                          danger
                           onClick={() =>
                             patchDraft({
-                              approval: { ...draft.approval, command_allowlist: draft.approval.command_allowlist.filter((_, j) => j !== i) },
+                              approval: { ...draft.approval, command_allowlist: commandAllowlist.filter((_, j) => j !== i) },
                             })
                           }
                         >
@@ -1544,8 +1568,15 @@ function SettingsPageController() {
                     );
                   })}
                 </div>
-              </SettingsFormItem>
-            )}
+              )}
+              {commandAllowlist.length > 5 && (
+                <Button type="link" className="cmd-allowlist-toggle" onClick={() => setShowAllCommands((value) => !value)}>
+                  {showAllCommands
+                    ? t("settings.cmdAllowlistCollapse")
+                    : t("settings.cmdAllowlistShowAll", { count: commandAllowlist.length })}
+                </Button>
+              )}
+            </SettingsSection>
           </div>
         </SettingsForm>
       ),
