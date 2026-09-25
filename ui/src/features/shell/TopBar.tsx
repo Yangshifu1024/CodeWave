@@ -16,7 +16,7 @@ import {
   MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import storeLogo from "../../assets/store-logo.png";
+import topbarLogo from "../../assets/logo-topbar.png";
 import { baseName } from "../../utils/path";
 import { NAV_W_DEFAULT } from "../../utils/layout";
 import { useRun } from "../../stores/run";
@@ -69,7 +69,7 @@ export default function TopBar() {
             aria-label={explorerOpen ? t("app.collapseLeft") : t("app.expandLeft")}
             onClick={() => useSessions.getState().setExplorerOpen(!explorerOpen)}
           >
-            <img className="tb-logo" src={storeLogo} alt="CodeWave" draggable={false} />
+            <img className="tb-logo" src={topbarLogo} alt="CodeWave" draggable={false} />
             {explorerOpen ? (
               <MenuFoldOutlined className="tb-logo-swap" />
             ) : (
