@@ -62,6 +62,12 @@ CodeWave 对应现状（本批次前即已具备）：
   read/input）。由 model_id 反查 provider 级 `api_format` 决定公式；历史已删模型不参与比率
 - 按来源拆分行改用 **output tokens**：输出语义跨协议一致，而 kind 聚合无 model 维度
 
+### M1-C 补订：anthropic SSE `message_delta` 帧补全 usage（[fix/composer-toolbar-and-anthropic-cache]）
+
+`provider/anthropic.rs` 原本仅在 `message_start` 帧读 `input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`，在 `message_delta` 帧只更新 `output_tokens`。后果：某些上游（deepseek 兼容模式、部分 anthropic proxy）在 `message_start` 时 `cache_read_input_tokens` 还未算出（先给 0 / 不给），最终累计值在 `message_delta.usage` 给出——但被丢。**按官方 SSE 规范“message_delta.usage 是该消息的累计最终值”**（[anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)），delta 帧应同样覆盖 input / cache_read / cache_write。表上表现：popover 命中率“始终 100%”（`cacheRead=0`初值 → `denom = cacheRead + cacheWrite = 0`）、跨多伦连续“看都被锁在 100%”。
+
+修复：`message_delta` 分支补三行 `if let Some(n) = v["usage"][…].as_u64()` 覆盖。**取覆盖不取累加**（官方语义是累计值不是增量），同时 **用 `if let Some` 守卫**保留 message_start 初值：上游不返的字段不抹平。保护测试：`message_delta_overrides_cumulative_input_and_cache`（delta 帧覆盖三个字段）+ `message_delta_keeps_start_values_for_missing_fields`（delta 帧缺字段时保留 start 初值）。
+
 ## 4 明确不做（含重议判据）
 
 - **OpenAI Responses `store:true` + `previous_response_id` 链式引用**：服务端留存完整对话与

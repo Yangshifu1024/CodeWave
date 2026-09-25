@@ -400,11 +400,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .attach-chip.ref-chip .anticon { color: var(--ws-text-2); font-size: 14px; }
 .composer-toolbar { display: flex; align-items: center; padding: 2px 2px 2px 4px; }
 /* 工具条分级显示（[docs/composer-responsive-toolbar]）：基于 composer 卡片实测宽度（[data-narrow]）切三档。
-   契约：[data-narrow="normal"] 全显；[data-narrow="medium"] 隐藏 toolbar-info 与 model provider；
-   [data-narrow="narrow"] 再隐藏权限档/力度的文字标签（保留图标）。不 wrap、不加 overflow（卡片是
-   BorderBeam 流光的定位上下文、按钮有 focus 环——参考 composer.toolbar.style.test.ts 的 "容器不动" 契约）。 */
-.composer-card[data-narrow="medium"] .toolbar-info,
-.composer-card[data-narrow="narrow"] .toolbar-info { display: none; }
+   契约：[data-narrow="normal"] 全显；[data-narrow="medium"] 隐藏 model provider 段；
+   [data-narrow="narrow"] 再隐藏权限档/力度的文字标签（保留图标）。
+   **不折叠 .toolbar-info**：该块在上下文/命中段过
+   渡到 Popover 后只留下速率段（"18.2 tok/s" ≈ 70px），medium/narrow 下仍需保留以传达“本轮生成速”.
+   折叠整块 = 速率消失（[fix/composer-toolbar-and-anthropic-cache]）。
+   不 wrap、不加 overflow（卡片是 BorderBeam 流光的定位上下文、按钮有 focus 环
+   ——参考 composer.toolbar.style.test.ts 的 "容器不动" 契约）。 */
 .composer-card[data-narrow="medium"] .tb-model-provider,
 .composer-card[data-narrow="narrow"] .tb-model-provider { display: none; }
 .composer-card[data-narrow="narrow"] .tb-mode-text,
