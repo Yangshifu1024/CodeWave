@@ -35,8 +35,9 @@ import { addRefs, mergeRefs, recoverRefs } from "./composerRefs";
 
 const { TextArea } = Input;
 
-// Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）
-const MODE_ORDER: ApprovalMode[] = ["confirm_each", "auto_edit", "plan", "goal", "full_access"];
+// Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）：
+// plan（最安全）→ confirm_each（询问）→ auto_edit（自动）→ goal（自主）→ full_access（完全）
+const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "goal", "full_access"];
 
 /** Composer：底部输入区 + 工具条（左：+/权限/子代理 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
@@ -87,6 +88,13 @@ export default function Composer() {
   // / @ $ 菜单的宽度上限来源：输入卡片实测宽度（长 description 不再撑出视口，见下方 menuStyle）
   const cardRef = useRef<HTMLDivElement>(null);
   const [menuWidth, setMenuWidth] = useState(0);
+  // 工具条分级显示（[docs/composer-responsive-toolbar]）：根据 composer 卡片实测宽度切三档。
+  // 复用下方 ResizeObserver 测宽，零额外监听。
+  // 阈值：narrow < 600（常规非全宽窗口都进窄档，只显 +、模式图标、压缩、发送）；
+  //      medium 600-820（图标 + 模型名 + 力度文字 + 发送）；
+  //      normal ≥ 820（全显：toolbar-info + provider/model + chev）。
+  type ComposerWidth = "narrow" | "medium" | "normal";
+  const [composerWidth, setComposerWidth] = useState<ComposerWidth>("normal");
   // 光标位置（触发判定与回填的唯一锚点，[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)）：
   // onChange 拿事件里的 selectionStart；点击/方向键移光标不过 onChange，由 onSelect/onClick/onKeyUp 补同步。
   // ref 供事件回调读即时值，state 供**渲染期复验**（菜单开合要判「trigger 在当前位置是否仍成立」）
@@ -482,11 +490,17 @@ export default function Composer() {
 
   // 菜单宽度上限 = 输入卡片实测宽度（技能 description 过长时不再撑破视口，与聊天框宽度一致）；
   // ResizeObserver 覆盖窗口缩放、侧栏宽度变化等一切来源（不依赖 window resize）；
-  // ask 态卡片卸载、恢复后依赖变化重测
+  // ask 态卡片卸载、恢复后依赖变化重测。
+  // 同步计算工具条分级显示（composerWidth）：< 240px → narrow（仅图标），240~360 → medium
+  // （隐藏 toolbar-info + provider），≥ 360 → normal（全部）。
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (!el) return;
-    const sync = () => setMenuWidth(el.getBoundingClientRect().width);
+    const sync = () => {
+      const w = el.getBoundingClientRect().width;
+      setMenuWidth(w);
+      setComposerWidth(w < 600 ? "narrow" : w < 820 ? "medium" : "normal");
+    };
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
@@ -541,32 +555,31 @@ export default function Composer() {
   );
 
   const modeDescKeys: Record<ApprovalMode, string> = {
+    plan: "composer.modePlanDesc",
     confirm_each: "composer.modeConfirmEachDesc",
     auto_edit: "composer.modeAutoEditDesc",
-    plan: "composer.modePlanDesc",
     goal: "composer.modeGoalDesc",
     full_access: "composer.modeFullAccessDesc",
   };
   const modeLabels: Record<ApprovalMode, string> = {
+    plan: t("composer.modePlan"),
     confirm_each: t("composer.modeConfirmEach"),
     auto_edit: t("composer.modeAutoEdit"),
-    plan: t("composer.modePlan"),
     goal: t("composer.modeGoal"),
     full_access: t("composer.modeFullAccess"),
   };
   const modeIcons: Record<ApprovalMode, React.ReactNode> = {
+    plan: <FileTextOutlined />,
     confirm_each: <ExclamationCircleOutlined />,
     auto_edit: <CheckCircleOutlined />,
-    plan: <FileTextOutlined />,
     goal: <ThunderboltOutlined />,
     full_access: <SafetyCertificateOutlined />,
   };
-  // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：确认 = 蓝（primary）/ 自动编辑 = 橙 / 完全访问 = 红（危险）；plan 档不着色。
-  // 同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
+  // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：plan 不着色；
+  // confirm = 绿 / auto = 黄 / goal = 橙 / full = 红。同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
   const modeClass: Partial<Record<ApprovalMode, string>> = {
     confirm_each: "approval-confirm",
     auto_edit: "approval-auto",
-    // 目标模式 = 橙（warn 语义，与自动编辑同色系；不引入新色系）
     goal: "approval-goal",
     full_access: "approval-full",
   };
@@ -774,7 +787,7 @@ export default function Composer() {
           color="var(--ws-accent)"
           className={beamActive ? undefined : "composer-beam-idle"}
         >
-          <div className="composer-card" ref={cardRef}>
+          <div className="composer-card" ref={cardRef} data-narrow={composerWidth}>
           {(images.length > 0 || refs.length > 0) && (
             <div className="composer-attachments">
               {/* 缩略图点击打开大图预览（多图可切换），与会话内已发送图片同一交互；
@@ -857,7 +870,7 @@ export default function Composer() {
                   title={t("composer.modeShortcutHint")}
                 >
                   {modeIcons[prefs.approval_mode]}
-                  <span className="tb-label">{modeLabels[prefs.approval_mode]}</span>
+                  <span className="tb-label tb-mode-text">{modeLabels[prefs.approval_mode]}</span>
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
@@ -950,25 +963,33 @@ export default function Composer() {
               </span>
             </div>
             <div className="toolbar-right">
-              <CompactButton />
+              <CompactButton className="tb-compact-btn" />
               <Dropdown menu={modelMenu} trigger={["click"]}>
                 <Button
                   type="text"
+                  className="tb-model-select"
                   aria-label={t("app.model")}
                   title={effectiveModel ? `${effectiveModel.providerName} / ${effectiveModel.model}` : t("composer.goSettings")}
                 >
                   <span className="tb-label">
                     {effectiveModel
-                      ? (effectiveModel.providerName ? `${effectiveModel.providerName} / ${effectiveModel.model}` : effectiveModel.model)
-                      : t("composer.noModel")}
+                      ? (effectiveModel.providerName ? (
+                          <>
+                            <span className="tb-model-provider">{effectiveModel.providerName} / </span>
+                            <span className="tb-model-name">{effectiveModel.model}</span>
+                          </>
+                        ) : (
+                          <span className="tb-model-name">{effectiveModel.model}</span>
+                        ))
+                      : <span className="tb-model-name">{t("composer.noModel")}</span>}
                   </span>
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
               <Dropdown menu={effortMenu} trigger={["click"]}>
-                <Button type="text" title={t("settings.reasoning")}>
+                <Button type="text" className="tb-effort-select" title={t("settings.reasoning")}>
                   <BulbOutlined />
-                  <span className="tb-label">
+                  <span className="tb-label tb-effort-text">
                     {effortValue === "default" ? t("composer.effortDefault") : effortLabels[effortValue]}
                   </span>
                   <DownOutlined className="tb-chev" />

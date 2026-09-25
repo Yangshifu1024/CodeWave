@@ -629,7 +629,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
   "shell/RightBar.tsx": ["common.", "rightbar."], // rightbar.* 自有；common.builtin 与设置页共用的来源标签
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
-  "shell/TopBar.tsx": ["app.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏
+  "shell/TopBar.tsx": ["app.", "settings.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏；settings.* 见 CROSS_SEGMENT_BORROWINGS
   "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板
@@ -649,6 +649,9 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   },
   "shell/ProjectNav.tsx": {
     "tasks.": "左栏任务区展示的就是计划任务（与任务页共用 stores/tasks 单一数据源），状态/下次触发/历史等文案复用任务页的 tasks.* 段——两处说的是同一件事，另起一段反而会漂移",
+  },
+  "shell/TopBar.tsx": {
+    "settings.": "设置页全屏打开时顶栏左段标题复用 settings.title（设置页外壳的页面标题，与 SettingsPage 用同一字面）；顶栏在不同模式下显示两套标题（会话标题 / 设置页标题），写 titlebar.* 反而是新增概念——「顶栏的设置页标题」不属于 titlebar 段语义",
   },
   "subagent/SubagentDrawer.tsx": {
     "composer.": "抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",

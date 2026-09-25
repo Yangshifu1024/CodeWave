@@ -11,7 +11,7 @@ import { ipc } from "../../ipc/client";
 
 /** 压缩上下文按钮：触发当前会话的 compaction；本地先行插入提示并置 compacting 态，
  *  状态翻转以 run:compacted 事件为准，命令失败路径在组件内兜底复位。 */
-export default function CompactButton() {
+export default function CompactButton({ className }: { className?: string }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const hasSession = useSessions((s) => !!s.activeKey);
@@ -49,6 +49,7 @@ export default function CompactButton() {
       disabled={!hasSession || compacting}
       aria-label={t("app.compact")}
       title={t("app.compact")}
+      className={className}
       onClick={() => void compact()}
     />
   );

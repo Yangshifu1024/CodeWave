@@ -113,13 +113,25 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口；z-index 须高于 antd Modal(1000)/message(1010)，否则弹框打开期间 toast 被遮罩盖住 */
 .notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 3000; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
 /* ---------- ChatMessages ---------- */
-.chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 16px; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
-/* 聊天区滚动条主题化（[docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md)）：透明轨道贴合内容背景、thumb 用主题 token，取代刺眼的 WebView 默认滚动条配色 */
+/* 聊天区布局：内容占中栏 70%，左右各留 15% 空白（[docs/chat-content-width]）。
+   padding 用百分比响应中栏宽度——窄窗（< ~320px）按内容/上下文需要仍可走 min() 兜底，但 antd Layout
+   已保证中栏 ≥ 480px（utils/layout CHAT_W_MIN），实际场景不会触发极窄。 */
+.chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 15%; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
+/* 聊天区滚动条主题化（[docs/chat-scrollbar-autohide]）：macOS 风格——thumb 默认透明，滚动时显色；
+   去掉头尾的箭头（::-webkit-scrollbar-button）。轨道透明贴合背景，thumb 用主题 token。
+   .is-scrolling 由 ChatMessages onScroll 节流 1s 加/移——见 [docs/chat-scrollbar-autohide]。 */
 .chat-messages { scrollbar-width: thin; scrollbar-color: var(--ws-border) transparent; }
-.chat-messages::-webkit-scrollbar { width: 8px; height: 8px; }
+.chat-messages::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
 .chat-messages::-webkit-scrollbar-track { background: transparent; }
-.chat-messages::-webkit-scrollbar-thumb { background: var(--ws-border); border-radius: 4px; }
-.chat-messages::-webkit-scrollbar-thumb:hover { background: var(--ws-dim); }
+/* thumb 默认透明——滚动条占位但不挡内容；滚动时显色，1s 后回到透明（由 .is-scrolling 切换） */
+.chat-messages::-webkit-scrollbar-thumb {
+  background: transparent; border-radius: 4px;
+  transition: background-color 0.25s ease;
+}
+.chat-messages.is-scrolling::-webkit-scrollbar-thumb { background: var(--ws-border); transition: none; }
+.chat-messages.is-scrolling::-webkit-scrollbar-thumb:hover { background: var(--ws-dim); }
+/* 去掉首尾箭头按钮（webkit 默认在两端渲染上/下三角） */
+.chat-messages::-webkit-scrollbar-button { display: none; }
 /* 空态引导：居中卡片 + 两个入口（新建临时会话 / 新建项目） */
 .chat-empty-guide {
   margin-top: 26vh; display: flex; flex-direction: column; align-items: center; gap: 10px;
@@ -181,8 +193,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
-/* inline code chip：token 化（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；原硬编码 #efefef/#1f2328 在暗色下不可读 */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-code-bg); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+/* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
+   与左侧导航同色，整体观感统一（[docs/ask-ink-accent-and-composer-cover]）。 */
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-quote { color: #6a737d; }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-selector-tag { color: #d73a49; }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-attr { color: #032f62; }
@@ -252,11 +265,22 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 0.9em; line-height: 1;
   width: 1em; height: 1em; flex: none;
 }
-/* 追问建议区（antd 6 filled 胶囊 + 语义标签头） */
-.chips { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 4px; }
-.chips-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); }
-.chips-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.chips-row .ant-btn .ant-btn-icon { color: var(--ws-dim); transition: color 0.2s; }
+/* 追问建议区：列表样式（垂直行项）+ 背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
+   列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/tool-card-frame]）。
+   容器背景与列表项边框形成「色块+卡片」层级：色块是上下文（建议区），卡片是单项可点元素。 */
+.chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-bg-nav); }
+.chips-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); margin-bottom: 8px; }
+.chips-row { display: flex; flex-direction: column; gap: 6px; }
+.chips-row .ant-btn {
+  display: flex !important; width: 100% !important; justify-content: space-between !important; align-items: center !important;
+  padding: 6px 10px !important; height: auto !important; line-height: 1.5 !important; text-align: left !important;
+  border: 1px solid var(--ws-border) !important; border-radius: 8px !important; /* 工具调用同款：1px 边框 + 8px 圆角。!important 盖过 antd 6 css-in-js 内联样式 */
+}
+/* antd 6 SVG：<svg fill="currentColor"> 但 <path> 不继承——path 默认 fill: black，
+   强制 path 用 currentColor 让 color 能传到 fill。 */
+.composer-toolbar .ant-btn-text .anticon svg path { fill: currentColor !important; }
+.chips-row .ant-btn .ant-btn-icon { color: var(--ws-text-1); transition: color 0.2s; }
+.chips-row .ant-btn:hover { background: var(--ws-hover); }
 .chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
 
 /* ---------- 目标模式提示条（`ApprovalMode::Goal`）---------- */
@@ -310,7 +334,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .menu .menu-item code { flex: none; }
 .menu .menu-item .dim { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 18px; }
 .menu .menu-item > span { min-width: 0; }
-.composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 16px 6px; }
+/* composer 与 ask-wrap 边距 = 中栏宽度的 15%（与 chat-messages padding 一致）——输入区与聊天内容区同一容器宽度 */
+.composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 15% 6px; }
 /* 卡片式输入（[docs/composer-toolbar-batch-report](../../../docs/docs/composer-toolbar-batch-report.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
 .composer .composer-card {
   position: relative; /* BorderBeam 层的定位上下文（[docs/antd6-upgrade-and-composer-border-beam](../../../docs/docs/antd6-upgrade-and-composer-border-beam.md)） */
@@ -349,6 +374,16 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    只把缩略图换成文件类型图标；无新增色彩变量，图标色跟次级文字色 */
 .attach-chip.ref-chip .anticon { color: var(--ws-text-2); font-size: 14px; }
 .composer-toolbar { display: flex; align-items: center; padding: 2px 2px 2px 4px; }
+/* 工具条分级显示（[docs/composer-responsive-toolbar]）：基于 composer 卡片实测宽度（[data-narrow]）切三档。
+   契约：[data-narrow="normal"] 全显；[data-narrow="medium"] 隐藏 toolbar-info 与 model provider；
+   [data-narrow="narrow"] 再隐藏权限档/力度的文字标签（保留图标）。不 wrap、不加 overflow（卡片是
+   BorderBeam 流光的定位上下文、按钮有 focus 环——参考 composer.toolbar.style.test.ts 的 "容器不动" 契约）。 */
+.composer-card[data-narrow="medium"] .toolbar-info,
+.composer-card[data-narrow="narrow"] .toolbar-info { display: none; }
+.composer-card[data-narrow="medium"] .tb-model-provider,
+.composer-card[data-narrow="narrow"] .tb-model-provider { display: none; }
+.composer-card[data-narrow="narrow"] .tb-mode-text,
+.composer-card[data-narrow="narrow"] .tb-effort-text { display: none; }
 .composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; }
 .composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .composer-toolbar .ant-btn-text { color: var(--ws-text-2); padding-inline: 8px; }
@@ -361,11 +396,25 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 权限胶囊按档着色：确认=墨（accent，中性=默认档）/ 自动编辑=橙 / 完全访问=红（危险）；
    [docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 墨化后语义 = 色彩强度映射风险等级（无色=默认、暖色=需注意、红=危险）；plan 档不着色。
    选择器带 .ant-btn-text（特异性相同、后者胜出）以压过上方 hover 变色规则，悬停保持档位色 */
-.composer-toolbar .ant-btn-text.approval-confirm { color: var(--ws-accent) !important; }
-.composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
-.composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
-/* 目标模式胶囊：橙（warn = 需注意，与自动编辑同色系；不引入新色系） */
-.composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-warn) !important; }
+/* 权限胶囊按档着色（[docs/composer-shift-tab-mode-cycle] §5，[docs/ask-ink-accent-and-composer-cover] 色彩强度映射风险等级）：
+   plan 不着色；confirm = 绿（每步询问，安全）；auto = 黄（自动编辑，需注意）；
+   goal = 橙（自主推进，更高授权）；full = 红（完全访问，危险）。
+   **文字不染色**（保留 antd 默认中性色），**只图标 + chev 染色**——视觉上以图标指示档位、文字辅助。
+   **selector 修正**：Composer 的 mode 按钮用 children（不是 `icon` prop）传 modeIcons，
+   antd Button 不会自动 wrap `.ant-btn-icon`——改选 `.anticon:first-of-type`（直接子元素的第一个 antd icon = mode 图标）。
+   硬编码不跟 antd token 走——亮暗主题同色。 */
+.composer-toolbar .ant-btn-text.approval-confirm,
+.composer-toolbar .ant-btn-text.approval-auto,
+.composer-toolbar .ant-btn-text.approval-full,
+.composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-text-2) !important; }
+.composer-toolbar .ant-btn-text.approval-confirm > .anticon:first-of-type,
+.composer-toolbar .ant-btn-text.approval-confirm .tb-chev { color: #73d13d !important; }
+.composer-toolbar .ant-btn-text.approval-auto    > .anticon:first-of-type,
+.composer-toolbar .ant-btn-text.approval-auto    .tb-chev { color: #ffec3d !important; }
+.composer-toolbar .ant-btn-text.approval-full    > .anticon:first-of-type,
+.composer-toolbar .ant-btn-text.approval-full    .tb-chev { color: #ff4d4f !important; }
+.composer-toolbar .ant-btn-text.approval-goal   > .anticon:first-of-type,
+.composer-toolbar .ant-btn-text.approval-goal   .tb-chev { color: #ffc53d !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
 /* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原住在 .toolbar-right 里，被 margin-left:auto
    推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
@@ -492,7 +541,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- AskPanel（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md) 卡片式 + 编号选项 + 键盘导航；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 降噪对齐：
             描边中性标签 + 轻量分页器 + ghost 补充输入 + 胶囊按钮 + 题干层级） ---------- */
-.ask-wrap { margin: 0 16px 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
+.ask-wrap { margin: 0 15% 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
 .ask-card {
   border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-panel);
   padding: 12px 14px; outline: none;
@@ -1304,7 +1353,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-resize-handle:focus-visible { outline: none; }
 /* 拖动期间关宽度过渡：栏跟手不拖影（0.2s 折叠/展开动画在松手后恢复；类由 ResizeHandle 挂到 <html>） */
 html.ws-resizing .right-bar,
-html.ws-resizing .ant-layout-sider { transition: none !important; }
+html.ws-resizing .ant-layout-sider,
+html.ws-resizing .tb-left-seg { transition: none !important; }
 
 /* ---------- 信息页签：项目目录标签行动作区（文件管理器按钮 + 编辑器下拉） ---------- */
 .rb-label-actions { display: flex; align-items: center; gap: 4px; flex: none; }

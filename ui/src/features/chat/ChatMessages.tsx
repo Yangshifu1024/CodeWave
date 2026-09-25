@@ -9,7 +9,7 @@ import {
   DownOutlined,
   LoadingOutlined,
   ThunderboltOutlined,
-  RightOutlined,
+  ArrowRightOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { MAX_PAGED_PAGES, useActiveRun, useRun } from "../../stores/run";
@@ -194,6 +194,10 @@ export default function ChatMessages() {
   // 2.4：是否贴底（贴底 -> 自动下滚；未贴底 -> 显示「回到底部」按钮）
   const [atBottom, setAtBottom] = useState(true);
   const stickBottom = useRef(true);
+  // macOS 风格滚动条：滚动时显示、停止 1s 后自动隐藏（[docs/chat-scrollbar-autohide]）。
+  // wheel/touchpad/keyboard 触发的 scroll 事件统一走 onScroll，1s 节流后关闭。
+  const [isScrolling, setIsScrolling] = useState(false);
+  const scrollIdleTimer = useRef<number | null>(null);
   const progScroll = useRef(0); // 程序化滚动的豁免窗口：窗口内自家触发的滚动事件不参与贴底判定
   const progFrom = useRef(0); // 发起程序化滚动时的 scrollTop（豁免区间的下端）
   const progTarget = useRef(Infinity); // 程序化滚动的落点 scrollTop（豁免区间的上端，docs/thinking-scroll-fix §2.3）
@@ -415,6 +419,10 @@ export default function ChatMessages() {
     const nearBottom = isAtBottom({ scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
     stickBottom.current = nearBottom;
     setAtBottom(nearBottom);
+    // 滚动条显隐：滚动时显示、停止 1s 后隐藏。覆盖初始显示（流式期间连续滚、保持显示）
+    setIsScrolling(true);
+    if (scrollIdleTimer.current !== null) window.clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = window.setTimeout(() => setIsScrolling(false), 1000);
   };
 
   // 滚轮上滚 = 阅读意图：立即暂停跟随并清空程序化滚动豁免窗口（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。
@@ -543,7 +551,7 @@ export default function ChatMessages() {
 
   return (
     <div className="chat-body" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
-      <div ref={scroller} className="chat-messages" onScroll={onScroll} onWheel={onWheel}>
+      <div ref={scroller} className={`chat-messages${isScrolling ? " is-scrolling" : ""}`} onScroll={onScroll} onWheel={onWheel}>
         {active.items.length === 0 && !hasSession && (
           <div className="chat-empty-guide">
             <div className="guide-icon"><MessageOutlined /></div>
@@ -614,7 +622,7 @@ export default function ChatMessages() {
                   shape="round"
                   variant="filled"
                   color="default"
-                  icon={<RightOutlined />}
+                  icon={<ArrowRightOutlined />}
                   iconPosition="end"
                   onClick={() => pick(s)}
                 >

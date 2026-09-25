@@ -833,22 +833,23 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
     const modeText = () => document.querySelector(".composer-toolbar")?.textContent ?? "";
-    expect(modeText()).toContain("自动编辑"); // initial mode
-    expect(document.querySelector(".composer-toolbar .approval-auto")).toBeTruthy(); // auto edit = orange
+    // 循环顺序：plan → confirm_each → auto_edit → goal → full_access → plan
+    expect(modeText()).toContain("自动编辑"); // initial mode (prefs.approval_mode = auto_edit)
+    expect(document.querySelector(".composer-toolbar .approval-auto")).toBeTruthy(); // auto edit = yellow
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("计划模式")); // auto_edit → plan
-    await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：计划模式")); // switch toast (docs/session-pref-switch-toast)
-    expect(document.querySelector(".composer-toolbar .approval-plan")).toBeFalsy(); // plan mode gets no color
-    fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("目标模式")); // plan → goal（第五档）
-    expect(document.querySelector(".composer-toolbar .approval-goal")).toBeTruthy(); // goal = orange (warn tier)
+    await waitFor(() => expect(modeText()).toContain("目标模式")); // auto_edit → goal
+    await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：目标模式")); // switch toast (docs/session-pref-switch-toast)
+    expect(document.querySelector(".composer-toolbar .approval-goal")).toBeTruthy(); // goal = orange
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
     await waitFor(() => expect(modeText()).toContain("完全访问")); // goal → full_access
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeTruthy(); // red highlight in sync
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("变更前确认")); // full_access wraps around to confirm_each
+    await waitFor(() => expect(modeText()).toContain("计划模式")); // full_access → plan
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeFalsy();
-    expect(document.querySelector(".composer-toolbar .approval-confirm")).toBeTruthy(); // confirm mode = blue
+    expect(document.querySelector(".composer-toolbar .approval-plan")).toBeFalsy(); // plan mode gets no color
+    fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(modeText()).toContain("变更前确认")); // plan → confirm_each
+    expect(document.querySelector(".composer-toolbar .approval-confirm")).toBeTruthy(); // confirm mode = green
   });
 
   it("模型菜单：图标入口 + 供应商分组 + 视觉标签 + 管理供应商入口 + 切换镜像 prefs", async () => {

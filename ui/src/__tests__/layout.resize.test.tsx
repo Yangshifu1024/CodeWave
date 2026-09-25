@@ -151,6 +151,22 @@ describe("分隔条交互", () => {
     expect(document.documentElement.classList.contains("ws-resizing")).toBe(false);
   });
 
+  it("拖动期间顶栏左段（.tb-left-seg）的 width 过渡也被关掉（与 Sider 同步不脱节）", () => {
+    // happy-dom 不解析外链 CSS，computed style 路径走不通——改为 CSS 文本契约断言：
+    // app.css 必须把 .tb-left-seg 列入 html.ws-resizing 的豁免，否则拖动时顶栏左段仍走 0.2s 缓动
+    // 与 Sider 脱节（用户反馈「拖动时顶栏慢半拍」）。变更豁免规则时请同步更新本断言或反之。
+    // vite 在测试环境会把 CSS 当 ?raw 导入；用 fs 直读更稳，避免对打包链的隐含依赖
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const css = fs.readFileSync(
+      path.join(__dirname, "..", "theme", "app.css"),
+      "utf8",
+    );
+    // 三类目标元素必须并列出现在同一豁免规则块里（避免「改了别处、漏改 tb-left-seg」的单边脱节）：
+    // 选择器部分要含 .tb-left-seg，且同一规则块的声明部分含 transition: none !important
+    expect(css).toMatch(/html\.ws-resizing[^{]+\.tb-left-seg[^{]*\{[^}]*transition:\s*none\s*!important/);
+  });
+
   it("指针被系统夺走（onLostPointerCapture）也能摘掉 ws-resizing", () => {
     const { container } = render(<ResizeHandle {...props} onWidth={() => {}} onReset={() => {}} />);
     const handle = container.querySelector(".rb-resize-handle") as HTMLElement;
