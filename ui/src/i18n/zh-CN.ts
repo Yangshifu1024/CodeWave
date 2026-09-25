@@ -483,7 +483,8 @@ export default {
     weekdayThu: "四", weekdayFri: "五", weekdaySat: "六",
     intervalUnitMin: "分钟", intervalUnitHour: "小时", intervalUnitDay: "天",
     intervalTooLarge: "间隔超出上限：分钟 ≤ 43200、小时 ≤ 720、天 ≤ 30",
-    nextRun: "下次触发", paused: "已暂停", noMoreRuns: "不再触发", neverRun: "从未运行",
+    nextRun: "下次触发", enabled: "已启用", paused: "已暂停", noMoreRuns: "不再触发", neverRun: "从未运行",
+    project: "项目", detailsSection: "任务内容", scheduleSection: "执行计划",
     running: "运行中", skipped: "已跳过", pause: "暂停", resume: "启用",
     // 执行状态文案：任务行标签 / 历史行 / 左栏 tooltip 共用 statusLabel（不再裸显 ok / error）
     statusOk: "正常", statusError: "失败", lastStatus: "上次状态",

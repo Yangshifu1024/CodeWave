@@ -15,6 +15,10 @@
 
 ## 基准与方案
 
+- 2026-09-26 · [tasks-local-cron-time.md](./tasks-local-cron-time.md) — 修复计划任务 cron 按 UTC 而非本地时区计算，及存量下次触发时间的恢复校正。
+
+- 2026-09-26 · [tasks-page-layout-polish.md](./tasks-page-layout-polish.md) — 计划任务列表、编辑弹窗与左栏返回按钮收敛到设置页的排版与 antd 组件样式。
+
 - 2026-09-26 · [settings-remaining-pages-polish.md](./settings-remaining-pages-polish.md) — 写入后检查、技能、工作区与智能体、日志及关于五页收敛到共用分组与表单样式。
 
 - 2026-09-25 · [mcp-settings-layout-and-fullscreen-seam.md](./mcp-settings-layout-and-fullscreen-seam.md) — MCP 设置页排版、服务器卡片与工具说明、编辑弹框优化，以及全屏页顶栏和导航分界修复。

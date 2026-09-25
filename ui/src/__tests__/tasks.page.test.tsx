@@ -23,6 +23,7 @@ let calls: { cmd: string; args: any }[] = [];
 let listFails = false;
 let deleteFails = false;
 let runFails = false;
+let runGate: Promise<void> | null = null;
 let saveFails = false;
 let enableFails = false;
 
@@ -38,6 +39,7 @@ async function baseInvoke(cmd: string, args?: any) {
       return JSON.parse(JSON.stringify({ ...hit, enabled: args.enabled }));
     }
     case "run_scheduled_task_now":
+      if (runGate) await runGate;
       if (runFails) throw new Error("已有任务正在运行，请稍后再试");
       return null;
     case "delete_scheduled_task":
@@ -133,6 +135,7 @@ beforeEach(() => {
   listFails = false;
   deleteFails = false;
   runFails = false;
+  runGate = null;
   saveFails = false;
   enableFails = false;
 });
@@ -144,6 +147,18 @@ afterEach(() => {
 });
 
 describe("任务页：列表渲染", () => {
+  it("返回按钮占满侧栏，任务卡片把信息和操作分层", async () => {
+    tasks = [task({ id: "t1", name: "日报" })];
+    mount();
+    await waitFor(() => expect(rows()).toHaveLength(1));
+
+    expect(document.querySelector(".tasks-nav-back")?.classList.contains("ant-btn-block")).toBe(true);
+    expect(rows()[0].classList.contains("ant-card")).toBe(true);
+    expect(rows()[0].querySelector(".ant-card-head")?.textContent).toContain("日报");
+    expect(rows()[0].querySelector(".task-row-meta")?.textContent).toContain("下次触发");
+    expect(rows()[0].querySelectorAll(".ant-card-actions > li")).toHaveLength(3);
+  });
+
   it("名称 + 周期描述 + 项目归属 + 状态标签（本地化文案：正常/失败/已跳过）+ 下次触发", async () => {
     tasks = [
       task({ id: "t1", name: "日报", last_status: "ok", next_run: "2026-10-01T01:00:00Z" }),
@@ -269,6 +284,22 @@ describe("任务页：执行历史", () => {
 });
 
 describe("任务页：行内操作", () => {
+  it("立即运行请求未结束时显示 loading 并阻止重复提交", async () => {
+    tasks = [task({ id: "t1", name: "日报" })];
+    let release = () => {};
+    runGate = new Promise<void>((resolve) => { release = resolve; });
+    mount();
+    await waitFor(() => expect(rows()).toHaveLength(1));
+
+    fireEvent.click(buttonByText("立即运行"));
+    expect(buttonByText("立即运行").disabled).toBe(true);
+    fireEvent.click(buttonByText("立即运行"));
+    expect(calls.filter((call) => call.cmd === "run_scheduled_task_now")).toHaveLength(1);
+
+    release();
+    await waitFor(() => expect(buttonByText("立即运行").disabled).toBe(false));
+  });
+
   it("暂停开关：调 set_scheduled_task_enabled 并把返回的任务就地合并", async () => {
     tasks = [task({ id: "t1", name: "日报" })];
     mount();
@@ -285,12 +316,18 @@ describe("任务页：行内操作", () => {
 
   it("立即运行：调 run_scheduled_task_now；被占（reject）时把后端原文显示出来", async () => {
     tasks = [task({ id: "t1", name: "日报" })];
+    let release = () => {};
+    runGate = new Promise<void>((resolve) => { release = resolve; });
     mount();
     await waitFor(() => expect(rows()).toHaveLength(1));
 
     fireEvent.click(buttonByText("立即运行"));
     await waitFor(() => expect(calls.find((c) => c.cmd === "run_scheduled_task_now")?.args).toEqual({ id: "t1" }));
+    expect(buttonByText("立即运行").disabled).toBe(true);
+    release();
+    await waitFor(() => expect(buttonByText("立即运行").disabled).toBe(false));
 
+    runGate = null;
     runFails = true;
     fireEvent.click(buttonByText("立即运行"));
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已有任务正在运行"));

@@ -488,7 +488,8 @@ export default {
     weekdayThu: "Thu", weekdayFri: "Fri", weekdaySat: "Sat",
     intervalUnitMin: "Minutes", intervalUnitHour: "Hours", intervalUnitDay: "Days",
     intervalTooLarge: "Interval too large: minutes ≤ 43200, hours ≤ 720, days ≤ 30",
-    nextRun: "Next run", paused: "Paused", noMoreRuns: "No more runs", neverRun: "Never run",
+    nextRun: "Next run", enabled: "Enabled", paused: "Paused", noMoreRuns: "No more runs", neverRun: "Never run",
+    project: "Project", detailsSection: "Task details", scheduleSection: "Schedule",
     running: "Running", skipped: "Skipped", pause: "Pause", resume: "Resume",
     // Run-status wording: shared by the row tag / history row / left-nav tooltip via statusLabel
     statusOk: "OK", statusError: "Failed", lastStatus: "Last status",

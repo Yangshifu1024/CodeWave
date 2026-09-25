@@ -96,6 +96,7 @@ pdf-extract = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
+chrono-tz = "0.10.4" # 固定时区测试 cron 跨 DST 回拨的两个 01:30
 # docs/43: tokio::test(start_paused) virtual clock (test-util feature enabled for test builds only)
 tokio = { version = "1", features = ["test-util"] }
 

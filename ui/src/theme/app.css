@@ -940,6 +940,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 /* 返回工作区一行（与 .settings-nav-head 同度量） */
 .tasks-nav-head { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; padding: 2px 2px 8px; }
+.tasks-nav-back { display: flex; justify-content: flex-start; text-align: left; }
 .tasks-nav-title {
   font-size: 13px; font-weight: 600; color: var(--ws-text-1); padding: 0 2px;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -950,20 +951,38 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 内容列：任务列表自己滚（返回/新建在左栏内不动，恒可点）。
    min-width: 0 是必需的：flex 行项目的默认 min-width:auto = min-content，不写就会被长任务名撑破外壳；
    基准 480px（与设置页页体同值）只在窗口够宽时生效，窄窗则收缩换行，而不是横向裁切。 */
-.tasks-body { flex: 1 1 480px; min-width: 0; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
+.tasks-body { flex: 1 1 480px; min-width: 0; min-height: 0; overflow: auto; padding: 32px 32px 72px; }
+.tasks-body-inner { width: min(100%, 960px); margin: 0 auto; container: tasks-content / inline-size; }
+.tasks-page-header { margin-bottom: 28px; }
+.tasks-page-header h1 { margin: 0 0 8px; color: var(--ws-text-1); font-size: 24px; line-height: 1.35; font-weight: 650; }
+.tasks-page-header p { margin: 0; color: var(--ws-dim); font-size: 13px; line-height: 1.6; }
+.tasks-empty { padding: 36px 12px; border: 1px solid var(--ws-border); border-radius: 10px; }
 /* 加载/操作失败的错误行：走风险色 token（不硬编码红值，暗色下才能跟主题） */
 .tasks-error { color: var(--ws-err); font-size: 12px; margin: 6px 0; }
 .tasks-loading { display: flex; justify-content: center; padding: 24px 0; }
-/* 任务行两级：主信息区（可点展开历史）+ 操作区（同级兄弟，不做 role=button 里嵌按钮） */
-.task-row { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
-.task-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 0; border-radius: 6px; cursor: pointer; }
-.task-row-main:hover { background: var(--ws-highlight); }
-.task-row-name { font-size: 12.5px; color: var(--ws-text-1); }
-.task-row-sched { font-size: 12px; color: var(--ws-text-2); }
-.task-row-project { font-size: 11.5px; }
-/* 下次触发：次要信息推列尾（主信息区内的 margin-left:auto，不挤操作按钮） */
-.task-row-next { font-size: 11.5px; margin-left: auto; }
-.task-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+/* antd Card 统一承载任务：标题/状态、摘要/元数据、等分底部操作。 */
+.task-row { margin-bottom: 14px; border-color: var(--ws-border); }
+.task-row .ant-card-head { min-height: 60px; padding: 12px 20px; }
+.task-row .ant-card-head-title { min-width: 0; }
+.task-row .ant-card-extra { min-width: 0; padding-inline-start: 12px; }
+.task-row .ant-card-body { padding: 16px 20px 12px; }
+.task-row .ant-card-actions { border-color: var(--ws-border); }
+.task-row .ant-card-actions > li { margin: 10px 0; }
+.task-row .ant-card-actions > li > span { display: block; width: 100%; }
+.task-row .ant-card-actions .ant-btn { max-width: 100%; }
+.task-row-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.task-row-heading .ant-tag { margin: 0; font-weight: 400; }
+.task-row-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; color: var(--ws-text-1); }
+.task-row-enabled { display: inline-flex; align-items: center; gap: 8px; color: var(--ws-dim); font-size: 12px; white-space: nowrap; }
+.task-row-main { display: block; border-radius: 6px; cursor: pointer; outline-offset: 3px; }
+.task-row-main:focus-visible { outline: 2px solid var(--ws-accent); }
+.task-row-instruction { margin: 0 0 14px; color: var(--ws-text-2); font-size: 13px; line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.task-row-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.task-row-meta > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.task-row-meta span { color: var(--ws-dim); font-size: 11.5px; }
+.task-row-meta strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); font-size: 12.5px; font-weight: 500; }
+.task-row-history-toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; color: var(--ws-text-2); font-size: 12px; }
+.task-row-history-toggle .anticon { font-size: 10px; }
 /* 执行历史：时间・状态・来源・tokens 一行，摘要另起一段（pre-wrap + 限高滚动，同 .mcp-status-error 的路子） */
 .tasks-history { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ws-border); display: flex; flex-direction: column; gap: 6px; }
 .tasks-history-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 11.5px; color: var(--ws-text-2); }
@@ -971,12 +990,29 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tasks-history-status-error { color: var(--ws-err); }
 .tasks-history-tokens { margin-left: auto; }
 .tasks-history-summary { flex: 1 0 100%; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
-/* 弹窗表单：纵向字段（label 在上，与设置表单 vertical 同范式） */
-.tasks-form { display: flex; flex-direction: column; gap: 10px; }
-.tasks-field { display: flex; flex-direction: column; gap: 4px; }
-.tasks-label { font-size: 12px; color: var(--ws-dim); }
+/* 弹窗复用 antd Form 的 vertical 字段与 Modal 固定底部操作。 */
+.tasks-editor-modal .ant-modal-body { max-height: min(68vh, 680px); overflow-y: auto; padding-block: 8px; }
+.tasks-form-section { padding: 16px 0 8px; }
+.tasks-form-section + .tasks-form-section { border-top: 1px solid var(--ws-border); }
+.tasks-form-section h3 { margin: 0 0 16px; font-size: 14px; line-height: 1.5; font-weight: 600; color: var(--ws-text-1); }
+.tasks-form .ant-form-item { margin-bottom: 16px; min-width: 0; }
+.tasks-form .ant-form-item-label { padding-bottom: 6px; }
+.tasks-form .ant-form-item-label > label { color: var(--ws-text-2); font-size: 12.5px; }
+.tasks-form .ant-input-number, .tasks-form .ant-select { width: 100%; }
+.tasks-schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .tasks-interval { display: flex; align-items: center; gap: 8px; }
+.tasks-interval > * { flex: 1 1 0; min-width: 0; }
+.tasks-schedule-hint { display: flex; flex-direction: column; gap: 4px; line-height: 1.5; }
 .tasks-field-error { font-size: 11.5px; color: var(--ws-err); }
+@media (max-width: 700px) {
+  .tasks-body { padding: 20px 16px 48px; }
+  .tasks-schedule-grid { grid-template-columns: 1fr; }
+}
+@container tasks-content (max-width: 700px) {
+  .task-row-meta { grid-template-columns: 1fr; gap: 10px; }
+  .task-row .ant-card-head { flex-wrap: wrap; }
+  .task-row .ant-card-extra { padding-inline-start: 0; }
+}
 .chart { display: flex; align-items: flex-end; gap: 4px; height: 170px; padding: 8px 4px; overflow-x: auto; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
 .bar-col .bar { width: 16px; background: var(--ws-accent); border-radius: 3px 3px 0 0; opacity: 0.85; }

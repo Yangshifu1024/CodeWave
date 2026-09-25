@@ -17,7 +17,7 @@ import type { ApprovalMode, EffortLevel, GoalState, GoalStatus } from "../../ipc
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { baseName } from "../../utils/path";
 import { GOAL_STATUS_DEFAULT, GOAL_STATUS_KEYS } from "../../utils/goal";
-import { cacheHitRate, contextTier, hitRateTier, type ContextTier } from "../../stores/runFrames";
+import { cacheHitRate, contextTier, type ContextTier } from "../../stores/runFrames";
 import { formatInt, formatMs, formatRate, tokPerSec } from "./composerMetrics";
 import { ipc } from "../../ipc/client";
 import { listenFileDrop } from "../../ipc/dragdrop";
@@ -245,6 +245,8 @@ export default function Composer() {
     useRun.getState().consumeDraftFromQueue(targetKey);
     const el = taRef.current?.resizableTextArea?.textArea ?? taRef.current;
     el?.focus?.();
+    // onTextReplaced 每次渲染都会重新创建；此处只按队列条目/Tab/图片回填变化执行。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftFromQueue, tab?.key, recalledImages]);
 
   // 会话生效模型：会话覆盖 -> 全局活跃（展示与发送守卫同一数据源，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)；摊平视图 [docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
@@ -516,7 +518,6 @@ export default function Composer() {
   const ctxTier: ContextTier = thresholdValid && active.breakdown
     ? contextTier(active.breakdown.ratio, compactThreshold)
     : "ok";
-  const hitTier = cacheHit != null ? hitRateTier(cacheHit) : null;
   const hitPct = cacheHit != null ? `${Math.round(cacheHit * 100)}%` : "";
   // 进度圈 strokeColor 按档取色（4 档全彩，红橙黄绿——与 AGENTS.md 「色彩强度映射风险等级」一致）
   const ctxProgressColor =

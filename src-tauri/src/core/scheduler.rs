@@ -2,7 +2,7 @@
 //! 每次运行使用全新隔离上下文（复用主循环）。supervisor 每 15s tick 一次。
 
 use crate::core::agent::SessionRuntime;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -127,14 +127,37 @@ impl ScheduleKind {
     /// 计算下次触发时间；Once 触发后返回 None。
     pub fn next_after(&self, now: DateTime<Local>) -> Option<DateTime<Local>> {
         match self {
-            ScheduleKind::Cron(expr) => {
-                let sched = cron::Schedule::from_str(expr).ok()?;
-                sched.upcoming(Utc).next().map(|u| u.with_timezone(&Local))
-            }
+            ScheduleKind::Cron(expr) => cron_next_after(expr, &now),
             ScheduleKind::Every(d) => Some(now + chrono::Duration::from_std(*d).ok()?),
             ScheduleKind::Once(t) if *t > now => Some(*t),
             ScheduleKind::Once(_) => None,
         }
+    }
+}
+
+/// cron 表达式中的时分按传入时间的时区解释，不能先在 UTC 中求下一次再转回本地。
+fn cron_next_after<Z: TimeZone>(expr: &str, now: &DateTime<Z>) -> Option<DateTime<Z>> {
+    // 回拨日同一个本地钟点可能有两个绝对时刻；cron 0.17 会先枚举较早的那个，
+    // 即使它对 now 而言已经过去。跳过过去候选，避免 tick 反复触发。
+    cron::Schedule::from_str(expr)
+        .ok()?
+        .after(now)
+        .find(|next| next > now)
+}
+
+/// 修正旧 UTC cron 计算留下的 next_run。未来值必须是最近一次本地触发；
+/// 已过期且符合表达式的值仍交给 tick 补跑，避免改动既有停机恢复语义。
+fn corrected_cron_next<Z: TimeZone>(
+    expr: &str,
+    now: &DateTime<Z>,
+    stored: &DateTime<Z>,
+) -> Option<DateTime<Z>> {
+    let schedule = cron::Schedule::from_str(expr).ok()?;
+    let expected = schedule.after(now).find(|next| next > now)?;
+    if !schedule.includes(stored.clone()) || (stored > now && stored != &expected) {
+        Some(expected)
+    } else {
+        None
     }
 }
 
@@ -286,7 +309,7 @@ impl TaskTable {
                 let Ok(bytes) = std::fs::read(f.path()) else {
                     continue;
                 };
-                let Ok(t) = serde_json::from_slice::<ScheduledTask>(&bytes) else {
+                let Ok(mut t) = serde_json::from_slice::<ScheduledTask>(&bytes) else {
                     continue;
                 };
                 // once 且已过期 → 不恢复（并删除文件）
@@ -301,6 +324,18 @@ impl TaskTable {
                             continue;
                         }
                     }
+                }
+                // 旧版本曾用 UTC 计算 cron 的 next_run，09:00 会落成北京时间 17:00。
+                // 未来值必须是最近一次本地触发（仅检查是否符合 cron 会漏掉 09,17
+                // 这类旧 UTC 值恰好命中 17:00 的情况）。已过期且匹配的值仍留给 tick。
+                if t.enabled
+                    && let (Ok(ScheduleKind::Cron(expr)), Some(stored)) =
+                        (parse_schedule(&t.schedule), t.next_run.as_deref())
+                    && let Ok(at) = DateTime::parse_from_rfc3339(stored)
+                    && let Some(corrected) =
+                        corrected_cron_next(&expr, &Local::now(), &at.with_timezone(&Local))
+                {
+                    t.next_run = Some(corrected.to_rfc3339());
                 }
                 out.push(t);
             }
@@ -641,6 +676,105 @@ fn task_scope(core: &crate::core::agent::AgentCore, task: &ScheduledTask) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{FixedOffset, LocalResult, Timelike};
+
+    #[test]
+    fn cron_clock_time_uses_schedule_timezone() {
+        let guangzhou = FixedOffset::east_opt(8 * 3600).unwrap();
+        let before = guangzhou.with_ymd_and_hms(2026, 9, 26, 8, 30, 0).unwrap();
+        let next = cron_next_after("0 0 9 * * *", &before).unwrap();
+        assert_eq!(
+            next,
+            guangzhou.with_ymd_and_hms(2026, 9, 26, 9, 0, 0).unwrap()
+        );
+
+        let after = guangzhou.with_ymd_and_hms(2026, 9, 26, 9, 30, 0).unwrap();
+        let next_day = cron_next_after("0 0 9 * * *", &after).unwrap();
+        assert_eq!(
+            next_day,
+            guangzhou.with_ymd_and_hms(2026, 9, 27, 9, 0, 0).unwrap()
+        );
+
+        // 旧版按 UTC 计算出的 17:00 即使也是合法 cron 时刻，仍跳过了更早的 09:00。
+        let at_eight = guangzhou.with_ymd_and_hms(2026, 9, 26, 8, 0, 0).unwrap();
+        let stored_seventeen = guangzhou.with_ymd_and_hms(2026, 9, 26, 17, 0, 0).unwrap();
+        assert_eq!(
+            corrected_cron_next("0 0 9,17 * * *", &at_eight, &stored_seventeen),
+            Some(guangzhou.with_ymd_and_hms(2026, 9, 26, 9, 0, 0).unwrap())
+        );
+        let overdue_nine = guangzhou.with_ymd_and_hms(2026, 9, 25, 9, 0, 0).unwrap();
+        assert_eq!(
+            corrected_cron_next("0 0 9,17 * * *", &at_eight, &overdue_nine),
+            None,
+            "已过期但符合 cron 的时刻仍保留给 tick"
+        );
+    }
+
+    #[test]
+    fn cron_after_dst_fallback_skips_the_first_past_clock_time() {
+        let zone = chrono_tz::America::New_York;
+        let LocalResult::Ambiguous(_, second_one_ten) =
+            zone.with_ymd_and_hms(2026, 11, 1, 1, 10, 0)
+        else {
+            panic!("测试日期必须落在秋季回拨的重复小时内");
+        };
+        let LocalResult::Ambiguous(_, second_one_thirty) =
+            zone.with_ymd_and_hms(2026, 11, 1, 1, 30, 0)
+        else {
+            panic!("01:30 必须出现两次");
+        };
+        assert_eq!(
+            cron_next_after("0 30 1 * * *", &second_one_ten),
+            Some(second_one_thirty),
+            "第一次 01:30 已在过去，下一次应为回拨后的第二次 01:30"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_repairs_only_cron_times_that_miss_local_schedule() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(dir.path().to_path_buf());
+        let wrong = (Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%dT17:00:00%:z")
+            .to_string();
+        let due = (Local::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%dT09:00:00%:z")
+            .to_string();
+        for (id, next_run) in [("wrong", wrong), ("due", due.clone())] {
+            table
+                .upsert(ScheduledTask {
+                    id: id.into(),
+                    name: id.into(),
+                    instruction: "test".into(),
+                    schedule: "cron:0 9 * * *".into(),
+                    next_run: Some(next_run),
+                    last_status: None,
+                    last_summary: None,
+                    project_id: Some("project".into()),
+                    enabled: true,
+                    runs: Vec::new(),
+                })
+                .await;
+        }
+
+        let restored = TaskTable::load_all_from_projects(dir.path()).await;
+        let repaired = restored.iter().find(|task| task.id == "wrong").unwrap();
+        let next = DateTime::parse_from_rfc3339(repaired.next_run.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Local);
+        assert_eq!(next.hour(), 9);
+        assert!(next > Local::now());
+        assert_eq!(
+            restored
+                .iter()
+                .find(|task| task.id == "due")
+                .unwrap()
+                .next_run
+                .as_deref(),
+            Some(due.as_str()),
+            "本地时刻已匹配的过期任务仍交给 tick 处理",
+        );
+    }
 
     /// C1：计划任务运行档位 = 完全访问（无人值守，需写文件与执行命令）。
     #[test]

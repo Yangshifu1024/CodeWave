@@ -1,6 +1,8 @@
 // 可拖拽栏宽（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
 // 纯函数夹取（只夹显示、保留记忆值）+ 分隔条交互（pointer 拖动 / 方向键 / 双击复位）。
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n";
@@ -156,10 +158,8 @@ describe("分隔条交互", () => {
     // app.css 必须把 .tb-left-seg 列入 html.ws-resizing 的豁免，否则拖动时顶栏左段仍走 0.2s 缓动
     // 与 Sider 脱节（用户反馈「拖动时顶栏慢半拍」）。变更豁免规则时请同步更新本断言或反之。
     // vite 在测试环境会把 CSS 当 ?raw 导入；用 fs 直读更稳，避免对打包链的隐含依赖
-    const fs = require("node:fs") as typeof import("node:fs");
-    const path = require("node:path") as typeof import("node:path");
-    const css = fs.readFileSync(
-      path.join(__dirname, "..", "theme", "app.css"),
+    const css = readFileSync(
+      join(__dirname, "..", "theme", "app.css"),
       "utf8",
     );
     // 三类目标元素必须并列出现在同一豁免规则块里（避免「改了别处、漏改 tb-left-seg」的单边脱节）：
