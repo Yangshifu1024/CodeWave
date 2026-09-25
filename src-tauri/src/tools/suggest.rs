@@ -22,7 +22,18 @@ impl Tool for SuggestTool {
         "suggest"
     }
     fn description(&self) -> &'static str {
-        "向用户提供 1–4 条可点击的后续建议。请在完成工作后作为收尾动作调用。必须是所在轮次中唯一的工具调用。按优先级排序：当完成的工作改动了代码或文档时，把「授权 commit」的建议放第一条（本产品中 git 操作归用户所有）。"
+        "向用户提供 1–4 条可点击的后续建议；完成工作后作为收尾动作调用，且必须独占该批次的唯一调用。
+
+入参 `items` 是 **`string[]`**（1–4 条字符串，每条 ≤80 字符、不能为空）。
+
+**正确调用**：
+{\"items\":[\"授权 commit 提交本次改动\",\"本地 tauri dev 验证\",\"去控制台 revoke key\"]}
+
+**错误调用**（会立即报 `E_ARGS: invalid type: map, expected a string`）：
+{\"items\":[{\"id\":\"a\",\"label\":\"A\",\"description\":\"...\",\"recommended\":true}]}
+错误根因：把 `ask.options` 的对象形态（带 id/label/description/recommended）塞给了 `suggest`——两者不同。要结构化选项 + 用户点击，请改用 `ask` 而不是复用 `suggest` 的对象形态。
+
+按优先级排序：当完成的工作改动了代码或文档时，把「授权 commit」的建议放第一条（本产品中 git 操作归用户所有）。"
     }
     fn schema(&self) -> &'static str {
         r#"{
