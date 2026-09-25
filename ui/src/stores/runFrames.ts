@@ -97,6 +97,44 @@ export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", 
   );
 }
 
+/** 剥一次「文本形态 ask」的协议原文（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：
+ *  与后端 `text_ask::strip_block`（`replacen(block, "", 1)` + `trim_end()`）逐字同口径——
+ *  ①只删**第一处**命中（JS 的 `String.replace(string, ...)` 本身就是首处替换）；②只裁剥离后残留的**尾部**空白；
+ *  ③找不到（跨段切分 / 已被裁剪 / 已经剥过）就原样返回、绝不抛错。
+ *  **幂等**是硬要求：它会在每帧 delta 之后被反复调用（见 stripRecoveredInTab）。 */
+export function stripRecoveredText(text: string, block?: string | null): string {
+  if (!block || !text.includes(block)) return text;
+  return text.replace(block, "").trimEnd();
+}
+
+/** 在 Tab 上补剥当轮被恢复的协议原文（待剥字符串 = `tab.textRecovered`；由 `ask:opened` 写入、`run:done` 清空）。
+ *
+ *  **为什么不能只在 `ask:opened` 那一刻剥一次**：正文是**经 64ms 节流**下发的（后端 `stream_flush_loop`
+ *  每 64ms 冲刷一次，run 收尾才最终冲刷），而 `ask:opened` 在流结束后几毫秒就到——最后那个节流窗口里的
+ *  尾巴（往往正是 `</ask>`）会在 ask:opened **之后**才作为 delta_text 到达，只剥一次就被后到的帧把尾巴又追加回去。
+ *  故剥离挂在**每帧 delta_text 落地之后**（applyFrameToTab）：标记补齐的那一帧就地生效，当轮状态保证它一直有效。
+ *  同类先例：`features/chat/segments.tsx` 的 `stripReportMarkers` 也把剥离放在标记必然完整之后（那里是渲染期，
+ *  因为增量流会把标记切成两片）——「只做一次、且依赖标记已完整到达」的剥离一律是错的。
+ *
+ *  只扫**最近一条** assistant 项（＝当轮气泡 / 当前流式项，与 ask:opened 原实现同域）；命中第一处即停
+ *  （同 `replacen(..., 1)` 的「只删一处」）；找不到什么也不做——绝不抛错。 */
+export function stripRecoveredInTab(t: TabRunState): void {
+  const block = t.textRecovered;
+  if (!block) return;
+  for (let i = t.items.length - 1; i >= 0; i--) {
+    const item = t.items[i];
+    if (item.kind !== "assistant") continue;
+    for (const seg of item.timeline) {
+      if (seg.kind !== "text") continue;
+      const next = stripRecoveredText(seg.text, block);
+      if (next === seg.text) continue;
+      seg.text = next;
+      break;
+    }
+    break;
+  }
+}
+
 /** timeline 无该工具锚点则追加，返回可更新的 ToolView（工具卡按插入位置穿插）。
  *  结构上泛型：主流 assistant 项与子代理流（SubStream）共用同一形状。 */
 export function ensureToolAnchorIm(
@@ -205,6 +243,9 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     t.streamGen = frame.gen;
     // 帧到达顺序 = 展示顺序：text/thinking 按到达顺序追加进 timeline
     appendDelta(currentAssistantIm(t).timeline, frame.type === "delta_text" ? "text" : "thinking", frame.text || "");
+    // 文本形态 ask 兜底（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：被恢复的协议原文
+    // 常在本帧才补齐（64ms 节流把块切到两帧），故每帧文本落库后都补剥一次（幂等；待剥字符串见 TabRunState.textRecovered）
+    if (frame.type === "delta_text") stripRecoveredInTab(t);
   } else if (frame.type === "tool_progress") {
     const callKey = `${frame.batch}:${frame.index}`;
     // 先跨 assistant 项找已有卡：跑批期间 notice 插队会另建末项，若此处只查末项就会为同一次调用再建一张卡

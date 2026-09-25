@@ -1081,6 +1081,351 @@ async fn main_session_text_only_turn_ends_run() {
     );
 }
 
+// ---- 文本形态 ask 兜底（[docs/text-form-ask-fallback]）----
+
+/// 记录原始 `emit` 事件：`ask:opened` 这类工具事件不走 `channel_frame`，
+/// 既有 `CaptureSink` 只收 Frame，故另建一个记录型 sink。
+#[derive(Default)]
+struct EventRecorder(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+impl EventSink for EventRecorder {
+    fn channel_frame(&self, _s: &SessionId, _f: &Frame) {}
+    fn emit(&self, _s: &SessionId, e: &str, p: serde_json::Value) {
+        self.0.lock().unwrap().push((e.to_string(), p));
+    }
+}
+
+impl EventRecorder {
+    fn events(&self, key: &str) -> Vec<serde_json::Value> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+}
+
+/// 同 `scripted_core`，但 core.sink 换成记录型 sink（原始事件断言用）。
+#[allow(clippy::type_complexity)]
+fn scripted_core_recording(
+    port: u16,
+    name: &str,
+) -> (
+    Arc<AgentCore>,
+    Arc<SessionRuntime>,
+    Arc<EventRecorder>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let mut cfg = crate::core::config::ConfigState::default();
+    cfg.providers.push(crate::core::config::ProviderConfig {
+        models: vec![crate::core::config::ProviderModel::default()],
+        ..Default::default()
+    });
+    cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+    cfg.providers[0].base_url = format!("http://127.0.0.1:{port}/v1");
+    cfg.providers[0].keys = vec!["test-key".into()];
+    let sink = Arc::new(EventRecorder::default());
+    let store = Arc::new(crate::core::sessions::SessionStore::new(
+        roots.data_dir.clone(),
+    ));
+    let core = Arc::new(AgentCore::new(
+        cfg,
+        sink.clone() as Arc<dyn EventSink>,
+        store,
+        reqwest::Client::new(),
+        roots.data_dir.clone(),
+    ));
+    let rt = core.get_or_create_session(name, roots.workspace.clone(), None, vec![], None, vec![]);
+    (core, rt, sink, ws, dd)
+}
+
+/// 复刻会话 5da292d8 的坏轮：模型把 ask 调用写成正文 XML，本回合**没有** tool_use。
+const TEXT_ASK_TURN: &str = "我建议的下一步\n\n得先确认你用的是哪一家。\n\n<ask>\n<questions>\n<item>\n<id>cn_domain_source</id>\n<options>\n<item>\n<description>改 base_url 后重试</description>\n<id>typo</id>\n<label>笔误</label>\n<recommended>true</recommended>\n</item>\n<item>\n<id>proxy</id>\n<label>是中间层代理</label>\n</item>\n</options>\n<question>你配置的是什么来源？</question>\n<single>true</single>\n</item>\n</questions>\n</ask>";
+
+/// 只吐正文的 SSE 回合（无 tool_calls）。
+fn text_only_sse_turn(text: &str) -> Vec<u8> {
+    let content = serde_json::to_string(text).unwrap();
+    let chunk = format!(r#"{{"choices":[{{"delta":{{"content":{content}}}}}]}}"#);
+    sse_body(&[chunk.as_str(), SSE_STOP])
+}
+
+/// 轮询等待 ask 挂起（工具已 emit `ask:opened`、正阻塞在应答通道上），返回 ask_id。
+async fn wait_for_ask(rt: &Arc<SessionRuntime>) -> String {
+    for _ in 0..500 {
+        if let Some(id) = rt.asks.lock().unwrap().keys().next().cloned() {
+            return id;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("等待 ask 挂起超时：兜底未把正文 XML 变成 ask 调用");
+}
+
+/// 历史里的工具调用（名字 + 入参）。
+fn history_tool_uses(rt: &Arc<SessionRuntime>) -> Vec<(String, serde_json::Value)> {
+    rt.history
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.content.iter().cloned().collect::<Vec<_>>())
+        .filter_map(|c| match c {
+            Content::ToolUse { name, args, .. } => Some((name, args)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 历史里的工具结果文本。
+fn history_tool_results(rt: &Arc<SessionRuntime>) -> Vec<String> {
+    rt.history
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.content.iter().cloned().collect::<Vec<_>>())
+        .filter_map(|c| match c {
+            Content::ToolResult { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 命中：无 tool_use 的纯文本轮里漂着完整 `<ask>` 块 → 恢复成等价 ask 调用，
+/// 走真实 AskTool 通道（`ask:opened` 卡片 + 应答通道），正文里的协议原文被剥掉。
+#[tokio::test]
+async fn text_form_ask_is_promoted_to_tool_call() {
+    let (port, hits) = spawn_scripted_sse(vec![
+        text_only_sse_turn(TEXT_ASK_TURN),
+        text_only_sse_turn("已记录你的选择。"),
+    ])
+    .await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_recording(port, "text-ask-promote");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: true,
+        main_session: true,
+        finish_on_text: true,
+        ..DriveParams::default()
+    };
+    let core_run = core.clone();
+    let rt_run = rt.clone();
+    let handle = tokio::spawn(async move {
+        super::drive::drive_agent(&core_run, &rt_run, params, "run_text_ask").await
+    });
+    let ask_id = wait_for_ask(&rt).await;
+    assert!(
+        rt.resolve_ask(
+            &ask_id,
+            serde_json::json!({"answers": {"cn_domain_source": {"selections": ["typo"], "note": ""}}})
+        ),
+        "应答必须命中挂起的 ask"
+    );
+    let (result, _, _) = handle.await.unwrap();
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "兜底后应再走一步（等用户回答 → 继续）"
+    );
+
+    // 事件面：真实 ask 卡片被拉起，题目来自正文 XML（复用既有通道，未新增事件键）
+    let opened = sink.events("ask:opened");
+    assert_eq!(opened.len(), 1, "应恰好拉起一张 ask 卡片：{opened:?}");
+    assert_eq!(opened[0]["questions"][0]["id"], "cn_domain_source");
+    assert_eq!(opened[0]["questions"][0]["single"], true);
+    assert_eq!(opened[0]["questions"][0]["options"][0]["id"], "typo");
+    assert!(
+        opened[0]["text_recovered"]
+            .as_str()
+            .is_some_and(|b| b.contains("<ask>")),
+        "由文本恢复的询问必须携带被剥离的原文（供前端剥气泡）：{opened:?}"
+    );
+
+    // 历史形态与真实工具调用一致：ToolUse{ask} + 配对 ToolResult（用户选择回填给模型）
+    let uses = history_tool_uses(&rt);
+    assert_eq!(uses.len(), 1, "恰好一个工具调用：{uses:?}");
+    assert_eq!(uses[0].0, "ask");
+    assert_eq!(uses[0].1["questions"][0]["id"], "cn_domain_source");
+    let results = history_tool_results(&rt);
+    assert_eq!(results.len(), 1, "调用必须有配对结果：{results:?}");
+    assert!(
+        results[0].contains("cn_domain_source"),
+        "用户选择应回填给模型：{}",
+        results[0]
+    );
+
+    // 正文：块被剥掉、块前正文保留、run 结果是最后一步的文本
+    let texts = history_texts(&rt);
+    assert!(
+        texts.iter().all(|t| !t.contains("<ask>")),
+        "协议原文不得留在历史里：{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t.contains("得先确认你用的是哪一家")));
+    assert_eq!(result.unwrap(), "已记录你的选择。");
+}
+
+/// 本回合已有真实工具调用时不兜底：再补一个 ask 只会变成两张卡 / 两次切档。
+#[tokio::test]
+async fn text_form_ask_not_promoted_when_real_tool_call_present() {
+    let content = serde_json::to_string(TEXT_ASK_TURN).unwrap();
+    let first = format!(
+        r#"{{"choices":[{{"delta":{{"content":{content},"tool_calls":[{{"index":0,"id":"c1","function":{{"name":"no_such_tool","arguments":"{{}}"}}}}]}}}}]}}"#
+    );
+    let (port, hits) = spawn_scripted_sse(vec![
+        sse_body(&[
+            first.as_str(),
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]),
+        text_only_sse_turn("收到。"),
+    ])
+    .await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "text-ask-real-call");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        main_session: true,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_text_ask_real").await;
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let uses = history_tool_uses(&rt);
+    assert_eq!(uses.len(), 1, "不得再合成第二个调用：{uses:?}");
+    assert_eq!(uses[0].0, "no_such_tool");
+    assert!(
+        history_texts(&rt).iter().any(|t| t.contains("<ask>")),
+        "有真实调用的回合，正文原样保留（不兜底）"
+    );
+}
+
+/// 子代理不生效：ask 不在子代理工具集里，弹出的卡片也没有落脚的 UI 桶。
+#[tokio::test]
+async fn text_form_ask_not_promoted_for_subagent() {
+    let (port, hits) = spawn_scripted_sse(vec![
+        text_only_sse_turn(TEXT_ASK_TURN),
+        text_only_sse_turn("<report>完成</report>"),
+    ])
+    .await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "text-ask-sub");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        main_session: false,
+        finish_on_text: false,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_text_ask_sub").await;
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "子代理的纯文本回合应续跑，而不是弹卡等待"
+    );
+    assert!(
+        history_tool_uses(&rt).is_empty(),
+        "子代理不得合成 ask 调用：{:?}",
+        history_tool_uses(&rt)
+    );
+    assert!(
+        history_texts(&rt)
+            .iter()
+            .any(|t| t.contains("<continue-notice>")),
+        "应走既有续跑路径"
+    );
+}
+
+/// ask 被排除时（目标档执行期「零提问」/ 角色策略）不兜底——那正是「零提问」的机制保证。
+#[tokio::test]
+async fn text_form_ask_not_promoted_when_ask_excluded() {
+    let (port, hits) = spawn_scripted_sse(vec![text_only_sse_turn(TEXT_ASK_TURN)]).await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "text-ask-excluded");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        main_session: true,
+        exclude_tools: vec!["ask".into()],
+        ..DriveParams::default()
+    };
+    let (result, _, _) =
+        super::drive::drive_agent(&core, &rt, params, "run_text_ask_excluded").await;
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "ask 不可用的档位应即收尾");
+    assert!(history_tool_uses(&rt).is_empty(), "不得合成 ask 调用");
+    assert!(
+        history_texts(&rt).iter().any(|t| t.contains("<ask>")),
+        "ask 不可用时正文原样保留"
+    );
+}
+
+/// 每 run 至多兜底一次：同一 run 第二次出现文本 XML 不再恢复（不给提示注入反复重试的窗口）。
+#[tokio::test]
+async fn text_form_ask_at_most_once_per_run() {
+    let (port, hits) = spawn_scripted_sse(vec![
+        text_only_sse_turn(TEXT_ASK_TURN),
+        text_only_sse_turn(TEXT_ASK_TURN),
+        text_only_sse_turn("结束"),
+    ])
+    .await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_recording(port, "text-ask-once");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: true,
+        main_session: true,
+        finish_on_text: true,
+        ..DriveParams::default()
+    };
+    let core_run = core.clone();
+    let rt_run = rt.clone();
+    let handle = tokio::spawn(async move {
+        super::drive::drive_agent(&core_run, &rt_run, params, "run_text_ask_once").await
+    });
+    let ask_id = wait_for_ask(&rt).await;
+    assert!(rt.resolve_ask(
+        &ask_id,
+        serde_json::json!({"answers": {"cn_domain_source": {"selections": ["proxy"], "note": ""}}})
+    ));
+    let (result, _, _) = handle.await.unwrap();
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "第二次纯文本回合应直接收尾（不再兜底）"
+    );
+    assert_eq!(sink.events("ask:opened").len(), 1, "只应拉起一张卡");
+    assert_eq!(history_tool_uses(&rt).len(), 1, "只应合成一个 ask 调用");
+    let texts = history_texts(&rt);
+    assert_eq!(
+        texts.iter().filter(|t| t.contains("<ask>")).count(),
+        1,
+        "第一次的块被剥、第二次的原文按既有行为保留：{texts:?}"
+    );
+}
+
+/// 代码围栏里的 `<ask>` 是格式示例而不是调用：不兜底（未闭合围栏 + 块位于末尾，单测围栏判据）。
+#[tokio::test]
+async fn text_form_ask_in_code_fence_is_ignored() {
+    let fenced = format!("格式示例：\n```\n{TEXT_ASK_TURN}");
+    let (port, hits) = spawn_scripted_sse(vec![text_only_sse_turn(&fenced)]).await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "text-ask-fenced");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        main_session: true,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_text_ask_fenced").await;
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "围栏内示例不弹卡");
+    assert!(history_tool_uses(&rt).is_empty(), "不得合成 ask 调用");
+}
+
 /// 被拒调用（参数 JSON 不可修复）：不再静默把该回合当成功收尾——
 /// 以 user 角色提示反馈给模型并继续；空 assistant 消息不入历史。
 #[tokio::test]
@@ -2401,5 +2746,54 @@ async fn goal_advance_transient_never_reaches_history() {
         rt.history.lock().unwrap().as_slice(),
         before.as_slice(),
         "组装与重建均不得写历史"
+    );
+}
+
+/// `text_recovered` 只在**文本恢复**的询问上出现：真实 tool_use 调 ask 时不带该字段
+///（take 语义——同一 run 内后续的真实询问不该被上一次兜底污染）。
+#[tokio::test]
+async fn text_recovered_only_on_recovered_asks() {
+    let args = serde_json::json!({
+        "questions": [{"id": "q1", "question": "选哪个", "options": [{"id": "a", "label": "A"}]}]
+    });
+    let turn = format!(
+        r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c1","function":{{"name":"ask","arguments":{}}}}}]}}}}]}}"#,
+        serde_json::to_string(&args.to_string()).unwrap()
+    );
+    let (port, hits) = spawn_scripted_sse(vec![
+        sse_body(&[
+            turn.as_str(),
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]),
+        text_only_sse_turn("收到。"),
+    ])
+    .await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_recording(port, "real-ask");
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: true,
+        main_session: true,
+        finish_on_text: true,
+        ..DriveParams::default()
+    };
+    let core_run = core.clone();
+    let rt_run = rt.clone();
+    let handle = tokio::spawn(async move {
+        super::drive::drive_agent(&core_run, &rt_run, params, "run_real_ask").await
+    });
+    let ask_id = wait_for_ask(&rt).await;
+    assert!(rt.resolve_ask(
+        &ask_id,
+        serde_json::json!({"answers": {"q1": {"selections": ["a"], "note": ""}}})
+    ));
+    let (result, _, _) = handle.await.unwrap();
+    assert!(result.is_ok(), "run 应正常收尾：{:?}", result.err());
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let opened = sink.events("ask:opened");
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0]["questions"][0]["id"], "q1");
+    assert!(
+        opened[0].get("text_recovered").is_none(),
+        "真实工具调用不该带 text_recovered：{opened:?}"
     );
 }

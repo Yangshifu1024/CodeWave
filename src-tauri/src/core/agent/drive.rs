@@ -13,12 +13,13 @@ use super::stream::{
     refresh_request_messages, stream_flush_loop,
 };
 use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
+use super::text_ask;
 use crate::core::context::{self};
 use crate::core::session_log;
 use crate::core::sessions::SaveReport;
 use crate::core::sessions::repair;
 use crate::core::types::{Content, Message, Role};
-use crate::provider::dto::ProviderError;
+use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, ProviderError};
 use crate::provider::retry;
 use crate::tools::batch::execute_batch;
 use serde::Deserialize;
@@ -27,6 +28,38 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// 文本形态 ask 兜底是否可用：仅主会话，且 ask 确实在本次工具集里。
+/// 排除项统一由档位/角色策略写入 `exclude_tools`（目标档执行期「零提问」、子代理工具集
+/// 不含 ask），故此处只看名单——将来新增排除方无需再改这里。
+fn ask_available(params: &DriveParams) -> bool {
+    params.main_session && !params.exclude_tools.iter().any(|t| t == "ask")
+}
+
+/// 从装配块里剥掉被恢复的块文本；返回是否真剥掉了。
+/// 找不到就不兜底——「正文留着协议原文却多出一个调用」比不兜底更糟。
+fn strip_text_block(asm: &mut Assembled, block: &str) -> bool {
+    for b in asm.blocks.iter_mut() {
+        if let AsmBlock::Text(t) = b {
+            if t.contains(block) {
+                *t = text_ask::strip_block(t, block);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 本回合正文总字数（诊断日志用；避免只为了计数克隆整段文本）。
+fn assembled_text_chars(asm: &Assembled) -> usize {
+    asm.blocks
+        .iter()
+        .filter_map(|b| match b {
+            AsmBlock::Text(t) => Some(t.chars().count()),
+            _ => None,
+        })
+        .sum()
+}
 
 /// 归一化后的工具调用（参数已修复为合法 JSON object；供批次执行层消费）。
 #[derive(Debug, Clone)]
@@ -1191,6 +1224,10 @@ pub async fn drive_agent(
     //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
     *rt.system_frozen.lock().unwrap() = None;
     *rt.cache_gen_anchor.lock().unwrap() = None;
+    // 文本形态 ask 的待剥标注同样只在一个 run 内有效（[docs/text-form-ask-fallback]）：
+    // 正常路径由 AskTool 打开卡片时 take 走；但若兜底命中后该调用没走到工具（例如用户在
+    // 批次执行前停止），残留会成为下一轮**真实** ask 的过期标注——这里兜底清一次。
+    *rt.text_ask_block.lock().unwrap() = None;
     // 父令牌存在（子代理）时派生 child_token：父取消 → 子取消；子仍可被单独停止（stop_subagent）
     let run_token = match params.parent_cancel.take() {
         Some(parent) => parent.child_token(),
@@ -1239,6 +1276,9 @@ pub async fn drive_agent(
     // 用于 <continue-notice> 续跑与 MAX_TEXT_TURNS 显式失败门
     //（[docs/subagent-text-turn-premature-exit]）
     let mut text_turns: u32 = 0;
+    // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：每 run 至多一次——既救
+    // 「端点偶发漏 tool_use」，也不给提示注入留反复重试的窗口。
+    let mut text_ask_used = false;
     // 目标模式进展快照（停滞判定基线）：执行期每步比对一次，见 `goal_account_step`
     let mut goal_key: Option<GoalProgressKey> = None;
 
@@ -1353,7 +1393,7 @@ pub async fn drive_agent(
             ),
         );
 
-        let assembled = match run_llm_turn(
+        let mut assembled = match run_llm_turn(
             core,
             rt,
             &sink,
@@ -1386,6 +1426,73 @@ pub async fn drive_agent(
             ));
             break 'steps;
         }
+
+        // 诊断口径取**兜底之前**的原始响应形态：兜底会凭空补一个调用，取在之后就分不清
+        // 「端点真的返回了 tool_use」与「我们补的」——而这正是这行日志要回答的问题。
+        let raw_tool_calls = assembled.tool_calls.len();
+        let raw_names = assembled
+            .tool_calls
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let raw_text_chars = assembled_text_chars(&assembled);
+
+        // ⑧’ 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：BYOK 端点偶发把工具调用
+        // 当正文透传（本回合无 tool_use，正文末尾漂着 `<ask>…</ask>` 原文）。此前这段协议
+        // 原文只被当普通 Markdown 渲染——问题不弹卡、也不留痕，用户只看到裸 XML。
+        // 条件门：仅主会话 + ask 确实在工具集里（覆盖目标档执行期与子代理）+ 本回合无调用
+        // + 每 run 一次；命中后剥掉正文里的块并补一个等价 ask 调用，交回既有批次路径执行
+        //（G2/G3 门、mode 切档、switchToAutoEdit、plan 落盘全在工具层，与调用从哪来无关）。
+        if !text_ask_used && assembled.tool_calls.is_empty() && ask_available(&params) {
+            if let Some(salvaged) = text_ask::salvage_text_ask(&assembled.joined_text()) {
+                if strip_text_block(&mut assembled, &salvaged.block) {
+                    let index = assembled.tool_calls.len();
+                    assembled.tool_calls.push(AssembledToolCall {
+                        index,
+                        id: format!("text_ask_{run_id}_{step}"),
+                        name: "ask".into(),
+                        args_raw: salvaged.args.to_string(),
+                    });
+                    assembled.blocks.push(AsmBlock::Tool(index));
+                    text_ask_used = true;
+                    // 交前端剥离当轮气泡里的残留原文（流式帧已下发、无法回收）
+                    *rt.text_ask_block.lock().unwrap() = Some(salvaged.block.clone());
+                    // 记块首一段：恢复后原文在历史与正文里都被剥掉，不留样则事后无从判断
+                    // 「什么内容触发了这张卡」（每 run 至多一条；换行压成空格保持单行日志）
+                    let sample: String = salvaged
+                        .block
+                        .lines()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(200)
+                        .collect();
+                    session_log::warn(
+                        rt,
+                        &format!(
+                            "step {step} 模型未按工具协议提问：正文里的 <ask> 块（{} 字）已恢复为 ask 调用；块首 200 字：{sample}",
+                            salvaged.block.chars().count()
+                        ),
+                    );
+                }
+            }
+        }
+
+        // step 级响应形态诊断（同上）：端点把工具调用当正文透传时，「为什么模型没返回
+        // tool_use」此前无从取证（原始 SSE 不落盘）。一行摘要即可区分三种可能：
+        // 请求侧工具集为空 / 响应侧确实没有 tool_use / 模型把调用写成了正文（recovered=true）。
+        session_log::info(
+            rt,
+            &format!(
+                "step {step} 响应形态 tools_sent={} tool_calls={} names=[{}] text≈{}字 recovered={}",
+                req.tools.len(),
+                raw_tool_calls,
+                raw_names,
+                raw_text_chars,
+                text_ask_used
+            ),
+        );
 
         // ⑨ 组装 assistant 消息
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);

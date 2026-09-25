@@ -127,6 +127,11 @@ pub struct SessionRuntime {
     pub sem_tools: Arc<Semaphore>,
     /// 待应答的 ask/审批 waiter：ask_id → 应答通道
     pub asks: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
+    /// 文本形态 ask 兜底恢复的原始块（[docs/text-form-ask-fallback]）：drive 兜底时写入，
+    /// AskTool 打开询问卡时**取走**（take）并随 `ask:opened` 的 `text_recovered` 下发——
+    /// 流式帧已把这段协议原文送到前端且无法回收，前端据此从当轮气泡里剔掉它。
+    /// 每 run 至多一处（兜底本身每 run 一次）。
+    pub text_ask_block: Mutex<Option<String>>,
     /// 流式节流缓冲（64ms 窗口聚合帧）
     pub stream: Arc<ThrottledStream>,
     /// 当前 run 的取消 token（空闲为 None）
@@ -216,6 +221,7 @@ impl SessionRuntime {
             file_ops: Arc::new(tokio::sync::Mutex::new(())),
             sem_tools: Arc::new(Semaphore::new(4)),
             asks: Mutex::new(HashMap::new()),
+            text_ask_block: Mutex::new(None),
             stream: Arc::new(ThrottledStream::new()),
             active_cancel: Mutex::new(None),
             breakdown_cache: Mutex::new(None),

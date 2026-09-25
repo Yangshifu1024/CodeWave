@@ -160,6 +160,12 @@ export interface TabRunState {
   streamGen: number;
   /** 当前询问/审批卡（null = 无） */
   ask: AskState | null;
+  /** 「文本形态 ask」当轮被后端从正文里剥掉的协议原文（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：
+   *  `ask:opened.text_recovered` 落地。存在的意义是**后到的文本增量仍要继续补剥**——正文经 64ms 节流下发，
+   *  `</ask>` 尾巴常在 ask:opened **之后**才作为 delta_text 到达，只在 ask:opened 那一刻剥一次会被后到的帧又追加回去
+   *  （消费方见 `runFrames.ts` 的 `stripRecoveredInTab`）。只在本轮有效：`run:done` 清空。
+   *  可选 + 缺省 = 本轮没有「文本恢复」的询问（真实工具调用路径 / 旧后端 / 测试夹具字面量）。 */
+  textRecovered?: string | null;
   /** 上下文 token 分布（null = 未知） */
   breakdown: Breakdown | null;
   todos: Todo[];
