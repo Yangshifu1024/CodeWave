@@ -4,6 +4,12 @@
 :root {
   /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/arithmetic-audit](../../../docs/docs/arithmetic-audit.md)#13——此前两处各写字面量 50px） */
   --ws-titlebar-h: 50px;
+  /* 全局高亮色：所有 hover / active / 选中态统一走此色。
+     从左栏背景 --ws-bg-nav 派生「深一点点」的色（与 --ws-text-1 混 12%）。
+     亮色模式下确实稍深；暗色模式下文字色翻浅、效果翻为「与底色反相更强」——同样达成高亮意图。
+     写死 #hex 会与亮暗自适应契约打架，故用 color-mix 跟基底走。
+     行覆盖层（.session-nav-row .row-actions）也走它，因为该层只在行 hover 时显形、与行 hover 同色才能遮住时间文本。 */
+  --ws-highlight: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%);
 }
 
 /* 裸 <code> 一律走等宽双槽 token：UA 默认 monospace 不随用户字体设置变化
@@ -72,7 +78,7 @@ html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0;
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity 0.15s;
 }
-.tb-logo-toggle:hover { background: var(--ws-hover); }
+.tb-logo-toggle:hover { background: var(--ws-highlight); }
 .tb-logo-toggle:hover .tb-logo { opacity: 0; }
 .tb-logo-toggle:hover .tb-logo-swap { opacity: 1; }
 .tb-title {
@@ -284,16 +290,17 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 高亮色：从 --ws-bg-nav 派生「深一点点」的色（color-mix 与 --ws-text-1 混 12%），
    亮色模式下确实稍深；暗色模式下文字色变浅、效果翻为「与左栏反相更强」——同样达成「高亮」意图。
    写死 #hex 会与亮暗自适应契约打架，故用 color-mix 跟基底走。 */
-.chips-row .ant-btn:hover { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%) !important; } /* !important 盖过基底的 --ws-bg-nav */
+.chips-row .ant-btn:hover { background: var(--ws-highlight) !important; } /* !important 盖过基底的 --ws-bg-nav */
 .chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
 
 /* ---------- 目标模式提示条（`ApprovalMode::Goal`）---------- */
 /* 澄清阶段（中性墨：只解释语义）与执行阶段共用一条；色彩强度只映射风险等级：
    澄清/执行 = 默认→橙（自主推进中，需注意）、已达成 = 绿、已中止 = 红。
-   外边距与 .composer 的 16px 对齐（与 .ask-wrap 同口径） */
+   宽度与 .ask-wrap 同口径（15% 横向 margin）——banner 是简短说明，宽度过宽会让短文「漂浮」在大量空白里，
+   复用窄面板口径与 ask 面板视觉成系。 */
 .goal-banner {
   display: flex; align-items: center; gap: 8px;
-  margin: 0 16px 6px; padding: 6px 10px;
+  margin: 0 15% 6px; padding: 6px 10px;
   border: 1px solid var(--ws-border); border-radius: 10px;
   background: var(--ws-panel);
   font-size: 12px; line-height: 1.5; color: var(--ws-text-2);
@@ -305,7 +312,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .goal-banner.st-aborted { border-color: var(--ws-err); color: var(--ws-err); }
 /* 「继续推进」按钮：继承提示条颜色（暂停态 = 橙），悬停走通用 hover token */
 .goal-banner .goal-resume-btn { flex: none; color: inherit; border-radius: 999px; }
-.goal-banner .goal-resume-btn:hover { background: var(--ws-hover) !important; }
+.goal-banner .goal-resume-btn:hover { background: var(--ws-highlight) !important; }
 
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
@@ -328,7 +335,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .skill-detail .skill-origin { font-size: 12px; color: var(--ws-dim); }
 /* 键盘导航高亮（↑↓ 移动，Enter/Tab 选中；与悬停同步） */
-.menu .menu-item.active { background: var(--ws-hover); }
+.menu .menu-item.active { background: var(--ws-highlight); }
 /* 条目长文本换行（技能/提及/子代理菜单共用）：antd Button 默认 nowrap + 固定行高，
    长 description 会把弹层撑宽——这里改为高度自适应、文本左对齐，描述占满剩余宽度并可任意断行 */
 .menu .menu-item {
@@ -391,34 +398,22 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; }
 .composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .composer-toolbar .ant-btn-text { color: var(--ws-text-2); padding-inline: 8px; }
-.composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+.composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
 .composer-toolbar .tb-label {
   /* 完整展示模型名（不限宽）；省略号只是窄窗口空间不足时的兜底，按钮 title 中有全名 */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   margin: 0 2px 0 6px; font-size: 13px;
 }
-/* 权限胶囊按档着色：确认=墨（accent，中性=默认档）/ 自动编辑=橙 / 完全访问=红（危险）；
-   [docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 墨化后语义 = 色彩强度映射风险等级（无色=默认、暖色=需注意、红=危险）；plan 档不着色。
-   选择器带 .ant-btn-text（特异性相同、后者胜出）以压过上方 hover 变色规则，悬停保持档位色 */
-/* 权限胶囊按档着色（[docs/composer-shift-tab-mode-cycle] §5，[docs/ask-ink-accent-and-composer-cover] 色彩强度映射风险等级）：
-   plan 不着色；confirm = 绿（每步询问，安全）；auto = 黄（自动编辑，需注意）；
-   goal = 橙（自主推进，更高授权）；full = 红（完全访问，危险）。
-   **文字不染色**（保留 antd 默认中性色），**只图标 + chev 染色**——视觉上以图标指示档位、文字辅助。
-   **selector 修正**：Composer 的 mode 按钮用 children（不是 `icon` prop）传 modeIcons，
-   antd Button 不会自动 wrap `.ant-btn-icon`——改选 `.anticon:first-of-type`（直接子元素的第一个 antd icon = mode 图标）。
-   硬编码不跟 antd token 走——亮暗主题同色。 */
+/* 权限胶囊不再按档染色：text + icon + chev 全部走中性墨色（[docs/ask-ink-accent-and-composer-cover] 的强调色契约）。
+   之前 confirm/auto/goal/full 按档位分配绿/黄/橙/红（[docs/composer-shift-tab-mode-cycle] §5 色彩强度映射风险等级），
+   与下拉菜单一起撤掉后，「当前档位徽标」仅起标识作用、不再承担风险等级提示。
+   **selector 修正**（保留以备查阅）：Composer 的 mode 按钮用 children（不是 `icon` prop）传 modeIcons，
+   antd Button 不会自动 wrap `.ant-btn-icon`——当时改选 `.anticon:first-of-type`（直接子元素的第一个 antd icon = mode 图标）。
+   text 显式置 --ws-text-2 是必要的——文本规则保留，色彩强度层全撤。 */
 .composer-toolbar .ant-btn-text.approval-confirm,
 .composer-toolbar .ant-btn-text.approval-auto,
 .composer-toolbar .ant-btn-text.approval-full,
 .composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-text-2) !important; }
-.composer-toolbar .ant-btn-text.approval-confirm > .anticon:first-of-type,
-.composer-toolbar .ant-btn-text.approval-confirm .tb-chev { color: #73d13d !important; }
-.composer-toolbar .ant-btn-text.approval-auto    > .anticon:first-of-type,
-.composer-toolbar .ant-btn-text.approval-auto    .tb-chev { color: #ffec3d !important; }
-.composer-toolbar .ant-btn-text.approval-full    > .anticon:first-of-type,
-.composer-toolbar .ant-btn-text.approval-full    .tb-chev { color: #ff4d4f !important; }
-.composer-toolbar .ant-btn-text.approval-goal   > .anticon:first-of-type,
-.composer-toolbar .ant-btn-text.approval-goal   .tb-chev { color: #ffc53d !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
 /* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原住在 .toolbar-right 里，被 margin-left:auto
    推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
@@ -460,13 +455,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }
 .menu-item-rich .desc { font-size: 11.5px; color: var(--ws-dim); }
-/* 权限档下拉条目：仅标题文字按档着色（与触发胶囊同色，[docs/composer-shift-tab-mode-cycle](../../../docs/docs/composer-shift-tab-mode-cycle.md) §5）。
-   档位类挂在内层 .menu-item-rich 上（rich() 传入）；规则瞄准标题 span（antd 的选中/悬停色作用在 li 上），
-   内层元素自身 color 的继承永远胜出——无需 !important。图标保持默认文字色 */
-.ant-dropdown .menu-item-rich.approval-confirm > span:not(.desc) { color: var(--ws-accent); }
-.ant-dropdown .menu-item-rich.approval-auto    > span:not(.desc) { color: var(--ws-warn); }
-.ant-dropdown .menu-item-rich.approval-full    > span:not(.desc) { color: var(--ws-err); }
-.ant-dropdown .menu-item-rich.approval-goal   > span:not(.desc) { color: var(--ws-warn); }
+/* 权限档下拉条目：不按档染色（确认=accent、自动/目标=warn、完全=err）——标题与图标统一走中性墨色。
+   色彩强度映射风险等级的设计意图保留在触发胶囊上（见 .composer-toolbar .ant-btn-text.approval-* 那组规则）。
+   档位类 .approval-* 仍由 rich() 传入（被 app.smoke.test.tsx 锚定），仅去掉 color 规则即可。 */
 .vision-tag {
   font-size: 10px; line-height: 16px; margin-left: 6px; padding: 0 5px;
   border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);
@@ -584,8 +575,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
   cursor: pointer; font-size: 13px; min-width: 0;
 }
-.ask-opt:hover { background: var(--ws-hover); }
-.ask-opt.kb { background: var(--ws-hover); }
+.ask-opt:hover { background: var(--ws-highlight); }
+.ask-opt.kb { background: var(--ws-highlight); }
 .ask-opt.picked { background: rgba(127, 127, 127, 0.16); }
 .ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
 .ask-opt .label { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -830,11 +821,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   height: 28px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
   font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
 }
-/* 会话行高亮：与「后续建议」每项 hover 同款——从 --ws-bg-nav 派生「深一点点」的色，
-   让侧栏与建议区两处「同背景容器的高亮」视觉上对齐。亮色确实稍深；暗色文字色翻浅、效果翻为反相更强，仍是高亮意图。
-   .row-actions 的 --ws-hover 背景是「遮住底下时间文本」的覆盖层，与高亮语义不同，不动。 */
-.session-nav-row:hover { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%); }
-.session-nav-row.active { background: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%); color: var(--ws-text-1); }
+/* 会话行高亮走 --ws-highlight（与全站统一），见 :root 定义 */
+.session-nav-row:hover { background: var(--ws-highlight); }
+.session-nav-row.active { background: var(--ws-highlight); color: var(--ws-text-1); }
 /* 运行指示定槽：恒渲染的占位保证每行标题对齐 */
 .session-nav-row .session-run-slot {
   flex: none; width: 12px; height: 12px;
@@ -852,7 +841,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: inline-flex; flex: none; margin-left: 4px;
   opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.12s;
-  background: var(--ws-hover); /* 遮住底下透出的时间文本 */
+  background: var(--ws-highlight); /* 遮住底下透出的时间文本 */
 }
 .session-nav-row:hover .row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
 .session-nav-row:hover .session-time { opacity: 0; }
@@ -863,7 +852,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .project-row .row-action {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   opacity: 0; visibility: hidden; pointer-events: none;
-  transition: opacity 0.12s; background: var(--ws-hover);
+  transition: opacity 0.12s; background: var(--ws-highlight);
 }
 .project-row:hover .row-action { opacity: 1; visibility: visible; pointer-events: auto; }
 .show-more { font-size: 12px; color: var(--ws-dim); padding: 4px 8px 4px 24px; cursor: pointer; }
@@ -872,7 +861,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; align-items: center; gap: 8px; padding: 5px 8px;
   font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px;
 }
-.task-nav-row:hover { background: var(--ws-hover); }
+.task-nav-row:hover { background: var(--ws-highlight); }
 .task-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-dim); flex: none; }
 /* 只有失败是红（与 .task-dot 的灰形成风险等级对比）：ok/skipped 走默认灰，不再另设 .task-dot.ok 死规则 */
 .task-dot.err { background: var(--ws-err); }
@@ -896,7 +885,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .sider-footer .git-avatar { font-size: 12px; }
 .sider-footer-ops { display: flex; align-items: center; flex: none; gap: 0; }
 .sider-footer-ops .ant-btn-text { color: var(--ws-text-2); }
-.sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+.sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
 /* 折叠窄轨的底部回退（.sider-rail-foot）已随 [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 窄轨退役一并移除 */
 
 /* ---------- 右侧栏「变更」页签（GitDiffModal 面板化） ---------- */
@@ -960,7 +949,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 任务行两级：主信息区（可点展开历史）+ 操作区（同级兄弟，不做 role=button 里嵌按钮） */
 .task-row { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
 .task-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 0; border-radius: 6px; cursor: pointer; }
-.task-row-main:hover { background: var(--ws-hover); }
+.task-row-main:hover { background: var(--ws-highlight); }
 .task-row-name { font-size: 12.5px; color: var(--ws-text-1); }
 .task-row-sched { font-size: 12px; color: var(--ws-text-2); }
 .task-row-project { font-size: 11.5px; }
@@ -1013,8 +1002,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   height: 28px; padding: 0 8px; margin: 0 0 2px; border: none; border-radius: 6px;
   background: transparent; text-align: left; cursor: pointer;
 }
-.settings-nav-item:hover { background: var(--ws-hover); }
-.settings-nav-item-active { background: var(--ws-hover); }
+.settings-nav-item:hover { background: var(--ws-highlight); }
+.settings-nav-item-active { background: var(--ws-highlight); }
 .settings-nav-label { display: inline-flex; align-items: center; gap: 6px; line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
 .settings-nav-item-active .settings-nav-label { color: var(--ws-text-1); }
 /* 导航项图标：Outlined 线性图标——**不设 color**，跟随 .settings-nav-label 的文本色（无彩色约定） */
@@ -1043,8 +1032,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   min-height: 28px; padding: 0 8px; margin: 0 0 2px; border-radius: 6px; cursor: pointer;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.settings-search-item:hover { background: var(--ws-hover); }
-.settings-search-item-active { background: var(--ws-hover); }
+.settings-search-item:hover { background: var(--ws-highlight); }
+.settings-search-item-active { background: var(--ws-highlight); }
 .settings-search-item-label {
   font-size: 12.5px; color: var(--ws-text-2);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1067,7 +1056,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    不再内联硬编码 #ff4d4f —— 硬编码色不跟主题走，暗色下对比不足 */
 .provider-models-error { color: var(--ws-err); font-size: 12px; margin-bottom: 8px; }
 /* 搜索命中临时高亮（约 1.5s 后由 JS 摘掉；墨色描边 + 浅底，不用彩色 accent） */
-.settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-hover); }
+.settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-highlight); }
 
 /* 右内容列：操作条常驻可点（窄窗换行），页体自己滚 */
 .settings-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -1098,7 +1087,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 11.5px; color: var(--ws-text-2); background: transparent;
   border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
 }
-.run-indicator:hover { background: var(--ws-hover); color: var(--ws-text-1); }
+.run-indicator:hover { background: var(--ws-highlight); color: var(--ws-text-1); }
 .run-indicator .run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); animation: pulse 1.2s infinite; }
 
 /* ---------- 设置页内各页共用（原 SettingsModal 段） ---------- */
@@ -1118,7 +1107,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .mcp-status-row-head { min-height: 28px; font-size: 11px; color: var(--ws-dim); border-bottom: 1px solid var(--ws-border); }
 .mcp-status-row-clickable { cursor: pointer; }
-.mcp-status-row-clickable:hover { background: var(--ws-hover); }
+.mcp-status-row-clickable:hover { background: var(--ws-highlight); }
 .mcp-status-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-status-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .mcp-status-tools, .mcp-status-pid { color: var(--ws-dim); }
@@ -1294,7 +1283,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 12px; color: var(--ws-text-2); }
 /* 可点击技能行（点击弹详情）：负 margin 补偿 padding，悬停反馈与菜单高亮同 token */
 .rb-skill-line.rb-skill-clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; transition: background 0.15s; }
-.rb-skill-line.rb-skill-clickable:hover { background: var(--ws-hover); }
+.rb-skill-line.rb-skill-clickable:hover { background: var(--ws-highlight); }
 .rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-skill-origin { padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 11px; color: var(--ws-dim); }
 /* [docs/session-logging-report](../../../docs/docs/session-logging-report.md)：右栏运行日志 */
@@ -1332,7 +1321,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; align-items: center; gap: 6px; padding: 4px 2px; border-radius: 5px;
   color: var(--ws-text-2); font-size: 12px; cursor: pointer; min-width: 0;
 }
-.rb-file:hover { background: rgba(127, 127, 127, 0.12); }
+.rb-file:hover { background: var(--ws-highlight); }
 .rb-file-icon { flex: none; display: inline-flex; }
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
@@ -1404,7 +1393,7 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
   background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
   color: var(--ws-text-2); font-size: 12px; font-family: inherit; transition: background 0.15s;
 }
-.rb-quota-summary:hover { background: var(--ws-hover); }
+.rb-quota-summary:hover { background: var(--ws-highlight); }
 /* 灰行（rejected / no_key / unsupported）：无可展开内容的那两类恒为只读样式 */
 .rb-quota-summary.rb-quota-degraded, .rb-quota-summary.rb-quota-static { color: var(--ws-dim); }
 .rb-quota-summary.rb-quota-degraded .rb-quota-name, .rb-quota-summary.rb-quota-static .rb-quota-name { color: var(--ws-text-2); }
@@ -1431,7 +1420,7 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
   background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
   color: var(--ws-dim); font-size: 11.5px; font-family: inherit; transition: background 0.15s;
 }
-.rb-quota-collapse:hover { background: var(--ws-hover); }
+.rb-quota-collapse:hover { background: var(--ws-highlight); }
 .rb-quota-window { flex: none; font-size: 11px; color: var(--ws-dim); }
 .rb-quota-remaining { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .rb-quota-remaining.risk-warn { color: var(--ws-warn, #d46b08); }

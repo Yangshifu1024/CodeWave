@@ -355,7 +355,7 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     // 批②：导航自建 → 导航列内的 antd Tabs 规则全部退场；组标题沿用 .nav-section-title 的度量
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
     expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
-    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-hover\)/);
+    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-highlight\)/);
     // 写入后检查的两列网格类收回 app.css（不再用内联 style）
     expect(appCss).toMatch(/\.postcheck-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(180px,\s*1fr\)\)/);
     // 已删除的 LSP 样式类不得残留
