@@ -9,8 +9,8 @@
 //   · **未知或缺失状态一律落到「未连接」**，不当作故障——后端将来加新态时不该被误报成错误。
 import { useState } from "react";
 import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Button, Spin, Tooltip, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { Button, Empty, Spin, Tag, Tooltip } from "antd";
+import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { McpScope, McpStatusPayload } from "../../ipc/types";
 
@@ -63,7 +63,7 @@ export function mcpStatusRow(
     name,
     tools: 0,
     toolsFiltered: st?.tools_filtered ?? 0,
-    pid: st?.pid ?? null,
+    pid: st?.state === "ready" || st?.state === "starting" ? (st?.pid ?? null) : null,
     note: st?.note ?? null,
     source: meta?.source,
     overridden: meta?.overridden ?? null,
@@ -89,6 +89,10 @@ interface Props {
   /** 刷新中：按钮转圈 + 防重复点击（只重读状态，不会重连） */
   refreshing: boolean;
   onRefresh: () => void;
+  onCreate?: () => void;
+  rawConfig?: boolean;
+  onEdit?: (name: string) => void;
+  editableNames?: ReadonlySet<string>;
   /** 有活跃会话时断开 / 重连才可用（两者都作用于会话可见集；「测试」在配置卡片上，无需会话） */
   hasSession: boolean;
   onDisconnect?: (name: string) => void;
@@ -103,6 +107,10 @@ export default function McpStatusTable({
   rows,
   refreshing,
   onRefresh,
+  onCreate,
+  rawConfig,
+  onEdit,
+  editableNames,
   hasSession,
   onDisconnect,
   onReconnect,
@@ -132,24 +140,18 @@ export default function McpStatusTable({
     return t("settings.mcpSourceGlobal");
   }
 
-  if (rows.length === 0) return null;
-
   return (
     <div className="setting-anchor" data-setting-id="app.mcp_status">
       <div className="settings-subhead">
         <span>{t("settings.mcpStatus")}</span>
-        <Tooltip title={t("settings.mcpStatusRefresh")}>
-          <Button
-            type="text"
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={refreshing}
-            aria-label={t("settings.mcpStatusRefresh")}
-            onClick={onRefresh}
-          />
-        </Tooltip>
+        <div className="mcp-list-actions">
+          <Button size="small" icon={<PlusOutlined />} onClick={onCreate}>{rawConfig ? t("settings.mcpEditRaw") : t("settings.mcpNew")}</Button>
+          <Tooltip title={t("settings.mcpStatusRefresh")}>
+            <Button type="text" size="small" icon={<ReloadOutlined />} loading={refreshing} aria-label={t("settings.mcpStatusRefresh")} onClick={onRefresh} />
+          </Tooltip>
+        </div>
       </div>
-      <div className="mcp-status">
+      {rows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("settings.mcpNoServers")} /> : <div className="mcp-status">
         <div className="mcp-status-row mcp-status-row-head">
           <span className="mcp-status-name">{t("settings.mcpName")}</span>
           <span className="mcp-status-source">{t("settings.mcpColSource")}</span>
@@ -199,15 +201,7 @@ export default function McpStatusTable({
                 </span>
                 <span className="mcp-status-state">
                   {row.kind === "starting" && <Spin size="small" />}
-                  {failed ? (
-                    <Typography.Text type="danger">{stateText(row.kind)}</Typography.Text>
-                  ) : row.kind === "evicted" ? (
-                    <Typography.Text type="warning">{stateText(row.kind)}</Typography.Text>
-                  ) : (
-                    <span className={row.kind === "disconnected" ? "dim" : undefined}>
-                      {stateText(row.kind)}
-                    </span>
-                  )}
+                  <Tag color={row.kind === "ready" ? "success" : failed ? "error" : row.kind === "evicted" || row.kind === "starting" ? "warning" : "default"}>{stateText(row.kind)}</Tag>
                 </span>
                 <span className="mcp-status-tools">
                   {row.kind !== "ready"
@@ -218,19 +212,20 @@ export default function McpStatusTable({
                 </span>
                 <span className="mcp-status-pid">{row.pid ?? "—"}</span>
                 <span className="mcp-status-actions">
+                  {onEdit && editableNames?.has(row.name) && <Button size="small" type="text" onClick={(event) => { event.stopPropagation(); onEdit(row.name); }}>{t("settings.mcpEdit")}</Button>}
                   <Button
                     size="small"
                     type="text"
-                    disabled={!hasSession}
-                    onClick={() => onDisconnect?.(row.name)}
+                    disabled={!hasSession || row.kind === "disconnected"}
+                    onClick={(event) => { event.stopPropagation(); onDisconnect?.(row.name); }}
                   >
                     {t("settings.mcpActionDisconnect")}
                   </Button>
                   <Button
                     size="small"
                     type="text"
-                    disabled={!hasSession}
-                    onClick={() => onReconnect?.(row.name)}
+                    disabled={!hasSession || row.kind === "ready" || row.kind === "starting"}
+                    onClick={(event) => { event.stopPropagation(); onReconnect?.(row.name); }}
                   >
                     {t("settings.mcpActionReconnect")}
                   </Button>
@@ -248,8 +243,7 @@ export default function McpStatusTable({
             </div>
           );
         })}
-      </div>
-      <div className="hint">{t("settings.mcpStatusHint")}</div>
+      </div>}
     </div>
   );
 }

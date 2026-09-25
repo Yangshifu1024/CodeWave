@@ -115,9 +115,25 @@ describe("mcpStatusRow 状态映射", () => {
 });
 
 describe("McpStatusTable 渲染", () => {
-  it("两侧皆空时整段不渲染（空表会把「没配」与「没连」显示成同一个样子）", () => {
-    const { container } = renderTable({ rows: [] });
-    expect(container.querySelector('[data-setting-id="app.mcp_status"]')).toBeFalsy();
+  it("两侧皆空时保留新建入口和空态", () => {
+    const onCreate = vi.fn();
+    const { container } = renderTable({ rows: [], onCreate });
+    expect(container.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy();
+    expect(container.textContent).toContain("暂无服务器");
+    fireEvent.click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("新建"))!);
+    expect(onCreate).toHaveBeenCalledOnce();
+  });
+
+  it("连接状态使用语义色，断开后 PID 清空", () => {
+    renderTable({ rows: [
+      mcpStatusRow("ready", st({ state: "ready", pid: 123 })),
+      mcpStatusRow("error", st({ state: { error: "failed" }, pid: 456 })),
+      mcpStatusRow("stopped", st({ state: "stopped", pid: 789 })),
+    ] });
+    expect(rows()[0].querySelector(".ant-tag-success")).toBeTruthy();
+    expect(rows()[1].querySelector(".ant-tag-error")).toBeTruthy();
+    expect(rows()[2].querySelector(".ant-tag-default")).toBeTruthy();
+    expect(rows()[2].querySelector(".mcp-status-pid")?.textContent).toBe("—");
   });
 
   it("六列表头齐备", () => {
@@ -204,7 +220,7 @@ describe("McpStatusTable 渲染", () => {
     fireEvent.click(btns[0]);
     fireEvent.click(btns[1]);
     expect(onDisconnect).toHaveBeenCalledWith("fs");
-    expect(onReconnect).toHaveBeenCalledWith("fs");
+    expect(onReconnect).not.toHaveBeenCalled();
   });
 
   it("刷新按钮：点击触发回调，且 aria-label 说明不会重连", () => {

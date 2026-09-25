@@ -13,7 +13,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
   App, Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
-  Segmented,
+  Tabs,
 } from "antd";
 import {
   ApiOutlined, ArrowLeftOutlined, BgColorsOutlined, CheckSquareOutlined, DeleteOutlined, DeploymentUnitOutlined,
@@ -314,6 +314,10 @@ export default function SettingsPage() {
   const [mcpIssues, setMcpIssues] = useState<McpConfigIssue[]>([]);
   /** 当前编辑的 MCP 配置作用域（global = 用户级；project = 当前会话所属项目） */
   const [mcpScope, setMcpScope] = useState<McpScope>("global");
+  const [mcpEditing, setMcpEditing] = useState(false);
+  const [mcpEditorIndex, setMcpEditorIndex] = useState<number | null>(null);
+  const [mcpCreating, setMcpCreating] = useState(false);
+  const [mcpDeletePending, setMcpDeletePending] = useState(false);
   /** 当前作用域 mcp.json 的绝对路径（来源诊断） */
   const [mcpPath, setMcpPath] = useState("");
   /** 项目层 mcp.json 路径；null = 当前会话没有项目目录（该作用域不可用） */
@@ -926,6 +930,10 @@ export default function SettingsPage() {
       const normalized = normalizeMcpDoc(json);
       setMcpRaw(normalized);
       setMcpOriginal(normalized);
+      setMcpEditing(false);
+      setMcpEditorIndex(null);
+      setMcpCreating(false);
+      setMcpDeletePending(false);
       // 保存后自动重连（后端只重载受影响的连接，其它会话不受牵连）
       if (sessionId) {
         await ipc.mcpConnect(sessionId).catch(() => null);
@@ -1001,6 +1009,38 @@ export default function SettingsPage() {
     );
   }
 
+  function openMcpCreate() {
+    if (!mcpDoc) {
+      setMcpEditorIndex(null);
+      setMcpCreating(false);
+      setMcpEditing(true);
+      return;
+    }
+    setMcpEditorIndex(mcpEntries?.length ?? 0);
+    setMcpDeletePending(false);
+    setMcpCreating(true);
+    addMcpEntry();
+    setMcpEditing(true);
+  }
+
+  function openMcpEdit(name: string) {
+    const index = mcpEntries?.findIndex((entry) => entry.name.trim() === name) ?? -1;
+    if (index < 0) return;
+    setMcpEditorIndex(index);
+    setMcpDeletePending(false);
+    setMcpCreating(false);
+    setMcpEditing(true);
+  }
+
+  function cancelMcpEditor() {
+    setMcpDoc(parseMcpDoc(mcpOriginal));
+    setMcpRaw(mcpOriginal);
+    setMcpEditing(false);
+    setMcpEditorIndex(null);
+    setMcpDeletePending(false);
+    setMcpCreating(false);
+  }
+
   /**
    * 读取某作用域的 MCP 配置并重置草稿与基线。
    *
@@ -1008,12 +1048,22 @@ export default function SettingsPage() {
    * 保存时也原样直存，避免拿空配置覆盖用户文件。回归用例：settings.mcp.test.tsx。
    */
   async function loadMcp(scope: McpScope) {
-    const doc = await ipc.mcpListConfig(scope, sessionId ?? undefined).catch(() => null);
+    let doc: Awaited<ReturnType<typeof ipc.mcpListConfig>>;
+    try {
+      doc = await ipc.mcpListConfig(scope, sessionId ?? undefined);
+    } catch (e) {
+      message.error(String(e));
+      return;
+    }
     const raw = doc?.json ?? "";
     const parsed = parseMcpDoc(raw);
     // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
     const normalized = parsed ? serializeMcpDoc(parsed) : raw;
     setMcpScope(scope);
+    setMcpEditing(parsed === null && raw.trim().length > 0);
+    setMcpEditorIndex(null);
+    setMcpDeletePending(false);
+    setMcpCreating(false);
     setMcpDoc(parsed);
     setMcpRaw(normalized);
     setMcpOriginal(normalized);
@@ -1026,7 +1076,12 @@ export default function SettingsPage() {
   /** 断开单个 server（连接没了但引用还在，可随时重连） */
   async function disconnectMcp(name: string) {
     if (!sessionId) return;
-    await ipc.mcpDisconnect(sessionId, [name]).catch(() => null);
+    try {
+      await ipc.mcpDisconnect(sessionId, [name]);
+    } catch (e) {
+      message.error(String(e));
+      return;
+    }
     const st = await readMcpStatus();
     if (st) useUi.setState({ mcpStatus: st });
   }
@@ -1101,11 +1156,9 @@ export default function SettingsPage() {
     const meta = new Map<string, { source?: McpScope; overridden?: McpScope | null }>();
     for (const v of mcpEffective) meta.set(v.name, { source: v.source, overridden: v.overridden });
     const byName = new Map(mcpStatus.map((s) => [s.name, s]));
-    const rows = names.map((n) => mcpStatusRow(n, byName.get(n), meta.get(n)));
-    for (const s of mcpStatus) {
-      if (!names.includes(s.name)) rows.push(mcpStatusRow(s.name, s, meta.get(s.name)));
-    }
-    return rows;
+    return mcpEntries === null
+      ? mcpStatus.map((s) => mcpStatusRow(s.name, s, meta.get(s.name)))
+      : names.map((n) => mcpStatusRow(n, byName.get(n), meta.get(n)));
   }, [mcpEntries, mcpStatus, mcpEffective]);
 
   /**
@@ -1601,49 +1654,53 @@ export default function SettingsPage() {
           {/* 配置作用域：全局（用户级）与项目两层都可编辑。
               会话可见集 = 全局 ∪ 项目，同名项目级胜出（后端 merge_scopes）。 */}
           <div className="mcp-scope">
-            <Segmented
+            <Tabs
               size="small"
-              value={mcpScope}
-              disabled={mcpDirty}
-              options={[
-                { label: t("settings.mcpScopeGlobal"), value: "global" },
-                {
-                  label: t("settings.mcpScopeProject"),
-                  value: "project",
-                  disabled: mcpProjectPath === null,
-                },
+              activeKey={mcpScope}
+              items={[
+                { key: "global", label: t("settings.mcpScopeGlobal"), disabled: mcpDirty },
+                { key: "project", label: t("settings.mcpScopeProject"), disabled: mcpDirty || mcpProjectPath === null },
               ]}
               onChange={(v) => void loadMcp(v as McpScope)}
             />
-            <span className="hint">
-              {mcpProjectPath === null
-                ? t("settings.mcpScopeNoProject")
-                : t("settings.mcpConfigPath", { path: mcpPath })}
-            </span>
+            <Tooltip title={mcpProjectPath === null ? t("settings.mcpScopeNoProject") : t("settings.mcpConfigPath", { path: mcpPath })}>
+              <Button type="text" size="small" className="mcp-scope-info" icon={<InfoCircleOutlined />} aria-label={mcpProjectPath === null ? t("settings.mcpScopeNoProject") : t("settings.mcpConfigPath", { path: mcpPath })} />
+            </Tooltip>
           </div>
           {mcpDirty && <div className="hint">{t("settings.mcpScopeDirtyHint")}</div>}
+          <div data-setting-id="mcp.servers">
           <McpStatusTable
             rows={mcpStatusRows}
             refreshing={mcpRefreshing}
             onRefresh={() => void refreshMcpStatus()}
+            onCreate={openMcpCreate}
+            rawConfig={mcpDoc === null}
+            onEdit={openMcpEdit}
+            editableNames={new Set((mcpEntries ?? []).map((entry) => entry.name.trim()))}
             hasSession={!!sessionId}
             onDisconnect={(n) => void disconnectMcp(n)}
             onReconnect={(n) => void reconnectMcp(n)}
           />
-          <div className="settings-subhead">{t("settings.mcpConfigHead")}</div>
-          {mcpEntries === null ? (
+          {mcpEditing && <Modal
+            open={mcpEditing}
+            title={mcpDeletePending ? t("settings.mcpDelete") : mcpCreating ? t("settings.mcpNew") : t("settings.mcpEdit")}
+            onCancel={cancelMcpEditor}
+            onOk={() => void saveMcp()}
+            okText={t("settings.mcpSave")}
+            width={720}
+            destroyOnHidden
+          >
+          {mcpDeletePending ? (
+            <div className="hint">{t("settings.mcpDeleteConfirm")}</div>
+          ) : mcpEntries === null ? (
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               <div className="hint">{t("settings.mcpRawHint")}</div>
               <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => setMcpRaw(e.target.value)} />
-              <div>
-                <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
-              </div>
             </div>
           ) : (
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
-              <div className="hint">{t("settings.mcpHint")}</div>
-              {mcpEntries.map((e, idx) => (
+              {mcpEntries.map((e, idx) => idx === mcpEditorIndex && (
                 <div className="mcp-entry" key={idx}>
                   <div className="mcp-entry-head">
                     <Input
@@ -1671,7 +1728,7 @@ export default function SettingsPage() {
                     >
                       {t("settings.mcpTest")}
                     </Button>
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeMcpEntry(idx)} />
+                    {!mcpCreating && <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label={t("settings.mcpDelete")} onClick={() => { removeMcpEntry(idx); setMcpDeletePending(true); }} />}
                   </div>
                   {draftTransport(e) === "stdio" ? (
                     <>
@@ -1765,13 +1822,10 @@ export default function SettingsPage() {
                   ))}
                 </div>
               )}
-              <div style={{ display: "flex", gap: 10 }}>
-                <Button size="small" onClick={addMcpEntry}>{t("settings.mcpAdd")}</Button>
-                <Button size="small" type="primary" onClick={() => void saveMcp()}>{t("settings.mcpSave")}</Button>
-              </div>
             </div>
           )}
-
+          </Modal>}
+          </div>
         </>
       ),
     },
@@ -2220,7 +2274,7 @@ export default function SettingsPage() {
         <div className="settings-pane">
           {/* 页体容器与导航 tab 配对（aria-controls ← → aria-labelledby 闭环；同一时刻只渲染一页） */}
           <div
-            className="settings-pane-body"
+            className={tab === "mcp" ? "settings-pane-body settings-pane-body-mcp" : "settings-pane-body"}
             id="settings-panel"
             role="tabpanel"
             aria-labelledby={`settings-tab-${tab}`}

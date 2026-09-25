@@ -35,6 +35,7 @@ code { font-family: var(--ws-font-mono); }
   background: var(--ws-bg-nav); border-right: 1px solid var(--ws-border);
   transition: width 0.2s, background 0.2s, border-right-color 0.2s;
 }
+.tb-left-seg.tb-left-fullscreen { transition: none; }
 /* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 折叠态：宽度内联置 0，本块只归零装饰并把背景融入
    内容色（.tb-main-seg）——0.2s 折叠期间两段读作同一表面，不留残带 */
 .tb-left-seg.tb-left-closed {
@@ -879,7 +880,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    resolveDisplayWidths 按窗口夹取，窄窗下会与全屏页左栏不等宽（此处曾写成「恒占同一格」，属误述，2026-09-23 修正）。
    下面几条度量与 .settings-nav 逐条对齐（有测试逐条比对），改一处必须同步另一处。 */
 .tasks-nav {
-  flex: none; min-width: 180px; max-width: 480px;
+  flex: none; min-width: 180px; max-width: 480px; box-sizing: border-box;
   display: flex; flex-direction: column;
   padding: 8px; border-right: 1px solid var(--ws-border);
   background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
@@ -941,7 +942,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 /* 左导航列：宽 280 基准（由 clampNavWidth 在 180..480 内随窗口收缩） */
 .settings-nav {
-  flex: none; min-width: 180px; max-width: 480px;
+  flex: none; min-width: 180px; max-width: 480px; box-sizing: border-box;
   display: flex; flex-direction: column;
   padding: 8px; border-right: 1px solid var(--ws-border);
   background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
@@ -1026,6 +1027,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-pane { flex: 1; min-height: 0; overflow: auto; }
 /* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点） */
 .settings-pane-body { min-width: 480px; padding: 14px 16px 24px; }
+.settings-pane-body-mcp { box-sizing: border-box; width: 100%; max-width: 960px; margin: 0; }
 
 /* 脏圆点：导航项与操作条共用；只换前景色，不当背景块用 */
 .settings-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); flex: none; display: inline-block; }
@@ -1051,32 +1053,52 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   margin: 2px 0 8px; font-size: 12px; color: var(--ws-dim);
 }
 
-/* MCP 服务器状态表（名称 / 状态 / 工具数三列；失败行整行可点展开错误） */
-.mcp-status { display: flex; flex-direction: column; margin-bottom: 8px; }
+/* 六列与 McpStatusTable 的 DOM 一一对应；窄窗由页体横向滚动承接。 */
+.mcp-status { display: flex; flex-direction: column; margin-bottom: 8px; min-width: 740px; }
 .mcp-status-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) 132px 72px;
-  align-items: center; gap: 8px; min-height: 26px; padding: 0 8px;
+  display: grid; grid-template-columns: minmax(150px, 2fr) 90px 100px 70px 70px 180px;
+  align-items: center; gap: 12px; min-height: 36px; padding: 4px 10px;
   border-radius: 6px; font-size: 12.5px; color: var(--ws-text-2);
 }
-.mcp-status-row-head { min-height: 22px; font-size: 11px; color: var(--ws-dim); }
+.mcp-status-row-head { min-height: 28px; font-size: 11px; color: var(--ws-dim); border-bottom: 1px solid var(--ws-border); }
 .mcp-status-row-clickable { cursor: pointer; }
 .mcp-status-row-clickable:hover { background: var(--ws-hover); }
 .mcp-status-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-status-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.mcp-status-tools { text-align: right; color: var(--ws-dim); }
+.mcp-status-tools, .mcp-status-pid { color: var(--ws-dim); }
+.mcp-status-actions { display: flex; gap: 2px; white-space: nowrap; }
+.mcp-status-actions .ant-btn { padding-inline: 4px; }
 /* 展开的完整错误（含 stderr）：等宽小字 + 换行保留 + 限高滚动，不撑破布局 */
 .mcp-status-error {
   margin: 0 8px 6px; padding: 8px 10px; border-radius: 6px; background: var(--ws-bg-nav);
   color: var(--ws-text-2); font-family: var(--ws-font-mono); font-size: 12px;
   white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
 }
-.mcp-pane { display: flex; flex-direction: column; gap: 10px; }
+.mcp-pane { display: flex; flex-direction: column; gap: 14px; }
+.mcp-scope { display: flex; align-items: flex-start; gap: 10px; }
+.mcp-scope .ant-tabs { flex: 1; min-width: 0; }
+.mcp-scope .ant-tabs-nav { margin-bottom: 12px; }
+.mcp-scope .ant-tabs-tab { padding: 6px 2px; }
+.mcp-scope-info { margin-top: 4px; color: var(--ws-dim); }
+.mcp-config-heading { margin-top: 18px; }
+.mcp-summary { display: flex; flex-direction: column; gap: 8px; }
+.mcp-summary-row { display: flex; align-items: center; gap: 16px; padding: 10px 12px; border: 1px solid var(--ws-border); border-radius: 8px; }
+.mcp-summary-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ws-text-1); }
+.mcp-summary-transport { flex: none; font-size: 12px; color: var(--ws-dim); }
+.mcp-summary > .ant-btn { align-self: flex-start; }
 .mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: 12px; }
-.mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-.mcp-entry-head { display: flex; align-items: center; gap: 10px; }
+.mcp-entry { border: 1px solid var(--ws-border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.mcp-entry-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--ws-border); }
 .mcp-entry-row { display: flex; flex-direction: column; gap: 3px; } /* label 在上（[docs/settings-forms-vertical](../../../docs/docs/settings-forms-vertical.md)） */
 .mcp-entry-row .mcp-label { flex: none; font-size: 12px; color: var(--ws-dim); }
 .mcp-entry-row .ant-input { flex: 1; }
+.mcp-table { display: flex; flex-direction: column; gap: 6px; }
+.mcp-table-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.mcp-table-row > .ant-input, .mcp-table-row > .ant-input-textarea { flex: 1; min-width: 0; }
+.mcp-table-row .mcp-table-key { flex: 0 0 34%; }
+.mcp-table-idx { flex: none; width: 20px; text-align: right; line-height: 24px; color: var(--ws-dim); }
+.mcp-table-row > .ant-btn { flex: none; }
+.mcp-table > .ant-btn { align-self: flex-start; }
 /* 写入后检查（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：命令 + 两个进阶数值项；
    LSP 行/徽标/引导卡的样式已随机制删除（旧类零引用，勿再复活） */
 .postcheck-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 0 20px; }

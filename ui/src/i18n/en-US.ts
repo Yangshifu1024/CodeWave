@@ -227,7 +227,9 @@ export default {
     vHeaders: "Header names must be valid, non-reserved and unique (reserved: Content-Type, Authorization, x-api-key, anthropic-version, Host, Content-Length); values must be visible ASCII with no line breaks",
     // MCP page: status table (server status) + configuration. mcpStatus names both the app.mcp_status item
     // (search / anchor) and that section's heading — one key per concept.
-    mcpStatus: "Server status", mcpConfigHead: "Server configuration",
+    mcpStatus: "Server list", mcpConfigHead: "Server configuration",
+    mcpNew: "New", mcpNoServers: "No servers", mcpDelete: "Delete server", mcpDeleteConfirm: "Delete this server? The change takes effect when saved.",
+    mcpEditRaw: "Edit raw config",
     mcpColState: "Status", mcpColTools: "Tools",
     mcpStateReady: "Connected", mcpStateStarting: "Connecting", mcpStateError: "Failed", mcpStateDisconnected: "Not connected",
     mcpStatusRefresh: "Refresh status (does not reconnect)", mcpStatusToggleError: "Toggle error details",
@@ -241,7 +243,8 @@ export default {
     mcpExtraKeys: "This entry also has {{n}} keys not shown in the form ({{keys}}); they are preserved on save.",
     mcpIssuesHead: "Config issues (error level blocks saving)",
     mcpSaveBlocked: "Config failed validation; saving was blocked",
-    mcpScopeGlobal: "Global (user)", mcpScopeProject: "Project",
+    mcpScopeGlobal: "User", mcpScopeProject: "Project",
+    mcpEdit: "Edit configuration",
     mcpScopeNoProject: "This session has no project directory; only the global MCP config applies",
     mcpScopeDirtyHint: "Unsaved changes: save or discard before switching scope",
     mcpConfigPath: "Config file: {{path}}",

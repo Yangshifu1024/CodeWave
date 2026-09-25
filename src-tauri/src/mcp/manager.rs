@@ -135,6 +135,7 @@ struct ServerEntry {
     service: Option<ClientService>,
     peer: Option<Peer<RoleClient>>,
     pid: Option<u32>,
+    generation: u64,
     /// 引用该条目的会话集合
     sessions: HashSet<String>,
     /// 最近一次使用序号（LRU）
@@ -214,6 +215,15 @@ fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
         error: e.error.clone(),
         note: e.note.clone(),
     }
+}
+
+fn clear_connection(e: &mut ServerEntry) {
+    e.peer = None;
+    e.pid = None;
+    e.tools.clear();
+    e.tools_filtered = 0;
+    e.dirty = None;
+    e.generation = e.generation.wrapping_add(1);
 }
 
 impl McpManager {
@@ -311,7 +321,7 @@ impl McpManager {
                     if let Some(svc) = e.service.take() {
                         to_close.push(svc);
                     }
-                    e.peer = None;
+                    clear_connection(e);
                     e.state = McpState::Stopped;
                     e.note = Some("会话已关闭".to_string());
                     closed_payloads.push((key.clone(), payload_of(&key, e)));
@@ -341,6 +351,7 @@ impl McpManager {
                             service: None,
                             peer: None,
                             pid: None,
+                            generation: 0,
                             sessions: HashSet::from([session.to_string()]),
                             last_used: self.tick(),
                             note: None,
@@ -382,7 +393,7 @@ impl McpManager {
                         if let Some(svc) = e.service.take() {
                             to_close.push(svc);
                         }
-                        e.peer = None;
+                        clear_connection(e);
                         e.state = McpState::Stopped;
                         e.error = None;
                         e.note = Some("会话已关闭".to_string());
@@ -408,7 +419,7 @@ impl McpManager {
             match inner.entries.get_mut(key) {
                 Some(e) => {
                     let svc = e.service.take();
-                    e.peer = None;
+                    clear_connection(e);
                     e.state = McpState::Stopped;
                     e.error = None;
                     e.note = Some("已手动断开".to_string());
@@ -437,7 +448,7 @@ impl McpManager {
                     if let Some(svc) = e.service.take() {
                         svcs.push(svc);
                     }
-                    e.peer = None;
+                    clear_connection(e);
                     e.state = McpState::Stopped;
                     e.error = None;
                     e.note = Some("已停止".to_string());
@@ -497,8 +508,7 @@ impl McpManager {
             if let Some(e) = inner.entries.get_mut(&victim) {
                 e.state = McpState::Evicted;
                 e.error = None;
-                e.peer = None;
-                e.tools.clear();
+                clear_connection(e);
                 e.note = Some("已被淘汰（资源上限）；需要时会自动重拉".to_string());
                 e.last_evict = Some(Instant::now());
                 // service 取出后由调用方取消（不持锁 await）
@@ -526,7 +536,7 @@ impl McpManager {
         http: reqwest::Client,
         session: &str,
     ) -> Result<usize, McpError> {
-        {
+        let generation = {
             let mut inner = self.inner.lock().await;
             if let Some(e) = inner.entries.get_mut(key) {
                 e.last_used = self.tick();
@@ -543,44 +553,66 @@ impl McpManager {
                         }
                     }
                 }
+                e.generation = e.generation.wrapping_add(1);
+                e.generation
+            } else {
+                let mut e = blank_entry(&cfg, self.tick());
+                e.generation = 1;
+                inner.entries.insert(key.clone(), e);
+                1
             }
-        }
+        };
         for p in self.reserve_slot(key).await {
             self.emit(session, &p).await;
         }
-        self.set_starting(key, &cfg, session).await;
+        if !self.set_starting(key, &cfg, session, generation).await {
+            return Err(McpError::config("连接已取消"));
+        }
         match Self::spawn_connect(key, &cfg, http).await {
             Ok(ready) => {
                 let n = ready.tools.len();
-                self.set_ready(key, ready, session).await;
-                Ok(n)
+                if self.set_ready(key, ready, session, generation).await {
+                    Ok(n)
+                } else {
+                    Err(McpError::config("连接已取消"))
+                }
             }
             Err(e) => {
-                self.set_error(key, e.clone(), session).await;
+                self.set_error(key, e.clone(), session, generation).await;
                 Err(e)
             }
         }
     }
 
-    async fn set_starting(&self, key: &PoolKey, cfg: &McpServerConfig, session: &str) {
+    async fn set_starting(
+        &self,
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+        session: &str,
+        generation: u64,
+    ) -> bool {
         let payload = {
             let mut inner = self.inner.lock().await;
             let tick = self.tick();
-            let e = inner
-                .entries
-                .entry(key.clone())
-                .or_insert_with(|| blank_entry(cfg, tick));
+            let Some(e) = inner.entries.get_mut(key) else {
+                return false;
+            };
+            if e.generation != generation {
+                return false;
+            }
             e.cfg = cfg.clone();
             e.state = McpState::Starting;
             e.error = None;
             e.note = None;
+            e.pid = None;
             e.last_used = tick;
             payload_of(key, e)
         };
         self.emit(session, &payload).await;
+        true
     }
 
-    async fn set_ready(&self, key: &PoolKey, ready: Ready, session: &str) {
+    async fn set_ready(&self, key: &PoolKey, ready: Ready, session: &str, generation: u64) -> bool {
         let Ready {
             tools,
             filtered,
@@ -589,32 +621,45 @@ impl McpManager {
             pid,
             dirty,
         } = ready;
+        let mut service = Some(service);
         let payload = {
             let mut inner = self.inner.lock().await;
-            let Some(e) = inner.entries.get_mut(key) else {
-                return;
-            };
-            e.tools = tools;
-            e.tools_filtered = filtered;
-            e.service = Some(service);
-            e.peer = Some(peer);
-            e.pid = pid;
-            e.dirty = Some(dirty);
-            e.state = McpState::Ready;
-            e.error = None;
-            e.note = None;
-            e.last_used = self.tick();
-            payload_of(key, e)
+            inner.entries.get_mut(key).and_then(|e| {
+                if e.generation != generation {
+                    return None;
+                }
+                e.tools = tools;
+                e.tools_filtered = filtered;
+                e.service = service.take();
+                e.peer = Some(peer);
+                e.pid = pid;
+                e.dirty = Some(dirty);
+                e.state = McpState::Ready;
+                e.error = None;
+                e.note = None;
+                e.last_used = self.tick();
+                Some(payload_of(key, e))
+            })
+        };
+        let Some(payload) = payload else {
+            if let Some(svc) = service.and_then(Arc::into_inner) {
+                let _ = svc.cancel().await;
+            }
+            return false;
         };
         self.emit(session, &payload).await;
+        true
     }
 
-    async fn set_error(&self, key: &PoolKey, err: McpError, session: &str) {
+    async fn set_error(&self, key: &PoolKey, err: McpError, session: &str, generation: u64) {
         let payload = {
             let mut inner = self.inner.lock().await;
             let Some(e) = inner.entries.get_mut(key) else {
                 return;
             };
+            if e.generation != generation {
+                return;
+            }
             e.tools.clear();
             e.tools_filtered = 0;
             e.peer = None;
@@ -995,6 +1040,7 @@ fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
         service: None,
         peer: None,
         pid: None,
+        generation: 0,
         sessions: HashSet::new(),
         last_used: tick,
         dirty: None,
@@ -1281,6 +1327,104 @@ mod tests {
                 "应发出 Stopped 事件：{events:?}"
             );
         });
+    }
+
+    fn pid_alive(pid: &str) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(pid))
+                .unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            std::process::Command::new("kill")
+                .args(["-0", pid])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = pid;
+            false
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnect_clears_pid_and_stops_stdio_process() {
+        if !node_available() {
+            return;
+        }
+        let mgr = Arc::new(McpManager::default());
+        let key = PoolKey::global("test");
+        mgr.warm("s", vec![(key.clone(), node_cfg())], reqwest::Client::new());
+        let pid = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(p) = mgr
+                    .status_for("s")
+                    .await
+                    .into_iter()
+                    .find(|p| p.state == McpState::Ready)
+                {
+                    break p.pid.expect("stdio PID");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        mgr.disconnect(&key, "s").await;
+        let status = mgr.status_for("s").await;
+        assert_eq!(status[0].state, McpState::Stopped);
+        assert_eq!(status[0].pid, None);
+        assert_eq!(status[0].tools, 0);
+        for _ in 0..20 {
+            if !pid_alive(&pid.to_string()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("stdio 进程 {pid} 断开后仍在运行");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnect_rejects_late_ready_result() {
+        if !node_available() {
+            return;
+        }
+        let mgr = Arc::new(McpManager::default());
+        let key = PoolKey::global("late");
+        let cfg = node_cfg();
+        let generation = {
+            let mut inner = mgr.inner.lock().await;
+            let mut entry = blank_entry(&cfg, mgr.tick());
+            entry.generation = 1;
+            entry.sessions.insert("s".to_string());
+            inner.entries.insert(key.clone(), entry);
+            inner
+                .sessions
+                .insert("s".to_string(), HashSet::from([key.clone()]));
+            1
+        };
+        let ready = McpManager::spawn_connect(&key, &cfg, reqwest::Client::new())
+            .await
+            .expect("test server should connect");
+        let pid = ready.pid.expect("stdio PID");
+        mgr.disconnect(&key, "s").await;
+        assert!(!mgr.set_ready(&key, ready, "s", generation).await);
+        let status = mgr.status_for("s").await;
+        assert_eq!(status[0].state, McpState::Stopped);
+        assert_eq!(status[0].pid, None);
+        for _ in 0..20 {
+            if !pid_alive(&pid.to_string()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("迟到连接的进程 {pid} 未被回收");
     }
 
     #[test]

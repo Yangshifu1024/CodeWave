@@ -286,8 +286,8 @@ describe("App 渲染冒烟", () => {
     // MCP 页：服务器配置区（本组 fixture 未配服务器 → 状态表整段不渲染）
     await clickTab("MCP");
     expect(document.querySelector('[data-setting-id="mcp.servers"]')).toBeTruthy();
-    expect(document.body.textContent ?? "").toContain("添加服务器");
-    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeFalsy();
+    expect(document.body.textContent ?? "").toContain("新建");
+    expect(document.querySelector('[data-setting-id="app.mcp_status"]')).toBeTruthy();
 
     // 技能页：禁用清单
     await clickTab("技能");
@@ -581,7 +581,7 @@ describe("App 渲染冒烟", () => {
     await clickIconBtn("设置");
     await clickTab("MCP");
     // Single-entry editing: add server → entry fields expand
-    await clickButton("添加服务器");
+    await clickButton("新建");
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);

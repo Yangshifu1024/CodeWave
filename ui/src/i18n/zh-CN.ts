@@ -224,7 +224,9 @@ export default {
     vHeaders: "请求头名称需合法、非保留名且不重复（保留名：Content-Type、Authorization、x-api-key、anthropic-version、Host、Content-Length）；值仅支持可见 ASCII 字符且不含换行",
     // MCP 独立页：状态表（服务器状态）+ 配置两段。mcpStatus 既是 app.mcp_status 的项名（搜索 / 锚点），
     // 也是状态段的段标题——同一个概念只留一把键。
-    mcpStatus: "服务器状态", mcpConfigHead: "服务器配置",
+    mcpStatus: "服务器列表", mcpConfigHead: "服务器配置",
+    mcpNew: "新建", mcpNoServers: "暂无服务器", mcpDelete: "删除服务器", mcpDeleteConfirm: "确认删除此服务器？保存后生效。",
+    mcpEditRaw: "编辑原始配置",
     mcpColState: "状态", mcpColTools: "工具数",
     mcpStateReady: "已连接", mcpStateStarting: "连接中", mcpStateError: "连接失败", mcpStateDisconnected: "未连接",
     mcpStatusRefresh: "刷新状态（不会重新连接）", mcpStatusToggleError: "展开 / 收起错误详情",
@@ -238,7 +240,8 @@ export default {
     mcpExtraKeys: "此条目还含 {{n}} 个表单未展示的自定义键（{{keys}}）；保存时原样保留。",
     mcpIssuesHead: "配置问题（error 级会阻止保存）",
     mcpSaveBlocked: "配置未通过校验，已阻止保存",
-    mcpScopeGlobal: "全局（用户级）", mcpScopeProject: "项目",
+    mcpScopeGlobal: "用户级", mcpScopeProject: "项目级",
+    mcpEdit: "编辑配置",
     mcpScopeNoProject: "当前会话没有项目目录，只使用全局 MCP 配置",
     mcpScopeDirtyHint: "有未保存改动：保存或放弃后才能切换作用域",
     mcpConfigPath: "配置文件：{{path}}",

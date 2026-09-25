@@ -15,7 +15,7 @@ html, body, #root { height: 100%; margin: 0; }
   /* 自绘标题栏（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)，tauri-plugin-decoration 消费的应用侧设置）：
      控制条高度对齐 50px 顶栏（32px 按钮在带内垂直居中）；z-index 高于内容、低于通知浮层 */
   --tauri-plugin-decoration-titlebar-height: 50px;
-  --tauri-plugin-decoration-z-index: 3;
+  --tauri-plugin-decoration-z-index: 100;
 }
 body {
   font-family: var(--ws-font-sans);

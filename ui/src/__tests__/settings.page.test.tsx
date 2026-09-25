@@ -716,12 +716,12 @@ describe("设置全屏页：逐页脏点由 PAGE_FIELDS 驱动", () => {
     // ④ MCP：条目（独立 mcp.json 的文本基线，不走 config）——拆页后脏点跟着 mcp 页走
     //   注意：空名条目会被序列化丢掉，所以要先填名字才真算改动
     clickNavTab("MCP");
-    fireEvent.click(buttonByText("添加服务器"));
+    fireEvent.click(buttonByText("新建"));
     const mcpName = document.querySelector(".mcp-entry input") as HTMLInputElement;
     fireEvent.change(mcpName, { target: { value: "fs" } });
     await waitFor(() => expect(navDot("mcp")).toBe(true));
     expect(navDotCount()).toBe(1);
-    fireEvent.click(document.querySelector(".mcp-entry .ant-btn-dangerous") as HTMLElement);
+    fireEvent.click(document.querySelector(".ant-modal-footer button") as HTMLElement);
     await waitFor(() => expect(navDotCount()).toBe(0));
 
     // ⑤ 工作区与智能体：自定义提示词（config.custom_prompt）
