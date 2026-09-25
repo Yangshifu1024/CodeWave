@@ -658,8 +658,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .plan-foot { display: flex; justify-content: center; margin-top: 8px; }
 
-/* ---------- 运行队列（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：运行中提交的任务入队顺序执行 ---------- */
-.queue-panel { margin: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
+/* ---------- 运行队列（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：运行中提交的任务入队顺序执行 ----------
+   宽度与 composer 同步：左右边距与 .composer 的 0 15% 同公式（输入区与中栏同一容器宽度）。
+   高度不在这里约束（手写 overfow-y 上面不出现 scrollbar），由 QueuePanel 内部 maxHeight 状态机管理。 */
+.queue-panel { margin: 0 15% 8px; display: flex; flex-direction: column; gap: 6px; }
 .queue-item {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px;
   background: var(--ws-panel); border: 1px solid var(--ws-border); min-width: 0;

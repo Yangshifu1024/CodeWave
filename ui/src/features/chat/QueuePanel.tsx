@@ -35,7 +35,11 @@ export default function QueuePanel() {
         <div
           className={`queue-item${draggingId === q.id ? " dragging" : ""}${overId === q.id && draggingId && draggingId !== q.id ? " drop-target" : ""}`}
           key={q.id}
-          draggable={draggingId === q.id}
+          // [fix/queue-panel-width-and-drag]：原写 `draggable={draggingId === q.id}` 是首改拖死锁
+          // —— `draggingId` 初始 null → draggable={false} → onDragStart 不触发 → draggingId 永远
+          // 不会被设上。改为 `draggable={true}` 让 item 始终可启动 DnD，`gripArmed` 守卫仍
+          // 只允许在按下 grip 后才实际进入拖动（避免点击文字 / 按钮误拖）。
+          draggable={true}
           onDragStart={(e) => {
             if (!gripArmed.current) {
               e.preventDefault();

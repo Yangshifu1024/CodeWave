@@ -11,7 +11,9 @@
   - `run:done` handler（既有幂等守卫防 suggest 双发）末尾 `runQueueNext` 自动出队；`run:cancelled` 检查 `pendingItemId`（「立即」路径）出队执行，否则保持暂停；
   - `runNow`（空闲直发/运行中记 pendingItemId + cancel）、`removeQueueItem`、`editQueueItem`（文本回填 Composer 并聚焦，附件不回填）、`consumeDraftFromQueue`；
   - QueuePanel 渲染于 Composer 顶部：条目 = 把手 + 文本（省略+title）+ 📎 附件数 + 「立即/编辑/删除」；暂停态显示提示 + 「继续执行」。运行中 placeholder 切换为「继续输入以排队后续修改」。
-- **不做拖拽排序**（避免引入 dnd 依赖），「立即」已覆盖优先级诉求；队列存于前端 Tab 运行态，应用重启不保留（运行中任务本就不跨重启）。
+  - **拖拽排序**（`queue-item` HTML5 DnD，**仅 grip 按下后启动**）：原生 setPointerCapture + draggable=true，onDragStart 受 `gripArmed` 守卫；不引入新依赖（[fix/queue-panel-width-and-drag]）。原“`draggable={draggingId===q.id}`首改拖死锁”由那场修复拔除，现每条 item 始终 draggable=true。
+- **不做独立面板宽度**：`.queue-panel` 边距与 `.composer` 同步为 `0 15% 8px`（与中栏同一公式），输入区与中栏同一容器宽度，窗口越宽越错位的旧问题拔除。
+- 队列存于前端 Tab 运行态，应用重启不保留（运行中任务本就不跨重启）。
 - 既有 `inject` 通道（运行中「插入当前对话流」语义、仅纯文本）保持不变，与本队列语义不同。
 
 ## 二、询问窗口重构（`features/tools/AskPanel.tsx` 重写）
