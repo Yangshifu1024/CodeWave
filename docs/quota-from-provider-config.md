@@ -114,7 +114,7 @@ quota_snapshots(active_provider_id) → QuotaSection（五类行 / 折叠 / 去�
 
 ## 7. 白名单口径与已知限制
 
-- 能否查询**只按 `base_url` 域名**判定（7 家：`opencode.ai` / `api.deepseek.com`·`deepseek.com` / `api.minimax.io`·`minimax.io` / `api.minimaxi.com`·`minimaxi.com` / `api.kimi.com`·`api.moonshot.cn`·`moonshot.cn` / `bigmodel.cn` / `api.z.ai`·`z.ai`）；**不校验路径**（`https://opencode.ai/v1` 也会命中），`api_format` 不参与匹配。
+- 能否查询**只按 `base_url` 域名**判定（7 家：`opencode.ai` / `api.deepseek.com`·`deepseek.com` / `api.minimax.io`·`minimax.io` / `api.minimax.cn`·`minimax.cn`·`www.minimax.cn` / `api.kimi.com`·`api.moonshot.cn`·`moonshot.cn` / `bigmodel.cn` / `api.z.ai`·`z.ai`）；**不校验路径**（`https://opencode.ai/v1` 也会命中），`api_format` 不参与匹配。
 - 额度请求打的是**各适配器内置的官方端点常量**，不是用户填的 `base_url`；`base_url` 只用于「是否可查」的白名单判定与置顶/消歧。
 - **接受的盲区**：自建网关（new-api / one-api / Ollama 等）指向兼容端点时域名不命中 → 永远归 `unsupported`（灰行）；Anthropic / OpenAI 官方本身没有额度接口。**不提供**手动指定适配器的开关。
 - **普通账号被白名单误伤**：域名命中但 key 不是订阅套餐（如 Moonshot 普通 key、智谱普通 key）→ 上游报错 → 首次即 401/403/404 判 `rejected` 灰行（文案写「可能非订阅账号」），**曾成功过**才升格为 `error` 错误行。

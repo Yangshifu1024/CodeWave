@@ -179,7 +179,7 @@ impl ProviderKind {
             Self::OpenCodeGo => &["opencode.ai"],
             Self::DeepSeek => &["api.deepseek.com", "deepseek.com"],
             Self::MiniMaxIntl => &["api.minimax.io", "minimax.io"],
-            Self::MiniMaxCn => &["api.minimaxi.com", "minimaxi.com"],
+            Self::MiniMaxCn => &["api.minimax.cn", "minimax.cn", "www.minimax.cn"],
             Self::Kimi => &["api.kimi.com", "kimi.com", "api.moonshot.cn", "moonshot.cn"],
             Self::Zhipu => &["bigmodel.cn"],
             Self::Zai => &["api.z.ai", "z.ai"],

@@ -122,6 +122,15 @@ fn kind_for_base_url_matches_whitelisted_hosts_only() {
     );
     assert_eq!(
         kind_for_base_url("https://api.minimaxi.com/v1/token_plan/remains"),
+        None,
+        "minimaxi.com 不属 MiniMax（归属口径：*.minimax.cn=中国 / *.minimax.io=国际，其他无效）"
+    );
+    assert_eq!(
+        kind_for_base_url("https://www.minimax.cn/v1"),
+        Some(ProviderKind::MiniMaxCn)
+    );
+    assert_eq!(
+        kind_for_base_url("https://api.minimax.cn/anthropic"),
         Some(ProviderKind::MiniMaxCn)
     );
     assert_eq!(
@@ -143,6 +152,21 @@ fn kind_for_base_url_matches_whitelisted_hosts_only() {
     // 自建/中转网关、空值、后缀伪冒域一律不命中（额度接口不可查）
     assert_eq!(kind_for_base_url("https://my-gateway.example.com/v1"), None);
     assert_eq!(kind_for_base_url("https://evildeepseek.com/v1"), None);
+    assert_eq!(
+        kind_for_base_url("https://api.minimax.com/v1"),
+        None,
+        "无 .cn 后缀不属 MiniMax"
+    );
+    assert_eq!(
+        kind_for_base_url("https://evilminimax.cn/v1"),
+        None,
+        "前缀伪冒域不命中"
+    );
+    // 子域正向命中（与白名单后缀匹配一致）
+    assert_eq!(
+        kind_for_base_url("https://a.b.minimax.cn/v1"),
+        Some(ProviderKind::MiniMaxCn)
+    );
     assert_eq!(kind_for_base_url(""), None);
 }
 
@@ -1998,6 +2022,58 @@ fn minimax_keeps_models_that_only_expose_the_weekly_reset() {
         entries[0].resets_at.as_deref(),
         Some("2026-01-21T13:53:20Z")
     );
+}
+
+#[test]
+fn minimax_cn_general_uses_remaining_percent_when_total_is_zero() {
+    // MiniMax `.cn` 真实响应样本：general 桶 total=0 → 走 `*_remaining_percent` 兑底
+    let payload = json!({
+        "base_resp": { "status_code": 0 },
+        "model_remains": [{
+            "model_name": "general",
+            "remains_time": 12_076_707,
+            "current_interval_total_count": 0,
+            "current_interval_usage_count": 0,
+            "current_interval_remaining_percent": 96,
+            "current_weekly_total_count": 0,
+            "current_weekly_usage_count": 0,
+            "weekly_remains_time": 217_276_707,
+            "current_weekly_remaining_percent": 97
+        }]
+    });
+
+    let entries = minimax::parse_usage(&payload, minimax::Endpoint::China, now()).unwrap();
+    assert_eq!(entries[0].key, "five_hour");
+    // 兑底：直接取 `*_remaining_percent`
+    assert_eq!(entries[0].remaining_percent, Some(96.0));
+    assert_eq!(entries[1].key, "week");
+    assert_eq!(entries[1].remaining_percent, Some(97.0));
+}
+
+#[test]
+fn minimax_cn_video_passes_filter_and_uses_usage_semantics() {
+    // `.cn` 响应里的 video 模型：`is_coding_model` 以前滤掉，现在收进。
+    // total=5, usage=0 → 中国端点「已用」语义 → (5-0)/5 = 100% 剩余
+    let payload = json!({
+        "base_resp": { "status_code": 0 },
+        "model_remains": [{
+            "model_name": "video",
+            "remains_time": 44_476_707,
+            "current_interval_total_count": 5,
+            "current_interval_usage_count": 0,
+            "current_interval_remaining_percent": 100,
+            "current_weekly_total_count": 35,
+            "current_weekly_usage_count": 0,
+            "weekly_remains_time": 217_276_707,
+            "current_weekly_remaining_percent": 100
+        }]
+    });
+
+    let entries = minimax::parse_usage(&payload, minimax::Endpoint::China, now()).unwrap();
+    assert_eq!(entries[0].key, "five_hour");
+    // total > 0 走 `entry_percent`（已用语义）→ (5-0)/5 = 100%
+    assert_eq!(entries[0].remaining_percent, Some(100.0));
+    assert_eq!(entries[1].remaining_percent, Some(100.0));
 }
 
 #[test]
