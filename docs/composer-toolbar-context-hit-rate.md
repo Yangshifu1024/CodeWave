@@ -157,3 +157,15 @@ usage?: UsageTotals;  // { input; output; cacheRead; cacheWrite }
 - **副作用（已知并接受）**：① 折行后工具条随之增高 1–2 行（极端窄宽 3 行），输入卡片整体变高；② 可用宽度下限 ≈ 最长的原子段（`上下文 60%（76.8k / 128k · 阈 60%）` ≈ 170px），再窄则首个原子段被硬裁——那正是最该读的数字，属刻意取舍；③ 分隔符「 · 」不再继承命中档颜色（原先它住在 `.ctx-hit` 里），回到 `.ctx-label` 的中性灰。
 - **契约**：`ui/src/__tests__/composer.toolbar.style.test.tsx`（9 用例）——CSS 侧钉住「`.ctx-label` 无 nowrap + `min-width:0` + `overflow:hidden`」「`.ctx-seg` / `.ctx-sep` / `.ctx-hit` / `.ctx-rate` 均 nowrap」「任何以 `.ctx-label` 结尾的选择器都不得重新引入 nowrap」「容器不加 flex-wrap / overflow」；DOM 侧钉住「`.toolbar-info > .ctx-label`」「恰两个 `<wbr>` 且分别在命中段与速率段之前」「全量与半段（只有命中 / 只有速率）文本逐字不变」「空态不引入断点」。
 - **手动验证**：1440×900 把左右栏拖到最宽（composer 最窄）、1024 宽窗口、有/无速率段、长/短模型名、暗色 + 英文各看一遍：小字折行后完整可读、不压模型选择器、行首不出现孤立「 · 」；恢复默认栏宽回单行。
+
+## 10. 后续追加：中等 / 窄窗口不再折叠 `.toolbar-info`（2026-09-26，[fix/composer-toolbar-and-anthropic-cache]）
+
+**缺陷**：`[data-narrow="medium"]` / `narrow` 下，Composer 工具条**速率段消失**（上下文/命中率已被迁到 Popover，`.toolbar-info` 块内仅剩“18.2 tok/s”这一段）。
+
+**根因**（CSS 折叠遗留）：§9 把上下文/命中迁到 Popover 后，`.toolbar-info` 只剩速率段，但 `ui/src/theme/app.css` 还有遗留折叠规则——该规则是「上下文/命中/速率三段合一」时代留下的（[docs/composer-responsive-toolbar] 原始设计），折叠整块 = 速率消失。
+
+**修复**：删 `.composer-card[data-narrow="medium|narrow"] .toolbar-info { display: none }`。`.toolbar-info` 块在 narrow 模式下只留下 ≈ 70px 的速率文字，保留不与邻居冲突。`tb-model-provider` / `tb-mode-text` / `tb-effort-text` 的折叠规则不变。
+
+**契约补**：`ui/src/__tests__/composer.toolbar.style.test.tsx` 新增 1 例，钉死任何 `.composer-card[data-narrow=…] .toolbar-info … { display: none }` 都不允许出现在 CSS 中。
+
+**刻意不做**：不重引入 `.toolbar-info` 的 `min-width` 或 `overflow:hidden` 拦截——速率段（"18.2 tok/s"）在最窄窗口下仍可被压缩到 1 字符级别，且与 Popover 按钮不重叠。

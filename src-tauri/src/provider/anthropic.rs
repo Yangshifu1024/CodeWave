@@ -302,8 +302,25 @@ pub fn handle_event(
             }
         }
         "message_delta" => {
+            // [fix/composer-toolbar-and-anthropic-cache]：anthropic SSE 的 `message_delta.usage`
+            // 是该消息的**累计**最终值（[anthropic streaming 规范](https://platform.claude.com/docs/en/build-with-claude/streaming)：
+            // "The token counts shown in the usage field of the message_delta event are cumulative."）。
+            // `message_start` 时服务端可能还没发完整 cache_read_input_tokens（先给 0 / 不给），
+            // 最终值在 delta 帧——需在 delta 帧也覆盖 input / cache_read / cache_write，否则
+            // 一直停在 message_start 的初值，前端 popover 命中率 “始终 100%”。
+            // `if let Some` 守卫：delta 帧中上游未给的字段**保留** message_start 的初值（不抹平，
+            // 不返阴塞点；取覆盖要者不取「累加」，因为官方语义是累计值不是 delta）。
             if let Some(o) = v["usage"]["output_tokens"].as_u64() {
                 acc.usage.output = o;
+            }
+            if let Some(n) = v["usage"]["input_tokens"].as_u64() {
+                acc.usage.input = n;
+            }
+            if let Some(n) = v["usage"]["cache_read_input_tokens"].as_u64() {
+                acc.usage.cache_read = n;
+            }
+            if let Some(n) = v["usage"]["cache_creation_input_tokens"].as_u64() {
+                acc.usage.cache_write = n;
             }
             let reason = v["delta"]["stop_reason"].as_str().unwrap_or("");
             if reason == "max_tokens" {
@@ -498,6 +515,65 @@ mod tests {
         );
         assert_eq!(acc.usage.output, 99);
         assert!(matches!(&d[0], StreamDelta::Text { text } if text.contains("截断")));
+    }
+
+    // [fix/composer-toolbar-and-anthropic-cache]：message_delta.usage 是该消息的累计最终值
+    // （anthropic SSE 规范），需覆盖 input / cache_read / cache_write 三个字段。守卫避免
+    // “上游在 delta 帧不给某字段就抹平 message_start 初值”的返阴。
+    #[test]
+    fn message_delta_overrides_cumulative_input_and_cache() {
+        let mut acc = AnAccum::default();
+        // message_start 给中间值（模拟某些上游先报中间数、最终累计后面 delta 才出）
+        feed(
+            &mut acc,
+            "message_start",
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#,
+        );
+        assert_eq!(acc.usage.input, 0);
+        assert_eq!(acc.usage.cache_read, 0);
+        assert_eq!(acc.usage.cache_write, 0);
+
+        // message_delta 给出累计最终值——必须覆盖
+        feed(
+            &mut acc,
+            "message_delta",
+            r#"{"type":"message_delta","delta":{},"usage":{"input_tokens":1200,"cache_read_input_tokens":900,"cache_creation_input_tokens":50,"output_tokens":80}}"#,
+        );
+        assert_eq!(acc.usage.input, 1200);
+        assert_eq!(acc.usage.cache_read, 900);
+        assert_eq!(acc.usage.cache_write, 50);
+        assert_eq!(acc.usage.output, 80);
+    }
+
+    // [fix/composer-toolbar-and-anthropic-cache]：message_delta 上游未给的字段必须保留
+    // message_start 初值（不抹平）。
+    #[test]
+    fn message_delta_keeps_start_values_for_missing_fields() {
+        let mut acc = AnAccum::default();
+        feed(
+            &mut acc,
+            "message_start",
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":50,"cache_creation_input_tokens":10}}}"#,
+        );
+        // delta 帧只给 output_tokens，其余三个字段缺失——初值应保留
+        feed(
+            &mut acc,
+            "message_delta",
+            r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":99}}"#,
+        );
+        assert_eq!(
+            acc.usage.input, 100,
+            "input 字段缺失时保留 message_start 初值"
+        );
+        assert_eq!(
+            acc.usage.cache_read, 50,
+            "cache_read 字段缺失时保留 message_start 初值"
+        );
+        assert_eq!(
+            acc.usage.cache_write, 10,
+            "cache_write 字段缺失时保留 message_start 初值"
+        );
+        assert_eq!(acc.usage.output, 99);
     }
 
     // 缺陷修复守护：空 assistant 消息不得上 wire（Anthropic 侧天然跳过空 blocks，

@@ -164,6 +164,13 @@ describe("Composer 工具条上下文进度圈样式契约", () => {
     expect(appCss).not.toMatch(/\.ctx-pct\b/);
     expect(appCss).not.toMatch(/\.ctx-hit\b/);
   });
+
+  it(".toolbar-info 在 medium/narrow 下不被 display:none（上下文/命中迁到 Popover 后只剩速率段，整块折叠 = 速率消失；[fix/composer-toolbar-and-anthropic-cache]）", () => {
+    // 不能有任何 .composer-card[data-narrow=…] .toolbar-info { display: none } 这类规则
+    // ——“折叠整块”会被 happy-dom 看不到，但选择器文案还在 CSS 中同样会让「medium 档下速度“消失”」重演。
+    const re = /\.composer-card\[data-narrow="(medium|narrow)"\]\s+\.toolbar-info[^{]*\{\s*display:\s*none\s*[;}]/;
+    expect(appCss).not.toMatch(re);
+  });
 });
 
 describe("Composer 工具条上下文进度圈结构契约", () => {
