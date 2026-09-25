@@ -96,7 +96,7 @@ export default {
     providers: "供应商", mcp: "MCP", skills: "技能",
     language: "界面语言", aiLanguage: "AI 语言", aiLanguageHint: "AI 回复使用的语言，可自由输入（如：中文、English、日本語）；留空时跟随对话语言",
     // 批④：占位符原先借用 composer.effortDefault（跨段借键），本批拆出独立键（值不变）
-    aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值（上下文占比）", compactTimeout: "压缩请求超时（秒，30–3600）",
+    aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值", compactTimeout: "压缩请求超时（秒，30–3600）",
     theme: "主题", themeHint: "选择界面亮暗外观；「跟随系统」时随系统亮暗实时切换", themeSystem: "跟随系统", themeLight: "亮色", themeDark: "暗色",
     uiFont: "界面字体", monoFont: "等宽字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车或失焦生效",
     fontReset: "恢复默认",
@@ -272,13 +272,12 @@ export default {
     leaveTitle: "有未保存的设置改动",
     leaveDesc: "离开前请选择如何处理这些改动；取消按钮会直接放弃全部未保存改动。",
     leaveSave: "保存并离开", leaveDiscard: "放弃改动", leaveStay: "留在原地",
-    // 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)）
+    // 批③ 搜索（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)）；
+    // 2026-09 移除「显示进阶项」开关，showAdvanced / advancedHint 文案一并清除
     searchPlaceholder: "搜索设置项…",
     searchResults: "搜索结果",
     searchEmpty: "没有匹配的设置项",
     searchEmptyHint: "供应商 / 模型、MCP 服务器、技能等条目请在各自页面内查找",
-    showAdvanced: "显示进阶项（{{n}}）",
-    advancedHint: "进阶项默认收起，该偏好会跨页跨会话记住",
   },
   chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染",
     // 分段历史分页（批2 P3）：逐段向前加载的入口、最早段终态、浏览上限与收起
@@ -363,15 +362,15 @@ export default {
     effortHigh: "高",
     effortMax: "最高",
     modeConfirmEach: "变更前确认",
-    modeConfirmEachDesc: "改文件前先问我。",
+    modeConfirmEachDesc: "修改文件前询问",
     modeAutoEdit: "自动编辑",
-    modeAutoEditDesc: "自动编辑文件。",
+    modeAutoEditDesc: "自动编辑文件",
     modePlan: "计划模式",
-    modePlanDesc: "只调研并给出方案，不做任何修改；确认方案后再执行。",
+    modePlanDesc: "只读调研给方案",
     modeGoal: "目标模式",
-    modeGoalDesc: "设定目标后自主推进；澄清完毕就不再打扰你，直到目标达成。",
+    modeGoalDesc: "自主推进达成目标",
     modeFullAccess: "完全访问",
-    modeFullAccessDesc: "减少确认次数（灾难命令仍拦截）。",
+    modeFullAccessDesc: "减少确认次数",
     modeShortcutHint: "Shift+Tab 循环切换权限模式",
     modeSwitched: "已切换权限模式：{{label}}",
     modelSwitched: "已切换模型：{{label}}",
@@ -379,7 +378,8 @@ export default {
     // Composer 工具条：上下文占用百分比分档 + 阈值/命中率小字标签
     contextThreshold: "阈",
     cacheHit: "命中",
-    ctxTitle: "上下文占用 · 自动压缩阈值 · 缓存命中率",
+    // Popover 详情（hover 进度圈弹出）：当前上下文 / 压缩阈值 / 缓存命中 三行键
+    ctxCurrent: "当前上下文",
     // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/composer-token-rate]）
     rateRunning: "在跑",
     rateTitle: "本轮生成速率",

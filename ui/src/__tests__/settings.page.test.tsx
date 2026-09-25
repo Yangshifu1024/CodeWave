@@ -355,7 +355,7 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     // 批②：导航自建 → 导航列内的 antd Tabs 规则全部退场；组标题沿用 .nav-section-title 的度量
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
     expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
-    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-hover\)/);
+    expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-highlight\)/);
     // 写入后检查的两列网格类收回 app.css（不再用内联 style）
     expect(appCss).toMatch(/\.postcheck-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(180px,\s*1fr\)\)/);
     // 已删除的 LSP 样式类不得残留
@@ -1146,13 +1146,6 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     return row;
   }
 
-  /** 页级进阶开关（该页进阶项数为 0 时不渲染） */
-  function advancedToggle(): HTMLElement {
-    return document.querySelector(
-      '[data-testid="settings-page"] .settings-advanced-toggle .ant-switch',
-    ) as HTMLElement;
-  }
-
   /** 播放 Esc（window 捕获链：先清空查询，清空后才回落「返回工作区」） */
   function pressEsc() {
     fireEvent.keyDown(window, { key: "Escape" });
@@ -1319,85 +1312,8 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     expect(cancelRunLog).toEqual([]);
   });
 
-  it("进阶折叠：默认收起、开关拨开可见、偏好落 localStorage 且跨页跨次打开都记得", async () => {
-    await mountWithSession();
-    await openPage("日志");
-
-    // 默认收起 + 开关文案带该页计数（本页 1 项）
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-    expect(document.querySelector(".settings-advanced-toggle")?.textContent ?? "").toContain("显示进阶项（1）");
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
-
-    fireEvent.click(advancedToggle());
-    await waitFor(() =>
-      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
-    );
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1");
-    // 折叠切换不产生未保存改动
-    expect(navDotCount()).toBe(0);
-
-    // 跨页记忆
-    clickNavTab("安全与审批");
-    await waitFor(() => expect(activeNavTabText()).toBe("安全与审批"));
-    expect(anchor("approval.command_allowlist")?.classList.contains("settings-advanced-hidden")).toBe(false);
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
-
-    // 跨次打开（离开设置页再进去）仍记得
-    fireEvent.click(buttonByText("返回工作区"));
-    await waitFor(() => expect(document.querySelector('[data-testid="settings-page"]')).toBeFalsy());
-    await openSettings();
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false);
-  });
-
-  it("命中被折叠的进阶项：临时展开该页进阶行（不写 localStorage），离开该页回到手动值", async () => {
-    await mountWithSession();
-    await openPage("日志");
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-
-    await search("详细");
-    fireEvent.click(resultRows()[0]);
-    await waitFor(() =>
-      expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false),
-    );
-    expect(anchor("log.session_verbose")?.classList.contains("settings-item-hit")).toBe(true);
-    // 临时展开不写偏好（开关仍反映手动值）
-    expect(localStorage.getItem("ws_settings_show_advanced")).toBeNull();
-    expect(
-      document.querySelector('[data-testid="settings-page"] .settings-advanced-toggle .ant-switch')?.getAttribute(
-        "aria-checked",
-      ),
-    ).toBe("false");
-
-    // 离开该页 → 回手动值（收起）
-    pressEsc();
-    await waitFor(() => expect(document.querySelector(".settings-search-results")).toBeFalsy());
-    clickNavTab("界面");
-    await waitFor(() => expect(activeNavTabText()).toBe("界面"));
-    clickNavTab("日志");
-    await waitFor(() => expect(activeNavTabText()).toBe("日志"));
-    expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(true);
-  });
-
-  it("进阶项改动仍正常亮脏点且可保存（折叠不影响 PAGE_FIELDS 语义）", async () => {
-    await mountWithSession();
-    await openPage("日志");
-    expect(navDotCount()).toBe(0);
-
-    fireEvent.click(advancedToggle());
-    await waitFor(() => expect(localStorage.getItem("ws_settings_show_advanced")).toBe("1"));
-    expect(navDotCount()).toBe(0); // 展开本身不是改动
-
-    fireEvent.click(anchor("log.session_verbose")?.querySelector(".ant-switch") as HTMLElement);
-    await waitFor(() => expect(navDot("logs")).toBe(true));
-    expect(navDotCount()).toBe(1);
-
-    fireEvent.click(buttonByText("保存"));
-    await waitFor(() => expect(navDotCount()).toBe(0));
-  });
+  // 2026-09 移除「显示进阶项」开关，原三个进阶折叠相关用例（默认收起/偏好落 localStorage、
+  // 命中被折叠的进阶项临时展开、进阶项改动亮脏点）随之删除。
 
   it("搜索框 ARIA：combobox 语义与 aria-activedescendant 都挂在输入框上，listbox 只作投影", async () => {
     await mountWithSession();
@@ -1457,22 +1373,6 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
       expect(document.querySelector(".settings-pane-body")?.classList.contains("settings-item-hit")).toBe(true),
     );
     expect(anchorEl.classList.contains("settings-item-hit")).toBe(false);
-  });
-
-  it("折叠 log.session_verbose：整行（Form.Item 与 label）都在隐藏容器内，不留孤立标签与空控制行", async () => {
-    await mountWithSession();
-    await openPage("日志");
-
-    const wrapper = anchor("log.session_verbose")!;
-    const row = wrapper.querySelector(".ant-form-item") as HTMLElement;
-    expect(row).toBeTruthy();
-    expect(row.querySelector(".ant-form-item-label")?.textContent).toContain("会话详细日志");
-    // antd 的 label 与 control 是兄弟节点：包层必须在 Form.Item **外部**，收起时整行一起消失
-    expect(row.closest(".settings-advanced-hidden")).toBe(wrapper);
-    expect(wrapper.classList.contains("settings-advanced-hidden")).toBe(true);
-
-    fireEvent.click(advancedToggle());
-    await waitFor(() => expect(anchor("log.session_verbose")?.classList.contains("settings-advanced-hidden")).toBe(false));
   });
 
   describe("命中跳转 × 三选拦截（三条离开路径的定位归属）", () => {

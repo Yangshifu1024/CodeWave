@@ -45,7 +45,11 @@ export function AppearanceSettings({ draft, patchDraft }: {
           />
         </div>
       </Form.Item>
-      <FontSettings />
+      {/* 字体组：sans / mono 双槽 + 预览合成一张 section 卡片（[docs/settings-fullscreen-shell]，
+          与参考图「浅色主题」组的圆角浅灰容器同构）。Form 上下文由外层 Form 提供。 */}
+      <div className="settings-section-card">
+        <FontSettings />
+      </div>
       {/* 「即时生效」写在标题括号里（instantApplySuffix）：本行是 Form.Item 块布局，标注挂控件下方会跟
           控件脱开、扫读时找不到（与关于·更新行同一形态）。 */}
       {draft && patchDraft && (

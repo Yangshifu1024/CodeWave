@@ -98,7 +98,7 @@ export default {
     providers: "Providers", mcp: "MCP", skills: "Skills",
     language: "Language", aiLanguage: "AI language", aiLanguageHint: "Language the AI replies in, free-form (e.g. 中文 / English / 日本語); empty = follow the conversation language",
     // Batch ④: the placeholder used to borrow composer.effortDefault (cross-segment key); now its own key (same value)
-    aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold (context ratio)", compactTimeout: "Compact request timeout (seconds, 30–3600)",
+    aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeHint: "Choose the light/dark appearance; “Follow system” tracks the OS in real time", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
     uiFont: "UI font", monoFont: "Monospace font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter/blur",
     fontReset: "Reset to default",
@@ -276,13 +276,12 @@ export default {
     leaveTitle: "Unsaved settings changes",
     leaveDesc: "Choose what to do with these changes before leaving; the cancel button discards everything without asking again.",
     leaveSave: "Save and leave", leaveDiscard: "Discard changes", leaveStay: "Stay here",
-    // Batch ③ search & advanced collapse ([docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md))
+    // Batch ③ search ([docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md));
+    // 2026-09 removed the "Show advanced" toggle, so showAdvanced / advancedHint keys are dropped
     searchPlaceholder: "Search settings…",
     searchResults: "Search results",
     searchEmpty: "No matching settings",
     searchEmptyHint: "Provider / model, MCP server and skill entries live on their own pages, not in search",
-    showAdvanced: "Show advanced ({{n}})",
-    advancedHint: "Advanced items are hidden by default; this preference is remembered across pages and sessions",
   },
   chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized",
     // Segmented history paging (batch 2 P3): load-earlier entry, oldest-end state, browse cap, collapse
@@ -369,15 +368,15 @@ export default {
     effortHigh: "High",
     effortMax: "Max",
     modeConfirmEach: "Confirm before changes",
-    modeConfirmEachDesc: "Ask me before modifying files.",
+    modeConfirmEachDesc: "Ask before modifying files",
     modeAutoEdit: "Auto edit",
-    modeAutoEditDesc: "Edit files automatically.",
+    modeAutoEditDesc: "Edit files automatically",
     modePlan: "Plan mode",
-    modePlanDesc: "Research only and propose a plan; no changes until you confirm.",
+    modePlanDesc: "Read-only research, propose a plan",
     modeGoal: "Goal mode",
-    modeGoalDesc: "Set a goal and it runs on its own; once clarified, it won't bother you again until the goal is met.",
+    modeGoalDesc: "Drive autonomously toward the goal",
     modeFullAccess: "Full access",
-    modeFullAccessDesc: "Fewer confirmations (disaster commands still blocked).",
+    modeFullAccessDesc: "Fewer confirmations",
     modeShortcutHint: "Shift+Tab to cycle permission modes",
     modeSwitched: "Approval mode switched: {{label}}",
     modelSwitched: "Model switched: {{label}}",
@@ -385,7 +384,8 @@ export default {
     // Composer toolbar: context usage tiering + threshold/hit-rate micro-labels
     contextThreshold: "thr",
     cacheHit: "hit",
-    ctxTitle: "Context usage · Auto-compact threshold · Cache hit rate",
+    // Popover detail (hover progress ring): current context / compression threshold / cache hit rate keys
+    ctxCurrent: "Current context",
     // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/composer-token-rate])
     rateRunning: "Running",
     rateTitle: "Generation rate (this run)",

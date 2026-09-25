@@ -51,15 +51,12 @@ import { McpArgTable, McpKvTable } from "./McpKvTable";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import {
-  ADVANCED_ITEM_IDS,
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
   PAGE_FIELDS,
   PAGE_GROUPS,
   PAGE_LABEL_KEY,
   PAGE_ORDER,
-  SETTINGS_ADVANCED_PREF_KEY,
-  advancedCountByPage,
   matchSettings,
   normalizePageKey,
   type PageKey,
@@ -136,18 +133,6 @@ const HIT_HIGHLIGHT_MS = 1500;
 
 /** 搜索结果列表的 DOM id（combobox 的 aria-controls 与 option 的 aria-activedescendant 都指向它） */
 const SEARCH_LISTBOX_ID = "settings-search-listbox";
-
-/** 进阶项 id 集合（注册表派生）：行内过滤只认这个集合，不手写第二份名单 */
-const ADVANCED_ID_SET = new Set(ADVANCED_ITEM_IDS);
-
-/** 读进阶折叠偏好（localStorage，默认收起；不可写 / 隐私模式下按收起处理，不报错） */
-function readShowAdvanced(): boolean {
-  try {
-    return localStorage.getItem(SETTINGS_ADVANCED_PREF_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 /** 逐段下钻取值（字段路径受 SettingFieldPath 联合类型约束，拼写错误在编译期暴露） */
 function drill(node: unknown, path: string): unknown {
@@ -357,10 +342,6 @@ export default function SettingsPage() {
   const [query, setQuery] = useState("");
   /** 结果列表高亮项下标；-1 = 无默认选中（多项命中不自动跳转、不默认选中） */
   const [hitIdx, setHitIdx] = useState(-1);
-  /** 进阶折叠偏好（localStorage，全局单一偏好、默认收起、跨页跨会话） */
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(readShowAdvanced);
-  /** 被「搜索命中」临时展开的页：**不写** localStorage，离开该页即回手动偏好值 */
-  const [forcedAdvanced, setForcedAdvanced] = useState<PageKey | null>(null);
   /** 待定位的命中项（**搜索命中**专用：要带 page 才能跨页走三选拦截，故只收注册表项） */
   const [pendingHit, setPendingHit] = useState<SettingItem | null>(null);
   /**
@@ -386,32 +367,10 @@ export default function SettingsPage() {
   const searching = query.trim() !== "";
   /** 结果列表当前高亮项的 id：越界保护（结果集收缩时 hitIdx 可能越界，不猜） */
   const activeHitId = results[hitIdx]?.id;
-  /** 当前页进阶项数（页级开关文案的计数；0 → 该行不渲染） */
-  const advancedCount = advancedCountByPage(tab);
-  /** 进阶项是否可见：手动偏好 ∨ 当前页被搜索临时展开 */
-  const advancedVisible = showAdvanced || forcedAdvanced === tab;
 
-  /** 行内过滤判定：该进阶项现在是否被收起（只影响类名，不挪 DOM 位置） */
-  function advHidden(id: string): boolean {
-    return !advancedVisible && ADVANCED_ID_SET.has(id);
-  }
-
-  /** 设置项锚点包裹层的类名（锚点 + 折叠类；锚点值 = 注册表 id） */
+  /** 设置项锚点包裹层的类名（锚点值 = 注册表 id，2026-09 移除进阶折叠后无折叠类） */
   function anchorCls(id: string): string {
-    return `setting-anchor${advHidden(id) ? " settings-advanced-hidden" : ""}`;
-  }
-
-  /**
-   * 页级进阶开关：只写 localStorage，**不碰 draft** —— 折叠切换因此不会产生未保存改动；
-   * 进阶项自身的改动照旧由 PAGE_FIELDS 判定（语义不变）。
-   */
-  function toggleAdvanced(next: boolean) {
-    setShowAdvanced(next);
-    try {
-      localStorage.setItem(SETTINGS_ADVANCED_PREF_KEY, next ? "1" : "0");
-    } catch {
-      // 隐私模式 / 配额不可写：本次会话内仍然生效（不外抛、不阻断开关）
-    }
+    return "setting-anchor";
   }
 
   /** 清空搜索（Esc 第一次按 / 清除按钮）：连高亮下标一并复位，避免下次搜索带着旧下标 */
@@ -1342,14 +1301,14 @@ export default function SettingsPage() {
   }, []);
 
   // ---------- 搜索命中定位（两段式：跨页 / 需临时展开时，目标节点当帧还不存在） ----------
-  // 段一：目标页成为当前页（切页完成、脏改动三选已放行）后，需要时先临时展开该页进阶行，
-  //       再把命中项交给段二；命中项在当前页时 tab 不变也照样命中（不切页、不改导航选中态）。
+  // 段一：目标页成为当前页（切页完成、脏改动三选已放行）后，把命中项交给段二；
+  // 命中项在当前页时 tab 不变也照样命中（不切页、不改导航选中态）。
+  // 2026-09 移除进阶折叠后不再需要「临时展开」分支。
   useEffect(() => {
     if (!pendingHit || pendingHit.page !== tab) return;
-    if (!advancedVisible && ADVANCED_ID_SET.has(pendingHit.id)) setForcedAdvanced(tab);
     setPendingHit(null);
     setHitTarget({ anchorId: pendingHit.id, nonce: ++hitSeqRef.current });
-  }, [pendingHit, tab, advancedVisible]);
+  }, [pendingHit, tab]);
 
   // 段一·外部跳转：`useUi.settingsHit` 里的锚点是**动态行级锚点**（没有注册表项，也没有进阶折叠要展开），
   // 但「页体已渲染」这一关比搜索路径更硬：供应商页体挂在 `body: draft && (...)` 上，而 draft 要等本组件
@@ -1397,11 +1356,6 @@ export default function SettingsPage() {
       hitTimerRef.current = null;
     }, HIT_HIGHLIGHT_MS);
   }, [hitTarget]);
-
-  // 离开被临时展开的页 → 回手动偏好值（临时展开只在本页有效，且从未写过 localStorage）
-  useEffect(() => {
-    setForcedAdvanced((prev) => (prev && prev !== tab ? null : prev));
-  }, [tab]);
 
   // 卸载时清掉高亮定时器，并摘掉仍挂着的临时高亮类（元素随组件销毁，留类只会污染测试与复挂场景）
   useEffect(() => () => {
@@ -1452,60 +1406,64 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.network,
       body: draft && (
         <Form layout="vertical">
-          <Form.Item label={t("settings.proxyMode")}>
-            {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
-            <div className="setting-anchor" data-setting-id="network.proxy">
-              {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
-              <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
-                <div className="proxy-mode-list">
-                  {([
-                    ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
-                    ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
-                    ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
-                  ] as const).map(([mode, title, desc]) => (
-                    <div key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
-                      {/* 整卡可点：主区（标题 + 说明 + 回显）是 label，点哪都能选中该模式 */}
-                      <label className="proxy-mode-main">
-                        <div className="proxy-mode-head">
-                          <Radio value={mode} />
-                          <span className="proxy-mode-title">{title}</span>
-                        </div>
-                        <div className="proxy-mode-desc">{desc}</div>
-                        {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
-                        {mode === "system" && sysProxy !== undefined && (
-                          <div className="proxy-mode-echo">
-                            {sysProxy
-                              ? t("settings.proxyDetected", { url: sysProxy })
-                              : t("settings.proxyNotDetected")}
+          {/* 代理模式组：模式三选一卡片 + 手动地址（同一项的子字段），合成一张 section 卡片
+              （[docs/settings-fullscreen-shell]，[docs/network-proxy-settings]） */}
+          <div className="settings-section-card">
+            <Form.Item label={t("settings.proxyMode")}>
+              {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
+              <div className="setting-anchor" data-setting-id="network.proxy">
+                {/* heroui radio-group 风格：整卡可点的三选一卡片，选中墨色描边（样式 .proxy-mode-card） */}
+                <Radio.Group value={proxyMode} onChange={(e) => patchProxyMode(e.target.value)}>
+                  <div className="proxy-mode-list">
+                    {([
+                      ["none", t("settings.proxyNone"), t("settings.proxyNoneDesc")],
+                      ["system", t("settings.proxySystem"), t("settings.proxySystemDesc")],
+                      ["manual", t("settings.proxyManual"), t("settings.proxyManualDesc")],
+                    ] as const).map(([mode, title, desc]) => (
+                      <div key={mode} className={`proxy-mode-card${proxyMode === mode ? " active" : ""}`}>
+                        {/* 整卡可点：主区（标题 + 说明 + 回显）是 label，点哪都能选中该模式 */}
+                        <label className="proxy-mode-main">
+                          <div className="proxy-mode-head">
+                            <Radio value={mode} />
+                            <span className="proxy-mode-title">{title}</span>
+                          </div>
+                          <div className="proxy-mode-desc">{desc}</div>
+                          {/* 系统代理探测回显：undefined = 未拉取不渲染；保存后经 save() 重探测刷新 */}
+                          {mode === "system" && sysProxy !== undefined && (
+                            <div className="proxy-mode-echo">
+                              {sysProxy
+                                ? t("settings.proxyDetected", { url: sysProxy })
+                                : t("settings.proxyNotDetected")}
+                            </div>
+                          )}
+                        </label>
+                        {/* 自定义模式独有的地址输入：放进卡片**内部**（不再单独占一行漂在卡片下方）。
+                            label 与输入框是字段区自己的，不嵌在外层 label 里（label 不能嵌 label） */}
+                        {mode === "manual" && proxyMode === "manual" && (
+                          <div className="proxy-mode-field">
+                            <Form.Item
+                              label={t("settings.proxyUrl")}
+                              extra={t("settings.proxyUrlHint")}
+                              validateStatus={proxyUrlInvalid ? "error" : undefined}
+                              help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
+                            >
+                              <Input
+                                size="small"
+                                className="w-wide"
+                                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                                value={proxyUrl}
+                                onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
+                              />
+                            </Form.Item>
                           </div>
                         )}
-                      </label>
-                      {/* 自定义模式独有的地址输入：放进卡片**内部**（不再单独占一行漂在卡片下方）。
-                          label 与输入框是字段区自己的，不嵌在外层 label 里（label 不能嵌 label） */}
-                      {mode === "manual" && proxyMode === "manual" && (
-                        <div className="proxy-mode-field">
-                          <Form.Item
-                            label={t("settings.proxyUrl")}
-                            extra={t("settings.proxyUrlHint")}
-                            validateStatus={proxyUrlInvalid ? "error" : undefined}
-                            help={proxyUrlInvalid ? t("settings.proxyUrlInvalid") : undefined}
-                          >
-                            <Input
-                              size="small"
-                              className="w-wide"
-                              placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                              value={proxyUrl}
-                              onChange={(e) => patchDraft({ proxy: { mode: "manual", url: e.target.value } })}
-                            />
-                          </Form.Item>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </Radio.Group>
-            </div>
-          </Form.Item>
+                      </div>
+                    ))}
+                  </div>
+                </Radio.Group>
+              </div>
+            </Form.Item>
+          </div>
           {/* 内网访问（批② 从「安全」页迁入本页：网络可达性归网络） */}
           <Form.Item label={t("settings.allowPrivate")}>
             <div className="setting-anchor" data-setting-id="network.allow_private_network">
@@ -1520,6 +1478,9 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.security,
       body: draft && (
         <Form layout="vertical">
+          {/* 审批策略组：4 个 Switch（总开关 + 三种确认策略 + 自动确认）合成一张 section 卡片
+              （[docs/settings-fullscreen-shell]，[docs/ask-ink-accent-and-composer-cover]） */}
+          <div className="settings-section-card">
           <Form.Item label={t("settings.approvalEnabled")}>
             <div className="setting-anchor" data-setting-id="approval.enabled">
               <Switch checked={draft.approval.enabled} onChange={(v) => patchDraft({ approval: { ...draft.approval, enabled: v } })} />
@@ -1541,6 +1502,7 @@ export default function SettingsPage() {
               <Switch checked={draft.approval.auto_confirm} onChange={(v) => patchDraft({ approval: { ...draft.approval, auto_confirm: v } })} />
             </div>
           </Form.Item>
+          </div>
           {/* docs/run-queue-and-ask-revamp：「始终允许本项目」命令白名单（审批时选择加入，此处管理/移除）。
               存储条目 = cwd \u{1} 完整命令文本（cwd 跟随项目 -> 白名单不跨项目生效），展示时拆开。
               advanced 项：包一层锚点容器，收起时整块（含 Form.Item 标签）加类隐藏 —— 零 DOM 搬迁 */}
@@ -1587,55 +1549,60 @@ export default function SettingsPage() {
       body: draft && (
         <>
           <Form layout="vertical">
+            {/* 写入后检查组：开关 + 命令 + 超时 + 输出尾字符 4 项合成一张 section 卡片
+                （[docs/settings-fullscreen-shell]，[docs/post-write-check-plan]）。hint 文本留在卡片外
+                （属于 section 标题性说明，不属于卡片内一组配置项） */}
             <div className="hint" style={{ marginBottom: 10 }}>{t("settings.postWriteHint")}</div>
-            {/* 开关：Switch 无宽度档，锚点挂整行 */}
-            <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
-              <Form.Item style={{ marginBottom: 8 }}>
-                <Switch
-                  checked={postWrite.enabled}
-                  aria-label={t("settings.postWriteEnabled")}
-                  onChange={(v) => patchPostWrite({ enabled: v })}
-                />
-                <span style={{ marginInlineStart: 8 }}>{t("settings.postWriteEnabled")}</span>
-              </Form.Item>
-            </div>
-            {/* 命令：整行输入 + {file} 占位符与各技术栈示例说明 */}
-            <div className={anchorCls("post_write_check.command")} data-setting-id="post_write_check.command">
-              <Form.Item label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
-                <Input
-                  value={postWrite.command}
-                  placeholder={t("settings.postWriteCommandPh")}
-                  onChange={(e) => patchPostWrite({ command: e.target.value })}
-                />
-              </Form.Item>
-            </div>
-            {/* 超时 / 输出尾部字符：两项都是进阶项（窄档；行内网格类收回 app.css） */}
-            <div className="postcheck-grid">
-              <Form.Item label={t("settings.postWriteTimeout")}>
-                <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
-                  <InputNumber
-                    size="small"
-                    className="w-narrow"
-                    min={1}
-                    max={3600}
-                    value={postWrite.timeout_seconds}
-                    onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
+            <div className="settings-section-card">
+              {/* 开关：Switch 无宽度档，锚点挂整行 */}
+              <div className={anchorCls("post_write_check.enabled")} data-setting-id="post_write_check.enabled">
+                <Form.Item style={{ marginBottom: 8 }}>
+                  <Switch
+                    checked={postWrite.enabled}
+                    aria-label={t("settings.postWriteEnabled")}
+                    onChange={(v) => patchPostWrite({ enabled: v })}
                   />
-                </div>
-              </Form.Item>
-              <Form.Item label={t("settings.postWriteTailChars")}>
-                <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
-                  <InputNumber
-                    size="small"
-                    className="w-narrow"
-                    min={100}
-                    max={100000}
-                    step={100}
-                    value={postWrite.tail_chars}
-                    onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
+                  <span style={{ marginInlineStart: 8 }}>{t("settings.postWriteEnabled")}</span>
+                </Form.Item>
+              </div>
+              {/* 命令：整行输入 + {file} 占位符与各技术栈示例说明 */}
+              <div className={anchorCls("post_write_check.command")} data-setting-id="post_write_check.command">
+                <Form.Item label={t("settings.postWriteCommand")} extra={t("settings.postWriteCommandHint")}>
+                  <Input
+                    value={postWrite.command}
+                    placeholder={t("settings.postWriteCommandPh")}
+                    onChange={(e) => patchPostWrite({ command: e.target.value })}
                   />
-                </div>
-              </Form.Item>
+                </Form.Item>
+              </div>
+              {/* 超时 / 输出尾部字符：两项都是进阶项（窄档；行内网格类收回 app.css） */}
+              <div className="postcheck-grid">
+                <Form.Item label={t("settings.postWriteTimeout")}>
+                  <div className={anchorCls("post_write_check.timeout_seconds")} data-setting-id="post_write_check.timeout_seconds">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={1}
+                      max={3600}
+                      value={postWrite.timeout_seconds}
+                      onChange={(v) => patchPostWrite({ timeout_seconds: v ?? DEFAULT_POST_WRITE_CHECK.timeout_seconds })}
+                    />
+                  </div>
+                </Form.Item>
+                <Form.Item label={t("settings.postWriteTailChars")}>
+                  <div className={anchorCls("post_write_check.tail_chars")} data-setting-id="post_write_check.tail_chars">
+                    <InputNumber
+                      size="small"
+                      className="w-narrow"
+                      min={100}
+                      max={100000}
+                      step={100}
+                      value={postWrite.tail_chars}
+                      onChange={(v) => patchPostWrite({ tail_chars: v ?? DEFAULT_POST_WRITE_CHECK.tail_chars })}
+                    />
+                  </div>
+                </Form.Item>
+              </div>
             </div>
           </Form>
         </>
@@ -1837,54 +1804,58 @@ export default function SettingsPage() {
       // （技能行：名称 / 来源 / 开关 / 删除）。
       body: draft && (
         <>
-          <div className="setting-anchor" data-setting-id="disabled_skills">
-            <div className="skills-toolbar">
-              <div className="hint">{t("settings.skillsHint")}</div>
-              <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
-                {t("settings.reloadSkills")}
-              </Button>
-            </div>
-            {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} style={{ marginTop: 24 }} />}
-            {skills.map((s) => {
-              const builtin = s.origin === "<builtin>";
-              const label = originLabel(s.origin);
-              return (
-                <div className="skill-row" key={s.name}>
-                  <div className="skill-info">
-                    <b>{s.name}</b>
-                    {builtin ? (
-                      <span className="skill-origin">{t("common.builtin")}</span>
-                    ) : (
-                      label && <span className="skill-origin" title={s.origin}>{label}</span>
-                    )}
-                    <span className="dim"> {s.description}</span>
-                    {s.whenToUse && <div className="dim small">when: {s.whenToUse}</div>}
+          {/* 技能清单整张 section 卡片（[docs/settings-fullscreen-shell]）；锚点继续落在最外层
+              div 上，搜索命中定位与折叠收起都不受影响 */}
+          <div className="settings-section-card">
+            <div className="setting-anchor" data-setting-id="disabled_skills">
+              <div className="skills-toolbar">
+                <div className="hint">{t("settings.skillsHint")}</div>
+                <Button size="small" loading={skillsBusy} onClick={() => void reloadSkills()}>
+                  {t("settings.reloadSkills")}
+                </Button>
+              </div>
+              {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} style={{ marginTop: 24 }} />}
+              {skills.map((s) => {
+                const builtin = s.origin === "<builtin>";
+                const label = originLabel(s.origin);
+                return (
+                  <div className="skill-row" key={s.name}>
+                    <div className="skill-info">
+                      <b>{s.name}</b>
+                      {builtin ? (
+                        <span className="skill-origin">{t("common.builtin")}</span>
+                      ) : (
+                        label && <span className="skill-origin" title={s.origin}>{label}</span>
+                      )}
+                      <span className="dim"> {s.description}</span>
+                      {s.whenToUse && <div className="dim small">when: {s.whenToUse}</div>}
+                    </div>
+                    <div className="skill-actions">
+                      <Switch
+                        checked={!draft?.disabled_skills.includes(s.name)}
+                        onChange={(v) => toggleSkill(s.name, !v)}
+                      />
+                      {s.deletable && (
+                        <Popconfirm
+                          title={t("settings.deleteSkillConfirm", { name: s.name })}
+                          description={s.origin}
+                          okButtonProps={{ loading: deletingName === s.name }}
+                          onConfirm={() => void removeSkill(s.name)}
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            aria-label={t("settings.deleteSkill")}
+                            icon={<DeleteOutlined />}
+                          />
+                        </Popconfirm>
+                      )}
+                    </div>
                   </div>
-                  <div className="skill-actions">
-                    <Switch
-                      checked={!draft?.disabled_skills.includes(s.name)}
-                      onChange={(v) => toggleSkill(s.name, !v)}
-                    />
-                    {s.deletable && (
-                      <Popconfirm
-                        title={t("settings.deleteSkillConfirm", { name: s.name })}
-                        description={s.origin}
-                        okButtonProps={{ loading: deletingName === s.name }}
-                        onConfirm={() => void removeSkill(s.name)}
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          aria-label={t("settings.deleteSkill")}
-                          icon={<DeleteOutlined />}
-                        />
-                      </Popconfirm>
-                    )}
-                  </div>
-                </div>
-              );
+                );
             })}
+            </div>
           </div>
         </>
       ),
@@ -1894,175 +1865,184 @@ export default function SettingsPage() {
       labelKey: PAGE_LABEL_KEY.agent,
       body: draft && (
         <Form layout="vertical">
-          <Form.Item label={t("settings.shell")} extra={t("settings.shellHint")}>
-            {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
-            <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
-              <Select
-                size="small"
-                className="w-mid"
-                style={{ flexShrink: 0 }}
-                value={draft.shell?.selection ?? "auto"}
-                onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
-                options={[
-                  {
-                    // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
-                    // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
-                    label:
-                      shells?.find((s) => s.auto)?.name !== undefined
-                        ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
-                        : t("settings.shellAuto"),
-                    value: "auto",
-                  },
-                  ...(shells ?? []).map((s) => ({
-                    label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
-                    value: s.id,
-                    title: s.path ?? s.name,
-                  })),
-                ]}
-              />
-              {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
-              {(() => {
-                const display = resolveShellDisplay(draft.shell?.selection ?? null, shells);
-                if (!display) return null;
-                return display.kind === "path" ? (
-                  <code
-                    title={display.text}
-                    style={{
-                      fontFamily: "var(--ws-font-mono)",
-                      fontSize: 12,
-                      color: "var(--ws-dim)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      minWidth: 0,
-                    }}
-                  >
-                    {display.text}
-                  </code>
-                ) : (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t("settings.shellNoPath")}
-                  </Typography.Text>
-                );
-              })()}
-            </div>
-            {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
-            {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                {t("settings.shellNotDetected")}
-              </Typography.Text>
-            )}
-            {shells === null && (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                {t("settings.shellDetectFailed")}
-              </Typography.Text>
-            )}
-          </Form.Item>
-          <Form.Item label={t("settings.customPrompt")}>
-            {/* TextArea 整行（不参与宽度三档），只补锚点 */}
-            <div className="setting-anchor" data-setting-id="custom_prompt">
-              <TextArea
-                rows={4}
-                value={draft.custom_prompt ?? ""}
-                // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
-                onChange={(e) => {
-                  const v = e.target.value;
-                  patchDraft({ custom_prompt: v.trim() === "" ? null : v });
-                }}
-              />
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.compactThreshold")}>
-            {/* Slider 是整行控件（不参与宽度三档）：批③ 去掉内联 320 像素宽，宽度随容器 */}
-            <div className="setting-anchor" data-setting-id="compact_threshold">
-              <Slider
-                min={0.1}
-                max={0.9}
-                step={0.05}
-                value={draft.compact_threshold ?? 0.6}
-                onChange={(v) => patchDraft({ compact_threshold: v })}
-              />
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.compactTimeout")}>
-            <div className="setting-anchor" data-setting-id="compact_timeout_seconds">
-              <InputNumber
-                className="w-narrow"
-                min={30}
-                max={3600}
-                step={30}
-                value={draft.compact_timeout_seconds ?? 180}
-                onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
-              />
-            </div>
-          </Form.Item>
-          {/* 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 18/25/26 条）：
-              下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
-          <Form.Item label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
-            <div className="setting-anchor" data-setting-id="sessions.retention_days">
-              <Select
-                size="small"
-                className="w-narrow"
-                value={draftRetention === null ? RETENTION_NEVER : String(draftRetention)}
-                onChange={patchRetention}
-                options={RETENTION_OPTIONS.map((days) => ({
-                  label: days === null ? t("settings.cleanupNever") : t("settings.cleanupDays", { n: days }),
-                  value: days === null ? RETENTION_NEVER : String(days),
-                }))}
-              />
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.cleanupNow")}>
-            {/* 禁用原因写在按钮右侧而不是 Tooltip：两条禁用条件（未选保留期 / 未保存）都能一眼看到 */}
-            <div
-              className="setting-anchor"
-              data-setting-id="app.cleanup_now"
-              style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
-            >
-              <Button size="small" loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
-                {t("settings.cleanupNow")}
-              </Button>
-              {cleanupBlock !== null && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {cleanupBlock === "none" ? t("settings.cleanupNeedRetention") : t("settings.cleanupUnsavedFirst")}
+          {/* 「Shell 与提示词」组：shell 选择器 + 自定义提示词合成一张 section 卡片
+              （[docs/settings-fullscreen-shell]） */}
+          <div className="settings-section-card">
+            <Form.Item label={t("settings.shell")} extra={t("settings.shellHint")}>
+              {/* 锚点挂在既有行容器上（shell.selection：选择器 + 路径回显是同一行） */}
+              <div className="setting-anchor" data-setting-id="shell.selection" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
+                <Select
+                  size="small"
+                  className="w-mid"
+                  style={{ flexShrink: 0 }}
+                  value={draft.shell?.selection ?? "auto"}
+                  onChange={(v) => patchDraft({ shell: { selection: v === "auto" ? null : v } })}
+                  options={[
+                    {
+                      // 自动默认项以后端 auto 标注为准（与 detect_shell 同源判定，PATH 上存在
+                      // 非 Git bash 时 shells[0] 不一定等于自动探测结果）
+                      label:
+                        shells?.find((s) => s.auto)?.name !== undefined
+                          ? t("settings.shellAutoWithDefault", { name: shells!.find((s) => s.auto)!.name })
+                          : t("settings.shellAuto"),
+                      value: "auto",
+                    },
+                    ...(shells ?? []).map((s) => ({
+                      label: s.limited ? `${s.name}${t("settings.shellLimited")}` : s.name,
+                      value: s.id,
+                      title: s.path ?? s.name,
+                    })),
+                  ]}
+                />
+                {/* 路径回显：所选 shell（或 auto 探测项）的可执行文件绝对路径；探测失败/已卸载不显示 */}
+                {(() => {
+                  const display = resolveShellDisplay(draft.shell?.selection ?? null, shells);
+                  if (!display) return null;
+                  return display.kind === "path" ? (
+                    <code
+                      title={display.text}
+                      style={{
+                        fontFamily: "var(--ws-font-mono)",
+                        fontSize: 12,
+                        color: "var(--ws-dim)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                      }}
+                    >
+                      {display.text}
+                    </code>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t("settings.shellNoPath")}
+                    </Typography.Text>
+                  );
+                })()}
+              </div>
+              {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
+              {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                  {t("settings.shellNotDetected")}
                 </Typography.Text>
               )}
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.cleanupStatus")}>
-            {/* 只读信息项（数据源 = get_cleanup_status）：**常驻渲染**，不因无记录而整行消失 */}
-            <div className="setting-anchor" data-setting-id="app.cleanup_status">
-              <span className="dim" style={{ fontSize: 12.5 }}>
-                {cleanupStatusText()}
-              </span>
-            </div>
-          </Form.Item>
-          {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：动作行 + 只读状态行，与保留期清理同一形态。
-              铁律「只删已有新格式段数据的旧文件」由后端把关（core/sessions/cleanup.rs），
-              界面负责把「必须保留 N 个」说出来 */}
-          <Form.Item label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
-            <div
-              className="setting-anchor"
-              data-setting-id="app.legacy_history_cleanup"
-              style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
-            >
-              <Button size="small" loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
-                {t("settings.legacyHistoryPreview")}
-              </Button>
-              <Button size="small" danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
-                {t("settings.legacyHistoryNow")}
-              </Button>
-            </div>
-          </Form.Item>
-          <Form.Item label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
-            {/* 只读信息项（数据源 = preview_legacy_history_cleanup）：同样**常驻渲染**，
-                没有旧格式历史时也有话说（不是空行） */}
-            <div className="setting-anchor" data-setting-id="app.legacy_history_status">
-              <span className="dim" style={{ fontSize: 12.5 }}>
-                {legacyStatusText()}
-              </span>
-            </div>
-          </Form.Item>
+              {shells === null && (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                  {t("settings.shellDetectFailed")}
+                </Typography.Text>
+              )}
+            </Form.Item>
+            <Form.Item label={t("settings.customPrompt")}>
+              {/* TextArea 整行（不参与宽度三档），只补锚点 */}
+              <div className="setting-anchor" data-setting-id="custom_prompt">
+                <TextArea
+                  rows={4}
+                  value={draft.custom_prompt ?? ""}
+                  // 空值归一：清空写 null（而非 ""），与 ai_language 同口径；后端也是按 trim 后非空才注入
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    patchDraft({ custom_prompt: v.trim() === "" ? null : v });
+                  }}
+                />
+              </div>
+            </Form.Item>
+          </div>
+          {/* 「压缩」组：压缩阈值 + 压缩超时（[docs/context-compaction]，[docs/settings-fullscreen-shell]） */}
+          <div className="settings-section-card">
+            <Form.Item label={t("settings.compactThreshold")}>
+              {/* Slider 是整行控件（不参与宽度三档）：批③ 去掉内联 320 像素宽，宽度随容器 */}
+              <div className="setting-anchor" data-setting-id="compact_threshold">
+                <Slider
+                  min={0.1}
+                  max={0.9}
+                  step={0.05}
+                  value={draft.compact_threshold ?? 0.6}
+                  onChange={(v) => patchDraft({ compact_threshold: v })}
+                />
+              </div>
+            </Form.Item>
+            <Form.Item label={t("settings.compactTimeout")}>
+              <div className="setting-anchor" data-setting-id="compact_timeout_seconds">
+                <InputNumber
+                  className="w-narrow"
+                  min={30}
+                  max={3600}
+                  step={30}
+                  value={draft.compact_timeout_seconds ?? 180}
+                  onChange={(v) => patchDraft({ compact_timeout_seconds: v ?? 180 })}
+                />
+              </div>
+            </Form.Item>
+          </div>
+          {/* 「会话清理」组：保留期 + 立即清理 + 清理状态 + 旧格式清理 + 旧格式状态（[docs/session-cleanup]）。
+              下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
+          <div className="settings-section-card">
+            <Form.Item label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
+              <div className="setting-anchor" data-setting-id="sessions.retention_days">
+                <Select
+                  size="small"
+                  className="w-narrow"
+                  value={draftRetention === null ? RETENTION_NEVER : String(draftRetention)}
+                  onChange={patchRetention}
+                  options={RETENTION_OPTIONS.map((days) => ({
+                    label: days === null ? t("settings.cleanupNever") : t("settings.cleanupDays", { n: days }),
+                    value: days === null ? RETENTION_NEVER : String(days),
+                  }))}
+                />
+              </div>
+            </Form.Item>
+            <Form.Item label={t("settings.cleanupNow")}>
+              {/* 禁用原因写在按钮右侧而不是 Tooltip：两条禁用条件（未选保留期 / 未保存）都能一眼看到 */}
+              <div
+                className="setting-anchor"
+                data-setting-id="app.cleanup_now"
+                style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
+              >
+                <Button size="small" loading={cleaning} disabled={cleanupBlock !== null} onClick={() => void runCleanupNow()}>
+                  {t("settings.cleanupNow")}
+                </Button>
+                {cleanupBlock !== null && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {cleanupBlock === "none" ? t("settings.cleanupNeedRetention") : t("settings.cleanupUnsavedFirst")}
+                  </Typography.Text>
+                )}
+              </div>
+            </Form.Item>
+            <Form.Item label={t("settings.cleanupStatus")}>
+              {/* 只读信息项（数据源 = get_cleanup_status）：**常驻渲染**，不因无记录而整行消失 */}
+              <div className="setting-anchor" data-setting-id="app.cleanup_status">
+                <span className="dim" style={{ fontSize: 12.5 }}>
+                  {cleanupStatusText()}
+                </span>
+              </div>
+            </Form.Item>
+            {/* 旧格式历史清理（分段 JSONL 落地后的显式入口）：动作行 + 只读状态行，与保留期清理同一形态。
+                铁律「只删已有新格式段数据的旧文件」由后端把关（core/sessions/cleanup.rs），
+                界面负责把「必须保留 N 个」说出来 */}
+            <Form.Item label={t("settings.legacyHistoryCleanup")} extra={t("settings.legacyHistoryHint")}>
+              <div
+                className="setting-anchor"
+                data-setting-id="app.legacy_history_cleanup"
+                style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
+              >
+                <Button size="small" loading={legacyBusy} onClick={() => void previewLegacyHistory()}>
+                  {t("settings.legacyHistoryPreview")}
+                </Button>
+                <Button size="small" danger loading={legacyBusy} onClick={() => void runLegacyHistoryCleanup()}>
+                  {t("settings.legacyHistoryNow")}
+                </Button>
+              </div>
+            </Form.Item>
+            <Form.Item label={t("settings.legacyHistoryStatus")} extra={t("settings.legacyHistoryStatusHint")}>
+              {/* 只读信息项（数据源 = preview_legacy_history_cleanup）：同样**常驻渲染**，
+                  没有旧格式历史时也有话说（不是空行） */}
+              <div className="setting-anchor" data-setting-id="app.legacy_history_status">
+                <span className="dim" style={{ fontSize: 12.5 }}>
+                  {legacyStatusText()}
+                </span>
+              </div>
+            </Form.Item>
+          </div>
         </Form>
       ),
     },
@@ -2279,21 +2259,12 @@ export default function SettingsPage() {
             role="tabpanel"
             aria-labelledby={`settings-tab-${tab}`}
           >
-            {/* 页级进阶开关（该页进阶项数为 0 时不渲染）：开关反映**手动偏好**（搜索临时展开
-                不改开关状态），切换只写 localStorage、不碰 draft → 不产生未保存改动 */}
-            {advancedCount > 0 && (
-              <div className="settings-advanced-toggle">
-                <Switch
-                  size="small"
-                  checked={showAdvanced}
-                  onChange={toggleAdvanced}
-                  aria-label={t("settings.showAdvanced", { n: advancedCount })}
-                />
-                <span className="settings-advanced-label">{t("settings.showAdvanced", { n: advancedCount })}</span>
-                <span className="hint">{t("settings.advancedHint")}</span>
-              </div>
-            )}
-            {activePage ? activePage.body : null}
+            {/* 中间内容居中容器：占右栏 50%、左右各 25% 留白，由 .settings-pane-inner 承担；
+                外层 .settings-pane-body 只负责保底宽与横滚兜底（[docs/settings-fullscreen-shell]） */}
+            <div className="settings-pane-inner">
+              {/* 2026-09 移除「显示进阶项」开关，所有项默认全部可见（[docs/settings-search-and-advanced] §2） */}
+              {activePage ? activePage.body : null}
+            </div>
           </div>
         </div>
       </div>

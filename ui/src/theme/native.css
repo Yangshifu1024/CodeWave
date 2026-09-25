@@ -15,11 +15,104 @@ html, body, #root { height: 100%; margin: 0; }
   /* 自绘标题栏（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)，tauri-plugin-decoration 消费的应用侧设置）：
      控制条高度对齐 50px 顶栏（32px 按钮在带内垂直居中）；z-index 高于内容、低于通知浮层 */
   --tauri-plugin-decoration-titlebar-height: 50px;
-  --tauri-plugin-decoration-z-index: 100;
+  --tauri-plugin-decoration-z-index: 25;
 }
 body {
   font-family: var(--ws-font-sans);
   overflow: hidden;
   background-color: var(--ws-bg);
   color: var(--ws-text-1);
+}
+/* tauri-plugin-decoration v3 Windows 控制按钮 CSS 兜底（[docs/custom-font-and-titlebar] §4.2 第 1 条）
+   根因：plugin v3.0.5 src/js/controls.js (Windows) 只放 unicode 字符（\uE921 \uE922 \uE8BB，Segoe Fluent Icons 字体）——
+   若 WebView2 不渲染该字体（Windows 10 早期版本 / 字体缓存被刷新），按钮变空、hit area 仍在但 visible 为 0。
+   linux-controls.js 有 img + CSS fallback 完整兜底；Windows 路径没有——这里补齐。
+   实现：font-size: 0 让 button 内的 unicode 字符不渲染，::before/::after 重新设 font-size 画图标
+   （与 plugin 自带 fallback CSS 几何一致；specificity 高于 controls.css 的 display: none，不需 !important）。 */
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control] {
+  font-size: 0;  /* 隐藏 button textContent 的 unicode 字符 */
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control]::before,
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control]::after {
+  display: block;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  content: "";
+  font-size: 10px;  /* 伪元素自身的字号（不受 button font-size: 0 继承影响） */
+  border-color: currentColor;
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="minimize"]::before {
+  height: 0;
+  border-top: 1.5px solid;
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="maximize"]::before {
+  border: 1.5px solid;
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="restore"]::before {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid;
+  transform: translate(calc(-50% + 2px), calc(-50% - 2px));
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="restore"]::after {
+  width: 8px;
+  height: 8px;
+  background: inherit;  /* 与 controls.css 一致：透过 ::after 显示内层方框 */
+  border: 1.5px solid;
+  transform: translate(calc(-50% - 2px), calc(-50% + 2px));
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="close"]::before,
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="close"]::after {
+  height: 0;
+  border-top: 1.5px solid;
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="close"]::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="close"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+/* 关闭按钮悬停变红（与 controls.css 第 104-110 行同款，保证 hover 反馈一致） */
+[data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-platform="windows"]
+  [data-tauri-decoration-control="close"]:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+/* 垂直居中兜底（[docs/custom-font-and-titlebar] §4.2 第 1 条）
+   plugin v3 controls.css 默认 .controls 容器 `top: 0; height: var(--titlebar-height, 32px)`——
+   即使应用侧把 titlebar-height 设为 50px，controls 内 button（align-items: center）落在容器中央，
+   但容器贴 toolbar 顶部，按钮整体偏上、toolbar 底部留白。
+   强制 controls 容器高度 = toolbar 高度 (50px)，button 在容器内居中 → button 中心 = toolbar 中心 (25px)。
+   specificity 0,2,0 = controls.css 的 0,2,0，需要 !important 覆盖。 */
+[data-tauri-plugin-decoration-root] [data-tauri-decoration-controls] {
+  height: var(--ws-titlebar-h) !important;
+  top: 0 !important;
 }

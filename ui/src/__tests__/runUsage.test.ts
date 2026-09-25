@@ -80,19 +80,22 @@ describe("命中率四档（≥99% ok / ≥95% yellow / ≥90% warn / 其余 dan
   });
 });
 
-describe("上下文占用三档（相对自动压缩阈值）", () => {
-  it("阈值 0.6：0.42 / 0.6 为界", () => {
-    expect(contextTier(0.4199, 0.6)).toBe("low");
-    expect(contextTier(0.42, 0.6)).toBe("medium"); // 阈值 × 0.7
-    expect(contextTier(0.5999, 0.6)).toBe("medium");
-    expect(contextTier(0.6, 0.6)).toBe("high"); // 达阈值
-    expect(contextTier(0.8, 0.6)).toBe("high");
-    expect(contextTier(0, 0.6)).toBe("low");
+describe("上下文占用四档（相对自动压缩阈值，红橙黄绿）", () => {
+  it("阈值 0.6：0.3 / 0.42 / 0.6 为界（ok / yellow→warn→danger）", () => {
+    // 阈值 0.6 → 50% 边界 0.30，70% 边界 0.42，100% 边界 0.60
+    expect(contextTier(0, 0.6)).toBe("ok");
+    expect(contextTier(0.2999, 0.6)).toBe("ok");
+    expect(contextTier(0.3, 0.6)).toBe("yellow"); // 阈值 × 0.5
+    expect(contextTier(0.4199, 0.6)).toBe("yellow");
+    expect(contextTier(0.42, 0.6)).toBe("warn"); // 阈值 × 0.7
+    expect(contextTier(0.5999, 0.6)).toBe("warn");
+    expect(contextTier(0.6, 0.6)).toBe("danger"); // 达阈值
+    expect(contextTier(0.8, 0.6)).toBe("danger");
   });
 
-  it("阈值非法（缺省 / 0 / 越界 / NaN）→ 一律 low（不臆测风险）", () => {
+  it("阈值非法（缺省 / 0 / 越界 / NaN）→ 一律 ok（不臆测风险）", () => {
     for (const bad of [0, -0.1, 1.5, NaN, Infinity]) {
-      expect(contextTier(0.95, bad)).toBe("low");
+      expect(contextTier(0.95, bad)).toBe("ok");
     }
   });
 });

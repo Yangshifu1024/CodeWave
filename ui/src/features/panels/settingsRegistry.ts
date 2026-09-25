@@ -349,13 +349,11 @@ export const SHELL_SETTING_KEYS: string[] = [
   "leaveDiscard", // 三选：放弃改动
   "leaveStay", // 三选：留在原地
 
-  // —— 搜索与进阶折叠的页壳文案（非可配置项；项由 SETTINGS_ITEMS 提供、开关状态存 localStorage） ——
+  // —— 搜索的页壳文案（非可配置项；项由 SETTINGS_ITEMS 提供） ——
   "searchPlaceholder", // 搜索框占位符
   "searchResults", // 结果列表的 aria-label（role=listbox）
   "searchEmpty", // 无命中空态
   "searchEmptyHint", // 无命中引导（动态条目在各自页面内查找）
-  "showAdvanced", // 页级开关文案（含 {{n}} 计数）
-  "advancedHint", // 进阶折叠说明（偏好跨页跨会话）
 
   // —— 界面页的从属文案（项已登记：ui.theme / ui.font_sans / ui.font_mono） ——
   "themeHint", // → ui.theme 的选择说明
@@ -575,28 +573,10 @@ export const SHELL_SETTING_KEYS: string[] = [
   "aboutViewLicense", // → app.license 的动作按钮
 ];
 
-/**
- * 进阶项偏好（localStorage，全局单一偏好、默认收起、跨页跨会话记忆）：
- * 存 "1" = 展开、"0" / 缺省 = 收起。页级开关只影响显示，**不参与脏标记**（PAGE_FIELDS 语义不变）。
- */
-export const SETTINGS_ADVANCED_PREF_KEY = "ws_settings_show_advanced";
-
-/** 进阶项 id（`advanced: true` 的全部项；页级开关的计数与行内过滤都从这里派生） */
-export const ADVANCED_ITEM_IDS: string[] = SETTINGS_ITEMS.filter((i) => i.advanced).map((i) => i.id);
-
-/** 该页进阶项数量（页级开关文案「显示进阶项（N）」的计数；N = 0 时该行不渲染） */
-export function advancedCountByPage(page: PageKey): number {
-  return SETTINGS_ITEMS.filter((i) => i.page === page && i.advanced).length;
-}
-
-/**
- * 该页该组是否**整组皆为进阶项**（是 → 收起时整组隐藏，而不是逐行隐藏）。
- * 组不存在 / 页不匹配 / 组内有非进阶项 → false（逐行判断由 ADVANCED_ITEM_IDS 承担）。
- */
-export function isAdvancedOnlyGroup(page: PageKey, group: string): boolean {
-  const items = SETTINGS_ITEMS.filter((i) => i.page === page && i.group === group);
-  return items.length > 0 && items.every((i) => i.advanced);
-}
+// 2026-09 移除「显示进阶项」开关：所有项默认全部可见，
+// 进阶折叠相关导出（SETTINGS_ADVANCED_PREF_KEY / ADVANCED_ITEM_IDS / advancedCountByPage /
+// isAdvancedOnlyGroup）一并清除；注册表 SETTINGS_ITEMS 上的 `advanced: true` 标记保留为
+// 无害冗余（不影响行为），待后续清理。
 
 /** 项序（注册表原序）：结果排序的最后一级，保证稳定输出 */
 const ITEM_RANK = new Map<string, number>(SETTINGS_ITEMS.map((item, idx) => [item.id, idx]));

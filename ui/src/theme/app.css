@@ -4,6 +4,12 @@
 :root {
   /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/arithmetic-audit](../../../docs/docs/arithmetic-audit.md)#13——此前两处各写字面量 50px） */
   --ws-titlebar-h: 50px;
+  /* 全局高亮色：所有 hover / active / 选中态统一走此色。
+     从左栏背景 --ws-bg-nav 派生「深一点点」的色（与 --ws-text-1 混 12%）。
+     亮色模式下确实稍深；暗色模式下文字色翻浅、效果翻为「与底色反相更强」——同样达成高亮意图。
+     写死 #hex 会与亮暗自适应契约打架，故用 color-mix 跟基底走。
+     行覆盖层（.session-nav-row .row-actions）也走它，因为该层只在行 hover 时显形、与行 hover 同色才能遮住时间文本。 */
+  --ws-highlight: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%);
 }
 
 /* 裸 <code> 一律走等宽双槽 token：UA 默认 monospace 不随用户字体设置变化
@@ -72,7 +78,7 @@ html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0;
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity 0.15s;
 }
-.tb-logo-toggle:hover { background: var(--ws-hover); }
+.tb-logo-toggle:hover { background: var(--ws-highlight); }
 .tb-logo-toggle:hover .tb-logo { opacity: 0; }
 .tb-logo-toggle:hover .tb-logo-swap { opacity: 1; }
 .tb-title {
@@ -113,13 +119,37 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口；z-index 须高于 antd Modal(1000)/message(1010)，否则弹框打开期间 toast 被遮罩盖住 */
 .notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 3000; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
 /* ---------- ChatMessages ---------- */
-.chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 16px; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
-/* 聊天区滚动条主题化（[docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md)）：透明轨道贴合内容背景、thumb 用主题 token，取代刺眼的 WebView 默认滚动条配色 */
-.chat-messages { scrollbar-width: thin; scrollbar-color: var(--ws-border) transparent; }
-.chat-messages::-webkit-scrollbar { width: 8px; height: 8px; }
-.chat-messages::-webkit-scrollbar-track { background: transparent; }
-.chat-messages::-webkit-scrollbar-thumb { background: var(--ws-border); border-radius: 4px; }
-.chat-messages::-webkit-scrollbar-thumb:hover { background: var(--ws-dim); }
+/* 聊天区布局：内容占中栏 70%，左右各留 15% 空白（[docs/chat-content-width]）。
+   padding 用百分比响应中栏宽度——窄窗（< ~320px）按内容/上下文需要仍可走 min() 兜底，但 antd Layout
+   已保证中栏 ≥ 480px（utils/layout CHAT_W_MIN），实际场景不会触发极窄。 */
+.chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 15%; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
+/* 自定义 overlay 滚动条（仿 MiniMax Code / Slack / Discord 范式）：
+   native 滚动条全部隐藏（webkit + Firefox），由 ChatScrollbar React 组件按 scroll 位置渲染细 thumb，
+   滚动时显、停 1s 后隐。native 滚动条在 Windows「始终显示滚动条」系统设置下会画出带箭头的 native widget——
+   那种 widget 不受 CSS 控制，所以这条路走不通，改用 React 自绘。 */
+.chat-messages { scrollbar-width: none; }
+.chat-messages::-webkit-scrollbar { width: 0; height: 0; background: transparent; }
+.chat-messages::-webkit-scrollbar-track,
+.chat-messages::-webkit-scrollbar-thumb { display: none; }
+
+/* ChatScrollbar 组件挂载在 .chat-messages 内第一个子元素，绝对定位贴右边缘。
+   默认透明（无内容感），滚动时由组件切 visible 类显色——0.25s 透明度过渡贴合 macOS overlay。 */
+.chat-scrollbar {
+  position: absolute; top: 0; right: 4px; bottom: 0; width: 10px;
+  pointer-events: auto; opacity: 0; transition: opacity 0.25s ease;
+  z-index: 5;
+}
+.chat-scrollbar.visible { opacity: 1; }
+.chat-scrollbar-track {
+  position: relative; width: 100%; height: 100%; cursor: pointer;
+}
+.chat-scrollbar-thumb {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: 6px; border-radius: 3px;
+  background: var(--ws-border);
+  transition: background 0.15s ease, width 0.15s ease;
+}
+.chat-scrollbar-thumb:hover { background: var(--ws-dim); width: 8px; }
 /* 空态引导：居中卡片 + 两个入口（新建临时会话 / 新建项目） */
 .chat-empty-guide {
   margin-top: 26vh; display: flex; flex-direction: column; align-items: center; gap: 10px;
@@ -181,8 +211,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
-/* inline code chip：token 化（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；原硬编码 #efefef/#1f2328 在暗色下不可读 */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-code-bg); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+/* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
+   与左侧导航同色，整体观感统一（[docs/ask-ink-accent-and-composer-cover]）。 */
+:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-quote { color: #6a737d; }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-selector-tag { color: #d73a49; }
 :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-attr { color: #032f62; }
@@ -252,20 +283,36 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 0.9em; line-height: 1;
   width: 1em; height: 1em; flex: none;
 }
-/* 追问建议区（antd 6 filled 胶囊 + 语义标签头） */
-.chips { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 4px; }
-.chips-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); }
-.chips-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.chips-row .ant-btn .ant-btn-icon { color: var(--ws-dim); transition: color 0.2s; }
+/* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
+   列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/tool-card-frame]）。
+   容器与列表项交换色：色块是上下文（建议区）= 工具调用同款面板色；卡片是单项可点元素 = 左栏背景色（前景）。 */
+.chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-panel); }
+.chips-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); margin-bottom: 8px; }
+.chips-row { display: flex; flex-direction: column; gap: 6px; }
+.chips-row .ant-btn {
+  display: flex !important; width: 100% !important; justify-content: space-between !important; align-items: center !important;
+  padding: 6px 10px !important; height: auto !important; line-height: 1.5 !important; text-align: left !important;
+  border: 1px solid var(--ws-border) !important; border-radius: 8px !important; /* 工具调用同款：1px 边框 + 8px 圆角。!important 盖过 antd 6 css-in-js 内联样式 */
+  background: var(--ws-bg-nav) !important; /* 列表项填充 = 左栏背景：与容器背景反相，使每项视觉上浮起 */
+}
+/* antd 6 SVG：<svg fill="currentColor"> 但 <path> 不继承——path 默认 fill: black，
+   强制 path 用 currentColor 让 color 能传到 fill。 */
+.composer-toolbar .ant-btn-text .anticon svg path { fill: currentColor !important; }
+.chips-row .ant-btn .ant-btn-icon { color: var(--ws-text-1); transition: color 0.2s; }
+/* 高亮色：从 --ws-bg-nav 派生「深一点点」的色（color-mix 与 --ws-text-1 混 12%），
+   亮色模式下确实稍深；暗色模式下文字色变浅、效果翻为「与左栏反相更强」——同样达成「高亮」意图。
+   写死 #hex 会与亮暗自适应契约打架，故用 color-mix 跟基底走。 */
+.chips-row .ant-btn:hover { background: var(--ws-highlight) !important; } /* !important 盖过基底的 --ws-bg-nav */
 .chips-row .ant-btn:hover .ant-btn-icon { color: var(--ws-accent); }
 
 /* ---------- 目标模式提示条（`ApprovalMode::Goal`）---------- */
 /* 澄清阶段（中性墨：只解释语义）与执行阶段共用一条；色彩强度只映射风险等级：
    澄清/执行 = 默认→橙（自主推进中，需注意）、已达成 = 绿、已中止 = 红。
-   外边距与 .composer 的 16px 对齐（与 .ask-wrap 同口径） */
+   宽度与 .ask-wrap 同口径（15% 横向 margin）——banner 是简短说明，宽度过宽会让短文「漂浮」在大量空白里，
+   复用窄面板口径与 ask 面板视觉成系。 */
 .goal-banner {
   display: flex; align-items: center; gap: 8px;
-  margin: 0 16px 6px; padding: 6px 10px;
+  margin: 0 15% 6px; padding: 6px 10px;
   border: 1px solid var(--ws-border); border-radius: 10px;
   background: var(--ws-panel);
   font-size: 12px; line-height: 1.5; color: var(--ws-text-2);
@@ -277,7 +324,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .goal-banner.st-aborted { border-color: var(--ws-err); color: var(--ws-err); }
 /* 「继续推进」按钮：继承提示条颜色（暂停态 = 橙），悬停走通用 hover token */
 .goal-banner .goal-resume-btn { flex: none; color: inherit; border-radius: 999px; }
-.goal-banner .goal-resume-btn:hover { background: var(--ws-hover) !important; }
+.goal-banner .goal-resume-btn:hover { background: var(--ws-highlight) !important; }
 
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
@@ -300,7 +347,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .skill-detail .skill-origin { font-size: 12px; color: var(--ws-dim); }
 /* 键盘导航高亮（↑↓ 移动，Enter/Tab 选中；与悬停同步） */
-.menu .menu-item.active { background: var(--ws-hover); }
+.menu .menu-item.active { background: var(--ws-highlight); }
 /* 条目长文本换行（技能/提及/子代理菜单共用）：antd Button 默认 nowrap + 固定行高，
    长 description 会把弹层撑宽——这里改为高度自适应、文本左对齐，描述占满剩余宽度并可任意断行 */
 .menu .menu-item {
@@ -310,7 +357,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .menu .menu-item code { flex: none; }
 .menu .menu-item .dim { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 18px; }
 .menu .menu-item > span { min-width: 0; }
-.composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 16px 6px; }
+/* composer 与 ask-wrap 边距 = 中栏宽度的 15%（与 chat-messages padding 一致）——输入区与聊天内容区同一容器宽度 */
+.composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 15% 6px; }
 /* 卡片式输入（[docs/composer-toolbar-batch-report](../../../docs/docs/composer-toolbar-batch-report.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
 .composer .composer-card {
   position: relative; /* BorderBeam 层的定位上下文（[docs/antd6-upgrade-and-composer-border-beam](../../../docs/docs/antd6-upgrade-and-composer-border-beam.md)） */
@@ -318,6 +366,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   border: 1px solid var(--ws-border); border-radius: 14px;
   background: var(--ws-panel);
   padding: 6px 10px 4px;
+  /* 阴影：与面板色配合的极淡阴影——给输入框视觉重量，不抢焦点（BorderBeam 是聚焦时的反馈） */
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
 }
 /* 输入框自身无边框（含 focus/hover 态）：浏览器 UA 的 focus outline 不受 antd borderless 管辖，
    必须显式压制；聚焦反馈由流光边框承担（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)：原 :focus-within 强调色边框取消，
@@ -349,71 +399,81 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    只把缩略图换成文件类型图标；无新增色彩变量，图标色跟次级文字色 */
 .attach-chip.ref-chip .anticon { color: var(--ws-text-2); font-size: 14px; }
 .composer-toolbar { display: flex; align-items: center; padding: 2px 2px 2px 4px; }
+/* 工具条分级显示（[docs/composer-responsive-toolbar]）：基于 composer 卡片实测宽度（[data-narrow]）切三档。
+   契约：[data-narrow="normal"] 全显；[data-narrow="medium"] 隐藏 toolbar-info 与 model provider；
+   [data-narrow="narrow"] 再隐藏权限档/力度的文字标签（保留图标）。不 wrap、不加 overflow（卡片是
+   BorderBeam 流光的定位上下文、按钮有 focus 环——参考 composer.toolbar.style.test.ts 的 "容器不动" 契约）。 */
+.composer-card[data-narrow="medium"] .toolbar-info,
+.composer-card[data-narrow="narrow"] .toolbar-info { display: none; }
+.composer-card[data-narrow="medium"] .tb-model-provider,
+.composer-card[data-narrow="narrow"] .tb-model-provider { display: none; }
+.composer-card[data-narrow="narrow"] .tb-mode-text,
+.composer-card[data-narrow="narrow"] .tb-effort-text { display: none; }
 .composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; }
 .composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .composer-toolbar .ant-btn-text { color: var(--ws-text-2); padding-inline: 8px; }
-.composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+.composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
 .composer-toolbar .tb-label {
   /* 完整展示模型名（不限宽）；省略号只是窄窗口空间不足时的兜底，按钮 title 中有全名 */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   margin: 0 2px 0 6px; font-size: 13px;
 }
-/* 权限胶囊按档着色：确认=墨（accent，中性=默认档）/ 自动编辑=橙 / 完全访问=红（危险）；
-   [docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 墨化后语义 = 色彩强度映射风险等级（无色=默认、暖色=需注意、红=危险）；plan 档不着色。
-   选择器带 .ant-btn-text（特异性相同、后者胜出）以压过上方 hover 变色规则，悬停保持档位色 */
-.composer-toolbar .ant-btn-text.approval-confirm { color: var(--ws-accent) !important; }
-.composer-toolbar .ant-btn-text.approval-auto { color: var(--ws-warn) !important; }
-.composer-toolbar .ant-btn-text.approval-full { color: var(--ws-err) !important; }
-/* 目标模式胶囊：橙（warn = 需注意，与自动编辑同色系；不引入新色系） */
-.composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-warn) !important; }
+/* 权限胶囊不再按档染色：text + icon + chev 全部走中性墨色（[docs/ask-ink-accent-and-composer-cover] 的强调色契约）。
+   之前 confirm/auto/goal/full 按档位分配绿/黄/橙/红（[docs/composer-shift-tab-mode-cycle] §5 色彩强度映射风险等级），
+   与下拉菜单一起撤掉后，「当前档位徽标」仅起标识作用、不再承担风险等级提示。
+   **selector 修正**（保留以备查阅）：Composer 的 mode 按钮用 children（不是 `icon` prop）传 modeIcons，
+   antd Button 不会自动 wrap `.ant-btn-icon`——当时改选 `.anticon:first-of-type`（直接子元素的第一个 antd icon = mode 图标）。
+   text 显式置 --ws-text-2 是必要的——文本规则保留，色彩强度层全撤。 */
+.composer-toolbar .ant-btn-text.approval-confirm,
+.composer-toolbar .ant-btn-text.approval-auto,
+.composer-toolbar .ant-btn-text.approval-full,
+.composer-toolbar .ant-btn-text.approval-goal { color: var(--ws-text-2) !important; }
 .composer-toolbar .composer-spin { color: var(--ws-dim); margin-right: 4px; font-size: 14px; }
 /* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原住在 .toolbar-right 里，被 margin-left:auto
    推到最右、与模型/力度/发送挤在一起，用户反馈「最右的信息没人看」（版式审计）。
-   百分比仍按占用分档着色（.ctx-label 的选择器前缀不变：composer.rate.style.test.ts 按字面选择器抓规则）。 */
+   本轮把上下文/命中挪到进度圈 hover 的 Popover 里，.toolbar-info 只剩速率段；
+   进度圈 + 压缩按钮挪到 .toolbar-right 原压缩按钮位（占据首位）。 */
 .composer-toolbar .toolbar-info { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0 4px; }
-/* 窄窗口折行（[docs/composer-toolbar-context-hit-rate](../../../docs/composer-toolbar-context-hit-rate.md) §9）：信息段此前是 nowrap
-   且没有裁剪边界，左右栏拖宽后这串小字会**溢出绘制**到右侧模型选择器上（position/z-index 不参与，纯溢出）→ 完全不可读。
-   这里去掉 nowrap，改为在 <wbr> 处折行（完整可见、不截断）；min-width:0 允许 flex 收缩，overflow:hidden 兜住
-   「单个原子段仍比可用宽度更宽」时的残余溢出，不再压到邻居。 */
-.composer-toolbar .ctx-label { font-size: 11.5px; color: var(--ws-dim); min-width: 0; overflow: hidden; margin: 0 2px; }
-/* 折行只允许发生在 <wbr> 处：每个原子段内部仍不换行（否则「命中 50%」会被拆到两行） */
-.composer-toolbar .ctx-label .ctx-seg { white-space: nowrap; }
-/* 分隔符「 · 」也包成不可断单元：否则它本身就是一个断行机会，可能被单独甩到下一行行首 */
-.composer-toolbar .ctx-label .ctx-sep { white-space: nowrap; }
-/* 上下文占用档：够阈值 = 红（危险）/ 阈值 70% 以上 = 橙（需注意）/ 以下 = 默认（中性墨） */
-.composer-toolbar .ctx-label .ctx-pct { color: var(--ws-accent); }
-.composer-toolbar .ctx-label .ctx-pct.warn { color: var(--ws-warn); }
-.composer-toolbar .ctx-label .ctx-pct.danger { color: var(--ws-err); }
-/* 命中率档（四档）：≥99% 绿 / 95–99% 黄（中性墨，色板无独立黄色 token）/ 90–95% 橙 / <90% 红 */
-.composer-toolbar .ctx-label .ctx-hit { color: var(--ws-accent); white-space: nowrap; }
-.composer-toolbar .ctx-label .ctx-hit.ok { color: var(--ws-ok); }
-.composer-toolbar .ctx-label .ctx-hit.yellow { color: var(--ws-accent); }
-.composer-toolbar .ctx-label .ctx-hit.warn { color: var(--ws-warn); }
-.composer-toolbar .ctx-label .ctx-hit.danger { color: var(--ws-err); }
-/* 本轮生成速率段（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：与上下文/命中同行同段。
-   铁律：色彩强度只映射风险等级 → 速率一律中性灰，不做分档着色（字号继承 .ctx-label 的 11.5px） */
-.composer-toolbar .ctx-label .ctx-rate { color: var(--ws-dim); white-space: nowrap; }
+/* 本轮生成速率段（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：
+   从原 .ctx-label 内提到 .toolbar-info 直接子级；色彩强度只映射风险等级 → 速率一律中性灰 */
+.composer-toolbar .toolbar-info .ctx-rate { color: var(--ws-dim); white-space: nowrap; font-size: 11.5px; }
 /* 「在跑」心跳点：极淡跳动，只表示「还在生成」，信息不依赖动效 */
-.composer-toolbar .ctx-label .rate-dot {
+.composer-toolbar .toolbar-info .rate-dot {
   display: inline-block; width: 4px; height: 4px; margin-left: 4px;
   border-radius: 50%; background: currentColor; vertical-align: middle;
   opacity: 0.35; animation: rate-dot-pulse 1.4s ease-in-out infinite;
 }
 @keyframes rate-dot-pulse { 0%, 100% { opacity: 0.18; } 50% { opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) {
-  .composer-toolbar .ctx-label .rate-dot { animation: none; }
+  .composer-toolbar .toolbar-info .rate-dot { animation: none; }
 }
+
+/* 进度圈（替换原 .ctx-label 文本 + 原 CompactButton 位）：
+   antd 6 dashboard 内部类名复用 .ant-progress-circle-*（与 type="circle" 一致，见 antd/es/progress/progress.js:165）；
+   这里只覆盖「轨道」色为主题 token，strokeColor / strokeWidth 走 antd 默认 + inline prop。 */
+.ctx-progress-wrap { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.ctx-progress.ant-progress { margin: 0; }
+.ctx-progress .ant-progress-circle-rail { stroke: var(--ws-border); }
+
+/* Popover 详情卡（hover 进度圈弹出）：当前上下文 / 缓存命中 / 压缩阈值 三行 + 压缩操作按钮
+   视觉与现有 .ask-card、.right-bar 等面板同源：背景 --ws-panel + 边框 --ws-border + 8-12px 圆角。 */
+.ctx-popover { display: flex; flex-direction: column; gap: 4px; min-width: 220px; padding: 2px 0; }
+.ctx-popover-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.6; }
+/* 阈值行：label flex 自适应，压缩按钮紧贴右侧（margin-left:auto） */
+.ctx-popover-row.ctx-popover-threshold-row { gap: 12px; }
+.ctx-popover-row.ctx-popover-threshold-row .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
+.ctx-popover-label { flex: none; color: var(--ws-dim); min-width: 56px; }
+.ctx-popover-value { flex: 1; min-width: 0; color: var(--ws-text-1); font-family: var(--ws-font-mono); }
+.ctx-popover-meta { flex: none; color: var(--ws-dim); font-size: 11.5px; }
+.ctx-popover-empty { display: flex; align-items: center; gap: 12px; color: var(--ws-dim); font-size: 12px; padding: 2px 0; }
+.ctx-popover-empty .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
 .composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }
 .menu-item-rich .desc { font-size: 11.5px; color: var(--ws-dim); }
-/* 权限档下拉条目：仅标题文字按档着色（与触发胶囊同色，[docs/composer-shift-tab-mode-cycle](../../../docs/docs/composer-shift-tab-mode-cycle.md) §5）。
-   档位类挂在内层 .menu-item-rich 上（rich() 传入）；规则瞄准标题 span（antd 的选中/悬停色作用在 li 上），
-   内层元素自身 color 的继承永远胜出——无需 !important。图标保持默认文字色 */
-.ant-dropdown .menu-item-rich.approval-confirm > span:not(.desc) { color: var(--ws-accent); }
-.ant-dropdown .menu-item-rich.approval-auto    > span:not(.desc) { color: var(--ws-warn); }
-.ant-dropdown .menu-item-rich.approval-full    > span:not(.desc) { color: var(--ws-err); }
-.ant-dropdown .menu-item-rich.approval-goal   > span:not(.desc) { color: var(--ws-warn); }
+/* 权限档下拉条目：不按档染色（确认=accent、自动/目标=warn、完全=err）——标题与图标统一走中性墨色。
+   色彩强度映射风险等级的设计意图保留在触发胶囊上（见 .composer-toolbar .ant-btn-text.approval-* 那组规则）。
+   档位类 .approval-* 仍由 rich() 传入（被 app.smoke.test.tsx 锚定），仅去掉 color 规则即可。 */
 .vision-tag {
   font-size: 10px; line-height: 16px; margin-left: 6px; padding: 0 5px;
   border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);
@@ -492,7 +552,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- AskPanel（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md) 卡片式 + 编号选项 + 键盘导航；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 降噪对齐：
             描边中性标签 + 轻量分页器 + ghost 补充输入 + 胶囊按钮 + 题干层级） ---------- */
-.ask-wrap { margin: 0 16px 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
+.ask-wrap { margin: 0 15% 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
 .ask-card {
   border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-panel);
   padding: 12px 14px; outline: none;
@@ -531,8 +591,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
   cursor: pointer; font-size: 13px; min-width: 0;
 }
-.ask-opt:hover { background: var(--ws-hover); }
-.ask-opt.kb { background: var(--ws-hover); }
+.ask-opt:hover { background: var(--ws-highlight); }
+.ask-opt.kb { background: var(--ws-highlight); }
 .ask-opt.picked { background: rgba(127, 127, 127, 0.16); }
 .ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
 .ask-opt .label { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -770,6 +830,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .project-row {
   display: flex; align-items: center; gap: 6px; padding: 4px 8px;
   font-size: 13px; font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+  cursor: pointer; user-select: none;
 }
 .project-row .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-nav-row {
@@ -777,8 +838,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   height: 28px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
   font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
 }
-.session-nav-row:hover { background: var(--ws-hover); }
-.session-nav-row.active { background: var(--ws-hover); color: var(--ws-text-1); }
+/* 会话行高亮走 --ws-highlight（与全站统一），见 :root 定义 */
+.session-nav-row:hover { background: var(--ws-highlight); }
+.session-nav-row.active { background: var(--ws-highlight); color: var(--ws-text-1); }
 /* 运行指示定槽：恒渲染的占位保证每行标题对齐 */
 .session-nav-row .session-run-slot {
   flex: none; width: 12px; height: 12px;
@@ -796,7 +858,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: inline-flex; flex: none; margin-left: 4px;
   opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.12s;
-  background: var(--ws-hover); /* 遮住底下透出的时间文本 */
+  background: var(--ws-highlight); /* 遮住底下透出的时间文本 */
 }
 .session-nav-row:hover .row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
 .session-nav-row:hover .session-time { opacity: 0; }
@@ -807,7 +869,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .project-row .row-action {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   opacity: 0; visibility: hidden; pointer-events: none;
-  transition: opacity 0.12s; background: var(--ws-hover);
+  transition: opacity 0.12s; background: var(--ws-highlight);
 }
 .project-row:hover .row-action { opacity: 1; visibility: visible; pointer-events: auto; }
 .show-more { font-size: 12px; color: var(--ws-dim); padding: 4px 8px 4px 24px; cursor: pointer; }
@@ -816,7 +878,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; align-items: center; gap: 8px; padding: 5px 8px;
   font-size: 12.5px; color: var(--ws-text-2); cursor: pointer; border-radius: 8px;
 }
-.task-nav-row:hover { background: var(--ws-hover); }
+.task-nav-row:hover { background: var(--ws-highlight); }
 .task-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-dim); flex: none; }
 /* 只有失败是红（与 .task-dot 的灰形成风险等级对比）：ok/skipped 走默认灰，不再另设 .task-dot.ok 死规则 */
 .task-dot.err { background: var(--ws-err); }
@@ -840,7 +902,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .sider-footer .git-avatar { font-size: 12px; }
 .sider-footer-ops { display: flex; align-items: center; flex: none; gap: 0; }
 .sider-footer-ops .ant-btn-text { color: var(--ws-text-2); }
-.sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-hover) !important; }
+.sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
 /* 折叠窄轨的底部回退（.sider-rail-foot）已随 [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 窄轨退役一并移除 */
 
 /* ---------- 右侧栏「变更」页签（GitDiffModal 面板化） ---------- */
@@ -904,7 +966,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 任务行两级：主信息区（可点展开历史）+ 操作区（同级兄弟，不做 role=button 里嵌按钮） */
 .task-row { border: 1px solid var(--ws-border); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
 .task-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 0; border-radius: 6px; cursor: pointer; }
-.task-row-main:hover { background: var(--ws-hover); }
+.task-row-main:hover { background: var(--ws-highlight); }
 .task-row-name { font-size: 12.5px; color: var(--ws-text-1); }
 .task-row-sched { font-size: 12px; color: var(--ws-text-2); }
 .task-row-project { font-size: 11.5px; }
@@ -957,14 +1019,16 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   height: 28px; padding: 0 8px; margin: 0 0 2px; border: none; border-radius: 6px;
   background: transparent; text-align: left; cursor: pointer;
 }
-.settings-nav-item:hover { background: var(--ws-hover); }
-.settings-nav-item-active { background: var(--ws-hover); }
+.settings-nav-item:hover { background: var(--ws-highlight); }
+.settings-nav-item-active { background: var(--ws-highlight); }
 .settings-nav-label { display: inline-flex; align-items: center; gap: 6px; line-height: 28px; font-size: 12.5px; color: var(--ws-text-2); }
 .settings-nav-item-active .settings-nav-label { color: var(--ws-text-1); }
 /* 导航项图标：Outlined 线性图标——**不设 color**，跟随 .settings-nav-label 的文本色（无彩色约定） */
 .settings-nav-icon { font-size: 16px; flex: none; }
 
-/* ---------- 设置页批③：搜索 + 进阶折叠 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ---------- */
+/* ---------- 设置页批③：搜索 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ----------
+   2026-09 移除「显示进阶项」开关后，进阶折叠相关 CSS 与导出（.settings-advanced-toggle /
+   .settings-advanced-label / .settings-advanced-hidden）一并清除，所有项默认全部可见。 */
 /* 控件宽度三档（窄 180 / 中 240 / 宽 360）：都带 max-width:100% —— 窄窗下宽档被 max-width 兜住
    → 变 100% 且不横向溢出。页体内**不得**再写像素内联 width（测试正则守护）。
    注：antd 自带宽度规则（.ant-input 100%、.ant-input-number 90px）与下面的单类规则同权重，
@@ -987,8 +1051,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   min-height: 28px; padding: 0 8px; margin: 0 0 2px; border-radius: 6px; cursor: pointer;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.settings-search-item:hover { background: var(--ws-hover); }
-.settings-search-item-active { background: var(--ws-hover); }
+.settings-search-item:hover { background: var(--ws-highlight); }
+.settings-search-item-active { background: var(--ws-highlight); }
 .settings-search-item-label {
   font-size: 12.5px; color: var(--ws-text-2);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -999,11 +1063,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-search-empty { padding: 6px 8px; }
 .settings-search-empty .settings-search-empty-title { font-size: 12.5px; color: var(--ws-text-2); margin-bottom: 4px; }
 
-/* 页体顶部的进阶开关行（该页进阶项数 N = 0 时不渲染；切换不产生未保存改动） */
-.settings-advanced-toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 0 10px; }
-.settings-advanced-toggle .settings-advanced-label { font-size: 12.5px; color: var(--ws-text-2); }
-/* 进阶行/组收起：只加类隐藏，**零 DOM 搬迁**（行仍留在原分组内，展开后在原位重现） */
-.settings-advanced-hidden { display: none; }
+/* 进阶折叠相关样式（.settings-advanced-toggle / .settings-advanced-hidden 等）已随 2026-09
+   移除「显示进阶项」开关一并清除。 */
 
 /* 设置项锚点包裹层（data-setting-id 挂在这里）：供搜索命中定位与临时高亮 */
 .setting-anchor { min-width: 0; }
@@ -1011,7 +1072,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    不再内联硬编码 #ff4d4f —— 硬编码色不跟主题走，暗色下对比不足 */
 .provider-models-error { color: var(--ws-err); font-size: 12px; margin-bottom: 8px; }
 /* 搜索命中临时高亮（约 1.5s 后由 JS 摘掉；墨色描边 + 浅底，不用彩色 accent） */
-.settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-hover); }
+.settings-item-hit { border-radius: 6px; box-shadow: 0 0 0 1px var(--ws-accent); background: var(--ws-highlight); }
 
 /* 右内容列：操作条常驻可点（窄窗换行），页体自己滚 */
 .settings-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -1025,9 +1086,27 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .settings-actions-buttons { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .settings-pane { flex: 1; min-height: 0; overflow: auto; }
-/* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点） */
+/* 内容保底宽（窄窗横向滚动；操作条在列内不动，保存/取消始终可点）。
+   外层 .settings-pane-body 只承担「保底 + 内边距」，不参与居中 —— 居中语义独立到
+   .settings-pane-inner，页体自身不再耦合对齐方式。 */
 .settings-pane-body { min-width: 480px; padding: 14px 16px 24px; }
-.settings-pane-body-mcp { box-sizing: border-box; width: 100%; max-width: 960px; margin: 0; }
+/* 中间内容居中容器：占右栏宽度 50%，左右各 25% 留白（box-sizing:border-box 让 padding 不撑破 50%）。
+   max-width:100% 防窄窗溢出，由父级 .settings-pane 的 overflow:auto 兜底横向滚动。
+   **只承担居中职责，不携带视觉外壳**——section 级别的卡片样式由 .settings-section-card 工具类承担，
+   page renderer 按需对分组显式加 className（参考图：每组相关设置项共用一张圆角浅灰卡片）。 */
+.settings-pane-inner { box-sizing: border-box; width: 50%; max-width: 100%; margin: 0 auto; }
+/* Section 卡片工具类（参考 IDE 设置页视觉，[docs/settings-fullscreen-shell]）：一组相关设置项共享
+   一个圆角浅灰容器，section 标题（如"浅色主题"）与单卡片组留在卡片外。颜色与左导航同色
+   （--ws-bg-nav，亮色 #eef4f9 / 暗色 antd 容器色），统一观感。 */
+.settings-section-card {
+  background: var(--ws-bg-nav);
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+.settings-section-card:last-child { margin-bottom: 0; }
+/* MCP 页：保留 960px 上限，避免超宽屏下状态表被拉得过宽不好读；上限挂在 inner 上与普通页同构 */
+.settings-pane-body-mcp .settings-pane-inner { max-width: 960px; }
 
 /* 脏圆点：导航项与操作条共用；只换前景色，不当背景块用 */
 .settings-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); flex: none; display: inline-block; }
@@ -1042,7 +1121,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 11.5px; color: var(--ws-text-2); background: transparent;
   border: 1px solid var(--ws-border); border-radius: 999px; cursor: pointer;
 }
-.run-indicator:hover { background: var(--ws-hover); color: var(--ws-text-1); }
+.run-indicator:hover { background: var(--ws-highlight); color: var(--ws-text-1); }
 .run-indicator .run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); animation: pulse 1.2s infinite; }
 
 /* ---------- 设置页内各页共用（原 SettingsModal 段） ---------- */
@@ -1062,7 +1141,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .mcp-status-row-head { min-height: 28px; font-size: 11px; color: var(--ws-dim); border-bottom: 1px solid var(--ws-border); }
 .mcp-status-row-clickable { cursor: pointer; }
-.mcp-status-row-clickable:hover { background: var(--ws-hover); }
+.mcp-status-row-clickable:hover { background: var(--ws-highlight); }
 .mcp-status-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-status-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .mcp-status-tools, .mcp-status-pid { color: var(--ws-dim); }
@@ -1105,8 +1184,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .hint { color: var(--ws-dim); font-size: 12px; }
 /* 外观页签字体预览（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）：两行分别以 sans/mono 槽渲染同一段文本 */
 .font-preview { display: flex; flex-direction: column; gap: 4px; }
+/* 预览块：section 卡片（浅灰 --ws-bg-nav）内嵌预览块用主背景色 --ws-bg-main 与卡片底色形成对比，
+   避免 dashed 边框在浅灰底上"飘"看不见边界（[docs/settings-fullscreen-shell]） */
 .font-preview-row {
   padding: 6px 10px; border: 1px dashed var(--ws-border); border-radius: 8px;
+  background: var(--ws-bg-main);
   color: var(--ws-text-2); font-size: 13px;
 }
 .skill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--ws-border); }
@@ -1238,7 +1320,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 12px; color: var(--ws-text-2); }
 /* 可点击技能行（点击弹详情）：负 margin 补偿 padding，悬停反馈与菜单高亮同 token */
 .rb-skill-line.rb-skill-clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; transition: background 0.15s; }
-.rb-skill-line.rb-skill-clickable:hover { background: var(--ws-hover); }
+.rb-skill-line.rb-skill-clickable:hover { background: var(--ws-highlight); }
 .rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-skill-origin { padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 11px; color: var(--ws-dim); }
 /* [docs/session-logging-report](../../../docs/docs/session-logging-report.md)：右栏运行日志 */
@@ -1276,7 +1358,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: flex; align-items: center; gap: 6px; padding: 4px 2px; border-radius: 5px;
   color: var(--ws-text-2); font-size: 12px; cursor: pointer; min-width: 0;
 }
-.rb-file:hover { background: rgba(127, 127, 127, 0.12); }
+.rb-file:hover { background: var(--ws-highlight); }
 .rb-file-icon { flex: none; display: inline-flex; }
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
@@ -1304,7 +1386,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-resize-handle:focus-visible { outline: none; }
 /* 拖动期间关宽度过渡：栏跟手不拖影（0.2s 折叠/展开动画在松手后恢复；类由 ResizeHandle 挂到 <html>） */
 html.ws-resizing .right-bar,
-html.ws-resizing .ant-layout-sider { transition: none !important; }
+html.ws-resizing .ant-layout-sider,
+html.ws-resizing .tb-left-seg { transition: none !important; }
 
 /* ---------- 信息页签：项目目录标签行动作区（文件管理器按钮 + 编辑器下拉） ---------- */
 .rb-label-actions { display: flex; align-items: center; gap: 4px; flex: none; }
@@ -1347,7 +1430,7 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
   background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
   color: var(--ws-text-2); font-size: 12px; font-family: inherit; transition: background 0.15s;
 }
-.rb-quota-summary:hover { background: var(--ws-hover); }
+.rb-quota-summary:hover { background: var(--ws-highlight); }
 /* 灰行（rejected / no_key / unsupported）：无可展开内容的那两类恒为只读样式 */
 .rb-quota-summary.rb-quota-degraded, .rb-quota-summary.rb-quota-static { color: var(--ws-dim); }
 .rb-quota-summary.rb-quota-degraded .rb-quota-name, .rb-quota-summary.rb-quota-static .rb-quota-name { color: var(--ws-text-2); }
@@ -1374,7 +1457,7 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
   background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left;
   color: var(--ws-dim); font-size: 11.5px; font-family: inherit; transition: background 0.15s;
 }
-.rb-quota-collapse:hover { background: var(--ws-hover); }
+.rb-quota-collapse:hover { background: var(--ws-highlight); }
 .rb-quota-window { flex: none; font-size: 11px; color: var(--ws-dim); }
 .rb-quota-remaining { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .rb-quota-remaining.risk-warn { color: var(--ws-warn, #d46b08); }

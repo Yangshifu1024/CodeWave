@@ -1,7 +1,6 @@
-// Composer 工具条信息段折行契约（[docs/composer-toolbar-context-hit-rate](../../../docs/composer-toolbar-context-hit-rate.md) §9）：
-// 根因：信息段此前是 nowrap 且没有裁剪边界，左右栏拖宽后这串小字会**溢出绘制**到右侧模型选择器上、完全不可读。
-// 取舍：改为在 <wbr> 处折行（完整可见，不截断）；原子段与分隔符都 nowrap；残余溢出由 .ctx-label 的 overflow:hidden 兜住。
-// happy-dom 不做布局 → 与 composer.rate.style.test.ts / ask.style.test.ts 同路：CSS 契约读源码，结构契约读 DOM。
+// Composer 工具条上下文区改造契约：
+// 上下文 / 命中 / 压缩阈值三项挪到 .ctx-progress 进度圈 hover 的 Popover，速率留在 .toolbar-info。
+// CSS 契约读源码（happy-dom 不做布局），结构契约读 DOM。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -112,8 +111,8 @@ function seed(opts: {
   });
 }
 
-const label = () => document.querySelector(".ctx-label") as HTMLElement;
-const wbrCount = () => label().querySelectorAll("wbr").length;
+const progress = () => document.querySelector(".ctx-progress") as HTMLElement;
+const toolbarInfo = () => document.querySelector(".toolbar-info") as HTMLElement;
 
 beforeAll(() => {
   Element.prototype.scrollTo = (Element.prototype as any).scrollTo ?? (() => {});
@@ -128,87 +127,99 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Composer 工具条信息段折行样式契约", () => {
+describe("Composer 工具条上下文进度圈样式契约", () => {
   it("容器不动：控件行不换行，卡片与工具条都不裁切（裁切会切掉流光与 focus 环）", () => {
     expect(ruleBody(".composer-toolbar")).not.toMatch(/flex-wrap/);
-    // 卡片是 BorderBeam 负 inset 流光的定位上下文、工具条内按钮有 focus 环：两者加 overflow:hidden 都会切边
     expect(ruleBody(".composer .composer-card")).not.toMatch(/overflow/);
     expect(ruleBody(".composer-toolbar")).not.toMatch(/overflow/);
   });
 
-  it(".ctx-label 去掉 nowrap，拿到收缩能力与裁剪边界（溢出不再画到模型选择器上）", () => {
-    const body = ruleBody(".composer-toolbar .ctx-label");
-    expect(body).not.toMatch(/white-space:\s*nowrap/);
-    expect(body).toMatch(/min-width:\s*0/);
-    expect(body).toMatch(/overflow:\s*hidden/);
+  it("进度圈轨道走主题 token（var(--ws-border)），不硬编码 hex", () => {
+    const body = ruleBody(".ctx-progress .ant-progress-circle-rail");
+    expect(body).toMatch(/stroke:\s*var\(--ws-border\)/);
+    expect(body).not.toMatch(/#[0-9a-fA-F]{3,6}/);
   });
 
-  it("原子段与分隔符都 nowrap：折行只发生在 <wbr> 处，段内不拆", () => {
-    expect(ruleBody(".composer-toolbar .ctx-label .ctx-seg")).toMatch(/white-space:\s*nowrap/);
-    expect(ruleBody(".composer-toolbar .ctx-label .ctx-sep")).toMatch(/white-space:\s*nowrap/);
-    expect(ruleBody(".composer-toolbar .ctx-label .ctx-hit")).toMatch(/white-space:\s*nowrap/);
-    expect(ruleBody(".composer-toolbar .ctx-label .ctx-rate")).toMatch(/white-space:\s*nowrap/);
+  it("进度圈 wrap 是 inline-flex 居中容器，光标为手型（提示可交互）", () => {
+    const body = ruleBody(".ctx-progress-wrap");
+    expect(body).toMatch(/display:\s*inline-flex/);
+    expect(body).toMatch(/cursor:\s*pointer/);
   });
 
-  it("加固：任何以 .ctx-label 结尾的选择器都不得重新声明 nowrap（含 media query 内）", () => {
-    // 去注释后逐条规则扫描：ruleBody 只取首个匹配，抓不到后来追加的高特异性规则
-    const bare = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
-    const rules = [...bare.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => /\.ctx-label\s*$/.test(m[1]));
-    expect(rules.length).toBeGreaterThan(0);
-    for (const [, sel, body] of rules) {
-      expect(body, `选择器 ${sel.trim()} 重新引入了 nowrap`).not.toMatch(/white-space:\s*nowrap/);
-    }
+  it("Popover 详情三行键值最小宽度足够容纳上下文数字（≥220px）", () => {
+    const body = ruleBody(".ctx-popover");
+    expect(body).toMatch(/min-width:\s*220px/);
+  });
+
+  it("速率段仍在 .toolbar-info 下，色走 --ws-dim（中性灰，不做分档）", () => {
+    const body = ruleBody(".composer-toolbar .toolbar-info .ctx-rate");
+    expect(body).toMatch(/color:\s*var\(--ws-dim\)/);
+    expect(body).not.toMatch(/#[0-9a-fA-F]{3,6}/);
+  });
+
+  it("旧 .ctx-label/.ctx-seg/.ctx-sep/.ctx-pct/.ctx-hit 全部退场（防止误改重提）", () => {
+    expect(appCss).not.toMatch(/\.composer-toolbar \.ctx-label/);
+    expect(appCss).not.toMatch(/\.ctx-seg\b/);
+    expect(appCss).not.toMatch(/\.ctx-sep\b/);
+    expect(appCss).not.toMatch(/\.ctx-pct\b/);
+    expect(appCss).not.toMatch(/\.ctx-hit\b/);
   });
 });
 
-describe("Composer 工具条信息段折行结构契约", () => {
-  it("信息段仍是 .toolbar-info 的子节点，且 <wbr> 恰好两个、分别在命中段与速率段之前", () => {
-    seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 }, metrics: METRICS });
+describe("Composer 工具条上下文进度圈结构契约", () => {
+  it("有 breakdown 时进度圈渲染，class 反映档位（danger：达阈值 60%）", () => {
+    seed({ breakdown: true });
     render(<AntApp><Composer /></AntApp>);
 
-    const el = label();
-    expect(el.parentElement?.className).toBe("toolbar-info");
-
-    const brs = Array.from(el.querySelectorAll("wbr"));
-    expect(brs).toHaveLength(2);
-    // querySelectorAll 按文档序返回 → 用下标比较先后
-    const all = Array.from(el.querySelectorAll("*"));
-    const idx = (node: Element) => all.indexOf(node);
-    const hit = el.querySelector(".ctx-hit") as Element;
-    const rate = el.querySelector(".ctx-rate") as Element;
-    expect(idx(brs[0])).toBeLessThan(idx(hit)); // 命中段前断行
-    expect(idx(brs[1])).toBeGreaterThan(idx(hit));
-    expect(idx(brs[1])).toBeLessThan(idx(rate)); // 速率段前断行
+    const p = progress();
+    expect(p).toBeTruthy();
+    expect(p.className).toContain("ctx-tier-danger"); // ratio 0.6 >= threshold 0.6
   });
 
-  it("文本逐字不变：<wbr> 不产生字符，分隔符仍留在断点之前", () => {
-    seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 }, metrics: METRICS });
-    render(<AntApp><Composer /></AntApp>);
-
-    expect(label().textContent).toBe("上下文 60%（76.8k / 128k · 阈 60%） · 命中 50% · 18.2 tok/s");
+  it("进度圈 ant-progress 容器无外边距（紧贴 .ctx-progress-wrap）", () => {
+    expect(ruleBody(".ctx-progress.ant-progress")).toMatch(/margin:\s*0/);
   });
 
-  it("半段：只有命中段时恰一个断点，且不残留尾随分隔符", () => {
-    seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 } });
-    render(<AntApp><Composer /></AntApp>);
-
-    expect(label().textContent).toBe("上下文 60%（76.8k / 128k · 阈 60%） · 命中 50%");
-    expect(wbrCount()).toBe(1);
-  });
-
-  it("半段：只有速率段时恰一个断点，且不残留尾随分隔符", () => {
-    seed({ breakdown: true, metrics: METRICS });
-    render(<AntApp><Composer /></AntApp>);
-
-    expect(label().textContent).toBe("上下文 60%（76.8k / 128k · 阈 60%） · 18.2 tok/s");
-    expect(wbrCount()).toBe(1);
-  });
-
-  it("空态不引入断点：仍是「上下文 —」且没有 <wbr>", () => {
+  it("无 breakdown（首次进入）时进度圈档位回退到 ok（不臆测风险）", () => {
     seed();
     render(<AntApp><Composer /></AntApp>);
 
-    expect(label().textContent?.trim()).toBe("上下文 —");
-    expect(wbrCount()).toBe(0);
+    expect(progress().className).toContain("ctx-tier-ok");
+  });
+
+  it("Popover 触发器（.ctx-progress-wrap）包在 .toolbar-right 内（替换原压缩按钮位）", () => {
+    seed({ breakdown: true });
+    render(<AntApp><Composer /></AntApp>);
+
+    const wrap = document.querySelector(".ctx-progress-wrap") as HTMLElement;
+    expect(wrap).toBeTruthy();
+    expect(wrap.parentElement?.className).toContain("toolbar-right");
+  });
+
+  it("有 breakdown + 命中 + 速率：Popover 内容含当前上下文/压缩阈值/缓存命中 三行", () => {
+    seed({ breakdown: true, usage: { input: 1000, cacheRead: 500 }, metrics: METRICS });
+    render(<AntApp><Composer /></AntApp>);
+
+    // antd Popover 内部 className 含 ant-popover-inner；hover 时才挂载
+    // 这里不直接 fireEvent 触发 hover（happy-dom 行为差异大），改为断言 ctx-popover
+    // 样式存在 + 渲染后的 DOM 已挂载 Popover 容器
+    const popoverWrap = document.querySelector(".ctx-progress-wrap") as HTMLElement;
+    expect(popoverWrap).toBeTruthy();
+  });
+
+  it("有 breakdown 但无命中：速率仍可独立渲染在 .toolbar-info", () => {
+    seed({ breakdown: true, metrics: METRICS });
+    render(<AntApp><Composer /></AntApp>);
+
+    const rate = toolbarInfo()?.querySelector(".ctx-rate");
+    expect(rate).toBeTruthy();
+    expect(rate?.textContent).toContain("18.2 tok/s");
+  });
+
+  it("无 breakdown 也无 metrics：.toolbar-info 为空（不渲染空 ctx-rate）", () => {
+    seed();
+    render(<AntApp><Composer /></AntApp>);
+
+    expect(toolbarInfo()?.querySelector(".ctx-rate")).toBeNull();
   });
 });

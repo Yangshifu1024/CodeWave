@@ -197,7 +197,7 @@ function uiSnapshot(keys: string[], activeKey: string | null): UiState {
     scrollAnchors: {},
     drafts: {},
     queue: {},
-    tree: { expanded: {}, collapsed: false, unread: {} },
+    tree: { expanded: {}, groupFolded: {}, collapsed: false, unread: {} },
     panels: {},
   };
 }

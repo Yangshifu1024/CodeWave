@@ -20,6 +20,16 @@ Layout (100%)
 `.settings-shell` 两列：左侧 `.settings-nav`（返回工作区 + 运行中指示 + 7 页导航，宽 280，窄窗按
 `utils/layout.clampNavWidth` 在 180..480 内收缩）、右侧 `.settings-content`（`.settings-actions` 操作条 +
 `.settings-pane` 页体，页体保底 480px 并横向滚动；操作条恒在列内，窄窗换行，保存/取消始终可点）。
+页体分两层：
+- 外层 `.settings-pane-body`：只承担「保底 + 内边距」职责（`min-width: 480px`、`padding: 14px 16px 24px`，
+  横滚兜底），不参与居中；
+- 内层 `.settings-pane-inner`：仅承担**居中职责**（`width: 50%`、`margin: 0 auto`、
+  `box-sizing: border-box`，左右各 25% 留白），不携带视觉外壳；section 级卡片样式独立到
+  `.settings-section-card` 工具类（`background: var(--ws-bg-nav)` + `border-radius: 12px` +
+  `padding: 14px 18px`），page renderer 按需对分组显式加 className——参考图里每组相关设置项共用
+  一张圆角浅灰卡片，section 标题与单卡片组（如主题选择）留在卡片外；MCP 页通过
+  `.settings-pane-body-mcp .settings-pane-inner { max-width: 960px }` 单独挂状态表可读性上限，
+  与普通页保持同构（同一居中容器类）。
 
 导航仍由 antd `Tabs tabPlacement="start"` 提供（自建导航是批②）。Tabs 只消费 `key/label`，页体在右列按
 当前页渲染——Tabs 自身无法把 nav 与 pane 拆到两列。副作用：**切页会卸载上一页页体**（页内局部状态如供应商

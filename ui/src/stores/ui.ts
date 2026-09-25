@@ -10,6 +10,7 @@ import { DEFAULT_PAGE, normalizePageKey, type PageKey } from "../features/panels
 import {
   setTreeCollapsed as persistTreeCollapsed,
   setTreeExpanded as persistTreeExpanded,
+  setTreeGroupFolded as persistTreeGroupFolded,
 } from "../utils/uiState";
 
 /** 界面语言 */
@@ -65,8 +66,13 @@ interface UiState {
   treeExpand: Record<string, boolean>;
   /** 左栏「项目」区是否折叠（同样是随快照恢复的左栏态） */
   treeCollapsed: boolean;
+  /** 单项目「完全折叠」（隐藏该项目下全部会话，与 treeExpand「显示更多」语义正交）；
+   *  key = 项目分组 key（如 `proj:<项目 id>`），true = 已折叠 */
+  treeGroupFolded: Record<string, boolean>;
   /** 展开/折叠某项目分组的「显示更多」（next 省略 = 按当前值取反） */
   setTreeGroupExpanded(key: string, next?: boolean): void;
+  /** 折叠/展开某项目分组的全部会话（next 省略 = 按当前值取反） */
+  setTreeGroupFolded(key: string, next?: boolean): void;
   /** 折叠/展开左栏「项目」区 */
   setTreeCollapsed(collapsed: boolean): void;
   /** 右栏开合持久态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
@@ -128,11 +134,16 @@ export const useUi = create<UiState>((set, get) => ({
   statsOpen: false,
   treeExpand: {},
   treeCollapsed: false,
+  treeGroupFolded: {},
   // 单一写入口：状态写进 store + 触发防抖落盘都在 uiState 的 setTreeExpanded/setTreeCollapsed 里（这里不再自己 set，
   // 免得多一次 setState 通知与重渲染）
   setTreeGroupExpanded(key, next) {
     const cur = get().treeExpand;
     persistTreeExpanded({ ...cur, [key]: next ?? !cur[key] });
+  },
+  setTreeGroupFolded(key, next) {
+    const cur = get().treeGroupFolded;
+    persistTreeGroupFolded({ ...cur, [key]: next ?? !cur[key] });
   },
   setTreeCollapsed(collapsed) {
     persistTreeCollapsed(collapsed);

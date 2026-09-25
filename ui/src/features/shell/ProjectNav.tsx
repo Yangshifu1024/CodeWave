@@ -6,6 +6,7 @@ import {
   CaretDownOutlined,
   DeleteOutlined,
   EditOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
   CopyOutlined,
   HolderOutlined,
@@ -90,6 +91,8 @@ export default function ProjectNav() {
   // （会话保存与恢复优化 · 批1）。组件内不留第二份副本，避免双事实源
   const expanded = useUi((s) => s.treeExpand);
   const collapsed = useUi((s) => s.treeCollapsed);
+  // 项目行点击折叠：与 expanded「显示更多」正交；true = 完全隐藏该项目下所有会话
+  const groupFolded = useUi((s) => s.treeGroupFolded);
   // 任务列表与被选中态都来自单一数据源（stores/tasks）：任务页与左栏共用，事件驱动的增量更新由 store 自己的 handler 负责
   const tasks = useTasks((s) => s.items);
   const runningIds = useTasks((s) => s.runningIds);
@@ -259,11 +262,21 @@ export default function ProjectNav() {
 
   const renderGroup = (g: NavGroup) => {
     const showAll = !!expanded[g.key];
-    const visible = showAll ? g.sessions : g.sessions.slice(0, PREVIEW_COUNT);
+    const isFolded = !!groupFolded[g.key];
+    // 折叠态下连预览都不显示；展开态保留旧的「显示更多」语义
+    const visible = isFolded ? [] : showAll ? g.sessions : g.sessions.slice(0, PREVIEW_COUNT);
     return (
       <div className="project-group" key={g.key}>
-        <div className="project-row" title={g.title}>
-          <FolderOutlined style={{ color: "var(--ws-dim)" }} />
+        <div
+          className="project-row"
+          title={g.title}
+          onClick={() => useUi.getState().setTreeGroupFolded(g.key, !isFolded)}
+          data-folded={isFolded ? "true" : "false"}
+        >
+          {/* 文件夹图标随折叠态切换：open（FolderOpenOutlined）= 已展开，close（FolderOutlined）= 已折叠——视觉同步 */}
+          {isFolded
+            ? <FolderOutlined className="project-folder" style={{ color: "var(--ws-dim)" }} />
+            : <FolderOpenOutlined className="project-folder" style={{ color: "var(--ws-dim)" }} />}
           <span className="project-name">{g.name}</span>
           {g.projectId && (
             <Button
@@ -272,30 +285,36 @@ export default function ProjectNav() {
               size="small"
               title={t("nav.newSessionInProject")}
               icon={<PlusOutlined />}
-              onClick={() => void useSessions.getState().openProjectSession(g.projectId!)}
+              onClick={(e) => {
+                // 阻止冒泡到 .project-row 的折叠 toggle
+                e.stopPropagation();
+                void useSessions.getState().openProjectSession(g.projectId!);
+              }}
             />
           )}
         </div>
-        <div className="project-sessions">
-          {visible.map((s) => (
-            <SessionRow
-              key={s.id}
-              meta={s}
-              active={s.id === activeKey}
-              onOpen={() => void useSessions.getState().openSession(s)}
-              onRename={() => openRename(s)}
-              onRemove={() => void useSessions.getState().removeSession(s)}
-            />
-          ))}
-          {g.sessions.length > PREVIEW_COUNT && (
-            <div
-              className="show-more"
-              onClick={() => useUi.getState().setTreeGroupExpanded(g.key, !showAll)}
-            >
-              {showAll ? t("nav.showLess") : t("nav.showMore")}
-            </div>
-          )}
-        </div>
+        {!isFolded && (
+          <div className="project-sessions">
+            {visible.map((s) => (
+              <SessionRow
+                key={s.id}
+                meta={s}
+                active={s.id === activeKey}
+                onOpen={() => void useSessions.getState().openSession(s)}
+                onRename={() => openRename(s)}
+                onRemove={() => void useSessions.getState().removeSession(s)}
+              />
+            ))}
+            {g.sessions.length > PREVIEW_COUNT && (
+              <div
+                className="show-more"
+                onClick={() => useUi.getState().setTreeGroupExpanded(g.key, !showAll)}
+              >
+                {showAll ? t("nav.showLess") : t("nav.showMore")}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
