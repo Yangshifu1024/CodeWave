@@ -1286,8 +1286,22 @@ html.ws-resizing .ant-layout-sider { transition: none !important; }
 
 /* ---------- 信息页签：项目目录标签行动作区（文件管理器按钮 + 编辑器下拉） ---------- */
 .rb-label-actions { display: flex; align-items: center; gap: 4px; flex: none; }
-.rb-editor-select { width: 132px; }
-.rb-editor-select .ant-select-selector { font-size: 11.5px; }
+.rb-editor-btn {
+  /* 视觉与 .rb-open-dir-btn 同款：通用编辑器图标 + caret 在右，不展开时不携带编辑器名 */
+  color: var(--ws-dim);
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  font-size: 14px;
+}
+.rb-editor-btn:hover { color: var(--ws-text-2); }
+.rb-editor-btn-icon { font-size: 14px; }
+.rb-editor-btn-caret { font-size: 10px; opacity: 0.85; }
+/* 记忆了默认编辑器（localStorage 已写过）时把 caret 染成 accent：与工作区「在跑」指示同理，
+   中性墨色，不引入彩色。data-active 由 OpenInEditorSelect 在 picked 非空时挂上。 */
+.rb-editor-btn[data-active="true"] .rb-editor-btn-caret { color: var(--ws-accent); opacity: 1; }
 
 /* 折叠段标题与信息页其他标题（项目目录 / 额度与余额）同款：11px + dim 色 + 无多余内边距。
    注意 antd 6 的标题文本类是 `.ant-collapse-title`（旧版 `-header-text` 已不存在，写成它等于死规则，

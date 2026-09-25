@@ -516,6 +516,66 @@ describe("App 渲染冒烟", () => {
     expect((document.querySelector(".settings-nav") as HTMLElement).style.width).toBe(tasksNavWidth);
   });
 
+  it("设置/任务页顶沿与 Header 底沿对齐（AppShell 内层 Layout 改 flex:1 后回归）", async () => {
+    // 真守卫：源码不再写 calc(100% - var(--ws-titlebar-h))——这是错位缺陷的历史写法，
+    // 一旦回退到 calc 此断言立刻转红。happy-dom 不做布局，DOM rect 断言只能算"占位"。
+    const appShellSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../features/shell/AppShell.tsx"),
+      "utf8",
+    );
+    expect(appShellSrc).not.toMatch(/calc\(100%\s*-\s*var\(--ws-titlebar-h\)\)/);
+
+    // happy-dom 布局尺寸恒为 0 → 给 .toolbar 与 .settings-shell/.tasks-shell 注入确定的几何值
+    // 模拟"修复后"的真实渲染：Header 高 50px；覆盖页顶沿贴 Header 底沿（=50）
+    // 一旦 CSS 漂移（如覆盖页 margin-top 几像素），getBoundingClientRect 的实现如果读真实 layout，
+    // 这里就会失败——同时给 jsdom/playwright 切换留好接口（仅 mock 几何，不动 CSS）
+    const origRect = Element.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const r = origRect.call(this);
+      if (this instanceof HTMLElement) {
+        if (this.classList.contains("toolbar")) {
+          return { ...r, top: 0, bottom: 50, height: 50 } as unknown as DOMRect;
+        }
+        if (this.classList.contains("settings-shell") || this.classList.contains("tasks-shell")) {
+          return { ...r, top: 50, bottom: 900, height: 850 } as unknown as DOMRect;
+        }
+      }
+      return r;
+    });
+    try {
+      await mountApp();
+
+      useUi.setState({ navWidth: 480 });
+      await clickIconBtn("设置");
+      await waitFor(() => expect(document.querySelector(".settings-shell")).toBeTruthy());
+
+      const header = document.querySelector(".toolbar") as HTMLElement | null;
+      const shell = document.querySelector(".settings-shell") as HTMLElement | null;
+      expect(header).toBeTruthy();
+      expect(shell).toBeTruthy();
+      const headerRect = header!.getBoundingClientRect();
+      const shellRect = shell!.getBoundingClientRect();
+      expect(Math.abs(shellRect.top - headerRect.bottom)).toBeLessThanOrEqual(1);
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(document.querySelector(".settings-shell")).toBeFalsy());
+      useUi.setState({ tasksOpen: true });
+      await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeTruthy());
+      const tasksShell = document.querySelector(".tasks-shell") as HTMLElement | null;
+      const tasksRect = tasksShell!.getBoundingClientRect();
+      expect(Math.abs(tasksRect.top - headerRect.bottom)).toBeLessThanOrEqual(1);
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(document.querySelector(".tasks-shell")).toBeFalsy());
+      useUi.setState({ navWidth: 280, settingsOpen: true });
+      await waitFor(() => expect(document.querySelector(".settings-shell")).toBeTruthy());
+      const shell2 = document.querySelector(".settings-shell") as HTMLElement | null;
+      expect(Math.abs(shell2!.getBoundingClientRect().top - headerRect.bottom)).toBeLessThanOrEqual(1);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it("设置：MCP 页的结构化编辑器与技能页的列表各自渲染（拆页后不再同页）", async () => {
     await mountApp();
     await clickIconBtn("设置");

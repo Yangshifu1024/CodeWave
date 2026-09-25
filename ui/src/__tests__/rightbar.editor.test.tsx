@@ -1,5 +1,8 @@
-// 「在编辑器中打开」下拉（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
-// 默认 = 第一个检测到的编辑器；改选即用该编辑器打开当前目录并记忆；一个都没检测到则不渲染控件。
+// 「在编辑器中打开」按钮（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+// 按钮恒显示通用编辑器图标（CodeOutlined）+ caret（CaretDownOutlined），不展示当前选中编辑器名称；
+// 点击展开 Dropdown 列出候选编辑器，单击即用该编辑器打开当前目录并记忆为新默认；
+// 一个编辑器都没检测到则不渲染控件（文件管理器按钮仍在）。
+// 顶部对齐修复后行为零变化（编辑器按钮挂在右栏，与标题栏无关）。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -32,7 +35,7 @@ function seed() {
         key: "s1",
         sessionId: "s1",
         workspace: "D:/demo/project",
-        title: "编辑器下拉",
+        title: "编辑器按钮",
         projectId: null,
         createdAt: "2026-09-08T00:00:00Z",
         prefs: { approval_mode: "auto_edit", model_id: null, reasoning_effort: null },
@@ -51,11 +54,13 @@ const renderBar = () =>
     </AntApp>,
   );
 
+// 打开下拉：antd 6 Dropdown trigger="click" — 直接 click 按钮即可（不需要 mouseDown）
 async function openDropdown() {
-  // antd 6.6：展开需对 .ant-select 根元素 mouseDown（`.ant-select-selector` 已不存在）
-  const root = document.querySelector(".rb-editor-select")!;
-  fireEvent.mouseDown(root);
-  return waitFor(() => expect(document.querySelector(".ant-select-dropdown")).toBeTruthy());
+  const btn = document.querySelector<HTMLElement>(".rb-editor-btn")!;
+  fireEvent.click(btn);
+  return waitFor(() =>
+    expect(document.querySelector(".ant-dropdown-menu")).toBeTruthy(),
+  );
 }
 
 afterEach(() => {
@@ -69,26 +74,35 @@ afterEach(() => {
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
 });
 
-describe("右栏「在编辑器中打开」下拉", () => {
-  it("默认显示第一个检测到的编辑器，且不自动打开", async () => {
+describe("右栏「在编辑器中打开」按钮", () => {
+  it("按钮恒显示通用编辑器图标 + caret（不含任何编辑器名），且不自动打开", async () => {
     seed();
     renderBar();
-    await waitFor(() =>
-      expect(document.querySelector(".rb-editor-select")!.textContent).toContain("VS Code"),
-    );
+    await waitFor(() => expect(document.querySelector(".rb-editor-btn")).toBeTruthy());
+    const btn = document.querySelector(".rb-editor-btn")!;
+    // 按钮文本必须只含通用图标 + caret，绝不携带编辑器名称
+    expect(btn.textContent ?? "").not.toContain("VS Code");
+    expect(btn.textContent ?? "").not.toContain("Zed");
+    expect(btn.querySelector(".rb-editor-btn-icon")).toBeTruthy();
+    expect(btn.querySelector(".rb-editor-btn-caret")).toBeTruthy();
+    // 记忆未设值 → data-active 不挂载
+    expect(btn.getAttribute("data-active")).toBeNull();
+    // 不会自动派发打开
     expect(calls.find((c) => c.cmd === "open_in_editor")).toBeUndefined();
   });
 
-  it("改选其他编辑器：用该编辑器打开当前工作区并记忆为新默认", async () => {
+  it("点击 dropdown 中的编辑器项：用该编辑器打开目录并记忆为新默认；按钮文字仍为通用图标", async () => {
     seed();
     renderBar();
-    await waitFor(() => expect(document.querySelector(".rb-editor-select")).toBeTruthy());
+    await waitFor(() => expect(document.querySelector(".rb-editor-btn")).toBeTruthy());
     await openDropdown();
 
-    const zedOption = Array.from(document.querySelectorAll(".ant-select-item-option")).find((o) =>
-      (o.textContent ?? "").includes("Zed"),
-    ) as HTMLElement;
-    fireEvent.click(zedOption);
+    // antd Dropdown 菜单项选择器
+    const zedItem = Array.from(
+      document.querySelectorAll<HTMLElement>(".ant-dropdown-menu-item"),
+    ).find((o) => (o.textContent ?? "").includes("Zed"));
+    expect(zedItem).toBeTruthy();
+    fireEvent.click(zedItem!);
 
     await waitFor(() => {
       const call = calls.find((c) => c.cmd === "open_in_editor");
@@ -97,15 +111,23 @@ describe("右栏「在编辑器中打开」下拉", () => {
       expect(call!.args.path).toBe("D:/demo/project");
     });
     expect(localStorage.getItem(PREFERRED_EDITOR_KEY)).toBe("zed");
+
+    // 单击触发后按钮文字依旧不出现编辑器名（**始终**显示通用图标 + caret）
+    const btn = document.querySelector(".rb-editor-btn")!;
+    expect(btn.textContent ?? "").not.toContain("Zed");
+    expect(btn.textContent ?? "").not.toContain("VS Code");
+    // 记忆后 caret 挂 data-active=true（视觉提示）
+    expect(btn.getAttribute("data-active")).toBe("true");
   });
 
-  it("上次选择仍可用时优先展示它（不再是列表第一个）", async () => {
+  it("上次选择仍可用时：按钮挂 data-active=true（视觉提示用，不展示名称）", async () => {
     localStorage.setItem(PREFERRED_EDITOR_KEY, "zed");
     seed();
     renderBar();
-    await waitFor(() =>
-      expect(document.querySelector(".rb-editor-select")!.textContent).toContain("Zed"),
-    );
+    await waitFor(() => expect(document.querySelector(".rb-editor-btn")).toBeTruthy());
+    const btn = document.querySelector(".rb-editor-btn")!;
+    expect(btn.getAttribute("data-active")).toBe("true");
+    expect(btn.textContent ?? "").not.toContain("Zed");
   });
 
   it("一个编辑器都没检测到时不渲染控件（文件管理器按钮仍在）", async () => {
@@ -113,6 +135,6 @@ describe("右栏「在编辑器中打开」下拉", () => {
     seed();
     renderBar();
     await waitFor(() => expect(screen.getByLabelText("在文件管理器中打开")).toBeTruthy());
-    expect(document.querySelector(".rb-editor-select")).toBeNull();
+    expect(document.querySelector(".rb-editor-btn")).toBeNull();
   });
 });
