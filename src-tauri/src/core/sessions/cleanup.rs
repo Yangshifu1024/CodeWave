@@ -300,6 +300,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
     ok &= remove_file_if_exists(&store.goal_path(&meta.id));
+    ok &= remove_file_if_exists(&store.prefs_path(&meta.id));
     // 子代理过程历史目录（histories/subs/<id>/）及其图片 blob（blob 归子历史自己，
     // owner 是 `<父会话 id>__<sub>`，不在父会话的 sessions/<id>.imgblob/ 里）——
     // 目录列必须先读，下一步就把它删了
@@ -422,7 +423,8 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
             let id = name
                 .strip_suffix(".artifacts.json")
                 .or_else(|| name.strip_suffix(".todos.json"))
-                .or_else(|| name.strip_suffix(".goal.json"));
+                .or_else(|| name.strip_suffix(".goal.json"))
+                .or_else(|| name.strip_suffix(".prefs.json"));
             let Some(id) = id else {
                 continue;
             };
@@ -1634,6 +1636,7 @@ mod tests {
         let orphan_todos = old("sessions/orphan-1.todos.json");
         let orphan_artifacts = old("sessions/orphan-2.artifacts.json");
         let orphan_goal = old("sessions/orphan-3.goal.json");
+        let orphan_prefs = old("sessions/orphan-4.prefs.json");
         let known_gz = old("histories/known.json.gz");
         let sub_gz = old("histories/sub_deadbeef.json.gz");
         let task_gz = old("histories/task_daily-1.json.gz");
@@ -1645,11 +1648,12 @@ mod tests {
 
         let cutoff = Utc::now() - chrono::Duration::hours(24);
         let removed = remove_orphan_files(&store, cutoff);
-        assert_eq!(removed, 4, "孤儿 gz + 三个孤儿边车");
+        assert_eq!(removed, 5, "孤儿 gz + 四个孤儿边车");
         assert!(!orphan_gz.exists());
         assert!(!orphan_todos.exists());
         assert!(!orphan_artifacts.exists());
         assert!(!orphan_goal.exists());
+        assert!(!orphan_prefs.exists());
         assert!(known_gz.exists(), "索引里的会话不得被当孤儿删");
         assert!(sub_gz.exists(), "sub_ 前缀（子代理过程历史）不得误删");
         assert!(task_gz.exists(), "task_ 前缀（计划任务）不得误删");

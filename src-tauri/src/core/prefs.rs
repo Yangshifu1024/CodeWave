@@ -1,6 +1,5 @@
 //! 会话级运行偏好（Composer 工具条批次，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）：审批档位 + 会话模型 + 思考力度。
-//! 纯内存：随 SessionRuntime 存活；重启后回落全局默认（已知限制，
-//! [docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) §limitations）。
+//! 会话权限档位重启后回落全局默认（目标档活动标记例外）；模型与思考力度另存边车。
 
 use crate::core::config::ConfigState;
 use serde::{Deserialize, Serialize};
@@ -99,6 +98,20 @@ pub struct SessionPrefs {
     #[serde(default)]
     pub model_id: Option<String>,
     /// None = 跟随模型配置的 reasoning_effort
+    #[serde(default)]
+    pub reasoning_effort: Option<EffortLevel>,
+}
+
+/// 重启恢复快照：仅目标档活动标记、会话模型与思考力度；其它权限档不持久化。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPrefsSnapshot {
+    #[serde(default)]
+    pub goal_mode_active: bool,
+    /// 旧版目标边车没有模型字段，不能把其缺省 null 当作用户显式选了“跟随全局”。
+    #[serde(default)]
+    pub model_choice_recorded: bool,
+    #[serde(default)]
+    pub model_id: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<EffortLevel>,
 }

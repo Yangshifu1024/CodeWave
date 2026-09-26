@@ -1069,14 +1069,14 @@ function GoalBanner({ goal, sessionKey }: { goal: GoalState | null; sessionKey: 
           : `${t("composer.goalRunning", { n: goal?.rounds ?? 0 })} · ${t(GOAL_STATUS_KEYS[status])}`}
       </span>
       {status === "paused" && (
-        <Button
-          type="text"
-          size="small"
-          className="goal-resume-btn"
-          onClick={() => void useRun.getState().resumeGoal(sessionKey)}
-        >
-          {t("composer.goalResume")}
-        </Button>
+        <>
+          <Button type="text" size="small" className="goal-resume-btn" onClick={() => void useRun.getState().resumeGoal(sessionKey)}>
+            {t("composer.goalResume")}
+          </Button>
+          <Button type="text" size="small" title={t("composer.goalReviseHint")} onClick={() => void useRun.getState().reopenGoal(sessionKey)}>
+            {t("composer.goalRevise")}
+          </Button>
+        </>
       )}
     </div>
   );

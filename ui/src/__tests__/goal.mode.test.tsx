@@ -28,6 +28,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
     if (cmd === "get_session_goal") return backend.goal;
     if (cmd === "get_session_prefs") return backend.prefs;
+    if (cmd === "reopen_goal") {
+      backend.goal = { ...(backend.goal as Record<string, unknown>), status: "clarify" };
+      return null;
+    }
     // resume_goal 与 start_chat 同签名：返回本轮 run_id
     if (cmd === "resume_goal") return "run-resume-1";
     return null;
@@ -398,5 +402,29 @@ describe("右栏「目标」段", () => {
     await screen.findByText("目标");
     expect(screen.queryByText("继续推进")).toBeNull();
     expect(document.querySelector(".rb-goal-badge")?.textContent).toBe("执行中");
+  });
+
+  it("切离目标档后右栏只展示暂停记录，不提供会被后端拒绝的动作", async () => {
+    seed();
+    useSessions.setState((s) => ({
+      tabs: s.tabs.map((tab) => ({ ...tab, prefs: { ...tab.prefs, approval_mode: "plan" } })),
+    }));
+    useRun.setState({ tabs: { s1: { goal: goal({ status: "paused" }), todos: [], items: [] } } } as any);
+    renderBar();
+    await screen.findByText("目标");
+    expect(screen.queryByText("继续推进")).toBeNull();
+    expect(screen.queryByText("修订目标")).toBeNull();
+  });
+
+  it("暂停目标可退回澄清期修订合同，修订后不再显示续跑按钮", async () => {
+    seed();
+    backend.goal = goal({ status: "paused" });
+    useRun.setState({ tabs: { s1: { goal: backend.goal, goalRev: 0, todos: [], items: [] } } } as any);
+    renderBar();
+    await screen.findByText("修订目标");
+    fireEvent.click(screen.getByText("修订目标"));
+    await waitFor(() => expect(useRun.getState().tabs.s1.goal?.status).toBe("clarify"));
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "reopen_goal")).toBe(true);
+    expect(screen.queryByText("继续推进")).toBeNull();
   });
 });

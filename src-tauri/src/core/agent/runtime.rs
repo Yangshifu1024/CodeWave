@@ -154,6 +154,8 @@ pub struct SessionRuntime {
     pub zombie: AtomicBool,
     /// 会话级运行偏好（审批档位 / 模型 / 思考力度；内存态，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
     pub prefs: Mutex<crate::core::prefs::SessionPrefs>,
+    /// 主会话偏好的状态过渡与边车持久化共用此锁，防旧模型迁移覆盖并发切档。
+    pub prefs_persist_lock: Mutex<()>,
     /// G2（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：plan 档分析产物标志——pm/tester 子代理成功返回时置位。
     /// 内存态：重启丢失 = 退化为无门禁语义，无安全回退（只读由 G5 独立保证）。
     pub analysis_done: std::sync::atomic::AtomicBool,
@@ -231,6 +233,7 @@ impl SessionRuntime {
             plan_hint_emitted: std::sync::atomic::AtomicBool::new(false),
             zombie: AtomicBool::new(false),
             prefs: Mutex::new(crate::core::prefs::SessionPrefs::default()),
+            prefs_persist_lock: Mutex::new(()),
             analysis_done: std::sync::atomic::AtomicBool::new(false),
             analysis_gate_denials: std::sync::atomic::AtomicUsize::new(0),
             approved_plan: Mutex::new(None),
@@ -482,8 +485,51 @@ impl AgentCore {
         if let Some(rt) = self.sessions.get(id) {
             return rt.clone();
         }
-        let initial_prefs =
-            crate::core::prefs::SessionPrefs::from_config(&self.cfg.read().unwrap());
+        let saved_prefs = self.store.load_prefs(id);
+        // 旧索引的 model_id 是“实际使用模型”，无法区分显式选择与跟随全局。
+        // 缺新版边车时先保持跟随全局；前端恢复的 Tab 快照可经专用入口补回显式选择。
+        let cfg = self.cfg.read().unwrap();
+        let default_prefs = crate::core::prefs::SessionPrefs::from_config(&cfg);
+        let mut initial_prefs = default_prefs.clone();
+        initial_prefs.model_id = saved_prefs
+            .as_ref()
+            .filter(|saved| saved.model_choice_recorded)
+            .and_then(|saved| saved.model_id.clone())
+            .filter(|model_id| cfg.find_model(model_id).is_some());
+        initial_prefs.reasoning_effort = saved_prefs
+            .as_ref()
+            .filter(|saved| saved.model_choice_recorded)
+            .and_then(|saved| saved.reasoning_effort);
+        drop(cfg);
+        let mut goal = self.store.load_goal(id);
+        let old_active_goal = goal.as_ref().is_some_and(|g| {
+            matches!(
+                g.status,
+                crate::core::agent::goal::GoalStatus::Clarify
+                    | crate::core::agent::goal::GoalStatus::Executing
+                    | crate::core::agent::goal::GoalStatus::Paused
+            )
+        });
+        // 权限只恢复目标档，其它档位按全局默认重建。旧边车无标记时
+        // 根据未结束目标推断，避免旧会话被 Plan 档覆盖；显式切走的 false 标记优先。
+        if saved_prefs
+            .as_ref()
+            .map(|saved| saved.goal_mode_active)
+            .unwrap_or(old_active_goal)
+        {
+            initial_prefs.approval_mode = crate::core::prefs::ApprovalMode::Goal;
+        }
+        // 上个进程里的执行令牌已消失；重启后只能由用户显式续跑。
+        if let Some(g) = goal.as_mut()
+            && g.status == crate::core::agent::goal::GoalStatus::Executing
+        {
+            g.status = crate::core::agent::goal::GoalStatus::Paused;
+            if let Err(e) = self.store.save_goal(id, &goal) {
+                tracing::warn!("会话 {id} 目标恢复为暂停态落盘失败：{e}");
+            }
+        }
+        let restored_goal_mode =
+            initial_prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal;
         let mut rt = SessionRuntime::new(id.to_string(), workspace, self.data_dir.clone());
         if let Some(r) = Arc::get_mut(&mut rt) {
             r.project_id = project_id;
@@ -492,7 +538,17 @@ impl AgentCore {
             r.is_main_session = true;
             *r.extra_roots.lock().unwrap() = extra_roots;
             *r.prefs.lock().unwrap() = initial_prefs;
+            *r.goal.lock().unwrap() = goal;
+            // 前档是当前进程的回落目标；重启后统一回全局默认，绝不复活旧 FullAccess。
+            *r.goal_prev_mode.lock().unwrap() =
+                restored_goal_mode.then_some(default_prefs.approval_mode);
         }
+        self.persist_session_prefs_with_choice(
+            &rt,
+            saved_prefs
+                .as_ref()
+                .is_some_and(|saved| saved.model_choice_recorded),
+        );
         self.sessions.insert(id.to_string(), rt.clone());
         rt
     }
@@ -572,11 +628,81 @@ impl AgentCore {
         rt: &SessionRuntime,
         new: crate::core::prefs::SessionPrefs,
     ) -> bool {
+        let _guard = rt.prefs_persist_lock.lock().unwrap();
         let paused = rt.transition_prefs(new);
+        self.save_session_prefs_locked(rt, true);
+        drop(_guard);
         if paused {
             self.persist_goal(rt);
         }
         paused
+    }
+
+    /// 仅改档位的后端路径（ask 批准 / 目标收尾）：在同一临界区读取当前模型，避免覆盖并发迁移。
+    pub fn set_session_mode_and_persist(
+        &self,
+        rt: &SessionRuntime,
+        mode: crate::core::prefs::ApprovalMode,
+    ) {
+        let _guard = rt.prefs_persist_lock.lock().unwrap();
+        let mut prefs = rt.prefs();
+        prefs.approval_mode = mode;
+        rt.set_prefs(prefs);
+        self.save_session_prefs_locked(rt, true);
+    }
+
+    /// 保存目标档活动标记、模型与力度；其它权限档及目标完成后的回落档按全局默认重建。
+    pub fn persist_session_prefs(&self, rt: &SessionRuntime) {
+        self.persist_session_prefs_with_choice(rt, true);
+    }
+
+    fn persist_session_prefs_with_choice(&self, rt: &SessionRuntime, model_choice_recorded: bool) {
+        let _guard = rt.prefs_persist_lock.lock().unwrap();
+        self.save_session_prefs_locked(rt, model_choice_recorded);
+    }
+
+    fn save_session_prefs_locked(&self, rt: &SessionRuntime, model_choice_recorded: bool) {
+        let prefs = rt.prefs();
+        let snapshot = crate::core::prefs::SessionPrefsSnapshot {
+            goal_mode_active: prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal,
+            model_choice_recorded,
+            model_id: prefs.model_id,
+            reasoning_effort: prefs.reasoning_effort,
+        };
+        if let Err(e) = self.store.save_prefs(&rt.id, &snapshot) {
+            tracing::warn!("会话 {} 运行偏好落盘失败：{e}", rt.id);
+        }
+    }
+
+    /// 旧版 ui-state Tab 的模型选择只迁移一次；已有新版边车时服务端选择优先。
+    /// 只改模型与力度，权限档位始终保留当前 runtime 的安全恢复结果。
+    pub fn restore_legacy_model_prefs(
+        &self,
+        rt: &SessionRuntime,
+        model_id: Option<String>,
+        reasoning_effort: Option<crate::core::prefs::EffortLevel>,
+    ) -> anyhow::Result<()> {
+        let _guard = rt.prefs_persist_lock.lock().unwrap();
+        if self
+            .store
+            .load_prefs(&rt.id)
+            .is_some_and(|saved| saved.model_choice_recorded)
+        {
+            return Ok(());
+        }
+        let mut prefs = rt.prefs();
+        prefs.model_id = model_id.filter(|id| self.cfg.read().unwrap().find_model(id).is_some());
+        prefs.reasoning_effort = reasoning_effort;
+        rt.set_prefs(prefs.clone());
+        self.store.save_prefs(
+            &rt.id,
+            &crate::core::prefs::SessionPrefsSnapshot {
+                goal_mode_active: prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal,
+                model_choice_recorded: true,
+                model_id: prefs.model_id,
+                reasoning_effort: prefs.reasoning_effort,
+            },
+        )
     }
 
     /// 目标状态视图（右栏目标卡 / 会话恢复时拉初始状态）：内存态优先，缺席时回退边车。
@@ -609,6 +735,34 @@ impl AgentCore {
             );
         }
         goal.status = GoalStatus::Executing;
+        // 越界阈值约束单次无人值守 run。用户显式续跑是新的尝试窗口；历史 blocked 保留。
+        goal.ledger_denials = 0;
+        goal.stall_streak = 0;
+        let _ = rt.take_goal_abort();
+        rt.set_goal(Some(goal));
+        self.persist_goal(rt);
+        Ok(())
+    }
+
+    /// 用户显式要求修订暂停目标：退回只读澄清期，保留目标和阻塞记录，重新批准前不可写。
+    pub fn reopen_goal(&self, rt: &SessionRuntime) -> anyhow::Result<()> {
+        use crate::core::agent::goal::GoalStatus;
+        if rt.prefs().approval_mode != crate::core::prefs::ApprovalMode::Goal {
+            anyhow::bail!("{}", crate::core::agent::goal::GOAL_RESUME_MODE_REQUIRED);
+        }
+        if rt.running.load(Ordering::SeqCst) {
+            anyhow::bail!("目标仍在运行，请先停止后再修订");
+        }
+        let Some(mut goal) = rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id)) else {
+            anyhow::bail!("尚未登记目标，无法修订");
+        };
+        if goal.status != GoalStatus::Paused {
+            anyhow::bail!("只有暂停中的目标可以重新澄清");
+        }
+        goal.status = GoalStatus::Clarify;
+        goal.ledger_denials = 0;
+        goal.stall_streak = 0;
+        let _ = rt.take_goal_abort();
         rt.set_goal(Some(goal));
         self.persist_goal(rt);
         Ok(())
@@ -631,7 +785,7 @@ impl AgentCore {
 mod tests {
     use super::*;
     use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
-    use crate::core::prefs::{ApprovalMode, SessionPrefs};
+    use crate::core::prefs::{ApprovalMode, EffortLevel, SessionPrefs, SessionPrefsSnapshot};
     use crate::core::types::SessionId;
 
     /// 记录事件的测试 sink：断言 `goal:update` 的键名与载荷（其余事件不关心）。
@@ -694,6 +848,46 @@ mod tests {
             model_id: None,
             reasoning_effort: None,
         }
+    }
+
+    fn configure_two_models(h: &Harness) {
+        let mut cfg = h.core.cfg.write().unwrap();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "provider-test".into(),
+            models: vec![
+                crate::core::config::ProviderModel {
+                    id: "m-global".into(),
+                    ..Default::default()
+                },
+                crate::core::config::ProviderModel {
+                    id: "m-session".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some("m-global".into());
+    }
+
+    fn rebuild(h: &Harness) -> Arc<SessionRuntime> {
+        h.core.sessions.remove(&h.rt.id);
+        h.core
+            .get_or_create_session(&h.rt.id, h.rt.workspace.clone(), None, vec![], None, vec![])
+    }
+
+    fn write_legacy_model_index(h: &Harness) {
+        h.core
+            .store
+            .save_history(
+                &h.rt.id,
+                "模型恢复",
+                &h.rt.workspace.to_string_lossy(),
+                Some("m-session"),
+                None,
+                &[],
+                &[Message::user_text("旧消息")],
+            )
+            .unwrap();
     }
 
     fn goal_state(status: GoalStatus) -> GoalState {
@@ -873,6 +1067,326 @@ mod tests {
         let ev = goal_events(&h);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0]["goal"]["status"], serde_json::json!("executing"));
+    }
+
+    #[test]
+    fn restored_goal_keeps_mode_contract_and_previous_mode() {
+        let h = harness();
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        h.core
+            .store
+            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Executing)))
+            .unwrap();
+        h.core.sessions.remove(&h.rt.id);
+        let rt = h.core.get_or_create_session(
+            &h.rt.id,
+            h.rt.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        // 真实打开会话会先把历史填入 runtime；目标与档位已在创建时独立恢复。
+        rt.history
+            .lock()
+            .unwrap()
+            .push(Message::user_text("旧消息"));
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        assert_eq!(rt.goal_prev_mode(), Some(ApprovalMode::Plan));
+        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            h.core.store.load_goal(&rt.id).unwrap().status,
+            GoalStatus::Paused
+        );
+    }
+
+    #[test]
+    fn old_goal_without_prefs_sidecar_restores_goal_mode() {
+        let h = harness();
+        h.core
+            .store
+            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
+            .unwrap();
+        std::fs::remove_file(h.core.store.prefs_path(&h.rt.id)).unwrap();
+        h.core.sessions.remove(&h.rt.id);
+        let rt = h.core.get_or_create_session(
+            &h.rt.id,
+            h.rt.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    }
+
+    #[test]
+    fn session_model_and_effort_survive_restart_without_restoring_full_access() {
+        let h = harness();
+        configure_two_models(&h);
+        h.core.transition_prefs(
+            &h.rt,
+            SessionPrefs {
+                approval_mode: ApprovalMode::FullAccess,
+                model_id: Some("m-session".into()),
+                reasoning_effort: Some(EffortLevel::Max),
+            },
+        );
+        let rt = rebuild(&h);
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Plan);
+        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
+        assert_eq!(rt.prefs().reasoning_effort, Some(EffortLevel::Max));
+        assert_eq!(
+            crate::core::prefs::effective_model(&h.core.cfg.read().unwrap(), &rt.prefs())
+                .unwrap()
+                .id,
+            "m-session"
+        );
+    }
+
+    #[test]
+    fn explicit_follow_global_is_not_overridden_by_legacy_index() {
+        let h = harness();
+        configure_two_models(&h);
+        write_legacy_model_index(&h);
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Plan));
+        let rt = rebuild(&h);
+        assert!(rt.prefs().model_id.is_none());
+        assert_eq!(
+            crate::core::prefs::effective_model(&h.core.cfg.read().unwrap(), &rt.prefs())
+                .unwrap()
+                .id,
+            "m-global"
+        );
+    }
+
+    #[test]
+    fn legacy_goal_session_restores_model_from_ui_snapshot_without_changing_mode() {
+        let h = harness();
+        configure_two_models(&h);
+        write_legacy_model_index(&h);
+        h.core
+            .store
+            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
+            .unwrap();
+        std::fs::remove_file(h.core.store.prefs_path(&h.rt.id)).unwrap();
+        let rt = rebuild(&h);
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        assert!(rt.prefs().model_id.is_none());
+        h.core
+            .restore_legacy_model_prefs(&rt, Some("m-session".into()), Some(EffortLevel::Max))
+            .unwrap();
+        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
+        assert_eq!(rt.prefs().reasoning_effort, Some(EffortLevel::Max));
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        assert!(
+            h.core
+                .store
+                .load_prefs(&rt.id)
+                .unwrap()
+                .model_choice_recorded
+        );
+    }
+
+    #[test]
+    fn older_goal_marker_without_model_choice_accepts_one_time_ui_migration() {
+        let h = harness();
+        configure_two_models(&h);
+        write_legacy_model_index(&h);
+        h.core
+            .store
+            .save_prefs(
+                &h.rt.id,
+                &SessionPrefsSnapshot {
+                    goal_mode_active: true,
+                    model_choice_recorded: false,
+                    model_id: None,
+                    reasoning_effort: None,
+                },
+            )
+            .unwrap();
+        let rt = rebuild(&h);
+        assert!(rt.prefs().model_id.is_none());
+        assert!(
+            !h.core
+                .store
+                .load_prefs(&rt.id)
+                .unwrap()
+                .model_choice_recorded
+        );
+        h.core
+            .restore_legacy_model_prefs(&rt, Some("m-session".into()), None)
+            .unwrap();
+        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        h.core
+            .restore_legacy_model_prefs(&rt, Some("m-global".into()), None)
+            .unwrap();
+        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
+    }
+
+    #[test]
+    fn legacy_global_following_session_does_not_pin_index_model() {
+        let h = harness();
+        configure_two_models(&h);
+        write_legacy_model_index(&h);
+        std::fs::remove_file(h.core.store.prefs_path(&h.rt.id)).unwrap();
+        let rt = rebuild(&h);
+        assert!(rt.prefs().model_id.is_none());
+        assert_eq!(
+            crate::core::prefs::effective_model(&h.core.cfg.read().unwrap(), &rt.prefs())
+                .unwrap()
+                .id,
+            "m-global"
+        );
+        h.core.restore_legacy_model_prefs(&rt, None, None).unwrap();
+        assert!(rt.prefs().model_id.is_none());
+        assert!(
+            h.core
+                .store
+                .load_prefs(&rt.id)
+                .unwrap()
+                .model_choice_recorded
+        );
+    }
+
+    #[test]
+    fn migration_and_mode_change_preserve_whichever_model_choice_is_newer() {
+        let h = harness();
+        configure_two_models(&h);
+        // 迁移先于 ask 切档：后端仅改 mode 的路径须保留迁移后的模型。
+        h.core
+            .restore_legacy_model_prefs(&h.rt, Some("m-session".into()), None)
+            .unwrap();
+        h.core
+            .set_session_mode_and_persist(&h.rt, ApprovalMode::AutoEdit);
+        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::AutoEdit);
+        assert_eq!(h.rt.prefs().model_id.as_deref(), Some("m-session"));
+
+        // 显式更新先于迟到的旧快照：迁移为空操作，档位与模型均不倒退。
+        h.core.transition_prefs(
+            &h.rt,
+            SessionPrefs {
+                approval_mode: ApprovalMode::FullAccess,
+                model_id: Some("m-global".into()),
+                reasoning_effort: Some(EffortLevel::High),
+            },
+        );
+        h.core
+            .restore_legacy_model_prefs(&h.rt, Some("m-session".into()), None)
+            .unwrap();
+        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::FullAccess);
+        assert_eq!(h.rt.prefs().model_id.as_deref(), Some("m-global"));
+        assert_eq!(h.rt.prefs().reasoning_effort, Some(EffortLevel::High));
+    }
+
+    #[test]
+    fn removed_session_model_falls_back_to_global_model() {
+        let h = harness();
+        configure_two_models(&h);
+        h.core.transition_prefs(
+            &h.rt,
+            SessionPrefs {
+                model_id: Some("m-session".into()),
+                reasoning_effort: Some(EffortLevel::High),
+                ..prefs_of(ApprovalMode::Plan)
+            },
+        );
+        h.core.cfg.write().unwrap().providers[0].models.pop();
+        let rt = rebuild(&h);
+        assert!(rt.prefs().model_id.is_none());
+        assert_eq!(rt.prefs().reasoning_effort, Some(EffortLevel::High));
+        assert_eq!(
+            crate::core::prefs::effective_model(&h.core.cfg.read().unwrap(), &rt.prefs())
+                .unwrap()
+                .id,
+            "m-global"
+        );
+    }
+
+    #[test]
+    fn non_goal_permission_does_not_survive_restart_or_reactivate_paused_goal() {
+        let h = harness();
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+        h.core
+            .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess));
+        h.core.sessions.remove(&h.rt.id);
+        let rt = h.core.get_or_create_session(
+            &h.rt.id,
+            h.rt.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Plan);
+        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+        assert_eq!(rt.goal_prev_mode(), None);
+    }
+
+    #[test]
+    fn full_access_before_goal_cannot_reappear_on_completion_after_restart() {
+        let h = harness();
+        h.core
+            .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess));
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::FullAccess));
+        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+        h.core.persist_goal(&h.rt);
+        h.core.sessions.remove(&h.rt.id);
+
+        let rt = h.core.get_or_create_session(
+            &h.rt.id,
+            h.rt.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
+        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+        assert_eq!(rt.goal_prev_mode(), Some(ApprovalMode::Plan));
+        let fallback =
+            super::super::drive::fallback_mode(rt.goal_prev_mode(), &h.core.cfg.read().unwrap());
+        assert_eq!(fallback, ApprovalMode::Plan);
+    }
+
+    #[test]
+    fn resume_resets_denial_window_but_retains_blocked_history() {
+        let h = harness();
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        let mut goal = goal_state(GoalStatus::Paused);
+        goal.ledger_denials = 8;
+        goal.stall_streak = 5;
+        goal.blocked.push("账本外操作被拒（程序）：mkdir".into());
+        h.rt.set_goal(Some(goal));
+        h.rt.request_goal_abort();
+        h.core.resume_goal(&h.rt).unwrap();
+        let goal = h.rt.goal_snapshot().unwrap();
+        assert_eq!(goal.status, GoalStatus::Executing);
+        assert_eq!((goal.ledger_denials, goal.stall_streak), (0, 0));
+        assert_eq!(goal.blocked.len(), 1);
+        assert!(!h.rt.take_goal_abort());
+        assert_eq!(h.core.store.load_goal(&h.rt.id).unwrap(), goal);
+    }
+
+    #[test]
+    fn reopen_paused_goal_returns_to_readonly_clarification() {
+        let h = harness();
+        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
+        let mut goal = goal_state(GoalStatus::Paused);
+        goal.ledger_denials = 3;
+        goal.blocked.push("遗漏的程序 mkdir".into());
+        h.rt.set_goal(Some(goal));
+        h.core.reopen_goal(&h.rt).unwrap();
+        let goal = h.rt.goal_snapshot().unwrap();
+        assert_eq!(goal.status, GoalStatus::Clarify);
+        assert_eq!(goal.ledger_denials, 0);
+        assert_eq!(goal.blocked.len(), 1);
+        assert_eq!(h.core.store.load_goal(&h.rt.id).unwrap(), goal);
+        assert!(h.core.reopen_goal(&h.rt).is_err());
     }
 
     #[test]

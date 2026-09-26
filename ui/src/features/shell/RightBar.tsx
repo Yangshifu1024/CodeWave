@@ -192,7 +192,7 @@ function InfoPanel({ visible }: { visible: boolean }) {
               ]
             : []),
           // 目标段（`ApprovalMode::Goal`）：仅在当前会话有目标时出现，与计划段并列不互相覆盖
-          ...(goal ? [{ key: "goal", label: t("rightbar.goal"), children: <GoalSection goal={goal} sessionId={sessionId} /> }] : []),
+          ...(goal ? [{ key: "goal", label: t("rightbar.goal"), children: <GoalSection goal={goal} sessionId={sessionId} canAct={tab?.prefs.approval_mode === "goal"} /> }] : []),
         ]}
       />
       <SkillDetailModal skill={detail} sessionId={sessionId} onClose={() => setDetail(null)} />
@@ -203,22 +203,22 @@ const TAIL_LINES = 300;
 
 /** 右栏「目标」段（`ApprovalMode::Goal`）：目标正文 / 达成标准（只读）/ 账本摘要 / 状态徽标 / 轮次。
  *  与「当前计划」段并列渲染；暂停态给出「继续推进」（调 `resume_goal`）。 */
-function GoalSection({ goal, sessionId }: { goal: GoalState; sessionId: string | null }) {
+function GoalSection({ goal, sessionId, canAct }: { goal: GoalState; sessionId: string | null; canAct: boolean }) {
   const { t } = useTranslation();
   return (
     <>
       <div className="rb-goal-head">
         <span className={`rb-goal-badge st-${goal.status}`}>{t(GOAL_STATUS_KEYS[goal.status])}</span>
         <span className="rb-dim">{t("rightbar.goalRounds", { n: goal.rounds })}</span>
-        {goal.status === "paused" && (
-          <Button
-            type="text"
-            size="small"
-            className="rb-goal-resume"
-            onClick={() => void useRun.getState().resumeGoal(sessionId)}
-          >
-            {t("rightbar.goalResume")}
-          </Button>
+        {goal.status === "paused" && canAct && (
+          <>
+            <Button type="text" size="small" className="rb-goal-resume" onClick={() => void useRun.getState().resumeGoal(sessionId)}>
+              {t("rightbar.goalResume")}
+            </Button>
+            <Button type="text" size="small" title={t("rightbar.goalReviseHint")} onClick={() => void useRun.getState().reopenGoal(sessionId)}>
+              {t("rightbar.goalRevise")}
+            </Button>
+          </>
         )}
       </div>
       <div className="rb-goal-text" title={goal.text}>{goal.text}</div>

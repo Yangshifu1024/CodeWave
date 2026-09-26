@@ -743,6 +743,7 @@ impl SessionStore {
             let _ = std::fs::remove_file(self.history_path(id));
             let _ = std::fs::remove_file(self.todos_path(id));
             let _ = std::fs::remove_file(self.goal_path(id));
+            let _ = std::fs::remove_file(self.prefs_path(id));
             let _ = std::fs::remove_file(self.artifacts_path(id));
             // 两个按会话分桶的托管目录（工具结果 sidecar / 图片 blob）：
             // 与 cleanup 路径同口径，幽灵条目不得留下目录
@@ -784,6 +785,7 @@ impl SessionStore {
         let _ = std::fs::remove_file(self.artifacts_path(id));
         let _ = std::fs::remove_file(self.todos_path(id));
         let _ = std::fs::remove_file(self.goal_path(id));
+        let _ = std::fs::remove_file(self.prefs_path(id));
         // 子代理过程历史目录级联清理（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）
         // 及其图片 blob（blob 归子历史自己，不在父会话的 blob 目录里）——
         // 子历史目录列必须**先**读，下一步就把该目录整个删了
@@ -1331,6 +1333,27 @@ impl SessionStore {
             .flatten()
     }
 
+    /// 主会话运行偏好边车；与 goal 一样随会话级联删除。
+    pub(crate) fn prefs_path(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.prefs.json"))
+    }
+
+    pub fn save_prefs(
+        &self,
+        id: &str,
+        snapshot: &crate::core::prefs::SessionPrefsSnapshot,
+    ) -> anyhow::Result<()> {
+        atomic_write(&self.prefs_path(id), &serde_json::to_vec_pretty(snapshot)?)?;
+        Ok(())
+    }
+
+    /// 旧会话无边车时交由调用方选用全局默认；损坏边车不阻断会话打开。
+    pub fn load_prefs(&self, id: &str) -> Option<crate::core::prefs::SessionPrefsSnapshot> {
+        std::fs::read(self.prefs_path(id))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
     // ---------- 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)） ----------
 
     /// 工具结果 sidecar 目录：sessions/<owner>.toolres/。
@@ -1674,6 +1697,16 @@ mod tests;
 mod goal_sidecar_tests {
     use super::*;
     use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
+    use crate::core::prefs::{EffortLevel, SessionPrefsSnapshot};
+
+    fn prefs() -> SessionPrefsSnapshot {
+        SessionPrefsSnapshot {
+            goal_mode_active: true,
+            model_choice_recorded: true,
+            model_id: Some("m1".into()),
+            reasoning_effort: Some(EffortLevel::Max),
+        }
+    }
 
     fn sample() -> GoalState {
         GoalState {
@@ -1724,15 +1757,33 @@ mod goal_sidecar_tests {
     }
 
     #[test]
+    fn prefs_sidecar_roundtrip_and_corrupt_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        assert!(store.load_prefs("s1").is_none());
+        store.save_prefs("s1", &prefs()).unwrap();
+        let loaded = store.load_prefs("s1").unwrap();
+        assert!(loaded.goal_mode_active);
+        assert!(loaded.model_choice_recorded);
+        assert_eq!(loaded.model_id.as_deref(), Some("m1"));
+        assert_eq!(loaded.reasoning_effort, Some(EffortLevel::Max));
+        std::fs::write(store.prefs_path("s1"), b"bad json").unwrap();
+        assert!(store.load_prefs("s1").is_none());
+    }
+
+    #[test]
     fn remove_and_purge_cascade_goal_sidecar() {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::new(dir.path().to_path_buf());
         // remove 级联
         store.save_goal("s1", &Some(sample())).unwrap();
+        store.save_prefs("s1", &prefs()).unwrap();
         store.remove("s1").unwrap();
         assert!(!dir.path().join("sessions/s1.goal.json").exists());
+        assert!(!store.prefs_path("s1").exists());
         // 启动清扫：sub_/task_ 前缀条目的 goal 边车同样要清（否则幽灵文件永久残留）
         store.save_goal("sub_x", &Some(sample())).unwrap();
+        store.save_prefs("sub_x", &prefs()).unwrap();
         store
             .upsert_meta(SessionMeta {
                 id: "sub_x".into(),
@@ -1752,5 +1803,6 @@ mod goal_sidecar_tests {
             .unwrap();
         assert_eq!(store.purge_non_session_entries(), 1);
         assert!(!dir.path().join("sessions/sub_x.goal.json").exists());
+        assert!(!store.prefs_path("sub_x").exists());
     }
 }

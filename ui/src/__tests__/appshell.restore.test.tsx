@@ -78,6 +78,7 @@ const h = vi.hoisted(() => {
     loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
+    restoreLegacyModelPrefs: fn(async () => undefined),
     connectMcp: fn(async () => ({ started: [], failed: [] })),
     getTokenBreakdown: fn(async () => ({
       system_tokens: 0, history_tokens: 0, tool_results_tokens: 0, tool_schema_tokens: 0,
@@ -247,9 +248,32 @@ afterEach(() => {
   localStorage.removeItem("ws_explorer_open");
   localStorage.removeItem("ws_right_bar_open");
   vi.clearAllMocks();
+  h.ipcMethods.getSessionPrefs.mockImplementation(async () => ({ ...h.PREFS }));
+  h.ipcMethods.restoreLegacyModelPrefs.mockImplementation(async () => undefined);
 });
 
 describe("AppShell 启动链路（会话保存与恢复优化 · 批1）", () => {
+  it("旧 Tab 的模型与力度先迁移，回读只覆盖成后端确认后的值", async () => {
+    h.state.sessions = [meta("s1")];
+    const snapshot = uiSnapshot(["s1"], "s1");
+    snapshot.tabs.items.s1.prefs = { approval_mode: "full_access", model_id: "m1", reasoning_effort: "max" };
+    h.state.uiState = snapshot;
+    let backendPrefs = { ...h.PREFS, approval_mode: "plan", model_id: null as string | null, reasoning_effort: null as string | null };
+    h.ipcMethods.restoreLegacyModelPrefs.mockImplementation(async (_id: string, modelId: string | null, effort: string | null) => {
+      backendPrefs = { ...backendPrefs, model_id: modelId, reasoning_effort: effort };
+    });
+    h.ipcMethods.getSessionPrefs.mockImplementation(async () => ({ ...backendPrefs }));
+
+    await mountApp();
+    await waitFor(() => expect(useSessions.getState().tabs[0]?.prefs.approval_mode).toBe("plan"));
+    expect(useSessions.getState().tabs[0].prefs.model_id).toBe("m1");
+    expect(ipc.restoreLegacyModelPrefs).toHaveBeenCalledWith("s1", "m1", "max");
+    expect(useSessions.getState().tabs[0].prefs.reasoning_effort).toBe("max");
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+    expect(vi.mocked(ipc.restoreLegacyModelPrefs).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(ipc.getSessionPrefs).mock.invocationCallOrder[0]);
+  });
+
   it("挂载即走「读盘 → 落 store → 急切加载活跃 Tab → 绑定事件」全链（守「模块写完没人调」的死代码事故）", async () => {
     h.state.sessions = [meta("s1")];
     h.state.uiState = uiSnapshot(["s1"], "s1");

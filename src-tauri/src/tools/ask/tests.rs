@@ -1245,6 +1245,36 @@ async fn goal_approval_enters_execute_without_plan_baseline() {
 }
 
 #[tokio::test]
+async fn paused_goal_can_revise_ledger_then_reapprove() {
+    let ctx = goal_ctx(GoalStatus::Paused);
+    ctx.core
+        .reopen_goal(&ctx.rt)
+        .expect("暂停目标应能重开澄清期");
+    assert_eq!(ctx.rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+
+    let revised = crate::tools::goal::GoalTool
+        .run(
+            &ctx,
+            json!({"ledger": {"paths": ["/work/proj/src"], "programs": ["cargo", "mkdir"]}}),
+        )
+        .await;
+    assert!(revised.ok, "{:?}", revised.error);
+    assert_eq!(ctx.rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+
+    let approved = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert!(approved.ok, "{:?}", approved.error);
+    let goal = ctx.rt.goal_snapshot().unwrap();
+    assert_eq!(goal.status, GoalStatus::Executing);
+    assert!(
+        goal.ledger
+            .programs
+            .iter()
+            .any(|program| program == "mkdir")
+    );
+    assert_eq!(ctx.core.store.load_goal(&ctx.rt.id).unwrap(), goal);
+}
+
+#[tokio::test]
 async fn goal_approval_with_arch_shape_skips_baseline_and_gate() {
     // 目标档下的批准形询问即便满足 arch 闸形态（单题 + id="approve" + switchToAutoEdit），
     // 也走目标档独立分支。不置 analysis_done：若误入 plan 档批准协议，G2 门会以

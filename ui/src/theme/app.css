@@ -311,7 +311,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    宽度与 .ask-wrap 同口径（15% 横向 margin）——banner 是简短说明，宽度过宽会让短文「漂浮」在大量空白里，
    复用窄面板口径与 ask 面板视觉成系。 */
 .goal-banner {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin: 0 15% 6px; padding: 6px 10px;
   border: 1px solid var(--ws-border); border-radius: 10px;
   background: var(--ws-panel);
@@ -1271,7 +1271,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-todo-done { color: var(--ws-dim); text-decoration: line-through; }
 /* 右栏「目标」段（`ApprovalMode::Goal`）：与「当前计划」段并列，只读展示。
    色彩只映射风险等级：执行/暂停 = 橙、已达成 = 绿、已中止 = 红、澄清 = 中性墨 */
-.rb-goal-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.rb-goal-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .rb-goal-badge {
   flex: none; font-size: 10.5px; line-height: 16px; padding: 0 5px;
   border: 1px solid var(--ws-border); border-radius: 4px; color: var(--ws-dim);

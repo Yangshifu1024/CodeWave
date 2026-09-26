@@ -71,6 +71,8 @@ const RESUME_GOAL_TEXT = "继续推进";
   resolveAsk(askId: string, value: any): Promise<void>;
   /** 目标模式（`ApprovalMode::Goal`）：暂停后继续推进（调 `resume_goal`，与 `start_chat` 同构；状态走 `goal:update`） */
   resumeGoal(sessionId?: string | null): Promise<void>;
+  /** 暂停后退回只读澄清期，允许修订合同并重新批准。 */
+  reopenGoal(sessionId?: string | null): Promise<void>;
   /** 目标模式：回读目标状态初值（会话打开 / 惰性激活时；`goal:update` 推送仍是唯一的持续更新源） */
   syncGoal(sessionId: string): Promise<void>;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复） */
@@ -602,6 +604,18 @@ export const useRun = create<RunStore>()(
           t.running = false;
           t.items.push({ kind: "error", text: String(e) });
         });
+      }
+    },
+
+    async reopenGoal(sessionId) {
+      const sid = sessionId ?? useSessions.getState().activeKey;
+      if (!sid || get().tabs[sid]?.goal?.status !== "paused") return;
+      try {
+        await ipc.reopenGoal(sid);
+        // 后端会推 goal:update；回读兜住切 Tab 时漏接事件的情况。
+        await get().syncGoal(sid);
+      } catch (e) {
+        useUi.getState().toast(String(e));
       }
     },
 

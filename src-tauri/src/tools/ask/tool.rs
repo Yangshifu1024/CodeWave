@@ -393,9 +393,10 @@ impl Tool for AskTool {
             }
             // 切到用户所选档位（目标档批准时选项声明的 mode 就是 goal；已是该档则无操作）
             if switch {
-                let mut p = ctx.rt.prefs();
-                p.approval_mode = switch_target;
-                ctx.rt.set_prefs(p);
+                ctx.core
+                    .set_session_mode_and_persist(&ctx.rt, switch_target);
+            } else {
+                ctx.core.persist_session_prefs(&ctx.rt);
             }
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
@@ -472,9 +473,8 @@ impl Tool for AskTool {
             ctx.rt
                 .scope_denials
                 .store(0, std::sync::atomic::Ordering::SeqCst);
-            let mut p = ctx.rt.prefs();
-            p.approval_mode = switch_target;
-            ctx.rt.set_prefs(p);
+            ctx.core
+                .set_session_mode_and_persist(&ctx.rt, switch_target);
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
                 &format!(
@@ -497,9 +497,8 @@ impl Tool for AskTool {
         // 轻量切换路径（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：ConfirmEach 普通有效应答 → 单步切档 + 审计日志；
         // 不过门、不冻结基线（approved_plan 留空 → batch.rs 的范围确认不触发）、不注入。
         if switch {
-            let mut p = ctx.rt.prefs();
-            p.approval_mode = switch_target;
-            ctx.rt.set_prefs(p);
+            ctx.core
+                .set_session_mode_and_persist(&ctx.rt, switch_target);
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
                 &format!(

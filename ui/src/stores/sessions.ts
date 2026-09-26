@@ -133,6 +133,12 @@ async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
   // 批2 P3：`load_session` 返回 `{ messages, paging }`——`messages` 只是**最近一段**（display 口径），
   // 更早内容由用户点「加载更早的」时按段前翻（run.loadEarlier）。
   const page = await ipc.loadSession(tab.sessionId, tab.workspace);
+  // 重启恢复的骨架 Tab 带有旧 ui-state 的显式模型/力度选择；仅旧边车可接纳迁移。
+  // 在聊天内容进入运行态前完成，避免后端默认值覆盖旧快照或用户操作与迁移交错。
+  if (tab.loaded === false) {
+    await ipc.restoreLegacyModelPrefs(tab.sessionId, tab.prefs.model_id, tab.prefs.reasoning_effort)
+      .catch((e) => useUi.getState().toast(String(e)));
+  }
   const run = useRun.getState();
   run.initTab(tab.sessionId);
   run.restoreFromMessages(tab.sessionId, page.messages, {

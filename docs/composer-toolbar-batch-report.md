@@ -76,7 +76,7 @@ fence 新增 `FencePolicy { approval_enabled, confirm_outside_create, confirm_in
 
 ## §5 已知限制与风险（如实记录）
 
-1. **prefs 为内存态**：应用重启后各会话回落全局默认（模型/力度/权限）。后续可持久化到 SessionMeta。
+1. **当时的限制：prefs 为内存态**。现行行为已由 [goal-mode-recovery](./goal-mode-recovery.md) 与 [session-model-recovery](./session-model-recovery.md) 更新：模型/力度与目标档活动标记可恢复，其它权限档回落全局默认。
 2. **anthropic thinking 与多轮回放**：Thinking 块不带 signature 不回放历史（anthropic.rs 既有约束），开启 thinking 的多轮工具循环在部分端点可能 400。已备真机 E2E 变体验证；若失败按回退方案（anthropic 协议不发送 thinking）处理。
 3. **ConfirmEach/Plan 语义洞如实声明**：ConfirmEach 只拦「文件写入类」与 shell 区内写目标；shell 的写不仅限重定向形态（如 `tee` 已覆盖、管道写进程外文件无法静态判定），Plan 模式 shell 仍可执行只读以外的边角写（fence L2/L3 与区内写确认覆盖主要形态）。
 4. **图片 token 粗估**：token_est 按 1600 tokens/张估，大图明显低估；图片随历史持久化与每轮重发会放大历史体积（上限：单张 5MB、4 张、20MB base64 总额）。

@@ -78,6 +78,8 @@ export const ipc = {
   setSessionPrefs: (sessionId: string, prefs: SessionPrefs) =>
     invoke<void>("set_session_prefs", { sessionId, prefs }),
   getSessionPrefs: (sessionId: string) => invoke<SessionPrefs>("get_session_prefs", { sessionId }),
+  restoreLegacyModelPrefs: (sessionId: string, modelId: string | null, reasoningEffort: SessionPrefs["reasoning_effort"]) =>
+    invoke<void>("restore_legacy_model_prefs", { sessionId, modelId, reasoningEffort }),
   injectRunMessage: (sessionId: string, text: string) =>
     invoke<void>("inject_run_message", { sessionId, text }),
   resolveAsk: (sessionId: string, askId: string, value: any) =>
@@ -89,6 +91,7 @@ export const ipc = {
    *  目标状态本身走 `goal:update` 事件——含起跑失败时的「执行中 → 已暂停」回滚） */
   resumeGoal: (sessionId: string, onEvent: Channel) =>
     invoke<string>("resume_goal", { sessionId, onEvent }),
+  reopenGoal: (sessionId: string) => invoke<void>("reopen_goal", { sessionId }),
   /** 目标状态快照（会话恢复 / 右栏重挂载时拉取；null = 该会话当前无目标） */
   getSessionGoal: (sessionId: string) => invoke<GoalState | null>("get_session_goal", { sessionId }),
 

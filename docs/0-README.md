@@ -15,6 +15,10 @@
 
 ## 基准与方案
 
+- 2026-09-26 · [session-model-recovery.md](./session-model-recovery.md) — 会话模型与思考力度跨重启恢复；旧 Tab 从 UI 快照一次性迁移，权限档仍按安全规则回落。
+
+- 2026-09-26 · [goal-mode-recovery.md](./goal-mode-recovery.md) — 修复目标模式重启丢档、目标边车未装载与越界后立即再停；新增只读修订合同入口。
+
 - 2026-09-26 · [tasks-local-cron-time.md](./tasks-local-cron-time.md) — 修复计划任务 cron 按 UTC 而非本地时区计算，及存量下次触发时间的恢复校正。
 
 - 2026-09-26 · [tasks-page-layout-polish.md](./tasks-page-layout-polish.md) — 计划任务列表、编辑弹窗与左栏返回按钮收敛到设置页的排版与 antd 组件样式。

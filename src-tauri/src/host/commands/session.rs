@@ -519,6 +519,19 @@ pub async fn get_session_prefs(
     Ok(rt.prefs())
 }
 
+/// 旧 ui-state Tab 的会话模型选择迁移；已有新版边车时保持服务端值。
+#[tauri::command]
+pub async fn restore_legacy_model_prefs(
+    core: Core<'_>,
+    session_id: String,
+    model_id: Option<String>,
+    reasoning_effort: Option<crate::core::prefs::EffortLevel>,
+) -> Result<(), String> {
+    let rt = core.session(&session_id).ok_or("会话不存在")?;
+    core.restore_legacy_model_prefs(&rt, model_id, reasoning_effort)
+        .map_err(|e| e.to_string())
+}
+
 /// 目标模式：读取当前会话目标（前端在会话恢复 / 右栏挂载时拉初始状态；未登记返回 null）。
 #[tauri::command]
 pub async fn get_session_goal(
@@ -527,6 +540,13 @@ pub async fn get_session_goal(
 ) -> Result<Option<crate::core::agent::goal::GoalState>, String> {
     let rt = core.session(&session_id).ok_or("会话不存在")?;
     Ok(core.goal_view(&rt))
+}
+
+/// 暂停目标需要修改账本或验收标准时，显式退回只读澄清期；修改后须重新批准。
+#[tauri::command]
+pub async fn reopen_goal(core: Core<'_>, session_id: String) -> Result<(), String> {
+    let rt = core.session(&session_id).ok_or("会话不存在")?;
+    core.reopen_goal(&rt).map_err(err)
 }
 
 /// 目标模式：续跑暂停中的目标 —— 状态置回执行中（core 内落边车 + 发 `goal:update`），

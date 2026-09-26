@@ -14,6 +14,7 @@ const ipcMock = vi.hoisted(() => ({
   listSessions: vi.fn(async (): Promise<unknown[]> => []),
   listProjects: vi.fn(async (): Promise<unknown[]> => []),
   getSessionPrefs: vi.fn(async () => ({ approval_mode: "auto_edit", model_id: null, reasoning_effort: null })),
+  restoreLegacyModelPrefs: vi.fn(async () => undefined),
   sessionRunning: vi.fn(async () => false),
   gitStatus: vi.fn(async () => ({ repo: false, entries: [] })),
   getTokenBreakdown: vi.fn(async () => null),

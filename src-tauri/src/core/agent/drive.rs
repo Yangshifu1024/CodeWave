@@ -164,17 +164,18 @@ pub async fn run_chat(
                 serde_json::json!({ "session": rt.id, "todos": todos }),
             );
         }
-        // 目标模式边车（goal mode）：目标存档**保留**（用户要能回看），恢复会话即装回内存态
-        // ——不装回的话，「已完成的目标」在恢复后会退化成「未登记」并把档位语义带偏。
-        if rt.goal_snapshot().is_none() {
-            if let Some(g) = core.store.load_goal(&rt.id) {
-                rt.set_goal(Some(g.clone()));
-                sink.emit(
-                    &rt.id,
-                    "goal:update",
-                    serde_json::json!({ "session": rt.id, "goal": g }),
-                );
-            }
+    }
+
+    // 目标边车与历史装载独立：load_session 会先填充 rt.history，旧的嵌套写法
+    // 因此永远跳过 goal，导致右栏看到目标而工具认为未登记。
+    if rt.goal_snapshot().is_none() {
+        if let Some(g) = core.store.load_goal(&rt.id) {
+            rt.set_goal(Some(g.clone()));
+            sink.emit(
+                &rt.id,
+                "goal:update",
+                serde_json::json!({ "session": rt.id, "goal": g }),
+            );
         }
     }
 
@@ -780,9 +781,7 @@ fn apply_goal_fallback(
         let cfg = core.cfg.read().unwrap();
         fallback_mode(prev, &cfg)
     };
-    let mut prefs = rt.prefs();
-    prefs.approval_mode = mode;
-    rt.set_prefs(prefs);
+    core.set_session_mode_and_persist(rt, mode);
     rt.set_goal_prev_mode(None);
     mode
 }
