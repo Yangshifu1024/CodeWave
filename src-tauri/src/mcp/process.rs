@@ -91,6 +91,11 @@ pub fn build_stdio_wrap(cfg: &McpServerConfig) -> Result<CommandWrap, McpError> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    Ok(wrap_process_tree(cmd))
+}
+
+/// Shared process-tree ownership for MCP and managed background services.
+pub(crate) fn wrap_process_tree(cmd: Command) -> CommandWrap {
     let mut wrap = CommandWrap::from(cmd);
     #[cfg(windows)]
     {
@@ -98,9 +103,10 @@ pub fn build_stdio_wrap(cfg: &McpServerConfig) -> Result<CommandWrap, McpError> 
     }
     #[cfg(unix)]
     {
-        wrap.wrap(ProcessGroup::leader());
+        wrap.wrap(ProcessGroup::leader())
+            .wrap(process_wrap::tokio::KillOnDrop);
     }
-    Ok(wrap)
+    wrap
 }
 
 /// 兜底杀进程树（当 Job Object / 进程组都不可用，或需要强制收尾时用）。

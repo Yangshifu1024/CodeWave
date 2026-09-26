@@ -9,6 +9,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import "../i18n";
 import Composer from "../features/chat/Composer";
 import RightBar from "../features/shell/RightBar";
+import GoalControls from "../features/chat/GoalControls";
+import AskPanel from "../features/tools/AskPanel";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
 import { useUi } from "../stores/ui";
@@ -22,7 +24,15 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string) => {
+  invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+    if (cmd === "set_goal_budget") {
+      backend.goal = { ...(backend.goal as object), delivery: { budget: args?.budget, used_tokens: 0, elapsed_ms: 0, sources: [], baseline: [], evidence: [], verifications: [] } };
+      return backend.goal;
+    }
+    if (cmd === "accept_goal") {
+      backend.goal = { ...(backend.goal as object), status: args?.accepted ? "done" : "paused" };
+      return backend.goal;
+    }
     if (cmd === "list_skills" || cmd === "list_editors" || cmd === "list_agents" || cmd === "quota_snapshots") {
       return [];
     }
@@ -61,6 +71,84 @@ function goal(over: Partial<GoalState> = {}): GoalState {
     ...over,
   };
 }
+
+describe("目标交付控制", () => {
+  it("目标批准前未选预算时保留询问，选定预算后保留目标档", async () => {
+    seed();
+    const state = goal({ status: "clarify", criteria: [
+      { title: "后端验收", done: false, verification: { command: "cargo test --workspace", cwd: "D:/demo/backend" } },
+      { title: "界面体验验收", done: false, manual: true },
+    ], delivery: { budget: null, used_tokens: 0, elapsed_ms: 0, sources: ["D:/demo/requirements.md"], baseline: [], evidence: [], verifications: [] } });
+    useRun.setState({ tabs: { s1: { goal: state, goalRev: 0, todos: [], items: [], ask: {
+      askId: "goal-approve", kind: "ask", approvalShape: true,
+      questions: [{ id: "q", question: "开始目标开发？", approveId: "approve", options: [{ id: "approve", label: "开始目标开发", mode: "goal", recommended: true }] }],
+    } } } } as any);
+    render(<AskPanel />);
+    const contract = document.querySelector(".goal-approval-contract")!;
+    expect(contract.textContent).toContain("把登录改成 OAuth");
+    expect(contract.textContent).toContain("后端验收");
+    expect(contract.textContent).toContain("cargo test --workspace");
+    expect(contract.textContent).toContain("D:/demo/backend");
+    expect(contract.textContent).toContain("D:/demo/requirements.md");
+    expect(contract.textContent).toContain("需人工验收");
+    fireEvent.click(screen.getByText("开始目标开发"));
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "resolve_ask")).toBe(false);
+    act(() => useRun.setState((s) => {
+      s.tabs.s1.goal!.delivery = { budget: { unlimited: true, token_limit: null, time_limit_ms: null }, used_tokens: 0, elapsed_ms: 0, sources: [], baseline: [], evidence: [], verifications: [] };
+    }));
+    fireEvent.click(screen.getByText("开始目标开发"));
+    await waitFor(() => expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "resolve_ask")).toBe(true));
+    expect(useSessions.getState().tabs.find((tab) => tab.key === "s1")?.prefs.approval_mode).toBe("goal");
+  });
+
+  it("普通目标澄清问答不展示批准合同卡", () => {
+    seed();
+    useRun.setState({ tabs: { s1: { goal: goal({ status: "clarify" }), todos: [], items: [], ask: {
+      askId: "goal-question", kind: "ask",
+      questions: [{ id: "q", question: "选择登录方案", options: [{ id: "oauth", label: "OAuth" }] }],
+    } } } } as any);
+    render(<AskPanel />);
+    expect(document.querySelector(".goal-approval-contract")).toBeNull();
+    expect(screen.queryByText("设置目标预算")).toBeNull();
+  });
+
+  it("预算必须明确选择，保存不限额后才写入后端", async () => {
+    const state = goal({ status: "clarify" });
+    backend.goal = state;
+    useRun.setState({ tabs: { s1: { goal: state, goalRev: 0, todos: [], items: [] } } } as any);
+    render(<GoalControls goal={state} sessionId="s1" />);
+    fireEvent.click(screen.getByText("设置目标预算"));
+    const confirm = screen.getByRole("button", { name: "确认预算" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText("不设上限"));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(useRun.getState().tabs.s1.goal?.delivery?.budget?.unlimited).toBe(true));
+    expect(vi.mocked(invoke).mock.calls.find((c) => c[0] === "set_goal_budget")?.[1]).toEqual({
+      sessionId: "s1", budget: { unlimited: true, token_limit: null, time_limit_ms: null },
+    });
+  });
+
+  it("验收反馈记录后保持暂停，不隐式续跑", async () => {
+    const state = goal({ status: "awaiting_acceptance" });
+    backend.goal = state;
+    useRun.setState({ tabs: { s1: { goal: state, goalRev: 0, todos: [], items: [] } } } as any);
+    render(<GoalControls goal={state} sessionId="s1" />);
+    const submit = screen.getByRole("button", { name: "提交反馈并保留暂停" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText("描述未通过的验收项及实际表现"), { target: { value: "登录失败没有错误提示" } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(useRun.getState().tabs.s1.goal?.status).toBe("paused"));
+    expect(vi.mocked(invoke).mock.calls.find((c) => c[0] === "accept_goal")?.[1]).toEqual({ sessionId: "s1", accepted: false, feedback: "登录失败没有错误提示" });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "resume_goal")).toBe(false);
+  });
+
+  it("正在停止时不提供继续推进或预算修改", () => {
+    render(<GoalControls goal={goal({ status: "stopping" })} sessionId="s1" />);
+    expect(screen.getByText("正在等待工具与子代理退出，请勿将当前状态视为已暂停。")).toBeTruthy();
+    expect(screen.queryByText("设置目标预算")).toBeNull();
+    expect(screen.queryByText("继续推进")).toBeNull();
+  });
+});
 
 /** 目标模式的会话 Tab（prefs.approval_mode = "goal"） */
 function seed() {
@@ -349,9 +437,12 @@ describe("右栏「目标」段", () => {
       </AntApp>,
     );
 
-  it("渲染目标正文 / 达成标准勾选 / 账本摘要 / 状态徽标 / 轮次", async () => {
+  it("渲染目标正文 / 达成标准勾选 / 完全访问说明 / 状态徽标 / 轮次", async () => {
     seed();
-    useRun.setState({ tabs: { s1: { goal: goal(), todos: [] } } } as any);
+    useRun.setState({ tabs: { s1: { goal: goal({ criteria: [
+      { title: "单测全绿", done: true, verification: { command: "cargo test", cwd: "D:/demo/project" } },
+      { title: "文档更新", done: false },
+    ] }), todos: [] } } } as any);
     renderBar();
     await screen.findByText("目标");
     expect(document.querySelector(".rb-goal-text")?.textContent).toContain("把登录改成 OAuth");
@@ -359,10 +450,11 @@ describe("右栏「目标」段", () => {
     expect(document.querySelector(".rb-goal-head")?.textContent).toContain("已推进 3 轮");
     // 达成标准：已完成项划线、未完成项不划线（只读展示）
     expect(document.querySelector(".rb-todo-done")?.textContent).toBe("单测全绿");
+    expect(screen.getByText("cargo test")).toBeTruthy();
     expect(screen.getByText("文档更新").className).not.toContain("rb-todo-done");
-    // 账本摘要：路径数 + 程序列表
-    expect(screen.getByText("路径 2 个")).toBeTruthy();
-    expect(document.querySelector(".rb-goal-programs")?.textContent).toContain("cargo");
+    expect(screen.getByText("执行权限与完全访问一致")).toBeTruthy();
+    expect(screen.getByText("开始前请明确选择预算或不设上限")).toBeTruthy();
+    expect(document.querySelector(".rb-goal-programs")).toBeNull();
   });
 
   it("与「当前计划」段并列：两段同时存在、互不覆盖", async () => {

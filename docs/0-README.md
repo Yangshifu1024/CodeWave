@@ -15,6 +15,8 @@
 
 ## 基准与方案
 
+- 2026-09-26 · [goal-mode-delivery-rebuild.md](./goal-mode-delivery-rebuild.md) — 目标模式重构：完全访问执行、显式共享预算、真实工具证据与人工验收、停止排空及恢复。
+
 - 2026-09-26 · [session-model-recovery.md](./session-model-recovery.md) — 会话模型与思考力度跨重启恢复；旧 Tab 从 UI 快照一次性迁移，权限档仍按安全规则回落。
 
 - 2026-09-26 · [goal-mode-recovery.md](./goal-mode-recovery.md) — 修复目标模式重启丢档、目标边车未装载与越界后立即再停；新增只读修订合同入口。

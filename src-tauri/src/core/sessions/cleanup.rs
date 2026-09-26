@@ -300,6 +300,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     ok &= remove_file_if_exists(&store.artifacts_path(&meta.id));
     ok &= remove_file_if_exists(&store.todos_path(&meta.id));
     ok &= remove_file_if_exists(&store.goal_path(&meta.id));
+    ok &= remove_dir_if_exists(&store.goal_sources_dir(&meta.id));
     ok &= remove_file_if_exists(&store.prefs_path(&meta.id));
     // 子代理过程历史目录（histories/subs/<id>/）及其图片 blob（blob 归子历史自己，
     // owner 是 `<父会话 id>__<sub>`，不在父会话的 sessions/<id>.imgblob/ 里）——
@@ -445,6 +446,7 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = name
                 .strip_suffix(".toolres")
+                .or_else(|| name.strip_suffix(".goal.sources"))
                 .or_else(|| name.strip_suffix(".imgblob"));
             let Some(id) = id else {
                 continue;
@@ -901,6 +903,7 @@ mod tests {
             rounds: 0,
             stall_streak: 0,
             ledger_denials: 0,
+            delivery: Default::default(),
         }
     }
 
@@ -1228,6 +1231,21 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("with-toolres.toolres"))
         );
+    }
+
+    #[test]
+    fn approved_goal_sources_removed_with_session() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        let dir = store.goal_sources_dir("goal-docs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("approved.md"), b"original requirements").unwrap();
+        assert!(delete_session_files(
+            &store,
+            dd.path(),
+            &meta("goal-docs", &ago(0))
+        ));
+        assert!(!dir.exists());
     }
 
     /// 图片 blob 目录（[docs/session-history-limits](../../../../../docs/session-history-limits.md)）：

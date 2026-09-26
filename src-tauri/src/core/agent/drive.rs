@@ -1,7 +1,4 @@
-use super::goal::{
-    self, GOAL_TEXT_TURN_LIMIT, GoalPhase, GoalState, GoalStatus, LEDGER_DENIAL_RETRY_LIMIT,
-    StallVerdict,
-};
+use super::goal::{self, GOAL_TEXT_TURN_LIMIT, GoalPhase, GoalState, GoalStatus, StallVerdict};
 use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
 use super::runtime::{
     AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS,
@@ -137,6 +134,33 @@ impl Default for DriveParams {
 }
 
 /// 主会话 run（[docs/p0-plan](../../../../docs/p0-plan.md) §5.2）：会话装载 → drive → 检查点/统计/事件。
+pub(super) async fn save_goal_supplement(
+    core: Arc<AgentCore>,
+    rt: Arc<SessionRuntime>,
+    user: Message,
+    run_id: String,
+) {
+    let _guard = rt.run_lock.lock().await;
+    if rt.history.lock().unwrap().is_empty() {
+        if let Ok(history) = core.store.load_history(&rt.id) {
+            *rt.history.lock().unwrap() = history;
+        }
+    }
+    rt.history.lock().unwrap().push(user.stamped());
+    core.sink.emit(
+        &rt.id,
+        "run:start",
+        serde_json::json!({"session":rt.id,"run_id":run_id}),
+    );
+    let save = checkpoint(&core, &rt).await;
+    rt.running.store(false, Ordering::SeqCst);
+    let mut payload = serde_json::json!({"session":rt.id,"run_id":run_id});
+    if let Some(report) = save.filter(|r| !r.is_clean()) {
+        payload["history_save"] = serde_json::to_value(report).unwrap_or_default();
+    }
+    core.sink.emit(&rt.id, "run:done", payload);
+}
+
 pub async fn run_chat(
     core: Arc<AgentCore>,
     rt: Arc<SessionRuntime>,
@@ -264,6 +288,20 @@ pub async fn run_chat(
             )
         }
     };
+    // Every exit path converges before advertising an idle session. In
+    // particular, provider failures and step exhaustion must not leave an
+    // executing goal or child workers behind.
+    if rt
+        .goal_snapshot()
+        .is_some_and(|g| matches!(g.status, GoalStatus::Executing | GoalStatus::Stopping))
+    {
+        let _ = core.goal_budget_check(&rt);
+        if let Err(error) = &result {
+            rt.mutate_goal(|g| g.blocked.push(format!("运行中断：{error}")));
+        }
+        goal_close_out(&core, &rt, GoalCloseCause::Interrupted).await;
+    }
+    *rt.goal_clock.lock().unwrap() = None;
     // C1 修复：drive 结束（成功/失败/取消）都必须复位，否则会话永远拒绝第二次 run
     rt.running.store(false, Ordering::SeqCst);
 
@@ -447,8 +485,16 @@ pub(super) fn apply_goal_mode(
         }
         GoalPhase::Execute => {
             params.exclude_tools.push("ask".into());
-            params.exclude_tools.push("http_request".into());
-            params.exclude_mcp = true;
+            if goal.is_some_and(|g| g.status != GoalStatus::Executing) {
+                params.exclude_tools.extend(
+                    WRITE_TOOLS
+                        .iter()
+                        .copied()
+                        .chain(["command", "service", "scheduled_task", "http_request"])
+                        .map(String::from),
+                );
+                params.exclude_mcp = true;
+            }
             params.idle_policy = IdlePolicy::NudgeOnly;
         }
     }
@@ -458,7 +504,7 @@ pub(super) fn apply_goal_mode(
 // ===================== 目标模式（goal mode）驱动层 =====================
 //
 // 阶段化的工具集 / 提示块 / idle 策略见 `apply_goal_mode`；本段承载**推进**语义：纯文本回合的
-// 瞬态推进指令、停滞两段式、达成 / 硬停 / 账本漂移三路收尾与自动回落前档。
+// 瞬态推进指令、停滞两段式、完成 / 验收 / 中断收尾与自动回落前档。
 // 边界：只作用于主会话 run（`goal_mode_active`）——子代理继承父档位但不得替父会话推进目标。
 
 /// 目标模式推进指令的瞬态标记（`stream::messages_for_request` 据此识别并保留尾部瞬态）。
@@ -546,7 +592,8 @@ pub(super) fn pause_goal_if_mode_left(core: &Arc<AgentCore>, rt: &Arc<SessionRun
     if g.status != GoalStatus::Executing {
         return false;
     }
-    g.status = GoalStatus::Paused;
+    g.status = GoalStatus::Stopping;
+    rt.cancel_active();
     rt.set_goal(Some(g.clone()));
     let _ = core.store.save_goal(&rt.id, &Some(g));
     emit_goal_update(&core.sink, rt);
@@ -589,15 +636,14 @@ pub(super) fn render_sub_goal_context(goal: Option<&GoalState>) -> String {
                 }
             }
             s.push_str(&format!(
-                "账本范围：路径 {}；程序 {}\n",
-                join_inline(&g.ledger.paths),
-                join_inline(&g.ledger.programs)
+                "批准的依据文档：{}\n",
+                join_inline(&g.delivery.sources)
             ));
             s
         }
     };
     format!(
-        "\n<goal-context read-only=\"true\">\n{body}\n本包任务见首条 <subagent-task> 消息。子代理不持有 goal 工具：不得改动验收合同（目标正文 / 验收标准 / 账本），只按本包任务推进；不得向用户提问，歧义写进最终汇报。\n</goal-context>"
+        "\n<goal-context read-only=\"true\">\n{body}\n本包任务见首条 <subagent-task> 消息。子代理不持有 goal 工具：不得降低验收合同（目标正文 / 验收标准），只按本包任务推进；不得向用户提问，歧义写进最终汇报。\n</goal-context>"
     )
 }
 
@@ -624,13 +670,14 @@ pub(super) fn render_goal_advance(state: &GoalState, reminder: bool) -> String {
         }
     }
     s.push_str(&format!(
-        "账本：路径 {}；程序 {}\n",
-        join_inline(&state.ledger.paths),
-        join_inline(&state.ledger.programs)
+        "依据文档：{}；累计 token {}，执行时长 {}ms\n",
+        join_inline(&state.delivery.sources),
+        state.delivery.used_tokens,
+        state.delivery.elapsed_ms
     ));
     s.push_str("硬约束：① 不得向用户提问（ask 工具已不可用），歧义自行判断；② 遇到未澄清的歧义按「最小惊讶 + 可回滚」自决，并把决策追加进 goal 的 decisions；③ 未达成全部验收标准前不要停下。\n");
     if reminder {
-        s.push_str(&format!("注意：本 run 的纯文本回合已达上限 {GOAL_TEXT_TURN_LIMIT}，下一回合必须发起工具调用推进，或给出收尾报告。\n"));
+        s.push_str("请改变推进方式并调用工具取得可验证进展；纯文本汇报不是目标完成的依据。\n");
     }
     s.push_str("</goal-advance>");
     s
@@ -639,8 +686,7 @@ pub(super) fn render_goal_advance(state: &GoalState, reminder: bool) -> String {
 /// 停滞提醒文案（`STALL_NUDGE_AT` 步无进展；与监督纠偏同机制——进历史，模型下一步可自查）。
 fn goal_stall_nudge(streak: u32) -> String {
     format!(
-        "<goal-stall-notice>目标模式：已连续 {streak} 步没有实质进展（没有非只读工具调用，验收标准也没有推进）。请立即自查并改变做法：确认是否卡在只读调研、重复读取或反复试探被拒的操作；把已完成的验收标准用 goal 工具勾选，把无法自行解决的阻塞记入 blocked 并停下报告。连续 {} 步无进展将自动暂停本目标。</goal-stall-notice>",
-        goal::STALL_STOP_AT
+        "<goal-stall-notice>连续 {streak} 步未观察到文件操作或验收进展。请核对是否仍在有效调研；重复读取时换一种方法，记录证据与必要阻塞。不会仅因只读步数而暂停；执行受已批准的共享预算约束。</goal-stall-notice>"
     )
 }
 
@@ -668,8 +714,14 @@ pub(super) fn goal_account_step(
     } else {
         g.stall_streak.saturating_add(1)
     };
-    let verdict = goal::stall_verdict(g.stall_streak);
-    rt.set_goal(Some(g.clone()));
+    // Fixed read-only step counts cannot establish lack of progress in a large
+    // project. Keep reminders, let the explicit shared budget bound the run.
+    let verdict = if g.stall_streak >= goal::STALL_NUDGE_AT {
+        StallVerdict::Nudge
+    } else {
+        StallVerdict::Continue
+    };
+    rt.mutate_goal(|current| current.stall_streak = g.stall_streak);
     match verdict {
         StallVerdict::Continue => {}
         StallVerdict::Nudge => {
@@ -698,9 +750,7 @@ pub(super) fn goal_account_step(
 /// 轮次只在「纯文本回合后下发推进指令」时递增：它对应一次「模型停下来又被推回」的循环，
 /// 与 LLM 步数无关（步数由 `step_count` 上报）。事件在轮边界发即为节流：不每步都发。
 fn bump_goal_round(sink: &Arc<dyn EventSink>, rt: &Arc<SessionRuntime>) -> Option<GoalState> {
-    let mut g = rt.goal_snapshot()?;
-    g.rounds = g.rounds.saturating_add(1);
-    rt.set_goal(Some(g.clone()));
+    let g = rt.mutate_goal(|g| g.rounds = g.rounds.saturating_add(1))?;
     emit_goal_update(sink, rt);
     Some(g)
 }
@@ -710,14 +760,11 @@ fn bump_goal_round(sink: &Arc<dyn EventSink>, rt: &Arc<SessionRuntime>) -> Optio
 pub(super) enum GoalCloseCause {
     /// 模型通过 goal 工具声明达成（地基已校验「全部 criteria.done」）
     Done,
-    /// L3 高危命令被硬拦（`rt.goal_abort` 置位）
+    /// Budget or runtime safety requested a stop (`rt.goal_abort`).
     Blocked,
-    /// 账本连续越界被拒达上限（`LEDGER_DENIAL_RETRY_LIMIT`）
-    LedgerDrift,
-    /// 连续多步无实质进展（`STALL_STOP_AT`）
-    Stalled,
     /// 执行期纯文本回合超限（推进不动，收尾出报告）
     TextLimit,
+    Interrupted,
 }
 
 impl GoalCloseCause {
@@ -734,10 +781,9 @@ impl GoalCloseCause {
     fn title(self) -> &'static str {
         match self {
             GoalCloseCause::Done => "目标已达成",
-            GoalCloseCause::Blocked => "目标执行被硬停（高危命令被拦）",
-            GoalCloseCause::LedgerDrift => "目标执行被硬停（账本连续越界）",
-            GoalCloseCause::Stalled => "目标执行被暂停（连续无实质进展）",
+            GoalCloseCause::Blocked => "目标执行已暂停（预算或运行阻塞）",
             GoalCloseCause::TextLimit => "目标执行被暂停（多轮只输出文字、未推进）",
+            GoalCloseCause::Interrupted => "目标执行已暂停（运行中断或预算耗尽）",
         }
     }
 }
@@ -751,7 +797,7 @@ pub(super) fn render_goal_report(state: &GoalState, cause: GoalCloseCause) -> St
         goal::render_goal_summary(state)
     );
     s.push_str(&format!(
-        "\n实际改动：均落在账本授权范围内（越界请求被拒 {} 次）",
+        "\n执行记录：历史拒绝 {} 次；实际改动范围与验证证据应以文件检查和验收记录为准",
         state.ledger_denials
     ));
     if cause == GoalCloseCause::Done {
@@ -772,7 +818,7 @@ pub(super) fn fallback_mode(
 }
 
 /// 应用回落档位（写 prefs + 清快照），返回落到的档位。
-fn apply_goal_fallback(
+pub(crate) fn apply_goal_fallback(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
 ) -> crate::core::prefs::ApprovalMode {
@@ -786,7 +832,7 @@ fn apply_goal_fallback(
     mode
 }
 
-/// 目标收尾（达成 / 硬停 / 账本漂移 / 停滞自停 / 文本轮超限 五路共用）：
+/// 目标收尾：完成或中断均先排空在途任务，再持久化最终状态。
 /// 1. 状态流转（Done 保持；其余 → Paused）+ 落边车 + 发 `goal:update`（用户回看）
 /// 2. 收尾报告作为**助手消息**进历史（落盘可回看）+ 发一次 `DeltaText` 帧（当场可见）
 /// 3. 达成时自动回落前档（`goal_prev_mode`，缺省走全局默认）并注入 `[system]` 说明
@@ -797,9 +843,10 @@ pub(super) async fn goal_close_out(
     rt: &Arc<SessionRuntime>,
     cause: GoalCloseCause,
 ) -> String {
-    // 五路收尾（含 Done）共用：先取消本会话在跑的子代理——目标已落 Done/Paused，
-    // 残留子代理不得再按执行期账本动工作区。
-    cancel_session_subagents(core, rt);
+    // Never advertise completion or pause while child tools can still write.
+    if !settle_goal_workers(core, rt, cause == GoalCloseCause::Done).await {
+        return "目标正在停止：仍有在途操作未确认退出，尚未进入安全暂停状态。".into();
+    }
     let Some(mut g) = rt.goal_snapshot() else {
         return String::new();
     };
@@ -813,11 +860,11 @@ pub(super) async fn goal_close_out(
     session_log::info(
         rt,
         &format!(
-            "目标收尾（{}）：标准 {}/{} 达成，账本越界被拒 {} 次，第 {} 轮",
+            "目标收尾（{}）：标准 {}/{} 达成，累计 token {}，第 {} 轮",
             cause.title(),
             g.criteria.iter().filter(|c| c.done).count(),
             g.criteria.len(),
-            g.ledger_denials,
+            g.delivery.used_tokens,
             g.rounds
         ),
     );
@@ -854,7 +901,7 @@ pub(super) async fn goal_close_out(
     report
 }
 
-/// 每步收尾裁决（批次后调用）：达成 / 硬停 / 账本漂移 / 停滞两段式。
+/// 每步收尾裁决：完成、人工验收、暂停与运行阻塞；停滞只提醒。
 /// 返回 `Some(收尾报告)` = 本 run 就此收尾（调用方 `break`；收尾经 `Ok` 走 run:done，不静默）。
 pub(super) async fn goal_bookkeep(
     core: &Arc<AgentCore>,
@@ -864,19 +911,32 @@ pub(super) async fn goal_bookkeep(
     goal_key: &mut Option<GoalProgressKey>,
 ) -> Option<String> {
     let g = rt.goal_snapshot()?;
+    if matches!(
+        g.status,
+        GoalStatus::Paused
+            | GoalStatus::Stopping
+            | GoalStatus::AwaitingAcceptance
+            | GoalStatus::Aborted
+    ) {
+        let target = g.status;
+        if settle_goal_workers(core, rt, target == GoalStatus::AwaitingAcceptance).await {
+            rt.mutate_goal(|g| {
+                g.status = if target == GoalStatus::Stopping {
+                    GoalStatus::Paused
+                } else {
+                    target
+                }
+            });
+            let _ = core.store.save_goal(&rt.id, &rt.goal_snapshot());
+            emit_goal_update(sink, rt);
+        }
+        return Some(goal::render_goal_summary(&rt.goal_snapshot()?));
+    }
     // 达成：模型已用 goal 工具声明（地基校验过「全部 criteria.done」）
     if g.status == GoalStatus::Done {
         return Some(goal_close_out(core, rt, GoalCloseCause::Done).await);
     }
-    // 账本漂移优先于通用硬停：越界达上限时 `ledger_gate` 会同时置 abort 标记，成因取更具体的
-    // 那个（LedgerDrift）；顺手消费掉标记，避免收尾被重复触发。
-    if goal::goal_phase(Some(&g)) == Some(GoalPhase::Execute)
-        && g.ledger_denials >= LEDGER_DENIAL_RETRY_LIMIT
-    {
-        let _ = rt.take_goal_abort();
-        return Some(goal_close_out(core, rt, GoalCloseCause::LedgerDrift).await);
-    }
-    // 硬停标记（L3 高危/灾难被硬拦）：无论阶段立即收尾
+    // Budget/runtime stop request: drain all work before reporting pause.
     if rt.take_goal_abort() {
         return Some(goal_close_out(core, rt, GoalCloseCause::Blocked).await);
     }
@@ -885,10 +945,8 @@ pub(super) async fn goal_bookkeep(
     if goal::goal_phase(Some(&g)) != Some(GoalPhase::Execute) {
         return None;
     }
-    match goal_account_step(sink, rt, idle_digest.has_non_readonly, goal_key) {
-        StallVerdict::Stop => Some(goal_close_out(core, rt, GoalCloseCause::Stalled).await),
-        _ => None,
-    }
+    let _ = goal_account_step(sink, rt, idle_digest.has_non_readonly, goal_key);
+    None
 }
 
 /// 子代理档位基座（B1）：spawn 时冻结一次，此后每步按父会话**实时**档位重建。
@@ -954,6 +1012,11 @@ pub fn subagent_drive_params(
         params.system_extra.push_str(&parent.system_extra);
     }
     crate::tools::subagent::apply_role_policy(&mut params, &base.role, parent_prefs.approval_mode);
+    if matches!(base.role.as_str(), "reviewer" | "code-reviewer")
+        && parent_goal.is_some_and(|g| g.status == GoalStatus::Executing)
+    {
+        params.system_extra.push_str("\n<goal-independent-review>独立验收：按任务消息提供的绝对合同路径读取 delivery.source_documents 批准快照（完整文件在 snapshot_path），并重新读取 sources 当前文档与代码，不得只复述主代理总结。核对需求遗漏、Mock 冒充真实集成、验证失效及未完成项；文档可更新实现细节但不得降低已批准 criteria。仅在确认无阻塞问题时，最终 report 最后一个非空行单独写 [GOAL_REVIEW_PASS]；否则写 [GOAL_REVIEW_FAIL] 并列明缺陷。</goal-independent-review>");
+    }
     dedup_excludes(&mut params.exclude_tools);
     params
 }
@@ -1119,17 +1182,6 @@ pub(super) enum TextTurnAction {
     StopWithLimit,
 }
 
-/// 文本轮上限：目标模式执行期用 `GOAL_TEXT_TURN_LIMIT`（8，先提醒后收尾），
-/// 其余场景保持 `MAX_TEXT_TURNS`（3，超限显式失败）——**非目标档行为逐字不变**（回归红线）。
-/// 被拒调用与纯文本共用同一计数器，故上限必须同源（混用两个上限会让计数失去意义）。
-pub(super) fn text_turn_limit(goal_execute: bool) -> u32 {
-    if goal_execute {
-        GOAL_TEXT_TURN_LIMIT
-    } else {
-        MAX_TEXT_TURNS
-    }
-}
-
 /// 无工具调用回合（含「唯一调用被拒」的空文本回合）如何处置——纯函数便于矩阵单测。
 ///
 /// 判定顺序（`rejected` 先于主会话语义，是有意为之，见下）：
@@ -1156,7 +1208,7 @@ pub(super) fn text_turn_action(
 ) -> TextTurnAction {
     // ① 被拒调用：提示已注入，绝不能就此收尾（主会话亦然）；上限仍生效
     if rejected {
-        return if text_turns >= text_turn_limit(goal_execute) {
+        return if text_turns >= MAX_TEXT_TURNS {
             TextTurnAction::StopWithLimit
         } else {
             TextTurnAction::Continue
@@ -1164,16 +1216,10 @@ pub(super) fn text_turn_action(
     }
     // ② 目标模式执行期：纯文本 = 推进暂停，不是收尾
     if goal_execute {
-        if text.contains(REPORT_TAG) {
-            return TextTurnAction::Finish;
-        }
-        if text_turns < GOAL_TEXT_TURN_LIMIT {
-            return TextTurnAction::Continue;
-        }
-        if text_turns == GOAL_TEXT_TURN_LIMIT {
+        if text_turns > 0 && text_turns.is_multiple_of(GOAL_TEXT_TURN_LIMIT) {
             return TextTurnAction::ContinueWithReminder;
         }
-        return TextTurnAction::Finish;
+        return TextTurnAction::Continue;
     }
     if finish_on_text {
         return TextTurnAction::Finish;
@@ -1281,7 +1327,10 @@ pub async fn drive_agent(
     // 目标模式进展快照（停滞判定基线）：执行期每步比对一次，见 `goal_account_step`
     let mut goal_key: Option<GoalProgressKey> = None;
 
-    'steps: for step in 0..params.max_steps {
+    'steps: for step in 0usize.. {
+        if step >= params.max_steps && !goal_mode_active(rt, &params) {
+            break 'steps;
+        }
         // 真实步数上报（sub:step 进度采样消费；取代 history.len() 失真口径）
         rt.step_count.store(step + 1, Ordering::SeqCst);
         // ① 取消检查
@@ -1289,7 +1338,24 @@ pub async fn drive_agent(
             outcome = Err(ProviderError::Cancelled);
             break 'steps;
         }
-        // ①’ 目标模式硬停（工具层拦下 L3 高危命令后置位）：立即收尾，不再进入下一步。
+        if let Some(reason) = core.goal_budget_check(rt) {
+            let root = goal::goal_gate_rt(core, rt);
+            root.mutate_goal(|g| g.blocked.push(reason.clone()));
+            root.request_goal_abort();
+            outcome = Err(ProviderError::Protocol(reason));
+            break 'steps;
+        }
+        if params.main_session
+            && rt
+                .goal_snapshot()
+                .is_some_and(|g| g.status == GoalStatus::Executing)
+        {
+            if let Err(error) = core.ensure_goal_writer(rt) {
+                outcome = Err(ProviderError::Protocol(error.to_string()));
+                break 'steps;
+            }
+        }
+        // ①’ 目标模式硬停（预算或运行层请求停止后置位）：立即收尾，不再进入下一步。
         // 正常路径由 `goal_bookkeep` 在批次后消费；此处兜住「标记在批次之外置位」的情形
         //（`take` 语义 → 两处不会重复收尾）。
         if goal_mode_active(rt, &params) && rt.take_goal_abort() {
@@ -1301,7 +1367,10 @@ pub async fn drive_agent(
         // 用户选了非目标档），避免「档位非目标档 + 目标 executing + 账本闸门关闭」的静默不一致。
         // 只对主会话生效：子代理不得替父会话改写目标状态。
         if params.main_session {
-            pause_goal_if_mode_left(core, rt);
+            if pause_goal_if_mode_left(core, rt) {
+                outcome = Err(ProviderError::Cancelled);
+                break 'steps;
+            }
         }
 
         // ② 消化注入队列（主会话语义）
@@ -1416,6 +1485,20 @@ pub async fn drive_agent(
                 break 'steps;
             }
         };
+
+        if let Some(reason) = core.goal_budget_check(rt) {
+            let root = goal::goal_gate_rt(core, rt);
+            root.mutate_goal(|g| g.blocked.push(reason.clone()));
+            root.request_goal_abort();
+            // No tool_use has entered history yet; do not start a new batch
+            // after the response consumes the last approved budget.
+            rt.history.lock().unwrap().push(
+                Message::user_text(format!("[system] {reason}；本次响应中的工具调用尚未执行。"))
+                    .stamped(),
+            );
+            outcome = Err(ProviderError::Protocol(reason));
+            break 'steps;
+        }
 
         // ⑧ 空响应兜底（M5）：空响应且重试预算耗尽则结束 run，
         // 不让空 assistant 消息进历史
@@ -1754,7 +1837,7 @@ pub async fn drive_agent(
                 break 'steps;
             }
         }
-        // 目标模式收尾裁决（批次后）：达成 / 硬停 / 账本漂移 / 停滞两段式。
+        // 目标模式收尾裁决（批次后）：完成 / 验收 / 中断。
         // 放在 `batch_done` 之前：本批用 goal 工具声明达成时收尾报告必须出得来，否则 run 直接结束、
         // 目标状态悬在「执行中」。停滞检测与轮次推进只在执行阶段生效（`goal_bookkeep` 内部门）。
         if goal_mode_active(rt, &params) {
@@ -1877,6 +1960,9 @@ async fn run_llm_turn(
     );
     loop {
         // 本**尝试**的计时起点（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+        if let Some(reason) = core.goal_budget_check(rt) {
+            return Err(ProviderError::Protocol(reason));
+        }
         // 必须在环内——环外的 `step_started` 含上一步的退避等待，拿它当 duration 会把重试等待算进去。
         let attempt_started = std::time::Instant::now();
         let (tx, rx) = mpsc::channel::<crate::provider::StreamDelta>(1024);
@@ -1947,6 +2033,7 @@ async fn run_llm_turn(
         }
         match res {
             Ok(usage) => {
+                core.account_goal_usage(rt, &usage, &model.api_format);
                 core.key_pool
                     .report(&model.provider_id, &resolved_keys, key_idx, None);
                 *run_usage = *run_usage + usage;
@@ -2369,10 +2456,9 @@ async fn sleep_backoff(attempt: u32) {
 fn batch_digest(calls: &[NormalizedCall]) -> BatchDigest {
     let mut d = BatchDigest::default();
     for c in calls {
-        let goal_read = c.name == "goal"
-            && c.args
-                .as_object()
-                .is_some_and(|fields| fields.values().all(serde_json::Value::is_null));
+        // Goal bookkeeping is not work progress. Criterion changes are measured
+        // independently by GoalProgressKey; repeating decisions cannot reset it.
+        let goal_read = c.name == "goal";
         let readonly = goal_read || super::supervise::READONLY_TOOLS.contains(&c.name.as_str());
         if !readonly {
             d.has_non_readonly = true;
@@ -2824,7 +2910,8 @@ mod tests {
             assert!(!digest.has_non_readonly, "{name} 只读调用不得重置停滞计数");
         }
         assert!(
-            batch_digest(&[call("goal", serde_json::json!({"decisions": ["x"]}))]).has_non_readonly
+            !batch_digest(&[call("goal", serde_json::json!({"decisions": ["x"]}))])
+                .has_non_readonly
         );
     }
 }
@@ -2854,7 +2941,7 @@ pub(super) fn emit_retry(
 /// 嵌套派发的子代理同样指向根会话）。
 ///
 /// 为什么需要显式取消：`cancel_run` 只取消主会话的 token，而目标收尾（达成 / 硬停 /
-/// 账本漂移 / 停滞 / 文本轮超限）根本不取消 token——run 只是跳出主循环。不显式收口就会出现
+/// 预算耗尽 / 运行中断）根本不取消 token——run 只是跳出主循环。不显式收口就会出现
 /// 「界面已显示已停止，子代理仍在写文件、跑命令」（目标模式下更糟：目标已 Paused/Done，
 /// 子代理仍按执行期账本动工作区）。
 ///
@@ -2866,15 +2953,50 @@ pub(super) fn cancel_session_subagents(core: &Arc<AgentCore>, rt: &Arc<SessionRu
         .filter(|e| e.value().root_session_id.as_deref() == Some(rt.id.as_str()))
         .map(|e| e.value().clone())
         .collect();
+    let mut cancelled = 0;
     for sub in &targets {
-        sub.cancel_active();
+        let token = sub.active_cancel.lock().unwrap();
+        if let Some(token) = token.as_ref()
+            && !token.is_cancelled()
+        {
+            token.cancel();
+            cancelled += 1;
+        }
     }
-    if !targets.is_empty() {
-        session_log::info(
-            rt,
-            &format!("已取消本会话在跑的子代理 {} 个", targets.len()),
-        );
+    if cancelled > 0 {
+        session_log::info(rt, &format!("已取消本会话在跑的子代理 {cancelled} 个"));
     }
+}
+
+/// Cancellation is a request, not evidence of quiescence. Keep Stopping until
+/// child tool scopes have dropped and managed background processes have exited.
+async fn settle_goal_workers(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    keep_preview: bool,
+) -> bool {
+    let _ = core.goal_budget_check(rt);
+    rt.mutate_goal(|g| g.status = GoalStatus::Stopping);
+    let _ = core.store.save_goal(&rt.id, &rt.goal_snapshot());
+    emit_goal_update(&core.sink, rt);
+    loop {
+        cancel_session_subagents(core, rt);
+        let active = core
+            .subs
+            .iter()
+            .any(|s| s.root_session_id.as_deref() == Some(rt.id.as_str()));
+        if !active {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    while let Err(error) =
+        crate::tools::service::stop_goal_services(core, &rt.id, keep_preview).await
+    {
+        session_log::warn(rt, &format!("目标仍在停止，等待服务退出：{error}"));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    true
 }
 
 /// 取消收尾：历史落取消标记 + 检查点 + run:cancelled 事件。
@@ -2885,13 +3007,14 @@ pub(super) fn cancel_session_subagents(core: &Arc<AgentCore>, rt: &Arc<SessionRu
 pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>, run_id: &str) {
     cancel_session_subagents(core, rt);
     lock_ok(&rt.history).push(Message::user_text("<run-cancelled/>").stamped());
-    if let Some(mut g) = rt.goal_snapshot() {
-        if g.status == GoalStatus::Executing {
-            g.status = GoalStatus::Paused;
-            rt.set_goal(Some(g.clone()));
-            let _ = core.store.save_goal(&rt.id, &Some(g));
-            emit_goal_update(&core.sink, rt);
-        }
+    if rt
+        .goal_snapshot()
+        .is_some_and(|g| matches!(g.status, GoalStatus::Executing | GoalStatus::Stopping))
+    {
+        settle_goal_workers(core, rt, false).await;
+        rt.mutate_goal(|g| g.status = GoalStatus::Paused);
+        let _ = core.store.save_goal(&rt.id, &rt.goal_snapshot());
+        emit_goal_update(&core.sink, rt);
     }
     let _ = checkpoint(core, rt).await;
     core.sink.emit(

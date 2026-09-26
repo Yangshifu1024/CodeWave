@@ -18,7 +18,7 @@
 //  随后任意一次 prefs 全量写入就把后端档位静默翻回去）；
 // 旧形态（无 mode）保留 approve_id / 正则兼容路径，胶囊回落 auto_edit。
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Input, Tag } from "antd";
+import { Button, Card, Input, Space, Tag, Typography } from "antd";
 import { CalendarOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ApprovalMode, AskOptionPayload, AskQuestionPayload } from "../../ipc/types";
@@ -26,6 +26,8 @@ import { useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { renderMarkdown } from "../../utils/markdown";
 import FileViewerModal from "../files/FileViewerModal";
+import GoalControls from "../chat/GoalControls";
+import { useUi } from "../../stores/ui";
 
 /** 判断键盘事件目标是否在输入框内（输入框内不拦截方向键/数字/空格等按键）。 */
 function isFormTarget(e: React.KeyboardEvent): boolean {
@@ -51,6 +53,7 @@ function enterCommits(e: React.KeyboardEvent): boolean {
 export default function AskPanel() {
   const { t } = useTranslation();
   const ask = useActiveRun().ask;
+  const goal = useActiveRun().goal;
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [cursor, setCursor] = useState(0); // 键盘高亮（审批：选中项；询问：当前页，末槽 = 补充输入）
@@ -261,6 +264,12 @@ export default function AskPanel() {
     // 先交付应答再同步胶囊（缺陷修复：此前 updatePrefs 先跑，后端 ask 工具恢复后读到新模式前
     // 前端已切到 AutoEdit，误判「无需切档」-> baseline/注入全部跳过；
     // 后端另有打开时的模式快照兜底；此处调整顺序从源头消除竞态）
+    const goalApproval = tabMode === "goal" && goal?.status === "clarify" && approved &&
+      (approvedMode === null || approvedMode === "goal") && !(allPreview && sawPreview);
+    if (goalApproval && !goal.delivery?.budget) {
+      useUi.getState().toast(t("goal.budgetRequired"));
+      return;
+    }
     await useRun.getState().resolveAsk(ask!.askId, { answers });
     // 非渲染路径禁止 hooks（缺陷修复：submit 内调 useActiveTab 抛「Invalid hook call」，
     // 提交按钮看似失效）-> 改用 getState() 命令式读取
@@ -291,7 +300,7 @@ export default function AskPanel() {
       // 旧形态（无 mode）走既有回落：仅 plan / confirm_each 两条路径同步，档位回落 auto_edit
       const modePath = approvedMode != null && !previewOnly;
       if (tab && (modePath || planPath || lightPath)) {
-        void updatePrefs(tab.key, { approval_mode: approvedMode ?? "auto_edit" });
+        void updatePrefs(tab.key, { approval_mode: approvedMode ?? (goalApproval ? "goal" : "auto_edit") });
       }
     }
   }
@@ -402,6 +411,25 @@ export default function AskPanel() {
 
   return (
     <div className="ask-wrap">
+      {tabMode === "goal" && goal?.status === "clarify" && sessionId && !isApproval && approvalShape &&
+        <Card size="small" title={t("goal.contract")} className="goal-approval-contract">
+          <Space orientation="vertical" style={{ width: "100%" }}>
+            <Typography.Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{goal.text}</Typography.Paragraph>
+            {goal.criteria.map((criterion, index) => <Space orientation="vertical" size={0} key={index}>
+              <Typography.Text>{index + 1}. {criterion.title}</Typography.Text>
+              <Typography.Text type="secondary">{criterion.manual ? t("goal.manual") : t("goal.automatic")}</Typography.Text>
+              {criterion.verification && <>
+                <Typography.Text code style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{criterion.verification.command}</Typography.Text>
+                <Typography.Text type="secondary">{criterion.verification.cwd ?? t("goal.defaultCwd")}</Typography.Text>
+              </>}
+            </Space>)}
+            {!!goal.delivery?.sources.length && <>
+              <Typography.Text strong>{t("goal.sources")}</Typography.Text>
+              {goal.delivery.sources.map((source, index) => <Typography.Text key={index} style={{ overflowWrap: "anywhere" }}>{source}</Typography.Text>)}
+            </>}
+            <GoalControls goal={goal} sessionId={sessionId} budgetOnly />
+          </Space>
+        </Card>}
       <div className="ask-card" tabIndex={0} onKeyDown={isApproval ? onKeyApproval : onKeyAsk}>
         {/* 计划卡（docs/run-queue-and-ask-revamp/35）：所有 ask 均展示（后端一律落盘计划文件）；完整方案 + 复制 + 查看完整方案 */}
         {isPlan && (

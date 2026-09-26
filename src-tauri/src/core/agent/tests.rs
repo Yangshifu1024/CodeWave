@@ -2233,10 +2233,14 @@ fn goal_state(status: crate::core::agent::goal::GoalStatus) -> crate::core::agen
             GoalCriterion {
                 title: "改完 X".into(),
                 done: false,
+                manual: false,
+                verification: None,
             },
             GoalCriterion {
                 title: "测试通过".into(),
                 done: false,
+                manual: false,
+                verification: None,
             },
         ],
         ledger: GoalLedger {
@@ -2250,6 +2254,13 @@ fn goal_state(status: crate::core::agent::goal::GoalStatus) -> crate::core::agen
         rounds: 0,
         stall_streak: 0,
         ledger_denials: 0,
+        delivery: crate::core::agent::goal_delivery::GoalDelivery {
+            budget: Some(crate::core::agent::goal_delivery::GoalBudget {
+                unlimited: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -2296,7 +2307,7 @@ fn goal_mode_clarify_phase_is_readonly_and_keeps_ask() {
 fn goal_mode_execute_phase_drops_ask_and_unlocks_writes() {
     use crate::core::agent::goal::GoalStatus;
     use crate::core::prefs::ApprovalMode;
-    for status in [GoalStatus::Executing, GoalStatus::Paused] {
+    for status in [GoalStatus::Executing] {
         let p = main_drive_params(
             &prefs_of(ApprovalMode::Goal, None),
             Some(&goal_state(status)),
@@ -2317,8 +2328,8 @@ fn goal_mode_execute_phase_drops_ask_and_unlocks_writes() {
             !p.exclude_tools.iter().any(|e| e == "goal"),
             "执行期保留 goal（勾选验收标准）"
         );
-        assert!(p.exclude_mcp, "执行期 MCP 尚无账本判定，必须排除");
-        assert!(p.exclude_tools.iter().any(|e| e == "http_request"));
+        assert!(!p.exclude_mcp, "执行期复用完全访问的 MCP 能力");
+        assert!(!p.exclude_tools.iter().any(|e| e == "http_request"));
         assert_eq!(p.idle_policy, IdlePolicy::NudgeOnly);
         assert!(p.system_extra.contains("<goal-mode>"));
     }
@@ -2365,20 +2376,20 @@ fn goal_execute_text_turn_continues_instead_of_finishing() {
             GOAL_TEXT_TURN_LIMIT + 1,
             true
         ),
-        TextTurnAction::Finish
+        TextTurnAction::Continue
     );
     // 显式汇报标记 → 收尾（与子代理同一标记语义）
     assert_eq!(
         text_turn_action("<report>做完了</report>", true, false, 0, true),
-        TextTurnAction::Finish
+        TextTurnAction::Continue
     );
     // 被拒调用仍优先于目标档分支，且上限与纯文本同源（同一个计数器，上限必须同源）
     assert_eq!(
-        text_turn_action("方案如下", true, true, GOAL_TEXT_TURN_LIMIT - 1, true),
+        text_turn_action("方案如下", true, true, MAX_TEXT_TURNS - 1, true),
         TextTurnAction::Continue
     );
     assert_eq!(
-        text_turn_action("方案如下", true, true, GOAL_TEXT_TURN_LIMIT, true),
+        text_turn_action("方案如下", true, true, MAX_TEXT_TURNS, true),
         TextTurnAction::StopWithLimit
     );
     // 非目标档：逐字不变
@@ -2458,7 +2469,7 @@ async fn goal_stall_nudge_at_five_and_stop_at_ten() {
     for _ in 0..STALL_STOP_AT - STALL_NUDGE_AT - 1 {
         assert_eq!(step(&mut key, false), StallVerdict::Nudge);
     }
-    assert_eq!(step(&mut key, false), StallVerdict::Stop);
+    assert_eq!(step(&mut key, false), StallVerdict::Nudge);
     assert_eq!(rt.goal_snapshot().unwrap().stall_streak, STALL_STOP_AT);
     // 非只读工具调用 = 进展 → 清零
     assert_eq!(step(&mut key, true), StallVerdict::Continue);
@@ -2494,9 +2505,8 @@ async fn goal_bookkeep_stall_gate_only_in_execute_phase() {
             break;
         }
     }
-    let report = closed.expect("执行期连续 10 步无进展必须自停");
-    assert!(report.contains("连续无实质进展"), "{report}");
-    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    assert!(closed.is_none(), "只读步数本身不得终止大型项目调研");
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
 }
 
 /// ⑤ 用户取消 run：目标从「执行中」落「已暂停」并落边车（复用取消链路，
@@ -2542,10 +2552,10 @@ async fn mode_left_goal_pauses_executing_goal() {
         super::drive::pause_goal_if_mode_left(&core, &rt),
         "应发生迁移"
     );
-    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Stopping);
     assert_eq!(
         core.store.load_goal(&rt.id).unwrap().status,
-        GoalStatus::Paused,
+        GoalStatus::Stopping,
         "兜底迁移必须落边车"
     );
     // 幂等：再调一次不迁移（已不是执行中）
@@ -2593,6 +2603,7 @@ async fn cancel_and_goal_close_out_stop_only_this_sessions_subagents() {
     super::drive::mark_cancelled(&core, &rt, "run_cancel_sub").await;
     assert!(mine_tok.is_cancelled(), "本会话子代理必须被取消");
     assert!(!theirs_tok.is_cancelled(), "其它会话的子代理不得被误杀");
+    core.subs.remove("sub-mine");
 
     // ② 目标收尾（达成 / 硬停 / 账本漂移 / 停滞 / 文本轮超限五路共用）同样取消本会话子代理
     rt.set_prefs(prefs_of(ApprovalMode::Goal, None));
@@ -2601,6 +2612,12 @@ async fn cancel_and_goal_close_out_stop_only_this_sessions_subagents() {
     let closing_tok = CancellationToken::new();
     *closing.active_cancel.lock().unwrap() = Some(closing_tok.clone());
     core.subs.insert("sub-close".into(), closing.clone());
+    let cleanup_core = core.clone();
+    let cleanup_token = closing_tok.clone();
+    tokio::spawn(async move {
+        cleanup_token.cancelled().await;
+        cleanup_core.subs.remove("sub-close");
+    });
     super::drive::goal_close_out(&core, &rt, super::drive::GoalCloseCause::Done).await;
     assert!(closing_tok.is_cancelled(), "目标收尾必须取消残留子代理");
     assert!(!theirs_tok.is_cancelled(), "目标收尾同样不得误杀其它会话");
@@ -2650,6 +2667,44 @@ fn done_goal() -> crate::core::agent::goal::GoalState {
         c.done = true;
     }
     g
+}
+
+#[tokio::test]
+async fn goal_pause_waits_until_child_scope_has_exited() {
+    use crate::core::agent::goal::GoalStatus;
+    let (core, rt) = goal_core_and_rt();
+    rt.set_goal(Some(goal_state(GoalStatus::Executing)));
+    let child = SessionRuntime::new_sub(&rt, "draining-child".into());
+    let token = tokio_util::sync::CancellationToken::new();
+    *child.active_cancel.lock().unwrap() = Some(token.clone());
+    core.subs.insert(child.id.clone(), child);
+    let (worker_core, worker_rt) = (core.clone(), rt.clone());
+    let stopping = tokio::spawn(async move {
+        super::drive::goal_close_out(
+            &worker_core,
+            &worker_rt,
+            super::drive::GoalCloseCause::Interrupted,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), token.cancelled())
+        .await
+        .unwrap();
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Stopping);
+    assert!(
+        !stopping.is_finished(),
+        "cancel request is not proof of child completion"
+    );
+    core.subs.remove("draining-child");
+    tokio::time::timeout(std::time::Duration::from_secs(2), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
+    assert_eq!(
+        core.store.load_goal(&rt.id).unwrap().status,
+        GoalStatus::Paused
+    );
 }
 
 /// ⑦ 子代理：基座排除集含 `goal`（不得替父会话改验收合同），目标档下拿到的是**只读**目标上下文
