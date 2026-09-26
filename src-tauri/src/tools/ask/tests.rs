@@ -1102,6 +1102,11 @@ fn goal_state(status: GoalStatus) -> GoalState {
         criteria: vec![GoalCriterion {
             title: "改完 X".into(),
             done: false,
+            manual: false,
+            verification: Some(crate::core::agent::goal_delivery::GoalCheck {
+                command: "cargo test".into(),
+                cwd: None,
+            }),
         }],
         ledger: GoalLedger {
             paths: vec!["/work/proj/src".into()],
@@ -1114,6 +1119,13 @@ fn goal_state(status: GoalStatus) -> GoalState {
         rounds: 0,
         stall_streak: 0,
         ledger_denials: 0,
+        delivery: crate::core::agent::goal::GoalDelivery {
+            budget: Some(crate::core::agent::goal::GoalBudget {
+                unlimited: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -1206,6 +1218,29 @@ async fn goal_approval_rejected_without_criteria() {
 }
 
 #[tokio::test]
+async fn goal_approval_requires_user_budget_choice() {
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    ctx.rt.mutate_goal(|g| g.delivery.budget = None);
+    let outcome = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert_eq!(outcome.error.unwrap().code, "E_GOAL_BUDGET_REQUIRED");
+    assert_eq!(ctx.rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+}
+
+#[tokio::test]
+async fn goal_approval_does_not_execute_when_contract_cannot_be_saved() {
+    let ctx = goal_ctx(GoalStatus::Clarify);
+    let path = ctx.core.store.goal_path(&ctx.rt.id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    if path.is_file() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    std::fs::create_dir_all(&path).unwrap();
+    let outcome = drive_ask_with_answer(&ctx, goal_approval_args(), gate_answer("approve")).await;
+    assert!(!outcome.ok);
+    assert_eq!(ctx.rt.goal_snapshot().unwrap().status, GoalStatus::Clarify);
+}
+
+#[tokio::test]
 async fn goal_approval_enters_execute_without_plan_baseline() {
     let ctx = goal_ctx(GoalStatus::Clarify);
     // 登记 todos + 分析产物：若误入 plan 档批准协议，基线就会被冻结（G3 前置成立）
@@ -1240,7 +1275,7 @@ async fn goal_approval_enters_execute_without_plan_baseline() {
     let summary = outcome.data["summary"].as_str().expect("summary 应为文本");
     assert!(summary.contains("[system] 方案已批准"), "{summary}");
     assert!(summary.contains("执行期"), "{summary}");
-    assert!(summary.contains("账本"), "{summary}");
+    assert!(summary.contains("完全访问"), "{summary}");
     assert!(summary.contains("goal 工具"), "{summary}");
 }
 

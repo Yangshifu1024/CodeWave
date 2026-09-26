@@ -743,6 +743,7 @@ impl SessionStore {
             let _ = std::fs::remove_file(self.history_path(id));
             let _ = std::fs::remove_file(self.todos_path(id));
             let _ = std::fs::remove_file(self.goal_path(id));
+            let _ = std::fs::remove_dir_all(self.goal_sources_dir(id));
             let _ = std::fs::remove_file(self.prefs_path(id));
             let _ = std::fs::remove_file(self.artifacts_path(id));
             // 两个按会话分桶的托管目录（工具结果 sidecar / 图片 blob）：
@@ -785,6 +786,7 @@ impl SessionStore {
         let _ = std::fs::remove_file(self.artifacts_path(id));
         let _ = std::fs::remove_file(self.todos_path(id));
         let _ = std::fs::remove_file(self.goal_path(id));
+        let _ = std::fs::remove_dir_all(self.goal_sources_dir(id));
         let _ = std::fs::remove_file(self.prefs_path(id));
         // 子代理过程历史目录级联清理（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）
         // 及其图片 blob（blob 归子历史自己，不在父会话的 blob 目录里）——
@@ -1307,6 +1309,10 @@ impl SessionStore {
     // ---------- 目标模式（goal mode）边车 ----------
 
     /// goal 边车文件路径：sessions/<id>.goal.json（清理按同一路径删除）。
+    pub(crate) fn goal_sources_dir(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.goal.sources"))
+    }
+
     pub(crate) fn goal_path(&self, id: &str) -> PathBuf {
         self.sessions_dir().join(format!("{id}.goal.json"))
     }
@@ -1714,6 +1720,8 @@ mod goal_sidecar_tests {
             criteria: vec![GoalCriterion {
                 title: "测试通过".into(),
                 done: true,
+                manual: false,
+                verification: None,
             }],
             ledger: GoalLedger {
                 paths: vec!["/work/proj/src".into()],
@@ -1726,6 +1734,7 @@ mod goal_sidecar_tests {
             rounds: 2,
             stall_streak: 1,
             ledger_denials: 0,
+            delivery: Default::default(),
         }
     }
 

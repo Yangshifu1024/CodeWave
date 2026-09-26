@@ -1068,6 +1068,9 @@ function GoalBanner({ goal, sessionKey }: { goal: GoalState | null; sessionKey: 
           ? t("composer.goalBannerClarify")
           : `${t("composer.goalRunning", { n: goal?.rounds ?? 0 })} · ${t(GOAL_STATUS_KEYS[status])}`}
       </span>
+      {status === "awaiting_acceptance" && <Button type="text" size="small" onClick={() => useUi.setState({ rightBarOpen: true, rbTab: "info" })}>
+        {t("composer.goalReviewDelivery")}
+      </Button>}
       {status === "paused" && (
         <>
           <Button type="text" size="small" className="goal-resume-btn" onClick={() => void useRun.getState().resumeGoal(sessionKey)}>

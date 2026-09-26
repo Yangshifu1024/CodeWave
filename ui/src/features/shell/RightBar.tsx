@@ -22,6 +22,7 @@ import { useActiveRun, useRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import FilesPanel from "../files/FilesPanel";
+import GoalControls from "../chat/GoalControls";
 import FileViewerModal from "../files/FileViewerModal";
 import { useSessionFiles } from "../files/useSessionFiles";
 import QuotaSection from "../quota/QuotaSection";
@@ -201,7 +202,7 @@ function InfoPanel({ visible }: { visible: boolean }) {
 }
 const TAIL_LINES = 300;
 
-/** 右栏「目标」段（`ApprovalMode::Goal`）：目标正文 / 达成标准（只读）/ 账本摘要 / 状态徽标 / 轮次。
+/** 右栏「目标」段：合同、预算、验证证据、阻塞和人工验收。
  *  与「当前计划」段并列渲染；暂停态给出「继续推进」（调 `resume_goal`）。 */
 function GoalSection({ goal, sessionId, canAct }: { goal: GoalState; sessionId: string | null; canAct: boolean }) {
   const { t } = useTranslation();
@@ -230,18 +231,21 @@ function GoalSection({ goal, sessionId, canAct }: { goal: GoalState; sessionId: 
               <span className={`rb-todo-dot ${c.done ? "completed" : "pending"}`}>
                 {c.done ? "✓" : "○"}
               </span>
-              <span className={c.done ? "rb-todo-done" : ""}>{c.title}</span>
+              <span><span className={c.done ? "rb-todo-done" : ""}>{c.title}</span>
+                {c.verification && <><div><code>{c.verification.command}</code></div>{c.verification.cwd && <div className="rb-dim">{c.verification.cwd}</div>}</>}
+              </span>
+              {c.manual && <span className="rb-dim">{t("goal.manual")}</span>}
             </div>
           ))}
         </>
       )}
-      <div className="rb-label">{t("rightbar.goalLedger")}</div>
-      <div className="rb-dim">{t("rightbar.goalPaths", { n: goal.ledger.paths.length })}</div>
-      {goal.ledger.programs.length > 0 && (
-        <div className="rb-goal-programs" title={goal.ledger.programs.join(", ")}>
-          {goal.ledger.programs.join(" · ")}
-        </div>
-      )}
+      {sessionId && <GoalControls goal={goal} sessionId={sessionId} readOnly={!canAct} />}
+      {goal.pending.length > 0 && <><div className="rb-label">{t("goal.pending")}</div>{goal.pending.map((item, i) => <div key={i}>{item}</div>)}</>}
+      {goal.blocked.length > 0 && <><div className="rb-label">{t("goal.blocked")}</div>{goal.blocked.map((item, i) => <div key={i}>{item}</div>)}</>}
+      {!!goal.delivery?.sources.length && <><div className="rb-label">{t("goal.sources")}</div>{goal.delivery.sources.map((item, i) => <div key={i}>{item}</div>)}</>}
+      {!!goal.delivery?.baseline.length && <><div className="rb-label">{t("goal.baseline")}</div>{goal.delivery.baseline.map((item, i) => <div key={i}>{item}</div>)}</>}
+      {!!goal.delivery?.evidence.length && <><div className="rb-label">{t("goal.evidence")}</div>{goal.delivery.evidence.map((item, i) => <div key={i} title={item.call_id}>{goal.criteria[item.criterion]?.title}: {item.summary}</div>)}</>}
+      {!!goal.delivery?.verifications.length && <><div className="rb-label">{t("goal.verifications")}</div>{goal.delivery.verifications.map((item, i) => <div key={i} title={item.call_id}>{item.passed ? "✓" : "○"} {item.review ? t("goal.review") : item.tool}: {item.summary}</div>)}</>}
     </>
   );
 }

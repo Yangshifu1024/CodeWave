@@ -8,6 +8,8 @@ import type { GoalStatus } from "../ipc/types";
 export const GOAL_STATUS_KEYS: Record<GoalStatus, string> = {
   clarify: "composer.goalStatusClarify",
   executing: "composer.goalStatusExecuting",
+  stopping: "composer.goalStatusStopping",
+  awaiting_acceptance: "composer.goalStatusAwaitingAcceptance",
   paused: "composer.goalStatusPaused",
   done: "composer.goalStatusDone",
   aborted: "composer.goalStatusAborted",

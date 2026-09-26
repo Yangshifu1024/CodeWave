@@ -7,9 +7,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 /// service 工具入参。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,12 +22,23 @@ pub struct Args {
     /// start：工作区相对的执行目录。
     #[serde(default)]
     cwd: Option<String>,
+    /// 服务用途：preview 可在待验收/完成后保留，其余随目标停止。
+    #[serde(default)]
+    purpose: ServicePurpose,
     /// stop / read：服务 id。
     #[serde(default)]
     id: Option<String>,
     /// read：读取的尾部字节数，默认 8192。
     #[serde(default)]
     tail_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServicePurpose {
+    #[default]
+    Development,
+    Preview,
 }
 
 /// service 工具：管理长驻后台服务（dev server 等）。
@@ -105,6 +113,9 @@ impl RingLog {
 pub struct ServiceHandle {
     /// 服务 id（`svc_` 前缀 + 8 位随机）。
     pub id: String,
+    /// 根会话所有者，子代理启动的服务归根目标管理。
+    pub owner_root_id: String,
+    pub purpose: ServicePurpose,
     /// 展示名。
     pub name: String,
     /// 启动命令原文。
@@ -161,43 +172,63 @@ impl ServiceTable {
     }
 }
 
-/// 优雅终止：TERM → 10s 宽限 → KILL（进程树）。
-pub async fn stop_service(handle: &Arc<ServiceHandle>) {
+/// Stop via the owned job/process group, then await confirmed process-tree exit.
+pub async fn stop_service(handle: &Arc<ServiceHandle>) -> Result<(), String> {
+    if handle.done.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     handle.cancel.cancel();
-    let pid = handle.pid;
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
-        }
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/PID", &pid.to_string()])
-            .creation_flags(0x0800_0000)
-            .output();
-    }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while tokio::time::Instant::now() < deadline
-        && !handle.done.load(std::sync::atomic::Ordering::SeqCst)
+    while !handle.done.load(std::sync::atomic::Ordering::SeqCst)
+        && tokio::time::Instant::now() < deadline
     {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    if !handle.done.load(std::sync::atomic::Ordering::SeqCst) {
-        #[cfg(unix)]
+    if handle.done.load(std::sync::atomic::Ordering::SeqCst) {
+        Ok(())
+    } else {
+        Err(format!("服务 {} 仍在停止，尚未确认进程树退出", handle.name))
+    }
+}
+
+/// Stop only this goal's services. A failed reap must keep the goal visibly stopping.
+pub async fn stop_goal_services(
+    core: &crate::core::agent::AgentCore,
+    root_id: &str,
+    keep_preview: bool,
+) -> Result<(), String> {
+    let handles: Vec<_> = core
+        .services
+        .list()
+        .into_iter()
+        .filter(|h| {
+            h.owner_root_id == root_id && !(keep_preview && h.purpose == ServicePurpose::Preview)
+        })
+        .collect();
+    let mut pending = Vec::new();
+    for handle in handles {
+        let _ = stop_service(&handle).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !handle.done.load(std::sync::atomic::Ordering::SeqCst)
+            && tokio::time::Instant::now() < deadline
         {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .creation_flags(0x0800_0000)
-                .output();
+        if handle.done.load(std::sync::atomic::Ordering::SeqCst) {
+            core.services.remove(&handle.id);
+            core.sink.emit(
+                &root_id.to_string(),
+                "service:update",
+                json!({"session":root_id,"removed":handle.id}),
+            );
+        } else {
+            pending.push(handle.name.clone());
         }
+    }
+    if pending.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("后台服务尚未确认退出：{}", pending.join("、")))
     }
 }
 
@@ -219,6 +250,7 @@ impl Tool for ServiceTool {
     "name": {"type": "string", "description": "短标签，start 用"},
     "command": {"type": "string", "description": "start 用"},
     "cwd": {"type": "string", "description": "相对工作区，start 用"},
+    "purpose": {"type": "string", "enum": ["development", "preview"], "description": "默认 development；明确用于人工验收的预览服务用 preview"},
     "id": {"type": "string", "description": "服务 id，stop/read 用"},
     "tailBytes": {"type": "integer", "description": "默认 8192，read 用"}
   }
@@ -240,7 +272,9 @@ impl Tool for ServiceTool {
                 let Some(h) = ctx.core.services.get(&id) else {
                     return ToolOutcome::err("E_NOT_FOUND", format!("服务不存在：{id}"));
                 };
-                stop_service(&h).await;
+                if let Err(error) = stop_service(&h).await {
+                    return ToolOutcome::err("E_SERVICE_STOPPING", error);
+                }
                 ctx.core.services.remove(&id);
                 ctx.core.sink.emit(
                     &ctx.rt.id,
@@ -257,7 +291,8 @@ impl Tool for ServiceTool {
                     .iter()
                     .map(|h| {
                         json!({ "id": h.id, "name": h.name, "command": h.command,
-                                "pid": h.pid, "uptime_secs": h.uptime_secs(), "log_bytes": h.log.len() })
+                                "pid": h.pid, "uptime_secs": h.uptime_secs(), "log_bytes": h.log.len(),
+                                "owner_root_id": h.owner_root_id, "purpose": h.purpose })
                     })
                     .collect();
                 ToolOutcome::ok(json!({ "services": items }))
@@ -291,50 +326,16 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     };
 
     // fence：后台服务走同一套安全检查（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认，灾难级仍拦截）
-    let mode = ctx.approval_mode();
-    let mut policy = ctx.fence_policy();
-    // 目标档执行期（判定见 core/agent/goal.rs 的 ledger_gate）：免确认的合法性由**账本**承担；
-    // 灾难 / 高危级直接硬拦并请求硬停（与 command 工具同一口径）。
-    // 账本判定的作用域 runtime：子代理不持有目标状态，判定取根会话的账本（见 goal_gate_rt）
-    let goal_rt = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
-    let goal_exec = crate::core::agent::goal::goal_execute_phase(&goal_rt);
-    if goal_exec {
-        policy.confirm_inside_writes = true;
-    }
-    let mut confirm_path: Option<String> = None;
+    let mode = ctx.execution_approval_mode();
+    let policy = ctx.fence_policy();
     match crate::safety::fence::check_command_policy(&command, &cwd, &roots, policy) {
         crate::safety::fence::Verdict::Allow => {}
         crate::safety::fence::Verdict::Block { code, message } => {
-            if goal_exec {
-                crate::core::agent::goal::goal_hard_block(
-                    &goal_rt,
-                    format!("后台服务命令被安全围栏硬拦：{message}"),
-                );
-            }
             return ToolOutcome::err(&code, message);
         }
         crate::safety::fence::Verdict::Confirm(reason) => {
             use crate::safety::fence::ConfirmReason;
-            if goal_exec {
-                match &reason {
-                    ConfirmReason::Disaster(why) | ConfirmReason::HighRisk(why) => {
-                        crate::core::agent::goal::goal_hard_block(
-                            &goal_rt,
-                            format!("高危命令被硬拦：{why}"),
-                        );
-                        return ToolOutcome::err(
-                            "E_COMMAND_BLOCKED",
-                            format!(
-                                "目标档执行期高危命令已硬拦（{why}）：该命令不在本次目标的授权范围内。本轮执行已请求停止，请由用户确认后再继续。"
-                            ),
-                        );
-                    }
-                    // 需确认级：免确认，落回下方账本判定
-                    ConfirmReason::InsideWrite(t) | ConfirmReason::OutsideCreate(t) => {
-                        confirm_path = Some(t.clone());
-                    }
-                }
-            } else if mode == crate::core::prefs::ApprovalMode::FullAccess {
+            if mode == crate::core::prefs::ApprovalMode::FullAccess {
                 if let ConfirmReason::Disaster(why) = &reason {
                     return ToolOutcome::err(
                         "E_COMMAND_BLOCKED",
@@ -373,24 +374,6 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         }
     }
 
-    // 目标档执行期：账本判定（程序名 + 需确认级携带的写目标）——越界即拒，不弹审批
-    if goal_exec {
-        use crate::core::agent::goal::{LedgerTarget, ledger_denial_message, ledger_gate};
-        let program = match crate::core::agent::goal::goal_command_program(&command) {
-            Ok(program) => program,
-            Err(message) => return ToolOutcome::err("E_GOAL_COMMAND_SHAPE", message),
-        };
-        let mut checks = vec![(LedgerTarget::Program(program.as_str()), program.clone())];
-        if let Some(p) = confirm_path.as_deref() {
-            checks.push((LedgerTarget::Path(p), p.to_string()));
-        }
-        for (target, label) in checks {
-            if let Err(code) = ledger_gate(&goal_rt, target) {
-                return ToolOutcome::err(code, ledger_denial_message(&goal_rt, &label));
-            }
-        }
-    }
-
     // 执行 shell 跟随配置 selection（与 command 工具同一拼接事实源；长驻任务不再硬编码 bash）
     let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
     let shell = crate::tools::command::resolve_shell(selection.as_deref());
@@ -401,15 +384,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null());
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x0800_0000);
-    }
-    let mut child = match cmd.spawn() {
+    let mut wrapped = crate::mcp::wrap_process_tree(cmd);
+    let mut child = match wrapped.spawn() {
         Ok(c) => c,
         Err(e) => return ToolOutcome::err("E_IO", format!("进程启动失败：{e}")),
     };
@@ -425,8 +401,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
 
     // M9 修复：stdout/stderr 各自独立泵（顺序读在任一流沉寂时会饿死另一流），
     // 只写 RingLog；节流事件由独立 ticker 发出
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    let stdout = child.stdout().take();
+    let stderr = child.stderr().take();
     async fn drain<R: tokio::io::AsyncRead + Unpin>(mut s: R, log: RingLog) {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 4096];
@@ -467,32 +443,44 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         }
     });
 
-    // 退出监听：置 done + 发事件
+    // Only process reaping marks completion; closed stdout alone is not termination.
     let done2 = done.clone();
     let sink2 = ctx.core.sink.clone();
     let session2 = ctx.rt.id.clone();
     let svc2 = id.clone();
-    let watcher = tokio::spawn(async move {
+    let stop_token = cancel.clone();
+    tokio::spawn(async move {
+        loop {
+            let result = tokio::select! {
+                result = child.wait() => result,
+                _ = stop_token.cancelled() => {
+                    match child.start_kill() {
+                        Ok(()) => child.wait().await,
+                        Err(error) => Err(error),
+                    }
+                }
+            };
+            if let Err(error) = result {
+                tracing::warn!("service {svc2} exit could not be confirmed: {error}");
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+            break;
+        }
         let _ = pump_a.await;
         let _ = pump_b.await;
         done2.store(true, std::sync::atomic::Ordering::SeqCst);
         sink2.emit(
             &session2,
             "service:update",
-            json!({ "session": session2, "id": svc2, "exited": true }),
+            json!({"session":session2,"id":svc2,"exited":true}),
         );
     });
-    // 进程本体等待（回收僵尸）
-    let done3 = done.clone();
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-        done3.store(true, std::sync::atomic::Ordering::SeqCst);
-        watcher.abort();
-    });
-    let _ = cancel; // cancel token 由 stop_service 消费（挂在表句柄上）
-
-    if let Err(e) = ctx.core.services.try_insert(Arc::new(ServiceHandle {
+    let owner = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
+    let handle = Arc::new(ServiceHandle {
         id: id.clone(),
+        owner_root_id: owner.id.clone(),
+        purpose: args.purpose,
         name,
         command,
         started_at: SystemTime::now(),
@@ -500,11 +488,17 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         log,
         cancel,
         done,
-    })) {
+    });
+    if let Err(e) = ctx.core.services.try_insert(handle.clone()) {
+        if let Err(stopping) = stop_service(&handle).await {
+            // Preserve ownership even when capacity rejection cannot finish cleanup.
+            ctx.core.services.services.insert(id.clone(), handle);
+            return ToolOutcome::err("E_SERVICE_STOPPING", format!("{e}；{stopping}（{id}）"));
+        }
         return ToolOutcome::err("E_SERVICE_FULL", e);
     }
     ToolOutcome::ok(
-        json!({ "id": id, "pid": pid, "note": "用 read 查看日志；stop 停止（进程树）" }),
+        json!({ "id": id, "pid": pid, "purpose": args.purpose, "owner_root_id": owner.id, "note": "用 read 查看日志；stop 停止（进程树）" }),
     )
 }
 
@@ -628,6 +622,8 @@ mod tests {
             criteria: vec![GoalCriterion {
                 title: "改完 X".into(),
                 done: false,
+                manual: false,
+                verification: None,
             }],
             ledger: GoalLedger {
                 paths: vec![],
@@ -640,6 +636,7 @@ mod tests {
             rounds: 0,
             stall_streak: 0,
             ledger_denials: 0,
+            delivery: Default::default(),
         }));
         let ctx = ToolCtx {
             core: core.clone(),
@@ -685,9 +682,9 @@ mod tests {
             .await;
     }
 
-    /// ② 目标档执行期：程序名在账本外 → 拒（不弹审批、不起进程）。
+    /// 目标执行期不再要求程序预登记，服务仍受完全访问的安全围栏约束。
     #[tokio::test]
-    async fn goal_service_gate_rejects_outside_program() {
+    async fn goal_service_allows_program_without_ledger() {
         use crate::core::prefs::ApprovalMode;
         let f = goal_svc_fixture(
             ApprovalMode::Goal,
@@ -700,14 +697,12 @@ mod tests {
                 serde_json::json!({"action":"start","name":"lister","command":"ls -la"}),
             )
             .await;
-        assert_eq!(
-            out.error.as_ref().map(|e| e.code.as_str()),
-            Some("E_GOAL_OUTSIDE_LEDGER"),
-            "{:?}",
-            out.error
-        );
-        assert!(f.ctx.core.services.list().is_empty(), "被拒不得注册服务");
-        assert_eq!(f.ctx.rt.goal_snapshot().unwrap().ledger_denials, 1);
+        assert!(out.ok, "{out:?}");
+        assert_eq!(f.ctx.rt.goal_snapshot().unwrap().ledger_denials, 0);
+        stop_goal_services(&f.ctx.core, &f.ctx.rt.id, false)
+            .await
+            .unwrap();
+        assert!(f.ctx.core.services.list().is_empty());
     }
 
     /// ③（回归红线）非目标档 / 目标档澄清期：账本闸门完全不受影响。
@@ -720,13 +715,20 @@ mod tests {
             (ApprovalMode::Goal, GoalStatus::Clarify),
         ] {
             let f = goal_svc_fixture(mode, status, vec![]);
+            f.ctx.cancel.cancel();
             let out = ServiceTool
                 .run(
                     &f.ctx,
-                    serde_json::json!({"action":"start","name":"lister","command":"ls -la"}),
+                    serde_json::json!({"action":"start","name":"lister","command":"echo listed"}),
                 )
                 .await;
-            assert!(out.ok, "{mode:?}/{status:?} 被账本闸门误伤：{out:?}");
+            assert_ne!(
+                out.error.as_ref().map(|e| e.code.as_str()),
+                Some("E_GOAL_OUTSIDE_LEDGER")
+            );
+            stop_goal_services(&f.ctx.core, &f.ctx.rt.id, false)
+                .await
+                .unwrap();
             assert_eq!(
                 f.ctx.rt.goal_snapshot().unwrap().ledger_denials,
                 0,
@@ -734,6 +736,111 @@ mod tests {
             );
             assert!(!f.ctx.rt.take_goal_abort(), "{mode:?}/{status:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn stop_timeout_keeps_service_visible_for_retry() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let f = goal_svc_fixture(ApprovalMode::Goal, GoalStatus::Executing, vec![]);
+        let handle = Arc::new(ServiceHandle {
+            id: "unconfirmed".into(),
+            owner_root_id: f.ctx.rt.id.clone(),
+            purpose: ServicePurpose::Development,
+            name: "unconfirmed".into(),
+            command: "test fixture".into(),
+            started_at: SystemTime::now(),
+            pid: 0,
+            log: RingLog::new(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        f.ctx.core.services.try_insert(handle.clone()).unwrap();
+        let out = ServiceTool
+            .run(&f.ctx, json!({"action":"stop","id":"unconfirmed"}))
+            .await;
+        assert_eq!(
+            out.error.as_ref().map(|e| e.code.as_str()),
+            Some("E_SERVICE_STOPPING")
+        );
+        assert!(f.ctx.core.services.get("unconfirmed").is_some());
+        handle.done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let out = ServiceTool
+            .run(&f.ctx, json!({"action":"stop","id":"unconfirmed"}))
+            .await;
+        assert!(out.ok);
+        assert!(f.ctx.core.services.get("unconfirmed").is_none());
+    }
+
+    /// Service cleanup is scoped to the root goal, and previews survive only acceptance cleanup.
+    #[tokio::test]
+    async fn goal_service_cleanup_respects_owner_and_preview() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let f = goal_svc_fixture(ApprovalMode::Goal, GoalStatus::Executing, vec![]);
+        for (id, owner, purpose) in [
+            ("own-dev", "goalsvc", ServicePurpose::Development),
+            ("own-preview", "goalsvc", ServicePurpose::Preview),
+            ("other", "other-session", ServicePurpose::Development),
+        ] {
+            f.ctx
+                .core
+                .services
+                .try_insert(Arc::new(ServiceHandle {
+                    id: id.into(),
+                    owner_root_id: owner.into(),
+                    purpose,
+                    name: id.into(),
+                    command: "echo".into(),
+                    started_at: SystemTime::now(),
+                    pid: 0,
+                    log: RingLog::new(),
+                    cancel: tokio_util::sync::CancellationToken::new(),
+                    done: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                }))
+                .unwrap();
+        }
+        stop_goal_services(&f.ctx.core, "goalsvc", true)
+            .await
+            .unwrap();
+        assert!(f.ctx.core.services.get("own-dev").is_none());
+        assert!(f.ctx.core.services.get("own-preview").is_some());
+        assert!(f.ctx.core.services.get("other").is_some());
+        stop_goal_services(&f.ctx.core, "goalsvc", false)
+            .await
+            .unwrap();
+        assert!(f.ctx.core.services.get("own-preview").is_none());
+        assert!(f.ctx.core.services.get("other").is_some());
+    }
+
+    #[tokio::test]
+    async fn goal_subagent_service_has_root_owner() {
+        use crate::core::agent::goal::GoalStatus;
+        use crate::core::prefs::ApprovalMode;
+        let f = goal_svc_fixture(ApprovalMode::Goal, GoalStatus::Executing, vec![]);
+        let ctx = ToolCtx {
+            core: f.ctx.core.clone(),
+            rt: crate::core::agent::SessionRuntime::new_sub(&f.ctx.rt, "service-sub".into()),
+            batch_id: "sub-service".into(),
+            call_index: 0,
+            call_key: "sub-service:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let out = ServiceTool
+            .run(
+                &ctx,
+                json!({"action":"start","command":"echo preview", "purpose":"preview"}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let id = out.data["id"].as_str().unwrap();
+        let handle = ctx.core.services.get(id).unwrap();
+        assert_eq!(handle.owner_root_id, f.ctx.rt.id);
+        assert_eq!(handle.purpose, ServicePurpose::Preview);
+        stop_goal_services(&ctx.core, &f.ctx.rt.id, false)
+            .await
+            .unwrap();
+        assert!(ctx.core.services.get(id).is_none());
     }
 
     #[test]

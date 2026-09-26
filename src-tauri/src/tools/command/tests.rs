@@ -480,6 +480,8 @@ fn goal_ctx(
         criteria: vec![GoalCriterion {
             title: "改完 X".into(),
             done: false,
+            manual: false,
+            verification: None,
         }],
         ledger: GoalLedger {
             paths: ledger_paths,
@@ -492,190 +494,93 @@ fn goal_ctx(
         rounds: 0,
         stall_streak: 0,
         ledger_denials: 0,
+        delivery: Default::default(),
     }));
     let ctx = test_ctx(core, rt, tokio_util::sync::CancellationToken::new());
     (ws, ctx)
 }
 
-/// ⑤ 目标档执行期 L3 高危：硬拦 + `blocked` 记录 + 请求硬停（不弹审批）。
+/// Goal execution uses the same command fence as FullAccess, even with an empty ledger.
 #[tokio::test]
-async fn goal_execute_hard_blocks_high_risk_command() {
+async fn goal_execution_matches_full_access_commands() {
     use crate::core::agent::goal::GoalStatus;
     use crate::core::prefs::ApprovalMode;
     use crate::tools::Tool as _;
-    let (_ws, ctx) = goal_ctx(
-        ApprovalMode::Goal,
-        GoalStatus::Executing,
-        vec![],
-        vec!["git".into()],
-    );
+    for mode in [ApprovalMode::FullAccess, ApprovalMode::Goal] {
+        let (ws, ctx) = goal_ctx(mode, GoalStatus::Executing, vec![], vec![]);
+        let out = CommandTool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo first > first.txt; echo second > second.txt"
+                }),
+            )
+            .await;
+        assert!(out.ok, "{mode:?}: {out:?}");
+        assert!(ws.path().join("first.txt").exists());
+        assert!(ws.path().join("second.txt").exists());
+        assert_eq!(ctx.rt.goal_snapshot().unwrap().ledger_denials, 0);
+        assert!(!ctx.rt.take_goal_abort());
+    }
+}
+
+#[tokio::test]
+async fn goal_execution_preserves_full_access_disaster_block() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    use crate::tools::Tool as _;
+    for mode in [ApprovalMode::FullAccess, ApprovalMode::Goal] {
+        let (_ws, ctx) = goal_ctx(mode, GoalStatus::Executing, vec![], vec![]);
+        let out = CommandTool
+            .run(
+                &ctx,
+                serde_json::json!({"command": "dd if=/dev/zero of=/dev/sda"}),
+            )
+            .await;
+        assert_eq!(
+            out.error.as_ref().map(|e| e.code.as_str()),
+            Some("E_COMMAND_BLOCKED")
+        );
+        assert!(
+            !ctx.rt.take_goal_abort(),
+            "a blocked tool must not terminate the goal"
+        );
+    }
+}
+
+#[tokio::test]
+async fn goal_clarification_does_not_inherit_full_access() {
+    use crate::core::agent::goal::GoalStatus;
+    use crate::core::prefs::ApprovalMode;
+    use crate::tools::Tool as _;
+    let (ws, ctx) = goal_ctx(ApprovalMode::Goal, GoalStatus::Clarify, vec![], vec![]);
+    ctx.cancel.cancel();
+    assert_eq!(ctx.execution_approval_mode(), ApprovalMode::Plan);
     let out = CommandTool
         .run(
             &ctx,
-            serde_json::json!({"command": "git push --force origin main"}),
+            serde_json::json!({"command": "echo denied > denied.txt"}),
         )
         .await;
     assert!(!out.ok);
-    assert_eq!(out.error.as_ref().unwrap().code, "E_COMMAND_BLOCKED");
-    let g = ctx.rt.goal_snapshot().unwrap();
-    assert!(
-        g.blocked.iter().any(|b| b.contains("git push --force")),
-        "L3 硬拦必须记入 blocked：{:?}",
-        g.blocked
-    );
-    assert!(ctx.rt.take_goal_abort(), "L3 硬拦必须请求硬停");
+    assert!(!ws.path().join("denied.txt").exists());
 }
 
-/// ⑥ 目标档执行期：程序名过账本（越界即拒），且不再走审批弹窗（预取消 token 不被消费）。
-/// 必须 multi_thread：(c) 段真会执行命令并被预取消的 token 终止进程树，而 `terminate_tree`
-/// 走 `block_in_place`（current_thread 运行时会直接 panic）。
-#[tokio::test(flavor = "multi_thread")]
-async fn goal_command_gate_and_confirm_skip() {
-    use crate::core::agent::goal::GoalStatus;
-    use crate::core::prefs::ApprovalMode;
-    use crate::tools::Tool as _;
-    // (a) 账本外程序：执行期直接拒绝，不问人（`ls` 过 fence 为 Allow，命中的是账本闸门）
-    let (_ws, ctx) = goal_ctx(
-        ApprovalMode::Goal,
-        GoalStatus::Executing,
-        vec![],
-        vec!["cargo".into()],
-    );
-    let out = CommandTool
-        .run(&ctx, serde_json::json!({"command": "ls -la"}))
-        .await;
-    assert_eq!(
-        out.error.as_ref().map(|e| e.code.as_str()),
-        Some("E_GOAL_OUTSIDE_LEDGER"),
-        "{:?}",
-        out.error
-    );
-    assert_eq!(ctx.rt.goal_snapshot().unwrap().ledger_denials, 1);
-
-    // (b) 同一命令（工作区外新建，默认配置下 fence 判 Confirm）在 AutoEdit 下预取消 = 拒绝
-    let outside = tempfile::tempdir().unwrap();
-    let cmd = format!("mkdir {}", outside.path().join("probe").display());
-    let (_ws_auto, ctx_auto) = goal_ctx(
-        ApprovalMode::AutoEdit,
-        GoalStatus::Executing,
-        vec![],
-        vec![],
-    );
-    ctx_auto.cancel.cancel();
-    let out = CommandTool
-        .run(&ctx_auto, serde_json::json!({"command": cmd}))
-        .await;
-    assert_eq!(
-        out.error.as_ref().map(|e| e.code.as_str()),
-        Some("E_APPROVAL_DENIED"),
-        "前提：AutoEdit 下该命令需确认：{:?}",
-        out.error
-    );
-
-    // (c) 目标档执行期 + 账本内：免确认（预取消 token 不被消费 → 绝不是审批拒绝）
-    let outside2 = tempfile::tempdir().unwrap();
-    let cmd2 = format!("mkdir {}", outside2.path().join("probe").display());
-    let (_ws_goal, ctx_goal) = goal_ctx(
-        ApprovalMode::Goal,
-        GoalStatus::Executing,
-        vec![outside2.path().to_string_lossy().into_owned()],
-        vec!["mkdir".into()],
-    );
-    ctx_goal.cancel.cancel();
-    let out = CommandTool
-        .run(&ctx_goal, serde_json::json!({"command": cmd2}))
-        .await;
-    assert_ne!(
-        out.error.as_ref().map(|e| e.code.as_str()),
-        Some("E_APPROVAL_DENIED"),
-        "目标档执行期不得产生审批请求：{:?}",
-        out.error
-    );
-    assert!(
-        ctx_goal.rt.goal_snapshot().unwrap().blocked.is_empty(),
-        "账本内命令不得被硬拦"
-    );
-    assert!(!ctx_goal.rt.take_goal_abort());
-    assert_eq!(ctx_goal.rt.goal_snapshot().unwrap().ledger_denials, 0);
-}
-
+#[cfg(unix)]
 #[tokio::test]
-async fn goal_command_rejects_redirection_and_second_program() {
+async fn goal_execution_allows_high_risk_like_full_access() {
     use crate::core::agent::goal::GoalStatus;
     use crate::core::prefs::ApprovalMode;
     use crate::tools::Tool as _;
-    let (ws, ctx) = goal_ctx(
-        ApprovalMode::Goal,
-        GoalStatus::Executing,
-        vec![],
-        vec!["echo".into()],
-    );
-    let outside = ws.path().join("outside.txt");
-    for command in [
-        format!("echo x > {}", outside.display()),
-        "echo ok; cargo build".into(),
-    ] {
+    for mode in [ApprovalMode::FullAccess, ApprovalMode::Goal] {
+        let (ws, ctx) = goal_ctx(mode, GoalStatus::Executing, vec![], vec![]);
         let out = CommandTool
-            .run(&ctx, serde_json::json!({"command": command}))
+            .run(
+                &ctx,
+                serde_json::json!({"command": "echo hi > $PWD/probe.txt"}),
+            )
             .await;
-        assert_eq!(
-            out.error.as_ref().map(|e| e.code.as_str()),
-            Some("E_GOAL_COMMAND_SHAPE")
-        );
-    }
-    assert!(!outside.exists());
-}
-
-#[tokio::test]
-async fn goal_command_checks_inside_write_even_without_user_confirmation() {
-    use crate::core::agent::goal::GoalStatus;
-    use crate::core::prefs::ApprovalMode;
-    use crate::tools::Tool as _;
-    let (ws, ctx) = goal_ctx(
-        ApprovalMode::Goal,
-        GoalStatus::Executing,
-        vec![],
-        vec!["touch".into()],
-    );
-    let outside = ws.path().join("outside.txt");
-    let out = CommandTool
-        .run(
-            &ctx,
-            serde_json::json!({"command": format!("touch {}", outside.display())}),
-        )
-        .await;
-    assert_eq!(
-        out.error.as_ref().map(|e| e.code.as_str()),
-        Some("E_GOAL_OUTSIDE_LEDGER")
-    );
-    assert!(!outside.exists());
-}
-
-/// ③（回归红线）非目标档 / 澄清期：命令执行完全不受账本闸门影响。
-#[tokio::test]
-async fn goal_command_gate_inert_outside_goal_execute() {
-    use crate::core::agent::goal::GoalStatus;
-    use crate::core::prefs::ApprovalMode;
-    use crate::tools::Tool as _;
-    for (mode, status) in [
-        (ApprovalMode::AutoEdit, GoalStatus::Executing),
-        (ApprovalMode::Goal, GoalStatus::Clarify),
-    ] {
-        let (_ws, ctx) = goal_ctx(mode, status, vec![], vec![]);
-        let out = CommandTool
-            .run(&ctx, serde_json::json!({"command": "ls -la"}))
-            .await;
-        assert_ne!(
-            out.error.as_ref().map(|e| e.code.as_str()),
-            Some("E_GOAL_OUTSIDE_LEDGER"),
-            "{mode:?}/{status:?} 被账本闸门误伤：{:?}",
-            out.error
-        );
-        assert_eq!(
-            ctx.rt.goal_snapshot().unwrap().ledger_denials,
-            0,
-            "{mode:?}/{status:?}"
-        );
-        assert!(!ctx.rt.take_goal_abort());
+        assert!(out.ok, "{mode:?}: {out:?}");
+        assert!(ws.path().join("probe.txt").exists());
     }
 }

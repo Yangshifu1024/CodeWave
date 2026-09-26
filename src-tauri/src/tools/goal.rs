@@ -11,6 +11,7 @@
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use crate::core::agent::goal::{self, GoalCriterion, GoalLedger, GoalPhase, GoalState, GoalStatus};
+use crate::core::agent::goal_delivery::{self, GoalDelivery, GoalEvidence};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -42,6 +43,14 @@ pub struct Args {
     /// 待办事项（执行期追加）。
     #[serde(default)]
     pending: Option<Vec<String>>,
+    #[serde(default)]
+    blocked: Option<Vec<String>>,
+    #[serde(default)]
+    sources: Option<Vec<String>>,
+    #[serde(default)]
+    baseline: Option<Vec<String>>,
+    #[serde(default)]
+    evidence: Option<Vec<GoalEvidence>>,
 }
 
 impl Args {
@@ -53,6 +62,10 @@ impl Args {
             || self.status.is_some()
             || self.decisions.is_some()
             || self.pending.is_some()
+            || self.blocked.is_some()
+            || self.sources.is_some()
+            || self.baseline.is_some()
+            || self.evidence.is_some()
     }
 }
 
@@ -65,6 +78,10 @@ pub struct CriterionIn {
     /// 是否已达成（缺省 false）。
     #[serde(default)]
     done: Option<bool>,
+    #[serde(default)]
+    manual: Option<bool>,
+    #[serde(default)]
+    verification: Option<goal_delivery::GoalCheck>,
 }
 
 /// 账本入参（两个列表均可缺省 = 空白名单）。
@@ -101,7 +118,7 @@ fn register(args: &Args) -> Result<GoalState, (String, String)> {
     if args.decisions.is_some() || args.pending.is_some() {
         return Err((
             "E_GOAL_NOT_REGISTERED".into(),
-            "目标尚未登记：先提供 text/criteria/ledger 登记目标，之后才能追加 decisions/pending"
+            "目标尚未登记：先提供 text/criteria/sources 登记目标，之后才能追加 decisions/pending"
                 .into(),
         ));
     }
@@ -119,7 +136,7 @@ fn register(args: &Args) -> Result<GoalState, (String, String)> {
     if args.text.is_none() && args.criteria.is_none() && args.ledger.is_none() {
         return Err((
             "E_GOAL_NOT_REGISTERED".into(),
-            "目标尚未登记：首次调用必须提供 text（或 criteria/ledger）以登记目标".into(),
+            "目标尚未登记：首次调用必须提供 text 和 criteria 以登记目标".into(),
         ));
     }
     let text = args.text.as_deref().unwrap_or("").trim().to_string();
@@ -137,6 +154,11 @@ fn register(args: &Args) -> Result<GoalState, (String, String)> {
         rounds: 0,
         stall_streak: 0,
         ledger_denials: 0,
+        delivery: GoalDelivery {
+            sources: args.sources.as_deref().map(clean_list).unwrap_or_default(),
+            baseline: args.baseline.as_deref().map(clean_list).unwrap_or_default(),
+            ..Default::default()
+        },
     })
 }
 
@@ -167,6 +189,7 @@ fn revise(cur: &GoalState, args: &Args) -> Result<GoalState, (String, String)> {
             rounds: 0,
             stall_streak: 0,
             ledger_denials: 0,
+            delivery: GoalDelivery::default(),
             ..cur.clone()
         }
     } else {
@@ -185,13 +208,19 @@ fn revise(cur: &GoalState, args: &Args) -> Result<GoalState, (String, String)> {
     if let Some(l) = args.ledger.as_ref() {
         next.ledger = build_ledger(Some(l))?;
     }
+    if let Some(sources) = &args.sources {
+        next.delivery.sources = clean_list(sources);
+    }
+    if let Some(baseline) = &args.baseline {
+        next.delivery.baseline = clean_list(baseline);
+    }
     next.status = GoalStatus::Clarify;
     Ok(next)
 }
 
 /// 执行期更新：只允许改 `criteria[].done` 与追加 `decisions` / `pending`（合同锁定其余字段）。
 fn update_in_execute(cur: &GoalState, args: &Args) -> Result<GoalState, (String, String)> {
-    if args.text.is_some() {
+    if args.text.is_some() || args.sources.is_some() || args.baseline.is_some() {
         return Err((
             "E_GOAL_CONTRACT_LOCKED".into(),
             "执行期合同锁定：不能修改目标 text（改目标须先 status=aborted，再重新登记）".into(),
@@ -207,10 +236,13 @@ fn update_in_execute(cur: &GoalState, args: &Args) -> Result<GoalState, (String,
     if let Some(ins) = args.criteria.as_deref() {
         // 只允许勾选：标题序列（长度 + 顺序 + 文本）必须与当前完全一致
         if ins.len() != cur.criteria.len()
-            || ins
-                .iter()
-                .zip(cur.criteria.iter())
-                .any(|(a, b)| a.title.trim() != b.title)
+            || ins.iter().zip(cur.criteria.iter()).any(|(a, b)| {
+                a.title.trim() != b.title
+                    || a.manual.is_some_and(|m| m != b.manual)
+                    || a.verification
+                        .as_ref()
+                        .is_some_and(|v| Some(v) != b.verification.as_ref())
+            })
         {
             return Err((
                 "E_GOAL_CONTRACT_LOCKED".into(),
@@ -220,6 +252,12 @@ fn update_in_execute(cur: &GoalState, args: &Args) -> Result<GoalState, (String,
         }
         for (i, a) in ins.iter().enumerate() {
             if let Some(d) = a.done {
+                if next.criteria[i].manual && d {
+                    return Err((
+                        "E_GOAL_MANUAL_ACCEPTANCE".into(),
+                        "人工验收项只能由用户确认".into(),
+                    ));
+                }
                 next.criteria[i].done = d;
             }
         }
@@ -228,19 +266,43 @@ fn update_in_execute(cur: &GoalState, args: &Args) -> Result<GoalState, (String,
         next.decisions.extend(clean_list(ds));
     }
     if let Some(ps) = args.pending.as_deref() {
-        next.pending.extend(clean_list(ps));
+        next.pending = clean_list(ps);
+    }
+    if let Some(bs) = &args.blocked {
+        next.blocked = clean_list(bs);
+    }
+    if let Some(es) = &args.evidence {
+        for evidence in es {
+            if evidence.criterion >= next.criteria.len()
+                || evidence.summary.trim().is_empty()
+                || !next
+                    .delivery
+                    .verifications
+                    .iter()
+                    .any(|v| v.call_id == evidence.call_id && v.passed)
+            {
+                return Err((
+                    "E_GOAL_EVIDENCE".into(),
+                    "验收证据必须引用实际成功工具调用，criterion 为零基序号".into(),
+                ));
+            }
+            next.delivery
+                .evidence
+                .retain(|e| e.criterion != evidence.criterion);
+            next.delivery.evidence.push(evidence.clone());
+        }
     }
     if let Some(s) = args.status {
         match s {
-            GoalStatus::Done => {
+            GoalStatus::Done | GoalStatus::AwaitingAcceptance => {
                 // done 门：以**本次调用之后**的标准集合判定（同一次调用里勾完最后一条也放行）
                 let left: Vec<&str> = next
                     .criteria
                     .iter()
-                    .filter(|c| !c.done)
+                    .filter(|c| !c.done && !c.manual)
                     .map(|c| c.title.as_str())
                     .collect();
-                if !left.is_empty() {
+                if next.criteria.is_empty() || !left.is_empty() {
                     return Err((
                         "E_GOAL_CRITERIA_PENDING".into(),
                         format!(
@@ -249,12 +311,18 @@ fn update_in_execute(cur: &GoalState, args: &Args) -> Result<GoalState, (String,
                         ),
                     ));
                 }
-                next.status = GoalStatus::Done;
+                next.status = if next.criteria.iter().any(|c| c.manual)
+                    || s == GoalStatus::AwaitingAcceptance
+                {
+                    GoalStatus::AwaitingAcceptance
+                } else {
+                    GoalStatus::Done
+                };
             }
             GoalStatus::Aborted => next.status = GoalStatus::Aborted,
             GoalStatus::Executing => next.status = GoalStatus::Executing,
             GoalStatus::Paused => next.status = GoalStatus::Paused,
-            GoalStatus::Clarify => {
+            GoalStatus::Clarify | GoalStatus::Stopping => {
                 return Err((
                     "E_ARGS".into(),
                     "执行期不接受 status=clarify（目标已进入执行期；改目标请先 aborted）".into(),
@@ -282,28 +350,19 @@ fn build_criteria(ins: Option<&[CriterionIn]>) -> Result<Vec<GoalCriterion>, (St
         out.push(GoalCriterion {
             title: t.to_string(),
             done: c.done.unwrap_or(false),
+            manual: c.manual.unwrap_or(false),
+            verification: c.verification.clone(),
         });
     }
     Ok(out)
 }
 
-/// 账本构建：去空条目；**禁用路径（裸根 / 家目录本身 / 系统路径 / `..`）在登记时即拒绝**
-/// （与其在执行期被逐次拒，不如登记时报错让模型改账本；判定本身仍由 `goal::ledger_allows` 兜底）。
+/// 清洗旧版账本数据；字段不再出现在工具 schema，也不参与权限判定。
 fn build_ledger(ins: Option<&LedgerIn>) -> Result<GoalLedger, (String, String)> {
     let Some(l) = ins else {
         return Ok(GoalLedger::default());
     };
     let paths = l.paths.as_deref().map(clean_list).unwrap_or_default();
-    for p in &paths {
-        if goal::is_forbidden_path(p) {
-            return Err((
-                "E_ARGS".into(),
-                format!(
-                    "账本路径 `{p}` 不可用：不得为裸根（/、C:\\）、家目录本身、系统路径（/etc、/usr、C:\\Windows 等）或含 `..` 的相对路径"
-                ),
-            ));
-        }
-    }
     Ok(GoalLedger {
         paths,
         programs: l.programs.as_deref().map(clean_list).unwrap_or_default(),
@@ -325,42 +384,22 @@ impl Tool for GoalTool {
         "goal"
     }
     fn description(&self) -> &'static str {
-        "读取或更新当前会话的目标（目标模式）。未登记时先用 {\\\"text\\\":..., \\\"criteria\\\":[{\\\"title\\\":...}], \\\"ledger\\\":{\\\"paths\\\":[...], \\\"programs\\\":[...]}} 登记目标（澄清期可反复修订）；进入执行期后只能改 criteria[].done 并追加 decisions/pending，改 text/criteria 标题/ledger 会被拒绝（E_GOAL_CONTRACT_LOCKED）。全部验收标准完成后用 {\\\"status\\\":\\\"done\\\"} 收尾；无法继续用 {\\\"status\\\":\\\"aborted\\\"}。传 {} 读取当前目标。"
+        "登记文档驱动的目标合同(text/criteria/sources/baseline)，执行中维护验收证据与进度。预算由用户在界面设置。criteria.manual=true为人工验收项，不能由模型勾选。evidence引用真实command调用id与criterion零基序号。pending/blocked整体替换当前未解决列表（[]表示已解决）；decisions追加。全部机器项完成并有当前版本独立审查后status=done，有人工项自动进入待验收。{}读取状态。"
     }
     fn schema(&self) -> &'static str {
         r#"{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "text": {"type": "string", "minLength": 1, "description": "目标陈述（澄清期登记/修订；执行期锁定）"},
-    "criteria": {
-      "type": "array",
-      "maxItems": 100,
-      "description": "验收标准（整体替换；执行期只允许改 done）",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["title"],
-        "properties": {
-          "title": {"type": "string", "minLength": 1},
-          "done": {"type": "boolean"}
-        }
-      }
-    },
-    "ledger": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "账本：本次目标允许触碰的路径与程序（执行期锁定）",
-      "properties": {
-        "paths": {"type": "array", "items": {"type": "string"}},
-        "programs": {"type": "array", "items": {"type": "string"}}
-      }
-    },
-    "status": {"type": "string", "enum": ["clarify", "executing", "paused", "done", "aborted"]},
-    "decisions": {"type": "array", "description": "关键决策（执行期追加）", "items": {"type": "string"}},
-    "pending": {"type": "array", "description": "待办事项（执行期追加）", "items": {"type": "string"}}
-  }
-}"#
+          "type":"object","additionalProperties":false,"properties":{
+            "text":{"type":"string","minLength":1},
+            "criteria":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["title"],"properties":{"title":{"type":"string"},"done":{"type":"boolean"},"manual":{"type":"boolean"},"verification":{"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string","minLength":1},"cwd":{"type":"string"}}}}}},
+            "sources":{"type":"array","items":{"type":"string"},"description":"需求与技术文档路径，执行期锁定"},
+            "baseline":{"type":"array","items":{"type":"string"},"description":"开工已有的失败与已知问题，执行期锁定"},
+            "status":{"type":"string","enum":["clarify","executing","paused","awaiting_acceptance","done","aborted"]},
+            "decisions":{"type":"array","items":{"type":"string"}},
+            "pending":{"type":"array","items":{"type":"string"},"description":"整体替换当前未完成工作；清空表示已解决"},
+            "blocked":{"type":"array","items":{"type":"string"},"description":"整体替换当前阻塞；清空表示已解决"},
+            "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","call_id","summary"],"properties":{"criterion":{"type":"integer","minimum":0},"call_id":{"type":"string"},"summary":{"type":"string"}}}}
+          }
+        }"#
     }
     fn kind(&self) -> ToolKind {
         ToolKind::Meta
@@ -379,27 +418,49 @@ impl Tool for GoalTool {
             };
             return ToolOutcome::ok(json!({ "goal": current, "rendered": rendered }));
         }
-        let next = match apply(current.as_ref(), &args) {
+        let stamp = if args
+            .status
+            .is_some_and(|s| matches!(s, GoalStatus::Done | GoalStatus::AwaitingAcceptance))
+        {
+            let Some(state) = &current else {
+                return ToolOutcome::err("E_GOAL_NOT_REGISTERED", "目标尚未登记");
+            };
+            if ctx
+                .core
+                .subs
+                .iter()
+                .any(|s| s.root_session_id.as_deref() == Some(ctx.rt.id.as_str()))
+            {
+                return ToolOutcome::err(
+                    "E_GOAL_VERIFY_BUSY",
+                    "仍有子代理在运行，请等待所有任务结束后单独验收",
+                );
+            }
+            match goal_delivery::fingerprint(&ctx.rt, state).await {
+                Ok(s) => Some(s),
+                Err(e) => return ToolOutcome::err("E_GOAL_EVIDENCE", e),
+            }
+        } else {
+            None
+        };
+        // Reapply under the shared lock: subagent usage and verification records must not be lost.
+        let mut guard = ctx.rt.goal.lock().unwrap();
+        let next = match apply(guard.as_ref(), &args) {
             Ok(n) => n,
             Err((code, msg)) => return ToolOutcome::err(&code, msg),
         };
-        ctx.rt.set_goal(Some(next.clone()));
-        // 事件 + 持久化（payload 带 session：右栏与目标卡按会话路由，与 plan:update 同形）
-        ctx.core.sink.emit(
-            &ctx.rt.id,
-            "goal:update",
-            json!({ "session": ctx.rt.id, "goal": next }),
-        );
-        let _ = ctx.core.store.save_goal(&ctx.rt.id, &Some(next.clone()));
-        let mut out = ToolOutcome::ok(json!({
-            "goal": next,
-            "rendered": goal::render_goal_summary(&next),
-        }));
-        if next.status == GoalStatus::Done && next.criteria.is_empty() {
-            out.warnings
-                .push("目标没有验收标准，完成判定未被约束".into());
+        if let Some(stamp) = &stamp {
+            if let Some(e) = goal_delivery::completion_error(&next, stamp, false) {
+                return ToolOutcome::err("E_GOAL_EVIDENCE", e);
+            }
         }
-        out
+        if let Err(e) = ctx.core.store.save_goal(&ctx.rt.id, &Some(next.clone())) {
+            return ToolOutcome::err("E_GOAL_SAVE", e.to_string());
+        }
+        *guard = Some(next.clone());
+        drop(guard);
+        goal_delivery::persist(&ctx.core, &ctx.rt);
+        ToolOutcome::ok(json!({"goal": next, "rendered": goal::render_goal_summary(&next)}))
     }
 }
 
@@ -687,8 +748,8 @@ mod tests {
             }),
         )
         .await;
-        assert!(out.ok, "{:?}", out.error);
-        assert_eq!(state_of(&h).status, GoalStatus::Done);
+        assert_eq!(code(&out), "E_GOAL_EVIDENCE", "仅勾选不能证明完成");
+        assert_eq!(state_of(&h).status, GoalStatus::Executing);
     }
 
     #[tokio::test]
@@ -719,31 +780,135 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forbidden_ledger_entries_rejected_at_registration() {
-        let h = harness();
-        for bad in ["/", "C:\\", "/etc", "/usr", "D:/", "src/../.."] {
-            let out = call(&h, json!({"text": "t", "ledger": {"paths": [bad]}})).await;
-            assert_eq!(code(&out), "E_ARGS", "账本条目 {bad} 应被拒");
-        }
-        assert!(h.ctx.rt.goal_snapshot().is_none());
-        // 正常路径可登记
-        let out = call(&h, json!({"text": "t", "ledger": {"paths": ["/tmp/x"]}})).await;
-        assert!(out.ok, "{:?}", out.error);
-    }
-
-    #[tokio::test]
-    async fn empty_criteria_done_is_allowed_with_warning() {
+    async fn empty_criteria_cannot_be_completed() {
         let h = harness();
         assert!(call(&h, json!({"text": "只改一行"})).await.ok);
         enter_execute(&h);
         let out = call(&h, json!({"status": "done"})).await;
+        assert_eq!(code(&out), "E_GOAL_CRITERIA_PENDING");
+        assert_eq!(state_of(&h).status, GoalStatus::Executing);
+    }
+
+    #[tokio::test]
+    async fn tool_backed_evidence_and_human_acceptance_form_a_complete_lifecycle() {
+        let h = harness();
+        assert!(call(&h,json!({"text":"完整交付", "criteria":[
+            {"title":"构建测试通过","verification":{"command":"test"}}, {"title":"人工操作界面", "manual":true}
+        ]})).await.ok);
+        h.ctx
+            .rt
+            .mutate_goal(|g| goal_delivery::prepare_contract(g, &h.ctx.rt).unwrap());
+        enter_execute(&h);
+        let stamp =
+            goal_delivery::verification_start(&h.ctx, "command", &json!({"command":"test"})).await;
+        goal_delivery::record_tool_result(
+            &h.ctx,
+            "test-1",
+            "command",
+            &json!({"command":"test"}),
+            &ToolOutcome::ok(json!({"exit_code":0})),
+            stamp,
+        )
+        .await;
+        let stamp =
+            goal_delivery::verification_start(&h.ctx, "subagent", &json!({"role":"reviewer"}))
+                .await;
+        goal_delivery::record_tool_result(
+            &h.ctx,
+            "review-1",
+            "subagent",
+            &json!({"role":"reviewer"}),
+            &ToolOutcome::ok(json!({"ended":"report","report":"已核对原文\n[GOAL_REVIEW_PASS]"})),
+            stamp,
+        )
+        .await;
+        let out = call(&h,json!({"criteria":[{"title":"构建测试通过","done":true},{"title":"人工操作界面","manual":true}],
+            "evidence":[{"criterion":0,"call_id":"test-1","summary":"构建与测试通过"}],"status":"done"})).await;
         assert!(out.ok, "{:?}", out.error);
-        assert_eq!(state_of(&h).status, GoalStatus::Done);
-        assert!(
-            out.warnings.iter().any(|w| w.contains("验收标准")),
-            "无验收标准的完成必须带告警：{:?}",
-            out.warnings
+        assert_eq!(state_of(&h).status, GoalStatus::AwaitingAcceptance);
+        assert!(!state_of(&h).criteria[1].done);
+        let done = h.ctx.core.accept_goal(&h.ctx.rt, true, None).await.unwrap();
+        assert_eq!(done.status, GoalStatus::Done);
+        assert!(done.criteria.iter().all(|c| c.done));
+        assert_eq!(
+            h.ctx.core.store.load_goal(&h.ctx.rt.id).unwrap().status,
+            GoalStatus::Done
         );
+    }
+
+    #[tokio::test]
+    async fn changes_during_verification_and_failed_reviews_cannot_supply_evidence() {
+        let h = harness();
+        assert!(call(&h,json!({"text":"test", "criteria":[{"title":"test","verification":{"command":"test"}}]})).await.ok);
+        h.ctx
+            .rt
+            .mutate_goal(|g| goal_delivery::prepare_contract(g, &h.ctx.rt).unwrap());
+        enter_execute(&h);
+        let stamp =
+            goal_delivery::verification_start(&h.ctx, "command", &json!({"command":"test"})).await;
+        std::fs::write(h.ctx.rt.workspace.join("changed.rs"), "changed during test").unwrap();
+        goal_delivery::record_tool_result(
+            &h.ctx,
+            "stale",
+            "command",
+            &json!({"command":"test"}),
+            &ToolOutcome::ok(json!({"exit_code":0})),
+            stamp,
+        )
+        .await;
+        assert!(!state_of(&h).delivery.verifications[0].passed);
+        let stamp =
+            goal_delivery::verification_start(&h.ctx, "subagent", &json!({"role":"reviewer"}))
+                .await;
+        goal_delivery::record_tool_result(
+            &h.ctx,
+            "review",
+            "subagent",
+            &json!({"role":"reviewer"}),
+            &ToolOutcome::ok(json!({"ended":"report","report":"[GOAL_REVIEW_FAIL] 缺少核心功能"})),
+            stamp,
+        )
+        .await;
+        assert!(!state_of(&h).delivery.verifications[1].passed);
+        let out = call(
+            &h,
+            json!({"evidence":[{"criterion":0,"call_id":"stale","summary":"通过"}]}),
+        )
+        .await;
+        assert_eq!(code(&out), "E_GOAL_EVIDENCE");
+    }
+
+    #[tokio::test]
+    async fn blocked_items_can_be_resolved_and_manual_flags_cannot_be_lowered() {
+        let h = harness();
+        assert!(
+            call(
+                &h,
+                json!({"text":"交付","criteria":[{"title":"真实账号验收","manual":true}]})
+            )
+            .await
+            .ok
+        );
+        enter_execute(&h);
+        assert!(
+            call(&h, json!({"blocked":["缺账号"],"pending":["待接入"]}))
+                .await
+                .ok
+        );
+        assert!(call(&h, json!({"blocked":[],"pending":[]})).await.ok);
+        assert!(state_of(&h).blocked.is_empty());
+        let out = call(
+            &h,
+            json!({"criteria":[{"title":"真实账号验收","manual":false,"done":true}]}),
+        )
+        .await;
+        assert_eq!(code(&out), "E_GOAL_CONTRACT_LOCKED");
+        let out = call(
+            &h,
+            json!({"criteria":[{"title":"真实账号验收","done":true}]}),
+        )
+        .await;
+        assert_eq!(code(&out), "E_GOAL_MANUAL_ACCEPTANCE");
     }
 
     // ---------- 纯函数：合同锁定（不经工具与 runtime）----------
@@ -754,6 +919,8 @@ mod tests {
             criteria: vec![GoalCriterion {
                 title: "a".into(),
                 done: false,
+                manual: false,
+                verification: None,
             }],
             ledger: GoalLedger::default(),
             status,
@@ -763,6 +930,7 @@ mod tests {
             rounds: 0,
             stall_streak: 0,
             ledger_denials: 0,
+            delivery: Default::default(),
         }
     }
 

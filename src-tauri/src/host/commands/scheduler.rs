@@ -11,7 +11,7 @@ pub async fn stop_service(
     let Some(h) = core.services.get(&service_id) else {
         return Err(format!("服务不存在：{service_id}"));
     };
-    crate::tools::service::stop_service(&h).await;
+    crate::tools::service::stop_service(&h).await?;
     core.services.remove(&service_id);
     Ok(())
 }

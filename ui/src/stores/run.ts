@@ -561,7 +561,7 @@ export const useRun = create<RunStore>()(
     async resumeGoal(sessionId) {
       const sid = sessionId ?? useSessions.getState().activeKey;
       if (!sid) return;
-      if (get().tabs[sid]?.goal?.status !== "paused") return;
+      if (get().tabs[sid]?.goal?.status !== "paused" || get().tabs[sid]?.running) return;
       // 本地回显的落点（起跑失败时按位置撤回这一条）：期间的帧只会往后追加，不会挪动它
       const echoAt = get().tabs[sid].items.length;
       set((s) => {

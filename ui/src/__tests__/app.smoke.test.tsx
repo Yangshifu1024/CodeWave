@@ -849,7 +849,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(planItem?.querySelector(".menu-item-rich")?.className).not.toContain("approval-");
     expect(planItem?.querySelector(".menu-item-rich")).toBeTruthy();
     const item = Array.from(menu?.querySelectorAll(".ant-dropdown-menu-item") ?? []).find((x) =>
-      x.textContent?.includes("完全访问"),
+      x.querySelector(".approval-full"),
     ) as HTMLElement;
     fireEvent.click(item);
     await waitFor(() => expect((document.querySelector(".composer-toolbar")?.textContent ?? "")).toContain("完全访问"));
