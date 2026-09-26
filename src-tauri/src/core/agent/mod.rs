@@ -14,12 +14,14 @@ mod supervise;
 mod text_ask;
 
 pub mod goal;
+pub mod goal_delivery;
 
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use drive::apply_goal_fallback;
 /// `<report>` 标记剥离（子代理 / 任务运行收尾消费）
 ///（[docs/subagent-text-turn-premature-exit]）。
 pub(crate) use drive::split_report;

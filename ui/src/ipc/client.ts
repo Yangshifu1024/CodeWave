@@ -92,6 +92,10 @@ export const ipc = {
   resumeGoal: (sessionId: string, onEvent: Channel) =>
     invoke<string>("resume_goal", { sessionId, onEvent }),
   reopenGoal: (sessionId: string) => invoke<void>("reopen_goal", { sessionId }),
+  setGoalBudget: (sessionId: string, budget: import("./types").GoalBudget) =>
+    invoke<GoalState>("set_goal_budget", { sessionId, budget }),
+  acceptGoal: (sessionId: string, accepted: boolean, feedback?: string) =>
+    invoke<GoalState>("accept_goal", { sessionId, accepted, feedback }),
   /** 目标状态快照（会话恢复 / 右栏重挂载时拉取；null = 该会话当前无目标） */
   getSessionGoal: (sessionId: string) => invoke<GoalState | null>("get_session_goal", { sessionId }),
 

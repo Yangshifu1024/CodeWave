@@ -610,53 +610,16 @@ impl Tool for CommandTool {
         };
 
         // fence + 审批（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认弹窗，灾难级仍拦截）
-        let mode = ctx.approval_mode();
-        let mut policy = ctx.fence_policy();
-        // 目标档执行期（判定见 core/agent/goal.rs 的 ledger_gate）：免确认的合法性由**账本**承担——
-        // 账本内放行、账本外即拒，全程不问人（零提问）；灾难 / 高危级直接硬拦并请求硬停。
-        // 账本判定的作用域 runtime：子代理不持有目标状态，判定取根会话的账本（见 goal_gate_rt）
-        let goal_rt = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
-        let goal_exec = crate::core::agent::goal::goal_execute_phase(&goal_rt);
-        if goal_exec {
-            policy.confirm_inside_writes = true;
-        }
-        // 需确认级（工作区内写 / 工作区外新建）携带的写目标：免确认后仍要过账本
-        let mut confirm_path: Option<String> = None;
+        let mode = ctx.execution_approval_mode();
+        let policy = ctx.fence_policy();
         match crate::safety::fence::check_command_policy(&args.command, &cwd, &roots, policy) {
             crate::safety::fence::Verdict::Allow => {}
             crate::safety::fence::Verdict::Block { code, message } => {
-                // 目标档执行期：L1/L2 硬拦（删除黑名单、符号链接逃逸等）记入 blocked 并请求硬停
-                if goal_exec {
-                    crate::core::agent::goal::goal_hard_block(
-                        &goal_rt,
-                        format!("命令被安全围栏硬拦：{message}"),
-                    );
-                }
                 return ToolOutcome::err(&code, message);
             }
             crate::safety::fence::Verdict::Confirm(reason) => {
                 use crate::safety::fence::ConfirmReason;
-                if goal_exec {
-                    match &reason {
-                        // 灾难 / 高危：硬拦 + 记 blocked + 请求硬停（无人值守，不弹审批）
-                        ConfirmReason::Disaster(why) | ConfirmReason::HighRisk(why) => {
-                            crate::core::agent::goal::goal_hard_block(
-                                &goal_rt,
-                                format!("高危命令被硬拦：{why}"),
-                            );
-                            return ToolOutcome::err(
-                                "E_COMMAND_BLOCKED",
-                                format!(
-                                    "目标档执行期高危命令已硬拦（{why}）：该命令不在本次目标的授权范围内。本轮执行已请求停止，请由用户确认后再继续。"
-                                ),
-                            );
-                        }
-                        // 需确认级：免确认，落回下方账本判定（账本内放行、账本外拒绝）
-                        ConfirmReason::InsideWrite(t) | ConfirmReason::OutsideCreate(t) => {
-                            confirm_path = Some(t.clone());
-                        }
-                    }
-                } else if mode == crate::core::prefs::ApprovalMode::FullAccess {
+                if mode == crate::core::prefs::ApprovalMode::FullAccess {
                     // 防御性兜底：灾难级在 fence 内已按 Block 处理（approval_enabled=true 时不可达）
                     if let ConfirmReason::Disaster(why) = &reason {
                         return ToolOutcome::err(
@@ -742,24 +705,6 @@ impl Tool for CommandTool {
             }
         }
 
-        // 目标档执行期：账本判定（程序名 + 需确认级携带的写目标）——越界即拒，不弹审批
-        if goal_exec {
-            use crate::core::agent::goal::{LedgerTarget, ledger_denial_message, ledger_gate};
-            let program = match crate::core::agent::goal::goal_command_program(&args.command) {
-                Ok(program) => program,
-                Err(message) => return ToolOutcome::err("E_GOAL_COMMAND_SHAPE", message),
-            };
-            let mut checks = vec![(LedgerTarget::Program(program.as_str()), program.clone())];
-            if let Some(p) = confirm_path.as_deref() {
-                checks.push((LedgerTarget::Path(p), p.to_string()));
-            }
-            for (target, label) in checks {
-                if let Err(code) = ledger_gate(&goal_rt, target) {
-                    return ToolOutcome::err(code, ledger_denial_message(&goal_rt, &label));
-                }
-            }
-        }
-
         // 超时预算
         let timeout = Duration::from_secs(
             args.timeout_seconds
@@ -793,23 +738,12 @@ async fn run_process(
         // 批次取消盲区修复：工具任务被 abort（收口 abort_all）时子进程随之回收，
         // 不留孤儿进程；正常取消路径仍走 terminate_tree 主动杀进程树
         .kill_on_drop(true);
-    #[cfg(unix)]
-    {
-        cmd.process_group(0); // 独立进程组：可整树终止
-    }
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-
-    let mut child = match cmd.spawn() {
+    // Own the entire process tree, including descendants if the tool future is dropped.
+    let mut wrapped = crate::mcp::wrap_process_tree(cmd);
+    let mut child = match wrapped.spawn() {
         Ok(c) => c,
         Err(e) => return ToolOutcome::err("E_IO", format!("进程启动失败：{e}")),
     };
-    let Some(pid) = child.id() else {
-        return ToolOutcome::err("E_IO", "进程启动后立即退出");
-    };
-
     // 输出收集：stdout/stderr 合流，节流推送进度 + 体积上限
     let collector = std::sync::Arc::new(std::sync::Mutex::new(Collector {
         buf: String::new(),
@@ -822,8 +756,8 @@ async fn run_process(
         total_lines: 0,
         last_chunk_ended_newline: true,
     }));
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout().take().unwrap();
+    let stderr = child.stderr().take().unwrap();
     let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     async fn pump<R: tokio::io::AsyncRead + Unpin>(
         mut s: R,
@@ -933,13 +867,12 @@ async fn run_process(
         s = wait => match s {
             Ok(st) => st,
             Err(e) => {
-                terminate_tree(pid);
+                stop_command_tree(child.as_mut()).await;
                 return ToolOutcome::err("E_IO", format!("等待进程失败：{e}"));
             }
         },
         _ = tokio::time::sleep(timeout) => {
-            terminate_tree(pid);
-            let _ = child.wait().await;
+            stop_command_tree(child.as_mut()).await;
             let _ = pump.await;
             // 若 pump 持锁时 panic 会中毒锁：用 lock_ok 清理，避免二次 panic（[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md) 评审修复）
             let mut c = crate::core::agent::lock_ok(&collector);
@@ -947,8 +880,7 @@ async fn run_process(
             return ToolOutcome::err("E_TIMEOUT", format!("命令超时（{}s）已终止进程树。\n部分输出（尾部）：\n{tail}", timeout.as_secs()));
         }
         _ = ctx.cancel.cancelled() => {
-            terminate_tree(pid);
-            let _ = child.wait().await;
+            stop_command_tree(child.as_mut()).await;
             let _ = pump.await;
             return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
         }
@@ -979,6 +911,23 @@ async fn run_process(
             )),
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+        }
+    }
+}
+
+/// A cancellation result is emitted only after the owned process tree confirms exit.
+/// An OS error leaves the tool visibly stopping and retries instead of claiming completion.
+async fn stop_command_tree(child: &mut dyn process_wrap::tokio::ChildWrapper) {
+    loop {
+        if let Err(error) = child.start_kill() {
+            tracing::warn!("command process-tree termination needs retry: {error}");
+        }
+        match child.wait().await {
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!("command process-tree exit unconfirmed: {error}");
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
         }
     }
 }

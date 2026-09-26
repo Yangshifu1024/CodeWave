@@ -1,5 +1,7 @@
 # 目标模式（Goal Mode）
 
+> 当前执行契约见 [完整交付与完全访问执行](./goal-mode-delivery-rebuild.md)。本文保留初版设计背景；账本权限、固定轮数停止与模型自勾完成的旧语义已被替换。
+
 > 2026-09-24 · 新增第五档会话管控档位 `ApprovalMode::Goal`：**设定目标 → 澄清 → 一次批准 → 自主推进到达成**，执行期零提问、零弹窗。
 > 分支 `feat/goal-mode`，基线 `0b9ec35`；验证：本地门禁 `pnpm prepr` **8/8 全绿**（`cargo test` **1111 passed / 0 failed / 3 ignored**、`pnpm --dir ui test` **1109 passed / 95 文件**、`ui build` 通过、`fmt` 通过、`scripts` 24 通过、`clippy` 软步骤退出码 0）。
 

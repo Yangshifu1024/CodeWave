@@ -35,3 +35,5 @@ pub use manager::{
 pub use tools::{
     McpTool, McpToolDef, normalize_schema, server_function_name, to_provider_tool_defs,
 };
+
+pub(crate) use process::wrap_process_tree;

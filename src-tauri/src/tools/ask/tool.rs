@@ -357,9 +357,10 @@ impl Tool for AskTool {
             let Some(mut goal) = ctx.rt.goal_snapshot() else {
                 return ToolOutcome::err(
                     "E_GOAL_NOT_REGISTERED",
-                    "目标模式批准未生效：尚未登记目标。请先用 goal 工具登记目标（text + criteria + ledger），再重新发起批准询问。",
+                    "目标模式批准未生效：尚未登记目标。请先用 goal 工具登记目标（text + criteria + sources），再重新发起批准询问。",
                 );
             };
+            let original_goal = goal.clone();
             if goal.criteria.is_empty() {
                 return ToolOutcome::err(
                     "E_GOAL_NOT_REGISTERED",
@@ -370,17 +371,54 @@ impl Tool for AskTool {
             //（模型漏声明 mode → `switch=false`，会话仍在目标档，此时批准必须能推进阶段）。
             let final_mode = if switch { switch_target } else { mode_at_open };
             let entered_execute = final_mode == crate::core::prefs::ApprovalMode::Goal;
+            if entered_execute {
+                if let Err(e) =
+                    crate::core::agent::goal_delivery::prepare_contract(&mut goal, &ctx.rt)
+                {
+                    return ToolOutcome::err("E_GOAL_CONTRACT_INCOMPLETE", e);
+                }
+                if let Some(reason) = goal.delivery.budget_exhausted() {
+                    return ToolOutcome::err("E_GOAL_BUDGET_REQUIRED", reason);
+                }
+                // A draft checkbox is not evidence of work completed under the approved contract.
+                for criterion in &mut goal.criteria {
+                    criterion.done = false;
+                }
+                goal.delivery.evidence.clear();
+                goal.delivery.verifications.clear();
+                goal.delivery.source_fingerprint =
+                    match crate::core::agent::goal_delivery::source_fingerprint(
+                        &ctx.rt.workspace,
+                        &goal.delivery.sources,
+                    ) {
+                        Ok(hash) => Some(hash),
+                        Err(e) => return ToolOutcome::err("E_GOAL_SOURCES", e),
+                    };
+            }
             // 澄清期 → 执行期（落边车 + 发 goal:update：右栏目标卡与前端状态据此推进）：
             // **仅当最终档位是目标档**；最终档位不是目标档时状态不动（目标留在澄清期）。
             if entered_execute && goal.status != GoalStatus::Executing {
+                let _start_guard = ctx.core.start_gate.lock().unwrap();
+                if let Err(e) = ctx.core.ensure_goal_writer_for_execution(&ctx.rt) {
+                    return ToolOutcome::err("E_GOAL_PROJECT_BUSY", e.to_string());
+                }
                 goal.status = GoalStatus::Executing;
-                ctx.rt.set_goal(Some(goal.clone()));
+                let mut current = ctx.rt.goal.lock().unwrap_or_else(|e| e.into_inner());
+                if current.as_ref() != Some(&original_goal) {
+                    return ToolOutcome::err(
+                        "E_GOAL_CHANGED",
+                        "目标或预算已更新，请重新确认当前合同。",
+                    );
+                }
+                if let Err(e) = ctx.core.store.save_goal(&ctx.rt.id, &Some(goal.clone())) {
+                    return ToolOutcome::err("E_GOAL_SAVE", format!("批准合同保存失败：{e}"));
+                }
+                *current = Some(goal.clone());
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "goal:update",
                     json!({ "session": ctx.rt.id, "goal": goal }),
                 );
-                let _ = ctx.core.store.save_goal(&ctx.rt.id, &Some(goal.clone()));
             }
             // 经 ask 从其它档位切进目标档：这条路径不过 `transition_prefs`，前档快照得在此补记
             //（目标达成后按它回落；缺省会错误地回落全局默认）。已有快照 / 打开时已是目标档不补。
@@ -420,7 +458,7 @@ impl Tool for AskTool {
             //（模型据此误判自己已有执行授权，而工作区实际只读）。
             let guidance = if entered_execute {
                 format!(
-                    "[system] 方案已批准：目标模式已进入执行期（{}），请立即按方案推进，不要再次询问。只改账本内路径、只跑账本内程序；每完成一条验收标准立即用 goal 工具把该条 done 置 true，全部完成后把 status 置 done。",
+                    "[system] 方案已批准：目标模式已进入执行期（{}），请立即按方案推进，不要再次询问。执行权限与完全访问一致；按需求连续开发、验证、审查，用 goal 工具绑定真实验收证据，全部机器检查通过后收尾，人工项等待用户验收。",
                     mode_label(final_mode)
                 )
             } else {

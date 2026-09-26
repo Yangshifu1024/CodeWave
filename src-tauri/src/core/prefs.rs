@@ -16,8 +16,7 @@ pub enum ApprovalMode {
     /// 计划模式（默认档，[docs/thinking-scroll-fix](../../../docs/thinking-scroll-fix.md)）：只调研与出方案，不做修改；方案获批后再执行。
     #[default]
     Plan,
-    /// 目标模式：先澄清目标与验收标准（澄清期只读），登记后按**账本**（允许触碰的路径与程序）
-    /// 执行最小改动；工作区内写入直通（与自动编辑档同），越界由驱动层硬拦而非弹审批。
+    /// 目标模式：澄清期只读；批准后的执行期采用完全访问权限，并按目标合同持续推进。
     Goal,
     /// 完全放行：跳过审批弹窗与 fence 确认；灾难级命令仍被直接拦截
     FullAccess,
@@ -35,7 +34,7 @@ impl ApprovalMode {
     }
 
     /// fence 是否把工作区内写目标升级为 Confirm（ConfirmEach / Plan 两档）。
-    /// 目标档不在此列：执行期的范围控制由账本在驱动层做（越界即拒，不弹审批）。
+    /// 目标档阶段权限由 ToolCtx::execution_approval_mode 解析。
     pub fn confirm_inside_writes(self) -> bool {
         matches!(self, ApprovalMode::ConfirmEach | ApprovalMode::Plan)
     }

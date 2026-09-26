@@ -373,6 +373,20 @@ impl Tool for SubagentTool {
                 "<subagent-task role=\"{}\">\n{}\n</subagent-task>",
                 args.role, args.task
             )));
+        let goal_root = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
+        if matches!(args.role.as_str(), "reviewer" | "code-reviewer")
+            && goal_root
+                .goal_snapshot()
+                .is_some_and(|g| g.status == crate::core::agent::goal::GoalStatus::Executing)
+        {
+            let contract = goal_root
+                .data_dir
+                .join("sessions")
+                .join(format!("{}.goal.json", goal_root.id));
+            sub_rt.history.lock().unwrap().push(crate::core::types::Message::user_text(format!(
+                "独立目标验收：请读取批准合同 {}。delivery.source_documents 的 snapshot_path 是批准时的完整文件；content 仅预览。使用 read/read_document 按文件类型读取快照，并对照 delivery.sources 当前文档和实现。检查遗漏、Mock替代集成、失效验证及降低验收标准。只有确认无阻塞问题时，最终 report 最后一个非空行单独写 [GOAL_REVIEW_PASS]；发现问题则写 [GOAL_REVIEW_FAIL] 并列明缺陷。", contract.display()
+            )));
+        }
 
         // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
         // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——

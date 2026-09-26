@@ -542,6 +542,27 @@ pub async fn get_session_goal(
     Ok(core.goal_view(&rt))
 }
 
+#[tauri::command]
+pub async fn set_goal_budget(
+    core: Core<'_>,
+    session_id: String,
+    budget: crate::core::agent::goal::GoalBudget,
+) -> Result<crate::core::agent::goal::GoalState, String> {
+    let rt = core.session(&session_id).ok_or("会话不存在")?;
+    core.set_goal_budget(&rt, budget)
+}
+
+#[tauri::command]
+pub async fn accept_goal(
+    core: Core<'_>,
+    session_id: String,
+    accepted: bool,
+    feedback: Option<String>,
+) -> Result<crate::core::agent::goal::GoalState, String> {
+    let rt = core.session(&session_id).ok_or("会话不存在")?;
+    core.accept_goal(&rt, accepted, feedback).await
+}
+
 /// 暂停目标需要修改账本或验收标准时，显式退回只读澄清期；修改后须重新批准。
 #[tauri::command]
 pub async fn reopen_goal(core: Core<'_>, session_id: String) -> Result<(), String> {
@@ -941,6 +962,8 @@ mod tests {
             criteria: vec![GoalCriterion {
                 title: "改完 X".into(),
                 done: false,
+                manual: false,
+                verification: None,
             }],
             ledger: GoalLedger::default(),
             status: GoalStatus::Executing,
@@ -950,6 +973,7 @@ mod tests {
             rounds: 0,
             stall_streak: 0,
             ledger_denials: 0,
+            delivery: Default::default(),
         }));
         (ws, dd, core, rt)
     }

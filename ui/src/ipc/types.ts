@@ -88,16 +88,30 @@ export interface ImageIn { mime: string; data: string }
 export const DEFAULT_PREFS: SessionPrefs = { approval_mode: "plan", model_id: null, reasoning_effort: null };
 
 // ---------- 目标模式（`ApprovalMode::Goal`）----------
-// 切档后下一条消息即目标：澄清（只读 + ask 结构化提问）→ 用户批准一次 → 执行（零提问、自主推进）
-// → 收尾报告 + 自动回落前档。前端只读展示，状态由后端单一事实源下发。
+// 澄清 → 用户批准合同与预算 → 完全访问权限执行 → 人工验收 → 完成。
+// 状态由后端单一事实源下发，预算与人工验收只由用户 IPC 更新。
 
 /** 目标状态机：澄清 / 执行 / 暂停 / 达成 / 中止 */
-export type GoalStatus = "clarify" | "executing" | "paused" | "done" | "aborted";
+export type GoalStatus = "clarify" | "executing" | "stopping" | "paused" | "awaiting_acceptance" | "done" | "aborted";
 
 /** 达成标准条目（只读展示：done = 已满足） */
-export interface GoalCriterion { title: string; done: boolean }
+export interface GoalCriterion { title: string; done: boolean; manual?: boolean; verification?: { command: string; cwd: string | null } | null }
 
-/** 目标账本：本轮目标已触及的路径与程序（右栏摘要展示） */
+export interface GoalBudget { token_limit: number | null; time_limit_ms: number | null; unlimited: boolean }
+export interface GoalEvidence { criterion: number; call_id: string; summary: string }
+export interface GoalVerification { call_id: string; tool: string; summary: string; passed: boolean; fingerprint: string; review: boolean; command?: string | null; cwd?: string | null }
+export interface GoalDelivery {
+  budget: GoalBudget | null;
+  used_tokens: number;
+  elapsed_ms: number;
+  sources: string[];
+  source_documents?: { path: string; content: string }[];
+  baseline: string[];
+  evidence: GoalEvidence[];
+  verifications: GoalVerification[];
+}
+
+/** 旧目标快照保留字段，不再参与权限判断或作为权限范围展示。 */
 export interface GoalLedger { paths: string[]; programs: string[] }
 
 /** 目标状态快照（`goal:update` 事件与 `get_session_goal` 命令共用同一形状） */
@@ -108,6 +122,7 @@ export interface GoalState {
   criteria: GoalCriterion[];
   ledger: GoalLedger;
   status: GoalStatus;
+  delivery?: GoalDelivery;
   /** 已记录的决策（后端维护，前端只读展示） */
   decisions: string[];
   /** 待办项 */
@@ -118,7 +133,7 @@ export interface GoalState {
   rounds: number;
   /** 连续无进展轮数（停滞检测） */
   stall_streak: number;
-  /** 账本外写操作被拒次数 */
+  /** 旧快照兼容计数，不再驱动停止 */
   ledger_denials: number;
 }
 

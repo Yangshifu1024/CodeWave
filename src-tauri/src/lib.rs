@@ -371,6 +371,8 @@ pub fn run() {
             host::commands::get_session_prefs,
             host::commands::restore_legacy_model_prefs,
             host::commands::get_session_goal,
+            host::commands::set_goal_budget,
+            host::commands::accept_goal,
             host::commands::resume_goal,
             host::commands::reopen_goal,
             host::commands::inject_run_message,

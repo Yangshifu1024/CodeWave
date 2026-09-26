@@ -174,6 +174,9 @@ pub async fn compact_history(
     keep_last_user: bool,
     cancel: &CancellationToken,
 ) -> Result<crate::provider::RunUsage, String> {
+    if let Some(reason) = core.goal_budget_check(rt) {
+        return Err(reason);
+    }
     let cfg = core.cfg.read().unwrap().clone();
     // 压缩请求使用会话生效模型（覆盖优先，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）；
     // 摘要输出上限压到 SUMMARY_MAX_TOKENS（兑现该常量的声明意图，此前只声明未接线）
@@ -299,6 +302,7 @@ pub async fn compact_history(
     rt.last_input_tokens
         .store(0, std::sync::atomic::Ordering::SeqCst);
 
+    core.account_goal_usage(rt, &usage, &model.api_format);
     // 压缩调用自身的 token 计账（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）：独立 kind=compact，不再凭空蒸发
     core.stats.record(crate::core::stats::UsageRecord {
         session: rt.id.clone(),
