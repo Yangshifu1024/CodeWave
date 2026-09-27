@@ -1091,4 +1091,3 @@ async fn legacy_approve_without_mode_still_switches_to_auto_edit() {
         crate::core::prefs::ApprovalMode::AutoEdit
     ));
 }
-

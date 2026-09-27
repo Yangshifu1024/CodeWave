@@ -274,11 +274,7 @@ pub(super) async fn build_stream_request(
             core
         }
     };
-    let messages = messages_for_request(
-        rt,
-        model.vision.unwrap_or(false),
-        None,
-    );
+    let messages = messages_for_request(rt, model.vision.unwrap_or(false), None);
     // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
     let mut tools: Vec<crate::provider::ToolDef> = core
         .tools

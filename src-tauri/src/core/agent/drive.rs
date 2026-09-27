@@ -242,7 +242,7 @@ pub async fn run_chat(
         }
     };
     // Every exit path converges before advertising an idle session.
-// C1 修复：drive 结束（成功/失败/取消）都必须复位，否则会话永远拒绝第二次 run
+    // C1 修复：drive 结束（成功/失败/取消）都必须复位，否则会话永远拒绝第二次 run
     rt.running.store(false, Ordering::SeqCst);
 
     match &result {
@@ -1005,12 +1005,7 @@ pub async fn drive_agent(
             // `text_turn_action(…, finish_on_text = true)` 直接 Finish，run 报成功而拒绝提示
             // 永不被模型看到（[docs/rejected-call-silent-finish]）。
             let rejected = !synth_results.is_empty();
-            let action = text_turn_action(
-                &joined,
-                params.finish_on_text,
-                rejected,
-                text_turns,
-            );
+            let action = text_turn_action(&joined, params.finish_on_text, rejected, text_turns);
             let _reminder = action == TextTurnAction::ContinueWithReminder;
             match action {
                 TextTurnAction::Finish => {
@@ -2194,9 +2189,7 @@ mod tests {
 
     #[test]
     fn batch_digest_does_not_count_document_reads_as_progress() {
-        for (name, args) in [
-            ("read_document", serde_json::json!({"path": "report.pdf"})),
-        ] {
+        for (name, args) in [("read_document", serde_json::json!({"path": "report.pdf"}))] {
             let digest = batch_digest(&[call(name, args)]);
             assert!(!digest.has_non_readonly, "{name} 只读调用不得重置停滞计数");
         }

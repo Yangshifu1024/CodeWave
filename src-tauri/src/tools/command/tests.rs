@@ -453,4 +453,3 @@ async fn full_access_skips_high_risk_confirm() {
     assert!(!out.ok);
     assert_eq!(out.error.as_ref().unwrap().code, "E_APPROVAL_DENIED");
 }
-

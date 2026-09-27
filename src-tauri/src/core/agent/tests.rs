@@ -50,10 +50,7 @@ fn text_turn_action_matrix() {
         text_turn_action("答完了", true, false, 0),
         TextTurnAction::Finish
     );
-    assert_eq!(
-        text_turn_action("", true, false, 9),
-        TextTurnAction::Finish
-    );
+    assert_eq!(text_turn_action("", true, false, 9), TextTurnAction::Finish);
     // ①’ 主会话 + 被拒调用 → 继续（**本缺陷的锚点**：[docs/rejected-call-silent-finish]）
     assert_eq!(
         text_turn_action("下面是完整方案", true, true, 0),
@@ -76,12 +73,7 @@ fn text_turn_action_matrix() {
         TextTurnAction::Finish
     );
     assert_eq!(
-        text_turn_action(
-            "回报如下 <report>x</report>",
-            false,
-            false,
-            MAX_TEXT_TURNS
-        ),
+        text_turn_action("回报如下 <report>x</report>", false, false, MAX_TEXT_TURNS),
         TextTurnAction::Finish
     );
     // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
@@ -2220,4 +2212,3 @@ fn plan_mode_block_describes_two_approve_options() {
     assert!(p.system_extra.contains("mode=\"auto_edit\""));
     assert!(p.system_extra.contains("mode=\"full_access\""));
 }
-
