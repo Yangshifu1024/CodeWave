@@ -828,21 +828,20 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     });
   });
 
-  it("权限菜单：五档渲染（含目标模式），切换触发 set_session_prefs 并更新按钮文案", async () => {
+  it("权限菜单：四档渲染，切换触发 set_session_prefs 并更新按钮文案", async () => {
     seedTab();
     await mountApp();
     const menu = await openToolbarMenu("自动编辑");
     expect(menu?.textContent).toContain("变更前确认");
     expect(menu?.textContent).toContain("自动编辑");
     expect(menu?.textContent).toContain("计划模式");
-    expect(menu?.textContent).toContain("目标模式");
     expect(menu?.textContent).toContain("完全访问");
+    expect(menu?.textContent).not.toContain("目标模式");
     // Menu items carry per-mode classes (wiring for coloring the label by mode; plan has no class = no color)
     expect(menu?.querySelector(".menu-item-rich.approval-confirm")).toBeTruthy();
     expect(menu?.querySelector(".menu-item-rich.approval-auto")).toBeTruthy();
     expect(menu?.querySelector(".menu-item-rich.approval-full")).toBeTruthy();
-    // 目标模式：第五项，橙（warn）语义，类名沿用仓库既有 approval-* 约定
-    expect(menu?.querySelector(".menu-item-rich.approval-goal")).toBeTruthy();
+    expect(menu?.querySelector(".menu-item-rich.approval-goal")).toBeFalsy();
     const planItem = Array.from(menu?.querySelectorAll("li.ant-dropdown-menu-item") ?? []).find((x) =>
       x.textContent?.includes("计划模式"),
     );
@@ -861,21 +860,17 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(document.querySelector(".composer-toolbar .approval-full .anticon-safety-certificate")).toBeTruthy();
   });
 
-  it("Shift+Tab：输入框内循环切换权限五档（docs/composer-shift-tab-mode-cycle）", async () => {
+  it("Shift+Tab：输入框内循环切换权限四档（docs/composer-shift-tab-mode-cycle）", async () => {
     seedTab();
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
     const modeText = () => document.querySelector(".composer-toolbar")?.textContent ?? "";
-    // 循环顺序：plan → confirm_each → auto_edit → goal → full_access → plan
+    // 循环顺序：plan → confirm_each → auto_edit → full_access → plan（目标档已删除）
     expect(modeText()).toContain("自动编辑"); // initial mode (prefs.approval_mode = auto_edit)
     expect(document.querySelector(".composer-toolbar .approval-auto")).toBeTruthy(); // auto edit = yellow
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("目标模式")); // auto_edit → goal
-    await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：目标模式")); // switch toast (docs/session-pref-switch-toast)
-    expect(document.querySelector(".composer-toolbar .approval-goal")).toBeTruthy(); // goal = orange
-    fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(modeText()).toContain("完全访问")); // goal → full_access
-    expect(document.querySelector(".composer-toolbar .approval-full")).toBeTruthy(); // red highlight in sync
+    await waitFor(() => expect(modeText()).toContain("完全访问")); // auto_edit → full_access
+    expect(document.querySelector(".composer-toolbar .approval-full")).toBeTruthy(); // full access = red
     fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
     await waitFor(() => expect(modeText()).toContain("计划模式")); // full_access → plan
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeFalsy();

@@ -101,19 +101,6 @@ pub struct SessionRuntime {
     pub extra_roots: Mutex<Vec<String>>,
     /// plan 工具的 todo 状态机（内存 + 边车持久化）
     pub todos: Mutex<Vec<crate::tools::plan::Todo>>,
-    /// 目标模式（goal mode）状态：None = 未登记（内存 + `sessions/<id>.goal.json` 边车）。
-    /// 阶段判定/账本判定是 `crate::core::agent::goal` 里的纯函数，读写入口是 `goal` 工具。
-    pub goal: Mutex<Option<crate::core::agent::goal::GoalState>>,
-    /// 目标模式硬停标记：L3 高危命令被硬拦时由工具层置位、驱动层 `take_goal_abort` 消费
-    ///（take 语义 = 读一次即复位，收尾只响应一次）。
-    pub goal_abort: AtomicBool,
-    /// 进入目标档前的档位快照（目标收尾自动回落用；None = 未记录 → 走全局默认语义）。
-    /// **刻意不放 `SessionPrefs`**：prefs 是前端整体替换写的事实源，纯后端运行时状态
-    /// 放进去会被前端补丁（如 AskPanel 的 updatePrefs）冲掉。
-    pub goal_prev_mode: Mutex<Option<crate::core::prefs::ApprovalMode>>,
-    /// Active wall time belongs to the root goal, never multiplied by child runs.
-    pub goal_clock: Mutex<Option<std::time::Instant>>,
-    pub goal_account_lock: Mutex<()>,
     /// 运行中注入通道的发送端（run.ts 队列消息入此）
     pub inject_tx: mpsc::Sender<Message>,
     /// 注入通道接收端（run 期间被 drive_agent 取走消化）
@@ -215,11 +202,6 @@ impl SessionRuntime {
             history: Mutex::new(Vec::new()),
             extra_roots: Mutex::new(Vec::new()),
             todos: Mutex::new(Vec::new()),
-            goal: Mutex::new(None),
-            goal_abort: AtomicBool::new(false),
-            goal_prev_mode: Mutex::new(None),
-            goal_clock: Mutex::new(None),
-            goal_account_lock: Mutex::new(()),
             inject_tx: tx,
             inject_rx: Mutex::new(Some(rx)),
             run_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -259,51 +241,6 @@ impl SessionRuntime {
     /// 当前会话偏好的快照。
     pub fn prefs(&self) -> crate::core::prefs::SessionPrefs {
         self.prefs.lock().unwrap().clone()
-    }
-
-    /// 目标状态快照（None = 未登记）。
-    pub fn goal_snapshot(&self) -> Option<crate::core::agent::goal::GoalState> {
-        self.goal.lock().unwrap().clone()
-    }
-
-    /// 整体替换目标状态（None = 清除）。
-    pub fn set_goal(&self, g: Option<crate::core::agent::goal::GoalState>) {
-        *self.goal.lock().unwrap() = g;
-    }
-
-    /// 目标状态的**就地改写**（读-改-写全程持同一把锁），返回改写后的快照；目标缺席时返回 None。
-    ///
-    /// 为什么需要：账本闸门的拒绝计数与 `blocked` 追加由**根会话与并行子代理共享**同一份状态
-    ///（子代理经 `goal::goal_gate_rt` 取根会话），「snapshot → 改 → set」会互相覆盖——
-    /// 丢计数会让自停阈值延后触发（连续越界 3 次自停的保证因此不可靠）。
-    pub fn mutate_goal(
-        &self,
-        f: impl FnOnce(&mut crate::core::agent::goal::GoalState),
-    ) -> Option<crate::core::agent::goal::GoalState> {
-        let mut guard = self.goal.lock().unwrap();
-        let state = guard.as_mut()?;
-        f(state);
-        Some(state.clone())
-    }
-
-    /// 请求硬停（L3 高危命令被硬拦时由工具层调用；驱动层在 step 边界消费）。
-    pub fn request_goal_abort(&self) {
-        self.goal_abort.store(true, Ordering::SeqCst);
-    }
-
-    /// 消费硬停标记：返回是否曾被请求，并把标记复位（同一请求只响应一次）。
-    pub fn take_goal_abort(&self) -> bool {
-        self.goal_abort.swap(false, Ordering::SeqCst)
-    }
-
-    /// 进入目标档前的档位快照（None = 未记录）。
-    pub fn goal_prev_mode(&self) -> Option<crate::core::prefs::ApprovalMode> {
-        *self.goal_prev_mode.lock().unwrap()
-    }
-
-    /// 记录 / 清除进入目标档前的档位快照。
-    pub fn set_goal_prev_mode(&self, m: Option<crate::core::prefs::ApprovalMode>) {
-        *self.goal_prev_mode.lock().unwrap() = m;
     }
 
     /// 整体替换会话偏好（前端 set_session_prefs；前端 Tab.prefs 是事实源）。
@@ -381,42 +318,10 @@ impl SessionRuntime {
         }
     }
 
-    /// 用户显式切档的过渡点（host `set_session_prefs` 专用）：写 prefs + 目标档进出的状态迁移，
-    /// 返回是否发生了目标状态变更。本方法**只动内存**——落边车与 `goal:update` 事件由
-    /// `AgentCore::transition_prefs` 收尾。
-    ///
-    /// - 进目标档（旧档 != Goal 且新档 == Goal）：记下进入前的档位快照
-    ///   （`goal_prev_mode`，达成后自动回落用）；**快照已存在时不覆盖**。
-    /// - 离开目标档（旧档 == Goal 且新档 != Goal）且目标正在执行：置 `Paused`
-    ///   （**不锁档**——用户可自由切走，前端收到状态变化）。
+    /// 整体写 prefs（仅内存态；持久化由 `AgentCore::transition_prefs` 负责）。
     pub fn transition_prefs(&self, new: crate::core::prefs::SessionPrefs) -> bool {
-        use crate::core::agent::goal::GoalStatus;
-        use crate::core::prefs::ApprovalMode;
-        let old = self.prefs.lock().unwrap().approval_mode;
-        if old != ApprovalMode::Goal && new.approval_mode == ApprovalMode::Goal {
-            let mut prev = self.goal_prev_mode.lock().unwrap();
-            if prev.is_none() {
-                *prev = Some(old);
-            }
-        }
-        let leaving_goal = old == ApprovalMode::Goal && new.approval_mode != ApprovalMode::Goal;
-        let mut paused = false;
-        if leaving_goal {
-            let mut goal = self.goal.lock().unwrap();
-            if let Some(s) = goal.as_mut()
-                && s.status == GoalStatus::Executing
-            {
-                s.status = if self.running.load(Ordering::SeqCst) {
-                    GoalStatus::Stopping
-                } else {
-                    GoalStatus::Paused
-                };
-                self.cancel_active();
-                paused = true;
-            }
-        }
         *self.prefs.lock().unwrap() = new;
-        paused
+        false
     }
 }
 
@@ -457,117 +362,6 @@ pub struct AgentCore {
 }
 
 impl AgentCore {
-    /// A goal is the sole writer for overlapping project roots. Ordinary runs
-    /// already using the directory must finish before goal execution can begin.
-    pub(crate) fn ensure_goal_writer(&self, rt: &SessionRuntime) -> anyhow::Result<()> {
-        let executing = rt.goal_snapshot().is_some_and(|g| {
-            matches!(
-                g.status,
-                super::goal::GoalStatus::Executing | super::goal::GoalStatus::Stopping
-            )
-        });
-        self.ensure_goal_writer_with(rt, executing)
-    }
-
-    pub(crate) fn ensure_goal_writer_for_execution(
-        &self,
-        rt: &SessionRuntime,
-    ) -> anyhow::Result<()> {
-        self.ensure_goal_writer_with(rt, true)
-    }
-
-    fn ensure_goal_writer_with(&self, rt: &SessionRuntime, own_goal: bool) -> anyhow::Result<()> {
-        use super::goal::GoalStatus;
-        let active = |r: &SessionRuntime| {
-            r.goal_snapshot()
-                .is_some_and(|g| matches!(g.status, GoalStatus::Executing | GoalStatus::Stopping))
-        };
-        let roots = |r: &SessionRuntime| {
-            let paths = if r.roots.is_empty() {
-                vec![r.workspace.clone()]
-            } else {
-                r.roots.iter().map(PathBuf::from).collect()
-            };
-            paths
-                .into_iter()
-                .map(|p| {
-                    let p = crate::tools::pathutil::canonical_best_effort(&p);
-                    #[cfg(windows)]
-                    let p = PathBuf::from(p.to_string_lossy().to_lowercase());
-                    p
-                })
-                .collect::<Vec<_>>()
-        };
-        let own_roots = roots(rt);
-        for entry in &self.sessions {
-            let other = entry.value();
-            if other.id == rt.id
-                || (!active(other) && !(own_goal && other.running.load(Ordering::SeqCst)))
-            {
-                continue;
-            }
-            if roots(other).iter().any(|b| {
-                own_roots
-                    .iter()
-                    .any(|a| a.starts_with(b) || b.starts_with(a))
-            }) {
-                anyhow::bail!(
-                    "E_GOAL_PROJECT_BUSY：同一项目目录已有执行者（会话 {}），请等待其结束或暂停",
-                    other.id
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Shared root accounting; called for main, child and compaction requests.
-    pub(crate) fn account_goal_usage(
-        &self,
-        rt: &Arc<SessionRuntime>,
-        usage: &crate::provider::RunUsage,
-        protocol: &crate::core::config::ApiFormat,
-    ) {
-        let root = super::goal::goal_gate_rt(self, rt);
-        let _account = root.goal_account_lock.lock().unwrap();
-        let tokens = usage.prompt_total(protocol).saturating_add(usage.output);
-        if let Some(state) = root.mutate_goal(|g| {
-            if matches!(
-                g.status,
-                super::goal::GoalStatus::Executing | super::goal::GoalStatus::Stopping
-            ) {
-                g.delivery.used_tokens = g.delivery.used_tokens.saturating_add(tokens);
-            }
-        }) {
-            let _ = self.store.save_goal(&root.id, &Some(state));
-        }
-    }
-
-    pub(crate) fn goal_budget_check(&self, rt: &Arc<SessionRuntime>) -> Option<String> {
-        let root = super::goal::goal_gate_rt(self, rt);
-        let _account = root.goal_account_lock.lock().unwrap();
-        let mut clock = root.goal_clock.lock().unwrap();
-        let now = std::time::Instant::now();
-        let state = root.mutate_goal(|g| {
-            if let Some(previous) = clock.take() {
-                g.delivery.elapsed_ms = g
-                    .delivery
-                    .elapsed_ms
-                    .saturating_add(previous.elapsed().as_millis() as u64);
-            }
-            if g.status == super::goal::GoalStatus::Executing {
-                *clock = Some(now);
-            }
-        })?;
-        let _ = self.store.save_goal(&root.id, &Some(state.clone()));
-        if state.status != super::goal::GoalStatus::Executing {
-            return None;
-        }
-        if state.delivery.budget.is_none() {
-            return Some("目标缺少明确预算，请修订目标后重新批准".into());
-        }
-        state.delivery.budget_exhausted()
-    }
-
     /// 构造核心（tools/skills/key_pool/mcp/stats/tasks 均取默认实现）。
     pub fn new(
         cfg: ConfigState,
@@ -625,35 +419,6 @@ impl AgentCore {
             .filter(|saved| saved.model_choice_recorded)
             .and_then(|saved| saved.reasoning_effort);
         drop(cfg);
-        let mut goal = self.store.load_goal(id);
-        let old_active_goal = goal.as_ref().is_some_and(|g| {
-            matches!(
-                g.status,
-                crate::core::agent::goal::GoalStatus::Clarify
-                    | crate::core::agent::goal::GoalStatus::Executing
-                    | crate::core::agent::goal::GoalStatus::Paused
-            )
-        });
-        // 权限只恢复目标档，其它档位按全局默认重建。旧边车无标记时
-        // 根据未结束目标推断，避免旧会话被 Plan 档覆盖；显式切走的 false 标记优先。
-        if saved_prefs
-            .as_ref()
-            .map(|saved| saved.goal_mode_active)
-            .unwrap_or(old_active_goal)
-        {
-            initial_prefs.approval_mode = crate::core::prefs::ApprovalMode::Goal;
-        }
-        // 上个进程里的执行令牌已消失；重启后只能由用户显式续跑。
-        if let Some(g) = goal.as_mut()
-            && g.status == crate::core::agent::goal::GoalStatus::Executing
-        {
-            g.status = crate::core::agent::goal::GoalStatus::Paused;
-            if let Err(e) = self.store.save_goal(id, &goal) {
-                tracing::warn!("会话 {id} 目标恢复为暂停态落盘失败：{e}");
-            }
-        }
-        let restored_goal_mode =
-            initial_prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal;
         let mut rt = SessionRuntime::new(id.to_string(), workspace, self.data_dir.clone());
         if let Some(r) = Arc::get_mut(&mut rt) {
             r.project_id = project_id;
@@ -662,10 +427,6 @@ impl AgentCore {
             r.is_main_session = true;
             *r.extra_roots.lock().unwrap() = extra_roots;
             *r.prefs.lock().unwrap() = initial_prefs;
-            *r.goal.lock().unwrap() = goal;
-            // 前档是当前进程的回落目标；重启后统一回全局默认，绝不复活旧 FullAccess。
-            *r.goal_prev_mode.lock().unwrap() =
-                restored_goal_mode.then_some(default_prefs.approval_mode);
         }
         self.persist_session_prefs_with_choice(
             &rt,
@@ -690,23 +451,6 @@ impl AgentCore {
         images: Vec<crate::core::prefs::ImageIn>,
     ) -> anyhow::Result<String> {
         let _start_guard = self.start_gate.lock().unwrap();
-        let supplement_only = rt.prefs().approval_mode == crate::core::prefs::ApprovalMode::Goal
-            && self.goal_view(&rt).is_some_and(|goal| {
-                matches!(
-                    goal.status,
-                    crate::core::agent::goal::GoalStatus::Paused
-                        | crate::core::agent::goal::GoalStatus::AwaitingAcceptance
-                )
-            });
-        if !supplement_only {
-            self.ensure_goal_writer(&rt)?;
-        }
-        if self
-            .goal_view(&rt)
-            .is_some_and(|goal| goal.status == crate::core::agent::goal::GoalStatus::Stopping)
-        {
-            anyhow::bail!("目标仍在停止，请等待在途操作完成");
-        }
         if rt.running.swap(true, Ordering::SeqCst) {
             anyhow::bail!("该会话已有运行中的任务");
         }
@@ -719,7 +463,7 @@ impl AgentCore {
         {
             let cfg = self.cfg.read().unwrap();
             let prefs = rt.prefs();
-            if !supplement_only && crate::core::prefs::effective_model(&cfg, &prefs).is_none() {
+            if crate::core::prefs::effective_model(&cfg, &prefs).is_none() {
                 rt.running.store(false, Ordering::SeqCst);
                 anyhow::bail!("请先在设置中配置并选择模型");
             }
@@ -752,34 +496,20 @@ impl AgentCore {
         };
         let run_id = uuid::Uuid::new_v4().to_string();
         let core = self.clone();
-        if supplement_only {
-            tokio::spawn(super::drive::save_goal_supplement(
-                core,
-                rt,
-                user,
-                run_id.clone(),
-            ));
-        } else {
-            tokio::spawn(run_chat(core, rt, user, run_id.clone()));
-        }
+        tokio::spawn(run_chat(core, rt, user, run_id.clone()));
         Ok(run_id)
     }
     /// 用户显式切档的完整过渡（host `set_session_prefs` 的唯一入口）：core 内完成 prefs 写入 +
-    /// 目标档进出的状态迁移（`SessionRuntime::transition_prefs`）+ 状态变更的落边车与
-    /// `goal:update` 事件。返回是否发生了目标状态变更。
+    /// 状态迁移（`SessionRuntime::transition_prefs`）+ 落边车。
     pub fn transition_prefs(
         &self,
         rt: &SessionRuntime,
         new: crate::core::prefs::SessionPrefs,
     ) -> bool {
         let _guard = rt.prefs_persist_lock.lock().unwrap();
-        let paused = rt.transition_prefs(new);
+        rt.transition_prefs(new);
         self.save_session_prefs_locked(rt, true);
-        drop(_guard);
-        if paused {
-            self.persist_goal(rt);
-        }
-        paused
+        false
     }
 
     /// 仅改档位的后端路径（ask 批准 / 目标收尾）：在同一临界区读取当前模型，避免覆盖并发迁移。
@@ -808,7 +538,6 @@ impl AgentCore {
     fn save_session_prefs_locked(&self, rt: &SessionRuntime, model_choice_recorded: bool) {
         let prefs = rt.prefs();
         let snapshot = crate::core::prefs::SessionPrefsSnapshot {
-            goal_mode_active: prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal,
             model_choice_recorded,
             model_id: prefs.model_id,
             reasoning_effort: prefs.reasoning_effort,
@@ -841,104 +570,21 @@ impl AgentCore {
         self.store.save_prefs(
             &rt.id,
             &crate::core::prefs::SessionPrefsSnapshot {
-                goal_mode_active: prefs.approval_mode == crate::core::prefs::ApprovalMode::Goal,
                 model_choice_recorded: true,
                 model_id: prefs.model_id,
                 reasoning_effort: prefs.reasoning_effort,
             },
         )
     }
-
-    /// 目标状态视图（右栏目标卡 / 会话恢复时拉初始状态）：内存态优先，缺席时回退边车。
-    /// 刚重建的 runtime 内存里还没有目标（`run_chat` 起跑时才装回），只读内存会让目标卡
-    /// 在恢复会话后显示为空。
-    pub fn goal_view(&self, rt: &SessionRuntime) -> Option<crate::core::agent::goal::GoalState> {
-        rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id))
-    }
-
-    /// 续跑暂停中的目标（host `resume_goal` 的唯一入口）：校验档位 + 「已暂停」→ 置「执行中」
-    /// + 落边车 + 发 `goal:update`。状态不是「已暂停」时返回 Err（幂等保护，不重复起跑）。
-    /// 运行态缺席时从边车装回：重启后 runtime 刚重建、尚未跑过 run 时内存里还没有目标。
-    pub fn resume_goal(&self, rt: &SessionRuntime) -> anyhow::Result<()> {
-        use crate::core::agent::goal::GoalStatus;
-        // 档位自校验（纵深防御）：host 命令层（`goal_resume_mode_guard`）已有同一道门，但 core
-        // 不得依赖 host 的守卫——续跑会把目标置回执行期，而账本闸门的档位门读的是 prefs：
-        // 档位已切走时会把「非目标档 + 目标执行中 + 账本闸门关闭」的静默不一致固化下来。
-        // 文案与 host 共用同一份常量（绝不允许两套）。
-        if rt.prefs().approval_mode != crate::core::prefs::ApprovalMode::Goal {
-            anyhow::bail!("{}", crate::core::agent::goal::GOAL_RESUME_MODE_REQUIRED);
-        }
-        let current = rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id));
-        let Some(mut goal) = current else {
-            anyhow::bail!("尚未登记目标，无法续跑");
-        };
-        if goal.status != GoalStatus::Paused {
-            anyhow::bail!(
-                "目标当前状态为「{}」，只有暂停中的目标可以续跑",
-                goal.status.label()
-            );
-        }
-        if goal.delivery.budget.is_none() {
-            anyhow::bail!("目标尚未设置预算，请修订目标并明确 token / 时间预算或不限额后重新批准");
-        }
-        if let Some(reason) = goal.delivery.budget_exhausted() {
-            anyhow::bail!("{reason}；请修订预算后再继续");
-        }
-        goal.status = GoalStatus::Executing;
-        // 越界阈值约束单次无人值守 run。用户显式续跑是新的尝试窗口；历史 blocked 保留。
-        goal.ledger_denials = 0;
-        goal.stall_streak = 0;
-        let _ = rt.take_goal_abort();
-        rt.set_goal(Some(goal));
-        self.persist_goal(rt);
-        Ok(())
-    }
-
-    /// 用户显式要求修订暂停目标：退回只读澄清期，保留目标和阻塞记录，重新批准前不可写。
-    pub fn reopen_goal(&self, rt: &SessionRuntime) -> anyhow::Result<()> {
-        use crate::core::agent::goal::GoalStatus;
-        if rt.prefs().approval_mode != crate::core::prefs::ApprovalMode::Goal {
-            anyhow::bail!("{}", crate::core::agent::goal::GOAL_RESUME_MODE_REQUIRED);
-        }
-        if rt.running.load(Ordering::SeqCst) {
-            anyhow::bail!("目标仍在运行，请先停止后再修订");
-        }
-        let Some(mut goal) = rt.goal_snapshot().or_else(|| self.store.load_goal(&rt.id)) else {
-            anyhow::bail!("尚未登记目标，无法修订");
-        };
-        if goal.status != GoalStatus::Paused {
-            anyhow::bail!("只有暂停中的目标可以重新澄清");
-        }
-        goal.status = GoalStatus::Clarify;
-        goal.ledger_denials = 0;
-        goal.stall_streak = 0;
-        let _ = rt.take_goal_abort();
-        rt.set_goal(Some(goal));
-        self.persist_goal(rt);
-        Ok(())
-    }
-
-    /// 目标状态落盘 + `goal:update` 事件（core 侧改写目标状态后的统一收尾）。
-    fn persist_goal(&self, rt: &SessionRuntime) {
-        if let Some(goal) = rt.goal_snapshot() {
-            let _ = self.store.save_goal(&rt.id, &Some(goal.clone()));
-            self.sink.emit(
-                &rt.id,
-                "goal:update",
-                serde_json::json!({ "session": rt.id, "goal": goal }),
-            );
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::agent::goal::{GoalCriterion, GoalLedger, GoalState, GoalStatus};
-    use crate::core::prefs::{ApprovalMode, EffortLevel, SessionPrefs, SessionPrefsSnapshot};
+    use crate::core::prefs::{ApprovalMode, EffortLevel, SessionPrefs};
     use crate::core::types::SessionId;
 
-    /// 记录事件的测试 sink：断言 `goal:update` 的键名与载荷（其余事件不关心）。
+    /// 记录事件的测试 sink（不关心具体事件名，仅作 runtime 装配）。
     #[derive(Default)]
     struct RecSink {
         events: Mutex<Vec<(String, String, serde_json::Value)>>,
@@ -976,7 +622,7 @@ mod tests {
             dd.path().to_path_buf(),
         ));
         let rt = core.get_or_create_session(
-            "goal-transition",
+            "prefs-transition",
             std::fs::canonicalize(ws.path()).unwrap(),
             None,
             vec![],
@@ -1040,401 +686,6 @@ mod tests {
             .unwrap();
     }
 
-    fn goal_state(status: GoalStatus) -> GoalState {
-        GoalState {
-            text: "把 X 改成 Y".into(),
-            criteria: vec![GoalCriterion {
-                title: "改完 X".into(),
-                done: false,
-                manual: false,
-                verification: None,
-            }],
-            ledger: GoalLedger::default(),
-            status,
-            decisions: Vec::new(),
-            pending: Vec::new(),
-            blocked: Vec::new(),
-            rounds: 0,
-            stall_streak: 0,
-            ledger_denials: 0,
-            delivery: super::super::goal_delivery::GoalDelivery {
-                budget: Some(super::super::goal_delivery::GoalBudget {
-                    unlimited: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        }
-    }
-
-    fn goal_events(h: &Harness) -> Vec<serde_json::Value> {
-        h.sink
-            .events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, e, _)| e == "goal:update")
-            .map(|(_, _, p)| p.clone())
-            .collect()
-    }
-
-    #[test]
-    fn goal_budget_counts_cached_usage_by_request_protocol_and_root() {
-        use crate::core::config::ApiFormat;
-        let h = harness();
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        h.core.sessions.insert(h.rt.id.clone(), h.rt.clone());
-        let child = SessionRuntime::new_sub(&h.rt, "budget-child".into());
-        let usage = crate::provider::RunUsage {
-            input: 100,
-            output: 20,
-            cache_read: 40,
-            cache_write: 10,
-        };
-        h.core
-            .account_goal_usage(&h.rt, &usage, &ApiFormat::OpenAiChat);
-        assert_eq!(h.rt.goal_snapshot().unwrap().delivery.used_tokens, 120);
-        h.core
-            .account_goal_usage(&child, &usage, &ApiFormat::OpenAiResponses);
-        assert_eq!(h.rt.goal_snapshot().unwrap().delivery.used_tokens, 240);
-        h.core
-            .account_goal_usage(&child, &usage, &ApiFormat::AnthropicMessages);
-        assert_eq!(h.rt.goal_snapshot().unwrap().delivery.used_tokens, 410);
-        assert!(child.goal_snapshot().is_none());
-        assert_eq!(
-            h.core
-                .store
-                .load_goal(&h.rt.id)
-                .unwrap()
-                .delivery
-                .used_tokens,
-            410
-        );
-    }
-
-    #[test]
-    fn overlapping_project_cannot_start_second_writer() {
-        let h = harness();
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        h.core.sessions.insert(h.rt.id.clone(), h.rt.clone());
-        let other = SessionRuntime::new(
-            "other-writer".into(),
-            h.rt.workspace.clone(),
-            h.rt.data_dir.clone(),
-        );
-        assert!(h.core.ensure_goal_writer(&other).is_err());
-        h.rt.mutate_goal(|g| g.status = GoalStatus::Paused);
-        assert!(h.core.ensure_goal_writer(&other).is_ok());
-    }
-
-    #[test]
-    fn goal_resume_requires_explicit_unexhausted_budget() {
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        let mut state = goal_state(GoalStatus::Paused);
-        state.delivery.budget = None;
-        h.rt.set_goal(Some(state));
-        assert!(h.core.resume_goal(&h.rt).is_err());
-        h.rt.mutate_goal(|g| {
-            g.delivery.budget = Some(super::super::goal_delivery::GoalBudget {
-                token_limit: Some(10),
-                ..Default::default()
-            });
-            g.delivery.used_tokens = 10;
-        });
-        assert!(h.core.resume_goal(&h.rt).is_err());
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-    }
-
-    #[test]
-    fn goal_final_interval_is_counted_once_before_human_wait() {
-        let h = harness();
-        h.rt.set_goal(Some(goal_state(GoalStatus::AwaitingAcceptance)));
-        *h.rt.goal_clock.lock().unwrap() =
-            Some(std::time::Instant::now() - std::time::Duration::from_millis(30));
-        assert!(h.core.goal_budget_check(&h.rt).is_none());
-        let elapsed = h.rt.goal_snapshot().unwrap().delivery.elapsed_ms;
-        assert!(elapsed >= 30);
-        assert!(h.rt.goal_clock.lock().unwrap().is_none());
-        h.core.goal_budget_check(&h.rt);
-        assert_eq!(h.rt.goal_snapshot().unwrap().delivery.elapsed_ms, elapsed);
-        assert_eq!(
-            h.core
-                .store
-                .load_goal(&h.rt.id)
-                .unwrap()
-                .delivery
-                .elapsed_ms,
-            elapsed
-        );
-    }
-
-    #[test]
-    fn concurrent_goal_usage_keeps_disk_total_in_sync() {
-        let h = harness();
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        std::thread::scope(|scope| {
-            for _ in 0..4 {
-                scope.spawn(|| {
-                    for _ in 0..3 {
-                        h.core.account_goal_usage(
-                            &h.rt,
-                            &crate::provider::RunUsage {
-                                input: 10,
-                                output: 2,
-                                ..Default::default()
-                            },
-                            &crate::core::config::ApiFormat::OpenAiChat,
-                        );
-                    }
-                });
-            }
-        });
-        assert_eq!(h.rt.goal_snapshot().unwrap().delivery.used_tokens, 144);
-        assert_eq!(
-            h.core
-                .store
-                .load_goal(&h.rt.id)
-                .unwrap()
-                .delivery
-                .used_tokens,
-            144
-        );
-    }
-
-    // ---------- 前档快照（切进目标档） ----------
-
-    #[test]
-    fn entering_goal_records_prev_mode_once() {
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::AutoEdit));
-        assert!(
-            !h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)),
-            "仅进档不产生目标状态变更"
-        );
-        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
-        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::Goal);
-        // 重复切进（目标档内再写同档）：快照不被覆盖
-        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)));
-        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
-        // 外部（非过渡路径）改档后再切进目标档：仍是首次记录（回落目标不得被改写）
-        h.rt.set_prefs(prefs_of(ApprovalMode::ConfirmEach));
-        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal)));
-        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::AutoEdit));
-        assert!(goal_events(&h).is_empty(), "无目标状态变更则不发事件");
-    }
-
-    #[test]
-    fn entering_goal_from_plan_records_plan() {
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Plan));
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::Plan));
-    }
-
-    // ---------- 切走档位：执行中的目标自动暂停 ----------
-
-    #[test]
-    fn leaving_goal_pauses_executing_goal_and_persists() {
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        assert!(
-            h.core
-                .transition_prefs(&h.rt, prefs_of(ApprovalMode::AutoEdit)),
-            "执行中切走档位应报告目标状态变更"
-        );
-        // 内存 + 边车都是已暂停；档位已切走（不锁档）
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-        assert_eq!(
-            h.core.store.load_goal(&h.rt.id).unwrap().status,
-            GoalStatus::Paused,
-            "暂停迁移必须落边车"
-        );
-        assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::AutoEdit);
-        // 事件：键名 + 载荷（session 与 goal）
-        let ev = goal_events(&h);
-        assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0]["session"], serde_json::json!("goal-transition"));
-        assert_eq!(ev[0]["goal"]["status"], serde_json::json!("paused"));
-    }
-
-    #[test]
-    fn leaving_goal_keeps_other_states_untouched() {
-        for status in [
-            GoalStatus::Clarify,
-            GoalStatus::Paused,
-            GoalStatus::Done,
-            GoalStatus::Aborted,
-        ] {
-            let h = harness();
-            h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-            h.rt.set_goal(Some(goal_state(status)));
-            assert!(
-                !h.core
-                    .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess)),
-                "{status:?} 不应发生暂停迁移"
-            );
-            assert_eq!(
-                h.rt.goal_snapshot().unwrap().status,
-                status,
-                "{status:?} 状态不得被改写"
-            );
-            assert_eq!(h.rt.prefs().approval_mode, ApprovalMode::FullAccess);
-            assert!(goal_events(&h).is_empty(), "{status:?} 无变更不发事件");
-        }
-        // 未登记目标：切走档位不 panic、不产生状态变更
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        assert!(!h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Plan)));
-        assert!(h.rt.goal_snapshot().is_none());
-    }
-
-    // ---------- 续跑（Paused → Executing） ----------
-
-    #[tokio::test]
-    async fn paused_goal_saves_supplement_without_running_model_even_after_restore() {
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
-        h.core
-            .start_chat(h.rt.clone(), "补充验收说明".into(), vec![])
-            .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while h.rt.running.load(Ordering::SeqCst) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(!h.rt.running.load(Ordering::SeqCst));
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-        assert!(
-            h.core
-                .store
-                .load_history(&h.rt.id)
-                .unwrap()
-                .iter()
-                .any(|m| m.first_text() == Some("补充验收说明"))
-        );
-
-        h.core
-            .store
-            .save_goal(&h.rt.id, &h.rt.goal_snapshot())
-            .unwrap();
-        h.rt.set_goal(None);
-        h.core
-            .start_chat(h.rt.clone(), "恢复后的补充".into(), vec![])
-            .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while h.rt.running.load(Ordering::SeqCst) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(!h.rt.running.load(Ordering::SeqCst));
-        assert_eq!(
-            h.core.store.load_goal(&h.rt.id).unwrap().status,
-            GoalStatus::Paused
-        );
-        assert!(
-            h.core
-                .store
-                .load_history(&h.rt.id)
-                .unwrap()
-                .iter()
-                .any(|m| m.first_text() == Some("恢复后的补充"))
-        );
-    }
-
-    #[test]
-    fn resume_goal_requires_paused_and_flips_to_executing() {
-        let h = harness();
-        // 档位前提：续跑本身要过目标档校验（core 层纵深防御，见下一条用例）
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        // 未登记：拒绝
-        assert!(h.core.resume_goal(&h.rt).is_err());
-        // 澄清期 / 执行中 / 终态：拒绝（幂等保护）
-        for status in [
-            GoalStatus::Clarify,
-            GoalStatus::Executing,
-            GoalStatus::Done,
-            GoalStatus::Aborted,
-        ] {
-            h.rt.set_goal(Some(goal_state(status)));
-            let e = h.core.resume_goal(&h.rt).expect_err("非暂停不得续跑");
-            assert!(
-                e.to_string().contains(status.label()),
-                "{status:?} 的错误文案应点明当前状态：{e}"
-            );
-            assert_eq!(h.rt.goal_snapshot().unwrap().status, status);
-        }
-        // 暂停中：置回执行期 + 落边车 + 发事件
-        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
-        assert!(h.core.resume_goal(&h.rt).is_ok());
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
-        assert_eq!(
-            h.core.store.load_goal(&h.rt.id).unwrap().status,
-            GoalStatus::Executing
-        );
-        let ev = goal_events(&h);
-        assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0]["goal"]["status"], serde_json::json!("executing"));
-    }
-
-    #[test]
-    fn restored_goal_keeps_mode_contract_and_previous_mode() {
-        let h = harness();
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        h.core
-            .store
-            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Executing)))
-            .unwrap();
-        h.core.sessions.remove(&h.rt.id);
-        let rt = h.core.get_or_create_session(
-            &h.rt.id,
-            h.rt.workspace.clone(),
-            None,
-            vec![],
-            None,
-            vec![],
-        );
-        // 真实打开会话会先把历史填入 runtime；目标与档位已在创建时独立恢复。
-        rt.history
-            .lock()
-            .unwrap()
-            .push(Message::user_text("旧消息"));
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        assert_eq!(rt.goal_prev_mode(), Some(ApprovalMode::Plan));
-        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-        assert_eq!(
-            h.core.store.load_goal(&rt.id).unwrap().status,
-            GoalStatus::Paused
-        );
-    }
-
-    #[test]
-    fn old_goal_without_prefs_sidecar_restores_goal_mode() {
-        let h = harness();
-        h.core
-            .store
-            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
-            .unwrap();
-        std::fs::remove_file(h.core.store.prefs_path(&h.rt.id)).unwrap();
-        h.core.sessions.remove(&h.rt.id);
-        let rt = h.core.get_or_create_session(
-            &h.rt.id,
-            h.rt.workspace.clone(),
-            None,
-            vec![],
-            None,
-            vec![],
-        );
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-    }
-
     #[test]
     fn session_model_and_effort_survive_restart_without_restoring_full_access() {
         let h = harness();
@@ -1473,71 +724,6 @@ mod tests {
                 .id,
             "m-global"
         );
-    }
-
-    #[test]
-    fn legacy_goal_session_restores_model_from_ui_snapshot_without_changing_mode() {
-        let h = harness();
-        configure_two_models(&h);
-        write_legacy_model_index(&h);
-        h.core
-            .store
-            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
-            .unwrap();
-        std::fs::remove_file(h.core.store.prefs_path(&h.rt.id)).unwrap();
-        let rt = rebuild(&h);
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        assert!(rt.prefs().model_id.is_none());
-        h.core
-            .restore_legacy_model_prefs(&rt, Some("m-session".into()), Some(EffortLevel::Max))
-            .unwrap();
-        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
-        assert_eq!(rt.prefs().reasoning_effort, Some(EffortLevel::Max));
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        assert!(
-            h.core
-                .store
-                .load_prefs(&rt.id)
-                .unwrap()
-                .model_choice_recorded
-        );
-    }
-
-    #[test]
-    fn older_goal_marker_without_model_choice_accepts_one_time_ui_migration() {
-        let h = harness();
-        configure_two_models(&h);
-        write_legacy_model_index(&h);
-        h.core
-            .store
-            .save_prefs(
-                &h.rt.id,
-                &SessionPrefsSnapshot {
-                    goal_mode_active: true,
-                    model_choice_recorded: false,
-                    model_id: None,
-                    reasoning_effort: None,
-                },
-            )
-            .unwrap();
-        let rt = rebuild(&h);
-        assert!(rt.prefs().model_id.is_none());
-        assert!(
-            !h.core
-                .store
-                .load_prefs(&rt.id)
-                .unwrap()
-                .model_choice_recorded
-        );
-        h.core
-            .restore_legacy_model_prefs(&rt, Some("m-session".into()), None)
-            .unwrap();
-        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        h.core
-            .restore_legacy_model_prefs(&rt, Some("m-global".into()), None)
-            .unwrap();
-        assert_eq!(rt.prefs().model_id.as_deref(), Some("m-session"));
     }
 
     #[test]
@@ -1616,158 +802,6 @@ mod tests {
                 .unwrap()
                 .id,
             "m-global"
-        );
-    }
-
-    #[test]
-    fn non_goal_permission_does_not_survive_restart_or_reactivate_paused_goal() {
-        let h = harness();
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        h.core
-            .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess));
-        h.core.sessions.remove(&h.rt.id);
-        let rt = h.core.get_or_create_session(
-            &h.rt.id,
-            h.rt.workspace.clone(),
-            None,
-            vec![],
-            None,
-            vec![],
-        );
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Plan);
-        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-        assert_eq!(rt.goal_prev_mode(), None);
-    }
-
-    #[test]
-    fn full_access_before_goal_cannot_reappear_on_completion_after_restart() {
-        let h = harness();
-        h.core
-            .transition_prefs(&h.rt, prefs_of(ApprovalMode::FullAccess));
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        assert_eq!(h.rt.goal_prev_mode(), Some(ApprovalMode::FullAccess));
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        h.core.persist_goal(&h.rt);
-        h.core.sessions.remove(&h.rt.id);
-
-        let rt = h.core.get_or_create_session(
-            &h.rt.id,
-            h.rt.workspace.clone(),
-            None,
-            vec![],
-            None,
-            vec![],
-        );
-        assert_eq!(rt.prefs().approval_mode, ApprovalMode::Goal);
-        assert_eq!(rt.goal_snapshot().unwrap().status, GoalStatus::Paused);
-        assert_eq!(rt.goal_prev_mode(), Some(ApprovalMode::Plan));
-        let fallback =
-            super::super::drive::fallback_mode(rt.goal_prev_mode(), &h.core.cfg.read().unwrap());
-        assert_eq!(fallback, ApprovalMode::Plan);
-    }
-
-    #[test]
-    fn resume_resets_denial_window_but_retains_blocked_history() {
-        let h = harness();
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        let mut goal = goal_state(GoalStatus::Paused);
-        goal.ledger_denials = 8;
-        goal.stall_streak = 5;
-        goal.blocked.push("账本外操作被拒（程序）：mkdir".into());
-        h.rt.set_goal(Some(goal));
-        h.rt.request_goal_abort();
-        h.core.resume_goal(&h.rt).unwrap();
-        let goal = h.rt.goal_snapshot().unwrap();
-        assert_eq!(goal.status, GoalStatus::Executing);
-        assert_eq!((goal.ledger_denials, goal.stall_streak), (0, 0));
-        assert_eq!(goal.blocked.len(), 1);
-        assert!(!h.rt.take_goal_abort());
-        assert_eq!(h.core.store.load_goal(&h.rt.id).unwrap(), goal);
-    }
-
-    #[test]
-    fn reopen_paused_goal_returns_to_readonly_clarification() {
-        let h = harness();
-        h.core.transition_prefs(&h.rt, prefs_of(ApprovalMode::Goal));
-        let mut goal = goal_state(GoalStatus::Paused);
-        goal.ledger_denials = 3;
-        goal.blocked.push("遗漏的程序 mkdir".into());
-        h.rt.set_goal(Some(goal));
-        h.core.reopen_goal(&h.rt).unwrap();
-        let goal = h.rt.goal_snapshot().unwrap();
-        assert_eq!(goal.status, GoalStatus::Clarify);
-        assert_eq!(goal.ledger_denials, 0);
-        assert_eq!(goal.blocked.len(), 1);
-        assert_eq!(h.core.store.load_goal(&h.rt.id).unwrap(), goal);
-        assert!(h.core.reopen_goal(&h.rt).is_err());
-    }
-
-    #[test]
-    fn resume_goal_loads_paused_goal_from_sidecar() {
-        // 重启后 runtime 刚重建（内存无目标）、边车是暂停态：续跑仍应成功（从边车装回）
-        let h = harness();
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        h.core
-            .store
-            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
-            .unwrap();
-        assert!(h.core.resume_goal(&h.rt).is_ok());
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
-    }
-
-    /// 🟡-3 续跑的档位自校验（纵深防御）：host 命令层已有 `goal_resume_mode_guard`，core 层
-    /// 不得依赖它——非 host 调用方绕过时会留下「非目标档 + 目标执行中 + 账本闸门关闭」的
-    /// 静默不一致。文案与 host 同源（同一份常量）。
-    #[test]
-    fn resume_goal_requires_goal_mode() {
-        let h = harness();
-        h.rt.set_goal(Some(goal_state(GoalStatus::Paused)));
-        for mode in [
-            ApprovalMode::ConfirmEach,
-            ApprovalMode::AutoEdit,
-            ApprovalMode::Plan,
-            ApprovalMode::FullAccess,
-        ] {
-            h.rt.set_prefs(prefs_of(mode));
-            let e = h.core.resume_goal(&h.rt).unwrap_err();
-            assert!(
-                e.to_string().contains("E_GOAL_MODE_REQUIRED"),
-                "{mode:?} 的错误文案应与 host 层同源：{e}"
-            );
-            // 拒绝时不动状态、不落边车、不发事件
-            assert_eq!(
-                h.rt.goal_snapshot().unwrap().status,
-                GoalStatus::Paused,
-                "{mode:?} 不得被置回执行期"
-            );
-            assert!(h.core.store.load_goal(&h.rt.id).is_none(), "{mode:?}");
-            assert!(goal_events(&h).is_empty(), "{mode:?} 无变更不发事件");
-        }
-        // 目标档：正常续跑
-        h.rt.set_prefs(prefs_of(ApprovalMode::Goal));
-        assert!(h.core.resume_goal(&h.rt).is_ok());
-        assert_eq!(h.rt.goal_snapshot().unwrap().status, GoalStatus::Executing);
-    }
-
-    #[test]
-    fn goal_view_prefers_memory_and_falls_back_to_sidecar() {
-        let h = harness();
-        assert!(h.core.goal_view(&h.rt).is_none());
-        h.core
-            .store
-            .save_goal(&h.rt.id, &Some(goal_state(GoalStatus::Paused)))
-            .unwrap();
-        assert_eq!(
-            h.core.goal_view(&h.rt).unwrap().status,
-            GoalStatus::Paused,
-            "内存缺席时回退边车"
-        );
-        h.rt.set_goal(Some(goal_state(GoalStatus::Executing)));
-        assert_eq!(
-            h.core.goal_view(&h.rt).unwrap().status,
-            GoalStatus::Executing,
-            "内存态优先"
         );
     }
 }

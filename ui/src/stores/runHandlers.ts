@@ -172,15 +172,6 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       }
       // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：任务完成后依序运行下一条队列项
       void get().runQueueNext(p.session);
-      // 目标档收尾的档位回落同步（见 goal:update）：只在确实处在目标档（或目标刚达成）时发这条 IPC，
-      // 普通会话的 run:done 不打扰后端
-      const st = useSessions.getState();
-      if (
-        get().tabs[p.session]?.goal?.status === "done" ||
-        st.tabs.find((t) => t.key === p.session)?.prefs.approval_mode === "goal"
-      ) {
-        void st.syncPrefs(p.session);
-      }
     },
     "run:error": (p) => {
       markUnreadIfAway(p?.session); // docs/ask-ink-accent-and-composer-cover：失败收尾同样算会话结束
@@ -265,26 +256,13 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         s.tabs[key].todos = p.todos ?? [];
       });
     },
-    // 目标模式（`ApprovalMode::Goal`）：目标状态快照落地（第 30 个事件键）。
-    // M-1 守卫：已关 Tab 的迟到事件不重建状态桶（与 ask:opened 同口径）。
-    "goal:update": (p) => {
-      set((s) => {
-        const t = s.tabs[p.session];
-        if (!t) return;
-        // null = 目标已清除 / 已回落前档：整体覆盖而不是合并，否则旧目标会残留
-        t.goal = (p?.goal ?? null) as any;
-        // 推送代际 +1：在途的 syncGoal 回读结果就此作废（推送永远更新，回读只补初值）
-        t.goalRev = (t.goalRev ?? 0) + 1;
-      });
-      // 目标达成 = 后端已把会话档位自动回落到「进入目标档前的档位」（改写 prefs）：
-      // 回读服务端真值同步权限胶囊，否则胶囊会停在「目标模式」而实际已是前档。
-      if (p?.goal?.status === "done") void useSessions.getState().syncPrefs(p.session);
-    },
     // 计划任务运行态：静默驱动 tasks store（用户已拍板去掉这两个 toast；面板/左栏自行渲染运行中与状态）
     "scheduled:fired": (p) => useTasks.getState().applyFired(p),
     "scheduled:done": (p) => useTasks.getState().applyDone(p),
   };
 }
+
+/** 运行生命周期（11 键：start/done/error/cancelled/inject/retry + 自动命名 + 计划任务 toast + 计划 todos）。
 
 /** 压缩流（5 键）：compacting / failed / compacted 通知 + suggestions + token 分布 */
 export function compactHandlers(set: SetFn): Record<string, (p: any) => void> {

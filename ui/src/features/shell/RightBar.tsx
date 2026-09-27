@@ -10,19 +10,17 @@ import { App as AntApp, Button, Collapse, Segmented, Select, Switch, Tabs } from
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import type { LogFileEntry, SkillMeta, GoalState } from "../../ipc/types";
+import type { LogFileEntry, SkillMeta } from "../../ipc/types";
 import { originLabel } from "../../utils/skills";
-import { GOAL_STATUS_KEYS } from "../../utils/goal";
 import {
   readCollapsedSections,
   writeCollapsedSections,
   type CollapsibleSection,
 } from "../../utils/rightbarPrefs";
-import { useActiveRun, useRun } from "../../stores/run";
+import { useActiveRun } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import FilesPanel from "../files/FilesPanel";
-import GoalControls from "../chat/GoalControls";
 import FileViewerModal from "../files/FileViewerModal";
 import { useSessionFiles } from "../files/useSessionFiles";
 import QuotaSection from "../quota/QuotaSection";
@@ -74,13 +72,10 @@ function InfoPanel({ visible }: { visible: boolean }) {
   const project = tab?.projectId ? projects.find((p) => p.id === tab.projectId) : null;
   // 「项目目录」section 要打开的目标：项目会话 = 主目录；临时会话 = 工作区；无目标则不渲染图标按钮
   const dirToOpen = project?.directory ?? tab?.workspace ?? "";
-  // 目标模式（`ApprovalMode::Goal`）：目标段仅在当前会话真有目标时参与（与计划段同口径）
-  const goal = active.goal ?? null;
-  // 折叠段集合：计划 / 目标段仅在当前会话有内容时参与（避免「折叠了不存在的段」）
+  // 折叠段集合：计划段仅在当前会话有内容时参与（避免「折叠了不存在的段」）
   const allSections: CollapsibleSection[] = [
     "skills",
     ...(active.todos.length > 0 ? (["plan"] as const) : []),
-    ...(goal ? (["goal"] as const) : []),
   ];
   const openSections = allSections.filter((id) => !collapsedSections.has(id));
 
@@ -192,8 +187,6 @@ function InfoPanel({ visible }: { visible: boolean }) {
                 },
               ]
             : []),
-          // 目标段（`ApprovalMode::Goal`）：仅在当前会话有目标时出现，与计划段并列不互相覆盖
-          ...(goal ? [{ key: "goal", label: t("rightbar.goal"), children: <GoalSection goal={goal} sessionId={sessionId} canAct={tab?.prefs.approval_mode === "goal"} /> }] : []),
         ]}
       />
       <SkillDetailModal skill={detail} sessionId={sessionId} onClose={() => setDetail(null)} />
@@ -202,53 +195,6 @@ function InfoPanel({ visible }: { visible: boolean }) {
 }
 const TAIL_LINES = 300;
 
-/** 右栏「目标」段：合同、预算、验证证据、阻塞和人工验收。
- *  与「当前计划」段并列渲染；暂停态给出「继续推进」（调 `resume_goal`）。 */
-function GoalSection({ goal, sessionId, canAct }: { goal: GoalState; sessionId: string | null; canAct: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <div className="rb-goal-head">
-        <span className={`rb-goal-badge st-${goal.status}`}>{t(GOAL_STATUS_KEYS[goal.status])}</span>
-        <span className="rb-dim">{t("rightbar.goalRounds", { n: goal.rounds })}</span>
-        {goal.status === "paused" && canAct && (
-          <>
-            <Button type="text" size="small" className="rb-goal-resume" onClick={() => void useRun.getState().resumeGoal(sessionId)}>
-              {t("rightbar.goalResume")}
-            </Button>
-            <Button type="text" size="small" title={t("rightbar.goalReviseHint")} onClick={() => void useRun.getState().reopenGoal(sessionId)}>
-              {t("rightbar.goalRevise")}
-            </Button>
-          </>
-        )}
-      </div>
-      <div className="rb-goal-text" title={goal.text}>{goal.text}</div>
-      {goal.criteria.length > 0 && (
-        <>
-          <div className="rb-label">{t("rightbar.goalCriteria")}</div>
-          {goal.criteria.map((c, i) => (
-            <div className="rb-todo" key={i}>
-              <span className={`rb-todo-dot ${c.done ? "completed" : "pending"}`}>
-                {c.done ? "✓" : "○"}
-              </span>
-              <span><span className={c.done ? "rb-todo-done" : ""}>{c.title}</span>
-                {c.verification && <><div><code>{c.verification.command}</code></div>{c.verification.cwd && <div className="rb-dim">{c.verification.cwd}</div>}</>}
-              </span>
-              {c.manual && <span className="rb-dim">{t("goal.manual")}</span>}
-            </div>
-          ))}
-        </>
-      )}
-      {sessionId && <GoalControls goal={goal} sessionId={sessionId} readOnly={!canAct} />}
-      {goal.pending.length > 0 && <><div className="rb-label">{t("goal.pending")}</div>{goal.pending.map((item, i) => <div key={i}>{item}</div>)}</>}
-      {goal.blocked.length > 0 && <><div className="rb-label">{t("goal.blocked")}</div>{goal.blocked.map((item, i) => <div key={i}>{item}</div>)}</>}
-      {!!goal.delivery?.sources.length && <><div className="rb-label">{t("goal.sources")}</div>{goal.delivery.sources.map((item, i) => <div key={i}>{item}</div>)}</>}
-      {!!goal.delivery?.baseline.length && <><div className="rb-label">{t("goal.baseline")}</div>{goal.delivery.baseline.map((item, i) => <div key={i}>{item}</div>)}</>}
-      {!!goal.delivery?.evidence.length && <><div className="rb-label">{t("goal.evidence")}</div>{goal.delivery.evidence.map((item, i) => <div key={i} title={item.call_id}>{goal.criteria[item.criterion]?.title}: {item.summary}</div>)}</>}
-      {!!goal.delivery?.verifications.length && <><div className="rb-label">{t("goal.verifications")}</div>{goal.delivery.verifications.map((item, i) => <div key={i} title={item.call_id}>{item.passed ? "✓" : "○"} {item.review ? t("goal.review") : item.tool}: {item.summary}</div>)}</>}
-    </>
-  );
-}
 const POLL_MS = 2000;
 
 /// 行级着色：同时兼容会话日志 `[WARN]` 与 tracing 文本 ` WARN ` 两种前缀

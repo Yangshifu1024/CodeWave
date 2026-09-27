@@ -14,7 +14,6 @@ pub mod edit;
 pub mod encoding;
 #[cfg(test)]
 mod fuzz;
-pub mod goal;
 pub mod grep;
 pub mod http_request;
 pub mod list_files;

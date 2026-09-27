@@ -10,7 +10,7 @@
 
 ## 二、证据链（为什么不是「模型不会用工具」这么简单）
 
-1. **不是请求侧漏发 tools**：`provider/anthropic.rs:69` 只在 `req.tools` 为空时省略该字段；`exclude_tools.push("ask")` 只出现在**目标档执行期**（`core/agent/drive.rs` 的 `apply_goal_mode`），而该会话是普通 plan 档。旁证：同一会话前后 **8 次以上** `ask` 都是正常结构化 `tool_use`（用户还答过 `test_first`），`plan` / `read` / `subagent` / `web_fetch` 也全正常。
+1. **不是请求侧漏发 tools**：`provider/anthropic.rs:69` 只在 `req.tools` 为空时省略该字段；该会话是普通 plan 档，没有 `exclude_tools.push("ask")` 的执行期路径。旁证：同一会话前后 **8 次以上** `ask` 都是正常结构化 `tool_use`（用户还答过 `test_first`），`plan` / `read` / `subagent` / `web_fetch` 也全正常。
 2. **不是解析或落盘丢帧**：若 SSE 里存在 `tool_use`，同一会话解析得出来；坏轮（`2026-09-25T03:29:29Z`）落盘的 assistant 消息 content **只有 `{"type":"text"}`**，XML 是以文本增量经 `asm.push_text` 进来的——落盘即原文，不是渲染或持久化产物。全仓（代码 / 提示词 / 技能 / 任务文档）**零命中** `<ask>` / `<questions>`，即这套 XML 协议不是 CodeWave 给的。
 3. **触发时机可复**：坏轮紧跟在**同批次两次 `web_fetch` 双 404** 之后（03:29:23 调用 → 03:29:27 `is_error`），模型被工具报错打断后掉出了协议；下一轮它自己承认「**没有按规范输出提问**……没有把它包装成正确结构」。
 4. **端点侧（推断，非实证）**：`api.minimax.cn` 不在本仓库记录的官方 CN 域名（`core/quota/mod.rs` 是 `api.minimaxi.com` / `minimaxi.com`）；该端点行为带「自带一层 harness」特征——模型正文混入私有特殊 token（实测 `]<]minimax[>[`，见下节）、思考块引用本仓库零命中的英文身份提示。最可能的机制是：端点把工具描述 prompt 化、再把输出里的 XML 解析回 `tool_use`，那一轮解析失败，原始 XML 被当普通文本透传。**要钉死必须抓原始 SSE**，而 CodeWave 不落盘原始请求/响应——这正是本批新增 step 级诊断日志的动机。

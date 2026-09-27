@@ -4,7 +4,7 @@
 use crate::core::config::ConfigState;
 use serde::{Deserialize, Serialize};
 
-/// 五档审批模式（Composer 下拉，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 安全语义表）。
+/// 四档审批模式（Composer 下拉，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 安全语义表）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -16,8 +16,6 @@ pub enum ApprovalMode {
     /// 计划模式（默认档，[docs/thinking-scroll-fix](../../../docs/thinking-scroll-fix.md)）：只调研与出方案，不做修改；方案获批后再执行。
     #[default]
     Plan,
-    /// 目标模式：澄清期只读；批准后的执行期采用完全访问权限，并按目标合同持续推进。
-    Goal,
     /// 完全放行：跳过审批弹窗与 fence 确认；灾难级命令仍被直接拦截
     FullAccess,
 }
@@ -34,13 +32,11 @@ impl ApprovalMode {
     }
 
     /// fence 是否把工作区内写目标升级为 Confirm（ConfirmEach / Plan 两档）。
-    /// 目标档阶段权限由 ToolCtx::execution_approval_mode 解析。
     pub fn confirm_inside_writes(self) -> bool {
         matches!(self, ApprovalMode::ConfirmEach | ApprovalMode::Plan)
     }
 
     /// 计划模式：shell 只读命令白名单直通，白名单外一律 Confirm。
-    /// 目标档为 false：澄清期的只读由驱动层排除写工具实现，不走 fence（fence 只管命令形态）。
     pub fn plan_readonly(self) -> bool {
         self == ApprovalMode::Plan
     }
@@ -101,11 +97,9 @@ pub struct SessionPrefs {
     pub reasoning_effort: Option<EffortLevel>,
 }
 
-/// 重启恢复快照：仅目标档活动标记、会话模型与思考力度；其它权限档不持久化。
+/// 重启恢复快照：会话模型与思考力度；其它权限档不持久化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionPrefsSnapshot {
-    #[serde(default)]
-    pub goal_mode_active: bool,
     /// 旧版目标边车没有模型字段，不能把其缺省 null 当作用户显式选了“跟随全局”。
     #[serde(default)]
     pub model_choice_recorded: bool,
@@ -167,26 +161,13 @@ mod tests {
         assert_eq!(m, ApprovalMode::Plan);
     }
 
-    /// 目标档：wire 值为 `goal`，往返一致；默认档仍是 Plan（新增变体不得挪动默认值）。
-    #[test]
-    fn goal_variant_serde_roundtrip() {
-        assert_eq!(
-            serde_json::to_string(&ApprovalMode::Goal).unwrap(),
-            r#""goal""#
-        );
-        let m: ApprovalMode = serde_json::from_str(r#""goal""#).unwrap();
-        assert_eq!(m, ApprovalMode::Goal);
-        assert_eq!(ApprovalMode::default(), ApprovalMode::Plan);
-    }
-
-    /// 语义矩阵：目标档 = 工作区内写直通（不升级 Confirm）+ 不走 plan 只读 fence。
+    /// 语义矩阵：四档各自语义守住。
     #[test]
     fn approval_mode_semantics_matrix() {
         let cases = [
             (ApprovalMode::ConfirmEach, true, false),
             (ApprovalMode::AutoEdit, false, false),
             (ApprovalMode::Plan, true, true),
-            (ApprovalMode::Goal, false, false),
             (ApprovalMode::FullAccess, false, false),
         ];
         for (mode, confirm_inside, plan_readonly) in cases {
@@ -237,7 +218,7 @@ mod tests {
 
     /// 前档快照**刻意不放 prefs**：prefs 是前端整体替换写的事实源（`updatePrefs` 走
     /// `{ ...prev, ...patch }`），把纯后端运行时状态塞进来会被前端补丁冲掉。
-    /// 它现在住在 `SessionRuntime::goal_prev_mode`；这里钉死 wire 字段集防回归。
+    /// 这里钉死 wire 字段集防回归。
     #[test]
     fn prefs_wire_fields_are_user_preferences_only() {
         let json = serde_json::to_string(&SessionPrefs::default()).unwrap();
@@ -247,7 +228,6 @@ mod tests {
         for k in ["approval_mode", "model_id", "reasoning_effort"] {
             assert!(obj.contains_key(k), "缺 {k}: {json}");
         }
-        assert!(!json.contains("goal_prev_mode"), "{json}");
     }
 
     #[test]

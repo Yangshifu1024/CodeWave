@@ -6,17 +6,16 @@ import {
   DownOutlined, ExclamationCircleOutlined, FileAddOutlined, FileExcelOutlined,
   FileOutlined, FilePdfOutlined, FileTextOutlined, FileWordOutlined,
   PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
-  SettingOutlined, StopOutlined, ThunderboltOutlined,
+  SettingOutlined, StopOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useActiveRun, useActiveDraft, useRun, useContextPct } from "../../stores/run";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
-import type { ApprovalMode, EffortLevel, GoalState, GoalStatus } from "../../ipc/types";
+import type { ApprovalMode, EffortLevel } from "../../ipc/types";
 import { cacheDenominator, cacheSemanticsOf, findModel } from "../../utils/models";
 import { baseName } from "../../utils/path";
-import { GOAL_STATUS_DEFAULT, GOAL_STATUS_KEYS } from "../../utils/goal";
 import { cacheHitRate, contextTier, type ContextTier } from "../../stores/runFrames";
 import { formatInt, formatMs, formatRate, tokPerSec } from "./composerMetrics";
 import { ipc } from "../../ipc/client";
@@ -36,8 +35,8 @@ import { addRefs, mergeRefs, recoverRefs } from "./composerRefs";
 const { TextArea } = Input;
 
 // Shift+Tab 循环的权限档顺序（与权限下拉菜单项顺序一致）：
-// plan（最安全）→ confirm_each（询问）→ auto_edit（自动）→ goal（自主）→ full_access（完全）
-const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "goal", "full_access"];
+// plan（最安全）→ confirm_each（询问）→ auto_edit（自动）→ full_access（完全）
+const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "full_access"];
 
 /** Composer：底部输入区 + 工具条（左：+/权限/子代理 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
@@ -557,29 +556,25 @@ export default function Composer() {
     plan: "composer.modePlanDesc",
     confirm_each: "composer.modeConfirmEachDesc",
     auto_edit: "composer.modeAutoEditDesc",
-    goal: "composer.modeGoalDesc",
     full_access: "composer.modeFullAccessDesc",
   };
   const modeLabels: Record<ApprovalMode, string> = {
     plan: t("composer.modePlan"),
     confirm_each: t("composer.modeConfirmEach"),
     auto_edit: t("composer.modeAutoEdit"),
-    goal: t("composer.modeGoal"),
     full_access: t("composer.modeFullAccess"),
   };
   const modeIcons: Record<ApprovalMode, React.ReactNode> = {
     plan: <FileTextOutlined />,
     confirm_each: <ExclamationCircleOutlined />,
     auto_edit: <CheckCircleOutlined />,
-    goal: <ThunderboltOutlined />,
     full_access: <SafetyCertificateOutlined />,
   };
   // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：plan 不着色；
-  // confirm = 绿 / auto = 黄 / goal = 橙 / full = 红。同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
+  // confirm = 绿 / auto = 黄 / full = 红。同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
   const modeClass: Partial<Record<ApprovalMode, string>> = {
     confirm_each: "approval-confirm",
     auto_edit: "approval-auto",
-    goal: "approval-goal",
     full_access: "approval-full",
   };
   // 菜单点击与 Shift+Tab 共用（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md)）。后端在每次 LLM 轮 / 工具调用时实时读取 prefs，
@@ -681,12 +676,6 @@ export default function Composer() {
       ) : (
         <>
           <QueuePanel />
-
-          {/* 目标模式提示条（`ApprovalMode::Goal`）：澄清阶段说明「这条消息就是目标」，
-              执行阶段显示轮次 + 状态，暂停态给出「继续推进」。纯展示层，不动触发符/光标逻辑 */}
-          {prefs.approval_mode === "goal" && (
-            <GoalBanner goal={active.goal ?? null} sessionKey={tab?.key ?? ""} />
-          )}
 
       {/* / 技能菜单（list_skills IPC，命令入口已移除）：点击/Enter 回填 /<name> 前缀，
           发送后由 <available-skills> 的点名语义引导模型加载技能（技能详情弹层在右栏技能行） */}
@@ -833,10 +822,7 @@ export default function Composer() {
             placeholder={
               active.running
                 ? t("composer.queuePlaceholder")
-                : // 目标模式澄清阶段：提示用户这条消息就是目标
-                  prefs.approval_mode === "goal" && (active.goal?.status ?? GOAL_STATUS_DEFAULT) === "clarify"
-                  ? t("composer.goalPlaceholder")
-                  : t("app.inputPlaceholder")
+                : t("app.inputPlaceholder")
             }
             spellCheck={false}
             onFocus={() => setComposerFocused(true)}
@@ -1052,35 +1038,4 @@ function refIcon(ref: string) {
     "c", "h", "cpp", "hpp", "cs", "swift", "sh", "ps1", "bat", "sql", "html", "css", "scss", "vue",
   ].includes(ext)) return <FileTextOutlined />;
   return <FileOutlined />;
-}
-
-/** 目标模式提示条（`ApprovalMode::Goal`）：澄清阶段说明「这条消息就是目标」，
- *  执行阶段显示轮次 + 状态（执行中/已暂停/已达成/已中止），暂停态给出「继续推进」。
- *  纯展示层：不碰触发符与光标逻辑（composerTriggers.ts / caretRef 一概不动）。 */
-function GoalBanner({ goal, sessionKey }: { goal: GoalState | null; sessionKey: string }) {
-  const { t } = useTranslation();
-  // 无目标 = 待澄清（与后端「切档后下一条消息即目标」的口径一致）
-  const status: GoalStatus = goal?.status ?? GOAL_STATUS_DEFAULT;
-  return (
-    <div className={`goal-banner st-${status}`} data-goal-status={status}>
-      <span className="goal-banner-text">
-        {status === "clarify"
-          ? t("composer.goalBannerClarify")
-          : `${t("composer.goalRunning", { n: goal?.rounds ?? 0 })} · ${t(GOAL_STATUS_KEYS[status])}`}
-      </span>
-      {status === "awaiting_acceptance" && <Button type="text" size="small" onClick={() => useUi.setState({ rightBarOpen: true, rbTab: "info" })}>
-        {t("composer.goalReviewDelivery")}
-      </Button>}
-      {status === "paused" && (
-        <>
-          <Button type="text" size="small" className="goal-resume-btn" onClick={() => void useRun.getState().resumeGoal(sessionKey)}>
-            {t("composer.goalResume")}
-          </Button>
-          <Button type="text" size="small" title={t("composer.goalReviseHint")} onClick={() => void useRun.getState().reopenGoal(sessionKey)}>
-            {t("composer.goalRevise")}
-          </Button>
-        </>
-      )}
-    </div>
-  );
 }
