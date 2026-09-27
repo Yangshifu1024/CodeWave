@@ -35,8 +35,6 @@ impl ToolRegistry {
         reg!(crate::tools::wait::WaitTool);
         reg!(crate::tools::suggest::SuggestTool);
         reg!(crate::tools::plan::PlanTool);
-        // 目标模式批次：目标登记与执行期合同锁定
-        reg!(crate::tools::goal::GoalTool);
         reg!(crate::tools::batch_read::BatchReadTool);
         reg!(crate::tools::calculate::CalculateTool);
         reg!(crate::tools::render_html::RenderHtmlTool);
@@ -110,7 +108,6 @@ mod tests {
                 "delete",
                 "edit",
                 "edit_document",
-                "goal",
                 "grep",
                 "http_request",
                 "list_files",

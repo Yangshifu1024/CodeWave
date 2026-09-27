@@ -12,7 +12,7 @@ CodeWave 跑在你的本机（Windows / macOS / Linux）。打开一个项目目
 - **本地优先**：会话、配置、记忆、技能全部存于本机（`~/.codewave` 与项目内 `.codewave/`）；API Key 入系统钥匙串，配置文件不落明文；零遥测、零上报
 - **多供应商 BYOK**：OpenAI 兼容 / Anthropic / OpenAI Responses 三协议，多 Key 轮换，端点与模型完全自定义（无内置模型目录）
 - **项目 = 单目录**：选一个代码目录作为项目主目录，托管数据（任务/日志/记忆/技能）存于其下 `.codewave/`，数据随项目走；也支持免目录的临时会话直接开聊
-- **权限五档**：`plan`（只读）→ `confirm_each`（每写必问）→ `auto_edit`（自动编辑）→ `full_access`，另有可持续执行目标的 `goal` 模式；Composer 里 Shift+Tab 切换
+- **权限四档**：`plan`（只读）→ `confirm_each`（每写必问）→ `auto_edit`（自动编辑）→ `full_access`；Composer 里 Shift+Tab 切换
 - **命令安全围栏**：三层静态围栏（删除黑名单 → tree-sitter AST 写目标分析 → 高危模式审批）先于弹窗拦截危险命令；写操作全部圈定在会话可写根内
 - **内置工具 + MCP 扩展**：文件读写、命令执行、grep、网络抓取、计划任务、后台服务管理、Office/PDF 文档处理等；rmcp 客户端接入 stdio / streamable-http MCP 服务器
 - **技能与子代理**：`/slash` 技能与 `$角色` 子代理委派；兼容 `.claude/skills`、`.agents/skills` 目录约定

@@ -586,7 +586,6 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
-  "chat/GoalControls.tsx": ["goal."], // 目标预算、验收与暂停操作
   "chat/ExternalDirPrompt.tsx": ["composer."], // 项目外目录放行确认框（文案归 composer 段，与附件入口同一处）
   "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
   "chat/segments.tsx": ["chat."], // 流式段落状态词
@@ -596,12 +595,12 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/AppShell.tsx": ["app.", "closeTab.", "exitApp.", "git.", "nav."], // 壳层：顶栏动作 / 两个拦截框 / git 身份条 / 中断提示
   "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
   "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
-  "shell/RightBar.tsx": ["common.", "rightbar.", "goal."], // 目标交付证据与控制使用共享 goal 段
+  "shell/RightBar.tsx": ["common.", "rightbar."], // 目标段已随目标模式整体删除移除
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "settings.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏；settings.* 见 CROSS_SEGMENT_BORROWINGS
   "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
-  "tools/AskPanel.tsx": ["ask.", "goal."], // 审批面板与目标预算前置门
+  "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
   "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
   "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
@@ -612,9 +611,6 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
  * 否则「允许段清单」会变成一张谁都可以往上加段的橡皮图章。
  */
 const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
-  "chat/GoalControls.tsx": { "goal.": "目标控制组件拥有独立 goal 文案段，供批准面板和右栏共同消费" },
-  "shell/RightBar.tsx": { "goal.": "右栏展示目标验收证据，与目标操作组件使用同一套交付术语" },
-  "tools/AskPanel.tsx": { "goal.": "目标批准前预算提醒，与 GoalControls 的显式预算选择共用" },
   "chat/Composer.tsx": {
     "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
     "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
@@ -649,7 +645,6 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
   "chat/Composer.tsx": {
     "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）",
-    "t(GOAL_STATUS_KEYS[status])": "目标提示条的状态标签键由 GoalStatus 派生（utils/goal.ts 单表；composer.goalStatus* 五键已由 i18n 键集合用例断言）",
   },
   "quota/QuotaSection.tsx": {
     "t(`rightbar.window.${k}`)": "窗口名键由 entry.key 派生（rolling/weekly/monthly 三键已由 i18n 键集合用例断言）",
@@ -659,9 +654,6 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
   "tools/ToolCallCard.tsx": {
     "t(key)": "工具动词键由 VERBS[tool.tool] 派生",
     "t(neutralErrKey)": "中性错误码（E_INTERRUPTED / E_ASK_*）→ 文案键由 NEUTRAL_ERR_KEYS 表派生（三键已由 i18n 键集合用例断言）",
-  },
-  "shell/RightBar.tsx": {
-    "t(GOAL_STATUS_KEYS[goal.status])": "右栏目标段的状态徐标与 Composer 提示条同源（utils/goal.ts 单表派生，避免两处标签漂移）",
   },
 };
 

@@ -153,8 +153,6 @@ async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
   });
   // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
   void useSessions.getState().syncPrefs(tab.sessionId);
-  // 目标模式（`ApprovalMode::Goal`）：目标状态初值（推送 `goal:update` 仍是持续更新源，回读只补初值）
-  void useRun.getState().syncGoal(tab.sessionId);
   // M4：同进程关 Tab 不打断后端运行——重开时若仍在运行则恢复运行态
   void ipc
     .sessionRunning(tab.sessionId)

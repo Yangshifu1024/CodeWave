@@ -86,18 +86,6 @@ S9 收尾 — 总结各阶段结论 + 产物绝对路径 + 遗留事项。
 </standard-workflow>
 "#;
 
-/// 目标模式（goal mode）定位：与 `<standard-workflow>` 并列常驻第 1 层。
-/// 独立成段而不并入 `WORKFLOW_SECTION`，两个原因：① 后者已顶到预算上限（2000 字）；
-/// ② 目标模式与标准工作流是**档位互斥**的两套推进语义（目标模式下 S1–S5 的确认部分
-/// 合并进澄清阶段），混写会让两套流程互相污染。
-const GOAL_MODE_SECTION: &str = r#"<goal-mode-protocol priority="core">
-目标模式是文档驱动的完整交付工作流。澄清期只读调研，登记 text/criteria/sources/baseline，补齐必要质量要求，解决文档冲突；用户显式设置预算后通过 ask(mode=goal)一次批准范围与验收合同。
-批准后的执行权限与完全访问一致，无额外路径/程序账本限制，常规命令、联网和 MCP 均可用。S1–S5确认合并进澄清，S6–S9开发/审查/测试/交付持续推进；用plan管理依赖与里程碑，不每阶段停下来索要批准。不得删需求、降低验收标准或以Mock替代正式集成。
-执行中自主诊断、有限重试和调整实现；记录decisions、pending、blocked。局部阻塞先推进其他工作。无必要信息/授权、预算耗尽或持续无进展才暂停并报告恢复条件。普通记账不是实际进展。
-每条验收绑定真实工具调用证据；最终文件变动后重做相关检查。独立reviewer/code-reviewer必须重新核对原始需求和当前成果。criteria.manual标记人工项，机器检查通过后进入待验收，用户反馈沿原目标修复。仅约定验收全部通过才能done，不能把阶段成果或轮数耗尽称为完成。
-</goal-mode-protocol>
-"#;
-
 /// 组装完整 system prompt。层序固定；列表排序固定。
 /// `skills_listing`/`memory_listing` 由调用方预算（缓存），保证字节稳定。
 #[allow(clippy::too_many_arguments)] // 参数即各 prompt 层，包成 struct 反而掩盖固定层序
@@ -120,8 +108,6 @@ pub fn assemble(
     // 标准工作流（原 arch 技能内置化，[docs/standard-workflow](../../../docs/standard-workflow.md)）：
     // 常驻第 1 层；编译期常量保证前缀字节稳定（缓存优先）。
     out.push_str(WORKFLOW_SECTION);
-    // 目标模式定位（档位互斥的另一条推进语义；见常量注释）
-    out.push_str(GOAL_MODE_SECTION);
     // 配置的回复语言（设置 → 通用 → AI 语言）：非空时以显式指令覆盖
     // 默认的「用用户语言回答」行为。
     if let Some(lang) = cfg
@@ -279,8 +265,8 @@ mod tests {
         assert!(a.contains("<environment>"));
         assert!(a.contains("<standard-workflow"), "标准工作流常驻第 1 层");
         assert!(
-            a.contains("<goal-mode-protocol"),
-            "目标模式定位常驻第 1 层（与标准工作流并列）"
+            !a.contains("<goal-mode-protocol"),
+            "目标模式已删除：不应再向 system prompt 追加 <goal-mode-protocol>"
         );
 
         // 技能/记忆注入

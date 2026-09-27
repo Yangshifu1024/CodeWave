@@ -142,18 +142,9 @@ impl ToolCtx {
         self.rt.prefs.lock().unwrap().approval_mode
     }
 
-    /// 执行权限与界面档位分开；目标澄清期绝不能继承完全访问。
+    /// 执行权限与界面档位一致。
     pub fn execution_approval_mode(&self) -> crate::core::prefs::ApprovalMode {
-        use crate::core::prefs::ApprovalMode;
-        let mode = self.approval_mode();
-        let root = crate::core::agent::goal::goal_gate_rt(&self.core, &self.rt);
-        if crate::core::agent::goal::goal_execute_phase(&root) {
-            ApprovalMode::FullAccess
-        } else if mode == ApprovalMode::Goal {
-            ApprovalMode::Plan
-        } else {
-            mode
-        }
+        self.approval_mode()
     }
 
     /// 当前会话生效的 fence 策略。approval_enabled 恒为 true：

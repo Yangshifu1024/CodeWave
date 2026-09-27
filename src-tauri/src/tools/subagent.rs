@@ -107,9 +107,7 @@ fn summarize_sub_tail(history: &[crate::core::types::Message]) -> (Option<String
     (last_tool, snippet)
 }
 
-/// 子代理基座排除集（B1）：spawn 时冻结的内部 8 项（交互类 / 元工具），与档位无关。
-/// `goal` 也在其中：目标登记与验收标准勾选只能由主会话做，子代理只拿只读目标上下文
-///（`drive::render_sub_goal_context`）。
+/// 子代理基座排除集（B1）：spawn 时冻结的内部 7 项（交互类 / 元工具），与档位无关。
 /// 父档派生（Plan 档的写工具 / 后台服务 / 计划任务）与角色派生（只读角色的写工具）
 /// 在 `subagent_drive_params` 重建时另加。
 pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
@@ -120,7 +118,6 @@ pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
     "scheduled_task",
     "suggest",
     "wait",
-    "goal",
 ];
 
 /// 组装子代理的 system_extra：公共纪律 + 注册表命中时的完整角色定义（<agent-definition>）。
@@ -373,20 +370,7 @@ impl Tool for SubagentTool {
                 "<subagent-task role=\"{}\">\n{}\n</subagent-task>",
                 args.role, args.task
             )));
-        let goal_root = crate::core::agent::goal::goal_gate_rt(&ctx.core, &ctx.rt);
-        if matches!(args.role.as_str(), "reviewer" | "code-reviewer")
-            && goal_root
-                .goal_snapshot()
-                .is_some_and(|g| g.status == crate::core::agent::goal::GoalStatus::Executing)
-        {
-            let contract = goal_root
-                .data_dir
-                .join("sessions")
-                .join(format!("{}.goal.json", goal_root.id));
-            sub_rt.history.lock().unwrap().push(crate::core::types::Message::user_text(format!(
-                "独立目标验收：请读取批准合同 {}。delivery.source_documents 的 snapshot_path 是批准时的完整文件；content 仅预览。使用 read/read_document 按文件类型读取快照，并对照 delivery.sources 当前文档和实现。检查遗漏、Mock替代集成、失效验证及降低验收标准。只有确认无阻塞问题时，最终 report 最后一个非空行单独写 [GOAL_REVIEW_PASS]；发现问题则写 [GOAL_REVIEW_FAIL] 并列明缺陷。", contract.display()
-            )));
-        }
+        // 目标模式已删除：reviewer/code-reviewer 子代理不再读取目标合同；保留通用评审任务消息。
 
         // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
         // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——
@@ -397,11 +381,7 @@ impl Tool for SubagentTool {
         // 父 Plan 档的写排除 / MCP 排除 / plan 档提示由 subagent_drive_params 从基座合并进子参数，
         // 堵住「借子代理绕过 plan 档」的洞；只读角色的策略（含 FullAccess 下解锁写工具，B3）
         // 同样在其中按档位置位。spawn 与每步重算共用这一条装配路径，两处不会漂移。
-        let mut params = crate::core::agent::subagent_drive_params(
-            &base,
-            &parent_prefs,
-            ctx.rt.goal_snapshot().as_ref(),
-        );
+        let mut params = crate::core::agent::subagent_drive_params(&base, &parent_prefs);
         params.max_steps = max_steps;
         params.budget_notice = true;
         params.emit_events = false;

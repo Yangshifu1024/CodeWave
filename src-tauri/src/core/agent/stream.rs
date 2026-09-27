@@ -1,4 +1,4 @@
-use super::drive::{DriveParams, GOAL_ADVANCE_TAG, NormalizedCall};
+use super::drive::{DriveParams, NormalizedCall};
 use super::runtime::{AgentCore, EventSink, Frame, STREAM_THROTTLE_MS, SessionRuntime};
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, StreamRequest};
@@ -31,7 +31,7 @@ pub(super) const ERROR_CAP: usize = 500;
 /// 按约定不重试，run 直接失败。粘性剥思考只作用于这份副本：`rt.history` 与落盘数据不动，
 /// 思考仍留在转录里，用户切回正常模型后仍可回传（`sanitize` 兜底则改写 `rt.history`，不落盘）。
 ///
-/// `transient` = 目标模式推进指令（[docs/goal-mode]）：非空时作为**最后一条用户消息**附在副本末尾，
+/// `transient` = 计划快照 / 其它瞬态注入，非空时作为**最后一条用户消息**附在副本末尾，
 /// 只进本次请求，绝不写入 `rt.history`（由 drive 层按一次性语义下发）。
 pub(super) fn messages_for_request(
     rt: &Arc<SessionRuntime>,
@@ -183,10 +183,10 @@ pub(super) fn refresh_request_messages(
 }
 
 /// 是否为 `build_stream_request` / `messages_for_request` 注入的尾部瞬态消息
-///（计划快照 `<current-plan-transient>` 或目标模式推进指令 `<goal-advance …>`）。
+///（计划快照 `<current-plan-transient>` 等）。
 fn is_request_transient(m: &Message) -> bool {
     m.first_text()
-        .map(|t| t.starts_with("<current-plan-transient>") || t.starts_with(GOAL_ADVANCE_TAG))
+        .map(|t| t.starts_with("<current-plan-transient>"))
         .unwrap_or(false)
 }
 
@@ -274,11 +274,7 @@ pub(super) async fn build_stream_request(
             core
         }
     };
-    let messages = messages_for_request(
-        rt,
-        model.vision.unwrap_or(false),
-        params.goal_transient.as_deref(),
-    );
+    let messages = messages_for_request(rt, model.vision.unwrap_or(false), None);
     // 工具集：内置（按排除集过滤）+ MCP（可选），统一按名排序
     let mut tools: Vec<crate::provider::ToolDef> = core
         .tools

@@ -31,7 +31,6 @@ export function blank(): TabRunState {
     pendingItemId: null,
     draftFromQueue: null,
     lastDoneRunId: null,
-    goalRev: 0,
     compacting: false,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
