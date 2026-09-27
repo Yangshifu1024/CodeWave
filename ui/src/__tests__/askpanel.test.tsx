@@ -94,6 +94,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     seedAsk({
       askId: "a3", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-20260901-120000.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [{
         id: "q1", question: "## 步骤\n1. 改 A\n2. 验证 B",
         options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }],
@@ -319,9 +320,10 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(payload.answers.q1.selections).toContain("a"); // other question's answer kept
   });
 
-  it("docs/notification-click-reveal：多题 ask（planFile 落盘）渲染计划卡片，双题文本拼接且每页题干仍显示", async () => {
+  it("docs/notification-click-reveal：多题 ask（planFile 落盘）渲染计划卡片（planBody 驱动） + page 1 题干仍可见", async () => {
     seedAsk({      askId: "a9", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [
         { id: "q1", question: "第一段方案", options: [{ id: "a", label: "甲" }] },
         { id: "q2", question: "第二段方案", options: [{ id: "c", label: "丙" }] },
@@ -329,9 +331,10 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     });
     render(<AskPanel />);
     expect(document.querySelector(".plan-card")).toBeTruthy(); // plan card applies to plain asks too
+    // plan-body 来自后端 planBody，不再拼接两道题题干（仅 page 1 可见的 q-text 不受影响）
+    expect(document.querySelector(".plan-body")?.textContent ?? "").toContain("完整方案");
     expect(screen.getAllByText(/第一段方案/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/第二段方案/).length).toBeGreaterThan(0);
-    expect(document.querySelector(".q-text")).toBeTruthy(); // per-page question text no longer hidden by isPlan
+    expect(document.querySelector(".q-text")?.textContent).toBe("第一段方案"); // page 1 题干仍显示
     fireEvent.click(screen.getByText(/查看完整计划/));
     await waitFor(() => expect(calls.some((c) => c.cmd === "read_workspace_file")).toBe(true));
   });
@@ -495,11 +498,11 @@ describe("AskPanel docs/ask-approval-shape-note-nav", () => {
     expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["feedback"]);
   });
 
-  it("多选题：复选框视觉 + 两项可同时勾选（不互斥）+ 多选 hint", () => {
+  it("多选题：复选框视觉 + 两项可同时勾选（不互斥）+ 多选 hint（显式 single: false 声明多选，互斥推断启发式兑底）", () => {
     seedAsk({
       askId: "d2", kind: "ask",
       questions: [{
-        id: "q1", question: "选择要执行的模块",
+        id: "q1", question: "选择要执行的模块", single: false,
         options: [{ id: "ma", label: "模块甲" }, { id: "mb", label: "模块乙" }],
       }],
     });
@@ -512,11 +515,11 @@ describe("AskPanel docs/ask-approval-shape-note-nav", () => {
     expect(document.querySelectorAll(".opt-box.check.checked")).toHaveLength(2); // multi-select is not exclusive
   });
 
-  it("键盘导航环：Tab/箭头循环高亮（末槽 = 补充输入）；空格切换高亮项（回车不再用于选中）", () => {
+  it("键盘导航环：Tab/箭头循环高亮（末槽 = 补充输入）；空格切换高亮项（回车不再用于选中）— 题干 single: false 显式声明多选", () => {
     seedAsk({
       askId: "d3", kind: "ask",
       questions: [{
-        id: "q1", question: "选一个",
+        id: "q1", question: "选一个", single: false,
         options: [{ id: "a", label: "甲" }, { id: "b", label: "乙" }],
       }],
     });
@@ -705,12 +708,12 @@ describe("AskPanel 单选题（single）", () => {
     expect((checked[0].parentElement as HTMLElement).textContent).toContain("彻底去掉序号");
   });
 
-  it("多题分页中 single 题互斥：两题各自单选，互不串扰", () => {
+  it("多题分页中 single 题互斥：两题各自单选，互不串扰（q1 显式 single:true / q2 显式 single:false 互不串扰）", () => {
     seedAsk({
       askId: "s4", kind: "ask",
       questions: [
         { id: "q1", question: "第一问", single: true, options: [{ id: "a", label: "甲" }, { id: "b", label: "乙" }] },
-        { id: "q2", question: "第二问", options: [{ id: "c", label: "丙" }, { id: "d", label: "丁" }] },
+        { id: "q2", question: "第二问", single: false, options: [{ id: "c", label: "丙" }, { id: "d", label: "丁" }] },
       ],
     });
     render(<AskPanel />);
@@ -745,6 +748,7 @@ describe("AskPanel 问句去重", () => {
     seedAsk({
       askId: "p1", kind: "ask", approval: true, approveId: "execute",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [{ id: "q1", question: longPlan, options: [{ id: "execute", label: "执行方案" }, { id: "feedback", label: "补充意见" }] }],
     });
     render(<AskPanel />);
@@ -756,6 +760,7 @@ describe("AskPanel 问句去重", () => {
     seedAsk({
       askId: "p2", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [{ id: "q1", question: longPlan, options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }] }],
     });
     render(<AskPanel />);
@@ -766,6 +771,7 @@ describe("AskPanel 问句去重", () => {
     seedAsk({
       askId: "p3", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [
         { id: "q1", question: "第一段方案", options: [{ id: "a", label: "甲" }] },
         { id: "q2", question: "第二段方案", options: [{ id: "c", label: "丙" }] },
@@ -779,6 +785,7 @@ describe("AskPanel 问句去重", () => {
     seedAsk({
       askId: "p4", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [{ id: "q1", question: "选择要执行的模块", options: [{ id: "ma", label: "模块甲" }, { id: "mb", label: "模块乙" }] }],
     });
     render(<AskPanel />);
@@ -789,6 +796,7 @@ describe("AskPanel 问句去重", () => {
     seedAsk({
       askId: "p5", kind: "ask", approval: true, approveId: "execute",
       planFile: "/ws/.codewave/tasks/plan-x.md",
+      planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
       questions: [
         { id: "q1", question: "第一段方案", options: [{ id: "execute", label: "执行方案" }] },
         { id: "q2", question: "第二段方案", options: [{ id: "feedback", label: "补充意见" }] },
@@ -884,6 +892,7 @@ describe("AskPanel 批准门选档（[docs/mode-gate-and-subagent-sync]）", () 
   const gateAsk = (askId: string) => ({
     askId, kind: "ask", approval: true, approveId: null,
     planFile: "/ws/.codewave/tasks/plan-gate.md",
+    planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
     questions: [{
       id: "q1", question: "【方案】第一步",
       options: [
@@ -1076,6 +1085,7 @@ describe("AskPanel 四选项批准门（[docs/mode-gate-and-subagent-sync] × [d
   const fusedGate = (askId: string) => ({
     askId, kind: "ask", approval: true, approveId: "approve",
     planFile: "/ws/.codewave/tasks/plan-gate.md",
+    planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
     questions: [{
       id: "q1", question: "是否按上述计划执行？",
       options: [
@@ -1158,10 +1168,10 @@ describe("AskPanel 四选项批准门（[docs/mode-gate-and-subagent-sync] × [d
     expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
   });
 
-  it("preview 单独存在（无 approval 标记 / 无 mode / 无 approve 项）不构成批准形：不直提，提交后也不切档", async () => {
+  it("preview 单独存在（无 approval 标记 / 无 mode / 无 approve 项）不构成批准形：不直提，提交后也不切档（single: false 显式多选，避免启发式误判为 radio）", async () => {
     seedAsk({
       askId: "f5", kind: "ask",
-      questions: [{ id: "q1", question: "要看预览吗？", options: [{ id: "preview", label: "先看预览" }] }],
+      questions: [{ id: "q1", question: "要看预览吗？", single: false, options: [{ id: "preview", label: "先看预览" }] }],
     });
     render(<AskPanel />);
     // 非批准形 = 多选复选框（批准形才渲染单选 + 直提）
@@ -1351,5 +1361,141 @@ describe("AskPanel 违约载荷：预览项挂 mode（[docs/preview-skill] × [d
     await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
     expect(calls.find((c) => c.cmd === "set_session_prefs")?.args?.prefs?.approval_mode).toBe("auto_edit");
     expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+});
+
+// ---------- [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+// planBody 驱动卡片正文 + inferSingle 启发式推断（覆盖面：选项数 ≤ 4 且无 multi 关键词 → radio；
+// 选项数 / 题干 / 选项 label 同时往 multi 语义偏转才走 multi，以「尽量约束多选误达成单选」为安全默认）。
+
+describe("AskPanel planCard 与互斥推断", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {}; s.drafts = {};
+    });
+  });
+
+  it("卡片正文来自 planBody（不是题干拼接）", () => {
+    seedAsk({
+      askId: "c1", kind: "ask", approval: true, approveId: "approve",
+      planFile: "/ws/.codewave/tasks/plan-shape.md",
+      planBody: "## 真实方案\n1. 改 main.ts → 抽信 click 委托\n2. 加测试：Tab 间交换\n\nR1 低风险",
+      questions: [{
+        id: "q1", question: "我把方案落到哪种粒度？",
+        options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }],
+      }],
+    });
+    render(<AskPanel />);
+    const body = document.querySelector(".plan-body")?.textContent ?? "";
+    // planBody 表达须进入卡片正文
+    expect(body).toContain("真实方案");
+    expect(body).toContain("R1");
+    // 旧实现把 q.question “我把方案落到哪种粒度？” 拼到 plan-body，现在不拼接了
+    expect(body).not.toContain("我把方案落到哪种粒度？");
+  });
+
+  it("planFile / planBody 均为空时不渲染计划卡、没有「查看完整计划」按钮", () => {
+    seedAsk({
+      askId: "c2", kind: "ask",
+      planFile: null,
+      planBody: null,
+      questions: [{
+        id: "q1", question: "选一个",
+        options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelector(".plan-card")).toBeNull();
+    expect(screen.queryByText(/查看完整计划/)).toBeNull();
+  });
+
+  // R4 回归：老后端可能下发了 planFile 但没 planBody（仅 planFile 场景）—— AskPanel 不应仅凭 planFile 渲染计划卡。
+  // 「真实方案优先」要求 planBody 与 planFile 必须同源；只有 planFile 时等同于「有路径但没正文」，与「无方案」同处理。
+  it("仅 planFile 存在但 planBody 为 null 时同样不渲染计划卡（不「路径依赖」）", () => {
+    seedAsk({
+      askId: "c2b", kind: "ask",
+      planFile: "/ws/.codewave/tasks/plan-legacy.md",
+      planBody: null,
+      questions: [{
+        id: "q1", question: "选一个",
+        options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelector(".plan-card")).toBeNull();
+    expect(screen.queryByText(/查看完整计划/)).toBeNull();
+  });
+
+  it("互斥推断：后台未声明 single 时按启发式兑底", () => {
+    // ① 题干「我把方案落到哪种粒度？」+ 4 选项（均无 single）→ radio（选项数 ≤ 4 路径）
+    seedAsk({
+      askId: "c3a", kind: "ask",
+      questions: [{
+        id: "q1", question: "我把方案落到哪种粒度？",
+        options: [
+          { id: "fine", label: "细粒度" },
+          { id: "mid", label: "中等" },
+          { id: "course", label: "粗粒度" },
+          { id: "unk", label: "未明" },
+        ],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelectorAll(".opt-box.radio")).toHaveLength(4);
+    expect(document.querySelectorAll('.ask-opt[role="radio"]')).toHaveLength(4);
+    expect(document.querySelectorAll('.ask-opt[role="checkbox"]')).toHaveLength(0);
+
+    // ② 题干含多选语境（「勾选所有 / 请勾选 / 哪些项…」）→ 选项 label 不需 multi 关键词也判定为多选
+    cleanup();
+    useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
+    seedAsk({
+      askId: "c3b", kind: "ask",
+      questions: [{
+        id: "q1", question: "请勾选所有适用的特性",
+        options: [
+          { id: "a", label: "特性甲" },
+          { id: "b", label: "特性乙" },
+          { id: "c", label: "特性丙" },
+        ],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelectorAll(".opt-box.check")).toHaveLength(3);
+    expect(document.querySelectorAll('.ask-opt[role="checkbox"]')).toHaveLength(3);
+
+    // ③ 题干「选择 X」+ 1 选项且 single: false → 多选（显式覆盖，体现 multiExplicit 优先级高于启发式）
+    cleanup();
+    useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
+    seedAsk({
+      askId: "c3c", kind: "ask",
+      questions: [{
+        id: "q1", question: "选择 X", single: false,
+        options: [{ id: "x", label: "选项 X" }],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelectorAll(".opt-box.check")).toHaveLength(1);
+    expect(document.querySelectorAll('.ask-opt[role="checkbox"]')).toHaveLength(1);
+
+    // ④ 题干「确定吗？」+ 2 选项 + 任一 label 含「可多选」→ checkbox（启发式 ④ 命中 multi 关键词反转；
+    //    注意 label 不能含「只能/单选」——那是互斥词，会触发 ② radio）
+    cleanup();
+    useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
+    seedAsk({
+      askId: "c3d", kind: "ask",
+      questions: [{
+        id: "q1", question: "确定吗？",
+        options: [
+          { id: "yes", label: "可多选确认" },
+          { id: "no", label: "取消" },
+        ],
+      }],
+    });
+    render(<AskPanel />);
+    expect(document.querySelectorAll(".opt-box.check")).toHaveLength(2);
+    expect(document.querySelectorAll('.ask-opt[role="checkbox"]')).toHaveLength(2);
   });
 });

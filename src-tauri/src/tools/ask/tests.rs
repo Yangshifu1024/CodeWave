@@ -437,7 +437,7 @@ fn plan_text_joins_all_questions() {
 
 #[test]
 fn plan_body_prefers_explicit_plan_field() {
-    // 修复回归：显式 plan 字段（trim 后非空）优先于题干拼接——此前模型把方案
+    // 修复回归：显式 plan 字段（trim 后非空）优先于正文兑底——此前模型把方案
     // 写在聊天消息、题干只放短问题时，计划文件只剩短题干（用户实测缺陷）
     let qs = vec![Question {
         id: "approve_plan".into(),
@@ -445,22 +445,74 @@ fn plan_body_prefers_explicit_plan_field() {
         options: vec![],
         single: true,
     }];
-    let body = plan_body(Some("# 完整方案\n1. 改 A\n2. 验证 B"), &qs);
+    let body =
+        usable_plan_body(Some("# 完整方案\n1. 改 A\n2. 验证 B"), "", &qs).expect("显式 plan 优先");
     assert!(body.contains("完整方案"), "{body}");
     assert!(!body.contains("是否批准"), "{body}");
 }
 
 #[test]
-fn plan_body_falls_back_to_questions_when_plan_blank() {
-    // 历史行为兼容：plan 缺失 / 纯空白（trim 后为空不采信，防占位符清空正文）→ 回退题干拼接
+fn plan_body_no_usable_source_returns_none() {
+    // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+    // 显式 plan 为空 + 本轮正文也不带来信息增量 → 不落盘不显示计划卡。
+    // 新语义取代旧的「回退为题干拼接」（后者产生「空壳计划卡」）。
     let qs = vec![Question {
         id: "q".into(),
-        question: "题干正文".into(),
+        question: "我把方案落到哪种粒度？".into(),
         options: vec![],
         single: false,
     }];
-    assert_eq!(plan_body(None, &qs), "题干正文");
-    assert_eq!(plan_body(Some("   \n  "), &qs), "题干正文");
+    // plan 缺失 + 正文空
+    assert_eq!(usable_plan_body(None, "", &qs), None);
+    // plan 纯空白（trim 后为空不采信，防占位符清空正文）+ 正文空
+    assert_eq!(usable_plan_body(Some("   \n  "), "", &qs), None);
+    // 正文与题干归一化后相等（场景：模型说「我把方案落到哪种粒度？」是正文里的唯一一句）
+    assert_eq!(
+        usable_plan_body(None, "我把方案落到哪种粒度？", &qs),
+        None,
+        "正文不能只是题干复读"
+    );
+    // 正文长度短于题干拼接
+    let long_q = vec![Question {
+        id: "q".into(),
+        question: "这个问题的题干有点长，写了这么多字".into(),
+        options: vec![],
+        single: false,
+    }];
+    assert_eq!(usable_plan_body(None, "短正文", &long_q), None);
+}
+
+#[test]
+fn plan_body_uses_turn_text_when_explicit_plan_missing() {
+    // 正文兑底生效：本轮 assistant 正文信息增量充分 → 采信并作为计划文件正文。
+    let qs = vec![Question {
+        id: "q".into(),
+        question: "我把方案落到哪种粒度？".into(),
+        options: vec![],
+        single: false,
+    }];
+    let turn = "以下是详细方案：\n- R1 低风险可立改\n- R2 中风险需设计\n- R3 不建议本次做";
+    let body = usable_plan_body(None, turn, &qs).expect("正文足以采信");
+    assert!(body.contains("R1"), "{body}");
+    assert!(body.contains("R2"), "{body}");
+}
+
+#[test]
+fn plan_body_rejects_turn_text_with_ask_block_residue() {
+    // 正文里含 `<ask>` 示例残留（文本形态 ask 兑底路径可能漏判的场景）→ 不采信，
+    // 避免「卡片里出现 <ask> XML」误导用户。
+    let qs = vec![Question {
+        id: "q".into(),
+        question: "问问".into(),
+        options: vec![],
+        single: false,
+    }];
+    let turn =
+        "看这里：<ask><questions><item><id>a</id><question>?</question></item></questions></ask>";
+    assert_eq!(usable_plan_body(None, turn, &qs), None);
+    // 闭合变体同样拒绝
+    let turn2 = "看这里：</ask>";
+    assert_eq!(usable_plan_body(None, turn2, &qs), None);
 }
 
 #[test]

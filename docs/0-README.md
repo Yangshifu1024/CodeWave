@@ -153,9 +153,9 @@
 - 2026-09-04 · [ask-approval-shape-note-nav.md](./ask-approval-shape-note-nav.md) — ask 交互加固批次：批准形判定单一事实源（后端识别）+ 选项视觉区分（复选/单选）+ 补充说明纳入键盘导航环
 - 2026-09-13 · [skill-ask-norm.md](./skill-ask-norm.md) — skill 注入条件式 ask 交互规范：任意技能加载时在 <skill-loaded> 闭合标签前附加 <ask-interaction-norm>，提问型技能（如用户级 grilling）提问轮次必经 ask 弹窗（推荐答案→recommended、>5 问拆连续调用、ask 不可用降级文本格式），无提问轮次技能行为零变化；关键词匹配否决 / frontmatter 声明搁置（YAGNI）的理由存档
 - 2026-09-21 · [ask-option-desc-wrap.md](./ask-option-desc-wrap.md) — 缺陷修复：ask 选项描述被单行省略号截断（「需你批…」→ 选它的后果看不全）改为**完整折行**——`flex-wrap: wrap` + 描述 `flex: 1 1 240px`（短描述仍与标签同行、剩余列宽不足 240px 时整段落下一行）+ `white-space: normal` / `overflow-wrap: anywhere` + 标签可收缩可断行；新增样式契约测试 ask.style.test.ts，纯视觉零交互改动
+- 2026-09-27 · [ask-plan-card-and-option-shape.md](./ask-plan-card-and-option-shape.md) — 缺陷修复（两件并入）：**计划卡与「查看完整计划」只显示短题干**（根因＝后端 `plan_body` 缺 `plan` 字段时回退题干拼接、前端 `AskPanel` 再拿它自拼一遍——`.codewave/tasks/plan-20260927-053537.012-8e8d.md` 3 行证据，仓内 62 个文件 28 个 <300B 是长期成规模存在）+ **选项 radio/checkbox 判据贴合语义**（渲染优先级：批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底；启发式按题干收尾语 / 选项数 / label 关键词判定；`toggle()` 复用 `inferSingle` 不允许渲染 / 行为分裂）。修复后：计划文件内容源优先级 = ① 显式 `plan`（trim 非空）→ ② 本轮 assistant 正文兑底（归一化后与题干不等价 + 不短于题干 + 不含 `<ask>` 示例残留）→ ③ None；`ask:opened` 增可选字段 `plan_body`（`skip_serializing_if`，事件键名不变）+ `AskState.planBody`；无真实方案 → 不落盘不渲染卡片；后端 42 / 前端 74 + 2 + 7 例全绿，build / lint 通过。遗留：子代理 ask 仍不可达（`exclude_tools` 固定挡），若将来放开须严守「读 `ctx.rt` 自己的 history」。
 
 ## 安全与工具链
-
 - 2026-09-19 · [fence-plan-readonly-gh-and-block-message.md](./fence-plan-readonly-gh-and-block-message.md) — plan 档围栏两项：`E_PLAN_READONLY` 错误文案**点名被拦命令**（`command_excerpt`：折叠换行 + 截断 120 字符）+ `gh` 按**子命令白名单**放行（pr/run/release/issue/repo/workflow 的 view|list；`gh api` 仅隐式/显式 GET，出现 `-f/--field/--input` 即判写；pr merge / release edit / api -X POST / secret set 等远端写继续被拦；比对前先做引号/外壳归一化，换行纳为命令分隔符且行继续（`\`+换行）先归一化）
 - 2026-09-03 · [builtin-tools-source-comparison.md](./builtin-tools-source-comparison.md) — 内置工具设计说明（11 组工具的实现解析：入参/出参/实现逻辑 + 分级优化建议）
 - 2026-09-03 · [edit-tool-optimization-report.md](./edit-tool-optimization-report.md) — edit 工具优化批次：EOL 归一 + 两级低风险模糊替换 + 进程级文件写互斥 + ConfirmEach 审批 diff 预览
@@ -324,9 +324,9 @@
 - 2026-09-04 · [ask-approval-shape-note-nav.md](./ask-approval-shape-note-nav.md) — ask 交互加固批次：批准形判定单一事实源（后端识别）+ 选项视觉区分（复选/单选）+ 补充说明纳入键盘导航环
 - 2026-09-13 · [skill-ask-norm.md](./skill-ask-norm.md) — skill 注入条件式 ask 交互规范：任意技能加载时在 <skill-loaded> 闭合标签前附加 <ask-interaction-norm>，提问型技能（如用户级 grilling）提问轮次必经 ask 弹窗（推荐答案→recommended、>5 问拆连续调用、ask 不可用降级文本格式），无提问轮次技能行为零变化；关键词匹配否决 / frontmatter 声明搁置（YAGNI）的理由存档
 - 2026-09-21 · [ask-option-desc-wrap.md](./ask-option-desc-wrap.md) — 缺陷修复：ask 选项描述被单行省略号截断（「需你批…」→ 选它的后果看不全）改为**完整折行**——`flex-wrap: wrap` + 描述 `flex: 1 1 240px`（短描述仍与标签同行、剩余列宽不足 240px 时整段落下一行）+ `white-space: normal` / `overflow-wrap: anywhere` + 标签可收缩可断行；新增样式契约测试 ask.style.test.ts，纯视觉零交互改动
+- 2026-09-27 · [ask-plan-card-and-option-shape.md](./ask-plan-card-and-option-shape.md) — 缺陷修复（两件并入）：**计划卡与「查看完整计划」只显示短题干**（根因＝后端 `plan_body` 缺 `plan` 字段时回退题干拼接、前端 `AskPanel` 再拿它自拼一遍——`.codewave/tasks/plan-20260927-053537.012-8e8d.md` 3 行证据，仓内 62 个文件 28 个 <300B 是长期成规模存在）+ **选项 radio/checkbox 判据贴合语义**（渲染优先级：批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底；启发式按题干收尾语 / 选项数 / label 关键词判定；`toggle()` 复用 `inferSingle` 不允许渲染 / 行为分裂）。修复后：计划文件内容源优先级 = ① 显式 `plan`（trim 非空）→ ② 本轮 assistant 正文兑底（归一化后与题干不等价 + 不短于题干 + 不含 `<ask>` 示例残留）→ ③ None；`ask:opened` 增可选字段 `plan_body`（`skip_serializing_if`，事件键名不变）+ `AskState.planBody`；无真实方案 → 不落盘不渲染卡片；后端 42 / 前端 74 + 2 + 7 例全绿，build / lint 通过。遗留：子代理 ask 仍不可达（`exclude_tools` 固定挡），若将来放开须严守「读 `ctx.rt` 自己的 history」。
 
 ## 安全与工具链
-
 - 2026-09-19 · [fence-plan-readonly-gh-and-block-message.md](./fence-plan-readonly-gh-and-block-message.md) — plan 档围栏两项：`E_PLAN_READONLY` 错误文案**点名被拦命令**（`command_excerpt`：折叠换行 + 截断 120 字符）+ `gh` 按**子命令白名单**放行（pr/run/release/issue/repo/workflow 的 view|list；`gh api` 仅隐式/显式 GET，出现 `-f/--field/--input` 即判写；pr merge / release edit / api -X POST / secret set 等远端写继续被拦；比对前先做引号/外壳归一化，换行纳为命令分隔符且行继续（`\`+换行）先归一化）
 - 2026-09-03 · [builtin-tools-source-comparison.md](./builtin-tools-source-comparison.md) — 内置工具设计说明（11 组工具的实现解析：入参/出参/实现逻辑 + 分级优化建议）
 - 2026-09-03 · [edit-tool-optimization-report.md](./edit-tool-optimization-report.md) — edit 工具优化批次：EOL 归一 + 两级低风险模糊替换 + 进程级文件写互斥 + ConfirmEach 审批 diff 预览

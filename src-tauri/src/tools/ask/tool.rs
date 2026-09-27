@@ -115,7 +115,7 @@ impl Tool for AskTool {
         "ask"
     }
     fn description(&self) -> &'static str {
-        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。完整方案文本放 plan 字段（question 只放题干）——系统会把 plan 自动落盘为计划文件并向用户展示可查看的计划卡；plan 缺失时回退拼接所有题干。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
+        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。**选项互斥语义**：默认按 `single` 字段渲染（true=radio 单选，false=checkbox 多选）；未声明 `single` 时前端会做形态启发式——互斥关键词（题干以「选一个 / 哪一种 / 走哪种 / 选中 X / 是否按…执行」收尾、选项 ≤4 且无「同时 / 可多」语义、label 含「要么…要么…」等）命中则按 radio 渲染。强互斥场景（粒度 / 方向 / 档位选择）请显式 `single: true` 以避免启发式误判。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。**plan 字段契约**：凡带完整方案的询问都必须把方案放进 `plan` 字段（question 只放题干）——系统会把它落盘为计划文件、向前端下发真实方案正文渲染计划卡。不传 plan 也能工作：后端会用当轮正文做兜底（仅当正文与题干不等价、长度不短于题干、不含 `<ask>` 示例残留时才下传），仍拿不到真方案就**不落盘也不显示计划卡**——避免出现「空壳计划卡 / 3 行文件 viewer」的误导。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -157,7 +157,7 @@ impl Tool for AskTool {
     "lightweight": {"type": "boolean", "description": "G2 豁免：轻量路径声明（跳过分析产物校验，仍要求 todos 非空）"},
     "skipAnalysis": {"type": "boolean", "description": "G2 豁免：用户已明确要求跳过分析（需最近一条用户消息命中口令）"},
     "switchToAutoEdit": {"type": "boolean", "description": "完整流水线批准门（键名拼写必须精确）：批准时把 ConfirmEach 会话切到自动编辑档；仅对含 'approve' 选项的单题 ask 生效"},
-    "plan": {"type": "string", "description": "完整方案正文（markdown）：plan 档批准形询问必须携带——系统把它落盘为计划文件，供计划卡「查看完整计划」展示；question 只放题干，缺失时系统回退拼接题干"}
+    "plan": {"type": "string", "description": "完整方案正文（markdown）：凡带完整方案的询问都应携带——系统把它落盘为计划文件、向前端下发真实方案正文渲染计划卡；question 只放题干，缺失/无效时系统按本轮正文兑底（仍拿不到真方案就不落盘也不显示计划卡）"}
   }
 }"#
     }
@@ -181,17 +181,25 @@ impl Tool for AskTool {
         // 基线冻结 / [system] 注入全部被跳过（日志证据：approved=true switch=false）。
         // switch 判定改用 open 时刻的档位快照。
         let mode_at_open = ctx.approval_mode();
-        // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：计划文件落盘泛化——所有 ask（不再限于批准闸形态）都把完整
-        // 方案文本存为计划文件，前端计划卡的「查看完整计划」对一切 ask 生效；多题 ask 按
-        // 顺序拼接（plan_text）。Plan 档没有写工具，落盘是系统行为；失败返回 None 优雅降级，不阻塞 ask。
-        // 内容源：显式 plan 字段优先（批准形契约），缺失/空白回退题干拼接（历史行为兼容）。
-        let plan_file = save_plan_file(ctx, &plan_body(args.plan.as_deref(), &args.questions));
+        // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+        // 计划文件落盘泛化——所有 ask 都把真实方案文本存为计划文件；但「真实方案」缺位时
+        // （显式 plan 为空 + 本轮正文也无法通过有效性判据）→ **不落盘也不渲染计划卡**，
+        // 避免「空壳计划卡 / 3 行文件 viewer」的长期缺陷（用户实测：模型正文 ~6.7k 字，
+        // 计划文件只剩 3 行题干）。Plan 档没有写工具，落盘是系统行为；失败返回 None 优雅降级，不阻塞 ask。
+        // 内容源优先级：① 显式 plan 字段（trim 非空即采信）→ ② 本轮 assistant 正文兑底
+        // （归一化后与题干拼接不等价、长度不短于题干、不含 `<ask>` 示例残留）→ ③ None。
+        let usable = usable_plan_body(
+            args.plan.as_deref(),
+            &current_turn_text(&ctx.rt),
+            &args.questions,
+        );
+        let plan_file = usable.as_deref().and_then(|body| save_plan_file(ctx, body));
         let mut ask_opened = json!({
             "session": ctx.rt.id, "ask_id": ask_id, "kind": "ask",
             "questions": args.questions,
             // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
             "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
-            // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败为 None）
+            // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败或无可用方案时为 None）
             "plan_file": plan_file,
             // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形标记（后端宽松检测 = 单一事实源）；
             // 前端据此渲染单选 + 批准项直提，不再猜测 id === "approve"
@@ -199,7 +207,12 @@ impl Tool for AskTool {
             "approval": approval_shape(&args.questions),
             "approve_id": approve_option_id(&args.questions),
         });
-        // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
+        // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+        // 真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」。
+        // 仅在有可用方案时下传（None 不下传，避免历史事件载荷体增长）。
+        if let Some(body) = usable.as_deref() {
+            ask_opened["plan_body"] = json!(body);
+        } // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
         // 原文一并下发，前端据此从当轮气泡文本里剔掉它（流式帧已下发，前端无法自行回收）。
         // 取走即清（take）：同一 run 内后续的真实 ask 不该再带这个字段。
         if let Some(block) = ctx.rt.text_ask_block.lock().unwrap().take() {
@@ -662,15 +675,77 @@ pub(super) fn plan_text(questions: &[Question]) -> String {
         .join("\n\n")
 }
 
-/// 计划文件正文源选择：显式 plan 字段优先（trim 后非空才采信，防纯空白占位），
-/// 否则回退题干拼接（历史行为兼容）。提取为纯函数以便单测。
-pub(super) fn plan_body(plan: Option<&str>, questions: &[Question]) -> String {
-    plan.map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| plan_text(questions))
+/// 计划文件正文源选择：[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)
+/// ① 显式 plan 字段（trim 后非空才采信，防纯空白占位）；
+/// ② 本轮 assistant 正文兑底——仅当正文通过有效性判据才采信（与题干归一化不等价、长度不短于题干、不含 `<ask>` 示例残留）；
+/// ③ 仍拿不到真方案 → `None`（**不落盘不显示计划卡**）。
+///
+/// 提取为纯函数（除 `current_turn_text` 取数外）以便单测。
+pub(super) fn usable_plan_body(
+    plan: Option<&str>,
+    turn_text: &str,
+    questions: &[Question],
+) -> Option<String> {
+    // ① 显式 plan 字段优先
+    if let Some(p) = plan.map(str::trim).filter(|p| !p.is_empty()) {
+        return Some(p.to_owned());
+    }
+    // ② 本轮 assistant 正文兑底（仅当 turn_text 真的带来信息增量时）
+    let candidate = turn_text.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if !is_usable_turn_body(candidate, questions) {
+        return None;
+    }
+    Some(candidate.to_owned())
 }
 
+/// 正文兑底有效性判据（[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)）：
+/// 三重过滤避免「空壳计划卡」——
+/// ① 归一化后与题干拼接**不相等**（防「闲聊/过程叙述 = 题干」场景）；
+/// ② 长度**不短于**题干拼接长度（防「正文就是题干复读」场景）；
+/// ③ 正文**不**含 `<ask`/`</ask`（防文本形态 ask 兑底路径里 `<ask>` 示例残留——`strip_text_block` 只救独占起始行 + 末尾 + 结构完整的块，行内 / 围栏内的不救）。
+pub(super) fn is_usable_turn_body(turn_text: &str, questions: &[Question]) -> bool {
+    if turn_text.contains("<ask") || turn_text.contains("</ask") {
+        return false;
+    }
+    let joined = plan_text(questions);
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let n_text = norm(turn_text);
+    let n_q = norm(&joined);
+    if n_text == n_q {
+        return false;
+    }
+    if n_text.chars().count() < n_q.chars().count() {
+        return false;
+    }
+    true
+}
+
+/// 取当轮 assistant 正文（[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)）：
+/// `core/agent/drive.rs` 在 `run_tool_batch` 之前把当轮 assistant 消息 push 进 history，
+/// 所以 ask 工具运行时 `rt.history` 尾部即当轮正文。按 `Content::Text` 过滤拼接。
+///
+/// **子代理约束**：一律读 `ctx.rt` 自己的 history（将来子代理若放开 ask，绝不能误读根会话的正文）。
+pub(super) fn current_turn_text(rt: &crate::core::agent::SessionRuntime) -> String {
+    let history = rt.history.lock().unwrap();
+    history
+        .iter()
+        .rev()
+        .find(|m| m.role == crate::core::types::Role::Assistant)
+        .map(|m| {
+            m.content
+                .iter()
+                .filter_map(|c| match c {
+                    crate::core::types::Content::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
 /// 批准生效点的 G2/G3 校验。通过返回 None；失败返回拒绝性 ToolOutcome（批准不生效）。
 pub(super) fn plan_approval_gate(
     ctx: &ToolCtx,

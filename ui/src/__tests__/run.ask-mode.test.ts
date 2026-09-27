@@ -30,7 +30,9 @@ describe("ask:opened 批准门选档", () => {
     const h = useRun.getState().bindGlobalHandlers();
     h["ask:opened"]({
       session, ask_id: "a1", kind: "ask", approval: true,
-      plan_file: "/ws/.codewave/tasks/plan-x.md", allow_always: true,
+      plan_file: "/ws/.codewave/tasks/plan-x.md",
+      plan_body: "## 完整方案\n1. 改 A\n2. 验证 B",
+      allow_always: true,
       questions: [{
         id: "q1", question: "【方案】第一步",
         options: [
@@ -42,6 +44,7 @@ describe("ask:opened 批准门选档", () => {
     });
     const ask = useRun.getState().tabs[session]!.ask!;
     expect(ask.planFile).toBe("/ws/.codewave/tasks/plan-x.md");
+    expect(ask.planBody).toBe("## 完整方案\n1. 改 A\n2. 验证 B");
     expect(ask.allowAlways).toBe(true);
     expect(ask.questions![0].options!.map((o) => o.mode)).toEqual(["auto_edit", "full_access", undefined]);
   });
