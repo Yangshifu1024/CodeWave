@@ -393,6 +393,8 @@ export interface AskOpenedEvent {
   title?: string; detail?: string;
   /** 计划文件路径（计划卡「查看完整计划」打开后端落盘的计划文件） */
   plan_file?: string | null;
+  /** [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」；缺省走 `skip_serializing_if`（后端仅在有可用方案时下传） */
+  plan_body?: string;
   /** 命令审批「始终允许本项目」第三选项 */
   allow_always?: boolean;
   /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */

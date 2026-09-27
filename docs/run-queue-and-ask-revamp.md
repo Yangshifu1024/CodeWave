@@ -35,6 +35,8 @@
 - **落盘由系统硬保证**：plan 档写入工具不可用（只读，D4），AI 无法自行 create 方案文件——`tools/ask.rs` 在**计划批准形态**（单问题含 `approve` 选项，即 `arch_gate_shape`）的 ask 打开时，把 `questions[0].question`（方案全文，模型协议要求写在 question 字段）写入 `<workspace>/.codewave/tasks/plan-<UTC时间戳>.md`（`resolve_write` 根校验 + 原子写；失败返回 None 降级，不影响 ask 流程）。ask 工具 description 已更新协议说明。
 - **计划卡片**（AskPanel，`kind=ask && planFile` 存在）：「📅 计划」标题 + 复制全文按钮（navigator.clipboard）+ 方案文本 markdown 渲染（max-height 截断滚动）+ 「查看完整计划 →」按钮打开 **FileViewerModal**（本批次起接受任意 path，不再要求 SessionFileEntry；RightBar/FilesPanel 调用点同步适配）。修订循环每次 ask 落盘新文件，历史可溯。
 
+  > **修订补充（[docs/ask-plan-card-and-option-shape](./ask-plan-card-and-option-shape.md)）**：原计划的「计划卡」仅在 `planFile` 存在时显示，但内容源 `plan_body` 在显式 `plan` 字段为空时回退题干拼接，会出现「计划卡只有短题干」的空壳；本批次起改为 **真实方案优先 + 无方案不渲染**，内容源优先级 = ① 显式 `plan` → ② 本轮 assistant 正文兑底（三重判据）→ ③ None；事件面增可选字段 `plan_body`。
+
 ## 五、测试
 
 - 后端（221 全绿 / 0 warning）：`command_allowlist_skips_approval`（ConfirmEach 档白名单命中跳过审批真实执行 / 白名单外预取消 = 拒绝）；`confirm_parses_always_with_server_side_gate`（载荷解析 + `allow_always=false` 时 always 服务端钳制）；`save_plan_file` 落盘（路径在 workspace 内 + 内容含方案）；`default_roundtrip_and_compat` 补 allowlist serde default 断言。

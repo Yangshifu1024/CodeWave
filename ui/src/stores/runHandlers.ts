@@ -354,6 +354,7 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
           switchToAutoEdit: p.switch_to_auto_edit,
           allowAlways: p.allow_always,
           planFile: p.plan_file ?? null,
+          planBody: p.plan_body ?? null,
           approval: p.approval,
           approveId: p.approve_id ?? null,
         };

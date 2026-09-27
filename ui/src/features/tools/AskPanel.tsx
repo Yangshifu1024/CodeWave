@@ -26,6 +26,7 @@ import { useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { renderMarkdown } from "../../utils/markdown";
 import FileViewerModal from "../files/FileViewerModal";
+import { inferSingle } from "./askShape";
 
 /** 判断键盘事件目标是否在输入框内（输入框内不拦截方向键/数字/空格等按键）。 */
 function isFormTarget(e: React.KeyboardEvent): boolean {
@@ -99,7 +100,12 @@ export default function AskPanel() {
   if (!ask) return null;
 
   const isApproval = ask.kind === "approval";
-  const isPlan = ask.kind === "ask" && !!ask.planFile;
+  // [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+  // 真实方案的唯一来源是 `ask.planBody`（后端按 skip_serializing_if 下发，只有落盘成功才给）；
+  // `planFile` 单独管「查看完整方案 → 打开后端落盘的文件」。没有 planBody 即视为「无真实方案」——
+  // 历史兼容：`planFile` 存在但 `planBody` 为空（旧后端遗留）同样不渲染计划卡。
+  const planText = ask.planBody ?? "";
+  const isPlan = !!planText;
   const cur = questions[page];
 
   function answer(option: { approved: boolean; always: boolean }) {
@@ -155,10 +161,14 @@ export default function AskPanel() {
         return { ...prev, [qid]: [optId] };
       }
       const q = questions.find((x) => x.id === qid);
-      // 单选题（模型声明的互斥选项）：替换单选——选一个替换上一个；
-      // 单击已选项保持选中（radio 语义，与批准形一致，不出现取消态）；
-      // 「未作答」路径由忽略按钮承担（清空当前题）
-      if (q?.single) {
+      // [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+      // 形态优先级与渲染分支保持同口径——批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底。
+      // 「渲染成 radio 但 toggle 是 multi」会出现「看着只能选一个、点两下又选了两个」的反直觉情况，故此处
+      // 必须复用 `inferSingle` 才能与选项框视觉一致；不允许渲染 / 行为分裂。
+      const singleExplicit = q?.single === true;
+      const multiExplicit = q?.single === false;
+      const singleQ = singleExplicit || (!multiExplicit && inferSingle(q));
+      if (singleQ) {
         return { ...prev, [qid]: [optId] };
       }
       const cur = prev[qid] ?? [];
@@ -396,7 +406,6 @@ export default function AskPanel() {
     }
   }
 
-  const planText = isPlan ? questions.map((q) => q.question).join("\n\n") : "";
   const sel = selected[cur?.id ?? ""] ?? [];
   const options = cur?.options ?? [];
 
@@ -419,7 +428,7 @@ export default function AskPanel() {
               />
             </div>
             <div className="plan-body md" dangerouslySetInnerHTML={{ __html: renderMarkdown(planText) }} />
-            {ask.planFile && (
+            {isPlan && ask.planFile && (
               <div className="plan-foot">
                 <Button size="small" type="primary" onClick={() => setPlanOpen(true)}>
                   {t("ask.viewFullPlan")} →
@@ -502,8 +511,13 @@ export default function AskPanel() {
               <div className="ask-options">
                 {options.map((opt, i) => {
                   const on = sel.includes(opt.id);
-                  // 形态优先级：批准 > single（模型声明互斥）> 多选——radio 声明互斥语义
-                  const singleQ = !approvalShape && cur?.single === true;
+                  // 形态优先级（[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)）：
+                  // 批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底。
+                  // cur.single === false 时严格多选（用户明确取消互斥）；
+                  // cur.single === true 时严格 radio；未声明时按启发式兑底。
+                  const singleExplicit = cur?.single === true;
+                  const multiExplicit = cur?.single === false;
+                  const singleQ = !approvalShape && (singleExplicit || (!multiExplicit && inferSingle(cur)));
                   const desc = optionDesc(opt);
                   return (
                     <div
@@ -562,7 +576,7 @@ export default function AskPanel() {
           </>
         )}
       </div>
-      {(isPlan || ask.planFile) && (
+      {isPlan && ask.planFile && (
         <FileViewerModal sessionId={sessionId} path={planOpen ? ask.planFile ?? null : null} onClose={() => setPlanOpen(false)} />
       )}
     </div>
