@@ -106,16 +106,13 @@ mod app_version_tests {
                 "版本段必须是数字：{version}"
             );
         }
-        match sha {
-            Some(sha) => {
-                assert_eq!(sha.len(), 7, "sha 必须是 7 位：{sha}");
-                assert!(
-                    sha.bytes().all(|b| b.is_ascii_hexdigit()),
-                    "sha 必须是十六进制：{sha}"
-                );
-            }
-            None => {} // 无 git 环境（如 cargo package）：允许纯版本号
-        }
+        if let Some(sha) = sha {
+            assert_eq!(sha.len(), 7, "sha 必须是 7 位：{sha}");
+            assert!(
+                sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                "sha 必须是十六进制：{sha}"
+            );
+        } // 无 git 环境（如 cargo package）：允许纯版本号
         assert!(!text.contains(" ()"), "不允许空括号占位：{text}");
     }
 }

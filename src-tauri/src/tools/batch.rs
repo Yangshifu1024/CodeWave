@@ -151,24 +151,26 @@ pub async fn execute_batch(
         // 不豁免将无法写文件）；本批含 plan 调用（同批乐观豁免，见 batch_has_plan）。
         // 分工边界：command 工具的 shell 重定向写不经本门，归 fence/G3 范围门兜底（见 run_tool）。
         let is_write = core.tools.get(&call.name).map(|t| t.kind()) == Some(ToolKind::FileWrite);
-        if main_session && is_write && !batch_has_plan {
-            if let Some(code) = plan_gate_verdict(&todos_snapshot, is_write) {
-                let message = if code == "E_PLAN_REQUIRED" {
-                    format!(
-                        "「{}」被拒绝：实现类工作开始前必须先用 plan 工具建立计划（建最简计划即可，一条 todo 也算）。此限制不会因重试或改写参数而解除：请调用 plan 登记计划后再重试。",
-                        call.name
-                    )
-                } else {
-                    format!(
-                        "「{}」被拒绝：当前计划已全部完成，继续写入属于计划外工作。请先用 plan 工具更新计划（新增待办条目）后再继续。",
-                        call.name
-                    )
-                };
-                let out = ToolOutcome::err(code, message);
-                emit_result(&sink, rt, run_id, &batch_id, call, &out, 0);
-                outcomes[i] = Some((out, Vec::new()));
-                continue;
-            }
+        if main_session
+            && is_write
+            && !batch_has_plan
+            && let Some(code) = plan_gate_verdict(&todos_snapshot, is_write)
+        {
+            let message = if code == "E_PLAN_REQUIRED" {
+                format!(
+                    "「{}」被拒绝：实现类工作开始前必须先用 plan 工具建立计划（建最简计划即可，一条 todo 也算）。此限制不会因重试或改写参数而解除：请调用 plan 登记计划后再重试。",
+                    call.name
+                )
+            } else {
+                format!(
+                    "「{}」被拒绝：当前计划已全部完成，继续写入属于计划外工作。请先用 plan 工具更新计划（新增待办条目）后再继续。",
+                    call.name
+                )
+            };
+            let out = ToolOutcome::err(code, message);
+            emit_result(&sink, rt, run_id, &batch_id, call, &out, 0);
+            outcomes[i] = Some((out, Vec::new()));
+            continue;
         }
         let core = core.clone();
         let rt = rt.clone();
@@ -274,15 +276,16 @@ pub async fn execute_batch(
                 Vec::new(),
             )
         });
-        if call.name == "suggest" && out.ok {
-            if let Some(items) = out.data["suggestions"].as_array() {
-                suggest_items = Some(
-                    items
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect(),
-                );
-            }
+        if call.name == "suggest"
+            && out.ok
+            && let Some(items) = out.data["suggestions"].as_array()
+        {
+            suggest_items = Some(
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            );
         }
         if call.name == "ask" && out.ok && out.data["plan_approved"].as_bool() == Some(true) {
             plan_approved = true;
@@ -437,19 +440,19 @@ async fn run_tool(
                 );
             }
             // 「总是允许」：持久化到该 server 所在作用域的条目（粒度 = server）
-            if verdict.always {
-                if let Some(scope) = core.mcp.server_scope(&rt.id, &server).await {
-                    let sref = match scope {
-                        crate::mcp::Scope::Global => Some(crate::mcp::global_scope(&rt.data_dir)),
-                        crate::mcp::Scope::Project => {
-                            rt.project_dir.as_deref().map(crate::mcp::project_scope)
-                        }
-                    };
-                    if let Some(sref) = sref {
-                        if let Err(e) = crate::mcp::set_always_allow(&sref, &server, true) {
-                            tracing::warn!("写回 always_allow 失败：{e}");
-                        }
+            if verdict.always
+                && let Some(scope) = core.mcp.server_scope(&rt.id, &server).await
+            {
+                let sref = match scope {
+                    crate::mcp::Scope::Global => Some(crate::mcp::global_scope(&rt.data_dir)),
+                    crate::mcp::Scope::Project => {
+                        rt.project_dir.as_deref().map(crate::mcp::project_scope)
                     }
+                };
+                if let Some(sref) = sref
+                    && let Err(e) = crate::mcp::set_always_allow(&sref, &server, true)
+                {
+                    tracing::warn!("写回 always_allow 失败：{e}");
                 }
             }
         }
@@ -679,10 +682,12 @@ async fn run_tool(
     // plan 纪律软提醒（不阻断）：仅主会话（子代理豁免 plan 纪律，提醒对无 plan 工具的
     // 子代理无意义）；写工具成功且计划没有进行中条目时，一次性追加到模型侧结果尾部
     let mut extra: Vec<Content> = outcome.extra_model_content.clone();
-    if main_session && tool_kind == ToolKind::FileWrite && outcome.error.is_none() {
-        if let Some(hint) = maybe_emit_plan_hint(rt) {
-            extra.push(Content::Text { text: hint });
-        }
+    if main_session
+        && tool_kind == ToolKind::FileWrite
+        && outcome.error.is_none()
+        && let Some(hint) = maybe_emit_plan_hint(rt)
+    {
+        extra.push(Content::Text { text: hint });
     }
     (outcome, extra, started.elapsed().as_millis())
 }

@@ -184,10 +184,10 @@ fn read_tail(path: &Path, tail_lines: usize) -> std::io::Result<LogFileContent> 
     let mut buf = String::new();
     file.read_to_string(&mut buf)?;
     // 从文件中部起读时丢弃首行（可能是半行）
-    if start > 0 {
-        if let Some(pos) = buf.find('\n') {
-            buf = buf[pos + 1..].to_string();
-        }
+    if start > 0
+        && let Some(pos) = buf.find('\n')
+    {
+        buf = buf[pos + 1..].to_string();
     }
     let lines: Vec<&str> = buf.lines().collect();
     let total = lines.len();

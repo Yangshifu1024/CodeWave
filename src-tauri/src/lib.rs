@@ -65,10 +65,10 @@ fn apply_saved_window_geometry(win: &tauri::WebviewWindow, data_dir: &std::path:
     if let Err(e) = win.set_size(tauri::LogicalSize::new(placed.width, placed.height)) {
         tracing::warn!("窗口尺寸恢复失败：{e}");
     }
-    if let (Some(x), Some(y)) = (placed.x, placed.y) {
-        if let Err(e) = win.set_position(tauri::LogicalPosition::new(x, y)) {
-            tracing::warn!("窗口位置恢复失败：{e}");
-        }
+    if let (Some(x), Some(y)) = (placed.x, placed.y)
+        && let Err(e) = win.set_position(tauri::LogicalPosition::new(x, y))
+    {
+        tracing::warn!("窗口位置恢复失败：{e}");
     }
 }
 

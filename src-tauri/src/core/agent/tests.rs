@@ -1166,7 +1166,7 @@ fn history_tool_uses(rt: &Arc<SessionRuntime>) -> Vec<(String, serde_json::Value
         .lock()
         .unwrap()
         .iter()
-        .flat_map(|m| m.content.iter().cloned().collect::<Vec<_>>())
+        .flat_map(|m| m.content.to_vec())
         .filter_map(|c| match c {
             Content::ToolUse { name, args, .. } => Some((name, args)),
             _ => None,
@@ -1180,7 +1180,7 @@ fn history_tool_results(rt: &Arc<SessionRuntime>) -> Vec<String> {
         .lock()
         .unwrap()
         .iter()
-        .flat_map(|m| m.content.iter().cloned().collect::<Vec<_>>())
+        .flat_map(|m| m.content.to_vec())
         .filter_map(|c| match c {
             Content::ToolResult { content, .. } => Some(content),
             _ => None,

@@ -710,10 +710,10 @@ impl SessionStore {
                     continue;
                 }
                 // 旧格式：histories/<id>.json.gz
-                if let Some(id) = name.strip_suffix(".json.gz") {
-                    if !known.contains(id) {
-                        out.push(id.to_string());
-                    }
+                if let Some(id) = name.strip_suffix(".json.gz")
+                    && !known.contains(id)
+                {
+                    out.push(id.to_string());
                 }
             }
         }

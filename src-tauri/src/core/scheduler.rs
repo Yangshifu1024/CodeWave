@@ -269,13 +269,13 @@ impl TaskTable {
     /// 任务重启后复活）。
     pub async fn remove(&self, id: &str) -> Option<ScheduledTask> {
         let removed = self.tasks.lock().await.remove(id);
-        if let Some(t) = &removed {
-            if let Some(pid) = &t.project_id {
-                let file = crate::core::projects::data_dir_by_id(&self.data_dir, pid)
-                    .join("tasks")
-                    .join(format!("{}.json", t.id));
-                let _ = std::fs::remove_file(&file);
-            }
+        if let Some(t) = &removed
+            && let Some(pid) = &t.project_id
+        {
+            let file = crate::core::projects::data_dir_by_id(&self.data_dir, pid)
+                .join("tasks")
+                .join(format!("{}.json", t.id));
+            let _ = std::fs::remove_file(&file);
         }
         removed
     }
@@ -313,17 +313,15 @@ impl TaskTable {
                     continue;
                 };
                 // once 且已过期 → 不恢复（并删除文件）
-                if t.schedule.starts_with("once:") {
-                    if let Some(Ok(at)) = t
+                if t.schedule.starts_with("once:")
+                    && let Some(Ok(at)) = t
                         .next_run
                         .as_ref()
                         .map(|s| chrono::DateTime::parse_from_rfc3339(s))
-                    {
-                        if at < chrono::Local::now() {
-                            let _ = std::fs::remove_file(f.path());
-                            continue;
-                        }
-                    }
+                    && at < chrono::Local::now()
+                {
+                    let _ = std::fs::remove_file(f.path());
+                    continue;
                 }
                 // 旧版本曾用 UTC 计算 cron 的 next_run，09:00 会落成北京时间 17:00。
                 // 未来值必须是最近一次本地触发（仅检查是否符合 cron 会漏掉 09,17

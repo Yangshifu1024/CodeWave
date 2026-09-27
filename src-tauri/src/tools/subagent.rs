@@ -909,9 +909,11 @@ mod tests {
     /// 幂等：重复调用不产生重复项，也不覆盖父档位已合并的排除集。
     #[test]
     fn apply_role_policy_is_idempotent_over_parent_excludes() {
-        let mut p = DriveParams::default();
         // 模拟父档位已合并集（其中 edit 与只读写排除重叠）
-        p.exclude_tools = vec!["ask".into(), "edit".into()];
+        let mut p = DriveParams {
+            exclude_tools: vec!["ask".into(), "edit".into()],
+            ..Default::default()
+        };
         apply_role_policy(&mut p, "explore", ApprovalMode::AutoEdit);
         let once = p.exclude_tools.clone();
         apply_role_policy(&mut p, "explore", ApprovalMode::AutoEdit);

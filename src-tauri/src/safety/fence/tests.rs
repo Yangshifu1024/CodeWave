@@ -119,7 +119,7 @@ fn t10_symlink_escape_blocked() {
     std::os::unix::fs::symlink(out.path(), ws.path().join("leak")).unwrap();
     let target = out.path().join("evil.txt");
     assert!(matches!(
-        run(&format!("echo x > leak/evil.txt",), &ws, &roots),
+        run("echo x > leak/evil.txt", &ws, &roots),
         Verdict::Block { .. }
     ));
     let _ = target;

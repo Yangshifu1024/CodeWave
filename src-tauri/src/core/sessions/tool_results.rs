@@ -66,6 +66,7 @@ pub fn sanitize_call_id(id: &str) -> String {
 /// - 头尾截断（`[已截断 N 字节]` 插在中间）必破坏 JSON 结构 → **要备份**；
 /// - 失败但有出参的调用（如失败 `command` 的 `[error …]` + JSON 体）也解析不了 → 要备份；
 /// - `read`/`batch_read` 原样透传、读图那种「合法 JSON 但剥了 data_url」→ 前端自己就能恢复 → **不备份**。
+///
 /// 调用方必须在**追加 plan 软提醒等 model hint 之前**传入文本，否则带 hint 的结果会被误判。
 pub fn should_persist(model_text: &str, outcome: &ToolOutcome) -> bool {
     !outcome.data.is_null()

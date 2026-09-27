@@ -558,10 +558,11 @@ impl SkillIndex {
         let key = cache_key(workspace, project_dir);
         {
             let g = self.cache.lock().unwrap();
-            if let Some((at, cached_key, map)) = g.as_ref() {
-                if *cached_key == key && at.elapsed() < self.ttl {
-                    return map.get(name).cloned();
-                }
+            if let Some((at, cached_key, map)) = g.as_ref()
+                && *cached_key == key
+                && at.elapsed() < self.ttl
+            {
+                return map.get(name).cloned();
             }
         }
         let map = Self::build(workspace, data_dir, disabled, project_dir);
@@ -602,10 +603,11 @@ impl SkillIndex {
         };
         {
             let g = self.cache.lock().unwrap();
-            if let Some((at, cached_key, map)) = g.as_ref() {
-                if *cached_key == key && at.elapsed() < self.ttl {
-                    return sorted(map.values().map(|s| s.meta.clone()).collect());
-                }
+            if let Some((at, cached_key, map)) = g.as_ref()
+                && *cached_key == key
+                && at.elapsed() < self.ttl
+            {
+                return sorted(map.values().map(|s| s.meta.clone()).collect());
             }
         }
         let map = Self::build(workspace, data_dir, disabled, project_dir);
@@ -625,13 +627,14 @@ fn scan_dir_into(base: &PathBuf, map: &mut HashMap<String, Skill>) {
         if !dir.is_file() {
             // 单文件技能：name.md
             let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("md") && p.is_file() {
-                if let Ok(text) = std::fs::read_to_string(&p) {
-                    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-                    if let Some(mut s) = parse_skill_md(&text, stem) {
-                        s.meta.origin = p.display().to_string();
-                        map.insert(s.meta.name.clone(), s);
-                    }
+            if p.extension().and_then(|e| e.to_str()) == Some("md")
+                && p.is_file()
+                && let Ok(text) = std::fs::read_to_string(&p)
+            {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                if let Some(mut s) = parse_skill_md(&text, stem) {
+                    s.meta.origin = p.display().to_string();
+                    map.insert(s.meta.name.clone(), s);
                 }
             }
             continue;

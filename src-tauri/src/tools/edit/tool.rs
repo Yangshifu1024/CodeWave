@@ -239,10 +239,10 @@ pub fn apply_changes(content: &str, changes: &[Change]) -> Result<(String, Vec<S
             for l in ch.new_text.as_deref().unwrap_or("").split_inclusive('\n') {
                 let mut l = l.to_string();
                 if first {
-                    if let Some(b) = bom {
-                        if !l.starts_with('\u{FEFF}') {
-                            l.insert_str(0, b);
-                        }
+                    if let Some(b) = bom
+                        && !l.starts_with('\u{FEFF}')
+                    {
+                        l.insert_str(0, b);
                     }
                     first = false;
                 }
@@ -368,13 +368,13 @@ impl Tool for EditTool {
 
         // 严格文件隔离（[docs/subagent-file-isolation](../../../../docs/subagent-file-isolation.md)）：
         // 非主 runtime 编辑前认领全部目标；任一文件被兄弟任务认领则整体拒绝（多文件编辑不部分应用）
-        if !ctx.rt.is_main_session {
-            if let Err(conflicts) = crate::tools::claims::claim(&ctx.rt.id, &resolved) {
-                return ToolOutcome::err(
-                    "E_FILE_CLAIMED",
-                    crate::tools::claims::denial_message(&conflicts),
-                );
-            }
+        if !ctx.rt.is_main_session
+            && let Err(conflicts) = crate::tools::claims::claim(&ctx.rt.id, &resolved)
+        {
+            return ToolOutcome::err(
+                "E_FILE_CLAIMED",
+                crate::tools::claims::denial_message(&conflicts),
+            );
         }
 
         // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2，跨 runtime）：按规范序加锁防死锁；
@@ -489,10 +489,10 @@ impl Tool for EditTool {
                 Ok(()) => written.push(p.clone()),
                 Err(e) => {
                     for w in &written {
-                        if let Some((_, b)) = backups.iter().find(|(orig, _)| orig == w) {
-                            if let Ok(data) = std::fs::read(b) {
-                                let _ = std::fs::write(w, data);
-                            }
+                        if let Some((_, b)) = backups.iter().find(|(orig, _)| orig == w)
+                            && let Ok(data) = std::fs::read(b)
+                        {
+                            let _ = std::fs::write(w, data);
                         }
                     }
                     return ToolOutcome::err(

@@ -412,10 +412,10 @@ pub async fn load_subagent_history(
 #[tauri::command]
 pub async fn delete_session(core: Core<'_>, session_id: String) -> Result<(), String> {
     // M14 修复：删除运行中的会话会被后续 checkpoint 复活 → 拒绝
-    if let Some(rt) = core.session(&session_id) {
-        if rt.running.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("会话正在运行，请先停止再删除".into());
-        }
+    if let Some(rt) = core.session(&session_id)
+        && rt.running.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err("会话正在运行，请先停止再删除".into());
     }
     // H5 同根因（[docs/session-auto-title](../../../../docs/session-auto-title.md) 评审修复）：run 已结束但自动命名后台任务（最长 20s）可能仍在途；
     // 标 zombie 让迟到的 session_log 写入 / 统计记账无法复活已删除会话
@@ -550,10 +550,10 @@ fn launch_run(
         .map_err(err)?;
     if let Err(e) = core.store.mark_running(session_id, true) {
         tracing::warn!("会话 {session_id} running 标记落盘失败：{e}");
-    } else if !rt.running.load(std::sync::atomic::Ordering::SeqCst) {
-        if let Err(e) = core.store.mark_running(session_id, false) {
-            tracing::warn!("会话 {session_id} running 标记回补失败：{e}");
-        }
+    } else if !rt.running.load(std::sync::atomic::Ordering::SeqCst)
+        && let Err(e) = core.store.mark_running(session_id, false)
+    {
+        tracing::warn!("会话 {session_id} running 标记回补失败：{e}");
     }
     Ok(run_id)
 }
@@ -605,10 +605,10 @@ pub async fn resolve_ask(
     value: serde_json::Value,
 ) -> Result<(), String> {
     // M16 修复：主会话未命中时扫描子代理 runtime（此前子代理的审批永远无法批准）
-    if let Some(rt) = core.session(&session_id) {
-        if rt.resolve_ask(&ask_id, value.clone()) {
-            return Ok(());
-        }
+    if let Some(rt) = core.session(&session_id)
+        && rt.resolve_ask(&ask_id, value.clone())
+    {
+        return Ok(());
     }
     for e in core.subs.iter() {
         if e.value().resolve_ask(&ask_id, value.clone()) {

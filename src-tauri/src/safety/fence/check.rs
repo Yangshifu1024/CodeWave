@@ -648,20 +648,20 @@ fn check_command_depth(
     // 理由：plan 档的只读承诺不能被一次误点确认绕过；重定向引导语 = 把命令写进方案、批准后执行。
     // 覆盖面：白名单外命令、灾难/高危命令、白名单命令带写重定向（InsideWrite）——一切本需确认的路径。
     let verdict = check_command_inner(cmd, cwd, roots, policy, depth);
-    if policy.plan_readonly {
-        if let Verdict::Confirm(reason) = verdict {
-            let why = match &reason {
-                ConfirmReason::Disaster(w) | ConfirmReason::HighRisk(w) => *w,
-                ConfirmReason::InsideWrite(_) | ConfirmReason::OutsideCreate(_) => "命令含写目标",
-            };
-            return Verdict::Block {
-                code: "E_PLAN_READONLY".into(),
-                message: format!(
-                    "计划模式只读拦截（被拦命令：{}）：{why}。请将该命令纳入方案，经用户批准后执行；或改用只读白名单内的替代命令",
-                    command_excerpt(cmd)
-                ),
-            };
-        }
+    if policy.plan_readonly
+        && let Verdict::Confirm(reason) = verdict
+    {
+        let why = match &reason {
+            ConfirmReason::Disaster(w) | ConfirmReason::HighRisk(w) => *w,
+            ConfirmReason::InsideWrite(_) | ConfirmReason::OutsideCreate(_) => "命令含写目标",
+        };
+        return Verdict::Block {
+            code: "E_PLAN_READONLY".into(),
+            message: format!(
+                "计划模式只读拦截（被拦命令：{}）：{why}。请将该命令纳入方案，经用户批准后执行；或改用只读白名单内的替代命令",
+                command_excerpt(cmd)
+            ),
+        };
     }
     verdict
 }
@@ -1057,20 +1057,19 @@ fn handle_command(node: tree_sitter::Node, ctx: &mut FenceCtx) {
         if let Some(pos) = args
             .iter()
             .position(|a| a == "-c" || a.eq_ignore_ascii_case("-command"))
+            && let Some(inner) = args.get(pos + 1)
         {
-            if let Some(inner) = args.get(pos + 1) {
-                let sub = check_command_depth(
-                    inner,
-                    &ctx.cwd,
-                    ctx.roots,
-                    FencePolicy {
-                        approval_enabled: true,
-                        ..ctx.policy
-                    },
-                    ctx.depth + 1,
-                );
-                ctx.escalate(sub);
-            }
+            let sub = check_command_depth(
+                inner,
+                &ctx.cwd,
+                ctx.roots,
+                FencePolicy {
+                    approval_enabled: true,
+                    ..ctx.policy
+                },
+                ctx.depth + 1,
+            );
+            ctx.escalate(sub);
         }
         return;
     }
@@ -1192,20 +1191,19 @@ fn handle_command_ps(node: tree_sitter::Node, ctx: &mut FenceCtx) {
         if let Some(pos) = args
             .iter()
             .position(|a| a.eq_ignore_ascii_case("-command") || a == "-c")
+            && let Some(inner) = args.get(pos + 1)
         {
-            if let Some(inner) = args.get(pos + 1) {
-                let sub = check_command_depth(
-                    inner,
-                    &ctx.cwd,
-                    ctx.roots,
-                    FencePolicy {
-                        approval_enabled: true,
-                        ..ctx.policy
-                    },
-                    ctx.depth + 1,
-                );
-                ctx.escalate(sub);
-            }
+            let sub = check_command_depth(
+                inner,
+                &ctx.cwd,
+                ctx.roots,
+                FencePolicy {
+                    approval_enabled: true,
+                    ..ctx.policy
+                },
+                ctx.depth + 1,
+            );
+            ctx.escalate(sub);
         }
         return;
     }
@@ -1344,10 +1342,9 @@ fn download_write_targets(args: &[String]) -> Vec<String> {
         if let Some(v) = a
             .strip_prefix("--output=")
             .or_else(|| a.strip_prefix("--output-document="))
+            && !v.is_empty()
         {
-            if !v.is_empty() {
-                out.push(v.to_string());
-            }
+            out.push(v.to_string());
         }
         i += 1;
     }
@@ -1427,10 +1424,10 @@ fn tar_file_value(args: &[String]) -> Option<String> {
         if a == "-f" || a == "--file" {
             return args.get(i + 1).cloned();
         }
-        if let Some(v) = a.strip_prefix("--file=") {
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
+        if let Some(v) = a.strip_prefix("--file=")
+            && !v.is_empty()
+        {
+            return Some(v.to_string());
         }
         if a.len() > 1 && a.starts_with('-') && !a.starts_with("--") && a.contains('f') {
             return args.get(i + 1).cloned();
@@ -1520,11 +1517,11 @@ fn eval_command_with(
             return;
         }
         let op = args.iter().find_map(|a| tar_arg_op(a));
-        if matches!(op, Some(TarOp::Create | TarOp::Modify | TarOp::Delete)) {
-            if let Some(f) = tar_file_value(args) {
-                let v = check_write_target(&f, &ctx.cwd, ctx.roots, ctx.policy);
-                ctx.escalate(v);
-            }
+        if matches!(op, Some(TarOp::Create | TarOp::Modify | TarOp::Delete))
+            && let Some(f) = tar_file_value(args)
+        {
+            let v = check_write_target(&f, &ctx.cwd, ctx.roots, ctx.policy);
+            ctx.escalate(v);
         }
     }
     // [S7 审查返工增补] unzip：解包形态把成员文件写入不可静态判定的落点（隐式写）
@@ -2221,10 +2218,10 @@ fn high_risk_match(cmd: &str) -> Option<&'static str> {
         }
     }
     // git reset：任何形态必确认（词法回退路径；AST 镜像见 eval_command_with）。
-    if let Some(pos) = tokens.iter().position(|t| *t == "git") {
-        if tokens.get(pos + 1).is_some_and(|t| *t == "reset") {
-            return Some("git reset（可能丢弃工作区更改或移动分支）");
-        }
+    if let Some(pos) = tokens.iter().position(|t| *t == "git")
+        && tokens.get(pos + 1).is_some_and(|t| *t == "reset")
+    {
+        return Some("git reset（可能丢弃工作区更改或移动分支）");
     }
     // [POSIX 命令全集加固批次] L3 高危扩充（HIGH_RISK_CMDS）词法镜像（AST 镜像见
     // eval_command_with / high_risk_cmd_reason）：按**首命令词**命中（与

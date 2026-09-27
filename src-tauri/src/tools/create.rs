@@ -59,15 +59,14 @@ impl Tool for CreateTool {
         };
         // 严格文件隔离（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
         // 非主 runtime 写前认领目标；兄弟任务已认领则拒绝并指引跳过上报
-        if !ctx.rt.is_main_session {
-            if let Err(conflicts) =
+        if !ctx.rt.is_main_session
+            && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
-            {
-                return ToolOutcome::err(
-                    "E_FILE_CLAIMED",
-                    crate::tools::claims::denial_message(&conflicts),
-                );
-            }
+        {
+            return ToolOutcome::err(
+                "E_FILE_CLAIMED",
+                crate::tools::claims::denial_message(&conflicts),
+            );
         }
         // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：
         // E_EXISTS 检查与写入共享同一把锁，防止跨 runtime 的并发 create/edit 交错；
@@ -89,10 +88,10 @@ impl Tool for CreateTool {
                 format!("{} 已存在；覆盖请传 overwrite=true", args.path),
             );
         }
-        if let Some(parent) = resolved.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return ToolOutcome::err("E_IO", format!("创建目录失败：{e}"));
-            }
+        if let Some(parent) = resolved.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return ToolOutcome::err("E_IO", format!("创建目录失败：{e}"));
         }
         // 写入后检查（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：结论进
         // `outcome.data.check`（模型侧读 data，读得到；warnings 只达前端）。写后构造目标即可，

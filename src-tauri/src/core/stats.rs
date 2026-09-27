@@ -259,26 +259,26 @@ fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>)
         // 读旧数据合并（多次启动 / 未冲刷的遗留）
         let path = stats_dir.join(format!("{date}.json"));
         let mut merged = day.clone();
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(old) = serde_json::from_str::<DailyStats>(&text) {
-                // 四桶统一走 ModelAgg::merge（九字段一份清单）：旧文件缺耗时字段时反序列化为 0，
-                // 新值照常保留——绝不是「旧文件的四字段丢掉」
-                for (k, v) in old.by_model {
-                    merged.by_model.entry(k).or_default().merge(&v);
-                }
-                for (k, v) in old.by_workspace {
-                    merged.by_workspace.entry(k).or_default().merge(&v);
-                }
-                for (k, v) in old.by_kind {
-                    merged.by_kind.entry(k).or_default().merge(&v);
-                }
-                merged.total.merge(&old.total);
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && let Ok(old) = serde_json::from_str::<DailyStats>(&text)
+        {
+            // 四桶统一走 ModelAgg::merge（九字段一份清单）：旧文件缺耗时字段时反序列化为 0，
+            // 新值照常保留——绝不是「旧文件的四字段丢掉」
+            for (k, v) in old.by_model {
+                merged.by_model.entry(k).or_default().merge(&v);
             }
+            for (k, v) in old.by_workspace {
+                merged.by_workspace.entry(k).or_default().merge(&v);
+            }
+            for (k, v) in old.by_kind {
+                merged.by_kind.entry(k).or_default().merge(&v);
+            }
+            merged.total.merge(&old.total);
         }
-        if let Ok(bytes) = serde_json::to_vec_pretty(&merged) {
-            if let Err(e) = atomic_write(&path, &bytes) {
-                tracing::warn!("统计落盘失败（{date}）：{e}");
-            }
+        if let Ok(bytes) = serde_json::to_vec_pretty(&merged)
+            && let Err(e) = atomic_write(&path, &bytes)
+        {
+            tracing::warn!("统计落盘失败（{date}）：{e}");
         }
     }
     pending.clear();
@@ -287,16 +287,14 @@ fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>)
         let cutoff = chrono::Local::now() - chrono::Duration::days(RETAIN_DAYS);
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if let Some(d) = name.strip_suffix(".json") {
-                if let Ok(day) = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d") {
-                    if chrono::DateTime::<chrono::Local>::from_naive_utc_and_offset(
-                        day.and_hms_opt(0, 0, 0).unwrap(),
-                        *chrono::Local::now().offset(),
-                    ) < cutoff
-                    {
-                        let _ = std::fs::remove_file(e.path());
-                    }
-                }
+            if let Some(d) = name.strip_suffix(".json")
+                && let Ok(day) = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                && chrono::DateTime::<chrono::Local>::from_naive_utc_and_offset(
+                    day.and_hms_opt(0, 0, 0).unwrap(),
+                    *chrono::Local::now().offset(),
+                ) < cutoff
+            {
+                let _ = std::fs::remove_file(e.path());
             }
         }
     }
@@ -310,10 +308,10 @@ pub fn query(data_dir: &std::path::Path, days: u32) -> Vec<DailyStats> {
         let date = (chrono::Local::now() - chrono::Duration::days(i as i64))
             .format("%Y-%m-%d")
             .to_string();
-        if let Ok(text) = std::fs::read_to_string(stats_dir.join(format!("{date}.json"))) {
-            if let Ok(d) = serde_json::from_str::<DailyStats>(&text) {
-                out.push(d);
-            }
+        if let Ok(text) = std::fs::read_to_string(stats_dir.join(format!("{date}.json")))
+            && let Ok(d) = serde_json::from_str::<DailyStats>(&text)
+        {
+            out.push(d);
         }
     }
     out.sort_by(|a, b| a.date.cmp(&b.date));

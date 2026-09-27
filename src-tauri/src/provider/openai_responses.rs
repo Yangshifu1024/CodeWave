@@ -146,21 +146,21 @@ pub fn handle_event(
 
     match name {
         "response.output_text.delta" => {
-            if let Some(t) = v["delta"].as_str() {
-                if !t.is_empty() {
-                    deltas.push(StreamDelta::Text {
-                        text: t.to_string(),
-                    });
-                }
+            if let Some(t) = v["delta"].as_str()
+                && !t.is_empty()
+            {
+                deltas.push(StreamDelta::Text {
+                    text: t.to_string(),
+                });
             }
         }
         "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-            if let Some(t) = v["delta"].as_str() {
-                if !t.is_empty() {
-                    deltas.push(StreamDelta::Reasoning {
-                        text: t.to_string(),
-                    });
-                }
+            if let Some(t) = v["delta"].as_str()
+                && !t.is_empty()
+            {
+                deltas.push(StreamDelta::Reasoning {
+                    text: t.to_string(),
+                });
             }
         }
         "response.output_item.added" => {
@@ -179,25 +179,24 @@ pub fn handle_event(
         }
         "response.function_call_arguments.delta" => {
             let call_id = v["call_id"].as_str().unwrap_or("");
-            if let Some(&index) = acc.call_index.get(call_id) {
-                if let Some(frag) = v["delta"].as_str() {
-                    if !frag.is_empty() {
-                        deltas.push(StreamDelta::ToolCallArgsDelta {
-                            index,
-                            fragment: frag.to_string(),
-                        });
-                    }
-                }
+            if let Some(&index) = acc.call_index.get(call_id)
+                && let Some(frag) = v["delta"].as_str()
+                && !frag.is_empty()
+            {
+                deltas.push(StreamDelta::ToolCallArgsDelta {
+                    index,
+                    fragment: frag.to_string(),
+                });
             }
         }
         "response.output_item.done" => {
             let item = &v["item"];
             if item["type"].as_str() == Some("function_call") {
                 let call_id = item["call_id"].as_str().unwrap_or("");
-                if let Some(&index) = acc.call_index.get(call_id) {
-                    if acc.ended.insert(index) {
-                        deltas.push(StreamDelta::ToolCallEnd { index });
-                    }
+                if let Some(&index) = acc.call_index.get(call_id)
+                    && acc.ended.insert(index)
+                {
+                    deltas.push(StreamDelta::ToolCallEnd { index });
                 }
             }
         }

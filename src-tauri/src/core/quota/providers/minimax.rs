@@ -101,10 +101,10 @@ fn window_percent(model: &Value, endpoint: Endpoint, window: usize) -> Option<f6
     let (_, total_field, count_field, percent_field, _) = WINDOWS[window];
     let total = number(model, total_field);
     let count = number(model, count_field);
-    if let (Some(total), Some(count)) = (total, count) {
-        if total > 0.0 {
-            return Some(entry_percent(total, count, endpoint));
-        }
+    if let (Some(total), Some(count)) = (total, count)
+        && total > 0.0
+    {
+        return Some(entry_percent(total, count, endpoint));
     }
     number(model, percent_field).map(|p| p.clamp(0.0, 100.0))
 }

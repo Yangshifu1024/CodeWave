@@ -327,6 +327,166 @@ fn gen_anchor_next(cur: Option<usize>, n: usize) -> Option<usize> {
     }
 }
 
+/// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。
+/// `anchor` = 本次尝试的请求发出时刻（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）；
+/// 返回值第二项 = TTFT（首个**任意类型**增量到达时的墙钟，含 thinking；全程无增量 → None）。
+/// 只读观测：不改 delta 语义、不碰 anthropic SSE 收尾路径。
+pub(super) async fn collect_deltas(
+    mut rx: mpsc::Receiver<crate::provider::StreamDelta>,
+    stream: Arc<ThrottledStream>,
+    anchor: Instant,
+) -> (Assembled, Option<u64>) {
+    let mut asm = Assembled::default();
+    let mut ttft_ms: Option<u64> = None;
+    while let Some(d) = rx.recv().await {
+        // 首帧（不论类型，含 ToolCall 增量）即 TTFT：放在 match 之前
+        if ttft_ms.is_none() {
+            ttft_ms = Some(anchor.elapsed().as_millis() as u64);
+        }
+        // 每帧刷新流活跃度（含不经 stream 缓冲的 ToolCall 增量）——停滞看门狗的观测点
+        stream.touch();
+        match d {
+            crate::provider::StreamDelta::Text { text } => {
+                asm.push_text(&text);
+                stream.push_text(&text);
+            }
+            crate::provider::StreamDelta::Reasoning { text } => {
+                asm.push_thinking(&text);
+                stream.push_reasoning(&text);
+            }
+            crate::provider::StreamDelta::ToolCallBegin { index, id, name } => {
+                asm.tool_calls.push(AssembledToolCall {
+                    index,
+                    id,
+                    name,
+                    args_raw: String::new(),
+                });
+                // 块记录：捕获工具调用的真实穿插位置（值 = tool_calls 下标）
+                asm.blocks.push(AsmBlock::Tool(asm.tool_calls.len() - 1));
+            }
+            crate::provider::StreamDelta::ToolCallArgsDelta { index, fragment } => {
+                if let Some(c) = asm.tool_calls.iter_mut().find(|c| c.index == index) {
+                    c.args_raw.push_str(&fragment);
+                }
+            }
+            crate::provider::StreamDelta::ToolCallEnd { .. } => {}
+        }
+    }
+    (asm, ttft_ms)
+}
+
+/// 组装 assistant 消息 + 归一化调用；参数无法修复的调用直接拒绝，合成错误结果。
+/// text/thinking/tool_use 全部按真实到达顺序（AsmBlock 顺序）产出内容——
+/// 此前 tool_use 被统一挪到末尾，重开会话后工具卡穿插位置丢失（已修复，与流式 UI 对齐）。
+pub(super) fn build_assistant_message(
+    asm: &Assembled,
+) -> (Message, Vec<NormalizedCall>, Vec<Content>) {
+    // 先归一化全部调用（保持顺序），再把 ToolUse 块插回真实位置
+    let mut calls: Vec<NormalizedCall> = Vec::new();
+    let mut synth = Vec::new();
+    let mut ord_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new(); // asm 工具序号 → calls 下标
+    for (ord, c) in asm.tool_calls.iter().enumerate() {
+        match crate::core::sessions::repair::parse_or_salvage(&c.args_raw) {
+            Some(v) => {
+                let args = if v.is_object() {
+                    v
+                } else {
+                    serde_json::json!({ "value": v })
+                };
+                ord_of.insert(ord, calls.len());
+                calls.push(NormalizedCall {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    args,
+                    index: c.index,
+                });
+            }
+            None => {
+                let msg = format!(
+                    "工具 {c_name} 的参数 JSON 无法解析（长度 {len}），调用被拒绝",
+                    c_name = c.name,
+                    len = c.args_raw.len()
+                );
+                tracing::warn!("{msg}");
+                synth.push(Content::ToolResult {
+                    tool_use_id: c.id.clone(),
+                    content: msg,
+                    is_error: true,
+                });
+            }
+        }
+    }
+    let mut content = Vec::new();
+    for b in &asm.blocks {
+        match b {
+            AsmBlock::Text(t) if !t.is_empty() => content.push(Content::Text { text: t.clone() }),
+            AsmBlock::Thinking(t) if !t.is_empty() => {
+                content.push(Content::Thinking { text: t.clone() })
+            }
+            AsmBlock::Tool(ord) => {
+                if let Some(&ci) = ord_of.get(ord) {
+                    let c = &calls[ci];
+                    content.push(Content::ToolUse {
+                        id: c.id.clone(),
+                        name: c.name.clone(),
+                        args: c.args.clone(),
+                    });
+                }
+            }
+            _ => {} // 空 text/thinking 块不进历史
+        }
+    }
+    (
+        Message {
+            role: Role::Assistant,
+            content,
+            created_at: None,
+        },
+        calls,
+        synth,
+    )
+}
+
+/// 将一个节流批次按段顺序拆成多条单通道帧依次下发：帧到达序 = 显示顺序。
+pub(super) fn flush_segments(
+    sink: &Arc<dyn EventSink>,
+    session: &SessionId,
+    buf: &crate::util::throttle::StreamBuffer,
+) {
+    for seg in &buf.segments {
+        let frame = match seg {
+            crate::util::throttle::Segment::Text(t) => Frame::DeltaText {
+                generation: buf.generation,
+                text: t.clone(),
+            },
+            crate::util::throttle::Segment::Reasoning(t) => Frame::DeltaThinking {
+                generation: buf.generation,
+                text: t.clone(),
+            },
+        };
+        sink.channel_frame(session, &frame);
+    }
+}
+
+/// 64ms 流式刷新 ticker（run 期间全程存活）。
+pub async fn stream_flush_loop(
+    sink: Arc<dyn EventSink>,
+    rt: Arc<SessionRuntime>,
+    stop: CancellationToken,
+) {
+    let interval = Duration::from_millis(STREAM_THROTTLE_MS);
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {
+                if let Some(buf) = rt.stream.try_take(interval) {
+                    flush_segments(&sink, &rt.id, &buf);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod anchor_tests {
     use super::gen_anchor_next;
@@ -692,165 +852,5 @@ mod anchor_tests {
             history.as_slice(),
             "绝不得改写 rt.history"
         );
-    }
-}
-
-/// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。
-/// `anchor` = 本次尝试的请求发出时刻（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）；
-/// 返回值第二项 = TTFT（首个**任意类型**增量到达时的墙钟，含 thinking；全程无增量 → None）。
-/// 只读观测：不改 delta 语义、不碰 anthropic SSE 收尾路径。
-pub(super) async fn collect_deltas(
-    mut rx: mpsc::Receiver<crate::provider::StreamDelta>,
-    stream: Arc<ThrottledStream>,
-    anchor: Instant,
-) -> (Assembled, Option<u64>) {
-    let mut asm = Assembled::default();
-    let mut ttft_ms: Option<u64> = None;
-    while let Some(d) = rx.recv().await {
-        // 首帧（不论类型，含 ToolCall 增量）即 TTFT：放在 match 之前
-        if ttft_ms.is_none() {
-            ttft_ms = Some(anchor.elapsed().as_millis() as u64);
-        }
-        // 每帧刷新流活跃度（含不经 stream 缓冲的 ToolCall 增量）——停滞看门狗的观测点
-        stream.touch();
-        match d {
-            crate::provider::StreamDelta::Text { text } => {
-                asm.push_text(&text);
-                stream.push_text(&text);
-            }
-            crate::provider::StreamDelta::Reasoning { text } => {
-                asm.push_thinking(&text);
-                stream.push_reasoning(&text);
-            }
-            crate::provider::StreamDelta::ToolCallBegin { index, id, name } => {
-                asm.tool_calls.push(AssembledToolCall {
-                    index,
-                    id,
-                    name,
-                    args_raw: String::new(),
-                });
-                // 块记录：捕获工具调用的真实穿插位置（值 = tool_calls 下标）
-                asm.blocks.push(AsmBlock::Tool(asm.tool_calls.len() - 1));
-            }
-            crate::provider::StreamDelta::ToolCallArgsDelta { index, fragment } => {
-                if let Some(c) = asm.tool_calls.iter_mut().find(|c| c.index == index) {
-                    c.args_raw.push_str(&fragment);
-                }
-            }
-            crate::provider::StreamDelta::ToolCallEnd { .. } => {}
-        }
-    }
-    (asm, ttft_ms)
-}
-
-/// 组装 assistant 消息 + 归一化调用；参数无法修复的调用直接拒绝，合成错误结果。
-/// text/thinking/tool_use 全部按真实到达顺序（AsmBlock 顺序）产出内容——
-/// 此前 tool_use 被统一挪到末尾，重开会话后工具卡穿插位置丢失（已修复，与流式 UI 对齐）。
-pub(super) fn build_assistant_message(
-    asm: &Assembled,
-) -> (Message, Vec<NormalizedCall>, Vec<Content>) {
-    // 先归一化全部调用（保持顺序），再把 ToolUse 块插回真实位置
-    let mut calls: Vec<NormalizedCall> = Vec::new();
-    let mut synth = Vec::new();
-    let mut ord_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new(); // asm 工具序号 → calls 下标
-    for (ord, c) in asm.tool_calls.iter().enumerate() {
-        match crate::core::sessions::repair::parse_or_salvage(&c.args_raw) {
-            Some(v) => {
-                let args = if v.is_object() {
-                    v
-                } else {
-                    serde_json::json!({ "value": v })
-                };
-                ord_of.insert(ord, calls.len());
-                calls.push(NormalizedCall {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    args,
-                    index: c.index,
-                });
-            }
-            None => {
-                let msg = format!(
-                    "工具 {c_name} 的参数 JSON 无法解析（长度 {len}），调用被拒绝",
-                    c_name = c.name,
-                    len = c.args_raw.len()
-                );
-                tracing::warn!("{msg}");
-                synth.push(Content::ToolResult {
-                    tool_use_id: c.id.clone(),
-                    content: msg,
-                    is_error: true,
-                });
-            }
-        }
-    }
-    let mut content = Vec::new();
-    for b in &asm.blocks {
-        match b {
-            AsmBlock::Text(t) if !t.is_empty() => content.push(Content::Text { text: t.clone() }),
-            AsmBlock::Thinking(t) if !t.is_empty() => {
-                content.push(Content::Thinking { text: t.clone() })
-            }
-            AsmBlock::Tool(ord) => {
-                if let Some(&ci) = ord_of.get(ord) {
-                    let c = &calls[ci];
-                    content.push(Content::ToolUse {
-                        id: c.id.clone(),
-                        name: c.name.clone(),
-                        args: c.args.clone(),
-                    });
-                }
-            }
-            _ => {} // 空 text/thinking 块不进历史
-        }
-    }
-    (
-        Message {
-            role: Role::Assistant,
-            content,
-            created_at: None,
-        },
-        calls,
-        synth,
-    )
-}
-
-/// 将一个节流批次按段顺序拆成多条单通道帧依次下发：帧到达序 = 显示顺序。
-pub(super) fn flush_segments(
-    sink: &Arc<dyn EventSink>,
-    session: &SessionId,
-    buf: &crate::util::throttle::StreamBuffer,
-) {
-    for seg in &buf.segments {
-        let frame = match seg {
-            crate::util::throttle::Segment::Text(t) => Frame::DeltaText {
-                generation: buf.generation,
-                text: t.clone(),
-            },
-            crate::util::throttle::Segment::Reasoning(t) => Frame::DeltaThinking {
-                generation: buf.generation,
-                text: t.clone(),
-            },
-        };
-        sink.channel_frame(session, &frame);
-    }
-}
-
-/// 64ms 流式刷新 ticker（run 期间全程存活）。
-pub async fn stream_flush_loop(
-    sink: Arc<dyn EventSink>,
-    rt: Arc<SessionRuntime>,
-    stop: CancellationToken,
-) {
-    let interval = Duration::from_millis(STREAM_THROTTLE_MS);
-    loop {
-        tokio::select! {
-            _ = stop.cancelled() => break,
-            _ = tokio::time::sleep(interval) => {
-                if let Some(buf) = rt.stream.try_take(interval) {
-                    flush_segments(&sink, &rt.id, &buf);
-                }
-            }
-        }
     }
 }

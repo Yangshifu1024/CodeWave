@@ -21,27 +21,24 @@ pub fn build_body(req: &StreamRequest) -> Value {
         convert_message(m, &mut messages);
         // 历史代际断点：标注该内部消息产出的最后一条 wire 消息的末块。
         // 内部消息可能产出 0 条 wire 消息（如仅 thinking 被滤空）——此时静默跳过，防止错标到更早位置
-        if req.cache_gen_index == Some(i) && messages.len() > before {
-            if let Some(blocks) = messages
+        if req.cache_gen_index == Some(i)
+            && messages.len() > before
+            && let Some(blocks) = messages
                 .last_mut()
                 .and_then(|m| m["content"].as_array_mut())
-            {
-                if let Some(last_block) = blocks.last_mut() {
-                    last_block["cache_control"] = json!({ "type": "ephemeral" });
-                }
-            }
+            && let Some(last_block) = blocks.last_mut()
+        {
+            last_block["cache_control"] = json!({ "type": "ephemeral" });
         }
     }
     // cache 断点：最后一条「非瞬态」消息的末尾 content block
     //（瞬态尾消息——如 <current-plan-transient>——排在断点之后，保证前缀字节稳定可命中缓存）
-    if let Some(last) = messages.iter_mut().rev().find(|m| !is_transient(m)) {
-        if let Some(blocks) = last["content"].as_array_mut() {
-            if let Some(last_block) = blocks.last_mut() {
-                if last_block.get("cache_control").is_none() {
-                    last_block["cache_control"] = json!({ "type": "ephemeral" });
-                }
-            }
-        }
+    if let Some(last) = messages.iter_mut().rev().find(|m| !is_transient(m))
+        && let Some(blocks) = last["content"].as_array_mut()
+        && let Some(last_block) = blocks.last_mut()
+        && last_block.get("cache_control").is_none()
+    {
+        last_block["cache_control"] = json!({ "type": "ephemeral" });
     }
 
     // M2 修复：合并相邻同角色消息（Anthropic 强制 user/assistant 交替；
@@ -88,10 +85,10 @@ pub fn build_body(req: &StreamRequest) -> Value {
     // 请求级 reasoning effort → extended thinking（budget 按 max_tokens 比例取值，夹取到 [1024, max_tokens-1]）。
     // ⚠ 已知风险（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）：Thinking block 不回放进历史，多轮工具循环在部分端点可能 400——
     // 已通过 e2e_real_glm thinking 变体验证；失败时回退为本协议不发 thinking。
-    if let Some(effort) = req.reasoning_effort {
-        if let Some(budget) = thinking_budget(req.model.max_tokens, effort) {
-            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
-        }
+    if let Some(effort) = req.reasoning_effort
+        && let Some(budget) = thinking_budget(req.model.max_tokens, effort)
+    {
+        body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
     }
     body
 }
@@ -110,15 +107,12 @@ fn thinking_budget(max_tokens: u32, effort: crate::core::prefs::EffortLevel) -> 
 fn merge_adjacent(messages: &mut Vec<Value>) {
     let mut merged: Vec<Value> = Vec::with_capacity(messages.len());
     for m in messages.drain(..) {
-        if let Some(last) = merged.last_mut() {
-            if last["role"] == m["role"] {
-                if let (Some(a), Some(b)) =
-                    (last["content"].as_array_mut(), m["content"].as_array())
-                {
-                    a.extend(b.iter().cloned());
-                    continue;
-                }
-            }
+        if let Some(last) = merged.last_mut()
+            && last["role"] == m["role"]
+            && let (Some(a), Some(b)) = (last["content"].as_array_mut(), m["content"].as_array())
+        {
+            a.extend(b.iter().cloned());
+            continue;
         }
         merged.push(m);
     }

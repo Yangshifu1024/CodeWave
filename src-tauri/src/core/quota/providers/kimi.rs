@@ -39,10 +39,10 @@ pub(crate) fn parse_usage(body: &Value, now: DateTime<Utc>) -> Result<Vec<QuotaE
         .and_then(Value::as_array);
 
     let mut entries = Vec::new();
-    if let Some(usage) = usage {
-        if let Some(entry) = row(usage, usage, None, "usage", now) {
-            entries.push(entry);
-        }
+    if let Some(usage) = usage
+        && let Some(entry) = row(usage, usage, None, "usage", now)
+    {
+        entries.push(entry);
     }
     if let Some(limits) = limits {
         for (index, item) in limits.iter().enumerate() {
@@ -132,10 +132,10 @@ fn label_of(item: &Value, detail: &Value, window: Option<&Value>) -> Option<Stri
 /// 重置时间：字符串时间戳 → 剩余秒数 → 窗口时长，三级来源。
 fn reset_at(value: &Value, now: DateTime<Utc>) -> Option<String> {
     for field in RESET_TEXT_FIELDS {
-        if let Some(raw) = text(value, field) {
-            if let Some(parsed) = parse_timestamp(&raw) {
-                return Some(parsed);
-            }
+        if let Some(raw) = text(value, field)
+            && let Some(parsed) = parse_timestamp(&raw)
+        {
+            return Some(parsed);
         }
     }
     for field in RESET_SECONDS_FIELDS {

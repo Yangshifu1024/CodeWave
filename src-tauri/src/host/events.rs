@@ -58,10 +58,10 @@ impl EventSink for TauriSink {
             }
             return;
         }
-        if let Some(ch) = self.channels.map.get(session) {
-            if let Err(e) = ch.send(frame.clone()) {
-                tracing::debug!("channel 发送失败（窗口可能已关闭）：{e}");
-            }
+        if let Some(ch) = self.channels.map.get(session)
+            && let Err(e) = ch.send(frame.clone())
+        {
+            tracing::debug!("channel 发送失败（窗口可能已关闭）：{e}");
         }
     }
 

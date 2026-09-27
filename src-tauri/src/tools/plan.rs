@@ -153,17 +153,16 @@ impl Tool for PlanTool {
                 {
                     let baseline = ctx.rt.approved_plan.lock().unwrap().clone();
                     let current: Vec<String> = todos.iter().map(|t| t.title.clone()).collect();
-                    if let Some(baseline) = baseline {
-                        if !diff_new_todos(&baseline, &current).is_empty()
-                            && !ctx
-                                .rt
-                                .scope_allowed
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                        {
-                            ctx.rt
-                                .scope_expanded
-                                .store(true, std::sync::atomic::Ordering::SeqCst);
-                        }
+                    if let Some(baseline) = baseline
+                        && !diff_new_todos(&baseline, &current).is_empty()
+                        && !ctx
+                            .rt
+                            .scope_allowed
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        ctx.rt
+                            .scope_expanded
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
                 *ctx.rt.todos.lock().unwrap() = todos.clone();

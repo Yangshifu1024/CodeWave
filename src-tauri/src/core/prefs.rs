@@ -135,10 +135,10 @@ pub fn effective_model(
     cfg: &ConfigState,
     prefs: &SessionPrefs,
 ) -> Option<crate::core::config::ModelConfig> {
-    if let Some(id) = &prefs.model_id {
-        if let Some(m) = cfg.find_model(id) {
-            return Some(m);
-        }
+    if let Some(id) = &prefs.model_id
+        && let Some(m) = cfg.find_model(id)
+    {
+        return Some(m);
     }
     cfg.active_model()
 }

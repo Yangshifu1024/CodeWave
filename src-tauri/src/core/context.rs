@@ -67,10 +67,10 @@ fn summary_timeout(cfg: &crate::core::config::ConfigState) -> std::time::Duratio
 pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdown {
     {
         let cache = rt.breakdown_cache.lock().unwrap();
-        if let Some((at, bd)) = cache.as_ref() {
-            if at.elapsed() < std::time::Duration::from_secs(30) {
-                return bd.clone();
-            }
+        if let Some((at, bd)) = cache.as_ref()
+            && at.elapsed() < std::time::Duration::from_secs(30)
+        {
+            return bd.clone();
         }
     }
     let cfg = core.cfg.read().unwrap().clone();
@@ -289,10 +289,10 @@ pub async fn compact_history(
     let mut new_history = vec![Message::user_text(format!(
         "<handoff-summary>\n以下是此前会话的结构化摘要，请基于它继续工作：\n\n{summary}\n</handoff-summary>"
     ))];
-    if keep_last_user {
-        if let Some(last_user) = history_snapshot.iter().rev().find(|m| m.role == Role::User) {
-            new_history.push(last_user.clone());
-        }
+    if keep_last_user
+        && let Some(last_user) = history_snapshot.iter().rev().find(|m| m.role == Role::User)
+    {
+        new_history.push(last_user.clone());
     }
     *rt.history.lock().unwrap() = new_history;
     rt.breakdown_cache.lock().unwrap().take();

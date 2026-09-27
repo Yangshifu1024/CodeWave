@@ -48,10 +48,10 @@ fn strip_paired_quotes(s: &str) -> &str {
         ("'", "'"),
     ];
     for (open, close) in pairs {
-        if let Some(inner) = s.strip_prefix(open).and_then(|r| r.strip_suffix(close)) {
-            if !inner.is_empty() {
-                return inner;
-            }
+        if let Some(inner) = s.strip_prefix(open).and_then(|r| r.strip_suffix(close))
+            && !inner.is_empty()
+        {
+            return inner;
         }
     }
     s
@@ -159,10 +159,10 @@ pub async fn generate_and_apply(
     // 已建索引 → 轻量改名（仅索引，不重写历史）；未建索引 → 由 run 结束检查点兜底落盘。
     // 注意：与并发检查点的「读标题 → gzip → 写」交错时索引可能短暂回落兜底值；
     // 后续任一检查点自愈（首条消息处历史极小、窗口微秒级）——可接受。
-    if core.store.get(&rt.id).is_some() {
-        if let Err(e) = core.store.rename_in_index(&rt.id, &title) {
-            tracing::warn!("自动命名索引更新失败：{e}");
-        }
+    if core.store.get(&rt.id).is_some()
+        && let Err(e) = core.store.rename_in_index(&rt.id, &title)
+    {
+        tracing::warn!("自动命名索引更新失败：{e}");
     }
     // 计账（kind=title，[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)：消耗不得凭空消失；usage 缺失时估算）
     let usage = if usage.input + usage.output == 0 {

@@ -575,15 +575,14 @@ impl McpManager {
                 if e.state == McpState::Ready {
                     return Ok(e.tools.len());
                 }
-                if e.state == McpState::Evicted {
-                    if let Some(t) = e.last_evict {
-                        if t.elapsed() < EVICT_DEBOUNCE {
-                            return Err(McpError::config_hint(
-                                format!("server {} 刚因资源上限被淘汰，稍后自动重拉", key.name),
-                                "如需立即恢复，请点「重连」；也可减少同时启用的 server 数量。",
-                            ));
-                        }
-                    }
+                if e.state == McpState::Evicted
+                    && let Some(t) = e.last_evict
+                    && t.elapsed() < EVICT_DEBOUNCE
+                {
+                    return Err(McpError::config_hint(
+                        format!("server {} 刚因资源上限被淘汰，稍后自动重拉", key.name),
+                        "如需立即恢复，请点「重连」；也可减少同时启用的 server 数量。",
+                    ));
                 }
                 e.generation = e.generation.wrapping_add(1);
                 e.generation
@@ -847,11 +846,11 @@ impl McpManager {
             let tick = self.tick();
             let mut tools = Vec::new();
             for k in &keys {
-                if let Some(e) = inner.entries.get_mut(k) {
-                    if e.state == McpState::Ready {
-                        e.last_used = tick;
-                        tools.extend(e.tools.iter().cloned());
-                    }
+                if let Some(e) = inner.entries.get_mut(k)
+                    && e.state == McpState::Ready
+                {
+                    e.last_used = tick;
+                    tools.extend(e.tools.iter().cloned());
                 }
             }
             tools
@@ -904,10 +903,10 @@ impl McpManager {
         let keys = inner.sessions.get(session)?.clone();
         let mut tools = Vec::new();
         for k in &keys {
-            if let Some(e) = inner.entries.get(k) {
-                if e.state == McpState::Ready {
-                    tools.extend(e.tools.iter().cloned());
-                }
+            if let Some(e) = inner.entries.get(k)
+                && e.state == McpState::Ready
+            {
+                tools.extend(e.tools.iter().cloned());
             }
         }
         let (_, index) = build_tool_defs(&tools);
@@ -948,10 +947,10 @@ impl McpManager {
                 .unwrap_or_default();
             let mut tools = Vec::new();
             for k in &keys {
-                if let Some(e) = inner.entries.get(k) {
-                    if e.state == McpState::Ready {
-                        tools.extend(e.tools.iter().cloned());
-                    }
+                if let Some(e) = inner.entries.get(k)
+                    && e.state == McpState::Ready
+                {
+                    tools.extend(e.tools.iter().cloned());
                 }
             }
             let (_, index) = build_tool_defs(&tools);
@@ -1168,10 +1167,11 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex as StdMutex;
 
+    type StatusLog = Arc<StdMutex<Vec<(String, McpStatusPayload)>>>;
+
     /// 收集状态事件的 sink。
-    fn collector() -> (StatusSink, Arc<StdMutex<Vec<(String, McpStatusPayload)>>>) {
-        let log: Arc<StdMutex<Vec<(String, McpStatusPayload)>>> =
-            Arc::new(StdMutex::new(Vec::new()));
+    fn collector() -> (StatusSink, StatusLog) {
+        let log: StatusLog = Arc::new(StdMutex::new(Vec::new()));
         let l = log.clone();
         let sink: StatusSink = Arc::new(move |session, p| {
             l.lock().unwrap().push((session.to_string(), p.clone()));
@@ -1859,11 +1859,11 @@ setInterval(()=>{}, 1000);
         // 等孙进程 PID 落盘
         let mut gpid = String::new();
         for _ in 0..50 {
-            if let Ok(t) = std::fs::read_to_string(&pidfile) {
-                if !t.trim().is_empty() {
-                    gpid = t.trim().to_string();
-                    break;
-                }
+            if let Ok(t) = std::fs::read_to_string(&pidfile)
+                && !t.trim().is_empty()
+            {
+                gpid = t.trim().to_string();
+                break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

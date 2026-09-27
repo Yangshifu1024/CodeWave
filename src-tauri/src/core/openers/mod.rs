@@ -353,10 +353,10 @@ fn detect_jetbrains(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) ->
             };
             let lower = stem.to_ascii_lowercase();
             // Toolbox 脚本名形如 rustrover / idea / zed；只认 JetBrains 产品名
-            if let Some(product) = jetbrains_product_name(&lower) {
-                if exists(&entry) {
-                    push(&product, entry);
-                }
+            if let Some(product) = jetbrains_product_name(&lower)
+                && exists(&entry)
+            {
+                push(&product, entry);
             }
         }
     }
@@ -375,10 +375,10 @@ fn detect_jetbrains(env: &EnvBases, exists: Probe<'_>, read_dir: ReadDir<'_>) ->
                 let Some(stem) = entry.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if let Some(product) = jetbrains_product_name(stem) {
-                    if exists(&entry) {
-                        push(&product, entry);
-                    }
+                if let Some(product) = jetbrains_product_name(stem)
+                    && exists(&entry)
+                {
+                    push(&product, entry);
                 }
             }
         }

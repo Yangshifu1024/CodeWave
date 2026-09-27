@@ -163,10 +163,10 @@ pub fn search_workspace_paths(
 
     {
         let cache = rt.paths_cache.lock().unwrap();
-        if let Some((at, paths)) = cache.as_ref() {
-            if at.elapsed() < TTL {
-                return fuzzy_filter(paths, query, limit);
-            }
+        if let Some((at, paths)) = cache.as_ref()
+            && at.elapsed() < TTL
+        {
+            return fuzzy_filter(paths, query, limit);
         }
     }
     // 跨根收集：多根返回绝对路径（可唯一定位）；单根保持相对路径

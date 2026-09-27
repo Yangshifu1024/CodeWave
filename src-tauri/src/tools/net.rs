@@ -14,10 +14,10 @@ pub const MAX_BODY_BYTES: u64 = 50 * 1024 * 1024;
 /// 内网/保留地址段判定（v4 + v6）。
 pub fn is_private_ip(ip: IpAddr) -> bool {
     // M13：判定前先把 IPv4-mapped IPv6 归一为 IPv4
-    if let IpAddr::V6(v6) = ip {
-        if let Some(v4) = v6.to_ipv4_mapped() {
-            return is_private_ip(IpAddr::V4(v4));
-        }
+    if let IpAddr::V6(v6) = ip
+        && let Some(v4) = v6.to_ipv4_mapped()
+    {
+        return is_private_ip(IpAddr::V4(v4));
     }
     match ip {
         IpAddr::V4(v4) => {

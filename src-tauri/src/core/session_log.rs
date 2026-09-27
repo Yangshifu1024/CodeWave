@@ -47,10 +47,10 @@ pub fn path_for(data_dir: &Path, project_id: Option<&str>, session_id: &str) -> 
 
 /// 确保目录存在；成功后记入 DIRS_OK 缓存，失败返回 false（调用方放弃本次写）。
 fn ensure_dir(dir: &Path) -> bool {
-    if let Ok(set) = DIRS_OK.lock() {
-        if set.as_ref().is_some_and(|s| s.contains(dir)) {
-            return true;
-        }
+    if let Ok(set) = DIRS_OK.lock()
+        && set.as_ref().is_some_and(|s| s.contains(dir))
+    {
+        return true;
     }
     if std::fs::create_dir_all(dir).is_err() {
         return false;

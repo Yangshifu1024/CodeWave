@@ -78,11 +78,11 @@ pub fn read_status(data_dir: &Path) -> CleanupStatus {
 /// 原子写上次清理状态：**每次清理执行后都写**（包括删除 0 条的情况，启动清理也计入）。
 pub fn write_status(data_dir: &Path, status: &CleanupStatus) {
     let path = status_path(data_dir);
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!("清理状态目录创建失败（{}）：{e}", parent.display());
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!("清理状态目录创建失败（{}）：{e}", parent.display());
+        return;
     }
     match serde_json::to_vec_pretty(status) {
         Ok(bytes) => {
@@ -278,11 +278,11 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
         tracing::warn!("会话编号非法（{}），跳过该会话的清理", meta.id);
         return false;
     }
-    if let Some(pid) = meta.project_id.as_deref() {
-        if !is_safe_session_id(pid) {
-            tracing::warn!("会话 {} 的项目编号非法（{pid}），跳过该会话的清理", meta.id);
-            return false;
-        }
+    if let Some(pid) = meta.project_id.as_deref()
+        && !is_safe_session_id(pid)
+    {
+        tracing::warn!("会话 {} 的项目编号非法（{pid}），跳过该会话的清理", meta.id);
+        return false;
     }
 
     // 计划文件清单必须先读（下一步会删掉产物边车本身）

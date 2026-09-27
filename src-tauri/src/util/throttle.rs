@@ -66,10 +66,10 @@ impl ThrottledStream {
     pub fn try_take(&self, min_interval: std::time::Duration) -> Option<StreamBuffer> {
         let mut last = self.last_flush.lock().unwrap();
         let now = Instant::now();
-        if let Some(t) = *last {
-            if now.duration_since(t) < min_interval {
-                return None;
-            }
+        if let Some(t) = *last
+            && now.duration_since(t) < min_interval
+        {
+            return None;
         }
         let mut g = self.inner.lock().unwrap();
         if !g.dirty {

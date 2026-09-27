@@ -128,15 +128,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.rs");
         let b = dir.path().join("b.rs");
-        claim("t1-owner", &[a.clone()]).unwrap();
+        claim("t1-owner", std::slice::from_ref(&a)).unwrap();
         // 兄弟写已认领文件：整体拒绝（多路径任一冲突即全不认领）
         let err = claim("t1-other", &[b.clone(), a.clone()]).unwrap_err();
         assert_eq!(err.len(), 1);
         assert_eq!(err[0].holder, "t1-owner");
         // 原子性：b 未被部分认领，t1-other 现在可整体认领 b
-        claim("t1-other", &[b.clone()]).unwrap();
+        claim("t1-other", std::slice::from_ref(&b)).unwrap();
         // owner 自身重复认领幂等通过
-        claim("t1-other", &[b.clone()]).unwrap();
+        claim("t1-other", std::slice::from_ref(&b)).unwrap();
         release("t1-owner");
         release("t1-other");
     }
@@ -146,15 +146,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path().join("pkg");
         let f = d.join("mod.rs");
-        claim("t2-dir", &[d.clone()]).unwrap();
+        claim("t2-dir", std::slice::from_ref(&d)).unwrap();
         assert!(
-            claim("t2-file", &[f.clone()]).is_err(),
+            claim("t2-file", std::slice::from_ref(&f)).is_err(),
             "认领目录后兄弟不可写其下文件"
         );
         release("t2-dir");
-        claim("t2-dir", &[f.clone()]).unwrap();
+        claim("t2-dir", std::slice::from_ref(&f)).unwrap();
         assert!(
-            claim("t2-file", &[d.clone()]).is_err(),
+            claim("t2-file", std::slice::from_ref(&d)).is_err(),
             "兄弟不可认领包含他人文件的目录（delete 目录会波及他人文件）"
         );
         release("t2-dir");
@@ -164,9 +164,9 @@ mod tests {
     fn release_allows_reclaim() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("x.rs");
-        claim("t3-a", &[f.clone()]).unwrap();
+        claim("t3-a", std::slice::from_ref(&f)).unwrap();
         release("t3-a");
-        claim("t3-b", &[f.clone()]).unwrap();
+        claim("t3-b", std::slice::from_ref(&f)).unwrap();
         release("t3-b");
     }
 
@@ -176,7 +176,7 @@ mod tests {
         let f = dir.path().join("y.rs");
         std::fs::write(&f, "").unwrap();
         let canonical = std::fs::canonicalize(&f).unwrap();
-        claim("t4", &[f.clone()]).unwrap();
+        claim("t4", std::slice::from_ref(&f)).unwrap();
         assert!(
             claim("t4-other", &[canonical]).is_err(),
             "规范化别名应落到同一条目"
@@ -189,9 +189,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("z.rs");
         let guard = ReleaseGuard::arm("t5-guard");
-        claim("t5-guard", &[f.clone()]).unwrap();
+        claim("t5-guard", std::slice::from_ref(&f)).unwrap();
         drop(guard);
-        claim("t5-other", &[f.clone()]).unwrap();
+        claim("t5-other", std::slice::from_ref(&f)).unwrap();
         release("t5-other");
     }
 

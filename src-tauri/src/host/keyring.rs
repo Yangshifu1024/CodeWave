@@ -98,10 +98,10 @@ pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
             }
         }
     }
-    if resolved.is_empty() {
-        if let Some(e) = last_err {
-            tracing::warn!("{e}（模型 {} 的 key 回退为空）", model.id);
-        }
+    if resolved.is_empty()
+        && let Some(e) = last_err
+    {
+        tracing::warn!("{e}（模型 {} 的 key 回退为空）", model.id);
     }
     resolved
 }

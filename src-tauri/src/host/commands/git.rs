@@ -49,10 +49,10 @@ pub async fn git_diff(
             Ok(mut files_of_root) => {
                 for mut f in files_of_root.drain(..) {
                     f.root = Some(root.clone());
-                    if let Some(p) = &path {
-                        if f.path != *p {
-                            continue;
-                        }
+                    if let Some(p) = &path
+                        && f.path != *p
+                    {
+                        continue;
                     }
                     files.push(f);
                 }

@@ -213,10 +213,10 @@ pub fn is_dangerous_delete_multi(p: &Path, roots: &[&Path]) -> bool {
             return true;
         }
     }
-    if let Some(h) = home {
-        if resolved == h {
-            return true;
-        }
+    if let Some(h) = home
+        && resolved == h
+    {
+        return true;
     }
     for root in roots {
         if resolved == canonical_best_effort(root) {

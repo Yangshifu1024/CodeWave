@@ -256,10 +256,10 @@ pub fn detect_all_shells() -> Vec<ShellInfo> {
 /// 结果按 selection 值缓存（selection 变化立即生效；重复调用零探测开销）。
 pub fn resolve_shell(selection: Option<&str>) -> Shell {
     let key = selection.unwrap_or("auto").trim().to_string();
-    if let Some((k, shell)) = RESOLVED.read().unwrap().as_ref() {
-        if *k == key {
-            return shell.clone();
-        }
+    if let Some((k, shell)) = RESOLVED.read().unwrap().as_ref()
+        && *k == key
+    {
+        return shell.clone();
     }
     let available: Vec<String> = detect_all_shells().into_iter().map(|s| s.id).collect();
     let available: Vec<&str> = available.iter().map(String::as_str).collect();

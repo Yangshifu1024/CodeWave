@@ -82,16 +82,16 @@ impl Tool for HttpRequestTool {
 
         // 组装 URL（追加 query）
         let mut url = args.url.clone();
-        if let Some(q) = &args.query {
-            if !q.is_empty() {
-                let qs = q
-                    .iter()
-                    .map(|(k, v)| format!("{k}={}", urlencode(v)))
-                    .collect::<Vec<_>>()
-                    .join("&");
-                url.push(if url.contains('?') { '&' } else { '?' });
-                url.push_str(&qs);
-            }
+        if let Some(q) = &args.query
+            && !q.is_empty()
+        {
+            let qs = q
+                .iter()
+                .map(|(k, v)| format!("{k}={}", urlencode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            url.push(if url.contains('?') { '&' } else { '?' });
+            url.push_str(&qs);
         }
 
         let allow_private = ctx.core.cfg.read().unwrap().network.allow_private_network;

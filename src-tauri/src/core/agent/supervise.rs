@@ -462,8 +462,10 @@ mod tests {
             let _ = s.feed_batch(&idle_step(&[]));
         }
         // 一次非只读调用（ask/command/edit 等）= 进展，计数清零
-        let mut d = BatchDigest::default();
-        d.has_non_readonly = true;
+        let d = BatchDigest {
+            has_non_readonly: true,
+            ..Default::default()
+        };
         assert!(matches!(s.feed_batch(&d), Verdict::None));
         // 清零后重新计数：需再累计满 IDLE_NUDGE_AT 步才纠偏
         for _ in 0..IDLE_NUDGE_AT - 1 {
@@ -623,8 +625,10 @@ mod tests {
         for _ in 0..READONLY_IDLE_NUDGE_AT - 1 {
             let _ = s.feed_batch(&idle_step(&[]));
         }
-        let mut d = BatchDigest::default();
-        d.has_non_readonly = true;
+        let d = BatchDigest {
+            has_non_readonly: true,
+            ..Default::default()
+        };
         assert!(matches!(s.feed_batch(&d), Verdict::None));
         // 清零后需重新累计满阈值才纠偏
         for _ in 0..READONLY_IDLE_NUDGE_AT - 1 {

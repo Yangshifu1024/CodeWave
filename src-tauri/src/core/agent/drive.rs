@@ -36,11 +36,11 @@ fn ask_available(params: &DriveParams) -> bool {
 /// 找不到就不兜底——「正文留着协议原文却多出一个调用」比不兜底更糟。
 fn strip_text_block(asm: &mut Assembled, block: &str) -> bool {
     for b in asm.blocks.iter_mut() {
-        if let AsmBlock::Text(t) = b {
-            if t.contains(block) {
-                *t = text_ask::strip_block(t, block);
-                return true;
-            }
+        if let AsmBlock::Text(t) = b
+            && t.contains(block)
+        {
+            *t = text_ask::strip_block(t, block);
+            return true;
         }
     }
     false
@@ -861,39 +861,40 @@ pub async fn drive_agent(
         // 条件门：仅主会话 + ask 确实在工具集里（覆盖目标档执行期与子代理）+ 本回合无调用
         // + 每 run 一次；命中后剥掉正文里的块并补一个等价 ask 调用，交回既有批次路径执行
         //（G2/G3 门、mode 切档、switchToAutoEdit、plan 落盘全在工具层，与调用从哪来无关）。
-        if !text_ask_used && assembled.tool_calls.is_empty() && ask_available(&params) {
-            if let Some(salvaged) = text_ask::salvage_text_ask(&assembled.joined_text()) {
-                if strip_text_block(&mut assembled, &salvaged.block) {
-                    let index = assembled.tool_calls.len();
-                    assembled.tool_calls.push(AssembledToolCall {
-                        index,
-                        id: format!("text_ask_{run_id}_{step}"),
-                        name: "ask".into(),
-                        args_raw: salvaged.args.to_string(),
-                    });
-                    assembled.blocks.push(AsmBlock::Tool(index));
-                    text_ask_used = true;
-                    // 交前端剥离当轮气泡里的残留原文（流式帧已下发、无法回收）
-                    *rt.text_ask_block.lock().unwrap() = Some(salvaged.block.clone());
-                    // 记块首一段：恢复后原文在历史与正文里都被剥掉，不留样则事后无从判断
-                    // 「什么内容触发了这张卡」（每 run 至多一条；换行压成空格保持单行日志）
-                    let sample: String = salvaged
-                        .block
-                        .lines()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .chars()
-                        .take(200)
-                        .collect();
-                    session_log::warn(
-                        rt,
-                        &format!(
-                            "step {step} 模型未按工具协议提问：正文里的 <ask> 块（{} 字）已恢复为 ask 调用；块首 200 字：{sample}",
-                            salvaged.block.chars().count()
-                        ),
-                    );
-                }
-            }
+        if !text_ask_used
+            && assembled.tool_calls.is_empty()
+            && ask_available(&params)
+            && let Some(salvaged) = text_ask::salvage_text_ask(&assembled.joined_text())
+            && strip_text_block(&mut assembled, &salvaged.block)
+        {
+            let index = assembled.tool_calls.len();
+            assembled.tool_calls.push(AssembledToolCall {
+                index,
+                id: format!("text_ask_{run_id}_{step}"),
+                name: "ask".into(),
+                args_raw: salvaged.args.to_string(),
+            });
+            assembled.blocks.push(AsmBlock::Tool(index));
+            text_ask_used = true;
+            // 交前端剥离当轮气泡里的残留原文（流式帧已下发、无法回收）
+            *rt.text_ask_block.lock().unwrap() = Some(salvaged.block.clone());
+            // 记块首一段：恢复后原文在历史与正文里都被剥掉，不留样则事后无从判断
+            // 「什么内容触发了这张卡」（每 run 至多一条；换行压成空格保持单行日志）
+            let sample: String = salvaged
+                .block
+                .lines()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(200)
+                .collect();
+            session_log::warn(
+                rt,
+                &format!(
+                    "step {step} 模型未按工具协议提问：正文里的 <ask> 块（{} 字）已恢复为 ask 调用；块首 200 字：{sample}",
+                    salvaged.block.chars().count()
+                ),
+            );
         }
 
         // step 级响应形态诊断（同上）：端点把工具调用当正文透传时，「为什么模型没返回
@@ -2189,7 +2190,8 @@ mod tests {
 
     #[test]
     fn batch_digest_does_not_count_document_reads_as_progress() {
-        for (name, args) in [("read_document", serde_json::json!({"path": "report.pdf"}))] {
+        {
+            let (name, args) = ("read_document", serde_json::json!({"path": "report.pdf"}));
             let digest = batch_digest(&[call(name, args)]);
             assert!(!digest.has_non_readonly, "{name} 只读调用不得重置停滞计数");
         }

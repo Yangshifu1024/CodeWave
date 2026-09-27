@@ -210,19 +210,19 @@ pub fn handle_chunk(
         return Ok(true); // 仅含 usage 的帧
     };
     let delta = &choice["delta"];
-    if let Some(t) = delta["content"].as_str() {
-        if !t.is_empty() {
-            deltas.push(StreamDelta::Text {
-                text: t.to_string(),
-            });
-        }
+    if let Some(t) = delta["content"].as_str()
+        && !t.is_empty()
+    {
+        deltas.push(StreamDelta::Text {
+            text: t.to_string(),
+        });
     }
-    if let Some(t) = delta["reasoning_content"].as_str() {
-        if !t.is_empty() {
-            deltas.push(StreamDelta::Reasoning {
-                text: t.to_string(),
-            });
-        }
+    if let Some(t) = delta["reasoning_content"].as_str()
+        && !t.is_empty()
+    {
+        deltas.push(StreamDelta::Reasoning {
+            text: t.to_string(),
+        });
     }
     if let Some(tcs) = delta["tool_calls"].as_array() {
         for tc in tcs {
@@ -248,13 +248,13 @@ pub fn handle_chunk(
                     name: name.to_string(),
                 });
             }
-            if let Some(frag) = tc["function"]["arguments"].as_str() {
-                if !frag.is_empty() {
-                    deltas.push(StreamDelta::ToolCallArgsDelta {
-                        index,
-                        fragment: frag.to_string(),
-                    });
-                }
+            if let Some(frag) = tc["function"]["arguments"].as_str()
+                && !frag.is_empty()
+            {
+                deltas.push(StreamDelta::ToolCallArgsDelta {
+                    index,
+                    fragment: frag.to_string(),
+                });
             }
         }
     }

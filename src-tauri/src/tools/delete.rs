@@ -65,15 +65,14 @@ impl Tool for DeleteTool {
         }
         // 严格文件隔离（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
         // 非主 runtime 删除前认领目标（目录认领经祖先匹配覆盖其下文件）；兄弟已认领则拒绝
-        if !ctx.rt.is_main_session {
-            if let Err(conflicts) =
+        if !ctx.rt.is_main_session
+            && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
-            {
-                return ToolOutcome::err(
-                    "E_FILE_CLAIMED",
-                    crate::tools::claims::denial_message(&conflicts),
-                );
-            }
+        {
+            return ToolOutcome::err(
+                "E_FILE_CLAIMED",
+                crate::tools::claims::denial_message(&conflicts),
+            );
         }
         // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：与 edit/create 的写路径互斥；
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行删除
