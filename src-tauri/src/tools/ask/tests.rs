@@ -445,7 +445,8 @@ fn plan_body_prefers_explicit_plan_field() {
         options: vec![],
         single: true,
     }];
-    let body = usable_plan_body(Some("# 完整方案\n1. 改 A\n2. 验证 B"), "", &qs).expect("显式 plan 优先");
+    let body =
+        usable_plan_body(Some("# 完整方案\n1. 改 A\n2. 验证 B"), "", &qs).expect("显式 plan 优先");
     assert!(body.contains("完整方案"), "{body}");
     assert!(!body.contains("是否批准"), "{body}");
 }
@@ -506,7 +507,8 @@ fn plan_body_rejects_turn_text_with_ask_block_residue() {
         options: vec![],
         single: false,
     }];
-    let turn = "看这里：<ask><questions><item><id>a</id><question>?</question></item></questions></ask>";
+    let turn =
+        "看这里：<ask><questions><item><id>a</id><question>?</question></item></questions></ask>";
     assert_eq!(usable_plan_body(None, turn, &qs), None);
     // 闭合变体同样拒绝
     let turn2 = "看这里：</ask>";

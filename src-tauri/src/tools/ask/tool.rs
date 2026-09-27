@@ -212,7 +212,7 @@ impl Tool for AskTool {
         // 仅在有可用方案时下传（None 不下传，避免历史事件载荷体增长）。
         if let Some(body) = usable.as_deref() {
             ask_opened["plan_body"] = json!(body);
-        }        // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
+        } // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
         // 原文一并下发，前端据此从当轮气泡文本里剔掉它（流式帧已下发，前端无法自行回收）。
         // 取走即清（take）：同一 run 内后续的真实 ask 不该再带这个字段。
         if let Some(block) = ctx.rt.text_ask_block.lock().unwrap().take() {
