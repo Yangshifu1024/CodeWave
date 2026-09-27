@@ -23,7 +23,7 @@ import {
 } from "@ant-design/icons";
 import { ipc } from "../../ipc/client";
 import { checkForUpdates, useAutoUpdateSetting } from "../../utils/updateCheck";
-import storeLogo from "../../assets/store-logo.png";
+import appLogo from "../../assets/app-logo.png";
 
 // 仓库地址（收拢为单一常量，迁移只需改一行）
 const REPO_URL = "https://github.com/Yangshifu1024/CodeWave";
@@ -102,7 +102,7 @@ export function AboutSettings() {
     <div className="about-pane">
       {/* 身份区（只读、非设置项）：logo + 名称 + 一句简介。版本不进这里——它是设置项（app.version），单独成行 */}
       <div className="about-body">
-        <img className="about-logo" src={storeLogo} alt="CodeWave" draggable={false} />
+        <img className="about-logo" src={appLogo} alt="CodeWave" draggable={false} />
         <div className="about-name">CodeWave</div>
         <div className="about-slogan">{t("settings.aboutSlogan")}</div>
       </div>
