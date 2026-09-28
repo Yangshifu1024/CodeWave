@@ -23,7 +23,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-clipboard-manager = "2"
+# tauri-plugin-clipboard-manager：仓内不使用（剪贴板走浏览器 Clipboard API / @tauri-apps/api 路径，无需 Rust 插件），声明不注册会导致虚警与无用 API 面。现不在此声明。
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 # Custom title bar (docs/23): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay

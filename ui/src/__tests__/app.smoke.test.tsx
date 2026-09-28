@@ -206,11 +206,59 @@ describe("App 渲染冒烟", () => {
     expect(guideBtns.some((t) => t.includes("临时会话"))).toBe(true);
   });
 
-  it("屏蔽 WebView 默认右键菜单（contextmenu preventDefault）", async () => {
+  // 回归守护：非编辑区仍须屏蔽（去掉刷新/检查等浏览器入口），
+  // 但可编辑目标要放行给原生编辑菜单（Composer / 设置页输入框右键修复）——两者都要断言。
+  it("屏蔽 WebView 默认右键菜单，但放行可编辑目标（contextmenu 分类处理）", async () => {
     await mountApp();
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    document.body.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
+
+    const fire = (el: Element) => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      el.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+
+    // 非编辑区（body）：仍被屏蔽
+    expect(fire(document.body)).toBe(true);
+    // 非编辑区（普通 div，**必须先入档**否则事件不冒泡到 window）：仍被屏蔽
+    const plain = document.createElement("div");
+    document.body.appendChild(plain);
+    expect(fire(plain)).toBe(true);
+    plain.remove();
+
+    // 设置页 input：放行
+    await clickIconBtn("设置");
+    const input = document.querySelector('[data-testid="settings-page"] input');
+    expect(input).toBeTruthy();
+    expect(fire(input as Element)).toBe(false);
+  });
+
+  // Composer 在空态不渲染（引导块占位），故先自建临时会话再断言；
+  // 用例内自行复位 sessions store —— afterEach 只重置 ui/run 两个 store，不含 tabs。
+  it("Composer 文本域：右键菜单放行（非编辑区仍屏蔽）", async () => {
+    try {
+      await mountApp();
+      const btn = Array.from(document.querySelectorAll(".chat-empty-guide button")).find((b) =>
+        (b.textContent ?? "").includes("临时会话"),
+      ) as HTMLElement;
+      fireEvent.click(btn);
+      await waitFor(() => expect(document.querySelector(".composer")).toBeTruthy());
+
+      const fire = (el: Element) => {
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        el.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+
+      // antd TextArea 的 autoSize 会在 DOM 里另放一个测量用 textarea，取最后一个即真身
+      const areas = Array.from(document.querySelectorAll(".composer textarea"));
+      const real = areas[areas.length - 1] as HTMLElement;
+      expect(real).toBeTruthy();
+      expect(fire(real)).toBe(false);
+      // 反断言：同一页面里非编辑区依旧屏蔽
+      expect(fire(document.body)).toBe(true);
+    } finally {
+      useSessions.setState({ tabs: [], activeKey: null });
+    }
   });
 
   it("空态引导：新建临时会话进入会话态，Composer 恢复", async () => {

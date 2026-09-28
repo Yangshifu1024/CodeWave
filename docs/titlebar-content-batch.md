@@ -97,6 +97,8 @@
 5. **信息面板删分支行 + 行级字体统一**：Git 段的 `⎇ 分支` 加粗行删除（分支由顶栏胶囊展示，信息面板仅保留「N 处改动 / 非 Git 仓库」）；`.rb-value` 类随之退役；取值行统一为 12px（`.rb-line` 显式补 `font-size: 12px`，与 `.rb-path`/`.rb-dim`/`.rb-todo` 对齐）——标签 11px dim、取值 12px 两档定稿。
 6. **右栏默认宽度收窄**：`.right-bar` 468px → **328px**（原值 70%），diff 代码块窄版注释同步。
 7. **屏蔽 WebView 默认右键菜单**：AppShell 挂全局 `contextmenu` preventDefault，去掉刷新/检查等浏览器入口（调试走 devtools 快捷键不受影响）；smoke 测试断言 `defaultPrevented`。
+   - **后补（可编辑目标放行）**：该屏蔽一度把 Composer 与全部表单输入框的**原生编辑菜单**（剪切/复制/粘贴/全选）也一起吞了（事件从 `<textarea>` 冒泡到 window 被无条件 preventDefault，WebView 就不再生成菜单）。现改为处理器先查 `closest("input, textarea, [contenteditable]")`，命中则**放行**、其余照旧屏蔽。放行范围是本条屏蔽**目标之外**的东西（目标是去浏览器入口），不改变决策意图。旁证：ProjectNav 会话行靠自身的 `stopPropagation` 规避与原生菜单叠加，行为不变。
+   - 必改的连带事实：`src-tauri/src/lib.rs` 的原生应用菜单整块 `#[cfg(target_os = "macos")]`（其 Edit 子菜单提供 undo/redo/cut/copy/paste/select_all），**Windows 侧连菜单栏兜底都没有**——不放行则该平台右键彻底无解。
 
 影响面：`.right-rail` CSS 块删除；`sidebar.style.test.ts` 契约更新（窄轨断言移除 + 新增「窄轨样式不得回归」反断言）；`app.smoke.test.tsx` 折叠流程用例改走顶栏按钮（折叠后 `.right-rail` 应不存在、经顶栏「展开右侧栏」恢复）；RightBar 清理 `useTranslation`/图标导入。验证 **154/154 全绿** + build 通过（两契约用例合并，总数 -1）。
 

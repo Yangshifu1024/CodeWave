@@ -376,9 +376,18 @@ export default function AppShell() {
   }, []);
 
   // 抑制 WebView 默认右键菜单：桌面应用语义，去掉刷新/检查等浏览器条目；
-  // 调试不受影响（debug 构建中 devtools 快捷键仍可用）
+  // 调试不受影响（debug 构建中 devtools 快捷键仍可用）。
+  // 例外：可编辑目标（input / textarea / contenteditable）**放行**，保留原生编辑菜单
+  // （剪切/复制/粘贴/全选）——放行它们才是本条屏蔽的目的之外的东西，且是这些编辑动作
+  // 唯一的「菜单」入口：src-tauri/src/lib.rs 的原生应用菜单整块 #[cfg(target_os = "macos")]，
+  // Windows 侧连菜单栏的 Edit 兜底都没有，不放行则右键完全无解。
+  // ProjectNav 会话行的 antd 右键菜单靠它自身的 stopPropagation 规避与原生菜单叠加，行为不变。
   useEffect(() => {
-    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("input, textarea, [contenteditable=''], [contenteditable='true']")) return;
+      e.preventDefault();
+    };
     window.addEventListener("contextmenu", onContextMenu);
     return () => window.removeEventListener("contextmenu", onContextMenu);
   }, []);
