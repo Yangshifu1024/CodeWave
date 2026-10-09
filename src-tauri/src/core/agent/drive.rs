@@ -660,7 +660,11 @@ pub(super) fn text_turn_action(
     }
     // ③ steer 强制续跑：用户刚提交的话必须被模型看到（AC-4/AC-5）。一次性上限在此生效。
     if steer_continue {
-        return TextTurnAction::Continue;
+        return if text_turns >= MAX_TEXT_TURNS {
+            TextTurnAction::Finish
+        } else {
+            TextTurnAction::Continue
+        };
     }
     if finish_on_text {
         // 主会话：计划未收尾时不得把纯文本旁白当成「回答完毕」（缺陷锚点）。
@@ -675,9 +679,6 @@ pub(super) fn text_turn_action(
         } else {
             TextTurnAction::Finish
         };
-    }
-    if finish_on_text {
-        return TextTurnAction::Finish;
     }
     if text_turns >= MAX_TEXT_TURNS {
         return TextTurnAction::StopWithLimit;

@@ -144,6 +144,19 @@ fn steer_continue_forces_one_more_turn() {
     );
 }
 
+#[test]
+fn steer_plain_text_respects_text_turn_limit() {
+    use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
+    assert_eq!(
+        text_turn_action("仍在旁白", true, false, MAX_TEXT_TURNS, true, false),
+        TextTurnAction::Finish
+    );
+    assert_eq!(
+        text_turn_action("仍在旁白", true, false, MAX_TEXT_TURNS + 1, true, true),
+        TextTurnAction::Finish
+    );
+}
+
 /// 主会话 + 计划未收尾的新维度（缺陷锚点：会话 f19c3890 的 50 字旁白让 run 带着
 /// 半成品计划静默成功）。三条硬约束：
 /// 1. 未收尾且未达上限 → `Continue`（不得 Finish）；
