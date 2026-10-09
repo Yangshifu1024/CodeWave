@@ -312,6 +312,10 @@ export default {
   notice: {
     cancelled: "Cancelled",
     compactSummary: "(compaction summary)",
+    // Backend-injected instructions for the model (<continue-notice> / <tool-args-rejected> /
+    // <text-turn-limit> …); rendered as a plain notice instead of a user bubble with raw XML
+    // ([docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4)
+    internalHint: "(internal continuation prompt)",
     needSession: "Create or select a session in the left nav first",
     taskDone: "Task completed",
     // History 8 MB cap visibility ([docs/session-history-limits](../../../docs/session-history-limits.md)):

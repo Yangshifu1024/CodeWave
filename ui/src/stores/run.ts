@@ -252,6 +252,33 @@ function mergeBoundaries(prev: HistoryBoundary[] | undefined, next: HistoryBound
   return out.sort((a, b) => a.seq - b.seq);
 }
 
+/**
+ * 内部提示标签（[docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4）：
+ * 后端以 **user 消息**形式注入历史（必须进——要出网给模型看），但它们是给模型看的内部指令，
+ * 重开历史时以 user 气泡原样展示 XML 标签既难看又让人误以为是自己发的。
+ *
+ * 判定口径：整条消息**恰好**是该标签（成对包裹）。**只处理整条**，不做「文本里包含标签」的
+ * 宽松匹配——后者会把用户自己在正文里提到 `<continue-notice>` 的消息也误判成内部提示。
+ * 压缩摘要（`handoff-summary`）形态不同（无标签、含正文），沿用既有的 `includes` 分支。
+ */
+const INTERNAL_HINT_TAGS = [
+  "<continue-notice>",
+  "<tool-args-rejected>",
+  "<text-turn-limit>",
+  "<budget-notice>",
+  "<final-report>",
+  "<supervision-notice>",
+  "<supervision-escalated>",
+] as const;
+
+/** 整条消息是否为一个内部提示（成对标签 + 标签闭合），命中则渲染为灰色 notice 而非 user 气泡。 */
+function isInternalHint(text: string): boolean {
+  const trimmed = text.trim();
+  return INTERNAL_HINT_TAGS.some(
+    (tag) => trimmed.startsWith(tag) && trimmed.endsWith(`</${tag.slice(1, -1)}>`),
+  );
+}
+
 /** 后端 `SessionPaging` → 前端分页游标。`loadedPages` 由调用方给（首屏 = 1，前翻 +1）。 */
 function toPaging(p: SessionPaging, loadedPages: number): HistoryPaging {
   return {
@@ -305,8 +332,13 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
       const imgs = m.content
         .filter((c) => c.type === "image")
         .map((c: any) => ({ mediaType: (c as any).media_type as string, data: (c as any).data as string }));
-      if (text === "<run-cancelled/>" || text.includes("handoff-summary")) {
-        out.push({ kind: "notice", text: text === "<run-cancelled/>" ? i18n.t("notice.cancelled") : i18n.t("notice.compactSummary") });
+      if (text === "<run-cancelled/>") {
+        out.push({ kind: "notice", text: i18n.t("notice.cancelled") });
+      } else if (text.includes("handoff-summary")) {
+        out.push({ kind: "notice", text: i18n.t("notice.compactSummary") });
+      } else if (isInternalHint(text)) {
+        // 只改展示：落盘数据、恢复数据、wire 三者保持一致（模型仍能在历史里看到这些提示）
+        out.push({ kind: "notice", text: i18n.t("notice.internalHint") });
       } else {
         out.push({ kind: "user", text, createdAt: m.created_at ?? undefined, images: imgs.length ? imgs : undefined });
       }

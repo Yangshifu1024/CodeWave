@@ -69,6 +69,19 @@ pub fn validate_todos(todos: &[Todo]) -> Result<(), String> {
     Ok(())
 }
 
+/// 计划是否仍有未完成项（存在任一非 `Completed` 条目）。
+///
+/// 口径与 `tools::batch::plan_gate_verdict` 的三态判定同源：空列表 = 无计划（不算「未完成」），
+/// 非空且全 `Completed` = 已收尾，其余 = 未完成。
+///
+/// 消费方：`core::agent::drive::text_turn_action` 的主会话分支
+/// （[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）
+/// ——计划未收尾时，「只输出文字、无工具调用」的回合不得被当成「回答完毕」而静默收尾
+/// （会话 f19c3890 的 50 字旁白即此形态）。
+pub fn has_pending(todos: &[Todo]) -> bool {
+    todos.iter().any(|t| t.status != TodoStatus::Completed)
+}
+
 /// 渲染为模型可读文本（tool_result 内容）。
 pub fn render_todos(todos: &[Todo]) -> String {
     if todos.is_empty() {
@@ -166,6 +179,12 @@ impl Tool for PlanTool {
                     }
                 }
                 *ctx.rt.todos.lock().unwrap() = todos.clone();
+                // 本 run 真的改过计划（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+                // 计划未收尾的收尾门只看本标记，否则上个 run 的陈旧计划会劫持本 run 的普通提问。
+                // 置位点在写入成功之后——被档位排除/参数非法的调用并未改变计划。
+                ctx.rt
+                    .plan_called_this_run
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
                 // 事件 + 持久化（payload 带 session：RightBar 与任务面板按会话路由，与其他事件一致）
                 ctx.core.sink.emit(
                     &ctx.rt.id,
@@ -231,6 +250,44 @@ mod tests {
             status: TodoStatus::Pending,
         }];
         assert!(validate_todos(&empty_title).is_err());
+    }
+
+    #[test]
+    fn has_pending_distinguishes_unfinished_plan() {
+        // 空列表 = 无计划，不算未完成（否则主会话每次提问都会被续跑门拦下）
+        assert!(!has_pending(&[]));
+        // 全完成 = 已收尾
+        assert!(!has_pending(&[
+            Todo {
+                title: "a".into(),
+                status: TodoStatus::Completed
+            },
+            Todo {
+                title: "b".into(),
+                status: TodoStatus::Completed
+            },
+        ]));
+        // 存在 in_progress / pending 即未完成（与 f19c3890 事故形态一致）
+        assert!(has_pending(&[
+            Todo {
+                title: "a".into(),
+                status: TodoStatus::Completed
+            },
+            Todo {
+                title: "b".into(),
+                status: TodoStatus::InProgress
+            },
+        ]));
+        assert!(has_pending(&[
+            Todo {
+                title: "a".into(),
+                status: TodoStatus::Completed
+            },
+            Todo {
+                title: "c".into(),
+                status: TodoStatus::Pending
+            },
+        ]));
     }
 
     #[test]

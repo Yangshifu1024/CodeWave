@@ -140,6 +140,17 @@ pub struct SessionRuntime {
     pub reasoning_rejected: AtomicBool,
     /// 本 run 是否已发过「计划无进行中条目」软提醒（原子 CAS 每 run 至多一次；run_chat 起点复位）
     pub plan_hint_emitted: std::sync::atomic::AtomicBool,
+    /// 本 run 是否**成功调用过 plan 工具**（即真的改过计划；run_chat 起点复位）
+    ///
+    /// 存在的意义（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+    /// `rt.todos` 跨 run 持久化且 run 开头从磁盘装载，而生产路径里唯一写者是 plan 工具——
+    /// 故本标记能唯一区分「本 run 的计划」与「上个 run 留下的陈旧计划」。计划未收尾的收尾门
+    /// （`text_turn_action` 的 `todos_pending` 与 suggest 的 `E_PLAN_PENDING`）**只看本标记**：
+    /// 没碰过计划就不拦，否则用户在与计划无关的普通提问会被旧计划劫持成多轮工具循环。
+    ///
+    /// 置位点：`tools::plan` 写 `rt.todos` 成功后（只计成功调用——被档位排除/参数非法的
+    /// 调用并未改变计划，不应把模型拖进续跑门）。
+    pub plan_called_this_run: std::sync::atomic::AtomicBool,
     /// 会话已删除（评审 H5）：置位后迟到的 run 收尾不得再检查点/写日志复活幽灵会话
     pub zombie: AtomicBool,
     /// 会话级运行偏好（审批档位 / 模型 / 思考力度；内存态，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
@@ -218,6 +229,7 @@ impl SessionRuntime {
             injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool::new(false),
             reasoning_rejected: AtomicBool::new(false),
             plan_hint_emitted: std::sync::atomic::AtomicBool::new(false),
+            plan_called_this_run: std::sync::atomic::AtomicBool::new(false),
             zombie: AtomicBool::new(false),
             prefs: Mutex::new(crate::core::prefs::SessionPrefs::default()),
             prefs_persist_lock: Mutex::new(()),

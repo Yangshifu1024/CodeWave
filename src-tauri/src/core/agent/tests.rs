@@ -40,59 +40,111 @@ fn budget_notice_step_at_20_percent_remaining() {
 }
 
 /// 无工具调用回合的处置矩阵（[docs/subagent-text-turn-premature-exit](../../../../docs/subagent-text-turn-premature-exit.md)）：
-/// 主会话语义不变；子代理/任务须带 `<report>` 标记收尾，否则有界续跑，超限显式失败
-///（绝不静默把过程旁白当成功收尾）。
+/// 主会话无计划时的语义不变；主会话 + 计划未收尾时不得静默收尾（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）；
+/// 子代理/任务须带 `<report>` 标记收尾，否则有界续跑，超限显式失败（绝不静默把过程旁白当成功收尾）。
 #[test]
 fn text_turn_action_matrix() {
     use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
-    // ① 主会话：纯文本回合即完成（行为不变）
+    // ① 主会话 + 无计划：纯文本回合即完成（行为不变）
     assert_eq!(
-        text_turn_action("答完了", true, false, 0),
+        text_turn_action("答完了", true, false, 0, false),
         TextTurnAction::Finish
     );
-    assert_eq!(text_turn_action("", true, false, 9), TextTurnAction::Finish);
-    // ①’ 主会话 + 被拒调用 → 继续（**本缺陷的锚点**：[docs/rejected-call-silent-finish]）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, 0),
+        text_turn_action("", true, false, 9, false),
+        TextTurnAction::Finish
+    );
+    // ①’ 主会话 + 被拒调用 → 继续（[docs/rejected-call-silent-finish]）
+    assert_eq!(
+        text_turn_action("下面是完整方案", true, true, 0, false),
         TextTurnAction::Continue
     );
     // ①’’ 被拒也受 MAX_TEXT_TURNS 硬上限约束（不无限续跑）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS),
+        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     // ①’’’ 被拒优先于 <report>：子代理「已写汇报但同回合有调用被拒」再多走一步
     //（有意取舍：被拒调用尚未被模型知晓；已登记为遗留）
     assert_eq!(
-        text_turn_action("<report>完成</report>", false, true, 0),
+        text_turn_action("<report>完成</report>", false, true, 0, false),
         TextTurnAction::Continue
     );
     // ② 非主会话 + <report> 标记 → 完成（不计数）
     assert_eq!(
-        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0),
+        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0, false),
         TextTurnAction::Finish
     );
     assert_eq!(
-        text_turn_action("回报如下 <report>x</report>", false, false, MAX_TEXT_TURNS),
+        text_turn_action(
+            "回报如下 <report>x</report>",
+            false,
+            false,
+            MAX_TEXT_TURNS,
+            false
+        ),
         TextTurnAction::Finish
     );
     // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
     assert_eq!(
-        text_turn_action("接下来我来改 AppShell", false, false, 0),
+        text_turn_action("接下来我来改 AppShell", false, false, 0, false),
         TextTurnAction::Continue
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS - 1),
+        text_turn_action("", false, false, MAX_TEXT_TURNS - 1, false),
         TextTurnAction::Continue
     );
     // ④ 触上限 → 显式失败（不伪装成功）
     assert_eq!(
-        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS),
+        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS + 5),
+        text_turn_action("", false, false, MAX_TEXT_TURNS + 5, false),
         TextTurnAction::StopWithLimit
+    );
+}
+
+/// 主会话 + 计划未收尾的新维度（缺陷锚点：会话 f19c3890 的 50 字旁白让 run 带着
+/// 半成品计划静默成功）。三条硬约束：
+/// 1. 未收尾且未达上限 → `Continue`（不得 Finish）；
+/// 2. 连续纯文本达上限 → **回落 `Finish`** 而非 `StopWithLimit`
+///    （主会话「显式失败」= 对一次普通提问弹 run:error，比多几轮对话更糟）；
+/// 3. `rejected` 仍先于本维度判定（非主会话路径逐字节不变）。
+#[test]
+fn text_turn_action_matrix_pending_todos() {
+    use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
+    // ① 未收尾 → 继续
+    assert_eq!(
+        text_turn_action("找到插入点了，接下来补单测", true, false, 0, true),
+        TextTurnAction::Continue
+    );
+    assert_eq!(
+        text_turn_action("", true, false, MAX_TEXT_TURNS - 1, true),
+        TextTurnAction::Continue
+    );
+    // ② 达上限 → 回落 Finish（**不是** StopWithLimit）
+    assert_eq!(
+        text_turn_action("还在旁白", true, false, MAX_TEXT_TURNS, true),
+        TextTurnAction::Finish
+    );
+    assert_eq!(
+        text_turn_action("还在旁白", true, false, MAX_TEXT_TURNS + 5, true),
+        TextTurnAction::Finish
+    );
+    // ③ rejected 仍优先（达上限时才是 StopWithLimit）
+    assert_eq!(
+        text_turn_action("方案如下", true, true, 0, true),
+        TextTurnAction::Continue
+    );
+    assert_eq!(
+        text_turn_action("方案如下", true, true, MAX_TEXT_TURNS, true),
+        TextTurnAction::StopWithLimit
+    );
+    // ④ 已收尾（todos_pending = false）→ 主会话语义逐字节不变
+    assert_eq!(
+        text_turn_action("答完了", true, false, 0, false),
+        TextTurnAction::Finish
     );
 }
 
@@ -1069,6 +1121,175 @@ async fn main_session_text_only_turn_ends_run() {
             .iter()
             .any(|t| t.contains("<continue-notice>")),
         "主会话不应收到续跑提示"
+    );
+}
+
+/// 缺陷回归锚点（[docs/main-run-finish-with-pending-todos]）：主会话 + 计划仍有未完成项时，
+/// 纯文本旁白不得让 run 静默成功收尾。
+///
+/// 会话 f19c3890 实测（2026-10-09 23:48:20）：模型输出 50 字「找到插入点了。在
+/// `shell_invocation_per_variant` 之前插入纯函数单测。」即 `tool_calls=0`，run 当场
+/// `完成 … 耗时 125s`（无 run:error）——而计划表第 4 项 in_progress、第 5–7 项 pending。
+/// 用户侧表现为会话进入已结束态、发消息不进队列、再发一次才继续。
+///
+/// 本例复刻该形态：预置 1×in_progress + 1×pending，三回合脚本——
+/// ① 纯文本旁白 → 应续跑（而非 Finish）；② `plan` 把两项标 completed；③ 纯文本收尾。
+/// 断言连接数为 3（修复前会是 1），且续跑提示点名未完成项并给出 plan 出口。
+#[tokio::test]
+async fn main_session_text_only_turn_with_pending_todos_continues() {
+    let (port, hits) = spawn_scripted_sse(vec![
+        // ① 纯文本旁白（f19c3890 同形态）——计划未收尾，不得就此收尾
+        sse_body(&[r#"{"choices":[{"delta":{"content":"找到插入点了，接下来补纯函数单测。"}}]}"#, SSE_STOP]),
+        // ② plan 把两项标 completed
+        sse_body(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"plan","arguments":"{\"todos\": [{\"title\": \"补单测\", \"status\": \"completed\"}, {\"title\": \"验证\", \"status\": \"completed\"}]}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]),
+        // ③ 计划已收尾 → 主会话语义逐字节不变：纯文本即完成
+        sse_body(&[r#"{"choices":[{"delta":{"content":"单测已补齐，收尾。"}}]}"#, SSE_STOP]),
+    ])
+    .await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "main-pending-todo");
+    // 陈旧计划豁免的对照面：直接预置 rt.todos（不经 plan 工具）时 plan_called_this_run 仍为
+    // false，收尾门不应生效——这正是 §8.2 要防的「旧计划劫持普通提问」。本例要测的是
+    // 「本 run 碰过计划」的门，故下方 step① 必须由 plan 工具真实建立计划。
+    rt.plan_called_this_run
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    *rt.todos.lock().unwrap() = vec![
+        crate::tools::plan::Todo {
+            title: "补单测".into(),
+            status: crate::tools::plan::TodoStatus::InProgress,
+        },
+        crate::tools::plan::Todo {
+            title: "验证".into(),
+            status: crate::tools::plan::TodoStatus::Pending,
+        },
+    ];
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        // finish_on_text 取默认 true = 主会话语义（缺陷正在此处）
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_main_pending").await;
+    assert!(result.is_ok(), "应正常收尾：{:?}", result.err());
+    // 用 >= 3 而非 == 3：脚本化 SSE 在脚本用尽后会重复应答最后一条（避免失败时悬挂），
+    // 且 provider 重试可能多开连接。判别力仍成立——修复前是 1（首个纯文本回合即静默收尾）。
+    assert!(
+        hits.load(Ordering::SeqCst) >= 3,
+        "计划未收尾的纯文本回合不得静默收尾（修复前连接数会是 1——旁白被当成最终汇报），实际 {}",
+        hits.load(Ordering::SeqCst)
+    );
+    let texts = history_texts(&rt);
+    assert!(
+        texts.iter().any(|t| t.contains("<continue-notice>")),
+        "应注入续跑提示，实际历史：{texts:?}"
+    );
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|t| t.contains("<continue-notice>"))
+            .count(),
+        1,
+        "仅第②回合注入一次提示（第④回合计划已收尾，正常 Finish）：{texts:?}"
+    );
+    assert_eq!(result.unwrap(), "单测已补齐，收尾。");
+    assert!(
+        !crate::tools::plan::has_pending(&rt.todos.lock().unwrap()),
+        "脚本第③回合已把计划标全完成"
+    );
+}
+
+/// 续跑提示变体的纯函数单测（与 `has_pending` 的 filter 漂移防护）：
+/// ① 只点名未完成项（已完成项**不得**出现在提示里，否则模型会去推进已收尾的待办）；
+/// ② 必须同时给出 `plan` 出口与「再空转即收尾」的代价（主会话第 4 个连续纯文本回合回落 Finish）；
+/// ③ 不得带非主会话专属的 `<report>` 引导（语义错位：主会话不靠标记收尾）。
+#[test]
+fn continue_notice_pending_todos_lists_only_unfinished_and_gives_escape() {
+    let todos = vec![
+        crate::tools::plan::Todo {
+            title: "已收尾项".into(),
+            status: crate::tools::plan::TodoStatus::Completed,
+        },
+        crate::tools::plan::Todo {
+            title: "补单测".into(),
+            status: crate::tools::plan::TodoStatus::InProgress,
+        },
+        crate::tools::plan::Todo {
+            title: "验证".into(),
+            status: crate::tools::plan::TodoStatus::Pending,
+        },
+    ];
+    let notice = super::drive::continue_notice_pending_todos(&todos);
+    assert!(
+        !notice.contains("已收尾项"),
+        "已完成项不得被点名（模型会据此去推进已收尾的待办）：{notice}"
+    );
+    assert!(
+        notice.contains("补单测") && notice.contains("验证"),
+        "未完成项应全部点名：{notice}"
+    );
+    assert!(notice.contains("plan"), "须给出 plan 出口：{notice}");
+    assert!(
+        notice.contains("再次只输出文字将被视为收尾"),
+        "须说破连续空转的代价（否则模型拿到同一句提示后原地复读）：{notice}"
+    );
+    assert!(
+        !notice.contains("<report>"),
+        "主会话不靠 <report> 标记收尾，变体不得携带该引导：{notice}"
+    );
+    // 空标题不 panic（plan 侧校验标题非空，但纯函数不应假设调用方已校验）
+    let empty_title = vec![crate::tools::plan::Todo {
+        title: String::new(),
+        status: crate::tools::plan::TodoStatus::Pending,
+    }];
+    assert!(
+        super::drive::continue_notice_pending_todos(&empty_title).contains("<continue-notice>")
+    );
+}
+
+/// §8.2 陈旧计划豁免的回归锚点：`rt.todos` 跳 run 持久化，但本 run 没调 plan 工具时，
+/// 收尾门**不得**生效——否则用户在留有半成品计划的会话里问一句无关的普通问题，
+/// 纯文本作答会被劫持成最多 3 轮工具循环（修复前是 1 轮答完）。
+///
+/// 本例：预置一个「上个 run 留下」的 in_progress 计划，但 `plan_called_this_run` 保持
+/// false（本 run 没碰计划），脚本单回合纯文本 → 必须直接 Finish（连接数 1）。
+/// 对照组：`main_session_text_only_turn_with_pending_todos_continues` 置位该标记后续跑。
+#[tokio::test]
+async fn stale_pending_todos_do_not_gate_plain_qa() {
+    let (port, hits) = spawn_scripted_sse(vec![sse_body(&[
+        r#"{"choices":[{"delta":{"content":"这段代码的思路是……直接答完。"}}]}"#,
+        SSE_STOP,
+    ])])
+    .await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "main-stale-todo");
+    // 陈旧计划：只写 rt.todos，不置 plan_called_this_run（模拟上个 run 的遗留）
+    *rt.todos.lock().unwrap() = vec![crate::tools::plan::Todo {
+        title: "上个 run 的遗留待办".into(),
+        status: crate::tools::plan::TodoStatus::InProgress,
+    }];
+    assert!(
+        !rt.plan_called_this_run.load(Ordering::SeqCst),
+        "本 run 未调用 plan 工具，标记应为 false"
+    );
+    let params = DriveParams {
+        max_steps: 6,
+        emit_events: false,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_stale").await;
+    assert!(result.is_ok(), "应正常收尾：{:?}", result.err());
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "陈旧计划不得劫持普通问答（本 run 没碰计划）"
+    );
+    assert_eq!(result.unwrap(), "这段代码的思路是……直接答完。");
+    assert!(
+        !history_texts(&rt)
+            .iter()
+            .any(|t| t.contains("<continue-notice>")),
+        "豁免路径不得注入续跑提示"
     );
 }
 
