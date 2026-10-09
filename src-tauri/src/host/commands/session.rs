@@ -591,9 +591,7 @@ pub async fn inject_run_message(
     text: String,
 ) -> Result<(), String> {
     let rt = core.session(&session_id).ok_or("会话不存在")?;
-    rt.inject_tx
-        .try_send(Message::user_text(text))
-        .map_err(|e| format!("注入失败：{e}"))
+    rt.inject_message(text).await
 }
 
 /// 解决一次 ask（审批/询问应答）：主会话未命中则扫描子代理 runtime。

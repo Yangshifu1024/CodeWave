@@ -1,7 +1,7 @@
 use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
 use super::runtime::{
-    AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, INJECT_BUFFER, MAX_STEPS,
-    STREAM_THROTTLE_MS, SessionRuntime,
+    AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, MAX_STEPS, STREAM_THROTTLE_MS,
+    SessionRuntime,
 };
 use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
 use super::stream::{
@@ -702,9 +702,42 @@ pub(crate) fn split_report(raw: &str) -> (String, bool) {
     (body.trim().to_string(), true)
 }
 
-/// 参数化的 agent 驱动主循环：主会话 / 子代理 / 任务运行共用（[docs/p2-plan](../../../../docs/p2-plan.md) §2.2）。
-/// 返回（最终文本或错误，usage 合计，suggest 跟进项）。本函数绝不发
-/// run:done——run_chat 在复位 running 后发唯一一次（[docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md) 队列回归）。
+/// 消化已接纳消息，统一事件/checkpoint/收据时序。收尾时空队列会原子关闭接纳窗口。
+async fn drain_inject(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    run_id: &str,
+    emit_events: bool,
+    close_if_empty: bool,
+) -> usize {
+    let messages = rt.take_injections(close_if_empty);
+    let count = messages.len();
+    if count == 0 {
+        return 0;
+    }
+    let mut receipts = Vec::with_capacity(count);
+    {
+        let mut history = lock_ok(&rt.history);
+        for msg in messages {
+            history.push(msg.message.stamped());
+            receipts.push(msg.receipt);
+        }
+    }
+    if emit_events {
+        core.sink.emit(
+            &rt.id,
+            "run:inject",
+            serde_json::json!({"session": rt.id, "run_id": run_id, "count": count}),
+        );
+    }
+    let _ = checkpoint(core, rt).await;
+    for receipt in receipts {
+        let _ = receipt.send(Ok(()));
+    }
+    count
+}
+
+/// 参数化主循环；返回最终文本/错误、usage、suggest。run:done 由 run_chat 复位 running 后发出。
 pub async fn drive_agent(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
@@ -716,6 +749,7 @@ pub async fn drive_agent(
     Option<Vec<String>>,
 ) {
     let sink = core.sink.clone();
+    let _injections = params.main_session.then(|| rt.begin_injections());
     // 每 run 重置：system 冻结与历史代际断点锚点只在单个 run 内有效
     //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
     *rt.system_frozen.lock().unwrap() = None;
@@ -806,40 +840,14 @@ pub async fn drive_agent(
         // 2) 立即 checkpoint：常规 checkpoint 每 CHECKPOINT_EVERY_STEPS 步一次
         //    （见循环尾），注入消息最多要等 19 步才落盘，崩溃即丢（AC-12）。
         // 3) `attempt` 归零：注入即新话题，重试预算按新话题重算（AC-13）。
-        {
-            let mut injected = 0usize;
-            {
-                let mut rx_guard = rt.inject_rx.lock().unwrap();
-                if let Some(rx) = rx_guard.as_mut() {
-                    while let Ok(msg) = rx.try_recv() {
-                        rt.history.lock().unwrap().push(msg.stamped());
-                        injected += 1;
-                        if injected >= INJECT_BUFFER {
-                            break;
-                        }
-                    }
-                }
-                if injected > 0 {
-                    force_continue = true;
-                    attempt = 0;
-                    if params.emit_events {
-                        sink.emit(&rt.id, "run:inject", serde_json::json!({ "session": rt.id, "run_id": run_id, "count": injected }));
-                    }
-                    session_log::warn(
-                        rt,
-                        &format!("step {step} 已注入 {injected} 条 steer 消息，强制续跑并立即落盘"),
-                    );
-                }
-            }
-            // 落盘保证（AC-12）：注入消息不等常规 checkpoint 节奏。
-            // 内层作用域已闭合，`MutexGuard` 在此已 drop——这一点是硬约束：
-            // std MutexGuard 非 Send，跨 await 会让整个 drive future 退化为 !Send，
-            // 子代理工具的 spawn 立即编译失败。
-            // checkpoint 对非主会话直接 return None（子代理无主历史），
-            // 主会话则抢 save_lock 串行落盘——只在本分支调用，不影响常态性能。
-            if injected > 0 {
-                let _ = checkpoint(core, rt).await;
-            }
+        let injected = drain_inject(core, rt, run_id, params.emit_events, false).await;
+        if injected > 0 {
+            force_continue = true;
+            attempt = 0;
+            session_log::warn(
+                rt,
+                &format!("step {step} 已注入 {injected} 条 steer 消息并立即落盘"),
+            );
         }
         // ③④ 实时上下文计账（主会话）+ 阈值自动压缩
         // （失败冷却 + 压缩互斥 + 进度事件，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）
@@ -1141,6 +1149,16 @@ pub async fn drive_agent(
             );
             match action {
                 TextTurnAction::Finish => {
+                    if text_turns < MAX_TEXT_TURNS
+                        && step + 1 < params.max_steps
+                        && !run_token.is_cancelled()
+                        && drain_inject(core, rt, run_id, params.emit_events, true).await > 0
+                    {
+                        text_turns += 1;
+                        force_continue = true;
+                        attempt = 0;
+                        continue 'steps;
+                    }
                     break 'steps;
                 }
                 TextTurnAction::Continue => {
@@ -1308,6 +1326,22 @@ pub async fn drive_agent(
         // 目标模式收尾裁决已随目标模式整体移除。
         // M6：强制汇报轮也在工具批次完成后才结束（历史不留悬空 tool_use）
         if batch_done {
+            if step + 1 < params.max_steps
+                && !run_token.is_cancelled()
+                && drain_inject(core, rt, run_id, params.emit_events, true).await > 0
+            {
+                force_continue = true;
+                attempt = 0;
+                suggest_out = None;
+                if params.emit_events {
+                    sink.emit(
+                        &rt.id,
+                        "run:suggestions",
+                        serde_json::json!({"session": rt.id, "items": []}),
+                    );
+                }
+                continue 'steps;
+            }
             break 'steps;
         }
 
@@ -1316,6 +1350,8 @@ pub async fn drive_agent(
         }
     }
 
+    // 正常结束、错误与取消都先关闭窗口并拒绝未消费项；flush 等待期不得再接纳消息。
+    rt.close_injections();
     // 先停 ticker 并让在途迭代排空（至多一个节流窗口），再做最终冲刷——
     // 避免两个冲刷者乱序竞争（评审 C4）
     unwind.armed = false;

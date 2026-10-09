@@ -240,12 +240,12 @@ async fn steer_marker_is_consumed_on_a_tool_call_turn() {
         .lock()
         .unwrap()
         .push(crate::core::types::Message::user_text("初始任务"));
-    rt.inject_tx
-        .try_send(crate::core::types::Message::user_text("补充约束"))
-        .unwrap();
+    let _inject_window = rt.begin_injections();
+    let receipt = rt.enqueue_injection("补充约束".into()).unwrap();
 
     let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_steer_tool").await;
     assert!(result.is_ok(), "正常收尾，实际：{result:?}");
+    assert!(receipt.await.unwrap().is_ok());
     assert_eq!(
         hits.load(Ordering::SeqCst),
         2,
@@ -301,13 +301,11 @@ async fn steer_injected_message_forces_one_more_turn_end_to_end() {
         .lock()
         .unwrap()
         .push(crate::core::types::Message::user_text("初始任务"));
-    rt.inject_tx
-        .try_send(crate::core::types::Message::user_text(
-            "补充：也看下错误处理",
-        ))
-        .unwrap();
+    let _inject_window = rt.begin_injections();
+    let receipt = rt.enqueue_injection("补充：也看下错误处理".into()).unwrap();
 
     let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_steer_e2e").await;
+    assert!(receipt.await.unwrap().is_ok());
     assert!(result.is_ok(), "正常收尾，实际：{result:?}");
     assert_eq!(
         hits.load(Ordering::SeqCst),
@@ -324,6 +322,251 @@ async fn steer_injected_message_forces_one_more_turn_end_to_end() {
     assert!(
         !texts.iter().any(|t| t.contains("<continue-notice>")),
         "steer 续跑不得注入 <continue-notice>（对主会话不实且违反既有硬不变量），实际：{texts:?}"
+    );
+}
+
+/// `<report>` 标记剥离：标记只用于收尾判定，不进入汇报正文。
+#[tokio::test]
+async fn steer_arriving_during_final_text_is_processed_in_same_run() {
+    assert_late_steer_is_processed(
+        sse_body(&[
+            r#"{"choices":[{"delta":{"content":"旧任务完成"}}]}"#,
+            SSE_STOP,
+        ]),
+        "late-text",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn steer_arriving_during_suggest_is_processed_in_same_run() {
+    assert_late_steer_is_processed(sse_body(&[
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"suggest-late","type":"function","function":{"name":"suggest","arguments":"{\"items\":[\"下一步\"]}"}}]}}]}"#,
+        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+    ]), "late-suggest").await;
+}
+
+/// 用首轮响应闸门把注入固定在「请求已发出、模型尚未收尾」窗口，避免 sleep 竞态。
+async fn assert_late_steer_is_processed(first: Vec<u8>, name: &str) {
+    assert_late_steer_exit(first, name, 6, false).await;
+}
+
+#[tokio::test]
+async fn steer_step_limit_rejects_unconsumed_message_without_cross_run_leak() {
+    assert_late_steer_exit(
+        sse_body(&[
+            r#"{"choices":[{"delta":{"content":"到达步数上限"}}]}"#,
+            SSE_STOP,
+        ]),
+        "late-step-limit",
+        1,
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn steer_cancel_rejects_unconsumed_message_without_cross_run_leak() {
+    assert_late_steer_exit(
+        sse_body(&[
+            r#"{"choices":[{"delta":{"content":"等待用户取消"}}]}"#,
+            SSE_STOP,
+        ]),
+        "late-cancel",
+        6,
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn steer_idle_full_and_unwind_do_not_acknowledge_unconsumed_messages() {
+    let (_core, rt, _ws, _dd) = scripted_core(9, "injection-lifecycle");
+    assert!(rt.inject_message("空闲".into()).await.is_err());
+    let window = rt.begin_injections();
+    let mut receipts = Vec::new();
+    for i in 0..super::runtime::INJECT_BUFFER {
+        receipts.push(rt.enqueue_injection(format!("待确认{i}")).unwrap());
+    }
+    assert!(rt.enqueue_injection("缓冲满".into()).is_err());
+    drop(window);
+    for receipt in receipts {
+        assert!(receipt.await.unwrap().is_err());
+    }
+    let _next_window = rt.begin_injections();
+    assert!(
+        rt.take_injections(false).is_empty(),
+        "下一 run 不得消费旧消息"
+    );
+}
+
+async fn assert_late_steer_exit(first: Vec<u8>, name: &str, max_steps: usize, cancel: bool) {
+    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let port = listener.local_addr().unwrap().port();
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let captured = requests.clone();
+    let server_listener = listener.clone();
+    let server = tokio::spawn(async move {
+        let mut seen_tx = Some(seen_tx);
+        let mut release_rx = Some(release_rx);
+        loop {
+            let (mut sock, _) = server_listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf)
+                    .await
+                    .unwrap();
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(header_end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&bytes[..header_end]);
+                    let len = header
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= header_end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            captured
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&bytes).into_owned());
+            let response = if let Some(tx) = seen_tx.take() {
+                let _ = tx.send(());
+                release_rx.take().unwrap().await.unwrap();
+                first.clone()
+            } else {
+                sse_body(&[
+                    r#"{"choices":[{"delta":{"content":"新要求已处理"}}]}"#,
+                    SSE_STOP,
+                ])
+            };
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, &response).await;
+            let _ = tokio::io::AsyncWriteExt::shutdown(&mut sock).await;
+        }
+    });
+    let (core, rt, _ws, _dd) = scripted_core(port, name);
+    let drive_core = core.clone();
+    let drive_rt = rt.clone();
+    let drive = tokio::spawn(async move {
+        super::drive::drive_agent(
+            &drive_core,
+            &drive_rt,
+            DriveParams {
+                max_steps,
+                finish_on_text: true,
+                main_session: true,
+                emit_events: false,
+                ..DriveParams::default()
+            },
+            "late-steer-run",
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), seen_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut receipt = rt
+        .enqueue_injection("只在本轮处理这条新要求".into())
+        .unwrap();
+    assert!(
+        matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ),
+        "尚未消化的消息不可确认成功"
+    );
+    if cancel {
+        rt.active_cancel.lock().unwrap().as_ref().unwrap().cancel();
+    }
+    release_tx.send(()).unwrap();
+    let (result, _, suggestions) = tokio::time::timeout(std::time::Duration::from_secs(5), drive)
+        .await
+        .unwrap()
+        .unwrap();
+    if cancel || max_steps == 1 {
+        assert!(
+            receipt.await.unwrap().is_err(),
+            "取消或上限必须拒绝未消费消息，让前端保留条目"
+        );
+        assert_eq!(result.is_err(), cancel);
+        assert!(rt.inject_message("晚到消息".into()).await.is_err());
+        let _ = super::drive::drive_agent(
+            &core,
+            &rt,
+            DriveParams {
+                max_steps: 1,
+                finish_on_text: true,
+                main_session: true,
+                emit_events: false,
+                ..DriveParams::default()
+            },
+            "unrelated-next-run",
+        )
+        .await;
+        server.abort();
+        assert!(
+            !history_texts(&rt)
+                .iter()
+                .any(|t| t.contains("只在本轮处理这条新要求"))
+        );
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.contains("只在本轮处理这条新要求"))
+        );
+        return;
+    }
+    server.abort();
+    assert!(
+        receipt.await.unwrap().is_ok(),
+        "进入本 run 历史后才确认注入成功"
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert!(
+        history_texts(&rt)
+            .iter()
+            .any(|t| t.contains("只在本轮处理这条新要求")),
+        "收尾期已接纳的消息必须进入本 run 历史"
+    );
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .any(|r| r.contains("只在本轮处理这条新要求")),
+        "必须实际发起含 steer 的后续请求"
+    );
+    assert!(
+        core.store
+            .load_history(&rt.id)
+            .unwrap()
+            .iter()
+            .any(|m| m.content.iter().any(
+                |c| matches!(c, Content::Text { text } if text.contains("只在本轮处理这条新要求"))
+            )),
+        "消化后立即 checkpoint"
+    );
+    assert!(suggestions.is_none(), "旧轮 suggest 不应成为最终建议");
+    assert!(
+        rt.inject_message("晚到消息".into()).await.is_err(),
+        "已经收尾的 run 拒绝晚到消息"
     );
 }
 

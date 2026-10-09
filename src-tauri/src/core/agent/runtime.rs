@@ -23,6 +23,20 @@ pub const STREAM_THROTTLE_MS: u64 = 64;
 /// 每隔多少步做一次历史检查点落盘。
 pub const CHECKPOINT_EVERY_STEPS: usize = 20;
 
+/// 只供本 run 消费的注入信封；确认成功时消息已进入历史并尝试过 checkpoint。
+pub(super) struct InjectMessage {
+    pub(super) message: Message,
+    pub(super) receipt: oneshot::Sender<Result<(), String>>,
+}
+
+/// 所有退出（含 panic）关闭接纳窗口并拒绝尚未消化的消息，避免跨 run 滞留。
+pub(super) struct InjectionGuard<'a>(&'a SessionRuntime);
+impl Drop for InjectionGuard<'_> {
+    fn drop(&mut self) {
+        self.0.close_injections();
+    }
+}
+
 /// 高频帧（走 IPC 通道；点对点、有序）。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(serde::Deserialize))]
@@ -102,9 +116,11 @@ pub struct SessionRuntime {
     /// plan 工具的 todo 状态机（内存 + 边车持久化）
     pub todos: Mutex<Vec<crate::tools::plan::Todo>>,
     /// 运行中注入通道的发送端（run.ts 队列消息入此）
-    pub inject_tx: mpsc::Sender<Message>,
+    inject_tx: mpsc::Sender<InjectMessage>,
     /// 注入通道接收端（run 期间被 drive_agent 取走消化）
-    pub inject_rx: Mutex<Option<mpsc::Receiver<Message>>>,
+    inject_rx: Mutex<mpsc::Receiver<InjectMessage>>,
+    /// 与 inject_rx 的锁共同使用；不能单独用此标志判定 IPC 接纳成功。
+    inject_accepting: AtomicBool,
     /// 运行互斥（同一会话同时只允许一个 run 主循环持有）
     pub run_lock: Arc<tokio::sync::Mutex<()>>,
     /// 是否有 run 进行中（start_chat 以 swap 抢占，结束时恒复位）
@@ -199,6 +215,63 @@ pub struct SessionRuntime {
 }
 
 impl SessionRuntime {
+    /// 开启当前 run 的接纳窗口。与发送/收尾使用同一锁，避免检查标志后发送的 TOCTOU。
+    pub(super) fn begin_injections(&self) -> InjectionGuard<'_> {
+        let _gate = super::guards::lock_ok(&self.inject_rx);
+        self.inject_accepting.store(true, Ordering::SeqCst);
+        InjectionGuard(self)
+    }
+
+    /// 入队只是候选接纳；调用方必须等收据，不能把 try_send 成功当成已经进入历史。
+    pub(super) fn enqueue_injection(
+        &self,
+        text: String,
+    ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
+        let _gate = super::guards::lock_ok(&self.inject_rx);
+        if !self.inject_accepting.load(Ordering::SeqCst) || self.zombie.load(Ordering::SeqCst) {
+            return Err("本 run 已收尾或尚未开始，消息未注入，请保留队列项".into());
+        }
+        let (receipt, rx) = oneshot::channel();
+        self.inject_tx
+            .try_send(InjectMessage {
+                message: Message::user_text(text),
+                receipt,
+            })
+            .map_err(|e| format!("注入失败：{e}"))?;
+        Ok(rx)
+    }
+
+    /// IPC 唯一注入入口；成功 = 消息已进入本 run 历史，失败 = 消息未被消费。
+    pub async fn inject_message(&self, text: String) -> Result<(), String> {
+        self.enqueue_injection(text)?
+            .await
+            .map_err(|_| "本 run 已终止，消息未注入，请保留队列项".to_string())?
+    }
+
+    /// 步首与收尾前复用；空队列收尾和发送在同一临界区线性化。
+    pub(super) fn take_injections(&self, close_if_empty: bool) -> Vec<InjectMessage> {
+        let mut rx = super::guards::lock_ok(&self.inject_rx);
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            out.push(msg);
+        }
+        if close_if_empty && out.is_empty() {
+            self.inject_accepting.store(false, Ordering::SeqCst);
+        }
+        out
+    }
+
+    /// 取消、错误、步数/纯文本上限及 panic 的统一兜底；未消费项不带到下一个 run。
+    pub(super) fn close_injections(&self) {
+        let mut rx = super::guards::lock_ok(&self.inject_rx);
+        self.inject_accepting.store(false, Ordering::SeqCst);
+        while let Ok(msg) = rx.try_recv() {
+            let _ = msg
+                .receipt
+                .send(Err("本 run 已收尾，消息未注入，请保留队列项".into()));
+        }
+    }
+
     /// 构造最小 runtime（Arc 包装；其余字段由 get_or_create_session / new_sub / new_task 补齐）。
     pub(super) fn new(id: SessionId, workspace: PathBuf, data_dir: PathBuf) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(INJECT_BUFFER);
@@ -214,7 +287,8 @@ impl SessionRuntime {
             extra_roots: Mutex::new(Vec::new()),
             todos: Mutex::new(Vec::new()),
             inject_tx: tx,
-            inject_rx: Mutex::new(Some(rx)),
+            inject_rx: Mutex::new(rx),
+            inject_accepting: AtomicBool::new(false),
             run_lock: Arc::new(tokio::sync::Mutex::new(())),
             running: Arc::new(AtomicBool::new(false)),
             compacting: AtomicBool::new(false),
