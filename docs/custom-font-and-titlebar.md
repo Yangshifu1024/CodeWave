@@ -12,7 +12,7 @@
 - `ui/src/theme/native.css` 定义 `--ws-font-sans(-fallback)` / `--ws-font-mono(-fallback)` 四个 token；body 与全部代码面（app.css 原 13 处硬编码 `"SF Mono", Menlo, Consolas, monospace` 链）统一改引 `var(--ws-font-mono)`。
 - `ui/src/utils/fonts.ts`（移植 GitWave fonts.ts，去字号缩放部分）：偏好为逗号分隔的**本机已安装字体名**，空 = 默认链。`sanitizeFontList` 剥离可逃逸 CSS 字面量的字符（引号/反斜杠/花括号/分号/尖括号/控制字符）但保留中文等非 ASCII 名；`buildFontOverride` 生成 `"用户字体", var(--ws-font-*-fallback)` 引导链写入 `<html>` 内联。
 - `main.tsx` 在 `createRoot().render()` 前调 `applyInitialFonts()`——先于 React 挂载应用，防首帧默认字体闪变。
-- **持久化（2026-09-19 改）**：真源后来改为**后端配置** `config.ui.font_sans` / `font_mono`（`set_font_prefs` 即时落盘，模式同 `lsp_enable`）；WebView 的 localStorage（`ws_font_sans` / `ws_font_mono`）降级为**首帧防闪变缓存**，启动后由 `utils/fonts.ts::reconcileFontsFromConfig` 与后端对账（后端优先；老版本只存缓存的自动迁移回后端）。原「只存 localStorage」的做法实测出现过「输了界面字体却从来没写进去」（存储里连已回收页的残留文本都没有），故改为双写 + 后端为真源。
+- **持久化（2026-09-19 改）**：真源后来改为**后端配置** `config.ui.font_sans` / `font_mono`（`set_font_prefs` 即时落盘、只 patch 这两个字段，先落盘再改内存）；WebView 的 localStorage（`ws_font_sans` / `ws_font_mono`）降级为**首帧防闪变缓存**，启动后由 `utils/fonts.ts::reconcileFontsFromConfig` 与后端对账（后端优先；老版本只存缓存的自动迁移回后端）。原「只存 localStorage」的做法实测出现过「输了界面字体却从来没写进去」（存储里连已回收页的残留文本都没有），故改为双写 + 后端为真源。
 - **提交时机（2026-09-19 改）**：原来是「回车或失焦才提交」，输入后直接关设置页 / 关窗就丢；现为回车 / 失焦 / **停手 600ms** / **组件卸载**四处都提交，且只有「用户确实改过」才写（未编辑过的空提交不抹掉已存值），输入法组合期间不提交。
 - **antd 接线**（CodeWave 特有，GitWave 是 tailwind 无此问题）：antd 组件不继承 body 字体，`App.tsx` ConfigProvider token 下发 `fontFamily: "var(--ws-font-sans)"` + `fontFamilyCode: "var(--ws-font-mono)"`，随设置即时生效。
 
@@ -99,7 +99,7 @@ macOS（如有条件）：红绿灯悬浮于顶栏左侧、Tab 条不与之重�
 | 层 | 改动 |
 |---|---|
 | 配置（Rust） | `UiPrefs` 新增 `font_sans` / `font_mono`（容器级 serde default 已覆盖，空串 = 默认链） |
-| 新命令（Rust） | `set_font_prefs { sans, mono }`：即时落盘、只 patch 这两个字段（先落盘再改内存，模式同 `lsp_enable`） |
+| 新命令（Rust） | `set_font_prefs { sans, mono }`：即时落盘、只 patch 这两个字段（先落盘再改内存） |
 | 页级保存（Rust） | `save_config` 经 `apply_page_save_shape` 护住这两个字段（**审查 🔴**：否则「改完字体 → 保存其他设置 → 重启」会静默回滚） |
 | 提交时机（前端） | 回车 / 失焦 / **停手 600ms** / **组件卸载**四处都提交；新增 `edited`（未编辑过的空提交不写存储）、`composing`（组合态不提交，失焦时强制解除，防 `compositionend` 漏发卡死）、失焦回填显示值 |
 | 真源与对账（前端） | `reconcileFontsFromConfig`：后端优先并回写缓存；后端为空而缓存有值时自动迁移回后端（老用户不丢）；配置加载后执行一次 |

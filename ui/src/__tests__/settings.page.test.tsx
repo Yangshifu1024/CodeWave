@@ -777,7 +777,7 @@ describe("设置页：关于（原 AboutModal 弹框迁入第 8 页）", () => {
 
     expect(document.querySelector(".about-logo")).toBeTruthy();
     expect(document.body.textContent ?? "").toContain("CodeWave");
-    expect(document.body.textContent ?? "").toContain("本地优先的桌面 AI 编程 Agent");
+    expect(document.body.textContent ?? "").toContain("桌面 AI 编程 Agent");
     await waitFor(() => expect(document.querySelector(".about-version")?.textContent).toBe("0.2.0"));
     const { invoke } = await import("@tauri-apps/api/core");
     expect((invoke as any).mock.calls.some((c: any[]) => c[0] === "app_version")).toBe(true);

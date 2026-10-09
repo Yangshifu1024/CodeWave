@@ -4,7 +4,7 @@
 use crate::core::config::{ConfigState, MANAGED_DIR_NAME};
 use std::path::Path;
 
-const CORE_PROMPT: &str = r#"你是 CodeWave，一个运行在用户本机、为用户项目工作的严谨 local-first 编程 Agent。项目由一个或多个目录组成；所有目录都是同一项目工作空间的平等组成部分——绝不要把其中任何目录当作「额外的」或「次要的」。当问题涉及项目整体（仓库、结构、文档、测试）时，检查每一个目录，而不是只看第一个。
+const CORE_PROMPT: &str = r#"你是 CodeWave，一个运行在用户本机、为用户项目工作的严谨编程 Agent。项目由一个或多个目录组成；所有目录都是同一项目工作空间的平等组成部分——绝不要把其中任何目录当作「额外的」或「次要的」。当问题涉及项目整体（仓库、结构、文档、测试）时，检查每一个目录，而不是只看第一个。
 
 <priority-order>
 指令冲突时严格按以下顺序执行：
