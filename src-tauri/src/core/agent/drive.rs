@@ -627,6 +627,9 @@ pub(super) enum TextTurnAction {
 ///    主会话 `finish_on_text` 恒为 true，否则 steer 消息进了历史却被模型用旧上下文
 ///    答完退出——用户看到的是 steer 没生效（AC-4/AC-5）。
 ///    一次性：标记由调用方在进入本函数前消费并清零，故同一注入只强制一轮。
+///    **仍受 `MAX_TEXT_TURNS` 硬上限约束**（连续注入不得把 run 无限续命），达上限回落
+///    `Finish`——与 `rejected` 分支的 `StopWithLimit` 有意不同：主会话「显式失败」
+///    = 对一次提问弹 `run:error`，比安静收尾更糟。
 /// 4. `finish_on_text`（主会话）→ 计划未收尾时 `Continue`，否则 `Finish`：
 ///    「无工具调用 = 回答完毕」对**无计划**的普通问答语义不变；但计划仍有未完成项时，
 ///    一句「我接下来要改 X」这类旁白收尾会让 run 带着半成品计划静默成功
@@ -659,6 +662,10 @@ pub(super) fn text_turn_action(
         return TextTurnAction::Finish;
     }
     // ③ steer 强制续跑：用户刚提交的话必须被模型看到（AC-4/AC-5）。一次性上限在此生效。
+    // **仍受 `MAX_TEXT_TURNS` 硬上限约束**（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // 连续各轮注入时不得越过连续纯文本防线——否则用户能靠反复点「立即」把 run 无限续命。
+    // 达上限回落 `Finish`（不是 StopWithLimit）：主会话的显式失败 = 对一次提问弹 run:error，
+    // 比安静收尾更糟；未消化的注入消息会在**收尾前复查**里被接管（drive_agent 的 pre-finish drain）。
     if steer_continue {
         return if text_turns >= MAX_TEXT_TURNS {
             TextTurnAction::Finish

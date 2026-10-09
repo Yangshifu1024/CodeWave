@@ -58,7 +58,7 @@
 
 **已排除的收尾分支**（tester 复核）：
 
-- `force_report` / `last_step`（基线 `drive.rs:987`、`1676`；本分支 `1042`、`1760`）——主会话 `force_report` 恒 false；
+- `force_report` / `last_step`（基线 `drive.rs:987`、`1676`）——主会话 `force_report` 恒 false；
 - 压缩分支——只 `reset text_turns` / `reset_idle`，不收尾；
 - 监督 Escalate（重复失败 / 空转）——产出 `Err`，用户看得见错误，与「静默成功」不符；
 - `MAX_STEPS = 9999`（`runtime.rs:18`）——本次仅 11 步，未触顶。
@@ -144,17 +144,19 @@ assertion `left == right` failed: 计划未收尾的纯文本回合不得静默�
 
 ## 6. 验证结果
 
-> **计数口径**：本分支工作区还携带**上一会话遗留的未提交改动**（`tools/command/tool.rs` + `tests.rs`，Windows Git Bash 非标准安装探测，已向用户报备并归入另一主题）。下方总数含那 3 个 `command` 用例，**本批自身新增 4 个测试**（`has_pending_distinguishes_unfinished_plan`、`text_turn_action_matrix_pending_todos`、`continue_notice_pending_todos_lists_only_unfinished_and_gives_escape`、`main_session_text_only_turn_with_pending_todos_continues`）。
+> **计数口径**：本分支工作区还携带**上一会话遗留的未提交改动**（`tools/command/tool.rs` + `tests.rs`，Windows Git Bash 非标准安装探测，已向用户报备并归入另一主题）。下方总数含那 3 个 `command` 用例，**本批自身新增 5 个后端测试**（`has_pending_distinguishes_unfinished_plan`、`text_turn_action_matrix_pending_todos`、`continue_notice_pending_todos_lists_only_unfinished_and_gives_escape`、`main_session_text_only_turn_with_pending_todos_continues`、`stale_pending_todos_do_not_gate_plain_qa`）。
+>
+> 下表是**本分支开发期间**的快照；合并 steer 后与清完 clippy 的**当前 main** 数字以 [AGENTS.md](../AGENTS.md) 为准（`cargo test --workspace` 1177 passed / 3 ignored、`pnpm --dir ui test` 1229 passed / 102 文件）。差异来自 main 侧 steer 的用例与文件，不是本批回归。
 
-| 检查 | 结果 |
+| 检查 | 结果（开发期快照） |
 |---|---|
 | `cargo fmt --all -- --check` | 干净（exit 0） |
-| `cargo clippy --all-targets` | 无新增警告（存量：`tools/postcheck.rs:305` unused import、`core/openers/mod.rs:476` unneeded return——均非本次引入） |
-| `cargo test --workspace` | **1171 passed / 0 failed / 3 ignored**（含上一会话遗留的 3 个用例；本分支两个主题新增 7 个） |
+| `cargo clippy --all-targets` | 无新增警告（当时存量：`tools/postcheck.rs` unused import、`core/openers/mod.rs` unneeded return——二者已在 `8e73d7d` 清零，**当前为 0 warning**） |
+| `cargo test --workspace` | **1171 passed / 0 failed / 3 ignored**（含上一会话遗留的 3 个用例） |
 | `pnpm --dir ui test` | **1226 passed / 102 文件**（新增 `internal-hint-render.test.ts` 5 例） |
 | `pnpm --dir ui build` | 通过 |
 
-本分支新增用例清单：`has_pending_distinguishes_unfinished_plan`、`text_turn_action_matrix_pending_todos`、`continue_notice_pending_todos_lists_only_unfinished_and_gives_escape`、`main_session_text_only_turn_with_pending_todos_continues`、`stale_pending_todos_do_not_gate_plain_qa`（后端 5） + `internal-hint-render.test.ts` 5 例（前端）；`tools/command/tests.rs` 的 3 个属另一主题（见 [git-bash-probe-nonstandard-path](./git-bash-probe-nonstandard-path.md)）。
+本分支新增用例清单：`has_pending_distinguishes_unfinished_plan`、`text_turn_action_matrix_pending_todos`、`continue_notice_pending_todos_lists_only_unfinished_and_gives_escape`、`main_session_text_only_turn_with_pending_todos_continues`、`stale_pending_todos_do_not_gate_plain_qa`（后端 5） + `internal-hint-render.test.ts` 5 例（前端）；`tools/command/tests.rs` 的 3 个属另一主题（见 [git-bash-probe-nonstandard-path](./git-bash-probe-nonstandard-path.md)）。合计 **8 个后端 + 5 个前端**。
 
 ## 7. 明确不做（非目标）
 
