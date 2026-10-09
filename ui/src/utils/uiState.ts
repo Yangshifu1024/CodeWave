@@ -363,7 +363,8 @@ export async function buildSnapshot(): Promise<UiState> {
   for (const key of [...new Set([...order, ...Object.keys(memory.retained)])]) {
     const c = contentOf(key);
     if (c.draft) drafts[key] = c.draft;
-    if (c.queue?.length) queue[key] = c.queue;
+    // injecting 只属于当前进程的 IPC 在途状态；重启后的条目必须可以继续执行。
+    if (c.queue?.length) queue[key] = c.queue.map(({ id, text, images }) => ({ id, text, ...(images ? { images } : {}) }));
     if (c.panels) panels[key] = c.panels;
   }
   const unread: Record<string, boolean> = {};
@@ -548,6 +549,16 @@ export function tabHasPendingContent(sessionId: string): boolean {
 export function retainTabContent(sessionId: string): void {
   const c = contentOf(sessionId);
   if (c.draft || c.queue?.length || c.panels) memory.retained[sessionId] = c;
+  scheduleFlush();
+}
+
+/** Tab 在注入确认前关闭时，结算其驻留队列；不能把已消费项留到重开后再发。 */
+export function settleRetainedInjection(sessionId: string, itemId: string, consumed: boolean): void {
+  const kept = memory.retained[sessionId];
+  if (!kept?.queue) return;
+  kept.queue = consumed
+    ? kept.queue.filter((q) => q.id !== itemId)
+    : kept.queue.map((q) => q.id === itemId ? { ...q, injecting: false } : q);
   scheduleFlush();
 }
 

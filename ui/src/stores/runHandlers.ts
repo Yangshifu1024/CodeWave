@@ -143,6 +143,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.running = false;
+        t.queueResumeAfterInjection = t.queue.some((q) => q.injecting);
         // 文本形态 ask 的待剥状态只在本轮有效（[docs/text-form-ask-fallback]）：清空后下一轮的增量不再被剥
         t.textRecovered = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
@@ -179,6 +180,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.running = false;
+        t.queueResumeAfterInjection = false;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
         // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
         closeStreamingAssistantItems(t);
@@ -192,6 +194,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.running = false;
+        t.queueResumeAfterInjection = false;
         // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
         closeStreamingAssistantItems(t);
         closeRunningTools(t);

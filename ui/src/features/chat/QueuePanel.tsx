@@ -1,4 +1,4 @@
-// [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：运行队列面板——运行中提交的任务入队；条目支持「立即运行（打断当前并执行）/ 编辑 / 删除」+ 拖拽排序；
+// [docs/steer-run-inject](../../../../docs/steer-run-inject.md)：运行队列面板——立即注入当前 run，确认期间占用条目；
 // 出错/取消后队列暂停但保留，「继续」恢复执行。
 // 拖拽排序（缺陷修复：此前把手纯装饰）：原生 HTML5 DnD——仅按住把手才可拖动，
 // 悬停目标高亮，落点把被拖条目移动到目标位置（store.reorderQueue）。
@@ -107,7 +107,8 @@ export default function QueuePanel() {
                   <Button
                     size="small"
                     icon={<ArrowUpOutlined />}
-                    disabled={blocked}
+                    disabled={blocked || q.injecting}
+                    loading={q.injecting}
                     onClick={() => void useRun.getState().runNow(activeKey, q.id)}
                   >
                     {t("queue.runNow")}
@@ -116,10 +117,10 @@ export default function QueuePanel() {
               );
             })()}
             <Tooltip title={t("queue.edit")}>
-              <Button size="small" type="text" icon={<EditOutlined />} onClick={() => useRun.getState().editQueueItem(activeKey, q.id)} />
+              <Button size="small" type="text" icon={<EditOutlined />} disabled={q.injecting} onClick={() => useRun.getState().editQueueItem(activeKey, q.id)} />
             </Tooltip>
             <Tooltip title={t("common.delete")}>
-              <Button size="small" type="text" icon={<DeleteOutlined />} onClick={() => useRun.getState().removeQueueItem(activeKey, q.id)} />
+              <Button size="small" type="text" icon={<DeleteOutlined />} disabled={q.injecting} onClick={() => useRun.getState().removeQueueItem(activeKey, q.id)} />
             </Tooltip>
           </span>
         </div>

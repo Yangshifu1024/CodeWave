@@ -1,17 +1,22 @@
 // Run queue ([docs/steer-run-inject](../../../docs/steer-run-inject.md)): submit while running enqueues (with attachments) / run:done auto-dequeues / error pauses /
 // "Run now" steers into the running run (no cancel_run, no interrupt) / edit backfills the draft
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
 import QueuePanel from "../features/chat/QueuePanel";
+import { applyRetainedContent, retainTabContent, reset as resetUiState } from "../utils/uiState";
 
 const calls: { cmd: string; args: any }[] = [];
+let injectReply: (() => Promise<unknown>) | undefined;
+let startReply: (() => Promise<unknown>) | undefined;
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: any) => {
     calls.push({ cmd, args });
+    if (cmd === "inject_run_message" && injectReply) return injectReply();
+    if (cmd === "start_chat" && startReply) return startReply();
     return null;
   }),
   Channel: class {
@@ -42,13 +47,137 @@ function handlers() {
 
 beforeEach(() => {
   calls.length = 0;
+  injectReply = undefined;
+  startReply = undefined;
+  resetUiState();
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   useRun.setState((s) => {
     s.tabs = {}; s.drafts = {};
   });
 });
+afterEach(cleanup);
 
 describe("运行队列", () => {
+  it("新 run 启动失败后，旧 done 的迟到确认不得恢复其队列", async () => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("旧注入B");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    handlers()["run:done"]({ session: "s1", run_id: "old-run" });
+    let rejectStart!: (e: Error) => void;
+    startReply = () => new Promise<void>((_, r) => { rejectStart = r; });
+    const manual = useRun.getState().send("手动新任务");
+    await useRun.getState().send("新任务排队C");
+    rejectStart(new Error("启动失败"));
+    await manual;
+    resolve();
+    // 若回归，会新开一个尚未确认的 start_chat；不用 await 掩盖调用次数错误。
+    const settled = pending;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls.filter((c) => c.cmd === "start_chat")).toHaveLength(1);
+    await settled;
+    expect(useRun.getState().tabs.s1.queue.map((q) => q.text)).toEqual(["新任务排队C"]);
+  });
+
+  it.each(["run:cancelled", "run:error"])("%s 先于成功注入确认时，剩余队列仍暂停", async (event) => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("已消费B");
+    await useRun.getState().send("待执行C");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    handlers()[event]({ session: "s1", error: "已停止" });
+    resolve();
+    await pending;
+    expect(calls.filter((c) => c.cmd === "start_chat")).toHaveLength(0);
+    expect(useRun.getState().tabs.s1.queue.map((q) => q.text)).toEqual(["待执行C"]);
+  });
+
+  it("关闭但保留队列时，注入确认仍结算驻留项，重开不会重复发送", async () => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("任务B");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    retainTabContent("s1");
+    useRun.getState().dispose("s1");
+    resolve();
+    await pending;
+    useRun.getState().initTab("s1");
+    applyRetainedContent("s1");
+    expect(useRun.getState().tabs.s1.queue).toHaveLength(0);
+  });
+
+  it("注入期间 done 只出队未占用项，失败后原条目保留且解除占用", async () => {
+    seed();
+    let reject!: (e: Error) => void;
+    injectReply = () => new Promise<void>((_, r) => { reject = r; });
+    await useRun.getState().send("任务B");
+    await useRun.getState().send("任务C");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    handlers()["run:done"]({ session: "s1", run_id: "r1" });
+    await waitFor(() => expect(calls.some((c) => c.cmd === "start_chat" && c.args.text === "任务C")).toBe(true));
+    expect(calls.some((c) => c.cmd === "start_chat" && c.args.text === "任务B")).toBe(false);
+    reject(new Error("本 run 已收尾"));
+    await pending;
+    expect(useRun.getState().tabs.s1.queue.map((q) => q.text)).toEqual(["任务B"]);
+    expect(useRun.getState().tabs.s1.queue[0].injecting).toBe(false);
+  });
+
+  it("done 先于注入确认时不再发同一项，成功后继续剩余队列", async () => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("任务B");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    handlers()["run:done"]({ session: "s1", run_id: "r1" });
+    expect(calls.some((c) => c.cmd === "start_chat")).toBe(false);
+    // 确认仍在途时用户继续排队；解除占用后必须有机会继续执行。
+    useRun.setState((s) => { s.tabs.s1.queue.push({ id: "next", text: "任务C" }); });
+    resolve();
+    await pending;
+    expect(calls.filter((c) => c.cmd === "start_chat").map((c) => c.args.text)).toEqual(["任务C"]);
+    expect(useRun.getState().tabs.s1.queue).toHaveLength(0);
+  });
+
+  it("注入确认前不能编辑或删除同一项", async () => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("任务B");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    useRun.getState().editQueueItem("s1", id);
+    useRun.getState().removeQueueItem("s1", id);
+    expect(useRun.getState().tabs.s1.queue).toHaveLength(1);
+    expect(useRun.getState().tabs.s1.draftFromQueue).toBeNull();
+    resolve();
+    await pending;
+  });
+
+  it("注入确认前连续点同项立即只发送一次，且按钮显示占用", async () => {
+    seed();
+    let resolve!: () => void;
+    injectReply = () => new Promise<void>((r) => { resolve = r; });
+    await useRun.getState().send("任务B");
+    const id = useRun.getState().tabs.s1.queue[0].id;
+    const pending = useRun.getState().runNow("s1", id);
+    const repeated = useRun.getState().runNow("s1", id);
+    expect(calls.filter((c) => c.cmd === "inject_run_message")).toHaveLength(1);
+    render(createElement(QueuePanel));
+    expect((screen.getByRole("button", { name: /立即/ }) as HTMLButtonElement).disabled).toBe(true);
+    resolve();
+    await Promise.all([pending, repeated]);
+    expect(useRun.getState().tabs.s1.queue).toHaveLength(0);
+  });
+
   it("运行中提交进入队列（含附件），不发起 start_chat", async () => {
     seed();
     const ok = await useRun.getState().send("任务B", [{ mime: "image/png", data: "xx" }]);

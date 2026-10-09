@@ -10,6 +10,7 @@ import type { Breakdown, HistoryBoundary, HistoryStatus, Message, SessionPaging,
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
+import { settleRetainedInjection } from "../utils/uiState";
 import {
   BLANK,
   appendDelta,
@@ -523,6 +524,7 @@ export const useRun = create<RunStore>()(
           images: images?.length ? images.map((im) => ({ mediaType: im.mime, data: im.data })) : undefined,
         });
         t.running = true;
+        t.queueResumeAfterInjection = false;
         t.suggestions = [];
         // 本轮计数归零（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：
         // 会话级 usage 跨 run 累加（命中率需要），而「本轮速率 / 本轮工具等待」必须从零重建，
@@ -580,11 +582,19 @@ export const useRun = create<RunStore>()(
     // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复）
     async runQueueNext(sessionId) {
       const t = get().tabs[sessionId];
-      if (!t || t.running || t.queue.length === 0) return;
-      const next = t.queue[0];
+      if (!t || t.running) return;
+      if (t.queue.length === 0) {
+        set((s) => { if (s.tabs[sessionId]) s.tabs[sessionId].queueResumeAfterInjection = false; });
+        return;
+      }
+      const next = t.queue.find((q) => !q.injecting);
+      if (!next) return;
       set((s) => {
         const t = s.tabs[sessionId];
-        if (t) t.queue = t.queue.slice(1);
+        if (t) {
+          t.queue = t.queue.filter((q) => q.id !== next.id);
+          t.queueResumeAfterInjection = false;
+        }
       });
       await get().send(next.text, next.images, sessionId);
     },
@@ -605,13 +615,22 @@ export const useRun = create<RunStore>()(
     async runNow(sessionId, id) {
       const t = get().tabs[sessionId];
       const item = t?.queue.find((q) => q.id === id);
-      if (!item) return;
+      if (!item || item.injecting) return;
       if (t.running) {
         // 带图项：inject 不支持，跳过 steer（留在队列等 run 结束后自然出队）
         if (item.images?.length) return;
+        set((s) => {
+          const q = s.tabs[sessionId]?.queue.find((q) => q.id === id);
+          if (q) q.injecting = true;
+        });
         try {
           await ipc.injectRunMessage(sessionId, item.text);
         } catch {
+          set((s) => {
+            const q = s.tabs[sessionId]?.queue.find((q) => q.id === id);
+            if (q) q.injecting = false;
+          });
+          settleRetainedInjection(sessionId, id, false);
           // 注入失败（会话不在跑 / 缓冲满 / 会话已删）：条目留在队列，
           // run 结束后 `runQueueNext` 会正常送出，不丢消息
           return;
@@ -622,6 +641,10 @@ export const useRun = create<RunStore>()(
           const t = s.tabs[sessionId];
           if (t) t.queue = t.queue.filter((q) => q.id !== id);
         });
+        settleRetainedInjection(sessionId, id, true);
+        // done 可能先于 IPC 确认到达；占用解除后补一次自动出队，避免剩余项停在空闲会话。
+        const after = get().tabs[sessionId];
+        if (after?.queueResumeAfterInjection && !after.running) await get().runQueueNext(sessionId);
       } else {
         set((s) => {
           const t = s.tabs[sessionId];
@@ -634,7 +657,7 @@ export const useRun = create<RunStore>()(
     removeQueueItem(sessionId, id) {
       set((s) => {
         const t = s.tabs[sessionId];
-        if (t) t.queue = t.queue.filter((q) => q.id !== id);
+        if (t) t.queue = t.queue.filter((q) => q.id !== id || q.injecting);
       });
     },
 
@@ -652,7 +675,7 @@ export const useRun = create<RunStore>()(
     editQueueItem(sessionId, id) {
       const t = get().tabs[sessionId];
       const item = t?.queue.find((q) => q.id === id);
-      if (!item) return;
+      if (!item || item.injecting) return;
       set((s) => {
         const t = s.tabs[sessionId];
         if (t) {

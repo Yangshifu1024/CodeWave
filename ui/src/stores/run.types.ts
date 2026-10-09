@@ -60,6 +60,8 @@ export interface QueueItem {
   text: string;
   /** 图片附件（base64，与发送入参同构；出队后走完整发送管线） */
   images?: { mime: string; data: string }[];
+  /** 正在等待本 run 的注入确认；按钮与自动出队共用的占用状态。 */
+  injecting?: boolean;
 }
 
 /** 子代理卡片视图模型（聊天卡与机器人运行指示器的数据源） */
@@ -185,6 +187,8 @@ export interface TabRunState {
   writeTick: number;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：运行队列（运行中提交的新任务，当前任务完成后依序执行） */
   queue: QueueItem[];
+  /** 正常 done 因注入占用而等待结算后续队；cancelled/error 必须清掉。 */
+  queueResumeAfterInjection?: boolean;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：待「立即运行」项（cancel 完成后立即出队执行） */
   pendingItemId: string | null;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：队列项编辑回填草稿（文本 + 附件；Composer 消费后清除） */

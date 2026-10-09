@@ -246,7 +246,7 @@ describe("快照往返（buildSnapshot → 磁盘 → loadUiState → 落 store�
     useRun.getState().initTab("s2");
     useRun.getState().setDraftText("半段草稿", "s2");
     useRun.setState((s) => {
-      s.tabs.s2.queue = [{ id: "q1", text: "排队任务", images: [{ mime: "image/png", data: "AAA" }] }];
+      s.tabs.s2.queue = [{ id: "q1", text: "排队任务", images: [{ mime: "image/png", data: "AAA" }], injecting: true }];
       s.tabs.s1.todos = [{ title: "跑测试", status: "in_progress" }];
       s.tabs.s1.subDrawer = { open: true, subId: "sub-1" };
     });
