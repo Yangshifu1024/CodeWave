@@ -197,22 +197,9 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         closeRunningTools(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
-      // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：「立即运行」打断后立即执行该项；普通取消 = 队列保持暂停
-      const t = get().tabs[p.session];
-      const pid = t?.pendingItemId;
-      if (t && pid) {
-        const item = t.queue.find((q) => q.id === pid);
-        if (item) {
-          set((s) => {
-            const t = s.tabs[p.session];
-            if (t) {
-              t.pendingItemId = null;
-              t.queue = t.queue.filter((q) => q.id !== pid);
-            }
-          });
-          void get().send(item.text, item.images, p.session);
-        }
-      }
+      // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：「↑ 立即」不再走打断路径
+      // （旧版在此检查 pendingItemId 并出队执行），故取消 = 纯停止，队列保持暂停待「继续执行」。
+      // `TabRunState.pendingItemId` 字段保留但已无写入方（删除会波及约 20 个测试文件的状态桶）。
     },
     "run:inject": (p) => {
       set((s) => {

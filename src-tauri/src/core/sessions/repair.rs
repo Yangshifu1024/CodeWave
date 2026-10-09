@@ -212,7 +212,15 @@ pub fn repair(msgs: &mut Vec<Message>) {
             }
         }
     }
-    // 悬空 tool_use：紧随其后补一条 Tool 消息（只补缺失的）
+    // 悬空 tool_use：紧随其后补一条 Tool 消息（只补缺失的）。
+    // 位置语义：补位紧跟在**含该 tool_use 的 assistant 消息之后**，即
+    // `assistant(tool_use…) → tool([interrupted])`，中间不跳任何消息。
+    // 因此 wire 组装（每条 Role::Tool 各自折成独立 user 消息、不合并相邻）产出的
+    // 仍是合法的「tool_use 紧接 tool_result」配对。
+    // **不得**改为「跨到下一个 assistant 消息处补」或「合并进已有 Tool 消息」——
+    // 两种改法都会在中间插入非 tool_result 的 user 消息，
+    // 而 Anthropic 要求 tool_use 后必须紧接 tool_result turn
+    // （[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
     let mut patched: Vec<Message> = Vec::with_capacity(msgs.len());
     for m in msgs.drain(..) {
         let missing: Vec<String> = m
@@ -362,6 +370,37 @@ mod tests {
         ];
         repair(&mut msgs);
         assert_eq!(msgs[1].content.len(), 0);
+    }
+
+    /// 补位必须**紧跟**产生 tool_use 的 assistant 消息（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
+    ///
+    /// 这条测试钉死的是位置语义，不是某个返回值：wire 组装（`stream.rs` 的
+    /// `messages_for_request`）会把每条 `Role::Tool` 各自折成一条独立 user 消息且
+    /// **不合并相邻**，所以「tool_use 后紧接 tool_result」只在这条消息紧邻时成立。
+    /// 若有人把补位改成跨消息补或合并进已有 Tool 消息，中间就会夹一条非
+    /// tool_result 的 user 消息 —— Anthropic 对此是明确非法的，而本测试会红。
+    #[test]
+    fn interrupted_result_is_adjacent_to_its_tool_use() {
+        let mut msgs = vec![
+            Message::user_text("q"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text { text: "x".into() }, tool_use("t1")],
+                created_at: None,
+            },
+            // 后续已有内容：补位绝不能插到它后面
+            Message::user_text("后续用户输入"),
+        ];
+        repair(&mut msgs);
+        // 断言：补位插在 index 2（原 assistant 紧后），而非被推到末尾
+        assert_eq!(msgs.len(), 4, "补位不得跳过后续消息");
+        assert_eq!(msgs[1].role, Role::Assistant);
+        assert_eq!(msgs[2].role, Role::Tool, "补位必须紧邻其 tool_use");
+        assert_eq!(msgs[3].role, Role::User, "后续消息顺序不得被打乱");
+        match &msgs[2].content[0] {
+            Content::ToolResult { tool_use_id, .. } => assert_eq!(tool_use_id, "t1"),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     // 用例 3：截断工具参数 → 修复或丢弃（历史保持可解析）

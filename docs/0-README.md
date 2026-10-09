@@ -15,6 +15,8 @@
 
 ## 基准与方案
 
+- 2026-09-26 · [steer-run-inject.md](./steer-run-inject.md) — **排队「↑ 立即」由打断改为 steer（中途注入，不结束 run）**。旧语义是 `cancel_run` 级联停掉主run 与全部子代理；新语义把新消息并入正在跑的 run（inject 通道），子代理照跑。调研 opencode / Codex CLI / pi 三家后对齐口径：**三家全都不做「子代理脱离父批次」，一律 steer**（opencode 的 background 子代理还是实验开关，注册表注释明写「进程重启会丢状态并打断在跑任务」）。六个时序缺口全修：**F 强制续跑标记**（命门——消化注入后模型若输出纯文本本会走 `Finish` 结束 run，steer 静默失效；标记**先于 `finish_on_text` 判定**且**一次性**消费防活锁，仍受 `MAX_TEXT_TURNS` 硬上限约束）、C 压缩历史替换前复查令牌（否则注入消息被摘要吞掉）、E 消化注入立即 checkpoint（常规 20 步节奏下崩溃即丢）、A 退避 sleep 挂取消令牌（此前裸 sleep，停响应最长 10s）、B 注入后 attempt 归零、D repair 补位位置语义核实后**无需改代码**（补位天然紧邻）只加护栏注释 + 测试钉死。前端 `runNow` 走 inject（带图项降级为排队等 run 结束），`pendingItemId` 停止写入（字段保留，删除会波及约 20 个测试文件状态桶），**事件面 29 键零改动**。验证：`cargo test` 1160 passed（2 个 Windows 存量失败与本次无关）、`pnpm --dir ui test` 1223 passed / 101 文件、`ui build` 通过。
+
 - 2026-09-26 · [session-model-recovery.md](./session-model-recovery.md) — 会话模型与思考力度跨重启恢复；旧 Tab 从 UI 快照一次性迁移，权限档仍按安全规则回落。
 
 - 2026-09-26 · [tasks-local-cron-time.md](./tasks-local-cron-time.md) — 修复计划任务 cron 按 UTC 而非本地时区计算，及存量下次触发时间的恢复校正。

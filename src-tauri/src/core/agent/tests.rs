@@ -47,52 +47,212 @@ fn text_turn_action_matrix() {
     use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
     // ① 主会话：纯文本回合即完成（行为不变）
     assert_eq!(
-        text_turn_action("答完了", true, false, 0),
+        text_turn_action("答完了", true, false, 0, false),
         TextTurnAction::Finish
     );
-    assert_eq!(text_turn_action("", true, false, 9), TextTurnAction::Finish);
+    assert_eq!(
+        text_turn_action("", true, false, 9, false),
+        TextTurnAction::Finish
+    );
     // ①’ 主会话 + 被拒调用 → 继续（**本缺陷的锚点**：[docs/rejected-call-silent-finish]）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, 0),
+        text_turn_action("下面是完整方案", true, true, 0, false),
         TextTurnAction::Continue
     );
     // ①’’ 被拒也受 MAX_TEXT_TURNS 硬上限约束（不无限续跑）
     assert_eq!(
-        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS),
+        text_turn_action("下面是完整方案", true, true, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     // ①’’’ 被拒优先于 <report>：子代理「已写汇报但同回合有调用被拒」再多走一步
     //（有意取舍：被拒调用尚未被模型知晓；已登记为遗留）
     assert_eq!(
-        text_turn_action("<report>完成</report>", false, true, 0),
+        text_turn_action("<report>完成</report>", false, true, 0, false),
         TextTurnAction::Continue
     );
     // ② 非主会话 + <report> 标记 → 完成（不计数）
     assert_eq!(
-        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0),
+        text_turn_action("<report>完成 A，未完成 B</report>", false, false, 0, false),
         TextTurnAction::Finish
     );
     assert_eq!(
-        text_turn_action("回报如下 <report>x</report>", false, false, MAX_TEXT_TURNS),
+        text_turn_action(
+            "回报如下 <report>x</report>",
+            false,
+            false,
+            MAX_TEXT_TURNS,
+            false
+        ),
         TextTurnAction::Finish
     );
     // ③ 非主会话纯旁白 / 空文本（唯一调用被拒）→ 继续
     assert_eq!(
-        text_turn_action("接下来我来改 AppShell", false, false, 0),
+        text_turn_action("接下来我来改 AppShell", false, false, 0, false),
         TextTurnAction::Continue
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS - 1),
+        text_turn_action("", false, false, MAX_TEXT_TURNS - 1, false),
         TextTurnAction::Continue
     );
     // ④ 触上限 → 显式失败（不伪装成功）
     assert_eq!(
-        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS),
+        text_turn_action("仍然只是旁白", false, false, MAX_TEXT_TURNS, false),
         TextTurnAction::StopWithLimit
     );
     assert_eq!(
-        text_turn_action("", false, false, MAX_TEXT_TURNS + 5),
+        text_turn_action("", false, false, MAX_TEXT_TURNS + 5, false),
         TextTurnAction::StopWithLimit
+    );
+}
+
+/// steer 强制续跑标记的判定（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+/// 用户中途提交的消息被消化后，模型这一回合即便输出纯文本也**不得**收尾——
+/// 否则用户看到的是「话进了历史、run 却已用旧上下文答完退出」。
+///
+/// 一次性上限（活锁防护）：标记由 drive 层在**每次调用本函数前**消费并清零
+/// （与本步是否发起工具调用解耦），故同一注入只强制一轮。
+#[test]
+fn steer_continue_forces_one_more_turn() {
+    use super::drive::{MAX_TEXT_TURNS, TextTurnAction, text_turn_action};
+    // 主会话 `finish_on_text` 恒为 true——正是它让 steer 会被静默吞掉，故必须先于它判定
+    assert_eq!(
+        text_turn_action("我先总结一下", true, false, 0, true),
+        TextTurnAction::Continue,
+        "steer 标记必须压过 finish_on_text，否则 steer 静默失效"
+    );
+    // 但压不过被拒调用分支与 MAX_TEXT_TURNS 硬上限：活锁防线不可被 steer 绕过
+    assert_eq!(
+        text_turn_action("全被拒", true, true, MAX_TEXT_TURNS, true),
+        TextTurnAction::StopWithLimit,
+        "steer 不得绕过连续无进展硬上限"
+    );
+    // 标记消费后（steer_continue = false）语义逐字节回到原状
+    assert_eq!(
+        text_turn_action("答完了", true, false, 0, false),
+        TextTurnAction::Finish
+    );
+}
+
+/// steer 标记跳工具调用轮仍必须被消费（review 🔴-1 的**回归锚**）。
+///
+/// 上一轮缺陷：消费点放在 `calls.is_empty()` 分支内，于是模型消化 steer 后发起工具调用时
+/// 标记不消费、滞留到更远的步。本用例的脚本是 **tool_use → 纯文本 → 纯文本**：
+/// - 修复后（消费点在无条件路径）：step 0 消费标记（本轮有调用，白读一次）→ step 1 纯文本
+///   且无标记 → Finish，**hits == 2**；
+/// - 回归后（消费点挪回 `calls.is_empty()` 内）：step 0 不消费、标记滞留 → step 1 被强制续跑
+///   → step 2 才 Finish，**hits == 3**。
+///
+/// 判别力验证：把 `drive.rs` 的消费点挪回 `calls.is_empty()` 分支内，本用例转红（hits 3 != 2）。
+#[tokio::test]
+async fn steer_marker_is_consumed_on_a_tool_call_turn() {
+    let tool_body = sse_body(&[
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"no_such_tool","arguments":"{}"}}]}}]}"#,
+        SSE_STOP,
+    ]);
+    let text_body = sse_body(&[r#"{"choices":[{"delta":{"content":"答复"}}]}"#, SSE_STOP]);
+    let (port, hits) = spawn_scripted_sse(vec![
+        tool_body.clone(),
+        text_body.clone(),
+        text_body.clone(),
+        text_body,
+    ])
+    .await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "steer-toolcall-e2e");
+    let params = DriveParams {
+        max_steps: 6,
+        finish_on_text: true,
+        emit_events: false,
+        main_session: true,
+        ..DriveParams::default()
+    };
+    rt.history
+        .lock()
+        .unwrap()
+        .push(crate::core::types::Message::user_text("初始任务"));
+    rt.inject_tx
+        .try_send(crate::core::types::Message::user_text("补充约束"))
+        .unwrap();
+
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_steer_tool").await;
+    assert!(result.is_ok(), "正常收尾，实际：{result:?}");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "工具调用轮必须消费 steer 标记（不得滞留到后面的纯文本步）；若这里得到 3 \
+         说明消费点被挪回了 calls.is_empty() 分支内"
+    );
+}
+
+/// `<report>` 显式汇报**优先于** steer（review 🔴-3）。
+///
+/// 模型主动声明「我说完了」是硬信号；steer 不得推翻它，否则会对着一份已完成汇报
+/// 强启新一轮，既烧 token 又可能触发对已完成任务的重复工具调用。
+#[test]
+fn explicit_report_wins_over_steer_continue() {
+    use super::drive::{TextTurnAction, text_turn_action};
+    assert_eq!(
+        text_turn_action("<report>阶段性汇报</report>", false, false, 0, true),
+        TextTurnAction::Finish,
+        "显式汇报标记优先于 steer：不得对着已完成汇报强启新一轮"
+    );
+    // 主会话 + report + steer 同样收尾
+    assert_eq!(
+        text_turn_action("<report>完成</report>", true, false, 0, true),
+        TextTurnAction::Finish
+    );
+}
+
+/// steer 端到端：消化注入后模型输出纯文本**不得**收尾（review 🔴-1 的集成层锚点）。
+///
+/// 纯函数测试只能证明 `text_turn_action` 的判定，证明不了「标记真的在消化注入后被置起、
+/// 且真的被下一步消费」。本例走完整链路：inject 通道写入 → 步循环②消化并置标记 →
+/// 第一轮纯文本被强制续跑 → 第二轮纯文本正常收尾（一次性）。
+///
+/// 关键断言：`hits == 2`。修复前（无强制续跑）只会打 1 次请求就 Finish。
+#[tokio::test]
+async fn steer_injected_message_forces_one_more_turn_end_to_end() {
+    let body = sse_body(&[
+        r#"{"choices":[{"delta":{"content":"先前的回答"}}]}"#,
+        SSE_STOP,
+    ]);
+    let (port, hits) = spawn_scripted_sse(vec![body.clone(), body.clone(), body]).await;
+    let (core, rt, _ws, _dd) = scripted_core(port, "steer-e2e");
+    // 主会话语义：finish_on_text = true（纯文本即收尾）
+    let params = DriveParams {
+        max_steps: 6,
+        finish_on_text: true,
+        emit_events: false,
+        main_session: true,
+        ..DriveParams::default()
+    };
+    // 预置一条用户消息 + steer 注入
+    rt.history
+        .lock()
+        .unwrap()
+        .push(crate::core::types::Message::user_text("初始任务"));
+    rt.inject_tx
+        .try_send(crate::core::types::Message::user_text(
+            "补充：也看下错误处理",
+        ))
+        .unwrap();
+
+    let (result, _, _) = super::drive::drive_agent(&core, &rt, params, "run_steer_e2e").await;
+    assert!(result.is_ok(), "正常收尾，实际：{result:?}");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "steer 消化后必须强制再走一轮（第一轮纯文本不得直接 Finish），且只强制一轮"
+    );
+    // steer 消息确实进了历史
+    let texts = history_texts(&rt);
+    assert!(
+        texts.iter().any(|t| t.contains("补充：也看下错误处理")),
+        "steer 消息应已并入历史，实际：{texts:?}"
+    );
+    // steer 的 Continue 分支**不得**注入 <continue-notice>（review 🔴-2：主会话硬不变量）
+    assert!(
+        !texts.iter().any(|t| t.contains("<continue-notice>")),
+        "steer 续跑不得注入 <continue-notice>（对主会话不实且违反既有硬不变量），实际：{texts:?}"
     );
 }
 

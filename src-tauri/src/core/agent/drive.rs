@@ -585,18 +585,26 @@ pub(super) enum TextTurnAction {
 ///    不无限续跑。**必须先于 `finish_on_text` 判定**：主会话「正文非空 + 全部调用被拒」
 ///    此前直接 `Finish`，run 静默成功、提示永不被模型看到、方案从未产出
 ///    （[docs/rejected-call-silent-finish]：会话 5100ea0c 的 8531 字符 `ask`）。
-/// 2. 文本轮：纯文本回合按 `text_turns` 计数，超 `MAX_TEXT_TURNS` 才 `Finish` 收尾。
+/// 2. 文本含 `<report>` 标记 → `Finish`：**显式汇报优先于一切**（含steer）——
+///    模型主动声明「我说完了」是硬信号，steer 不得推翻它，否则会对着一份已完成汇报
+///    强启新一轮，既烧 token 又可能触发对已完成任务的重复工具调用。
+/// 3. **`steer_continue`（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）**：
+///    本步消化过用户 steer 注入 → 强制再走一轮。**必须先于 `finish_on_text`**：
+///    主会话 `finish_on_text` 恒为 true，否则 steer 消息进了历史却被模型用旧上下文
+///    答完退出——用户看到的是 steer 没生效（AC-4/AC-5）。
+///    一次性：标记由调用方在进入本函数前消费并清零，故同一注入只强制一轮。
+/// 4. 文本轮：纯文本回合按 `text_turns` 计数，超 `MAX_TEXT_TURNS` 才 `Finish` 收尾。
 ///    ——主会话的 `finish_on_text` 恒为 true，否则本分支永不可达；
-/// 3. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变
-///    （无被拒调用、非目标档的回合逐字节不变）；
-/// 4. 文本含 `<report>` 标记 → `Finish`：显式最终汇报；
-/// 5. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
-/// 6. 其余 → `Continue`。
+/// 5. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变
+///    （无被拒调用、无 report 标记、非 steer 的回合逐字节不变）；
+/// 6. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
+/// 7. 其余 → `Continue`。
 pub(super) fn text_turn_action(
     text: &str,
     finish_on_text: bool,
     rejected: bool,
     text_turns: u32,
+    steer_continue: bool,
 ) -> TextTurnAction {
     // ① 被拒调用：提示已注入，绝不能就此收尾（主会话亦然）；上限仍生效
     if rejected {
@@ -606,10 +614,15 @@ pub(super) fn text_turn_action(
             TextTurnAction::Continue
         };
     }
-    if finish_on_text {
+    // ② `<report>` 显式汇报优先于一切（含 steer）
+    if text.contains(REPORT_TAG) {
         return TextTurnAction::Finish;
     }
-    if text.contains(REPORT_TAG) {
+    // ③ steer 强制续跑：用户刚提交的话必须被模型看到（AC-4/AC-5）。一次性上限在此生效。
+    if steer_continue {
+        return TextTurnAction::Continue;
+    }
+    if finish_on_text {
         return TextTurnAction::Finish;
     }
     if text_turns >= MAX_TEXT_TURNS {
@@ -617,7 +630,6 @@ pub(super) fn text_turn_action(
     }
     TextTurnAction::Continue
 }
-
 /// 剥离 `<report>…</report>` 包裹，返回（正文，是否带标记）。
 ///
 /// 语义（有意约定，非缺陷）：无标记 → 原样（仅 trim）；标记未闭合 → 其后全部视为正文；
@@ -686,6 +698,10 @@ pub async fn drive_agent(
     let mut sanitized_once = false;
     let mut attempt: u32 = 0;
     let mut run_usage = crate::provider::RunUsage::default();
+    // steer 强制续跑标记（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // 消化注入后置位，被纯文本收尾路径消费一次。**一次性**——防止模型反复纯文本
+    // 与用户注入形成活锁（活锁判据：无界增长 / 永不终止的 run）。
+    let mut force_continue = false;
     // 本 run 的生成耗时/TTFT 观测每 run 复位（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
     // 子代理/任务运行也复位各自的 runtime，不会跨 run 累积。
     *rt.run_timing.lock().unwrap() = crate::core::stats::UsageTiming::default();
@@ -722,24 +738,52 @@ pub async fn drive_agent(
             break 'steps;
         }
 
-        // ② 消化注入队列（主会话题义）
+        // ② 消化注入队列（主会话题义，[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）
+        // steer 语义：中途提交的消息并入当前 run，不结束 run、不打断子代理
+        // （与 Codex CLI `InputQueueActivity::Steer` / opencode `ensureRunning` 同构）。
+        //
+        // 命中注入时必须做三件事，缺一件 steer 就会静默失效：
+        // 1) 置 `force_continue`：消化注入后模型若输出纯文本，本可走 `Finish` 收尾——
+        //    但那意味着「用户刚说的话进了历史、模型却已用旧上下文答完退出」，
+        //    用户看到的是 steer 没生效（AC-4/AC-5）。标记在纯文本收尾路径消费。
+        // 2) 立即 checkpoint：常规 checkpoint 每 CHECKPOINT_EVERY_STEPS 步一次
+        //    （见循环尾），注入消息最多要等 19 步才落盘，崩溃即丢（AC-12）。
+        // 3) `attempt` 归零：注入即新话题，重试预算按新话题重算（AC-13）。
         {
-            let mut rx_guard = rt.inject_rx.lock().unwrap();
-            if let Some(rx) = rx_guard.as_mut() {
-                let mut injected = 0;
-                while let Ok(msg) = rx.try_recv() {
-                    rt.history.lock().unwrap().push(msg.stamped());
-                    injected += 1;
-                    if injected >= INJECT_BUFFER {
-                        break;
+            let mut injected = 0usize;
+            {
+                let mut rx_guard = rt.inject_rx.lock().unwrap();
+                if let Some(rx) = rx_guard.as_mut() {
+                    while let Ok(msg) = rx.try_recv() {
+                        rt.history.lock().unwrap().push(msg.stamped());
+                        injected += 1;
+                        if injected >= INJECT_BUFFER {
+                            break;
+                        }
                     }
                 }
-                if injected > 0 && params.emit_events {
-                    sink.emit(&rt.id, "run:inject", serde_json::json!({ "session": rt.id, "run_id": run_id, "count": injected }));
+                if injected > 0 {
+                    force_continue = true;
+                    attempt = 0;
+                    if params.emit_events {
+                        sink.emit(&rt.id, "run:inject", serde_json::json!({ "session": rt.id, "run_id": run_id, "count": injected }));
+                    }
+                    session_log::warn(
+                        rt,
+                        &format!("step {step} 已注入 {injected} 条 steer 消息，强制续跑并立即落盘"),
+                    );
                 }
             }
+            // 落盘保证（AC-12）：注入消息不等常规 checkpoint 节奏。
+            // 内层作用域已闭合，`MutexGuard` 在此已 drop——这一点是硬约束：
+            // std MutexGuard 非 Send，跨 await 会让整个 drive future 退化为 !Send，
+            // 子代理工具的 spawn 立即编译失败。
+            // checkpoint 对非主会话直接 return None（子代理无主历史），
+            // 主会话则抢 save_lock 串行落盘——只在本分支调用，不影响常态性能。
+            if injected > 0 {
+                let _ = checkpoint(core, rt).await;
+            }
         }
-
         // ③④ 实时上下文计账（主会话）+ 阈值自动压缩
         // （失败冷却 + 压缩互斥 + 进度事件，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）
         step_auto_compact(
@@ -915,6 +959,16 @@ pub async fn drive_agent(
         // ⑨ 组装 assistant 消息
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);
         let joined = assembled.joined_text();
+        // steer 强制续跑标记**每步恰好消费一次**，与本步是否发起工具调用**解耦**
+        // （[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+        //
+        // 消费点必须在**此处**（run_llm_turn 之后、判定之前）而不能放在下面的
+        // `calls.is_empty()` 分支内——若放在那里，模型消化 steer 后发起工具调用时
+        // （最常见路径）标记会滞留到某个恰好输出纯文本的步，可能已是「任务完成后的汇报」，
+        // 于是强制它对着已完成的任务再烧一轮；run 提前结束则标记永不被消费。
+        // 工具调用轮不需要续跑（模型正在干活），该轮只是白读一次变量。
+        let steer_continue = force_continue;
+        force_continue = false;
         if !joined.is_empty() {
             // clone：下方 text_turn_action 仍需读本回合文本（final_text 只保留最后一段非空文本）
             final_text = joined.clone();
@@ -973,7 +1027,10 @@ pub async fn drive_agent(
                 if params.emit_events {
                     emit_retry(&sink, rt, run_id, attempt);
                 }
-                sleep_backoff(attempt).await;
+                if !sleep_backoff(attempt, &run_token).await {
+                    outcome = Err(ProviderError::Cancelled);
+                    break 'steps;
+                }
                 continue 'steps;
             }
             outcome = Err(ProviderError::Protocol(
@@ -1006,8 +1063,13 @@ pub async fn drive_agent(
             // `text_turn_action(…, finish_on_text = true)` 直接 Finish，run 报成功而拒绝提示
             // 永不被模型看到（[docs/rejected-call-silent-finish]）。
             let rejected = !synth_results.is_empty();
-            let action = text_turn_action(&joined, params.finish_on_text, rejected, text_turns);
-            let _reminder = action == TextTurnAction::ContinueWithReminder;
+            let action = text_turn_action(
+                &joined,
+                params.finish_on_text,
+                rejected,
+                text_turns,
+                steer_continue,
+            );
             match action {
                 TextTurnAction::Finish => {
                     break 'steps;
@@ -1025,6 +1087,21 @@ pub async fn drive_agent(
                         );
                         continue 'steps;
                     }
+                    // steer 续跑（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+                    // **不得**叠加 <continue-notice>。该文案「你没有发起工具调用」对 steer 场景
+                    // 完全不实——模型确实刚回答完用户，只是用户中途提交了新消息要求它再走一轮。
+                    // 且主会话的 `<continue-notice>` 注入是一条既有硬不变量
+                    // （既有测试断言主会话不得收到它），此前本分支因 finish_on_text=true
+                    // 对主会话不可达；steer 让它首次可达，故必须在这里显式排除。
+                    if steer_continue {
+                        session_log::warn(
+                            rt,
+                            &format!(
+                                "step {step} steer 强制续跑（第 {text_turns} 次），用户新提交的消息待处理，继续下一步"
+                            ),
+                        );
+                        continue 'steps;
+                    }
                     session_log::warn(
                         rt,
                         &format!(
@@ -1036,7 +1113,8 @@ pub async fn drive_agent(
                          立即继续调用工具推进；全部完成时以 <report>…</report> 包裹输出最终汇报。</continue-notice>",
                     ).stamped());
                     // continue 跳过循环尾的 checkpoint 与空转看门狗：前者对非主会话直接
-                    // return（本分支只可能在非主会话 run 命中，finish_on_text=false），
+                    // return（余下到达此处的纯文本 Continue 只会命中非主会话，
+                    // finish_on_text=false——steer 分支已在上方提前 continue），
                     // 后者只按「有工具调用的批次」喂入——均为有意为之，勿挪到主会话语义。
                     continue 'steps;
                 }
@@ -1321,7 +1399,9 @@ async fn run_llm_turn(
             if params.emit_events {
                 emit_retry(sink, rt, run_id, *attempt);
             }
-            sleep_backoff(*attempt).await;
+            if !sleep_backoff(*attempt, &run_token).await {
+                return Err(ProviderError::Cancelled);
+            }
             continue;
         }
         match res {
@@ -1365,7 +1445,9 @@ async fn run_llm_turn(
                     if params.emit_events {
                         emit_retry(sink, rt, run_id, *attempt);
                     }
-                    sleep_backoff(*attempt).await;
+                    if !sleep_backoff(*attempt, &run_token).await {
+                        return Err(ProviderError::Cancelled);
+                    }
                     continue;
                 }
                 *attempt = 0; // M3：成功即复位重试预算（按轮，不按 run）
@@ -1489,7 +1571,9 @@ async fn run_llm_turn(
                     if params.emit_events {
                         emit_retry(sink, rt, run_id, *attempt);
                     }
-                    sleep_backoff(*attempt).await;
+                    if !sleep_backoff(*attempt, &run_token).await {
+                        return Err(ProviderError::Cancelled);
+                    }
                     continue;
                 }
                 core.key_pool
@@ -1738,8 +1822,17 @@ pub async fn run_task_agent(
 }
 
 /// 按尝试次数取退避间隔并休眠（attempt 从 1 起，与 retry 层约定一致）。
-async fn sleep_backoff(attempt: u32) {
-    tokio::time::sleep(retry::delay_for_attempt(attempt.saturating_sub(1))).await;
+///
+/// 遇取消**立即**返回，不等满退避间隔（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+/// 此前是裸 `tokio::time::sleep`，退避期间取消不生效——累计 7 次 × 10s 意味着用户点了停止
+/// 最多要等 10s 才有反应，而 `run_llm_turn` 的取消分支正是靠退避结束后进入的
+/// `attempt_token` 派发才生效。返回 false = 被取消，调用方应当直接收尾。
+async fn sleep_backoff(attempt: u32, cancel: &CancellationToken) -> bool {
+    let delay = retry::delay_for_attempt(attempt.saturating_sub(1));
+    tokio::select! {
+        _ = cancel.cancelled() => false,
+        _ = tokio::time::sleep(delay) => true,
+    }
 }
 
 /// 空转看门狗的批次摘要：从批次调用列表提取非只读标志与 read 路径（workspace 归一化后）。

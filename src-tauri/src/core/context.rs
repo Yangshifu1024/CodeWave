@@ -294,6 +294,16 @@ pub async fn compact_history(
     {
         new_history.push(last_user.clone());
     }
+    // 替换前的不可中断窗口（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // 上面 `cancel.cancelled()` 只守住了**摘要请求**那一段；从摘要拿到到执行下面这行替换
+    // 之间没有 await，故取消不会在此生效。但 steer 恰好落在这个窗口里是有后果的：
+    // 注入消化（drive 步循环②）发生在压缩**之前**，用户刚说的话已经进了 history，
+    // 若此刻仍执行整体替换，它会被一并摘要掉——用户看到的是「steer 消息凭空消失」。
+    // 故替换前复查令牌：已取消则保留原历史并放弃本次压缩（走既有 compact_fail_streak
+    // 失败路径，冷却与重试语义不变，不新增任何状态）。
+    if cancel.is_cancelled() {
+        return Err("压缩已取消（历史替换前复查）".into());
+    }
     *rt.history.lock().unwrap() = new_history;
     rt.breakdown_cache.lock().unwrap().take();
     // 真实输入量随历史一起作废：不复位会让「按上游回报触发」在压缩后立刻重复触发
