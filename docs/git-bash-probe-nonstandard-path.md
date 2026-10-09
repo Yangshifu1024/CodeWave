@@ -47,7 +47,7 @@ Git for Windows 有两种常见布局，二者都收敛到同一个 `root`：
 
 ### 2.2 `bash_via_git_exe`
 
-在 PATH 的非 `system32` 目录里用 `find_exe_in_all(&dirs, "git")` 收集**全部** `git.exe` 命中，对每个反推出 root，再按 `bin\bash.exe` → `usr\bin\bash.exe` 顺序检查存在性。
+在传入的 PATH 目录列表中排除 `system32`，用 `find_exe_in_all(&dirs, "git")` 收集**全部** `git.exe` 命中，对每个反推出 root，再按 `bin\bash.exe` → `usr\bin\bash.exe` 顺序检查存在性。`windows_probe` 读取真实环境，再调用共用的 `probe_git_bash(candidates, dirs)`；测试给同一探测链注入临时目录，不修改进程 PATH，也不受本机标准安装遮蔽。
 
 排除 `system32` 的理由：那里的 `git.exe`（若存在）通常来自非 Git-for-Windows 的第三方 git，反推出的 root 下不会有 Git Bash。
 
@@ -74,14 +74,14 @@ Windows 下同时尝试 `<exe>.exe` 与裸名（与既有 `find_exe_in` 同语�
 | 用例 | 作用 |
 |---|---|
 | `git_root_from_exe_covers_both_layouts` | 纯函数矩阵：布局 A（`D:\App\Git\cmd\git.exe`）、布局 B（`D:\App\Git\bin\git.exe`）都归到 `D:\App\Git`；负例 `git.exe` / `cmd\git.exe`（深度不足）严格断言 `None` |
-| `git_bash_probe_finds_nonstandard_install_via_git_exe` | 端到端：本机装了 Git Bash 时 `windows_probe("git_bash")` 必须返回真实存在的 `bash.exe`；且由 PATH 上的 `git.exe` 反推出的 root 下确实存在 bash（**不依赖 PATH 是否含 git 目录**）。这是 CI 的 `windows-2022` runner 结构性覆盖不到的盲区（非标准安装路径），故钉一个回归 |
-| `find_exe_in_all_collects_and_dedups` | 造两个目录各放一个同名 exe：全部命中、同路径不重复、不存在的 exe 返空 |
+| `git_bash_probe_finds_nonstandard_install_via_git_exe` | 构造临时 `arbitrary-install/cmd/git.exe` 与 `bin/bash.exe`；固定候选明确不存在，PATH 只有 cmd。断言共用探测链返回 **Some(预期 bash 完整路径)**，不允许 None 时跳过，也不依赖机器实际安装 |
+| `find_exe_in_all_collects_and_dedups` | 造两个目录各放一个同名 exe，传 a/b/a；结果必须精确为 a/exe、b/exe（保持目录顺序且去重），不存在的 exe 返空 |
 
 ## 4. 判别力
 
-`git_root_from_exe_covers_both_layouts` 与 `find_exe_in_all_collects_and_dedups` 是纯函数断言，在修复前这两个函数不存在，编译即失败。
+最初新增的测试有两个断言漏洞：probe 为 None 时跳过结果检查；全命中只断言数量 ≤2，恒返空仍通过。**编译失败不等于行为判别力**。二者已于 2026-10-10 修正，详见 [steer-race-and-probe-test-fixes](./steer-race-and-probe-test-fixes.md)。
 
-`git_bash_probe_finds_nonstandard_install_via_git_exe` 在**标准安装路径**的机器上恒通过（此时走的是原兜底）——它的判别力来自「非标准安装路径机器上修复前会红、修复后转绿」，本地以非标准路径实测确认过。
+行为反向验证：移除共用链中的 `bash_via_git_exe` 分支，临时布局测试得到 `None` 而不是预期路径，转红；临时把 `find_exe_in_all` 改为恒返空，精确结果断言转红。还原后通过。这两项现在可在 Windows CI 重复验证，无需非标准安装的实体机器。
 
 ## 5. 边界与遗留
 

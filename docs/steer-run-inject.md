@@ -12,6 +12,8 @@
 
 steer 与取消的分界：**是否结束当前 run**。steer 不结束，取消结束。
 
+**接纳契约（2026-10-10 修正）**：IPC 成功表示该消息已经进入本 run 的历史并尝试过 checkpoint；写入 mpsc 本身不算成功。请求以消息 + oneshot 收据入队，驱动消化后应答。空闲、已收尾、缓冲满、未消化即取消/出错/触顶的请求明确失败，前端保留条目；未消化消息不进入下一次 run。详见 [steer-race-and-probe-test-fixes](./steer-race-and-probe-test-fixes.md)。
+
 ## 二、业界依据（三家都不做「脱离父批次」）
 
 | | 中途发消息 | 子代理 | 汇总 |
@@ -33,7 +35,7 @@ steer 与取消的分界：**是否结束当前 run**。steer 不结束，取消
 
 → 消化注入时置 `force_continue`；`text_turn_action` 新增 `steer_continue` 参数，**判定顺序先于 `finish_on_text`**、但**后于 `<report>` 显式汇报标记**（模型主动说「完了」是硬信号，不得对着已完成汇报强启新一轮）。
 → **一次性**：标记由 drive 层在**每次进入判定前**消费并清零，**且消费点与本步是否发起工具调用解耦**（在 `run_llm_turn` 之后即读取）。若把消费点放在 `calls.is_empty()` 分支内，模型消化 steer 后发起工具调用时（最常见路径）标记会滞留到某个恰好输出纯文本的步——可能已是「任务完成后的汇报」，于是强启一轮；run 提前结束则标记永不被消费。
-→ 仍受 `MAX_TEXT_TURNS` 硬上限约束 —— steer 不得绕过连续无进展防线。
+→ 仍受 `MAX_TEXT_TURNS` 硬上限约束 —— steer 不得绕过连续无进展防线。**此承诺在最初提交中未兑现，已于 2026-10-10 修正**：普通纯文本 + steer 在 `text_turns >= MAX_TEXT_TURNS` 时回落 `Finish`；未被消化的消息返回失败并留队。原测试只验证 `rejected=true` 的更早分支，现补普通纯文本矩阵。
 → steer 触发的 `Continue` **不得**注入 `<continue-notice>`：该文案「你没有发起工具调用」对 steer 完全不实，且主会话不得收到它是一条既有硬不变量（此前主会话因 `finish_on_text=true` 走不到该分支，steer 让它首次可达）。
 
 ### C — 压缩历史替换窗口可中断（🔴）
@@ -68,7 +70,8 @@ steer 与取消的分界：**是否结束当前 run**。steer 不结束，取消
 
 ## 四、前端改动
 
-- **`runNow`**（`stores/run.ts`）：运行中 → 调 `ipc.injectRunMessage`（**不再调 `cancel`、不再置 `pendingItemId`**）。注入成功才出队；失败留在队列等 `runQueueNext`（不丢消息）。**不重排队列** —— 消息进后端 history 后队列位置已无意义。
+- **`runNow`**（`stores/run.ts`）：运行中 → 在 await 前同步占用 `QueueItem.injecting`，再调 `ipc.injectRunMessage`（**不再调 `cancel`、不再置 `pendingItemId`**）。确认成功才出队；失败释放占用并保留条目。自动出队找第一条未占用项；确认在正常 done 后到达时，按 `queueResumeAfterInjection` 补一次自动出队。取消、错误和启动新 run 均清掉标记，防止旧确认误启队列。**不重排剩余队列**。
+- **占用期间**：「立即」禁用并转圈，编辑/删除同时禁用且 store 有守卫。占用是进程内状态，磁盘快照只保留 id/text/images；关闭但保留队列时，IPC 的成功/失败仍结算驻留条目，重开不重复发送也不永久占用。
 - **带图条目降级**：`inject_run_message` 只收纯文本 → 带图项在运行中**禁用**「立即」按钮（否则是静默 no-op，用户只能靠悬停才知道点了没用）；留队列等 run 结束，tooltip 为 `queue.runNowTipImage`。
 - **`run:cancelled` handler**：`pendingItemId` 出队分支删除（Q21 后不可达）。
 - **`pendingItemId` 字段保留但停止写入**：删除会波及约 20 个测试文件的状态桶，回归风险高于收益。
@@ -83,6 +86,8 @@ steer 与取消的分界：**是否结束当前 run**。steer 不结束，取消
 - `docs/mode-gate-and-subagent-sync.md`：澄清 steer 只注入主会话、不影响档位传播。
 
 ## 六、验证
+
+下列计数为原 steer 开发期快照；2026-10-10 的时序修复、可重复测试与最新门禁见 [steer-race-and-probe-test-fixes](./steer-race-and-probe-test-fixes.md)。
 
 - 后端 `cargo test`：1161 passed（含新增 `steer_continue_forces_one_more_turn`、`explicit_report_wins_over_steer_continue`、`steer_injected_message_forces_one_more_turn_end_to_end`，以及 repair 位置语义用例）。**端到端用例已做判别力验证**：临时关掉 `force_continue` 置位即转红（`left: 1, right: 2`）。**2 个存量失败与本次改动无关**：`shell_invocation_per_variant`（本机无 Git Bash，`main` 基线即红）、`service_lifecycle`（时序敏感偶发）。
 - 代码审查（7 维度）首轮结论**需返工**：3 个 🔴 —— 标记在工具调用路径滞留导致承诺不成立 / steer 的 Continue 打破了主会话不注入 `<continue-notice>` 的硬不变量 / steer 压过 `<report>` 显式汇报。三项均已修复并补上集成层用例。
@@ -104,5 +109,15 @@ steer 与取消的分界：**是否结束当前 run**。steer 不结束，取消
 
 - `delete_session` / `delete_project` 不遍历 `core.subs`，本次未改（与 steer 无关，steer 不产生 detached 任务）。
 - steer 消息在会话恢复后与任务开始时的消息同形，回看时无法区分（需求分析开放问题 1，已确认本期不做）。
+
+## 九、收尾与接纳同步（2026-10-10）
+
+- `SessionRuntime.inject_accepting` 的检查、通道发送、空队列收尾和拒绝未消费项共用 `inject_rx` 的锁。**不能**在 try_send 后只复查原子标志：消息可能已被消费却被误报失败，前端将再发一次。
+- `drain_inject` 统一步首与收尾前的历史追加、`run:inject.count`、checkpoint 和收据应答；MutexGuard 不跨 await。
+- 纯文本 `Finish` 与 `batch_done` 在有后续步数预算时复查。若消化到消息，复位 retry 预算并续跑；空队列则在同一临界区关闭接纳窗口，再收尾。
+- 纯文本复查续跑计入 `text_turns`，达到上限或无剩余步数时不再消费新项。取消、错误、触顶与 panic 均关闭窗口并拒绝未消费项；流式 flush 等待期也不再接纳。
+- suggest 收尾被新消息延续时，清掉旧 `suggest_out` 并以现有 `run:suggestions` 事件发空数组，避免旧任务的建议留在新任务结果中；事件键不新增。
+- 已被模型请求看到的消息仍遵守 `<report>` 优先级。当前响应途中才到达、尚未被看到的消息由收尾复查处理。
+- checkpoint 失败仍沿用既有保存状态上报；注入成功保证本 run 的内存历史归属，不额外宣称磁盘写入必定成功。
 - `TabRunState.pendingItemId` 已成为**死字段**（无写入方、无读取方）。保留而非删除是为了不波及约 20 个测试文件的状态桶；后续清理时可直接删除并同步清理状态桶。
 - `TextTurnAction::ContinueWithReminder` 全局无构造点（返工前既有的死代码，本次未加剧）。
