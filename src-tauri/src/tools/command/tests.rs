@@ -4,9 +4,7 @@ use super::*;
 #[cfg(windows)]
 use super::git_root_from_exe;
 #[cfg(windows)]
-use super::path_dirs as windows_path_dirs;
-#[cfg(windows)]
-use super::windows_probe;
+use super::tool::probe_git_bash;
 // find_exe_in_all 为模块内私有辅助（不经 pub use 重导出），测试显式引入
 use super::tool::find_exe_in_all;
 
@@ -200,35 +198,18 @@ fn git_root_from_exe_covers_both_layouts() {
 #[cfg(windows)]
 #[test]
 fn git_bash_probe_finds_nonstandard_install_via_git_exe() {
-    // 本机 Git 若装在非标准位置，此用例正是它失败的原因；标准位置下同样应通过。
-    let probed = windows_probe("git_bash");
-    // 若本机确实装了 Git Bash，则探测必须返回一个真实存在的 bash.exe
-    if let Some(p) = probed {
-        assert!(
-            p.is_file()
-                && p.to_string_lossy()
-                    .to_ascii_lowercase()
-                    .ends_with("bash.exe"),
-            "git_bash 探测应返回存在的 bash.exe，实际：{p:?}"
-        );
-    }
-    // 反推函数本身在本机有 Git 时必须能定位到 bash（与 PATH 是否含 git 目录无关）
-    if let Some(git_exe) = find_exe_in_all(&windows_path_dirs(), "git")
-        .into_iter()
-        .next()
-        && let Some(root) = git_root_from_exe(&git_exe)
-    {
-        let found = [r"bin\bash.exe", r"usr\bin\bash.exe"]
-            .iter()
-            .map(|r| root.join(r))
-            .any(|p| p.is_file());
-        assert!(
-            found,
-            "由 {} 反推出的 {} 下应存在 bash.exe",
-            git_exe.display(),
-            root.display()
-        );
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("arbitrary-install");
+    let cmd = root.join("cmd");
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&cmd).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(cmd.join("git.exe"), b"fixture").unwrap();
+    let bash = bin.join("bash.exe");
+    std::fs::write(&bash, b"fixture").unwrap();
+    // 使用生产同一探测链，只注入固定候选与 PATH；绝不修改进程全局环境。
+    let missing = dir.path().join("missing-bash.exe");
+    assert_eq!(probe_git_bash(&[missing], &[cmd]), Some(bash));
 }
 
 /// find_exe_in_all：收集全部命中且去重（find_exe_in 只取首个）。
@@ -251,9 +232,10 @@ fn find_exe_in_all_collects_and_dedups() {
     // a 出现两次但应去重；PATH 语义下同名 exe 由调用方顺序取用
     let uniq: std::collections::HashSet<_> = hits.iter().collect();
     assert_eq!(uniq.len(), hits.len(), "同一路径不得重复计入：{hits:?}");
-    assert!(
-        hits.len() <= 2,
-        "同名 exe 至多命中不同目录的若干份：{hits:?}"
+    assert_eq!(
+        hits,
+        vec![a.join(exe_name), b.join(exe_name)],
+        "全部命中、保持目录顺序并去重"
     );
 
     // 不存在的 exe → 空

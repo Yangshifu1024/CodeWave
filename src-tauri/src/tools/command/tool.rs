@@ -479,14 +479,15 @@ pub(super) fn git_root_from_exe(git_exe: &std::path::Path) -> Option<std::path::
 
 /// 由 PATH 上的 git.exe 反推 Git Bash 可执行文件路径（存在性检查在此处）。
 #[cfg(windows)]
-fn bash_via_git_exe() -> Option<std::path::PathBuf> {
-    let git_dirs: Vec<std::path::PathBuf> = path_dirs()
-        .into_iter()
+fn bash_via_git_exe(dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let git_dirs: Vec<std::path::PathBuf> = dirs
+        .iter()
         .filter(|d| {
             !d.to_string_lossy()
                 .to_ascii_lowercase()
                 .contains("system32")
         })
+        .cloned()
         .collect();
     for git_exe in find_exe_in_all(&git_dirs, "git") {
         let Some(root) = git_root_from_exe(&git_exe) else {
@@ -546,9 +547,29 @@ fn unix_probe(id: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Windows 侧探测：PATH 扫描 + 常见安装位置；powershell/cmd 恒在（System32）；
-/// wsl 需 `wsl.exe --status` 在 3s 预算内成功才列入。
+/// Git Bash 探测共用链；候选与 PATH 可由测试注入，生产不改全局环境。
 #[cfg(windows)]
+pub(super) fn probe_git_bash(
+    candidates: &[std::path::PathBuf],
+    dirs: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    candidates
+        .iter()
+        .find(|p| p.is_file())
+        .cloned()
+        .or_else(|| bash_via_git_exe(dirs))
+        .or_else(|| {
+            let git_dirs: Vec<_> = dirs
+                .iter()
+                .filter(|d| d.to_string_lossy().to_ascii_lowercase().contains("git"))
+                .cloned()
+                .collect();
+            find_exe_in(&git_dirs, "bash")
+        })
+}
+
+#[cfg(windows)]
+/// Windows PATH 与常见位置探测；WSL 需在 3s 内通过状态检查。
 pub(super) fn windows_probe(id: &str) -> Option<std::path::PathBuf> {
     match id {
         // System32 的 bash.exe 是 WSL stub（走 wsl id）；Git 目录下的 bash 走 git_bash id
@@ -576,17 +597,7 @@ pub(super) fn windows_probe(id: &str) -> Option<std::path::PathBuf> {
             cands.push(r"C:\Program Files\Git\usr\bin\bash.exe".into());
             cands.push(r"C:\Git\bin\bash.exe".into());
             // 顺序：固定候选 → 由 git.exe 反推（覆盖非标准安装路径）→ PATH 含 git 目录兜底
-            cands
-                .into_iter()
-                .find(|p| p.is_file())
-                .or_else(bash_via_git_exe)
-                .or_else(|| {
-                    let git_dirs: Vec<std::path::PathBuf> = path_dirs()
-                        .into_iter()
-                        .filter(|d| d.to_string_lossy().to_ascii_lowercase().contains("git"))
-                        .collect();
-                    find_exe_in(&git_dirs, "bash")
-                })
+            probe_git_bash(&cands, &path_dirs())
         }
         "pwsh" => {
             let mut cands: Vec<std::path::PathBuf> = Vec::new();
