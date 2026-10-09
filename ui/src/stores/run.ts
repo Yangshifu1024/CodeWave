@@ -557,17 +557,39 @@ export const useRun = create<RunStore>()(
       await get().send(next.text, next.images, sessionId);
     },
 
-    // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：立即运行——空闲时直接执行；运行中则打断当前运行（以 pendingItemId 标记，待 run:cancelled 后执行）
+    // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：立即运行 = **steer**（中途注入，不结束当前 run）
+    //
+    // 语义变更（与旧实现相反）：旧版是「打断当前运行并立即执行该条」（cancel_run 级联停子代理），
+    // 新版是「把该项提到队首并把内容 steer 进正在跑的 run」——不结束 run、不打断子代理
+    // （与 Codex CLI `InputQueueActivity::Steer` / opencode `ensureRunning` 同构）。
+    //
+    // 两条路径：
+    // - 会话空闲 → 直接发（与旧版一致）
+    // - 正在跑 → `injectRunMessage`：后端在步循环开头消化（`drive.rs` 的注入块），
+    //   消化后置强制续跑标记，保证模型至少再走一轮看到这条消息（AC-4/AC-5）
+    //
+    // 带图片附件的条目走降级：inject 通道只收纯文本（`inject_run_message` 无 images 参数），
+    // 故带图项仍按「插队首 + 等本轮结束再跑」处理（AC-9）。
     async runNow(sessionId, id) {
       const t = get().tabs[sessionId];
       const item = t?.queue.find((q) => q.id === id);
       if (!item) return;
       if (t.running) {
+        // 带图项：inject 不支持，跳过 steer（留在队列等 run 结束后自然出队）
+        if (item.images?.length) return;
+        try {
+          await ipc.injectRunMessage(sessionId, item.text);
+        } catch {
+          // 注入失败（会话不在跑 / 缓冲满 / 会话已删）：条目留在队列，
+          // run 结束后 `runQueueNext` 会正常送出，不丢消息
+          return;
+        }
+        // 注入成功才出队（AC-3）。**不重排队列**：消息已进入后端 history，
+        // 队列里的相对位置对它已无意义，剩余条目保持原序即可。
         set((s) => {
           const t = s.tabs[sessionId];
-          if (t) t.pendingItemId = id;
+          if (t) t.queue = t.queue.filter((q) => q.id !== id);
         });
-        await get().cancel(sessionId);
       } else {
         set((s) => {
           const t = s.tabs[sessionId];

@@ -97,11 +97,24 @@ export default function QueuePanel() {
             </Tooltip>
           ) : null}
           <span className="queue-ops">
-            <Tooltip title={t("queue.runNowTip")}>
-              <Button size="small" icon={<ArrowUpOutlined />} onClick={() => void useRun.getState().runNow(activeKey, q.id)}>
-                {t("queue.runNow")}
-              </Button>
-            </Tooltip>
+            {/* [docs/steer-run-inject](../../../../docs/steer-run-inject.md) AC-9：inject 通道只收纯文本。
+                带图项在运行中点「立即」无法 steer（runNow 会直接 return）——按 review 🟡-2
+                显式禁用，否则用户只能靠悬停 tooltip 才知道点了没用 */}
+            {(() => {
+              const blocked = running && !!q.images?.length;
+              return (
+                <Tooltip title={blocked ? t("queue.runNowTipImage") : t("queue.runNowTip")}>
+                  <Button
+                    size="small"
+                    icon={<ArrowUpOutlined />}
+                    disabled={blocked}
+                    onClick={() => void useRun.getState().runNow(activeKey, q.id)}
+                  >
+                    {t("queue.runNow")}
+                  </Button>
+                </Tooltip>
+              );
+            })()}
             <Tooltip title={t("queue.edit")}>
               <Button size="small" type="text" icon={<EditOutlined />} onClick={() => useRun.getState().editQueueItem(activeKey, q.id)} />
             </Tooltip>

@@ -1,9 +1,11 @@
-// Run queue ([docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)): submit while running enqueues (with attachments) / run:done auto-dequeues / error pauses /
-// "Run now" interrupts the current run, then executes after cancelled / edit backfills the draft
+// Run queue ([docs/steer-run-inject](../../../docs/steer-run-inject.md)): submit while running enqueues (with attachments) / run:done auto-dequeues / error pauses /
+// "Run now" steers into the running run (no cancel_run, no interrupt) / edit backfills the draft
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
+import QueuePanel from "../features/chat/QueuePanel";
 
 const calls: { cmd: string; args: any }[] = [];
 
@@ -83,20 +85,59 @@ describe("运行队列", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "start_chat" && c.args.text === "任务B")).toBe(true));
   });
 
-  it("「立即」运行中打断当前任务，cancelled 后执行该条", async () => {
+  it("「立即」steer 进正在跑的 run：不打断、不调 cancel_run，条目出队", async () => {
     seed();
     await useRun.getState().send("任务B");
     const id = useRun.getState().tabs["s1"]!.queue[0].id;
     await useRun.getState().runNow("s1", id);
-    expect(calls.some((c) => c.cmd === "cancel_run")).toBe(true);
-    expect(useRun.getState().tabs["s1"]!.pendingItemId).toBe(id);
-    // current task cancelled → this item runs immediately (does not wait for the rest of the queue; the queue only has this item here)
-    handlers()["run:cancelled"]({ session: "s1" });
+    // steer 语义的核心断言：**不得**调 cancel_run（那会级联停掉在跑的子代理）
+    expect(calls.some((c) => c.cmd === "cancel_run")).toBe(false);
+    // 改为走 inject 通道把消息并入当前 run
+    expect(calls.some((c) => c.cmd === "inject_run_message" && c.args.text === "任务B")).toBe(true);
+    // 注入成功后才出队
+    expect(useRun.getState().tabs["s1"]!.queue).toHaveLength(0);
+    // 不经 start_chat 开新 run（当前 run 继续跑）
+    expect(calls.some((c) => c.cmd === "start_chat")).toBe(false);
+  });
+
+  it("「立即」steer 不重排队列：消息进后端 history，剩余条目保持原序", async () => {
+    seed();
+    await useRun.getState().send("任务A");
+    await useRun.getState().send("任务B");
+    await useRun.getState().send("任务C");
+    const last = useRun.getState().tabs["s1"]!.queue[2].id;
+    await useRun.getState().runNow("s1", last);
+    const q = useRun.getState().tabs["s1"]!.queue;
+    expect(q.map((x) => x.text)).toEqual(["任务A", "任务B"]);
+  });
+
+  it("「立即」遇带图条目：运行中不入队也不 steer，条目留在队列", async () => {
+    seed();
+    await useRun.getState().send("任务B", [{ mime: "image/png", data: "xx" }]);
+    const id = useRun.getState().tabs["s1"]!.queue[0].id;
+    await useRun.getState().runNow("s1", id);
+    // inject 通道只收纯文本 → 不调
+    expect(calls.some((c) => c.cmd === "inject_run_message")).toBe(false);
+    // 条目留在队列里等 run:done 自然出队（不丢消息）
+    expect(useRun.getState().tabs["s1"]!.queue).toHaveLength(1);
+    handlers()["run:done"]({ session: "s1" });
     await waitFor(() =>
       expect(calls.some((c) => c.cmd === "start_chat" && c.args.text === "任务B")).toBe(true),
     );
-    expect(useRun.getState().tabs["s1"]!.queue).toHaveLength(0);
-    expect(useRun.getState().tabs["s1"]!.pendingItemId).toBeNull();
+  });
+
+  it("带图条目的「立即」按钮在运行中禁用（review 🟡-2：避免静默 no-op）", async () => {
+    seed();
+    await useRun.getState().send("纯文本");
+    await useRun.getState().send("带图", [{ mime: "image/png", data: "xx" }]);
+    render(createElement(QueuePanel));
+    await waitFor(() => expect(useRun.getState().tabs["s1"]!.queue).toHaveLength(2));
+    const btns = screen.getAllByRole("button", { name: /立即/ });
+    expect(btns).toHaveLength(2);
+    // 第一条（纯文本）可 steer，第二条（带图）不可 → 按钮禁用
+    // 不用 jest-dom 的 toBeDisabled（本项目未装该扩展），直接读原生 disabled 属性
+    expect((btns[0] as HTMLButtonElement).disabled).toBe(false);
+    expect((btns[1] as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("编辑队列条目：文本与附件回填草稿并移除条目", async () => {

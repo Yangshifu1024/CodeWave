@@ -534,7 +534,7 @@ export default {
   },
   queue: {
     dragToSort: "Drag to reorder", images: "{{n}} image(s)",
-    runNowTip: "Interrupt the current task and run this one now", runNow: "Run now", edit: "Edit",
+    runNowTip: "Insert into the current run (no interrupt; subagents keep going)", runNowTipImage: "Has image attachments: cannot be inserted into the current run; runs after it finishes", runNow: "Run now", edit: "Edit",
     paused: "Queue paused (the previous task was cancelled or failed)", resume: "Resume",
   },
   files: {

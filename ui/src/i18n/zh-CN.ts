@@ -528,7 +528,7 @@ export default {
   },
   queue: {
     dragToSort: "拖动排序", images: "{{n}} 张图片",
-    runNowTip: "打断当前任务并立即执行该条", runNow: "立即", edit: "编辑",
+    runNowTip: "插入当前运行中（不打断，子代理继续跑）", runNowTipImage: "含图片附件：无法插入当前运行，只能等本轮结束后执行", runNow: "立即", edit: "编辑",
     paused: "队列已暂停（上一任务被取消或失败）", resume: "继续执行",
   },
   files: {

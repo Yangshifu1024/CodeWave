@@ -4,17 +4,18 @@
 
 ## 一、运行队列（纯前端，后端零改动）
 
-- **语义**（用户确认）：运行中在 Composer 输入并提交（含图片附件）→ 进入队列；当前任务 `run:done` 后自动出队执行下一条；`run:error` / `run:cancelled` 后队列**暂停保留**（不出队），由用户「继续执行」恢复；条目「↑ 立即」= **打断当前运行并立即执行该条**（被打断任务不回队列，与手动停止等效），其余条目在该条完成后继续顺序执行。
+- **语义**（用户确认）：运行中在 Composer 输入并提交（含图片附件）→ 进入队列；当前任务 `run:done` 后自动出队执行下一条；`run:error` / `run:cancelled` 后队列**暂停保留**（不出队），由用户「继续执行」恢复；条目「↑ 立即」= **steer**（中途注入当前 run，不结束 run、不打断子代理，[docs/steer-run-inject](./steer-run-inject.md)），其余条目在该条完成后继续顺序执行。
+  > **语义修订（2026-09-26）**：「↑ 立即」原为「打断当前运行并立即执行该条（与手动停止等效）」，已改为 steer。手动停止 / Esc 仍是唯一的硬取消入口（结束 run + 级联停子代理）。
 - **实现**（`ui/src/stores/run.ts` + `features/chat/QueuePanel.tsx`）：
   - `TabRunState` 新增 `queue: QueueItem[]`（`{id, text, images?}`，附件 base64 与 send 参数同构）、`pendingItemId`、`draftFromQueue`；
   - `send(text, images, targetKey?)`：运行中不再拒绝，入队受理；`targetKey` 供出队定向到源会话（后台 Tab 队列完成不抢当前焦点，完成通知机制已有覆盖）；
-  - `run:done` handler（既有幂等守卫防 suggest 双发）末尾 `runQueueNext` 自动出队；`run:cancelled` 检查 `pendingItemId`（「立即」路径）出队执行，否则保持暂停；
-  - `runNow`（空闲直发/运行中记 pendingItemId + cancel）、`removeQueueItem`、`editQueueItem`（文本回填 Composer 并聚焦，附件不回填）、`consumeDraftFromQueue`；
+  - `run:done` handler（既有幂等守卫防 suggest 双发）末尾 `runQueueNext` 自动出队；`run:cancelled` 后队列保持暂停（**不再检查 `pendingItemId`**——steer 化后该标记无写入方）；
+  - `runNow`（空闲直发 / 运行中走 `ipc.injectRunMessage` 把内容 steer 进当前 run；带图项降级为留队等 run 结束）、`removeQueueItem`、`editQueueItem`（文本回填 Composer 并聚焦，附件不回填）、`consumeDraftFromQueue`；
   - QueuePanel 渲染于 Composer 顶部：条目 = 把手 + 文本（省略+title）+ 📎 附件数 + 「立即/编辑/删除」；暂停态显示提示 + 「继续执行」。运行中 placeholder 切换为「继续输入以排队后续修改」。
   - **拖拽排序**（`queue-item` HTML5 DnD，**仅 grip 按下后启动**）：原生 setPointerCapture + draggable=true，onDragStart 受 `gripArmed` 守卫；不引入新依赖（[fix/queue-panel-width-and-drag]）。原“`draggable={draggingId===q.id}`首改拖死锁”由那场修复拔除，现每条 item 始终 draggable=true。
 - **不做独立面板宽度**：`.queue-panel` 边距与 `.composer` 同步为 `0 15% 8px`（与中栏同一公式），输入区与中栏同一容器宽度，窗口越宽越错位的旧问题拔除。
 - 队列存于前端 Tab 运行态，应用重启不保留（运行中任务本就不跨重启）。
-- 既有 `inject` 通道（运行中「插入当前对话流」语义、仅纯文本）保持不变，与本队列语义不同。
+- 既有 `inject` 通道（运行中「插入当前对话流」语义、仅纯文本）是 **steer 的后端实现**（[docs/steer-run-inject](./steer-run-inject.md)）：前端自本批起有了首个消费者（队列「↑ 立即」）。用户视角叫 steer（中途提交），后端视角叫 inject（写入 `rt.inject_tx`），是同一机制的两个视角。
 
 ## 二、询问窗口重构（`features/tools/AskPanel.tsx` 重写）
 
@@ -55,7 +56,7 @@
 
 1. 长任务运行中在 Composer 输入文字（可粘图）回车 → 输入框上方出现队列条目（📎×N 标记），placeholder 变为「继续输入以排队后续修改…」；连提多条按序排列。
 2. 当前任务完成后下一条自动开始执行；全部执行完队列清空。
-3. 点某条「↑ 立即」→ 当前任务被取消（出现「已取消」）→ 该条立即执行 → 其余队列继续；点 ✏️ → 文本回填输入框、条目移除；点 🗑️ → 条目移除。
+3. 点某条「↑ 立即」→ 当前任务**不中断**（不出现「已取消」，改为「已注入 N 条消息」notice）→ 该条内容 steer 进当前 run 并被处理 → 其余队列继续顺序执行；点 ✏️ → 文本回填输入框、条目移除；点 🗑️ → 条目移除。
 4. 让任务失败或手动停止 → 队列保留并显示「队列已暂停」→ 点「继续执行」恢复顺序执行。
 5. ConfirmEach 档触发命令审批 → 新卡片样式（需要权限/等待确认/命令块/编号三选项）→ 点击卡片后按 Tab/↑↓ 移动高亮、数字 1-3 快选、回车确认；选 2（始终允许本项目）→ 确认后命令执行，同命令再次执行不再询问。
 6. 设置 → 安全 → 可见「命令白名单」列表 → 删除某条 → 保存后该命令恢复询问。
