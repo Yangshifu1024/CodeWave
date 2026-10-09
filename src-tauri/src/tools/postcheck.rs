@@ -302,7 +302,6 @@ pub fn is_json(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::ToolCtx;
 
     #[test]
     fn placeholder_detection_and_substitution_quotes_path() {

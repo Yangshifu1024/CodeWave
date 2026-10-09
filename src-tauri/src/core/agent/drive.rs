@@ -1482,7 +1482,7 @@ async fn run_llm_turn(
             if params.emit_events {
                 emit_retry(sink, rt, run_id, *attempt);
             }
-            if !sleep_backoff(*attempt, &run_token).await {
+            if !sleep_backoff(*attempt, run_token).await {
                 return Err(ProviderError::Cancelled);
             }
             continue;
@@ -1528,7 +1528,7 @@ async fn run_llm_turn(
                     if params.emit_events {
                         emit_retry(sink, rt, run_id, *attempt);
                     }
-                    if !sleep_backoff(*attempt, &run_token).await {
+                    if !sleep_backoff(*attempt, run_token).await {
                         return Err(ProviderError::Cancelled);
                     }
                     continue;
@@ -1654,7 +1654,7 @@ async fn run_llm_turn(
                     if params.emit_events {
                         emit_retry(sink, rt, run_id, *attempt);
                     }
-                    if !sleep_backoff(*attempt, &run_token).await {
+                    if !sleep_backoff(*attempt, run_token).await {
                         return Err(ProviderError::Cancelled);
                     }
                     continue;

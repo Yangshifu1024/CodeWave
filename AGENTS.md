@@ -31,8 +31,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（本地实测 **1111 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；**已知存量 warning**：`src/tools/postcheck.rs:305` 的 unused import（主工作区同样存在、非近期引入）——「0 warning」的表述与现状不符；CI 用 `cargo test --workspace` |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1109 passed / 95 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（本地实测 **1177 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；**0 warning 基线**（2026-10-10 清掉最后 7 条 clippy 警告：`drive.rs` 三处 `needless_borrow`（steer 改动带入）、`openers/mod.rs` unneeded return、`postcheck.rs` unused import、`command/tests.rs` 两处——**新增警告一律当场修，不要攒**）；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1229 passed / 102 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |

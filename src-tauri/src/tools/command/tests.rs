@@ -216,19 +216,18 @@ fn git_bash_probe_finds_nonstandard_install_via_git_exe() {
     if let Some(git_exe) = find_exe_in_all(&windows_path_dirs(), "git")
         .into_iter()
         .next()
+        && let Some(root) = git_root_from_exe(&git_exe)
     {
-        if let Some(root) = git_root_from_exe(&git_exe) {
-            let found = [r"bin\bash.exe", r"usr\bin\bash.exe"]
-                .iter()
-                .map(|r| root.join(r))
-                .any(|p| p.is_file());
-            assert!(
-                found,
-                "由 {} 反推出的 {} 下应存在 bash.exe",
-                git_exe.display(),
-                root.display()
-            );
-        }
+        let found = [r"bin\bash.exe", r"usr\bin\bash.exe"]
+            .iter()
+            .map(|r| root.join(r))
+            .any(|p| p.is_file());
+        assert!(
+            found,
+            "由 {} 反推出的 {} 下应存在 bash.exe",
+            git_exe.display(),
+            root.display()
+        );
     }
 }
 
@@ -258,7 +257,7 @@ fn find_exe_in_all_collects_and_dedups() {
     );
 
     // 不存在的 exe → 空
-    assert!(find_exe_in_all(&[a.clone()], "definitely_missing_xyz").is_empty());
+    assert!(find_exe_in_all(std::slice::from_ref(&a), "definitely_missing_xyz").is_empty());
 }
 
 /// run_process 拼接契约：各变体的程序 + 参数（纯字符串断言）。

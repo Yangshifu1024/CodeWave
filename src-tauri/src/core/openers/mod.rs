@@ -473,7 +473,7 @@ fn spawn_detached(program: &Path, args: &[&Path]) -> Result<(), String> {
             c
         };
         command.creation_flags(CREATE_NO_WINDOW);
-        return command.spawn().map(|_| ()).map_err(|e| e.to_string());
+        command.spawn().map(|_| ()).map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
