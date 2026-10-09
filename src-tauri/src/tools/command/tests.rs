@@ -1,6 +1,15 @@
 use super::*;
 // 本文件全部用例 cfg(unix)：trait 导入需同步 cfg——Windows 下 cfg(unix) 用例整体剔除后报 unused import、
 // macOS 上则因缺此导入 E0599（CommandTool.run 不可见）——基线曾因 Windows 端用例剔除而漏检
+#[cfg(windows)]
+use super::git_root_from_exe;
+#[cfg(windows)]
+use super::path_dirs as windows_path_dirs;
+#[cfg(windows)]
+use super::windows_probe;
+// find_exe_in_all 为模块内私有辅助（不经 pub use 重导出），测试显式引入
+use super::tool::find_exe_in_all;
+
 #[cfg(unix)]
 use crate::tools::Tool as _;
 use crate::tools::ToolCtx;
@@ -156,6 +165,100 @@ fn detect_all_shells_stable_order_and_windows_always_present() {
         assert!(!s.name.is_empty());
         assert_eq!(s.limited, matches!(s.id.as_str(), "cmd" | "fish" | "wsl"));
     }
+}
+
+/// git_root_from_exe：两种常见 Git 布局都收敛到同一个安装根（纯函数，不碰文件系统）。
+#[cfg(windows)]
+#[test]
+fn git_root_from_exe_covers_both_layouts() {
+    // 布局 A：只把 cmd 加进 PATH（本机形态，bash.exe 在同级 bin\ 下）
+    assert_eq!(
+        git_root_from_exe(std::path::Path::new(r"D:\App\Git\cmd\git.exe")),
+        Some(std::path::PathBuf::from(r"D:\App\Git"))
+    );
+    // 布局 B：整个 bin 加进 PATH
+    assert_eq!(
+        git_root_from_exe(std::path::Path::new(r"D:\App\Git\bin\git.exe")),
+        Some(std::path::PathBuf::from(r"D:\App\Git"))
+    );
+    // 标准安装位置同样成立
+    assert_eq!(
+        git_root_from_exe(std::path::Path::new(r"C:\Program Files\Git\cmd\git.exe")),
+        Some(std::path::PathBuf::from(r"C:\Program Files\Git"))
+    );
+    // 负例：深度不足（没有 cmd/bin 父层）→ None。
+    // Rust 的 Path::parent 对 "git.exe" 返 Some("")，实现已过滤空根，故此处可严格断言 None。
+    assert_eq!(git_root_from_exe(std::path::Path::new(r"git.exe")), None);
+    assert_eq!(
+        git_root_from_exe(std::path::Path::new(r"cmd\git.exe")),
+        None
+    );
+}
+
+/// bash_via_git_exe 必须在「固定候选落空 + PATH 里只有 git.exe 没有 bash.exe」时仍能找到 bash.exe。
+/// 这是 CI 的 windows-2022 runner 结构性覆盖不到的盲区（非标准安装路径），故钉一个端到端回归。
+#[cfg(windows)]
+#[test]
+fn git_bash_probe_finds_nonstandard_install_via_git_exe() {
+    // 本机 Git 若装在非标准位置，此用例正是它失败的原因；标准位置下同样应通过。
+    let probed = windows_probe("git_bash");
+    // 若本机确实装了 Git Bash，则探测必须返回一个真实存在的 bash.exe
+    if let Some(p) = probed {
+        assert!(
+            p.is_file()
+                && p.to_string_lossy()
+                    .to_ascii_lowercase()
+                    .ends_with("bash.exe"),
+            "git_bash 探测应返回存在的 bash.exe，实际：{p:?}"
+        );
+    }
+    // 反推函数本身在本机有 Git 时必须能定位到 bash（与 PATH 是否含 git 目录无关）
+    if let Some(git_exe) = find_exe_in_all(&windows_path_dirs(), "git")
+        .into_iter()
+        .next()
+    {
+        if let Some(root) = git_root_from_exe(&git_exe) {
+            let found = [r"bin\bash.exe", r"usr\bin\bash.exe"]
+                .iter()
+                .map(|r| root.join(r))
+                .any(|p| p.is_file());
+            assert!(
+                found,
+                "由 {} 反推出的 {} 下应存在 bash.exe",
+                git_exe.display(),
+                root.display()
+            );
+        }
+    }
+}
+
+/// find_exe_in_all：收集全部命中且去重（find_exe_in 只取首个）。
+#[test]
+fn find_exe_in_all_collects_and_dedups() {
+    let dir = tempfile::tempdir().unwrap();
+    // 造两个「目录」各放一个同名 exe，验证全部命中；同名同路径不重复计入
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    #[cfg(windows)]
+    let exe_name = "probe_tool.exe";
+    #[cfg(not(windows))]
+    let exe_name = "probe_tool";
+    std::fs::write(a.join(exe_name), b"x").unwrap();
+    std::fs::write(b.join(exe_name), b"x").unwrap();
+
+    let hits = find_exe_in_all(&[a.clone(), b.clone(), a.clone()], "probe_tool");
+    // a 出现两次但应去重；PATH 语义下同名 exe 由调用方顺序取用
+    let uniq: std::collections::HashSet<_> = hits.iter().collect();
+    assert_eq!(uniq.len(), hits.len(), "同一路径不得重复计入：{hits:?}");
+    assert!(
+        hits.len() <= 2,
+        "同名 exe 至多命中不同目录的若干份：{hits:?}"
+    );
+
+    // 不存在的 exe → 空
+    assert!(find_exe_in_all(&[a.clone()], "definitely_missing_xyz").is_empty());
 }
 
 /// run_process 拼接契约：各变体的程序 + 参数（纯字符串断言）。

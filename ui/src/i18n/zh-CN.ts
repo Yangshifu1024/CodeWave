@@ -308,6 +308,9 @@ export default {
   notice: {
     cancelled: "已取消",
     compactSummary: "（压缩摘要）",
+    // 内部提示（<continue-notice> / <tool-args-rejected> / <text-turn-limit> 等）是后端注入
+    // 给模型看的指令，恢复历史时不以 user 气泡原样展示 XML（[docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4）
+    internalHint: "（系统内部续跑提示）",
     needSession: "请先在左侧导航新建或选择一个会话",
     taskDone: "任务完成",
     // 历史 8MB 上限的越限可见性（[docs/session-history-limits](../../../docs/session-history-limits.md)）：

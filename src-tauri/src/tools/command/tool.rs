@@ -430,7 +430,7 @@ fn find_windows_bash() -> Option<std::path::PathBuf> {
 }
 
 /// PATH 目录列表（Windows `;`、Unix `:`；空项忽略）。
-fn path_dirs() -> Vec<std::path::PathBuf> {
+pub(super) fn path_dirs() -> Vec<std::path::PathBuf> {
     std::env::var_os("PATH")
         .map(|p| {
             std::env::split_paths(&p)
@@ -453,6 +453,73 @@ fn find_exe_in(dirs: &[std::path::PathBuf], exe: &str) -> Option<std::path::Path
             p.is_file().then_some(p)
         })
     })
+}
+
+/// 从一个已定位的 `git.exe` 路径反推 Git 安装根目录。
+///
+/// 纯函数（不碰文件系统）：给定 PATH 上找到的 git.exe，返回可能的安装根。
+/// Git for Windows 有两种常见布局——`<root>\cmd\git.exe`（只把 cmd 加进 PATH）
+/// 与 `<root>\bin\git.exe`（整个 bin 加进 PATH）——两者都收敛到同一个 root，
+/// 因此统一「取父目录的父目录」即可覆盖。
+///
+/// 存在的意义：固定候选路径只覆盖 `%ProgramFiles%\Git` 等标准安装位置，
+/// 而 PATH 兜底只认「目录名含 git」。当 Git 装在任意位置（如 `D:\App\Git`）且
+/// PATH 里只有 `D:\App\Git\cmd`（不含 bash.exe）时，两者同时落空——本函数
+/// 跟着已确认存在的 git.exe 走，对任意安装位置都成立。
+#[cfg(windows)]
+pub(super) fn git_root_from_exe(git_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    git_exe
+        .parent()
+        .and_then(std::path::Path::parent)
+        // Path::parent 对 "git.exe" 这类单段路径返 Some("")，会让后续 join 产出
+        // 相对路径（可能误命中 cwd 下的同名目录）——空根一律视为无法反推
+        .filter(|root| !root.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+}
+
+/// 由 PATH 上的 git.exe 反推 Git Bash 可执行文件路径（存在性检查在此处）。
+#[cfg(windows)]
+fn bash_via_git_exe() -> Option<std::path::PathBuf> {
+    let git_dirs: Vec<std::path::PathBuf> = path_dirs()
+        .into_iter()
+        .filter(|d| {
+            !d.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("system32")
+        })
+        .collect();
+    for git_exe in find_exe_in_all(&git_dirs, "git") {
+        let Some(root) = git_root_from_exe(&git_exe) else {
+            continue;
+        };
+        // bin\bash.exe 是 Git for Windows 的标准落点，usr\bin 作为次选
+        for rel in [r"bin\bash.exe", r"usr\bin\bash.exe"] {
+            let p = root.join(rel);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// 在目录列表中查找可执行文件，收集全部命中（`find_exe_in` 的多命中版）。
+pub(super) fn find_exe_in_all(dirs: &[std::path::PathBuf], exe: &str) -> Vec<std::path::PathBuf> {
+    let mut names: Vec<String> = Vec::with_capacity(2);
+    if cfg!(windows) && !exe.to_ascii_lowercase().ends_with(".exe") {
+        names.push(format!("{exe}.exe"));
+    }
+    names.push(exe.to_string());
+    let mut out = Vec::new();
+    for d in dirs {
+        for n in &names {
+            let p = d.join(n);
+            if p.is_file() && !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// 探测固定候选路径中第一个存在的（Unix /bin、/usr/bin 布局）。
@@ -482,7 +549,7 @@ fn unix_probe(id: &str) -> Option<std::path::PathBuf> {
 /// Windows 侧探测：PATH 扫描 + 常见安装位置；powershell/cmd 恒在（System32）；
 /// wsl 需 `wsl.exe --status` 在 3s 预算内成功才列入。
 #[cfg(windows)]
-fn windows_probe(id: &str) -> Option<std::path::PathBuf> {
+pub(super) fn windows_probe(id: &str) -> Option<std::path::PathBuf> {
     match id {
         // System32 的 bash.exe 是 WSL stub（走 wsl id）；Git 目录下的 bash 走 git_bash id
         "bash" => {
@@ -508,13 +575,18 @@ fn windows_probe(id: &str) -> Option<std::path::PathBuf> {
             cands.push(r"C:\Program Files\Git\bin\bash.exe".into());
             cands.push(r"C:\Program Files\Git\usr\bin\bash.exe".into());
             cands.push(r"C:\Git\bin\bash.exe".into());
-            cands.into_iter().find(|p| p.is_file()).or_else(|| {
-                let git_dirs: Vec<std::path::PathBuf> = path_dirs()
-                    .into_iter()
-                    .filter(|d| d.to_string_lossy().to_ascii_lowercase().contains("git"))
-                    .collect();
-                find_exe_in(&git_dirs, "bash")
-            })
+            // 顺序：固定候选 → 由 git.exe 反推（覆盖非标准安装路径）→ PATH 含 git 目录兜底
+            cands
+                .into_iter()
+                .find(|p| p.is_file())
+                .or_else(bash_via_git_exe)
+                .or_else(|| {
+                    let git_dirs: Vec<std::path::PathBuf> = path_dirs()
+                        .into_iter()
+                        .filter(|d| d.to_string_lossy().to_ascii_lowercase().contains("git"))
+                        .collect();
+                    find_exe_in(&git_dirs, "bash")
+                })
         }
         "pwsh" => {
             let mut cands: Vec<std::path::PathBuf> = Vec::new();

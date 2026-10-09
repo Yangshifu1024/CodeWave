@@ -139,6 +139,9 @@ pub async fn run_chat(
         .store(false, Ordering::SeqCst);
     // plan 软提醒（batch::maybe_emit_plan_hint）每 run 至多一次：run 起点同模式复位
     rt.plan_hint_emitted.store(false, Ordering::SeqCst);
+    // 「本 run 碰过计划」标记同位复位（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+    // 计划未收尾的收尾门只看本标记，避免上个 run 的陈旧计划劫持本 run 的普通提问
+    rt.plan_called_this_run.store(false, Ordering::SeqCst);
 
     // 会话装载：内存为空但磁盘有历史 → 加载（历史 + todos）
     if rt.history.lock().unwrap().is_empty() {
@@ -528,6 +531,39 @@ pub(super) const REPORT_TAG_END: &str = "</report>";
 /// 是保守取舍（上限 3 连，代价可控）。
 pub(super) const MAX_TEXT_TURNS: u32 = 3;
 
+/// `<continue-notice>` 注入文案：非主会话的「只输出文字」续跑提示（带 `<report>` 收尾引导）。
+fn continue_notice() -> String {
+    "<continue-notice>你在上一回合只输出了文字、没有发起工具调用。若任务尚未完成，\
+     立即继续调用工具推进；全部完成时以 <report>…</report> 包裹输出最终汇报。</continue-notice>"
+        .to_string()
+}
+
+/// `<continue-notice>` 注入文案变体（主会话 + 计划未收尾）：点名未完成待办，给出显式
+/// 逃生口（`plan` 更新计划），并**点名连续空转的代价**。
+///
+/// 为什么要变体而不在变异体后继续追加（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）：
+/// `rt.todos` 跨 run 持久化且 run 开头从磁盘装载（`run_chat` 装载段），「上个 run 留下的半成品计划」
+/// 也会命中续跑门。复用子代理那句「全部完成时以 <report> 包裹」等于把模型推向一个它无法自行验证的
+/// 断言；点名待办 + 指明 `plan` 出口，模型才有办法自己解开（调用 plan 把不相关项标 completed 或删掉）。
+///
+/// 末句「再次只输出文字将被视为收尾」不是同义反复而是**硬约束**：主会话的 `text_turns` 在纯文本
+/// 回合不复位（复位点只在有工具调用的回合末尾），故第 4 个连续纯文本回合会静默回落 `Finish`
+/// ——不说破，模型容易拿到同一句提示后原地复读。下一回合该做什么形态（工具调用 / 更新计划 / 收尾）
+/// 三条路都已点名，不需再重复主会话「正文即收尾」的常识。
+pub(super) fn continue_notice_pending_todos(todos: &[crate::tools::plan::Todo]) -> String {
+    let pending: Vec<String> = todos
+        .iter()
+        .filter(|t| t.status != crate::tools::plan::TodoStatus::Completed)
+        .map(|t| t.title.clone())
+        .collect();
+    format!(
+        "<continue-notice>你在上一回合只输出了文字、没有发起工具调用，而当前计划仍有未完成项：\
+         {}\n请立即调用工具推进；若这些待办其实已完成或不再需要，先用 plan 更新计划\
+         （把已完成项标为 completed、删除无关项）。再次只输出文字将被视为收尾。</continue-notice>",
+        pending.join("；")
+    )
+}
+
 /// 被拒调用（参数 JSON 不可修复）的反馈文案。两处消费：① 空 content 回合（唯一调用被拒、
 /// 文本也被滤空）；② 正文非空但全部调用被拒的回合。抽为单函数防止两处文案漂移——
 /// 合并集成修复前，①处直接盲重试，模型看不到拒绝原因（本提示一度为不可达死代码）。
@@ -571,8 +607,6 @@ pub(super) enum TextTurnAction {
     Finish,
     /// 注入提示后继续下一步（消耗步数预算）
     Continue,
-    /// 目标模式执行期已达文本轮上限：注入提醒后再给一轮（下一轮仍纯文本才收尾）
-    ContinueWithReminder,
     /// 连续无工具调用达上限：以显式错误终止，绝不伪装成功
     StopWithLimit,
 }
@@ -593,18 +627,24 @@ pub(super) enum TextTurnAction {
 ///    主会话 `finish_on_text` 恒为 true，否则 steer 消息进了历史却被模型用旧上下文
 ///    答完退出——用户看到的是 steer 没生效（AC-4/AC-5）。
 ///    一次性：标记由调用方在进入本函数前消费并清零，故同一注入只强制一轮。
-/// 4. 文本轮：纯文本回合按 `text_turns` 计数，超 `MAX_TEXT_TURNS` 才 `Finish` 收尾。
-///    ——主会话的 `finish_on_text` 恒为 true，否则本分支永不可达；
-/// 5. `finish_on_text`（主会话）→ `Finish`：对主会话而言「无工具调用 = 回答完毕」语义不变
-///    （无被拒调用、无 report 标记、非 steer 的回合逐字节不变）；
-/// 6. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
-/// 7. 其余 → `Continue`。
+/// 4. `finish_on_text`（主会话）→ 计划未收尾时 `Continue`，否则 `Finish`：
+///    「无工具调用 = 回答完毕」对**无计划**的普通问答语义不变；但计划仍有未完成项时，
+///    一句「我接下来要改 X」这类旁白收尾会让 run 带着半成品计划静默成功
+///    （[docs/main-run-finish-with-pending-todos]：会话 f19c3890 的 50 字旁白）。
+///    连续纯文本达 `MAX_TEXT_TURNS` 仍不收敛则**回落 `Finish`**（不 `StopWithLimit`）：
+///    主会话的「显式失败」= 对一次普通提问弹 `run:error`，比多几轮对话更糟；
+///    计划表在右栏可见，信息不丢。
+///    实际触发点是**第 4 个**纯文本回合（`text_turns` 的复位点只在「有工具调用的回合」末尾，
+///    纯文本回合走 `continue 'steps` 跳过它），即最多强制续跑 3 轮后回落收尾，绝不无限续跑。
+/// 5. `text_turns >= MAX_TEXT_TURNS` → `StopWithLimit`：不收敛则显式失败；
+/// 6. 其余 → `Continue`。
 pub(super) fn text_turn_action(
     text: &str,
     finish_on_text: bool,
     rejected: bool,
     text_turns: u32,
     steer_continue: bool,
+    todos_pending: bool,
 ) -> TextTurnAction {
     // ① 被拒调用：提示已注入，绝不能就此收尾（主会话亦然）；上限仍生效
     if rejected {
@@ -621,6 +661,20 @@ pub(super) fn text_turn_action(
     // ③ steer 强制续跑：用户刚提交的话必须被模型看到（AC-4/AC-5）。一次性上限在此生效。
     if steer_continue {
         return TextTurnAction::Continue;
+    }
+    if finish_on_text {
+        // 主会话：计划未收尾时不得把纯文本旁白当成「回答完毕」（缺陷锚点）。
+        // 连续纯文本达上限则回落 Finish —— 宁可保持今日行为，也不把普通提问弹成 run:error。
+        //
+        // 关于「达上限」的实际触发点：text_turns 的复位点只在「有工具调用的回合」末尾，
+        // 纯文本回合走 continue 'steps 跳过它，故计数为 0→1→2→3，**第 4 个**纯文本回合
+        // 才满足 text_turns >= MAX_TEXT_TURNS。即计划未收尾时最多强制续跑 3 轮后回落收尾，
+        // 绝不无限续跑（与子代理的 StopWithLimit 区别见上）。
+        return if todos_pending && text_turns < MAX_TEXT_TURNS {
+            TextTurnAction::Continue
+        } else {
+            TextTurnAction::Finish
+        };
     }
     if finish_on_text {
         return TextTurnAction::Finish;
@@ -718,9 +772,12 @@ pub async fn drive_agent(
     //（[docs/subagent-idle-watchdog-misfire]：只读 run 的空转层只纠偏不终止；失败重复层
     // 与步数/汇报门不受 policy 影响，照常终止）
     let mut supervision = SupervisionState::with_idle_policy(params.idle_policy);
-    // 连续「无工具调用回合」计数（仅非主会话 run 消费；有工具调用或压缩成功时复位）：
+    // 连续「无工具调用回合」计数（有工具调用或压缩成功时复位）：
     // 用于 <continue-notice> 续跑与 MAX_TEXT_TURNS 显式失败门
-    //（[docs/subagent-text-turn-premature-exit]）
+    //（[docs/subagent-text-turn-premature-exit]）。非主会话达上限 → StopWithLimit；
+    // 主会话（finish_on_text=true）另有计划维度，见 text_turn_action。
+    // 注意复位点在本文件「有工具调用的回合」末尾，纯文本回合走 continue 'steps 跳过它——
+    // 故主会话连续纯文本时计数为 0→1→2→3，第 4 个才吃到回落 Finish。
     let mut text_turns: u32 = 0;
     // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：每 run 至多一次——既救
     // 「端点偶发漏 tool_use」，也不给提示注入留反复重试的窗口。
@@ -811,9 +868,12 @@ pub async fn drive_agent(
             );
         }
         // ⑥ 强制汇报轮：最后一步
+        // 成对标签（与 <budget-notice> / <continue-notice> 等同口径）：前端 buildTranscript 的
+        // isInternalHint 按「整条恰好是成对标签」判定并渲染为 notice——缺闭合标签会漏判，
+        // 恢复后仍以 user 气泡展示 XML 原文（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.4）。
         if params.force_report && step == params.max_steps.saturating_sub(1) {
             rt.history.lock().unwrap().push(Message::user_text(
-                "<final-report>已到达步数上限。停止调用工具，立即输出最终汇报：已完成、未完成、结论。",
+                "<final-report>已到达步数上限。停止调用工具，立即输出最终汇报：已完成、未完成、结论。</final-report>",
             ).stamped());
         }
 
@@ -1063,18 +1123,27 @@ pub async fn drive_agent(
             // `text_turn_action(…, finish_on_text = true)` 直接 Finish，run 报成功而拒绝提示
             // 永不被模型看到（[docs/rejected-call-silent-finish]）。
             let rejected = !synth_results.is_empty();
+            // 计划快照与判定同帧读取（锁序：只取 clone 后立即释放，不跨 await 持锁）
+            let todos_snapshot = rt.todos.lock().unwrap().clone();
+            // 陈旧计划豁免（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+            // rt.todos 跳 run 持久化，但生产路径唯一写者是 plan 工具，故「本 run 碰过计划」
+            // 能区分本 run 的计划与上个 run 的遗留。没碰过计划就不拦——否则用户在留有半成品
+            // 计划的会话里问一句无关的普通问题，会被劫持成最多 3 轮工具循环。
+            let todos_pending = rt.plan_called_this_run.load(Ordering::SeqCst)
+                && crate::tools::plan::has_pending(&todos_snapshot);
             let action = text_turn_action(
                 &joined,
                 params.finish_on_text,
                 rejected,
                 text_turns,
                 steer_continue,
+                todos_pending,
             );
             match action {
                 TextTurnAction::Finish => {
                     break 'steps;
                 }
-                TextTurnAction::Continue | TextTurnAction::ContinueWithReminder => {
+                TextTurnAction::Continue => {
                     text_turns += 1;
                     if rejected {
                         // 被拒回合：<tool-args-rejected> 已注入，不再叠加 <continue-notice>——
@@ -1090,9 +1159,6 @@ pub async fn drive_agent(
                     // steer 续跑（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
                     // **不得**叠加 <continue-notice>。该文案「你没有发起工具调用」对 steer 场景
                     // 完全不实——模型确实刚回答完用户，只是用户中途提交了新消息要求它再走一轮。
-                    // 且主会话的 `<continue-notice>` 注入是一条既有硬不变量
-                    // （既有测试断言主会话不得收到它），此前本分支因 finish_on_text=true
-                    // 对主会话不可达；steer 让它首次可达，故必须在这里显式排除。
                     if steer_continue {
                         session_log::warn(
                             rt,
@@ -1102,20 +1168,37 @@ pub async fn drive_agent(
                         );
                         continue 'steps;
                     }
-                    session_log::warn(
-                        rt,
-                        &format!(
-                            "step {step} 无工具调用回合（第 {text_turns}/{MAX_TEXT_TURNS} 次），注入续跑提示后继续"
-                        ),
-                    );
-                    rt.history.lock().unwrap().push(Message::user_text(
-                        "<continue-notice>你在上一回合只输出了文字、没有发起工具调用。若任务尚未完成，\
-                         立即继续调用工具推进；全部完成时以 <report>…</report> 包裹输出最终汇报。</continue-notice>",
-                    ).stamped());
+                    // 主会话 + 计划未收尾：点名未完成项并给出 plan 出口（[docs/main-run-finish-with-pending-todos]）。
+                    // 非主会话走原句（含 <report> 引导，两者语义不同不得混用）。
+                    //
+                    // 注：主会话在此可达**仅限 todos_pending**（无计划的普通问答仍由
+                    // `text_turn_action` 直接 Finish，不落到本分支）；故主会话不得收到
+                    // <continue-notice> 这条不变量收窄为「无计划时」。
+                    let (notice, log_line) = if params.finish_on_text && todos_pending {
+                        (
+                            continue_notice_pending_todos(&todos_snapshot),
+                            format!(
+                                "step {step} 主会话纯文本回合但计划仍有未完成项（第 {text_turns}/{MAX_TEXT_TURNS} 次），\
+                                 已注入计划续跑提示"
+                            ),
+                        )
+                    } else {
+                        (
+                            continue_notice(),
+                            format!(
+                                "step {step} 无工具调用回合（第 {text_turns}/{MAX_TEXT_TURNS} 次），注入续跑提示后继续"
+                            ),
+                        )
+                    };
+                    session_log::warn(rt, &log_line);
+                    rt.history
+                        .lock()
+                        .unwrap()
+                        .push(Message::user_text(notice).stamped());
                     // continue 跳过循环尾的 checkpoint 与空转看门狗：前者对非主会话直接
-                    // return（余下到达此处的纯文本 Continue 只会命中非主会话，
-                    // finish_on_text=false——steer 分支已在上方提前 continue），
-                    // 后者只按「有工具调用的批次」喂入——均为有意为之，勿挪到主会话语义。
+                    // return（到达此处的纯文本 Continue 要么是非主会话 finish_on_text=false，
+                    // 要么是主会话计划未收尾的续跑），后者只按「有工具调用的批次」喂入
+                    // ——均为有意为之，勿挪到主会话语义。
                     continue 'steps;
                 }
                 TextTurnAction::StopWithLimit => {
@@ -1765,6 +1848,12 @@ async fn run_tool_batch(
     // 本函数返回后 run_chat 还要复位 running（提前发 done 会让前端出队后 startChat
     // 撞上未复位窗口，报「该会话已有运行中的任务」并丢弃队列项）——建议经
     // 返回值交给 run_chat 并入唯一一次 done。
+    //
+    // ⚠️ 依赖（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.1）：
+    // 「计划未收尾时不得静默成功收尾」的门在 `tools::suggest::plan_pending_blocks_suggest`
+    // （主会话 + 本 run 碰过计划 + has_pending → 返回 E_PLAN_PENDING），故到这里的
+    // `suggest_items` 必定为 None、batch_done 不会被置位。**勿在本处新增旁路**（例如
+    // 「主会话一律忽略 suggest」或「有 suggestions 就收尾」），否则未完成计划可被绕开。
     if let Some(items) = batch_out.suggest_items {
         return (Some(items), true, batch_out.call_summary);
     }
