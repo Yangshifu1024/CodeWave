@@ -304,6 +304,15 @@ export default function AskPanel() {
         void updatePrefs(tab.key, { approval_mode: approvedMode ?? "auto_edit" });
       }
     }
+    // 批准门「先看预览」（[docs/preview-skill](../../../../docs/preview-skill.md)）：本次应答是「要看预览」，
+    // 置位一次性信号 → run store 在本 run 第一张合格 widget 落地时把它转成目标 callKey，
+    // 卡片据此自动弹预览弹框（用户不必回聊天区找那个很小的「预览」按钮）。
+    // 必须放在上面的切档闸门之外：previewOnly 会让 approved / answerEffective 同时为假，
+    // 塞在 if 里等于永远不执行。sessionId 取活跃会话（与下方切档块同款口径）。
+    if (previewOnly) {
+      const sid = useSessions.getState().activeKey;
+      if (sid) useRun.getState().armWidgetAutoOpen(sid);
+    }
   }
 
   function ignoreCurrent() {

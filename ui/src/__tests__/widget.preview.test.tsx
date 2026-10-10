@@ -28,10 +28,10 @@ function widgetCard(data: unknown): ToolView {
   };
 }
 
-function renderCard(data: unknown) {
+function renderCard(data: unknown, props?: { autoOpenCallKey?: string | null; onConsumeAutoOpen?: (k: string) => void }) {
   return render(
     <AntApp>
-      <ToolCallCard tool={widgetCard(data)} />
+      <ToolCallCard tool={widgetCard(data)} {...props} />
     </AntApp>,
   );
 }
@@ -164,5 +164,78 @@ describe("render_html 大弹框预览", () => {
     await openModal();
     expect(frame()!.style.colorScheme).toBe("light"); // 默认跟随亮色主题
     expect(modalButton("复制源码")).toBeTruthy(); // 复制态已复位
+  });
+});
+
+// ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门「先看预览」→ 本 run 第一张
+// 合格 widget 卡片自动弹框（不必回聊天区点那个很小的头部「预览」按钮）。组件级、零 store：
+// store 侧只负责把一次性信号转成 callKey，这里只验「命中即弹 + 回抛消费」，不重复验 store。
+
+describe("render_html 自动弹预览（autoOpenCallKey）", () => {
+  it("信号命中本卡 + 有 html → 无需点头部按钮即出现弹框，且回抛消费（参数为本卡 callKey）", async () => {
+    const onConsume = vi.fn();
+    renderCard({ title: "Demo", html: HTML, chars: 23 }, { autoOpenCallKey: "b1:0", onConsumeAutoOpen: onConsume });
+    await waitFor(() => expect(modalEl()).toBeTruthy());
+    expect(frame()!.getAttribute("srcdoc")).toBe(HTML);
+    expect(document.body.textContent).toContain("Demo");
+    // 消费只发生一次，且带上本卡 callKey（上层据此清掉 store 里的一次性信号）
+    await waitFor(() => expect(onConsume).toHaveBeenCalledTimes(1));
+    expect(onConsume).toHaveBeenCalledWith("b1:0");
+  });
+
+  it("autoOpenCallKey 不匹配本卡 → 不自动弹框（仍需点头部入口；消费也不发生）", async () => {
+    const onConsume = vi.fn();
+    renderCard({ title: "Demo", html: HTML }, { autoOpenCallKey: "b9:9", onConsumeAutoOpen: onConsume });
+    expect(modalEl()).toBeNull();
+    expect(onConsume).not.toHaveBeenCalled();
+    // 手动入口仍在（未被自动通道带坏）
+    await openModal();
+  });
+
+  it("信号命中但无 html（{restored:true} 历史占位）→ 不弹、不消费（消费留给有 html 的那张卡）", () => {
+    const onConsume = vi.fn();
+    renderCard({ restored: true }, { autoOpenCallKey: "b1:0", onConsumeAutoOpen: onConsume });
+    expect(modalEl()).toBeNull();
+    expect(onConsume).not.toHaveBeenCalled();
+  });
+
+  it("弹框开关是卡片本地 state：信号消费置 null 后重渲染不再次弹出，消费回调仍只有一次", async () => {
+    const onConsume = vi.fn();
+    const data = { title: "Demo", html: HTML };
+    const { rerender } = render(
+      <AntApp>
+        <ToolCallCard tool={widgetCard(data)} autoOpenCallKey="b1:0" onConsumeAutoOpen={onConsume} />
+      </AntApp>,
+    );
+    await waitFor(() => expect(modalEl()).toBeTruthy());
+    expect(onConsume).toHaveBeenCalledTimes(1);
+    // 上层消费后信号变 null（store 已清），重渲染：弹框状态留在本卡，不被信号再次拉起
+    await closeModal();
+    rerender(
+      <AntApp>
+        <ToolCallCard tool={widgetCard(data)} autoOpenCallKey={null} onConsumeAutoOpen={onConsume} />
+      </AntApp>,
+    );
+    expect(modalEl()).toBeNull();
+    expect(onConsume).toHaveBeenCalledTimes(1);
+  });
+
+  it("信号先命中但出参未到（无 html）→ 不消费；随后 html 落地（同一 callKey）重渲染才弹并消费", async () => {
+    const onConsume = vi.fn();
+    const { rerender } = render(
+      <AntApp>
+        <ToolCallCard tool={widgetCard({})} autoOpenCallKey="b1:0" onConsumeAutoOpen={onConsume} />
+      </AntApp>,
+    );
+    // 运行中：出参还没到 → 不弹、不消费（否则信号被空卡吃掉，真 widget 就再也不会自动弹）
+    expect(modalEl()).toBeNull();
+    expect(onConsume).not.toHaveBeenCalled();
+    rerender(
+      <AntApp>
+        <ToolCallCard tool={widgetCard({ title: "Demo", html: HTML })} autoOpenCallKey="b1:0" onConsumeAutoOpen={onConsume} />
+      </AntApp>,
+    );
+    await waitFor(() => expect(modalEl()).toBeTruthy());
+    expect(onConsume).toHaveBeenCalledWith("b1:0");
   });
 });

@@ -1501,6 +1501,90 @@ describe("AskPanel planCard 与互斥推断", () => {
 });
 
 
+// ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门「先看预览」→ 置位一次性信号
+// 「本 run 第一张合格 widget 自动弹框」（widget 侧联动见 widget.preview.test.tsx）。
+// 信号层（run store 字段 + armWidgetAutoOpen / consumeWidgetAutoOpen）由并行任务包落地；
+// 本组用例走真 store，直接验「预览应答 → 置位」与「其余应答 → 不置位」这条边界。
+
+/** 读当前 tab 的一次性自动弹框信号；未置位时为 undefined/null（断言写「不置位」即可）。 */
+function widgetAutoOpen() {
+  return useRun.getState().st("s1").widgetAutoOpen;
+}
+
+describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/preview-skill]）", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {};
+      s.drafts = {};
+    });
+  });
+
+  // 后端融合后的批准门四选项：approve=auto_edit / approve_full=full_access / revise / preview（不带 mode）
+  const gate = (askId: string) => ({
+    askId, kind: "ask", approval: true, approveId: "approve",
+    questions: [{
+      id: "q1", question: "是否按上述计划执行？",
+      options: [
+        { id: "approve", label: "以自动编辑档执行", mode: "auto_edit", recommended: true },
+        { id: "approve_full", label: "以完全访问档执行", mode: "full_access" },
+        { id: "revise", label: "补充意见" },
+        { id: "preview", label: "先看预览" },
+      ],
+    }],
+  });
+
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("点「先看预览」直提 → 一次性信号被置位为 armed", async () => {
+    seedAsk(gate("w1"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
+    await settle();
+    expect(widgetAutoOpen()).toEqual({ armed: true });
+  });
+
+  it("对照：点「以自动编辑档执行」→ 信号不置位，档位照常切到 auto_edit", async () => {
+    seedAsk(gate("w2"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("以自动编辑档执行"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
+    await settle();
+    expect(widgetAutoOpen()).toBeFalsy();
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("auto_edit");
+  });
+
+  it("对照：点「补充意见」→ 信号不置位", async () => {
+    seedAsk(gate("w3"));
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("补充意见"));
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    await settle();
+    expect(widgetAutoOpen()).toBeFalsy();
+  });
+
+  it("安全回归：置位信号不得顺带切档——「先看预览」后仍是 confirm_each（既有 previewOnly 契约不得被破坏）", async () => {
+    seedAsk(gate("w4"), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
+    await settle();
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+    // 信号与切档必须互不相干：要置位（供 widget 弹框）但不得提权
+    expect(widgetAutoOpen()).toEqual({ armed: true });
+  });
+});
+
 // ---------- 选项排版：说明独占下一行 + 与标题左边界对齐（[docs/ask-option-desc-wrap]） ----------
 // happy-dom 不做布局，「下一行 + 左边界对齐」无法直接量；只能钉住它的**结构前提**：
 // 说明与标题同处 .opt-body 列容器、且说明是标题行（.opt-head）的下一个兄弟——

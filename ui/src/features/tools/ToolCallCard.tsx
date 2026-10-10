@@ -33,8 +33,26 @@ const NEUTRAL_ERR_KEYS: Record<string, string> = {
 
 // memo：immer 结构共享让历史工具卡引用稳定，流式帧不再触发 diff/JSON 重算
 /** 工具调用卡实现：头部为状态点 + 动作词 + 工具名 + 摘要 + 耗时；展开体按工具类型分派
- *  （read 列内容 / edit 展示 diff / command 展示输出 / grep 列命中 / 其余 JSON）。 */
-function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () => void }) {
+ *  （read 列内容 / edit 展示 diff / command 展示输出 / grep 列命中 / 其余 JSON）。
+ *
+ *  自动弹预览（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门选「先看预览」后，
+ *  ChatMessages 把 store 的一次性信号 `autoOpenCallKey` 透传下来；命中本卡且确有 html 时自动弹框，
+ *  并回抛 `onConsumeAutoOpen` 让上层把信号清掉（一次性、不重放）。
+ *  刻意保持「纯展示 + 回调」形态：不直接 import useRun / useSessions，也不持有全局态——
+ * 弹框开关仍是卡片本地 state（卡片卸载即关闭，切走会话不残留）。 */
+function ToolCallCardImpl({
+  tool,
+  onToggle,
+  autoOpenCallKey,
+  onConsumeAutoOpen,
+}: {
+  tool: ToolView;
+  onToggle?: () => void;
+  /** 本 run 要自动弹预览的 widget 卡片 callKey（来自 run store 的一次性信号）；null/undefined = 不自动弹 */
+  autoOpenCallKey?: string | null;
+  /** 卡片已消费该信号（弹框已自动打开）后回抛；不传 = 只自动弹、不通知上层 */
+  onConsumeAutoOpen?: (callKey: string) => void;
+}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   // render_html 的弹框预览开关（[docs/html-preview-modal](../../../../docs/html-preview-modal.md)）：
@@ -47,6 +65,16 @@ function ToolCallCardImpl({ tool, onToggle }: { tool: ToolView; onToggle?: () =>
   // data 会退化成 { restored: true } 占位 → 没有 html，此时入口不渲染、只给一行提示（不点了报错）
   const widgetHtml: string = typeof data.html === "string" ? data.html : "";
   const hasWidget = tool.tool === "render_html" && widgetHtml !== "";
+  // 自动弹预览：[docs/preview-skill] 的「先看预览」→ 合格 widget 落地后不必回聊天区点那个很小的头部按钮。
+  // 判据复用既有 hasWidget（出参真有 html）；信号被消费后 autoOpenCallKey 变 null，effect 自然不再满足条件，
+  // 所以无需额外 ref 记「已消费」——也天然保证「同一张卡不会因反复渲染而二次消费」。
+  // 依赖数组含 hasWidget：运行中该卡的出参是后到的，命中信号但此刻尚无 html → 不消费也不弹，
+  // 待 html 落地后本 effect 重跑再弹（这正是「先看预览」要等的时刻）。
+  useEffect(() => {
+    if (!autoOpenCallKey || autoOpenCallKey !== tool.callKey || !hasWidget) return;
+    setWidgetOpen(true);
+    onConsumeAutoOpen?.(tool.callKey);
+  }, [autoOpenCallKey, tool.callKey, hasWidget, onConsumeAutoOpen]);
   // 「历史未保留预览内容」只在真·历史占位时出现：运行中（data 还是空对象）与失败（data 为 null）都不该说这句话
   const restoredPlaceholder = tool.tool === "render_html" && !hasWidget && data?.restored === true;
   const widgetTitle: string = typeof data.title === "string" ? data.title : "";

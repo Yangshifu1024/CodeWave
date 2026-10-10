@@ -136,10 +136,16 @@ const AssistantMessage = memo(function AssistantMessage({
   onUserToggle,
   anchorKey,
   anchorSig,
+  autoOpenCallKey,
+  onConsumeAutoOpen,
 }: {
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
   onUserToggle?: () => void;
+  /** 自动弹预览信号（[docs/preview-skill](../../../../docs/preview-skill.md)）：透传到工具卡，命中即弹框 */
+  autoOpenCallKey?: string | null;
+  /** 卡片已消费该信号后回抛（清 store，保证一次性、不重放） */
+  onConsumeAutoOpen?: (callKey: string) => void;
 } & AnchorAttrs) {
   return (
     <div className="msg assistant" data-key={anchorKey} data-sig={anchorSig}>
@@ -148,7 +154,14 @@ const AssistantMessage = memo(function AssistantMessage({
         <span className="ts">{ts(item.createdAt)}</span>
       </div>
       {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagent-interaction-drawer 抽取至 segments.tsx） */}
-      <TimelineSegsView timeline={item.timeline} toolsMap={item.toolsMap} streaming={streaming} onUserToggle={onUserToggle} />
+      <TimelineSegsView
+        timeline={item.timeline}
+        toolsMap={item.toolsMap}
+        streaming={streaming}
+        onUserToggle={onUserToggle}
+        autoOpenCallKey={autoOpenCallKey}
+        onConsumeAutoOpen={onConsumeAutoOpen}
+      />
       {/* 等待指示（[docs/chat-loading-indicator](../../../../docs/chat-loading-indicator.md)）：antd 加载图标，
           样式类承载颜色/字号（theme/app.css 的 .ws-streaming-indicator）；位置仍在末尾、状态判定不变 */}
       {streaming && (
@@ -278,6 +291,20 @@ export default function ChatMessages() {
 
   // 2.9：发送消息后强制滚到底部（items 增长且最后一条是新的用户消息）
   const activeKey = useSessions((s) => s.activeKey);
+  // ---------- 自动弹预览（[docs/preview-skill](../../../../docs/preview-skill.md)） ----------
+  // 批准门选「先看预览」→ AskPanel 置位一次性信号；run store 在本 run 第一张合格 widget 落地时
+  // 把它转成目标 callKey，这里只负责透传给工具卡（卡片自己判有没有 html、弹不改它的本地 state）。
+  const autoOpenCallKey = active.widgetAutoOpen?.callKey ?? null;
+  // 消费 = 把 store 里的信号清掉。用订阅来的 activeKey（而非 getState 再取）：它是依赖数组里的真依赖，
+  // 切 Tab 时回调随会话一起换新，避免拿旧会话的信号去消费；同时稳定引用——它是透传进 memo 组件的回调，
+  // 每次渲染新建会让 memo 全量失效（流式期间 items 频繁变，代价被放大）。
+  const consumeAutoOpen = useCallback(
+    (callKey: string) => {
+      if (!activeKey) return;
+      useRun.getState().consumeWidgetAutoOpen(activeKey, callKey);
+    },
+    [activeKey],
+  );
   const lastLen = active.items.length;
   const lastKind = lastItem_kind(active.items);
   const prevRef = useRef({ len: 0, kind: "" });
@@ -504,6 +531,8 @@ export default function ChatMessages() {
           onUserToggle={suspendFollow}
           anchorKey={itemKey}
           anchorSig={anchorSig}
+          autoOpenCallKey={autoOpenCallKey}
+          onConsumeAutoOpen={consumeAutoOpen}
         />
       );
     }

@@ -153,6 +153,20 @@ export interface HistoryPaging {
   failed?: boolean;
 }
 
+/** 批准门「先看预览」后的 widget 自动弹框信号（[docs/preview-skill](../../../docs/preview-skill.md)）。
+ *  一次性、仅本 run 内有效：
+ *  - `armed: true` = 用户刚在批准门选了「先看预览」，等待本 run 第一张合格 widget 落地；
+ *  - `callKey: string` = 已锁定那张卡，UI 据此自动弹框（弹完由 consume 清空）。
+ *  刻意做成「两态合一」而非两个字段：armed 关闭与 callKey 落位是同一次写入，
+ *  天然排除「armed 已关但 callKey 未置」的中间态。
+ *  可选：缺省/undefined = 本 Tab 没有待弹的预览（测试夹具逐字构造 TabRunState，不写它）。 */
+export interface WidgetAutoOpen {
+  /** 已置位待弹（armed 已被同一份对象取代为带 callKey 的形态） */
+  armed?: boolean;
+  /** 目标工具卡的 callKey；存在即表示已锁定，UI 弹框后调用 consumeWidgetAutoOpen 清空 */
+  callKey?: string;
+}
+
 /** 单个 Tab 的全部运行态（run store 的分桶单元，blank() 给出初值）。
  *  契约：帧 reducer（runFrames.ts）与事件 handler（runHandlers.ts）在此结构上就地变异（immer 草稿）。 */
 export interface TabRunState {
@@ -170,6 +184,11 @@ export interface TabRunState {
    *  （消费方见 `runFrames.ts` 的 `stripRecoveredInTab`）。只在本轮有效：`run:done` 清空。
    *  可选 + 缺省 = 本轮没有「文本恢复」的询问（真实工具调用路径 / 旧后端 / 测试夹具字面量）。 */
   textRecovered?: string | null;
+  /** [docs/preview-skill](../../../docs/preview-skill.md)：批准门选「先看预览」后的一次性 widget 自动弹框信号（纯 UI 信号，不落盘）。
+   *  可选 + 缺省 = 本 Tab 没有待弹的预览——刻意不进 `blank()`（同 `usage` / `runMetrics` 的约定：约 26 个测试文件
+   *  逐字构造 TabRunState 字面量，加必填字段会全炸）。收尾三兄弟（run:done / run:error / run:cancelled）清空，
+   *  即「本 run 内未落地的预览信号作废，不跨轮补弹」。 */
+  widgetAutoOpen?: WidgetAutoOpen | null;
   /** 上下文 token 分布（null = 未知） */
   breakdown: Breakdown | null;
   todos: Todo[];

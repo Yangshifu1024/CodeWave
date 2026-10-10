@@ -116,4 +116,88 @@
 
 ## 6. 非目标
 
-计划卡上另加一个独立的「预览」按钮（更省一轮模型往返，但属前端新入口，另议）；预览产物的持久化与版本对比；预览与代码 diff 的联动；导出预览为图片/HTML 文件；自动生成多套视觉风格供挑选；预览弹框自动弹出（可选增强）。
+计划卡上另加一个独立的「预览」按钮（更省一轮模型往返，但属前端新入口，另议）；预览产物的持久化与版本对比；预览与代码 diff 的联动；导出预览为图片/HTML 文件；自动生成多套视觉风格供挑选。
+
+> 「预览弹框自动弹出」原列于此，已由 §7 交付。
+
+## 7. 自动弹框增强：「先看预览」后 widget 落地即弹（前端信号，后端零改动）
+
+> 本节记录 2026-10-10 追加的增强。解除 §6 中「预览弹框自动弹出」那条非目标。
+
+### 7.1 问题
+
+选「先看预览」后，Agent 会 `render_html` 产出预览 widget，但前端只把它渲染成工具卡，**必须点卡片头部那个很小的「预览」按钮**才打开弹框（见 [html-preview-modal](./html-preview-modal.md)）——卡可能要滚动才看得到，用户明确反馈「很难找到按钮去点击」。
+
+### 7.2 路线选择：run store 一次性信号（**不给 `render_html` 加入参**）
+
+原 §6 曾把自动弹框的建议路线写成「给 `render_html` 增加可选入参并在历史重放时防误开」。实际实现**换成了前端信号**，理由：
+
+| 方案 | 问题 |
+|---|---|
+| 给 `render_html` 加 `auto_open` 入参 | ① 入参要进 schema，就要与 `tools/registry.rs` 的严格 schema 断言、`collect_unknown_fields` 的未知字段机制全面对齐；② 出参会多一个字段，牵动 `batch.rs` 那条「render_html 大出参必须落 sidecar」的用例；③ **历史重放防误开做不干净**——`render_html` 的入参不进历史、只有出参落盘，恢复态根本无从判断当初是否要自动弹；④ 模型得记得每次都传，漏传就退化成现状 |
+| **run store 一次性信号（本实现）** | 全部判断都在**前端本地**，且判据取自用户**当次真实动作**（点了「先看预览」），不是模型自觉 |
+
+信号形状（`ui/src/stores/run.types.ts` 的 `WidgetAutoOpen`，`TabRunState` 上的**可选**字段）：
+
+```ts
+// armed = 用户刚选了「先看预览」，等本 run 第一张合格 widget 落地
+widgetAutoOpen = { armed: true }
+// callKey = 已锁定那张卡，UI 据此自动弹框（弹完 consume 清空）
+widgetAutoOpen = { callKey: "<该卡 call_key>" }
+```
+
+**两态合一而非两个字段**：armed 关闭与 callKey 落位是同一次写入，天然排除「armed 已关但 callKey 未置」的中间态。
+
+数据流（6 个前端文件，后端零改动）：
+
+```
+AskPanel.submitWith 算出 previewOnly → armWidgetAutoOpen(activeKey)
+  → render_html 结果到达 → onToolResult 主会话分支判定四条件 → widgetAutoOpen={callKey}
+  → ChatMessages 透传 autoOpenCallKey → segments 转发 → ToolCallCard 打开 widgetOpen 并 consume
+  → run:done / run:error / run:cancelled 清空信号
+```
+
+### 7.3 三条不变量（由「走不同代码路径」保证，非打标记）
+
+判据取自**代码路径差异**，因此无需给 `ToolView` 增任何来源标记字段（沿用本仓 `runMetrics`「只在实时路径累加」的既有惯例）：
+
+1. **历史恢复态永不自动弹** —— `restoreFromMessages` / `applyToolOutcomes` / `backfillToolOutcomes` 都不经过 `onToolResult`。
+2. **子代理渲染的 widget 永不自动弹** —— 双保险：`onToolResult` 的 `!t` 早退分支（子代理结果路由进 `subStreams`），且 `SubagentDrawer` 刻意不传那两个 prop。
+3. **未 armed 时普通 `render_html` 永不自动弹** —— 用户直接说「画个仪表盘」时行为零变化。
+
+### 7.4 边界规则
+
+- **一次性**：同 run 内仅第一张**合格** widget 自动弹；`armed` 随锁定一并消失（整体替换为 `{callKey}`）。卡头按钮仍在，后续 widget 手动打开。
+- **不合格结果不消费信号**：`ok=false` / 无 html / html 为空串 / `{restored:true}` 占位 → 信号继续在本 run 内等下一张。
+- **跨轮作废**：三兄弟收尾清空信号，**不跨轮补弹**（含「Agent 收下先看预览却没渲染任何 widget」的情形）。
+- **不重弹**：`consumeWidgetAutoOpen` 在卡首次开框即清空 callKey，配合收尾清空，与 [html-preview-modal](./html-preview-modal.md) 点验第 11 条「切 Tab / 切会话不会自动重开」一致，不冲突。
+- **乱序保护**：signal 先到、出参后到时，`ToolCallCard` 的 effect 依赖含 `hasWidget`，**空出参时既不弹也不消费**——否则信号会被还没出参的空卡提前吃掉，真 widget 永不弹。
+- **弹框不自动关闭**；重发的批准询问在用户关框后于聊天区可见。
+- **置位不得顺带切档**：置位代码刻意放在切档闸门 `if (approved || answerEffective)` **之外**——`previewOnly` 会让两者同时为假，塞进去等于永不执行；反过来置位也绝不能碰档位。
+
+### 7.5 改动清单与验证
+
+| 文件 | 改动 |
+|---|---|
+| `ui/src/stores/run.types.ts` | 新增导出 `WidgetAutoOpen`；`TabRunState` 增**可选**字段 `widgetAutoOpen`（可选是硬约束：约 26 个测试文件逐字构造 `TabRunState`；**不写入 `blank()`**，`ToolView` 零改动） |
+| `ui/src/stores/run.ts` | `RunStore` 增 `armWidgetAutoOpen` / `consumeWidgetAutoOpen`（后者**仅 callKey 命中才清**，不匹配静默 no-op）；`onToolResult` 主会话分支内四条件锁定 |
+| `ui/src/stores/runHandlers.ts` | `run:done` / `run:error` / `run:cancelled` 三处清空 |
+| `ui/src/features/tools/AskPanel.tsx` | `submitWith` 里 `previewOnly` 为真 → 置位（切档闸门之外） |
+| `ui/src/features/chat/ChatMessages.tsx` | 取 `autoOpenCallKey` + 稳定 `useCallback` 消费回调，`AssistantMessage`（memo）透传 |
+| `ui/src/features/chat/segments.tsx` | `TimelineSegsView` 透传（子代理抽屉不传 = 刻意不弹） |
+| `ui/src/features/tools/ToolCallCard.tsx` | 复用既有 `hasWidget` 判据开框并回调消费；`widgetOpen` 仍为卡片本地 state；不直接依赖 store |
+| `ui/src/__tests__/runWidgetAutoOpen.test.ts` | 新增 13 个 store 层用例 |
+| `ui/src/__tests__/widget.preview.test.tsx` | 新增 5 个自动弹框用例（含乱序与不消费） |
+| `ui/src/__tests__/askpanel.test.tsx` | 新增 4 个置位 + 对照 + 不切档回归用例 |
+
+- **后端零改动**：`cargo test` 不受牵连；事件面 29 键、`tool:result` 载荷、i18n、`ToolView`、`render_html` 入参全部不动，也未新增 `features/` 文件（故 `settings.registry.test.ts` 无需登记）。
+- 验证：`pnpm --dir ui test` **1325 passed / 108 文件**；`pnpm --dir ui build` 通过（tsc 0 error）；`pnpm --dir ui run lint` **0 error 0 warning**。方案对齐审查零 🔴。
+
+人工点验清单（界面改动不做 GUI 自动点验）：
+
+1. 走到方案批准门 → 点「先看预览」→ Agent 渲染预览后**零点击**即自动弹出大弹框。
+2. 关闭弹框 → 聊天区同时可见 widget 卡 + 重发的批准询问；点批准照常切档开工。
+3. 连续多张 widget → 仅第一张自动弹，其余靠卡头按钮手动打开。
+4. 聊天里直接说「用 render_html 画个仪表盘」（未点先看预览）→ **不**自动弹框。
+5. 切 Tab / 切会话回来 → 预览弹框**不**自动重开。
+6. 子代理渲染 widget → 不自动弹框。

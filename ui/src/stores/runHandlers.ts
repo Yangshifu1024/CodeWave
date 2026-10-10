@@ -146,6 +146,9 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         t.queueResumeAfterInjection = t.queue.some((q) => q.injecting);
         // 文本形态 ask 的待剥状态只在本轮有效（[docs/text-form-ask-fallback]）：清空后下一轮的增量不再被剥
         t.textRecovered = null;
+        // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」信号同样只在本 run 内有效——
+        // 本轮没等到合格的 widget 就作废，不跨轮补弹（否则下一轮的第一张 widget 会莫名自己弹出来）
+        t.widgetAutoOpen = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
         // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
         // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
@@ -181,6 +184,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         t.running = false;
         t.queueResumeAfterInjection = false;
+        // [docs/preview-skill](../../../docs/preview-skill.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
+        t.widgetAutoOpen = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
         // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
         closeStreamingAssistantItems(t);
@@ -195,6 +200,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         t.running = false;
         t.queueResumeAfterInjection = false;
+        // [docs/preview-skill](../../../docs/preview-skill.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
+        t.widgetAutoOpen = null;
         // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
         closeStreamingAssistantItems(t);
         closeRunningTools(t);
