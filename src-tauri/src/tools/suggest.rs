@@ -58,7 +58,7 @@ impl Tool for SuggestTool {
         "suggest"
     }
     fn description(&self) -> &'static str {
-        "向用户提供 1–4 条可点击的后续建议；完成工作后作为收尾动作调用，且必须独占该批次的唯一调用。
+        "向用户提供 1–4 条可点击的后续建议；完成工作后作为收尾动作调用，可与 read/grep/list_files 等只读工具同批（[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)，与 ask/wait 不同——这两个仍独占）。
 
 入参 `items` 是 **`string[]`**（1–4 条字符串，每条 ≤80 字符、不能为空）。
 
