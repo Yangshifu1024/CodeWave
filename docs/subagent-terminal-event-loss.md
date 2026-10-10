@@ -4,14 +4,31 @@
 
 ## 现象
 
-会话 `a99e0f9b-fcec-41fa-b398-633bde7552d5` 中派出 3 个 explore 子代理。**后端 3 个子代理全部正常返回了 report**
-（`drive_agent` 返回 `Ok`、`cleanup.armed = false`、`drop(cleanup)` 已执行、7 个子代理历史完整落盘），
-但界面上：
+用户报告的原始会话是 `a99e0f9b-fcec-41fa-b398-633bde7552d5`，症状为
+**「子代理在编辑工作空间外的文件被审批拒绝后，无法判定结束、疑似卡死」**
+（该会话的自动命名即为「子代理文件操作拒绝后卡死」）。
 
-- 3 张子代理卡仍是转圈（`status === "running"`）
+**取证更正（本轮）**：此前本文引用的证据数字与会话号对不上——`a99e0f9b` 的日志里是
+10 个 backend-dev / tester / code-reviewer 子代理，既无 `explore`，步数与 token 也与文中所列不符。
+逐值回查后确认，**证据实际来自会话 `228fc63d`**（即用户为排查此缺陷而开的调查会话本身）：
+该会话在 `05:26:15.020` **同一毫秒**并发 spawn 了 3 个 explore 子代理，其返回 token
+（80781 / 139187 / 168839 ≈ 80.8k / 139.2k / 168.8k）与步数（21/25、33/40、34/40）与文中所列逐一吻合。
+换言之：**用户在排查这个 bug 的过程中，派出的 3 个 explore 子代理自己也复现了同一症状。**
+
+界面表现（针对上述 3 个 explore 子代理）：
+
+- 3 张子代理卡仍在转圈（`status === "running"`）
 - composer 工具条仍显示「3」（数 `status === "running"` 的子代理）
 - 子代理卡的停止按钮仍在（该按钮仅在 `status === "running"` 时渲染，`SubagentItemCard.tsx:55`）
-- 卡片上的步数（34/40、33/40、21/25）与 token 数**在更新** —— 说明 `sub:step` / `sub:usage` 持续到达
+- 卡片上的 token 数**有值** —— 说明 `sub:usage` 已到达
+
+### 后端零挂起（本轮新增的硬证据）
+
+对 `.codewave/logs/` 下**全部 20 份会话日志**做了「spawn 与返回配对」统计：
+**没有任何一个子代理 spawn 后未返回**（零挂起）。每个 `sub_id` 也都只 spawn 一次（无重复条目）。
+
+⇒ 「子代理真的卡死、拿不到终态」被排除；本故障是**后端正常返回、前端不收敛**。
+同时排除「审批拒绝导致子代理永久阻塞」这一路径（在日志中未发生过）。
 
 ## 决定性判别证据
 
@@ -35,6 +52,9 @@
 | immer producer 抛错回滚 | `closeRunningTools`（`runFrames.ts:213-223`）全程 `if (st)` 守卫，不会抛错 |
 | 打字机 | `TypewriterText` 只作用于助手文本段（`segments.tsx:451`，开关 `streaming && i === tailIdx`）；子代理卡走 `segments.tsx:440` 的 `<SubagentItemCard>`，独立组件 |
 | `web_fetch` 无超时导致真挂起 | 3 个子代理均正常返回，非挂起 |
+| **子代理真挂起 / 审批拒绝后永久阻塞** | **全量 20 份会话日志的 spawn↔返回配对统计：零挂起**，每个 `sub_id` 都只 spawn 一次且都有返回 |
+| **桶不存在 / `subs.find` 未命中** | 实时运行中 `sub.tokens` 的**唯一**写入点是 `sub:usage`（`runHandlers.ts:477`；`run.ts:243` 那处在 `applyRestoredEnded`，属恢复路径）。**token 数有值即证明 `s.tabs[p.session]` 与 `subs.find(subId)` 双双命中**——而 `sub:done` 用的是**同一套**查法。故此分支不成立 |
+| **重复条目（同一 sub_id 两条）** | 日志显示每个 `sub_id` 只 spawn 一次；且抽屉 `find` 取首个匹配，重复时只会命中已收敛的那条 |
 
 ### 本轮追加：重复条目假设的排除与断点收窄
 
@@ -265,9 +285,17 @@ if let Err(e) = self.app.emit_to(...) {
   `unlistens` 永不赋值、后续整条初始化链（配置加载 / 会话与项目刷新 / ui-state 恢复）全部静默跳过，
   只剩一个未处理的 Promise rejection。
 
-  这与本故障的症状**部分吻合**：`sub:usage` 已注册并持续到达，而紧随其后的 `sub:done` 未注册 ⇒
+  这与本故障的症状**部分吻合**：`sub:usage` 已注册并到达，而紧随其后的 `sub:done` 未生效 ⇒
   两者行为分叉。但该模式会同时打死 `sub:error` 与 `miscHandlers` 的 3 键（`mcp:status` / `service:update` /
-  `app:exit_requested`），影响面偏大、用户通常会发现，故**尚未确证**。
+  `app:exit_requested`），影响面偏大、用户通常会发现，故**尚未确证**。且已排除「桶 / find 未命中」
+  与「重复条目」两条（见上表），剩下的解释面**只剩投递丢失本身**。
+
+- **复现配方（本轮从会话 `228fc63d` 反推，优先级最高）**：唯一已知复现样本是
+  **同一 step 内并发派 3 个 explore 子代理**（`step 0 响应形态 tools_sent=16 tool_calls=3 names=[subagent,subagent,subagent]`，
+  三条 spawn 日志时间戳精确到 `05:26:15.020` 同毫秒），且发生在 **plan 档**。
+  下轮复现请按此形状构造：plan 档 → 单个 step 内并发 `subagent` × 3 → 观察 3 张卡是否停在转圈。
+  若并发是必要条件，优先怀疑**同一 tick 内多条同族事件的投递**（而非单条丢失）；
+  若单发也能复现，则 `bindEvents` 假设权重上升。两者的区分只需多派/少派一次即可判定。
 
   本轮已核实并排除的两个相邻因素：主 effect 依赖数组为 `[]`（`AppShell.tsx:334`），不存在依赖变更导致的重绑窗口；
   `main.tsx` **未启用 StrictMode**，dev 下也没有双挂载的注册空窗期。

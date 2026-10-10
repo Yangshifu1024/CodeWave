@@ -643,11 +643,14 @@ impl Tool for SubagentTool {
                     json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
                             "steps_used": steps_used, "ended": ended_str }),
                 );
-                // 收尾形态：仅「按约定汇报」（ended == "report"）算成功完成。
-                // budget（步数耗尽）/ no_report（未交汇报）都是**没拿到成果**，
-                // 对 wait 的「等到子代理完成」而言不成立，归 Failed；
+                // 收尾形态 → wait 目标终态：仅 `Report` 算成功完成。
+                // `Partial` / `Budget` / `NoReport` 都是**没拿到成果**——`Partial` 虽交了汇报，
+                // 但是撞顶逼出来的半成品、主代理无从知道自己被砍断过（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)），
+                // 对 wait 的「等到子代理完成」而言不成立，归 Failed。
+                // 判据取 `is_delivered()`：它是 `analysis_done` 置位（plan 档 G2 分析闸）
+                // 与文案分档的**共同单一事实源**，两处共用可防口径漂移。
                 // report 全文按 2000 字符截断作终态摘要（避免大报告长期占内存）。
-                cleanup.final_state = if ended == "report" {
+                cleanup.final_state = if ended.is_delivered() {
                     TargetState::Succeeded
                 } else {
                     TargetState::Failed
