@@ -109,6 +109,8 @@
 
 ## 界面与交互
 
+- 2026-10-10 · [project-name-autofill-and-allowed-dirs.md](./project-name-autofill-and-allowed-dirs.md) — 新建项目选目录自动填名称 + **`allowed_dirs` 静默丢失修复**。需求主体：`pickDirectory()` 单点，仅新建且名称空时填 `baseName(dir)`（编辑路径不联动；零 dirty 状态、零新增文案、零 i18n key）。硬要求是先 `if (!dir) return`——`baseName` 的 `|| p` 兜底会把 `null` 变成字符串 `"null"`。顺带收口四个缺陷：① 前端 `ProjectEntry` 无 `allowed_dirs` 字段 + 手抄漏字段 + 后端整份覆盖 → 用户「始终允许的目录」每次保存都被静默清空（修复用**独立入参 DTO** `ProjectSaveInput` 的 `Option<Vec<String>>` 表达三态：缺键=沿用旧值 / `[]`=显式清空，落盘 DTO 保持 `Vec` 不变故 project.json 格式零变化；前端刻意不写 `?? []`）；② 改主目录致项目从左栏消失（`data_dir` 保留旧目录而索引指新目录，`normalize_data_dir` 追加「父目录≠当前 directory」分支）；③ 空主目录在进程 CWD 下建目录且索引被跳过（mkdir 前 bail）；④ L5 后端零校验（校验分三层，core 刻意不拦空名以保 `create_session` 回写路径）。双向契约测试（Rust 6 键锚点 + TS 字段集合对拍）根治「后端加字段、前端忘声明」这类静默丢数据。
+
 - 2026-09-26 · [titlebar-content-batch.md](./titlebar-content-batch.md) §6.7 后补 — 缺陷修复：输入框右键菜单（剪切/复制/粘贴/全选）全局消失。根因是 `AppShell` 的全局 `contextmenu` 处理器**无条件** `preventDefault()`，把从 `<textarea>` 冒泡上来的 Composer 右键一并吞掉，WebView 便不再生成原生菜单（受影响的不止 Composer：设置页/供应商/MCP 等全部表单输入框同样失菜单；快捷键 Cmd/Ctrl+C/V/A/Z 始终可用，故是**菜单入口**丢失而非功能丢失）。现按目标分类：`closest("input, textarea, [contenteditable]")` 命中则放行、其余照旧屏蔽——放行的编辑菜单本就在「去浏览器入口」这一屏蔽目标之外，决策意图不变；`ProjectNav` 会话行靠自身 `stopPropagation` 规避菜单叠加，行为不变。附带记录 `src-tauri/src/lib.rs` 原生应用菜单整块 `#[cfg(target_os = "macos")]`（Edit 子菜单含 cut/copy/paste/select_all），**Windows 侧无菜单栏兜底**，不放行则该平台右键彻底无解。
 - 2026-09-25 · [settings-ui-unification.md](./settings-ui-unification.md) — 设置页视觉统一：用共享 antd 主题层、左右式设置行、统一分组卡片、响应式宽度与主题预览样式覆盖所有设置页和弹框。
 - 2026-08-31 · [composer-toolbar-batch-report.md](./composer-toolbar-batch-report.md) — Composer 工具条重构（权限四档 + 会话级模型/力度 + 附件/$技能 + 供应商分组与视觉标签）
