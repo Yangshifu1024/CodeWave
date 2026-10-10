@@ -16,6 +16,7 @@ import { MAX_PAGED_PAGES, useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import { upgradeDiagrams } from "../../utils/diagrams";
+import { renderUserMarkdown } from "../../utils/markdown";
 import type { UiItem } from "../../stores/run";
 // 滚动锚点（会话保存与恢复优化 · 批1）：锚点读写与现场态落盘的调用链见本文件「滚动锚点」一节。
 import {
@@ -94,7 +95,7 @@ const UserMessage = memo(function UserMessage({
         <span className="ts">{ts(createdAt)}</span>
         <span>{t("chat.you")}</span>
       </div>
-      {text && <div className="bubble user-bubble">{text}</div>}
+      {text && <div className="bubble user-bubble md" dangerouslySetInnerHTML={{ __html: renderUserMarkdown(text) }} />}
       {text && (
         <div className="user-msg-actions">
           <Tooltip title={t("chat.copy")}>
