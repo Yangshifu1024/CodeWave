@@ -5,6 +5,7 @@
 //! 注意 rt.data_dir 恒为全局数据目录（见 get_or_create_session），项目数据目录经 rt.project_dir 传入。
 
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -39,6 +40,17 @@ pub struct Skill {
 /// frontmatter 解析：`---\n<yaml>\n---\n<body>`；无 frontmatter 时 name 回退目录名。
 pub fn parse_skill_md(text: &str, fallback_name: &str) -> Option<Skill> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // 换行归一（顺序固定：BOM 剥离 → CRLF/孤立 CR 归一 → 剥 frontmatter）。
+    // Windows 上用户手写的 SKILL.md 实测是 CRLF（首行字节 `---\r\n`），不归一则 frontmatter
+    // 匹配全落空：无 frontmatter 分支会把 YAML 头当正文注入模型，且 description/whenToUse 全空。
+    // 必须先长后短：反序会把 `\r\n` 拆成两个 `\n`，凭空多出一个空行。
+    // 只归一换行，不动正文缩进与空行（trim 之类会破坏 markdown 语义）。
+    let text = if text.contains('\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(text)
+    };
+    let text = text.as_ref();
     let body = if let Some(rest) = text.strip_prefix("---\n") {
         let (fm, body) = rest.split_once("\n---")?;
         let body = body.trim_start_matches('\n');
@@ -694,6 +706,52 @@ mod tests {
         assert_eq!(s3.meta.name, "fb");
     }
 
+    /// Windows 用户手写 SKILL.md 实测为 CRLF：不归一则 frontmatter 匹配落空。
+    #[test]
+    fn frontmatter_parsing_handles_crlf() {
+        let md = "---\r\nname: crlf\r\ndescription: d\r\nwhenToUse: w\r\n---\r\n# Body\r\nStep 1.";
+        let s = parse_skill_md(md, "fallback").unwrap();
+        assert_eq!(s.meta.name, "crlf");
+        assert_eq!(s.meta.description, "d");
+        assert_eq!(s.meta.when_to_use, "w");
+        assert!(s.body.starts_with("# Body"), "{:?}", s.body);
+        assert!(!s.body.contains("---"), "YAML 头不得漏进正文");
+        assert!(!s.body.contains('\r'), "归一后正文不得残留 CR");
+    }
+
+    /// 旧 Mac 行尾（孤立 `\r`）同样要能解析。
+    #[test]
+    fn frontmatter_parsing_handles_lone_cr() {
+        let md = "---\rname: mac\rdescription: d\rwhenToUse: w\r---\r# Body\rStep 1.";
+        let s = parse_skill_md(md, "fallback").unwrap();
+        assert_eq!(s.meta.name, "mac");
+        assert_eq!(s.meta.description, "d");
+        assert_eq!(s.meta.when_to_use, "w");
+        assert!(s.body.starts_with("# Body"), "{:?}", s.body);
+        assert!(!s.body.contains("---"), "YAML 头不得漏进正文");
+        assert!(!s.body.contains('\r'), "归一后正文不得残留 CR");
+    }
+
+    /// BOM 剥离语义不因换行归一而失效（归一发生在 BOM 之后）。
+    #[test]
+    fn frontmatter_parsing_keeps_bom_with_crlf() {
+        let md = "\u{feff}---\r\nname: b\r\ndescription: d\r\n---\r\nbody";
+        let s = parse_skill_md(md, "fallback").unwrap();
+        assert_eq!(s.meta.name, "b");
+        assert_eq!(s.meta.description, "d");
+        assert!(!s.body.contains('\u{feff}'), "BOM 已剥离");
+        assert!(!s.body.contains('\r'));
+    }
+
+    /// 无 frontmatter 分支同样拿到归一后的文本，否则纯正文 CRLF 文件仍带 `\r`。
+    #[test]
+    fn body_without_frontmatter_normalizes_crlf() {
+        let s = parse_skill_md("# Only body\r\nline2", "fb").unwrap();
+        assert_eq!(s.meta.name, "fb");
+        assert!(s.body.starts_with("# Only body\n"), "{:?}", s.body);
+        assert!(!s.body.contains('\r'));
+    }
+
     #[test]
     fn builtin_skills_parse() {
         let names: Vec<&str> = builtin_skills().iter().map(|(n, _)| *n).collect();
@@ -708,6 +766,7 @@ mod tests {
             // whenToUse 进技能列表的「when: …」——preview 技能的两处触发场景全靠它，
             // 缺失等于「模型不知道何时该加载这个技能」，故一并钉住
             assert!(!s.meta.when_to_use.is_empty(), "{name} 缺 whenToUse");
+            assert!(!s.body.contains('\r'), "{name} 正文含 CR");
         }
     }
 
@@ -724,12 +783,13 @@ mod tests {
             "---\nname: common\ndescription: claude ver\n---\nclaude",
         )
         .unwrap();
-        // 工作区 .agents/skills（agents 约定）
+        // 工作区 .agents/skills（agents 约定）；写成 CRLF 以延伸单测到真实读文件路径，
+        // 防止将来在 scan_dir_into 调用链上重新引入 LF 假设
         let a = ws.path().join(".agents/skills/agent-only");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::write(
             a.join("SKILL.md"),
-            "---\nname: agent-only\ndescription: agents ver\n---\nagents",
+            "---\r\nname: agent-only\r\ndescription: agents ver\r\n---\r\nagents",
         )
         .unwrap();
         // 全局 .codewave/skills（data_dir，用户级）

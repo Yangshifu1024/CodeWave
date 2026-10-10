@@ -155,6 +155,24 @@ mod tests {
         );
     }
 
+    /// CRLF 写法的 SKILL.md 不得把 YAML 头注入 <skill-loaded> 正文（Windows 用户实测场景）。
+    #[tokio::test]
+    async fn injected_body_excludes_frontmatter() {
+        let (ctx, _ws, dd) = setup();
+        let skill_dir = dd.path().join("skills/demo");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\r\nname: demo\r\ndescription: test skill\r\n---\r\nCRLF BODY LINE",
+        )
+        .unwrap();
+        let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
+        assert!(out.ok, "{out:?}");
+        let content = out.data["content"].as_str().unwrap();
+        assert!(!content.contains("name: demo"), "{content:?}");
+        assert!(!content.contains('\r'), "{content:?}");
+        assert!(content.contains("CRLF BODY LINE"), "{content:?}");
+    }
+
     #[tokio::test]
     async fn caller_context_is_appended_when_args_given() {
         let (ctx, _ws, _dd) = setup();

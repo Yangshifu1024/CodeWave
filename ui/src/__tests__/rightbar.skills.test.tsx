@@ -67,6 +67,52 @@ describe("RightBar 技能段", () => {
     expect(document.body.textContent ?? "").toContain("触发时机");
   });
 
+  // 契约守护：正文区忠实渲染后端所给的 body，**不做任何 frontmatter 防御**。
+  // 剥离 frontmatter 是后端 parse_skill_md 的职责（CRLF 现场形态由 skills::tests 的
+  // frontmatter_parsing_handles_crlf 等用例验收，见 src-tauri/src/skills/mod.rs）。
+  // 本例把这条边界钉死：后端若漏剥，hr + setext h2 就会出现在这里——这是预期现象，
+  // 它证明前端确实原样透传，兜底责任不在前端；若哪天给前端加防御，本例会失败提醒同步。
+  it("正文忠实透传后端所给内容（含 frontmatter 时渲染出 hr/setext h2，前端不剥离）", async () => {
+    const mock = vi.mocked(invoke);
+    const original = mock.getMockImplementation()!;
+// 局部覆盖：正文带 frontmatter——即 CRLF 行的 SKILL.md 在后端漏剥时的原样形态。
+      // 断言必须钉 DOM 结构：setext 标题只有 hr/h2 元素能钉住，纯 textContent 断言发现不了。
+      mock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_skill")
+          return {
+            meta: { name: "demo", description: "项目技能", whenToUse: "输入 /demo 时", origin: "/tmp/ws/.codewave/skills/demo/SKILL.md" },
+            body: "---\nname: demo\ndescription: d\ndisable-model-invocation: true\n---\n\n# DEMO BODY",
+          };
+        return original(cmd);
+      });
+    try {
+      seedTab();
+      render(<RightBar />);
+      fireEvent.click(
+        (await waitFor(() => {
+          const el = Array.from(document.querySelectorAll(".rb-skill-name")).find(
+            (n) => n.textContent === "demo",
+          );
+          expect(el).toBeTruthy();
+          return el as HTMLElement;
+        })),
+      );
+      const skillBody = await waitFor(() => {
+        const el = document.querySelector(".skill-body");
+        expect(el).toBeTruthy();
+        return el as HTMLElement;
+      });
+      await waitFor(() => expect(skillBody.textContent ?? "").toContain("DEMO BODY"));
+      // 后端未剥离时确实渲染出 hr + setext h2（证明前端原样透传，兜底责任在解析层）
+      expect(skillBody.querySelector("hr")).not.toBeNull();
+      expect(skillBody.querySelector("h2")?.textContent).toContain("name: demo");
+      // 正文标题形态不变：# DEMO BODY 仍渲染为真 h1
+      expect(skillBody.querySelector("h1")?.textContent).toBe("DEMO BODY");
+    } finally {
+      mock.mockImplementation(original);
+    }
+  });
+
   it("详情「使用」按钮派发 ws:composer-insert（/name 追加输入框）并关闭弹层", async () => {
     seedTab();
     render(<RightBar />);
@@ -112,6 +158,42 @@ describe("RightBar 技能段", () => {
       });
       // 技能空态也不允许退回「暂无会话」（批④ 修的缺陷就在这条借用键上）
       expect(document.body.textContent ?? "").not.toContain("暂无会话");
+    } finally {
+      mock.mockImplementation(original);
+    }
+  });
+
+  // 空 description 曾无条件渲染出真实空 <p class="dim">，在 .skill-detail 顶部留下多余垂直空白。
+  // 顺带把两条断言都钉上：既不留空段，来源行（.skill-origin，不属 .dim）仍在，防「整块吃掉」式误修。
+  it("技能 description 为空时不渲染空段落（.skill-detail 内无 .dim）", async () => {
+    const mock = vi.mocked(invoke);
+    const original = mock.getMockImplementation()!;
+    mock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_skills")
+        return [
+          { name: "nodesc", description: "", whenToUse: "", origin: "/tmp/ws/.agents/skills/nodesc/SKILL.md" },
+        ];
+      return original(cmd);
+    });
+    try {
+      seedTab();
+      render(<RightBar />);
+      fireEvent.click(
+        (await waitFor(() => {
+          const el = document.querySelector(".rb-skill-name");
+          expect(el).toBeTruthy();
+          return el as HTMLElement;
+        })),
+      );
+      const detail = await waitFor(() => {
+        const el = document.querySelector(".skill-detail");
+        expect(el).toBeTruthy();
+        return el as HTMLElement;
+      });
+      await waitFor(() => expect(document.body.textContent ?? "").toContain("DEMO BODY"));
+      expect(Array.from(detail.querySelectorAll(".dim"))).toHaveLength(0);
+      expect(Array.from(detail.querySelectorAll("p")).every((p) => (p.textContent ?? "") !== "")).toBe(true);
+      expect(detail.querySelector(".skill-origin")).toBeTruthy();
     } finally {
       mock.mockImplementation(original);
     }
