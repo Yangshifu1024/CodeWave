@@ -388,9 +388,6 @@ impl Tool for AskTool {
             ctx.rt
                 .scope_expanded
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            ctx.rt
-                .scope_denials
-                .store(0, std::sync::atomic::Ordering::SeqCst);
             ctx.core
                 .set_session_mode_and_persist(&ctx.rt, switch_target);
             crate::core::session_log::info(

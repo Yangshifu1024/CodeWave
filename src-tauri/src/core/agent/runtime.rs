@@ -182,10 +182,11 @@ pub struct SessionRuntime {
     pub approved_plan: Mutex<Option<Vec<String>>>,
     /// G3：执行期间计划更新 diff 出新 todo（置位后下一次写操作前先弹范围确认）
     pub scope_expanded: std::sync::atomic::AtomicBool,
-    /// G3：用户对计划外步骤选了「本次会话允许」（此后新增静默放行 + 记录偏差）
+    /// G3：用户对计划外步骤选了「本次会话允许」（此后新增静默放行）
     pub scope_allowed: std::sync::atomic::AtomicBool,
-    /// G3：范围确认拒绝计数（拒绝后保持标记，下一次写操作再次询问；仅作诊断记录）
-    pub scope_denials: std::sync::atomic::AtomicUsize,
+    /// G3 范围确认的单飞锁：同批并发写的多个写工具只弹一张确认卡
+    /// （command 工具是 ReadOnly、走并发闸，逐 call 求值会重复弹窗）。
+    pub scope_gate_lock: tokio::sync::Mutex<()>,
     /// 产物归属（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：子代理 runtime 指向主会话 id，写操作登记到主会话名下；
     /// 主会话 / 任务运行 = None
     pub root_session_id: Option<String>,
@@ -312,7 +313,7 @@ impl SessionRuntime {
             approved_plan: Mutex::new(None),
             scope_expanded: std::sync::atomic::AtomicBool::new(false),
             scope_allowed: std::sync::atomic::AtomicBool::new(false),
-            scope_denials: std::sync::atomic::AtomicUsize::new(0),
+            scope_gate_lock: tokio::sync::Mutex::new(()),
             root_session_id: None,
             is_task_runtime: false,
             is_main_session: false,

@@ -426,6 +426,28 @@ fn cancelled_outcome() -> ToolOutcome {
     ToolOutcome::err("E_CANCELLED", "命令被用户取消")
 }
 
+/// G3：把标题**追加**进已批准基线（保序去重，不替换）。
+///
+/// 为什么是追加而不是替换：用户对「计划外步骤确认」点一次「允许」，语义是「这些步骤属于本次
+/// 已批准范围」——若只替换基线，同一批标题会在下一次写入时又被算成计划外步骤、反复摆到用户面前
+/// （用户抱怨的噪音形态之一）。追加后这批标题不再触发门，之后出现真正的新增才再问一次。
+fn merge_into_approved_baseline(rt: &SessionRuntime, titles: &[String]) {
+    if titles.is_empty() {
+        return;
+    }
+    let mut approved = rt.approved_plan.lock().unwrap();
+    // 基线缺失属异常路径（G3 门本身要求基线存在），不凭空造基线——凭空造会把
+    // 「未批准计划」的会话变成有基线的会话，反而放行后续门。
+    let Some(base) = approved.as_mut() else {
+        return;
+    };
+    for t in titles {
+        if !base.iter().any(|b| b == t) {
+            base.push(t.clone());
+        }
+    }
+}
+
 /// 单个工具的执行（含 MCP 分发），带 panic 兜底。返回（结果，模型侧附加内容，耗时 ms）。
 /// 附加内容当前只有 plan 软提醒（0/1 条 Text 块，由批次层拼进 ToolResult content 尾部）。
 async fn run_tool(
@@ -456,6 +478,7 @@ async fn run_tool(
                         serde_json::to_string_pretty(&call.args).unwrap_or_default()
                     ),
                     allow_always: true,
+                    kind: crate::safety::approval::ApprovalKind::Once,
                     auto_confirm,
                 },
                 &cancel,
@@ -551,13 +574,18 @@ async fn run_tool(
     // 后者用专门的「写目标探针」策略（confirm_inside_writes=true），与执行档判定解耦：
     // 批准后会话已切 AutoEdit，其执行档 fence 会把范围内写重定向判为 Allow；若无探针，
     // shell 重定向可完全绕过确认。纯只读命令探针得 Allow，不打扰。
-    // 批准 = 本会话放行（后续新增静默纳入）；拒绝 = 保留标记，下次写入再问。基线缺失（异常路径）不阻塞。
     //
     // 封成闭包而非提前求值：门 1 的审批是 await，同批并发写可能在该窗口改动 scope_expanded /
     // approved_plan，提前求值会让安全门 fail-open（等一次审批的工夫把 G3 条件判成 false）。
     // 「发 waiting 相」与「门本体」两处各调用一次，既是单一真相（共用同一份表达式），又不改变求值时点。
-    let g3_gate = |ctx: &ToolCtx| -> bool {
-        let g3_applies = match tool.kind() {
+    //
+    // 拆成两个闭包是为了把「要不要排队等锁」与「这次到底弹不弹」分开：
+    // - g3_write_channel 只看工具形态与入参（本次调用固有，不随会话状态变化），可无锁求值；
+    // - g3_gate 含状态判据（scope_expanded / scope_allowed / 基线），一律在单飞锁内重新求值。
+    // 于是纯只读命令永不排队等锁，而两条写通道之间严格串行——同批 3~4 条带写目标的命令
+    // 只弹一张卡（先到的那次已消费 scope_expanded，后到的重新求值为 false 直接放行）。
+    let g3_write_channel = |ctx: &ToolCtx| -> bool {
+        match tool.kind() {
             ToolKind::FileWrite => true,
             ToolKind::Network => false,
             _ => {
@@ -586,8 +614,10 @@ async fn run_tool(
                     false
                 }
             }
-        };
-        g3_applies
+        }
+    };
+    let g3_gate = |ctx: &ToolCtx| -> bool {
+        g3_write_channel(ctx)
             // 目标模式已删除：G3 范围确认在所有档位生效。
             && ctx
                 .rt
@@ -619,6 +649,7 @@ async fn run_tool(
                 title: format!("文件写入确认：{}", call.name),
                 detail,
                 allow_always: false,
+                kind: crate::safety::approval::ApprovalKind::Once,
                 auto_confirm,
             },
             &ctx.cancel,
@@ -632,58 +663,103 @@ async fn run_tool(
             );
         }
     }
-    if g3_gate(&ctx) {
-        let new_titles: Vec<String> = {
-            let approved = ctx.rt.approved_plan.lock().unwrap();
-            let todos = ctx.rt.todos.lock().unwrap();
-            crate::tools::plan::diff_new_todos(
-                approved.as_deref().unwrap_or(&[]),
-                &todos.iter().map(|t| t.title.clone()).collect::<Vec<_>>(),
-            )
-        };
-        // Y1（评审）：模型已移除新增 todos（diff 为空）→ 状态与基线一致；清标记放行，不弹空列表
-        if new_titles.is_empty() {
-            ctx.rt
-                .scope_expanded
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        } else {
-            let auto_confirm = ctx.core.cfg.read().unwrap().approval.auto_confirm;
-            let ok = crate::safety::approval::confirm(
-                &ctx.rt,
-                &ctx.core.sink,
-                crate::safety::approval::ApprovalRequest {
-                    title: "计划外步骤确认".into(),
-                    detail: format!(
-                        "执行中出现已批准方案之外的新步骤：\n{}\n\n即将执行：{} {}\n批准 = 本会话允许后续新增步骤；拒绝 = 模型需收窄范围。",
-                        new_titles.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n"),
-                        call.name,
-                        serde_json::to_string(&call.args).unwrap_or_default(),
-                    ),
-                    allow_always: false,
-                    auto_confirm,
-                },
-                &ctx.cancel,
-            )
-            .await;
-            if ok.approved {
-                ctx.rt
-                    .scope_allowed
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+    // G3 单飞（并发噪音修复）：锁**必须**在 g3_gate 求值之前取。若只在弹窗时取，同批并发的写通道
+    // 会各自求出 g3_gate=true，在彼此等待用户应答的窗口里弹出 3~4 张几乎一样的卡（command 是
+    // ReadOnly 工具、走 4 并发闸，这正是用户报障的形态）。
+    //
+    // 持锁顺序：execute_batch 的 spawn 体里先取并发闸（写工具 = file_ops），再进 run_tool 取本锁，
+    // 故全局顺序恒为 **file_ops → scope_gate_lock**；本临界区内绝不再取 file_ops，无反向路径。
+    // 代价：写工具的串行闸会一直占着直到用户答完 G3 门（与既有的门 1 写入审批同形态，不新增死锁类）。
+    if g3_write_channel(&ctx) {
+        let _g3_single_flight = ctx.rt.scope_gate_lock.lock().await;
+        if g3_gate(&ctx) {
+            // 分类口径与 plan.rs 的范围扩张判定同源（classify_new_todos）：只有真新增才弹门。
+            let deltas: Vec<(String, crate::tools::plan::NewTodoClass)> = {
+                let approved = ctx.rt.approved_plan.lock().unwrap();
+                let todos = ctx.rt.todos.lock().unwrap();
+                crate::tools::plan::classify_new_todos(
+                    approved.as_deref().unwrap_or(&[]),
+                    &todos.iter().map(|t| t.title.clone()).collect::<Vec<_>>(),
+                )
+            };
+            // 细化 / 改写（批准时登记「新增 core/x.rs + 单测」、执行时写成「包 A（backend-dev）：新增
+            // core/x.rs」）不需要用户授权，静默并入基线——标准工作流 S6 必然把标题切成人名任务包，
+            // 若仍弹门，用户会被同一条已批准步骤的另一种写法反复打扰。
+            let refinements: Vec<String> = deltas
+                .iter()
+                .filter(|(_, k)| matches!(k, crate::tools::plan::NewTodoClass::Refinement(_)))
+                .map(|(t, _)| t.clone())
+                .collect();
+            let new_titles: Vec<String> = deltas
+                .iter()
+                .filter(|(_, k)| matches!(k, crate::tools::plan::NewTodoClass::New(_)))
+                .map(|(t, _)| t.clone())
+                .collect();
+            // Y1（评审）：无真新增（模型已移除新增 / 全是细化）→ 状态与基线一致；清标记放行，不弹空列表
+            if new_titles.is_empty() {
                 ctx.rt
                     .scope_expanded
                     .store(false, std::sync::atomic::Ordering::SeqCst);
+                merge_into_approved_baseline(&ctx.rt, &refinements);
             } else {
-                ctx.rt
-                    .scope_denials
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                return (
-                    ToolOutcome::err(
-                        "E_SCOPE_DENIED",
-                        "用户拒绝了计划外步骤的写入。请收窄到已批准的 todos 范围，或向用户说明理由后重试。",
-                    ),
-                    Vec::new(),
-                    0,
-                );
+                let auto_confirm = ctx.core.cfg.read().unwrap().approval.auto_confirm;
+                let ok = crate::safety::approval::confirm(
+                    &ctx.rt,
+                    &ctx.core.sink,
+                    crate::safety::approval::ApprovalRequest {
+                        title: "计划外步骤确认".into(),
+                        detail: format!(
+                            "执行中出现已批准方案之外的新步骤：\n{}\n\n即将执行：{} {}\n\n\
+「允许」= 把以上步骤纳入本次已批准范围（并入后不再重复询问；之后若出现真正的新步骤仍会再问）。\n\
+「本会话始终允许」= 本会话后续任何新增步骤都不再询问（作用域是本会话，不是本项目）。\n\
+「拒绝」= 需要收窄到已批准范围。",
+                            new_titles
+                                .iter()
+                                .map(|t| format!("- {t}"))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            call.name,
+                            serde_json::to_string(&call.args).unwrap_or_default(),
+                        ),
+                        // 三个选项对应三种后果，「允许」与「始终允许」语义天差地别：不给第三个选项，
+                        // 等于逼用户拿「仅允许这一次」的按钮交出整场会话的范围门。
+                        allow_always: true,
+                        kind: crate::safety::approval::ApprovalKind::Scope,
+                        auto_confirm,
+                    },
+                    &ctx.cancel,
+                )
+                .await;
+                if ok.approved {
+                    // 「允许」= 认可这批步骤属于本次已批准范围：并入基线（追加去重，不替换），
+                    // 于是同一批标题不会被反复摆到用户面前，之后出现真新增才再问一次。
+                    merge_into_approved_baseline(&ctx.rt, &new_titles);
+                    merge_into_approved_baseline(&ctx.rt, &refinements);
+                    if ok.always {
+                        ctx.rt
+                            .scope_allowed
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    ctx.rt
+                        .scope_expanded
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                } else {
+                    // 拒绝：消费本轮的范围扩张标记。保留它会让同批下一条写操作立刻弹同一张卡
+                    //（用户已明确拒绝过，问一次就够）；下一个 run 若模型又改了计划，plan.rs 会
+                    // 重新置位，那时再问是合理的。代价：同批其余已排队的写操作不再被拦，
+                    // 模型侧靠 E_SCOPE_DENIED 收窄——用「放行后续」换「不重复打扰」是有意取舍。
+                    ctx.rt
+                        .scope_expanded
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    return (
+                        ToolOutcome::err(
+                            "E_SCOPE_DENIED",
+                            "用户拒绝了计划外步骤的写入。请收窄到已批准的 todos 范围，或向用户说明理由后重试。",
+                        ),
+                        Vec::new(),
+                        0,
+                    );
+                }
             }
         }
     }
@@ -1050,7 +1126,38 @@ mod tests {
                 "eventargs:{e}:{}",
                 p["args_preview"].as_str().unwrap_or("-")
             ));
+            // 审批弹窗的文案就在 title / detail 里（三个选项各自的后果是否写清楚，只能看这两项），
+            // 同样走加性扩展，不动既有前缀。
+            if let Some(t) = p["title"].as_str() {
+                entries.push(format!("eventtitle:{e}:{t}"));
+            }
+            if let Some(d) = p["detail"].as_str() {
+                entries.push(format!("eventaskdetail:{e}:{d}"));
+            }
+            // 审批语义类别：前端按它选按钮文案（范围门与命令审批的「允许」后果不同），
+            // 字段没下发就会静默走错文案——所以「值错了」与「字段缺失」要在断言里可区分。
+            if p.get("approval_kind").is_some() {
+                entries.push(format!(
+                    "eventapprovalkind:{e}:{}",
+                    p["approval_kind"].as_str().unwrap_or("-")
+                ));
+            }
         }
+    }
+
+    /// 统计某类事件下发的次数（G3 单飞用例数审批卡张数用）。
+    fn event_count(entries: &[String], event: &str) -> usize {
+        let tag = format!("event:{event}");
+        entries.iter().filter(|e| **e == tag).count()
+    }
+
+    /// 取该事件的全部标题 / 正文（审批文案断言用；多条则按下发序返回）。
+    fn event_texts(entries: &[String], kind: &str, event: &str) -> Vec<String> {
+        let prefix = format!("{kind}:{event}:");
+        entries
+            .iter()
+            .filter_map(|e| e.strip_prefix(&prefix).map(String::from))
+            .collect()
     }
 
     /// 从 `eventdetail:<event>:<call_key>:<phase>` 条目解析 (call_key, phase) 列表；
@@ -1804,6 +1911,19 @@ mod tests {
         Arc<crate::core::agent::AgentCore>,
         Arc<crate::core::agent::SessionRuntime>,
     ) {
+        let (ws, core, rt, _) = g3_scope_fixture_with_log();
+        (ws, core, rt)
+    }
+
+    /// 同上，但换上会记录 `ask:opened` 的事件汇（数审批卡张数、断言文案都要用）。
+    #[allow(clippy::type_complexity)]
+    fn g3_scope_fixture_with_log() -> (
+        tempfile::TempDir,
+        Arc<crate::core::agent::AgentCore>,
+        Arc<crate::core::agent::SessionRuntime>,
+        Log,
+    ) {
+        let log: Log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
@@ -1811,7 +1931,22 @@ mod tests {
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
         };
-        let core = crate::core::agent::test_support::make_core(&roots);
+        let mut cfg = crate::core::config::ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            models: vec![crate::core::config::ProviderModel::default()],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+        let store = Arc::new(crate::core::sessions::SessionStore::new(
+            roots.data_dir.clone(),
+        ));
+        let core = Arc::new(crate::core::agent::AgentCore::new(
+            cfg,
+            Arc::new(RecordingSink(log.clone())),
+            store,
+            reqwest::Client::new(),
+            roots.data_dir.clone(),
+        ));
         let rt =
             core.get_or_create_session("g3", roots.workspace.clone(), None, vec![], None, vec![]);
         rt.set_prefs(crate::core::prefs::SessionPrefs {
@@ -1827,27 +1962,44 @@ mod tests {
         });
         rt.scope_expanded
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        (ws, core, rt)
+        (ws, core, rt, log)
     }
 
-    #[tokio::test]
-    async fn g3_command_redirect_requires_scope_approval() {
-        // G3 回归：批准后命令的范围内写重定向必须触发计划外步骤确认（预取消 token = 拒绝）
-        let (ws, core, rt) = g3_scope_fixture();
-        let calls = vec![crate::core::agent::NormalizedCall {
-            id: "t1".into(),
+    /// 造一条待执行的写命令调用（索引为批内位置）。
+    fn g3_write_call(id: &str, index: usize, cmd: &str) -> crate::core::agent::NormalizedCall {
+        crate::core::agent::NormalizedCall {
+            id: id.into(),
             name: "command".into(),
-            args: serde_json::json!({ "command": "echo x > g3_probe.txt" }),
-            index: 0,
-        }];
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
-        let out = execute_batch(&core, &rt, calls, &[], false, false, cancel, "run1").await;
-        let err = out
-            .results
+            args: serde_json::json!({ "command": cmd }),
+            index,
+        }
+    }
+
+    /// 起一个应答器：把出现的第 n 个审批按给定结果答掉（找不到就返回 false）。
+    fn g3_answer_spawner(
+        rt: Arc<crate::core::agent::SessionRuntime>,
+        answer: serde_json::Value,
+    ) -> tokio::task::JoinHandle<bool> {
+        tokio::spawn(async move {
+            for _ in 0..2000 {
+                let id = rt.asks.lock().unwrap().keys().next().cloned();
+                if let Some(id) = id {
+                    return rt.resolve_ask(&id, answer);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            false
+        })
+    }
+
+    /// 从批次结果里取出第一个错误结果文本。
+    fn first_error(results: &[Content]) -> Option<String> {
+        // 返回 Option 而非 String：「批次根本没产出结果」与「有结果但无错误」必须可区分，
+        // 否则 unwrap_or_default() 会让 is_empty() 断言在「无结果」时空洞通过。
+        results
             .iter()
             .filter_map(|c| match c {
-                crate::core::types::Content::ToolResult {
+                Content::ToolResult {
                     content,
                     is_error: true,
                     ..
@@ -1855,12 +2007,78 @@ mod tests {
                 _ => None,
             })
             .next()
-            .expect("应有 G3 拒绝错误");
+    }
+
+    /// 断言批次产出了结果且首个错误命中片段。
+    #[track_caller]
+    fn assert_error_contains(results: &[Content], needle: &str) {
+        let err = first_error(results).expect("批次应有错误结果");
+        assert!(err.contains(needle), "错误文本应含 {needle}：{err}");
+    }
+
+    /// 断言批次产出结果但无错误（显式区分于「无结果」）。
+    #[track_caller]
+    fn assert_no_error(results: &[Content]) {
         assert!(
-            err.contains("E_CANCELLED"),
-            "预取消应在闸层立即拦截（G3 范围门）: {err}"
+            !results.is_empty(),
+            "批次应产出结果，空批次不能当作「无错误」"
+        );
+        assert!(
+            first_error(results).is_none(),
+            "不应有错误结果：{:?}",
+            first_error(results)
+        );
+    }
+
+    #[tokio::test]
+    async fn g3_command_redirect_requires_scope_approval() {
+        // G3 回归：批准后命令的范围内写重定向必须触发计划外步骤确认。
+        // 预取消 token 走的是批次层的并发闸短路（run_tool 根本不进），守不到 G3 门本体——
+        // 故这里应答一次「拒绝」，真正让弹窗发生并落 E_SCOPE_DENIED。
+        let (ws, core, rt, log) = g3_scope_fixture_with_log();
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![crate::core::agent::NormalizedCall {
+                    id: "t1".into(),
+                    name: "command".into(),
+                    args: serde_json::json!({ "command": "echo x > g3_probe.txt" }),
+                    index: 0,
+                }],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("拒绝应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        let err = first_error(&out.results).expect("拒绝后应有错误结果");
+        assert!(
+            err.contains("E_SCOPE_DENIED"),
+            "拒绝必须落 E_SCOPE_DENIED: {err}"
         );
         assert!(!ws.path().join("g3_probe.txt").exists(), "被拒命令不应执行");
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(
+            event_count(&entries, "ask:opened"),
+            1,
+            "写目标命令必须恰好弹一张计划外步骤确认：{entries:?}"
+        );
+        // 拒绝必须消费本轮范围标记（同 run 内不再重弹），否则每条写命令都弹一次
+        assert!(
+            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
+            "拒绝后必须清掉 scope_expanded，否则同批下一条写命令会再弹同一张卡"
+        );
+        assert!(
+            !rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
+            "拒绝不得置 scope_allowed"
+        );
     }
 
     #[tokio::test]
@@ -1897,6 +2115,476 @@ mod tests {
             .expect("应有工具结果");
         assert!(!result.1, "纯只读命令不应被 G3 拦截：{}", result.0);
         assert!(result.0.contains("hello"), "{}", result.0);
+        // 防「为排重弹把锁也上了」：纯只读命令不得弹卡（也不该消费掉标记）
+        assert!(
+            rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
+            "纯只读命令不经过 G3 门，范围标记应原样保留（后续真正的写入仍要问）"
+        );
+    }
+
+    /// 「允许」= 把本批计划外步骤**并入基线**：同一批标题不再重复弹，但之后出现真新增要再拦一次。
+    #[tokio::test]
+    async fn g3_allow_merges_titles_into_baseline_then_new_one_asks_again() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        // 第一轮：应答「允许」（不勾始终允许）
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": true }));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t1", 0, "echo a > g3_a.txt")],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("审批被应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        assert!(
+            first_error(&out.results).is_none(),
+            "「允许」必须放行本次写入：{:?}",
+            first_error(&out.results)
+        );
+        assert!(
+            !rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
+            "普通「允许」不得置 scope_allowed（那是「始终允许」的语义）"
+        );
+        let baseline = rt.approved_plan.lock().unwrap().clone().unwrap();
+        assert!(
+            baseline.contains(&"计划外新增步骤".to_string()),
+            "「允许」必须把计划外标题并入基线，否则同一批会被反复摆到用户面前：{baseline:?}"
+        );
+
+        // 关键回归：同一批标题已被并入基线 → 下一条写操作不得再弹窗
+        let log_before = log.lock().unwrap().len();
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("t2", 0, "echo b > g3_b.txt")],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run2",
+        )
+        .await;
+        assert!(
+            first_error(&out.results).is_none(),
+            "已并入基线的标题不应再拦：{:?}",
+            first_error(&out.results)
+        );
+        let log_after = log.lock().unwrap();
+        let ask_between = log_after[log_before..]
+            .iter()
+            .filter(|e| e.as_str() == "event:ask:opened")
+            .count();
+        assert_eq!(
+            ask_between,
+            0,
+            "同一批标题不得重复弹窗：{:?}",
+            &log_after[log_before..]
+        );
+        drop(log_after);
+    }
+
+    /// 「允许」不是永久放行：之后出现**真新增**（与基线无包含关系）必须再拦一次。
+    /// 与上例拆成独立用例：本例的第二次审批发生在同一 rt 上，与上例合并会把两个
+    /// 应答器的时序绑在一起（一处挂起就整例超时）。
+    #[tokio::test]
+    async fn g3_true_new_todo_after_allow_is_asked_again() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        // 先完成一轮「允许」并入基线
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": true }));
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t1", 0, "echo a > g3_a.txt")],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("审批被应答后批次必须返回");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+
+        // 然后模型又改了计划，混入真新增 → 必须重新弹范围确认
+        rt.todos.lock().unwrap().push(crate::tools::plan::Todo {
+            title: "顺手把 openers.rs 也修了".into(),
+            status: crate::tools::plan::TodoStatus::Pending,
+        });
+        rt.scope_expanded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let answerer2 = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t3", 0, "echo c > g3_c.txt")],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run3",
+            ),
+        )
+        .await
+        .expect("拒绝应答后批次必须返回");
+        assert!(answerer2.await.unwrap(), "真新增必须重新弹范围确认");
+        assert!(
+            first_error(&out.results).is_some_and(|e| e.contains("E_SCOPE_DENIED")),
+            "真新增必须重新触发范围确认：{:?}",
+            first_error(&out.results)
+        );
+        assert_eq!(
+            event_count(&log.lock().unwrap().clone(), "ask:opened"),
+            2,
+            "两轮各弹一张（共 2 张）"
+        );
+    }
+
+    /// 细化型标题（批准时是文件级改动点，执行时写成「包 X（role）：…」）不弹窗、静默并入基线。
+    #[tokio::test]
+    async fn g3_refinement_title_does_not_prompt() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        // 基线 = 文件级改动点；当前 todos 把它细化成任务包写法（标准工作流 S6 的必然形态）
+        *rt.approved_plan.lock().unwrap() =
+            Some(vec!["新增 core/wait_targets.rs 登记表内核 + 单测".into()]);
+        rt.todos.lock().unwrap().clear();
+        rt.todos.lock().unwrap().push(crate::tools::plan::Todo {
+            title: "包 A（backend-dev）：新增 core/wait_targets.rs 登记表内核".into(),
+            status: crate::tools::plan::TodoStatus::Pending,
+        });
+        rt.scope_expanded
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("t1", 0, "echo a > g3_refine.txt")],
+            &[],
+            false,
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error(&out.results).is_none(),
+            "细化型标题不得被拦（用户不该为已批准步骤的另一种写法授权）：{:?}",
+            first_error(&out.results)
+        );
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(
+            event_count(&entries, "ask:opened"),
+            0,
+            "细化型标题不得弹审批卡：{entries:?}"
+        );
+        assert!(
+            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
+            "细化并入后应清扩张标记"
+        );
+        let baseline = rt.approved_plan.lock().unwrap().clone().unwrap();
+        assert!(
+            baseline
+                .contains(&"包 A（backend-dev）：新增 core/wait_targets.rs 登记表内核".to_string()),
+            "细化标题应静默并入基线：{baseline:?}"
+        );
+    }
+
+    /// 并发单飞：同批多条带写目标的 command 只产生**一张**计划外步骤确认。
+    /// 守的是 scope_gate_lock 必须包住「求值 + 弹窗 + 落状态」整段——只锁弹窗会退化成同批弹 N 张。
+    #[tokio::test]
+    async fn g3_concurrent_writes_pop_single_approval_card() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        let calls: Vec<crate::core::agent::NormalizedCall> = (0..4)
+            .map(|i| g3_write_call(&format!("t{i}"), i, &format!("echo x{i} > g3_c{i}.txt")))
+            .collect();
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": true }));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                calls,
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("审批被应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+
+        let entries = log.lock().unwrap().clone();
+        let asks: Vec<&String> = entries
+            .iter()
+            .filter(|e| e.as_str() == "event:ask:opened")
+            .collect();
+        assert_eq!(
+            asks.len(),
+            1,
+            "同批 4 条带写目标的命令只应弹一张计划外步骤确认（单飞回归）：{entries:?}"
+        );
+        let titles = event_texts(&entries, "eventtitle", "ask:opened");
+        assert_eq!(
+            titles,
+            vec!["计划外步骤确认".to_string()],
+            "唯一一张必须是 G3 范围确认卡：{titles:?}"
+        );
+        // 单飞后余下三条直接放行，不得被范围门拒绝
+        let denials = out
+            .results
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    Content::ToolResult { content, .. } if content.contains("E_SCOPE_DENIED")
+                )
+            })
+            .count();
+        assert_eq!(
+            denials, 0,
+            "单飞后其余写操作不得再被范围门拒绝：{:?}",
+            out.results
+        );
+    }
+
+    /// 拒绝后本 run 内不再重弹：第二条写操作不再弹卡（标记已被消费）。
+    #[tokio::test]
+    async fn g3_denial_does_not_reprompt_within_run() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t1", 0, "echo a > g3_deny.txt")],
+                &[],
+                false,
+                false,
+                cancel.clone(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("拒绝应答后批次必须返回");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        assert!(
+            first_error(&out.results).is_some_and(|e| e.contains("E_SCOPE_DENIED")),
+            "拒绝必须落 E_SCOPE_DENIED：{:?}",
+            first_error(&out.results)
+        );
+        assert!(
+            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
+            "拒绝必须消费本轮 scope_expanded"
+        );
+
+        // 同 run 的下一条写操作：不得再弹同一张卡。
+        // 取舍（有代码注释为证）：拒绝时已消费 scope_expanded，因此**同批已排队但尚未进门的**
+        // 写操作也会被放行。这是拿「不再重复打扰」换的——被拒的那条已经落 E_SCOPE_DENIED，
+        // 模型侧会收窄范围后重试；同批剩余调用若被逐个拦下，用户反而要回答 N 次同一问题。
+        // 真正的越界写入仍有 fence / 写入门 / 下一 run 的重新置位兼底，不构成安全缺口。
+        let log_before = log.lock().unwrap().len();
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("t2", 0, "echo b > g3_deny2.txt")],
+            &[],
+            false,
+            false,
+            cancel,
+            "run1",
+        )
+        .await;
+        assert!(
+            first_error(&out.results).is_none(),
+            "拒绝后同 run 内不应再拦：{:?}",
+            first_error(&out.results)
+        );
+        let log_after = log.lock().unwrap();
+        assert_eq!(
+            log_after[log_before..]
+                .iter()
+                .filter(|e| e.as_str() == "event:ask:opened")
+                .count(),
+            0,
+            "拒绝后本 run 内不得重弹同一张卡：{:?}",
+            &log_after[log_before..]
+        );
+        // 但下一 run 若模型又改了计划，plan.rs 会重新置位 → 那时再问是合理的
+        assert!(
+            !rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
+            "拒绝不得置 scope_allowed"
+        );
+    }
+
+    /// 「本会话始终允许」应答：置 scope_allowed（保留会话级永久放行语义）+ 清扩张标记。
+    #[tokio::test]
+    async fn g3_always_answer_sets_scope_allowed() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        let answerer = g3_answer_spawner(
+            rt.clone(),
+            serde_json::json!({ "approved": true, "always": true }),
+        );
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t1", 0, "echo a > g3_always.txt")],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("审批被应答后批次必须返回（不得永久挂起）");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        assert!(
+            first_error(&out.results).is_none(),
+            "「始终允许」必须放行：{:?}",
+            first_error(&out.results)
+        );
+        assert!(
+            rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
+            "「本会话始终允许」必须置 scope_allowed"
+        );
+        assert!(
+            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
+            "放行后必须清扩张标记"
+        );
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(
+            event_count(&entries, "ask:opened"),
+            1,
+            "「始终允许」必须真的向用户摆出第三个选项（allow_always=true）：{entries:?}"
+        );
+    }
+
+    /// 文案契约：正文必须把三个选项各自的真实后果写清楚。
+    /// 这是本次修复的核心诉求——旧文案写「批准 = 本会话允许后续新增步骤」而按钮写着
+    /// 「仅允许这一次」，两边矛盾，用户在不知情下交出整场会话的范围门。
+    #[tokio::test]
+    async fn g3_prompt_text_states_each_options_real_effect() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        // 应答一次「拒绝」让弹窗真实发生（预取消会在批次层短路，根本不进 G3 门）
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![g3_write_call("t1", 0, "echo a > g3_text.txt")],
+                &[],
+                false,
+                false,
+                tokio_util::sync::CancellationToken::new(),
+                "run1",
+            ),
+        )
+        .await
+        .expect("拒绝应答后批次必须返回");
+        assert!(answerer.await.unwrap(), "审批请求必须出现并被应答");
+        let entries = log.lock().unwrap().clone();
+        let details = event_texts(&entries, "eventaskdetail", "ask:opened");
+        assert_eq!(details.len(), 1, "应恰好一张 G3 范围确认卡：{entries:?}");
+        let d = &details[0];
+        assert!(d.contains("计划外新增步骤"), "正文须列出计划外步骤：{d}");
+        assert!(d.contains("「允许」"), "正文须说明「允许」的后果：{d}");
+        assert!(d.contains("纳入"), "「允许」= 纳入本次已批准范围：{d}");
+        assert!(
+            d.contains("「本会话始终允许」"),
+            "正文须说明「本会话始终允许」的后果：{d}"
+        );
+        // 不得再把会话级选项说成项目级：前端 label 已切，detail 跟着切，否则同一张卡自相矛盾
+        assert!(
+            !d.contains("「始终允许本项目」"),
+            "正文仍在用项目级措辞：{d}"
+        );
+        assert!(d.contains("「拒绝」"), "正文须说明「拒绝」的后果：{d}");
+        // 旧文案「批准 = 本会话允许后续新增步骤」必须消失
+        assert!(
+            !d.contains("批准 = 本会话允许后续新增步骤"),
+            "旧的错位文案仍在：{d}"
+        );
+        // approval_kind 必须真的下发：前端靠它选按钮文案，字段缺失会静默走错文案
+        assert_eq!(
+            event_texts(&entries, "eventapprovalkind", "ask:opened"),
+            vec!["scope".to_string()],
+            "范围门必须下发 approval_kind=scope：{entries:?}"
+        );
+    }
+
+    /// 审批语义类别回归：非范围门的审批必须下发 `once`（默认语义）。
+    /// 前端据 `approvalKind === "scope"` 二分选文案——误标成 scope 会让命令审批显示
+    /// 「纳入已批准范围 / 本会话始终允许」，与实际行为不符；漏下发则走默认分支。
+    #[tokio::test]
+    async fn non_scope_approvals_declare_once() {
+        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        // 切回 ConfirmEach 才会触发写入门（夹具为测 G3 预设了 AutoEdit，那里写工具不需审批）。
+        // 同时清掉 G3 基线与扩张标记，确保本例只走写入门、不走范围门。
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::ConfirmEach,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        *rt.approved_plan.lock().unwrap() = None;
+        rt.scope_expanded
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // ConfirmEach 下的文件写入审批（allow_always=false，仍走 approval::confirm）
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": true }));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            execute_batch(
+                &core,
+                &rt,
+                vec![crate::core::agent::NormalizedCall {
+                    id: "t1".into(),
+                    name: "create".into(),
+                    args: serde_json::json!({ "path": "g3_once.txt", "content": "x" }),
+                    index: 0,
+                }],
+                &[],
+                false,
+                false,
+                cancel,
+                "run1",
+            ),
+        )
+        .await
+        .expect("应答后批次必须返回");
+        assert!(answerer.await.unwrap(), "写入审批必须出现并被应答");
+        assert!(
+            first_error(&out.results).is_none(),
+            "批准后应写入成功：{:?}",
+            first_error(&out.results)
+        );
+        assert_eq!(
+            event_texts(
+                &log.lock().unwrap().clone(),
+                "eventapprovalkind",
+                "ask:opened"
+            ),
+            vec!["once".to_string()],
+            "文件写入审批必须下发 approval_kind=once"
+        );
     }
 
     /// Plan 档硬门回归：模型坚持调用被排除的 edit 也必须拒绝不执行；

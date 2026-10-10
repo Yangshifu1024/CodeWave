@@ -87,15 +87,33 @@ export default function AskPanel() {
 
   // ---------- 审批：三选项 + 单选高亮（hooks 必须在提前 return 之前跑完） ----------
   const approvalOptions = useMemo(() => {
+    // [docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7.3：同一组按钮在
+    // 范围门语义下后果完全不同——「允许」是把计划外步骤纳入已批准范围（而非只放行这一次），
+    // 「始终允许」才是本会话后续新增都不再询问。共用一套文案会让用户误判实际行为。
+    const isScope = ask?.approvalKind === "scope";
     const opts: { id: string; label: string; desc: string; approved: boolean; always: boolean }[] = [
-      { id: "allow", label: t("ask.allow"), desc: t("ask.allowDesc"), approved: true, always: false },
+      {
+        id: "allow",
+        label: t("ask.allow"),
+        desc: isScope ? t("ask.scopeAllowDesc") : t("ask.allowDesc"),
+        approved: true,
+        always: false,
+      },
     ];
     if (ask?.allowAlways) {
-      opts.push({ id: "always", label: t("ask.alwaysAllow"), desc: t("ask.alwaysAllowDesc"), approved: true, always: true });
+      opts.push({
+        id: "always",
+        // label 也按语义切：后端 scope_allowed 是 SessionRuntime 内存态、且下次方案批准会重置
+        // —— 作用域是「本会话」不是「本项目」，label 说项目级就是本 PR 要消灭的那类文案失真。
+        label: isScope ? t("ask.scopeAlwaysAllow") : t("ask.alwaysAllow"),
+        desc: isScope ? t("ask.scopeAlwaysAllowDesc") : t("ask.alwaysAllowDesc"),
+        approved: true,
+        always: true,
+      });
     }
     opts.push({ id: "deny", label: t("ask.deny"), desc: t("ask.denyDesc"), approved: false, always: false });
     return opts;
-  }, [ask?.allowAlways, t]);
+  }, [ask?.allowAlways, ask?.approvalKind, t]);
 
   if (!ask) return null;
 

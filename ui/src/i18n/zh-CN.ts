@@ -67,6 +67,10 @@ export default {
     note: "补充说明（可选）", submit: "提交回答", next: "下一题", timeoutHint: "120 秒未响应将视为拒绝",
     waitingConfirm: "等待确认",
     allowDesc: "仅允许这一次", alwaysAllow: "始终允许本项目", alwaysAllowDesc: "后续相同命令不再询问",
+    /* G3 范围门（[docs/plan-mode-workflow] §7.3）：同一组按钮在范围门语义下后果完全不同——「允许」是把计划外步骤
+       纳入已批准范围（不是只放行这一次），「始终允许」才是本会话后续新增都不再询问。缺这两组文案会让用户误判实际行为 */
+    scopeAllowDesc: "纳入本次已批准范围", scopeAlwaysAllowDesc: "本会话后续新增都不再询问",
+    scopeAlwaysAllow: "本会话始终允许",
     denyDesc: "这次先拒绝", confirm: "确认", ignore: "忽略",
     keyHint: "使用 Tab / 上下键选择，回车确认（点击卡片后生效）",
     keyHintMulti: "使用 Tab / 上下键选择，空格选中；回车 = 下一题 / 提交",

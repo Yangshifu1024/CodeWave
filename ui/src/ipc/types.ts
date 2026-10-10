@@ -404,6 +404,8 @@ export interface AskOpenedEvent {
   plan_body?: string;
   /** 命令审批「始终允许本项目」第三选项 */
   allow_always?: boolean;
+  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（`once` = 单次操作审批；`scope` = G3 范围门）——决定按钮文案；缺省 = `once` */
+  approval_kind?: "once" | "scope";
   /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */
   switch_to_auto_edit?: boolean;
   /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准形形状标记（后端宽松识别 = 单一事实源：单题 + id/label 命中批准协议） */
