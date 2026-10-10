@@ -6,7 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -207,6 +207,13 @@ export const ipc = {
   getTokenStats: (days: number) => invoke<DailyStats[]>("get_token_stats", { days }),
   stopService: (sessionId: string, serviceId: string) =>
     invoke<void>("stop_service", { sessionId, serviceId }),
+  /**
+   * 后台服务权威快照（对账 `service:update` 推送的增量通道）。
+   *
+   * 推送会丢帧（tab 未挂载 / 子代理流 / 静默期无输出），丢一次就永久停在错误状态；
+   * 本命令是拉取兜底，投影与后端工具 `list` 同源。
+   */
+  listServices: () => invoke<ServiceInfo[]>("list_services"),
 
   // 运行日志（[docs/session-logging-report](../../../docs/session-logging-report.md)）
   listLogFiles: () => invoke<LogFileEntry[]>("list_log_files"),

@@ -316,8 +316,13 @@ function ToolCallCardImpl({
                 </div>
               )}
               {tool.tool === "service" && (
-                <div className="kv">                  <Tag bordered={false}>{data.tail ? t("tools.serviceRunning") : t("tools.serviceStopped")}</Tag>
-                  {data.tail && (
+                <div className="kv">                  {/* 三态：running 权威 / false 已收退出信号 / undefined 未知。
+                      早期用 `!!data.tail` 代理存活是错的：无输出的服务 tail 恒为空，
+                      会让运行中的卡片永久显示「已停止」，且停止按钮一并消失。 */}
+                  <Tag bordered={false}>{typeof data.running === "boolean"
+                    ? (data.running ? t("tools.serviceRunning") : t("tools.serviceStopped"))
+                    : t("tools.serviceUnknown")}</Tag>
+                  {(data.running === true || data.running === undefined) && (
                     <Button
                       size="small"
                       style={{ fontSize: 11 }}

@@ -146,6 +146,24 @@ export interface LogFileEntry { name: string; size: number; modified: string | n
 /** 日志内容：truncated = 尾部截断读取 */
 export interface LogFileContent { content: string; truncated: boolean }
 
+/**
+ * 后台服务权威快照（与后端 `tools::service::service_info` 同源，list 工具与 list_services IPC 共用）。
+ *
+ * `running` 是进程存活事实，**不可**用「日志非空」代理：无输出的服务 tail 恒为空，
+ * 那会让工具卡永久误报已停止。字段无 `tail`——日志只走 `service:update` 增量推送。
+ */
+export interface ServiceInfo {
+  id: string;
+  name: string;
+  command: string;
+  pid: number;
+  uptime_secs: number;
+  log_bytes: number;
+  owner_root_id: string;
+  purpose: "development" | "preview";
+  running: boolean;
+}
+
 /** [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：会话产物登记（create/edit 边车 + 统计），first_op/last_op ∈ "create" | "edit" */
 export interface SessionFileEntry {
   path: string;
