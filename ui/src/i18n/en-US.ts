@@ -469,6 +469,8 @@ export default {
     stop: "Stop this subagent",
     endedEarly: "Ended early",
     endedBudget: "Budget exhausted",
+    /* partial = report handed in only after the step budget ran out: results in hand, work possibly unfinished */
+    endedPartial: "Budget hit · incomplete",
     /* Drawer header mode line ([docs/mode-gate-and-subagent-sync]): mode = label from composer.mode* keys */
     modeLine: "Permission mode: {{mode}}",
     modeInherited: " (inherited from the main session)",

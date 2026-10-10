@@ -655,6 +655,9 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(key)": "工具动词键由 VERBS[tool.tool] 派生",
     "t(neutralErrKey)": "中性错误码（E_INTERRUPTED / E_ASK_*）→ 文案键由 NEUTRAL_ERR_KEYS 表派生（三键已由 i18n 键集合用例断言）",
   },
+  "subagent/SubagentItemCard.tsx": {
+    "t(warnKey)": "收尾警示文案键由 endedWarnLabel 四态映射派生（partial / budget / no_report 三键已由 subagent.card.test.tsx 逐条断言；键值域由 i18n 双侧键集合用例守）",
+  },
 };
 
 describe("features 全目录：不得跨段借键（批④ 返工 · 守门②扩面）", () => {
