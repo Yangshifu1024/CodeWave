@@ -4,6 +4,7 @@
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use crate::core::agent::{DriveParams, SessionRuntime, SubBase};
 use crate::core::prefs::ApprovalMode;
+use crate::core::wait_targets::{TargetKind, TargetState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -347,6 +348,11 @@ impl Tool for SubagentTool {
         // 独立 runtime（继承 workspace/data_dir/extra_roots）+ 注册（支持 StopSubagent）
         let sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
         ctx.core.subs.insert(sub_id.clone(), sub_rt.clone());
+        // 登记为可等待目标（`wait` 的 until 可等它收尾）：放在 spawn 真正成功之后——
+        // 抢占并发槽位失败等早退路径都不会走到这里，不会留下永远等不到的 running 条目。
+        ctx.core
+            .wait_targets
+            .register(sub_id.clone(), TargetKind::Subagent, None);
         // clean_context=false 时携带主会话最后 6 条消息作背景
         if args.clean_context == Some(false) {
             let tail: Vec<_> = ctx
@@ -457,6 +463,10 @@ impl Tool for SubagentTool {
             sub_rt: sub_rt.clone(),
             progress,
             armed: true,
+            // 默认失败：以下三个失败分支（取消 / provider 错误）不覆写就是 Failed，
+            // panic 路（armed 仍为 true）也落到 Failed。
+            final_state: TargetState::Failed,
+            final_text: None,
         };
 
         let run_id = format!("sub_{}", sub_id);
@@ -562,6 +572,16 @@ impl Tool for SubagentTool {
                     json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
                             "steps_used": steps_used, "ended": ended }),
                 );
+                // 收尾形态：仅「按约定汇报」（ended == "report"）算成功完成。
+                // budget（步数耗尽）/ no_report（未交汇报）都是**没拿到成果**，
+                // 对 wait 的「等到子代理完成」而言不成立，归 Failed；
+                // report 全文按 2000 字符截断作终态摘要（避免大报告长期占内存）。
+                cleanup.final_state = if ended == "report" {
+                    TargetState::Succeeded
+                } else {
+                    TargetState::Failed
+                };
+                cleanup.final_text = Some(crate::core::session_log::trunc(&clean_report, 2000));
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
                     // 供会话恢复关联过程历史文件（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
@@ -621,10 +641,24 @@ struct SubCleanupGuard {
     sub_rt: std::sync::Arc<crate::core::agent::SessionRuntime>,
     progress: tokio::task::JoinHandle<()>,
     armed: bool,
+    /// 可等待目标登记表（`wait` 的 until）置终态：正常完成时由 Ok 分支改写为 Succeeded；
+    /// 默认 Failed 覆盖用户停止 / provider 错误 / panic 三类非正常收尾。
+    /// 无报告但正常返回（ended = budget / no_report）算失败——它没按约定交汇报。
+    final_state: TargetState,
+    /// 终态摘要（observed.text）：正常路径传 report，其余传 None。
+    /// 按 2000 字符截断（与 session_log 同量级；wait 工具侧还会再限长）。
+    final_text: Option<String>,
 }
 impl Drop for SubCleanupGuard {
     fn drop(&mut self) {
         self.progress.abort();
+        // 登记表置终态**必须早于 subs.remove**：成功 / 失败 / 用户停止 / panic 共用本路径，
+        // 而 wait 的轮询间隙反查 subs 会分不清「已完成」与「从不存在」。早一步置位，
+        // 哪怕 wait 反查时空（条目仍在登记表里且已终态）也不误报。
+        let report = std::mem::take(&mut self.final_text);
+        self.core
+            .wait_targets
+            .finish(&self.sub_id, self.final_state, report, None);
         self.core.subs.remove(&self.sub_id);
         // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md) 配对注销：防止 subs 注册表无限增长（内存泄漏 + 向陈旧 sub_id 误投递一段窗口）。
         // NoopSink（测试）默认无操作；无通道时零副作用。

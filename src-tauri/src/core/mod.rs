@@ -18,3 +18,4 @@ pub mod stats;
 pub mod title;
 pub mod types;
 pub mod ui_state;
+pub mod wait_targets;

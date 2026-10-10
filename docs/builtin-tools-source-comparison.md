@@ -716,9 +716,9 @@ read 的 deprecated 别名（历史会话兼容）：name/description 声明弃�
 
 **入参**：`items[1..4]`（非空、trim 后 80 字符截断）。**行为**：`prioritize_commit_first` 确定性重排（含 "commit" 的授权建议置顶——产品约定 git 由用户执行，授权 commit 是最常见收尾动作）；发 `run:suggestions` 事件（前端 chip）；**成功即结束 run**（run 循环对 suggest 特判，`BatchOutcome.suggest_items`，`batch.rs:149-155`）。批次唯一调用约束（Interactive）。
 
-### 14.9 `wait`（`tools/wait.rs`，46 行）
+### 14.9 `wait`（`tools/wait.rs`）
 
-**入参**：`seconds`(1–3600) + `reason`（必填，形成自解释历史）。**行为**：`tokio::select!` sleep vs cancel——可取消的被动等待（等 dev server 起之类的场景），取消 → `E_CANCELLED`。批次唯一调用约束（Interactive）。设计动机：防止模型用 `sleep 999` 命令占用 command 通道。
+**入参**：`seconds`(1–3600) + `reason`（必填）+ **`until?`（后续批次新增，条件等待）**。**行为**：无 `until` 时仍是 `tokio::select!` sleep vs cancel（可取消的被动等待，取消 → `E_CANCELLED`）；给 `until` 时改为 t=0 首探 + 固定 1s 轮询「可等待目标登记表」，条件满足即提前结束。`until` 三字段：`target`（service / subagent / scheduled_task 回执 id，必填）、`state?`（`done` 缺省 = 任意终态 / `exited` / `failed`）、`match?{text}`（摘要大小写不敏感子串，与 `state` 是 AND）。出参：不传 `until` 时**逐字不变**（`{waited_seconds, reason}`）；传则增 `outcome`(`condition_met`/`timeout`) + `until` 回显 + `observed`，**超时不占用错误码**（返 `ok`），判据顺序固定取消 > 条件 > 超时。后端数据面 `core/wait_targets.rs` 是独立登记表（子代理完成即从 `subs` 移除、service 自然退出不移除、计划任务无 running 中间态，反查既有表都分不清「已完成」与「不存在」）。详见 [wait-conditional-wait](./wait-conditional-wait.md)。批次唯一调用约束（Interactive）不变。设计动机：防止模型用 `sleep 999` 命令占用 command 通道。
 
 ### 14.10 基础设施附注（非模型面工具，属工具层执行/安全基建）
 
