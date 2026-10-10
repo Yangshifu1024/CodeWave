@@ -136,6 +136,9 @@ export interface ConfigState {
    *  `null` = 不清理（默认）。可选 = 后端 serde default 向前兼容（同 `shell?` 口径），读取请用
    *  `config.sessions?.retention_days ?? null`——老配置里没有这一段。 */
   sessions?: { retention_days: number | null };
+  /** 内置子代理按角色的模型覆盖（key = role 名 kebab-case 如 "explore"；value = wire id 或 null=跟随父会话）。
+   *  与全局 active_model_id 完全独立。缺失 = 全部跟随父会话；老 config 自动按空对象读入。 */
+  subagent_models?: Record<string, string | null>;
 }
 
 /** [docs/session-logging-report](../../../docs/session-logging-report.md)：运行日志读取契约（全局滚动日志 / 会话日志） */

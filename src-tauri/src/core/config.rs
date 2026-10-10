@@ -4,6 +4,7 @@
 
 use crate::util::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -478,6 +479,11 @@ pub struct ConfigState {
     pub shell: ShellConfig,
     /// 会话保留期设置（[docs/session-cleanup](../../../docs/session-cleanup.md)）
     pub sessions: SessionSettings,
+    /// 内置子代理按角色模型覆盖：key = role（kebab-case，与 agents::DELEGABLE_ROLES 对齐），
+    /// value = Some(model_id) 显式覆盖 / None 跟随父会话。
+    /// 缺省空 HashMap：旧 config 自动按空读入，运行时由 ensure_subagent_models 预填 8 键为 None。
+    #[serde(default)]
+    pub subagent_models: HashMap<String, Option<String>>,
 }
 
 impl Default for ConfigState {
@@ -499,6 +505,7 @@ impl Default for ConfigState {
             log: LogConfig::default(),
             shell: ShellConfig::default(),
             sessions: SessionSettings::default(),
+            subagent_models: HashMap::new(),
         }
     }
 }
@@ -639,6 +646,16 @@ impl ConfigState {
             take -= 1;
         }
         format!("***{}", &key[key.len() - take..])
+    }
+
+    /// 运行时预填：缺失的角色键补 None；已存在的不动。
+    /// callers 通常传 `agents::DELEGABLE_ROLES`。
+    pub fn ensure_subagent_models(&mut self, callers: &[&str]) {
+        for role in callers {
+            self.subagent_models
+                .entry((*role).to_string())
+                .or_insert(None);
+        }
     }
 }
 
@@ -863,6 +880,52 @@ mod tests {
     }
 
     /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：自定义头校验规则（空名/非法名/保留名/重名/换行/值仅可见 ASCII）。
+    /// validate_request_headers_rules 后面补子代理模型覆盖两测试
+    #[test]
+    fn ensure_subagent_models_fills_missing_keys() {
+        let mut cfg = ConfigState::default();
+        assert!(cfg.subagent_models.is_empty());
+        let roles = crate::agents::DELEGABLE_ROLES;
+        cfg.ensure_subagent_models(roles);
+        assert_eq!(cfg.subagent_models.len(), roles.len());
+        for role in roles {
+            assert_eq!(
+                cfg.subagent_models.get(*role).map(|v| v.as_deref()),
+                Some(None),
+                "{role} 缺失键应被预填 None"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_subagent_models_does_not_overwrite_existing() {
+        let mut cfg = ConfigState::default();
+        let roles = crate::agents::DELEGABLE_ROLES;
+        // 预先填一个具名覆盖 + 一个 None + 两个未填
+        cfg.subagent_models
+            .insert("explore".to_string(), Some("m-explore".into()));
+        cfg.subagent_models.insert("backend-dev".to_string(), None);
+        cfg.ensure_subagent_models(roles);
+        // 已存在值原样不动
+        assert_eq!(
+            cfg.subagent_models
+                .get("explore")
+                .and_then(|v| v.as_deref()),
+            Some("m-explore")
+        );
+        assert_eq!(
+            cfg.subagent_models
+                .get("backend-dev")
+                .and_then(|v| v.as_deref()),
+            None
+        );
+        // 缺失键被预填
+        for role in roles {
+            assert!(cfg.subagent_models.contains_key(*role), "{role} 键缺失");
+        }
+        assert_eq!(cfg.subagent_models.len(), roles.len());
+    }
+
     #[test]
     fn validate_request_headers_rules() {
         let ok = vec![HeaderPair {

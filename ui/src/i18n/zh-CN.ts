@@ -213,6 +213,8 @@ export default {
     maxTokensHint: "模型单次回复（含思考过程）的输出上限，超出即被截断；偏小会过早截断长回复。",
     contextWindowHint: "仅用于自动压缩触发阈值与用量显示，不影响单次回复的输出长度。",
     active: "当前",
+    subagentModels: "子代理模型", subagentModelsHint: "未设置的角色继续跟随父会话（与当前全局活跃模型保持一致）",
+    subagentInherit: "继承父会话", subagentReadonly: "只读", subagentSaveFailed: "保存失败",
     addProvider: "添加供应商", editProvider: "编辑供应商", editProviderAction: "编辑", providerDone: "完成", backToProvider: "返回供应商",
     addProviderHint: "配置一个完全自定义的 API 端点和初始模型。",
     providerName: "名称", providerNamePh: "如：智谱 GLM",
