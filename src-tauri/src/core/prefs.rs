@@ -143,6 +143,22 @@ pub fn effective_model(
     cfg.active_model()
 }
 
+/// 内置子代理按角色模型解析：①角色级映射命中且 wire id 有效 → ②fallback 到 effective_model(cfg, parent_prefs)。
+/// 命中语义：`cfg.subagent_models[role] = Some(id)` 且 `cfg.find_model(id).is_some()`。
+/// 悬空/未设置/None 一律回落父会话（含父覆盖 + 全局 active 两级）。
+pub fn effective_subagent_model(
+    cfg: &ConfigState,
+    role: &str,
+    parent_prefs: &SessionPrefs,
+) -> Option<crate::core::config::ModelConfig> {
+    if let Some(Some(id)) = cfg.subagent_models.get(role)
+        && let Some(m) = cfg.find_model(id)
+    {
+        return Some(m);
+    }
+    effective_model(cfg, parent_prefs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +268,111 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(effective_model(&cfg, &prefs).unwrap().id, "m1");
+    }
+
+    /// 子代理角色级覆盖命中 → 优先于父会话 model_id。
+    #[test]
+    fn effective_subagent_model_role_override_wins_over_parent() {
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "p1".into(),
+            models: vec![
+                crate::core::config::ProviderModel {
+                    id: "m-parent".into(),
+                    ..Default::default()
+                },
+                crate::core::config::ProviderModel {
+                    id: "m-role".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        cfg.subagent_models
+            .insert("tester".into(), Some("m-role".into()));
+        let parent_prefs = SessionPrefs {
+            model_id: Some("m-parent".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &parent_prefs)
+                .unwrap()
+                .id,
+            "m-role"
+        );
+    }
+
+    /// 角色覆盖的 id 悬空（已不在 providers 中）→ 回落 effective_model。
+    #[test]
+    fn effective_subagent_model_dangling_id_falls_back_to_parent() {
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "p1".into(),
+            models: vec![crate::core::config::ProviderModel {
+                id: "m-parent".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        cfg.subagent_models
+            .insert("tester".into(), Some("m-deleted".into()));
+        let parent_prefs = SessionPrefs {
+            model_id: Some("m-parent".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &parent_prefs)
+                .unwrap()
+                .id,
+            "m-parent"
+        );
+    }
+
+    /// 角色键未设置或值为 None → 回落 effective_model（父覆盖 > 全局 active）。
+    #[test]
+    fn effective_subagent_model_unset_role_falls_back_to_parent() {
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "p1".into(),
+            models: vec![
+                crate::core::config::ProviderModel {
+                    id: "m-active".into(),
+                    ..Default::default()
+                },
+                crate::core::config::ProviderModel {
+                    id: "m-parent".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some("m-active".into());
+        // 角色键不存在
+        let parent_prefs = SessionPrefs {
+            model_id: Some("m-parent".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &parent_prefs)
+                .unwrap()
+                .id,
+            "m-parent"
+        );
+        // 角色键存在但值为 None
+        cfg.subagent_models.insert("tester".into(), None);
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &parent_prefs)
+                .unwrap()
+                .id,
+            "m-parent"
+        );
+        // 角色键不存在、父 prefs 也未提供 → 走全局 active
+        let no_parent = SessionPrefs::default();
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &no_parent)
+                .unwrap()
+                .id,
+            "m-active"
+        );
     }
 }

@@ -372,6 +372,31 @@ impl Tool for SubagentTool {
             )));
         // 目标模式已删除：reviewer/code-reviewer 子代理不再读取目标合同；保留通用评审任务消息。
 
+        // 角色级模型覆盖：父 prefs 已复制入 sub_rt（runtime.rs:377），此处用 effective_subagent_model 重新解析并覆写 model_id。
+        // approval_mode / reasoning_effort 保持父继承（沿用现有档位同步语义，不动）。
+        // args.role 未统一归一，但以 normalize_role 跳一次保证与 subagent_models 键一致：
+        // find() 内部走同一归一，HashMap 键与 DELEGABLE_ROLES 都是 kebab-case，双重归一是安全的。
+        {
+            let role_key = crate::agents::normalize_role(&args.role);
+            // 写锁预填未设键（最短临界区，释放后再取读锁调用纯函数）。
+            ctx.core
+                .cfg
+                .write()
+                .unwrap()
+                .ensure_subagent_models(crate::agents::DELEGABLE_ROLES);
+            // 读锁读出 effective_subagent_model（纯函数，不嵌套持锁）。
+            let resolved = {
+                let cfg = ctx.core.cfg.read().unwrap();
+                crate::core::prefs::effective_subagent_model(&cfg, &role_key, &parent_prefs)
+                    .map(|m| m.id.clone())
+            };
+            if let Some(id) = resolved
+                && let Ok(mut p) = sub_rt.prefs.lock()
+            {
+                p.model_id = Some(id);
+            }
+        }
+
         // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
         // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——
         // 子代理不再冻结在 spawn 时的档位上。
@@ -651,6 +676,8 @@ impl Drop for GuardGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::ConfigState;
+    use crate::core::prefs::{SessionPrefs, effective_subagent_model};
 
     #[test]
     fn budget_constants() {
@@ -927,6 +954,76 @@ mod tests {
             assert!(p.exclude_tools.iter().any(|e| e == t), "缺排除项 {t}");
         }
         assert_eq!(p.idle_policy, crate::core::agent::IdlePolicy::NudgeOnly);
+    }
+
+    /// 子代理角色覆盖命中：effective_subagent_model 返回角色级模型。
+    #[test]
+    fn subagent_model_override_takes_effect() {
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "p1".into(),
+            models: vec![
+                crate::core::config::ProviderModel {
+                    id: "m-active".into(),
+                    ..Default::default()
+                },
+                crate::core::config::ProviderModel {
+                    id: "m-tester-role".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some("m-active".into());
+        cfg.subagent_models
+            .insert("tester".into(), Some("m-tester-role".into()));
+        // 父 prefs model_id 设为另一个——仍应被角色覆盖优先。
+        let parent_prefs = SessionPrefs {
+            model_id: Some("m-active".into()),
+            ..Default::default()
+        };
+        let m = effective_subagent_model(&cfg, "tester", &parent_prefs).unwrap();
+        assert_eq!(m.id, "m-tester-role");
+    }
+
+    /// 角色覆盖未设值：回落父 prefs（父未设 → 回落全局 active）。
+    #[test]
+    fn subagent_model_override_unset_falls_back() {
+        let mut cfg = ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            id: "p1".into(),
+            models: vec![
+                crate::core::config::ProviderModel {
+                    id: "m-active".into(),
+                    ..Default::default()
+                },
+                crate::core::config::ProviderModel {
+                    id: "m-parent".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some("m-active".into());
+        cfg.subagent_models.insert("tester".into(), None);
+        // 父 prefs 未设 → active 胜出
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &SessionPrefs::default())
+                .unwrap()
+                .id,
+            "m-active"
+        );
+        // 父 prefs 设了 → 父 prefs 胜出（模拟「跟随父会话」语义）
+        let parent_prefs = SessionPrefs {
+            model_id: Some("m-parent".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_subagent_model(&cfg, "tester", &parent_prefs)
+                .unwrap()
+                .id,
+            "m-parent"
+        );
     }
 
     #[test]

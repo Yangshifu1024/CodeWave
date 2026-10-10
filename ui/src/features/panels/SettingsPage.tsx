@@ -51,6 +51,7 @@ import {
 import { McpArgTable, McpKvTable } from "./McpKvTable";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
+import SubagentModelsPanel from "./SubagentModelsPanel";
 import {
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
@@ -1437,6 +1438,14 @@ function SettingsPageController() {
             </SettingsSection>
           </SettingsForm>
           <ProvidersPanel draft={draft} patchDraft={patchDraft} />
+          {/* 子代理角色按角色覆盖的模型——读 useSettings.store，独立 save；
+              容器根自身带 data-setting-id 锚点（SettingFieldPath = "subagentModels"）。
+              与 ProvidersPanel 平级，不嵌进 provider 卡片（覆盖的是角色而非某家供应商）。 */}
+          <SettingsForm>
+            <SettingsSection title={t("settings.subagentModels")}>
+              <SubagentModelsPanel />
+            </SettingsSection>
+          </SettingsForm>
         </>
       ),
     },

@@ -290,6 +290,19 @@ pub struct AgentMeta {
     pub description: String,
 }
 
+/// 可委派角色清单（kebab-case，按 builtin 注册顺序排列，剔除内部 title 角色）。
+/// 双源唯一事实：subagent 模型覆盖（ConfigState.subagent_models）的 key 必须与此列表完全对齐。
+pub const DELEGABLE_ROLES: &[&str] = &[
+    "explore",
+    "backend-dev",
+    "frontend-dev",
+    "app-dev",
+    "reviewer",
+    "product-manager",
+    "code-reviewer",
+    "tester",
+];
+
 /// 可委派角色清单（剔除内部 title 角色），供 `list_agents` IPC 展示与用户 `$<role>` 点名。
 pub fn delegable() -> Vec<AgentMeta> {
     builtin()
