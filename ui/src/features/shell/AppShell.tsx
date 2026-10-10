@@ -343,8 +343,10 @@ export default function AppShell() {
   // 而挂在它们身上的 `settleRunningSubs` / `closeRunningTools` / ask 清理会随之一起失效——
   // 丢一帧即永久卡死（子代理卡转圈，或 ask 面板残留导致整个输入区不可用）。
   //
-  // 本地已有未收敛状态时才问后端（`hasUnsettledRunState` 为假直接跳过，连 IPC 都不发），
-  // 因此正常运行时**零开销**；一旦真的卡住则最多一个轮询间隔自动恢复。
+  // 本地无未收敛状态时不问后端（`hasUnsettledRunState` 为假直接跳过，连 IPC 都不发）。
+  // **开销口径**：空闲时零开销；run 进行中每轮询间隔一次本地 IPC（亚毫秒级，可忽略）——
+  // 这是**必须**付出的代价：`run:start` / `run:done` 任一丢失都会留下 `t.running === true`，
+  // 而那恰恰是看门狗唯一需要抓的场景，不查就等于没有。
   useEffect(() => {
     const timer = setInterval(() => {
       const st = useRun.getState();
