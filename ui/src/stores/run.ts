@@ -30,10 +30,12 @@ import {
 import {
   askHandlers,
   compactHandlers,
+  hasUnsettledRunState,
   historyStatusNotice,
   miscHandlers,
   runLifecycleHandlers,
   scheduleServiceReconcile,
+  settleRun,
   subHandlers,
   toolHandlers,
 } from "./runHandlers";
@@ -111,6 +113,11 @@ export interface RunStore {
   collapseEarlier(sessionId?: string | null): void;
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
   openSubDrawer(sessionId: string | null, subId: string): Promise<void>;
+  /** [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：run 终态对账（**双向**）。
+   *  后端 `session_running` 是独立于事件管线的可靠真值（`core/agent/runtime.rs` 的 `swap(true)` 置位、
+   *  `drive.rs` 所有退出路径 `store(false)` 复位）。此前的前端对账只置 true、不置回 false，
+   *  恰好漏掉「后端已停、前端还认为在跑」这个方向——即本缺陷所属方向。 */
+  reconcileRun(sessionId: string): Promise<void>;
   closeSubDrawer(sessionId?: string | null): void;
   refreshGit(sessionId?: string | null): Promise<void>;
   bindGlobalHandlers(): Record<string, (p: any) => void>;
@@ -1111,6 +1118,36 @@ export const useRun = create<RunStore>()(
       } catch {
         /* 拉取失败保持降级展示（task + 最终报告） */
       }
+    },
+
+    /** run 终态对账（双向）——见 RunStore 接口处注释与 [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)。
+     *
+     *  本地侧判据 `hasUnsettledRunState` 刻意**不只看 `t.running`**：`run:start` 丢失时它恒为 false，
+     *  而 `sub:spawn` 建卡不检查它，此时子代理卡仍是 running（证据 5）。
+     *
+     *  「问不到后端就维持现状」：探测失败绝不能反推成「已结束」——那会误杀正在跑的 run。
+     *  本地已收敛时直接短路，连 IPC 都不发。 */
+    async reconcileRun(sessionId) {
+      const t0 = get().tabs[sessionId];
+      if (!t0) return;
+      const needSettle = hasUnsettledRunState(t0);
+      let running: boolean;
+      try {
+        running = await ipc.sessionRunning(sessionId);
+      } catch {
+        return;
+      }
+      if (running) {
+        // true 方向：后端在跑而本地没置位（例如 run:start 丢帧、或关 Tab 期间起的 run）
+        if (!get().tabs[sessionId]?.running) get().markRunning(sessionId);
+        return;
+      }
+      if (!needSettle) return;
+      set((s) => {
+        const t = s.tabs[sessionId];
+        // 探测期间可能已正常收到 run:done 收敛过；settleRun 幂等，重复调用无副作用
+        if (t) settleRun(t);
+      });
     },
 
     closeSubDrawer(sessionId) {

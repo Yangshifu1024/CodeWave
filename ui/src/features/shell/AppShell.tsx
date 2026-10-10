@@ -4,6 +4,7 @@ import { BarChartOutlined, ClockCircleOutlined, SettingOutlined, WarningOutlined
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { useRun } from "../../stores/run";
+import { hasUnsettledRunState } from "../../stores/runHandlers";
 import { useActiveTab, useSessions } from "../../stores/sessions";
 import { useSettings } from "../../stores/settings";
 import { useUi } from "../../stores/ui";
@@ -39,6 +40,10 @@ import {
   RB_W_MIN,
 } from "../../utils/layout";
 import { useTitlebarActivation } from "./useTitlebar";
+
+/** run 终态看门狗轮询间隔（[docs/run-terminal-event-fallback](../../../../docs/run-terminal-event-fallback.md)）：
+ *  只在本地确有未收敛状态时才发 IPC，故正常运行时零开销；间隔大小只影响「真卡住」时的恢复延迟。 */
+const RUN_SETTLE_WATCHDOG_MS = 5000;
 
 const { Header, Sider, Content } = Layout;
 
@@ -331,6 +336,26 @@ export default function AppShell() {
       cancelled = true;
       for (const fn of unlistens) fn();
     };
+  }, []);
+
+  // run 终态看门狗（[docs/run-terminal-event-fallback](../../../../docs/run-terminal-event-fallback.md)）：
+  // run 的收尾状态此前**只有** `run:done` / `run:error` / `run:cancelled` 三个一次性事件一个入口，
+  // 而挂在它们身上的 `settleRunningSubs` / `closeRunningTools` / ask 清理会随之一起失效——
+  // 丢一帧即永久卡死（子代理卡转圈，或 ask 面板残留导致整个输入区不可用）。
+  //
+  // 本地无未收敛状态时不问后端（`hasUnsettledRunState` 为假直接跳过，连 IPC 都不发）。
+  // **开销口径**：空闲时零开销；run 进行中每轮询间隔一次本地 IPC（亚毫秒级，可忽略）——
+  // 这是**必须**付出的代价：`run:start` / `run:done` 任一丢失都会留下 `t.running === true`，
+  // 而那恰恰是看门狗唯一需要抓的场景，不查就等于没有。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const st = useRun.getState();
+      for (const sid of Object.keys(st.tabs)) {
+        const t = st.tabs[sid];
+        if (t && hasUnsettledRunState(t)) void st.reconcileRun(sid);
+      }
+    }, RUN_SETTLE_WATCHDOG_MS);
+    return () => clearInterval(timer);
   }, []);
 
   // 系统通知点击回跳（Windows/macOS 原生通知 -> 后端发 notify:activate）

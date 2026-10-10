@@ -1,6 +1,6 @@
 # run 终态事件丢失 → 整条兜底链一起失效
 
-> 缺陷分析。2026-10-11 深度排查产出，尚未实施。
+> 缺陷修复。2026-10-11 深度排查产出，同日实施（分支 `fix/run-terminal-event-fallback`）。
 > 上游：[subagent-terminal-event-loss.md](./subagent-terminal-event-loss.md)（子代理终态事件丢失的定位与三层兜底）。
 
 ## 结论
@@ -168,8 +168,12 @@ ask 缺口由此顺带覆盖，不需要单独一处改动。
 
 命中即调 `settleRun(t)`。
 
-轮询节奏：只在上述条件的前件可能成立时启动（`t.running` 为真、或存在任何未收敛状态），
-间隔数秒；条件完全不成立时停掉，避免空转开销。本地 IPC 单次开销可忽略。
+轮询节奏：只在上述条件的前件可能成立时启动，间隔数秒；条件完全不成立时停掉。
+
+**开销口径（自查后修正）**：空闲时零开销（循环内先筛，无未收敛状态则连 IPC 都不发）；
+**run 进行中每个轮询间隔会发一次本地 IPC**（亚毫秒级，可忽略）。这是必须付出的代价——
+`run:start` / `run:done` 任一丢失都会留下 `t.running === true`，而那正是看门狗唯一要抓的场景，
+不查就等于没有看门狗。
 
 效果：**丢一个 run 终态事件（或 `run:start` + 任一终态）的后果，从「永久卡死」降级为
 「最多延迟一个轮询间隔自动恢复」。**
@@ -192,14 +196,61 @@ export function hasRunningTools(t: TabRunState): boolean
 
 ## 回归测试计划
 
-- `settleRun` 单测：直接喂「running + ask 非空 + 在途工具卡 + running 子代理卡」的 Tab，
-  断言四类状态一次性收敛（尤其 `t.ask === null`）
-- 对账双向：喂 `sessionRunning` 返回 false，断言 `t.running` 被置 false 且 ask 被清
-- 看门狗：用假定时器推进，断言轮询在 `t.running === true` 时发生、`false` 时停止
-- 幂等：对已收尾的 Tab 重复调 `settleRun` 无副作用
+已实施，实际用例见下方「回归测试」一节（16 条，含反向验证）。
+
+## 实施结果
+
+四步全部落地（分支 `fix/run-terminal-event-fallback`）：
+
+| 步骤 | 落点 |
+|---|---|
+| ① `settleRun(t)` 共享收敛体 | `runHandlers.ts`，export 供对账/看门狗复用；含 `t.running = false` 与新增的 `t.ask = null` |
+| ② 双向对账 | `run.ts` 新增 `reconcileRun(sessionId)`；`sessions.ts` 的 `activate` 改为调它（原先内联的 `sessionRunning` + `markRunning` 删除） |
+| ③ 看门狗 | `AppShell.tsx` 5s 轮询，循环内先用 `hasUnsettledRunState` 筛；`runFrames.ts` 新增 `hasRunningTools` |
+| ④ 早退前先收敛 | `runHandlers.ts` 的 `run:done` 第一道守卫；`before` 为 undefined（Tab 已关）时短路 |
+
+**三处实施期踩坑，均由测试拦下**：
+
+1. **`settleRun` 一开始没写 `t.running = false`** —— 三个 handler 各自在调用前就设了它，但
+   **看门狗/对账路径不经过 handler**，后端空闲后仍会卡在「运行中」。3 条用例同时指向该行。
+2. **早退分支漏判 `before` 为 undefined** —— `Tab 已关时 dispose` 已删桶，迟到 `run:done`
+   会把 `undefined` 传给 `hasUnsettledRunState` 抛 `TypeError`，把整条 `run:done` 打断。
+   由 `projectnav.row-states` 的未读点用例拦下（它断言迟到 done 仍要标未读）。
+3. **设计文档一处表述与实现不符** —— 原文写「本地已收敛时直接短路，连 IPC 都不发」，
+   实际 `reconcileRun` **总是查询**（`activate` 需要双向对账），短路在 AppShell 的循环里。
+   核对后确认**实现正确、改文档表述**，测试断言随之调整。
+
+**第 4 步刻意没动第二道守卫**（`lastDoneRunId` 去重）：它命中时新 run 已乐观把 `running`
+置回 `true`，此时收敛会**误杀正在跑的新 run**。已有一条负向用例钉死该决策。
+
+事件面 29 键零改动（未新增/删除/改名任何事件键），`events.contract.test.ts` 仍守 29 键硬锚点。
+
+## 回归测试
+
+`ui/src/__tests__/run.terminal-fallback.test.ts`，**新增 16 条**：
+
+- **共享收敛体（3）**：一次收敛 ask / 在途工具卡 / 流式项 / running 子代理卡；
+  `run:error` 与 `run:cancelled` 走同一收敛体；重复调用幂等
+- **早退路径（4）**：`run:start` 丢失时迟到 done 不再跳过收敛；已收敛时纯 no-op；
+  **桶已删不抛错**；`lastDoneRunId` 守卫**不得**收敛掉在跑的新 run（负向）
+- **双向对账（4）**：后端空闲→收敛；后端在跑→不收敛且补置 `running=true`；
+  **IPC 失败→维持现状绝不反推成已结束**；已收敛时不产生多余变更
+- **看门狗判据（5）**：`running=false` 但子代理卡在跑**也算未收敛**（只按 `t.running`
+  判会让看门狗不启动）；ask 残留也算；完全收敛返回 false；`waiting` 与 `settleRunningTools`
+  判据同源（落定后判据同步转 false，否则看门狗永远空转）；子流内工具卡被扫到
+
+**反向验证**：临时把 `if (t.ask)` 改成 `if (t.ask && false)`，恰好 5 条失败 ——
+覆盖三条 handler 路径、早退路径、对账路径与判据函数，证明用例真在守这些行为。
 
 ## 遗留
 
+- **队列不会自动续跑（但本修复顺带把它救回来了）**：`runQueueNext` 的自动调用点只有 `run:done`
+  handler 一处（`runHandlers.ts`）；`run:error` / `run:cancelled` 本就按设计暂停、等用户点「继续」。
+  该事件丢失时队列不会自动出队——**但修复前这也不是死局**：队列同样卡死，因为
+  `QueuePanel.tsx:128` 的「继续」按钮渲染条件是 `!running`，而 `running` 正卡在 true，
+  **按钮永远不渲染**，用户连手动救都做不到。本修复把 `running` 收敛为 false 后该按钮重新出现，
+  一键即可恢复队列。⇒ 自动续跑仍缺（要动队列续跑语义、且需与 in-flight 的 `runQueueNext`
+  竞态防护，风险高于本次其余三步，单独立项），但**「队列彻底搁浅且无法自救」已被本修复消除**。
 - **子代理终态事件的根因仍未定位**，已收窄到「事件投递丢失」单一分支（推导见
   [subagent-terminal-event-loss.md](./subagent-terminal-event-loss.md)）。本方案**不替代**根因定位，
   它是在无法修复投递的前提下对丢失做免疫。

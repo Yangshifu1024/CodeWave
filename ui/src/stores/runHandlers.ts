@@ -15,7 +15,7 @@ import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
-import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, stripRecoveredInTab } from "./runFrames";
+import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, hasRunningTools, stripRecoveredInTab } from "./runFrames";
 import type { RunStore } from "./run";
 import type { TabRunState, UiItem } from "./run.types";
 
@@ -141,6 +141,46 @@ function settleRunningSubs(t: TabRunState): void {
   }
 }
 
+/** run 终态的**共享收敛体**（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)）：
+ *  `run:done` / `run:error` / `run:cancelled` 三个 handler 与 run 终态看门狗共用同一套收敛动作。
+ *
+ *  为什么必须共用：这三件事原本就是同一套清理动作散在三处，而**它们本身全都由一次性终态事件驱动**
+ *  ——一旦 `run:done` 丢失，原先挂在它身上的 `settleRunningSubs` / `closeRunningTools` /
+ *  `closeStreamingAssistantItems` 会一起失效（子代理卡永久转圈）。提成共享函数后，
+ *  看门狗可以在「后端已空闲但本地仍有未收敛状态」时复现同一套动作，成为整条链的兜底网。
+ *
+ *  `t.ask = null` 是本函数新增的一格：`t.ask` 此前**只有** `ask:closed` 一个清理入口，而
+ *  `Composer.tsx` 在 `askActive` 为真时不渲染输入区（提问卡覆盖整个输入区）——
+ *  `ask:closed` 丢失即整个会话无法输入。run 都收尾了还挂着的 ask 必是残帧，清掉是正确语义。
+ *
+ *  幂等：各项判据都是「只在仍是未收敛态时才动」，重复调用无副作用。 */
+export function settleRun(t: TabRunState): void {
+  // 本地运行态一并落定。三个 handler 此前各自在调本函数**之前**就设了 running=false，
+  // 但看门狗 / 对账路径不经过 handler —— 后端已空闲而本地仍显示「运行中」同样是卡死的一种形态，
+  // 故收敛体自身必须负责置位（幂等，重复设无副作用）。
+  t.running = false;
+  // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
+  // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
+  closeStreamingAssistantItems(t);
+  // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
+  closeRunningTools(t);
+  // 子代理卡兜底（docs/subagent-terminal-event-loss）：sub:done 丢了就永久转圈
+  settleRunningSubs(t);
+  // ask / 审批面板兜底：此前只有 ask:closed 一个清理入口，丢帧即输入锁死
+  if (t.ask) t.ask = null;
+}
+
+/** 本 Tab 是否仍有「未收敛」状态——run 终态看门狗的本地侧判据（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)）。
+ *
+ *  刻意**不只看 `t.running`**：`run:start` 丢失时 `t.running` 恒为 false，而 `sub:spawn` 建卡不检查它
+ *  （`runHandlers.ts` 的 sub:spawn 只判 `if (!t) return`），此时子代理卡仍会是 running。
+ *  只按 `t.running` 判会让看门狗在这种场景下**根本不启动**，漏洞原样保留。 */
+export function hasUnsettledRunState(t: TabRunState): boolean {
+  if (t.running || t.ask) return true;
+  if (t.subs.some((s) => s.status === "running")) return true;
+  return hasRunningTools(t);
+}
+
 /** 运行生命周期（11 键）：start/done/error/cancelled/inject/retry + 自动命名 + 计划任务 toast + 计划 todos + 目标状态 */
 export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
@@ -155,7 +195,22 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
     "run:done": (p) => {
       markUnreadIfAway(p?.session);
       const before = get().tabs[p.session];
-      if (!before?.running) return; // 幂等：迟到 done 场景
+      if (!before?.running) {
+        // 幂等守卫照旧早退，但**早退不等于无事可做**（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md) 证据 5）：
+        // `run:start` 丢失时 `t.running` 恒为 false，而 `sub:spawn` 建卡不检查它——
+        // 原本这里直接 return 会让 settleRunningSubs / closeRunningTools / ask 清理**全部跳过**，
+        // 子代理卡永久转圈。故早退前先收敛一次（仅在确有未收敛状态时动手，幂等无副作用）。
+        //
+        // 下面那道 `lastDoneRunId` 守卫**刻意不加**：它命中时新 run 已乐观把 running 置回 true，
+        // 此时收敛会误杀正在跑的新 run。
+        if (before && hasUnsettledRunState(before)) {
+          set((s) => {
+            const t = s.tabs[p.session];
+            if (t) settleRun(t);
+          });
+        }
+        return;
+      }
       // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：按 run_id 对 suggest 的双 run:done 去重——done1 已同步出队并乐观把
       // running 翻回 true（新运行），旧 `!running` 守卫对 done2 失效；放行两次会错误重置 running 并重复出队
       if (p?.run_id && before.lastDoneRunId === p.run_id) return;
@@ -171,15 +226,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // 本轮没等到合格的 widget 就作废，不跨轮补弹（否则下一轮的第一张 widget 会莫名自己弹出来）
         t.widgetAutoOpen = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
-        // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
-        // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
-        // 这里扫全部 assistant 项统一收尾（streaming=false + 冻结思考时长）；本 handler 其余语义一概不动。
-        closeStreamingAssistantItems(t);
-        // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
-        closeRunningTools(t);
-        // 子代理卡兜底（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
-        // sub:done 丢了就永久转圈（子代理侧无兜底），主 run 收尾时统一收敛
-        settleRunningSubs(t);
+        // 收敛体与另两个 run 收尾 handler、以及 run 终态看门狗共用（docs/run-terminal-event-fallback）
+        settleRun(t);
         if (p.suggestions) t.suggestions = p.suggestions;
         // [docs/session-history-limits](../../../docs/session-history-limits.md)：历史保存不干净时向本会话转录补一条提示。
         // 载荷仅在「拒存 / 有损保存」时才带 history_save（干净路径零打扰）；保存结果由后端在 run 收尾检查点上报，
@@ -211,11 +259,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // [docs/preview-skill](../../../docs/preview-skill.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
         t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
-        // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
-        closeStreamingAssistantItems(t);
-        closeRunningTools(t);
-        // 子代理卡兜底（docs/subagent-terminal-event-loss）：error 路径同样收敛，同 run:done
-        settleRunningSubs(t);
+        // 收敛体同 run:done（docs/run-terminal-event-fallback）
+        settleRun(t);
         // errorKind 携带后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）：auth/billing 有设置快捷入口
         t.items.push({ kind: "error", text: String(p?.error ?? i18n.t("notice.runFailed")), errorKind: p?.kind });
       });
@@ -228,11 +273,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         t.queueResumeAfterInjection = false;
         // [docs/preview-skill](../../../docs/preview-skill.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
-        // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
-        closeStreamingAssistantItems(t);
-        closeRunningTools(t);
-        // 子代理卡兜底（docs/subagent-terminal-event-loss）：cancelled 路径同样收敛，同 run:done
-        settleRunningSubs(t);
+        // 收敛体同 run:done（docs/run-terminal-event-fallback）；必须在 push notice 之前，保证语义清晰
+        settleRun(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
       // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：「↑ 立即」不再走打断路径
