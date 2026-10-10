@@ -333,6 +333,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
                         title,
                         detail: command.clone(),
                         allow_always: false,
+                        kind: crate::safety::approval::ApprovalKind::Once,
                         auto_confirm,
                     },
                     &ctx.cancel,

@@ -46,6 +46,8 @@ export interface AskState {
   switchToAutoEdit?: boolean;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：命令审批显示「始终允许本项目」第三选项 */
   allowAlways?: boolean;
+  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（once = 单次操作审批；scope = G3 范围门）——驱动按钮文案；缺省 = once */
+  approvalKind?: "once" | "scope";
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」打开）；[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：无真实方案时为 null */
   planFile?: string | null;
   /** [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：后端下发的真实方案正文（与 planFile 同源；AskPanel 卡片正文与「复制计划全文」用此字段渲染）；null/缺省 = 不渲染计划卡 */

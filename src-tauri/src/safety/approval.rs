@@ -30,6 +30,30 @@ pub fn effective_auto_confirm(auto_confirm: bool, is_disaster: bool) -> bool {
     auto_confirm && !is_disaster
 }
 
+/// 审批语义类别：决定前端渲染哪一套按钮文案。
+///
+/// 同一组「允许 / 始终允许 / 拒绝」在不同语义下后果完全不同：命令审批的「允许」是
+/// 只放行这一次，「始终允许」是后续相同命令不再询问；范围门（G3，计划外步骤）的
+/// 「允许」是把这些步骤纳入已批准范围，「始终允许」才是本会话后续新增都不再询问。
+/// 两者共用一套文案会让用户对实际行为产生误判（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalKind {
+    /// 单次操作审批（命令 / 文件写入 / 服务命令 / MCP 调用）：默认语义
+    Once,
+    /// G3 范围门：批准 = 把计划外步骤纳入已批准范围
+    Scope,
+}
+
+impl ApprovalKind {
+    /// wire 值（`ask:opened` 的 `approval_kind`）：缺省即 `once`。
+    pub fn wire(self) -> &'static str {
+        match self {
+            ApprovalKind::Once => "once",
+            ApprovalKind::Scope => "scope",
+        }
+    }
+}
+
 /// 一次审批请求的载荷：经 ask:opened 事件下发给前端弹卡。
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
@@ -37,8 +61,10 @@ pub struct ApprovalRequest {
     pub title: String,
     /// 审批详情正文（命令全文 / diff 预览等）
     pub detail: String,
-    /// 是否提供「始终允许本项目」（仅命令审批为 true；文件写入确认 / service 命令等一律 false）
+    /// 是否提供「始终允许本项目」（命令审批 / G3 范围门为 true；文件写入确认 / service 命令等一律 false）
     pub allow_always: bool,
+    /// 审批语义类别（前端据此选文案）；默认 Once，向后兼容既有构造点
+    pub kind: ApprovalKind,
     /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：5 分钟未响应自动确认推荐选项（允许）；false 表示永不超时、无限等待
     pub auto_confirm: bool,
 }
@@ -99,6 +125,7 @@ pub async fn confirm(
             "session": emit_session, "ask_id": ask_id, "kind": "approval",
             "title": req.title, "detail": req.detail,
             "allow_always": req.allow_always,
+            "approval_kind": req.kind.wire(),
             "sub_id": from_sub,
         }),
     );
@@ -258,6 +285,7 @@ mod tests {
                     title: "t".into(),
                     detail: "d".into(),
                     allow_always,
+                    kind: ApprovalKind::Once,
                     auto_confirm: false,
                 };
                 let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -286,6 +314,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            kind: ApprovalKind::Once,
             auto_confirm: true,
         };
         let (task, _ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -306,6 +335,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            kind: ApprovalKind::Once,
             auto_confirm: false,
         };
         let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -330,6 +360,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            kind: ApprovalKind::Once,
             auto_confirm: true,
         };
         let (task, _ask_id) = spawn_confirm(&core, &rt, req, cancel.clone()).await;
@@ -351,6 +382,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            kind: ApprovalKind::Once,
             auto_confirm: true,
         };
         let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -371,6 +403,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            kind: ApprovalKind::Once,
             auto_confirm: false,
         };
         let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -417,6 +450,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: false,
+            kind: ApprovalKind::Once,
             auto_confirm: false, // 主会话不勾 auto_confirm = 永不超时；子代理例外
         };
         let (task, ask_id) = spawn_confirm(&core, &sub, req, cancel).await;
@@ -443,6 +477,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: false,
+            kind: ApprovalKind::Once,
             auto_confirm: false,
         };
         let (task, ask_id) = spawn_confirm(&core, &sub, req, cancel).await;

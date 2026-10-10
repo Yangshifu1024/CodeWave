@@ -762,6 +762,7 @@ impl Tool for CommandTool {
                                 title,
                                 detail,
                                 allow_always: !is_disaster,
+                                kind: crate::safety::approval::ApprovalKind::Once,
                                 auto_confirm,
                             },
                             &ctx.cancel,
