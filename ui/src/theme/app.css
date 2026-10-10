@@ -168,6 +168,33 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   max-width: 78%; background: var(--ws-user-bubble); color: var(--ws-text-1);
   padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
 }
+/* 用户气泡保守 markdown 子集（[docs/markdown-style-refresh]）：重置 white-space:pre-wrap 与 p 内外边距，
+   避免 markdown 元素双换行 / 列表错位；保留 padding / max-width 不动。 */
+.user-bubble.md { white-space: normal; }
+.user-bubble.md > p { margin: 0.35em 0; line-height: 1.6; }
+.user-bubble.md > p:first-child { margin-top: 0; }
+.user-bubble.md > p:last-child { margin-bottom: 0; }
+.user-bubble.md :is(h1, h2, h3, h4, h5, h6) { margin: 0.45em 0 0.2em; font-weight: 600; line-height: 1.35; color: var(--ws-text-1); }
+.user-bubble.md h1 { font-size: 16.5px; }
+.user-bubble.md h2 { font-size: 15px; }
+.user-bubble.md h3 { font-size: 14px; }
+.user-bubble.md :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.user-bubble.md :is(ul, ol) { padding-inline-start: 20px; margin: 0.3em 0; }
+.user-bubble.md li { margin: 0.1em 0; }
+.user-bubble.md blockquote {
+  border-left: 3px solid var(--ws-accent);
+  padding: 1px 10px; margin: 0.4em 0; border-radius: 0 4px 4px 0;
+  color: var(--ws-text-2);
+  background: color-mix(in srgb, var(--ws-accent) 4%, transparent);
+}
+.user-bubble.md hr { border: 0; border-top: 1px solid var(--ws-border); margin: 0.6em 0; }
+.user-bubble.md :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); font-family: var(--ws-font-mono); font-size: 12.5px; }
+.user-bubble.md a { color: var(--ws-accent); text-decoration: underline; text-underline-offset: 2px; }
+.user-bubble.md strong { font-weight: 600; }
+.user-bubble.md em { font-style: italic; }
+.user-bubble.md del { color: var(--ws-dim); text-decoration: line-through; }
+.user-bubble.md mark { background: color-mix(in srgb, var(--ws-warn, #d4a106) 30%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
+
 /* 用户消息附件缩略图（发送回显 + 重开会话恢复时同一样式） */
 .user-attachments { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
 .user-attachments .attach-thumb {
@@ -185,10 +212,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡 + 更新弹窗发布说明（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
    inline code chip、表格等全部无样式；[docs/updater-notes-markdown-and-progress-throttle](../../../docs/updater-notes-markdown-and-progress-throttle.md) 把更新弹窗的发布说明也并入本组）。
    新增消费点一律往这里的 :is() 里加容器选择器，不要另抄一套排版。 */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) p { margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) p { margin: 0.4em 0; }
 /* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap { position: relative; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap > pre { margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) .code-wrap { position: relative; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) .code-wrap > pre { margin: 0.4em 0; }
 .code-copy {
   position: absolute; top: 6px; right: 6px; z-index: 2;
   height: 22px; padding: 0 8px;
@@ -199,29 +226,70 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   cursor: pointer; user-select: none;
 }
 /* 代码块悬停时显示按钮；复制成功/失败态保持可见 1.5s（类由 codecopy.ts 驱动） */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) .code-wrap:hover .code-copy,
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) .code-wrap:hover .code-copy,
 .code-copy:focus-visible,
 .code-copy-done { opacity: 1; visibility: visible; }
 .code-copy:hover { color: var(--ws-text-1); border-color: var(--ws-dim); }
 .code-copy-done { color: var(--ws-ok, #1f8f4d); }
 .code-copy-fail { color: var(--ws-err); }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre,
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre,
 .code-block {
   border-radius: 8px; padding: 10px 12px; overflow-x: auto;
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
 /* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
    与左侧导航同色，整体观感统一（[docs/ask-ink-accent-and-composer-cover]）。 */
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-comment, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-quote { color: #6a737d; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-keyword, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-selector-tag { color: #d73a49; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-string, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-attr { color: #032f62; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-number, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-literal { color: #005cc5; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-title, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-name { color: #6f42c1; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) pre .hljs-built_in { color: #e36209; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) table { border-collapse: collapse; }
-:is(.assistant .md, .plan-body.md, .updater-notes-body.md) th, :is(.assistant .md, .plan-body.md, .updater-notes-body.md) td { border: 1px solid var(--ws-border); padding: 4px 8px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-comment { color: var(--ws-hl-comment); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-keyword { color: var(--ws-hl-keyword); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-string { color: var(--ws-hl-string); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-number { color: var(--ws-hl-number); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-title { color: var(--ws-hl-name); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) pre .hljs-built_in { color: var(--ws-hl-built); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) table { border-collapse: collapse; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) .table-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--ws-border); border-radius: 6px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) .table-wrap > table { width: 100%; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: 12.5px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) th { background: var(--ws-bg-nav); font-weight: 600; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) tr:hover td { background: var(--ws-bg-nav); }
+/* 标题：渐变 + 紧凑（[docs/markdown-style-refresh]） */
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0.8em 0 0.3em; font-weight: 600; line-height: 1.4; color: var(--ws-text-1);
+}
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h1 { font-size: 18.5px; margin-top: 1em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h2 { font-size: 16.5px; margin-top: 0.9em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h3 { font-size: 15px; margin-top: 0.8em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h4 { font-size: 14px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h5, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) h6 { font-size: 13.5px; color: var(--ws-text-2); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) p { line-height: 1.7; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) a {
+  color: var(--ws-accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--ws-accent) 50%, transparent);
+  transition: color 0.12s ease, text-decoration-color 0.12s ease;
+}
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) a:hover { color: var(--ws-text-1); text-decoration-color: var(--ws-text-1); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) :is(ul, ol) { padding-inline-start: 22px; margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) li { margin: 0.15em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) li::marker { color: var(--ws-dim); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) li > p { margin: 0.2em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) blockquote {
+  border-left: 3px solid var(--ws-accent);
+  padding: 2px 12px; margin: 0.6em 0; border-radius: 0 6px 6px 0;
+  color: var(--ws-text-2);
+  background: color-mix(in srgb, var(--ws-accent) 4%, transparent);
+}
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) blockquote > :first-child { margin-top: 0.4em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) blockquote > :last-child { margin-bottom: 0.4em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) hr { border: 0; border-top: 1px solid var(--ws-border); margin: 1em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) del { color: var(--ws-dim); text-decoration: line-through; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) mark { background: color-mix(in srgb, var(--ws-warn, #d4a106) 30%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) sub, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) sup { font-size: 0.75em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) input[type="checkbox"] { margin-right: 6px; transform: translateY(1px); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) strong { font-weight: 600; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md) em { font-style: italic; }
+
 /* 思考块：antd Collapse ghost 面板（默认收起）；样式微调仍走 token */
 .thinking-block.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
   padding: 2px 0; font-size: 12px; color: var(--ws-dim);
@@ -1440,3 +1508,6 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 
 /* antd 6 sets radio-group font-size to zero to remove inline-block whitespace. Restore text sizing. */
 .proxy-mode-list { font-size: var(--ws-font-size); }
+
+/* 子代理过程流：max-width 收窄以适应抽屉（< 600px），不沿用 .assistant .md 的 860px */
+.sub-drawer-stream .md { max-width: 100%; }

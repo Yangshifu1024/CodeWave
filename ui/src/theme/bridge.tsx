@@ -45,6 +45,19 @@ export default function ThemeBridge() {
     s.setProperty("--ws-diff-add-text", token.colorSuccessText);
     s.setProperty("--ws-diff-del-bg", token.colorErrorBg);
     s.setProperty("--ws-diff-del-text", token.colorErrorText);
+    // [docs/markdown-style-refresh] 主题感 hljs token 与 code-block 容器色：亮色继承 GitHub 浅色调色板
+    // （保留现观感），暗色按 GitHub Dark 标准色板。markdown.ts 不切换 github.css，css 用 var() 覆盖即可。
+    const dark = isDarkBase(token.colorBgBase);
+    s.setProperty("--ws-hl-keyword", dark ? "#ff7b72" : "#d73a49");
+    s.setProperty("--ws-hl-string", dark ? "#a5d6ff" : "#032f62");
+    s.setProperty("--ws-hl-number", dark ? "#79c0ff" : "#005cc5");
+    s.setProperty("--ws-hl-name", dark ? "#d2a8ff" : "#6f42c1");
+    s.setProperty("--ws-hl-built", dark ? "#ffa657" : "#e36209");
+    s.setProperty("--ws-hl-comment", dark ? "#8b949e" : "#6a737d");
+    s.setProperty("--ws-hl-attr", dark ? "#a5d6ff" : "#032f62");
+    s.setProperty("--ws-code-block-bg", dark ? "#0d1117" : "#f6f8fa");
+    s.setProperty("--ws-code-block-border", dark ? "#30363d" : "#d0d7de");
+    s.setProperty("--ws-code-block-text", dark ? "#e6edf3" : "#1f2328");
   }, [token]);
 
   return null;
