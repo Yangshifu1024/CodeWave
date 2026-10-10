@@ -26,7 +26,8 @@ export type UiItem =
   | { kind: "user"; text: string; createdAt?: string; images?: { mediaType: string; data: string }[] }
   | { kind: "assistant"; timeline: TimelineSeg[]; toolsMap: Record<string, ToolView>; streaming: boolean; createdAt?: string }
   | { kind: "sub"; subId: string }
-  | { kind: "notice"; text: string }
+  /** injectedTexts：run:inject 带 texts 时的注入正文（[docs/steer-run-inject](../../../docs/steer-run-inject.md)）；缺省 = 无正文可渲染（ask 批准注入 / 旧后端），仍回落 notice.injected */
+  | { kind: "notice"; text: string; injectedTexts?: string[] }
   /** errorKind = 后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；auth/billing 渲染「打开模型设置」快捷入口 */
   | { kind: "error"; text: string; errorKind?: string };
 

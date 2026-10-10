@@ -540,8 +540,32 @@ export default function ChatMessages() {
       return <SubagentItemCard key={itemKey} subId={item.subId} />;
     }
     if (item.kind === "notice") {
+      // 注入通知带正文（steer 通道：run:inject 载荷含 texts，[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
+      // 防御性过滤：正常路径后端已滤掉空串；万一整组为空则**退回无正文形态**——不渲染空正文行、也不挂 Tooltip
+      //（否则悬停会弹出一个空白浮层）。此时逐字等价于旧的单行 notice，是回归基线。
+      const injected = (item.injectedTexts ?? []).filter((s) => s.trim() !== "");
+      if (injected.length === 0) {
+        return (
+          <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
+        );
+      }
+      // Tooltip **每条各挂**（而非挂整块）：① 悬停哪一行就给哪一行的全文，N 条时不会张冠李戴；
+      // ② 单条 title 是纯字符串，antd 默认 `wordWrap: break-word` + max-width 就能折行显示长文本，
+      //    不依赖「\n 要靠 white-space: pre-wrap 才换行」这类容器样式语义（挂整块就得额外配 pre-wrap）；
+      // ③ rc-trigger 的浮层按需挂载，N 个 Tooltip 实例在未悬停时不产生任何 DOM，开销可忽略。
+      // Tooltip 只克隆子元素加 ref/事件，不额外插 DOM —— 截断行的 width 仍由父级约束，ellipsis 生效。
+      // 视觉权重：外层 div 已带 `dim`，正文行继承颜色，不提到 user 气泡级别；paddingLeft 让后续行对齐到「· 」后的正文起始处。
       return (
-        <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
+        <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>
+          <div>· {item.text}</div>
+          <div style={{ paddingLeft: 14 }}>
+            {injected.map((s, i) => (
+              <Tooltip key={`${itemKey}-inj-${i}`} title={s}>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s}</div>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
       );
     }
     if (item.kind === "error") {
