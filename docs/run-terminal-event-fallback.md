@@ -192,11 +192,7 @@ export function hasRunningTools(t: TabRunState): boolean
 
 ## 回归测试计划
 
-- `settleRun` 单测：直接喂「running + ask 非空 + 在途工具卡 + running 子代理卡」的 Tab，
-  断言四类状态一次性收敛（尤其 `t.ask === null`）
-- 对账双向：喂 `sessionRunning` 返回 false，断言 `t.running` 被置 false 且 ask 被清
-- 看门狗：用假定时器推进，断言轮询在 `t.running === true` 时发生、`false` 时停止
-- 幂等：对已收尾的 Tab 重复调 `settleRun` 无副作用
+已实施，实际用例见下方「回归测试」一节（16 条，含反向验证）。
 
 ## 实施结果
 
