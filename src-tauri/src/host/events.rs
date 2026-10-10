@@ -66,10 +66,17 @@ impl EventSink for TauriSink {
     }
 
     /// 低频事件：emit 到 labeled "main" 窗口（29 键事件面，契约由前端测试守护）。
+    /// 发射失败必须可见（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+    /// 此前 `let _ =` 把 Result 整个吞掉，`sub:done` 这类**一生只发一次**的终态事件一旦丢帧，
+    /// 前端子代理卡会永久停在「运行中」（只有 `sub:step` 这种高频事件丢几帧无感，掩盖了故障）。
+    /// `emit_to` 走本地 IPC、失败率极低，但一旦失败就是静默永久卡死 —— 故此处记 warn 不静默。
     fn emit(&self, _session: &SessionId, event: &str, payload: serde_json::Value) {
-        let _ = self
+        if let Err(e) = self
             .app
-            .emit_to(tauri::EventTarget::labeled("main"), event, payload);
+            .emit_to(tauri::EventTarget::labeled("main"), event, payload)
+        {
+            tracing::warn!(target: "sub_diag", event, err = %e, "事件发射失败（前端收不到）");
+        }
     }
 
     /// 登记子代理 → 父会话的 channel 绑定（子代理帧借父 channel 下发）。

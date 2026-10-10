@@ -319,4 +319,86 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect(mainTl.map((s) => s.kind)).toEqual(["sub", "text"]);
     expect((mainTl[1] as any).text).toBe("主流");
   });
+
+  // ===== [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md) =====
+  // 子代理终态事件一旦丢失，卡片永久转圈且 composer 计数不归零。本组钉死兜底与次生修复。
+
+  describe("子代理卡收尾兜底（subagent-terminal-event-loss）", () => {
+    function seedRunningSub(subId: string) {
+      useRun.setState((s) => {
+        const t = s.tabs[session]!;
+        t.subs.push({
+          subId, role: "explore", name: null, description: "d",
+          step: 3, maxSteps: 25, tokens: 100, lastTools: [],
+          status: "running",
+        });
+        t.subStreams[subId] = { timeline: [], toolsMap: {}, status: "running", gen: 0, loaded: false };
+      });
+    }
+
+    it("run:done 兜底：残留 running 的子代理卡收敛为 done（终态事件丢了也不永久转圈）", () => {
+      const h = handlers();
+      seedRunningSub("sub_lost");
+      expect(tabOf(session).subs[0].status).toBe("running");
+      // 终态事件从未到达（模拟丢帧）：直接投喂主 run 收尾
+      h["run:done"]({ session, run_id: "r1" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(tabOf(session).subStreams.sub_lost.status).toBe("done");
+      // 兜底标记为「未按约定汇报」而非伪装成干净完成（卡片按橙色警示口径展示）
+      expect(sub.ended).toBe("no_report");
+    });
+
+    it("run:done 兜底幂等：已终态的子代理不被改写（不污染正常 sub:done 路径）", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_ok", role: "explore", description: "d", max_steps: 5 });
+      h["sub:done"]({ session, sub_id: "sub_ok", steps_used: 4, ended: "report" });
+      h["run:done"]({ session, run_id: "r2" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      // 正常路径的 ended 不被兜底覆写
+      expect(sub.ended).toBe("report");
+      expect(sub.step).toBe(4);
+    });
+
+    it("run:error 与 run:cancelled 同样收敛残留 running 的子代理卡", () => {
+      const h = handlers();
+      seedRunningSub("sub_e");
+      h["run:error"]({ session, error: "boom" });
+      expect(tabOf(session).subs[0].status).toBe("done");
+
+      useRun.setState((s) => {
+        const t = s.tabs[session]!;
+        t.running = true;
+        t.subs.push({
+          subId: "sub_c", role: "explore", name: null, description: "d",
+          step: 1, maxSteps: 25, tokens: 0, lastTools: [], status: "running",
+        });
+        t.subStreams.sub_c = { timeline: [], toolsMap: {}, status: "running", gen: 0, loaded: false };
+      });
+      h["run:cancelled"]({ session });
+      expect(tabOf(session).subs.find((s) => s.subId === "sub_c")!.status).toBe("done");
+    });
+
+    it("sub:step 次生：已收尾的子代理不再被迟到 tick 覆写步数", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_s", role: "explore", description: "d", max_steps: 40 });
+      h["sub:done"]({ session, sub_id: "sub_s", steps_used: 34, ended: "report" });
+      expect(tabOf(session).subs[0].step).toBe(34);
+      // 后端 sub:done 先于 progress.abort() 发射，窗口内的迟到 tick 不得覆写最终步数
+      h["sub:step"]({ session, sub_id: "sub_s", step: 12, tool: "read" });
+      expect(tabOf(session).subs[0].step).toBe(34);
+    });
+
+    it("sub:step 仍正常更新 running 状态子代理的步数（守卫不误伤）", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_r", role: "explore", description: "d", max_steps: 40 });
+      h["sub:step"]({ session, sub_id: "sub_r", step: 7, tool: "grep", detail: "d1" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("running");
+      expect(sub.step).toBe(7);
+      expect(sub.detail).toBe("d1");
+      expect(sub.lastTools).toEqual(["grep"]);
+    });
+  });
 });
