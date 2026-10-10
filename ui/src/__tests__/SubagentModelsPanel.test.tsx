@@ -13,10 +13,29 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import "../i18n"; // 显式初始化：standalone 挂载不走全局入口
 import SubagentModelsPanel from "../features/panels/SubagentModelsPanel";
 import { useSettings } from "../stores/settings";
 import type { AgentMeta, ConfigState } from "../ipc/types";
+
+// 样式契约读 CSS 源码（happy-dom 不做布局，先例：composer.toolbar.style.test.tsx）——
+// 本组件的行节奏/右对齐全由 settings-theme.css 的 .subagent-models-* 承担，
+// 曾经的「行糊成一片 + 控件贴左」正是组件写 Space+内联宽度、绕开该样式表造成的。
+const settingsCss = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../features/panels/settings/settings-theme.css"),
+  "utf8",
+);
+
+/** 取出选择器对应的规则体（[^}] 恰好停在规则右括号；选择器含空格时逐字面匹配） */
+function ruleBody(selector: string): string {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`${esc}\\s*\\{([^}]*)\\}`).exec(settingsCss);
+  expect(m, `未找到规则：${selector}`).toBeTruthy();
+  return m![1];
+}
 
 // 后端 agents::DELEGABLE_ROLES 顺序：剔除 title；任务约束「顺序 = 后端注册表」
 // 与「只读角色 = explore / reviewer / code-reviewer」（后端 readonly=true）。
@@ -250,6 +269,28 @@ describe("SubagentModelsPanel：8 行下拉与只读角色", () => {
     // 该行 Select 显示框退化为「继承父会话」，且未触发 save
     expect(selectedDisplay("backend-dev")).toContain("继承父会话");
     expect(savedCalls.length).toBe(0);
+  });
+
+  it("样式契约：行有纵向 padding 与行间分隔线、控件右对齐走 w-wide（不再用内联宽度/Space 间距）", async () => {
+    // 7. 行节奏与对齐：读 CSS 源码文本（happy-dom 无布局引擎）
+    const row = ruleBody(".settings-theme-root .subagent-models-row");
+    expect(row).toContain("padding: var(--settings-row-padding-block) 0");
+    expect(row).toContain("border-bottom: 1px solid var(--ws-border)");
+    expect(row).toContain("justify-content: space-between");
+    // 末行去线，避免卡底多一道断线
+    expect(settingsCss).toContain(".settings-theme-root .subagent-models-row:last-child { border-bottom: 0; }");
+    // 顶部提示走统一说明文字规格（.settings-section-intro），不再用面板外的通用 .dim
+    expect(ruleBody(".settings-theme-root .settings-section-intro")).toContain("var(--ws-text-2)");
+    mountPanel(withProviders(makeConfig()));
+    await waitFor(() => expect(rowRoleTexts().length).toBe(8));
+    // 组件不再自行定宽：Select 上无 inline style，宽度档由 .w-wide 提供
+    const sel = rowSelectByRole("backend-dev");
+    expect(sel.getAttribute("style") ?? "").not.toContain("min-width");
+    expect(sel.className).toContain("w-wide");
+    // 角色名容器与下拉容器是兄弟行节点（行本身是普通 div，不是 antd Space）
+    const rowEl = document.querySelector(".subagent-models-row") as HTMLElement;
+    expect(rowEl).toBeTruthy();
+    expect(rowEl.querySelector(".subagent-models-role")).toBeTruthy();
   });
 
   it("默认 empty config（无 providers）不崩：8 行下拉都在；空态时「继承父会话」即为唯一显示", async () => {

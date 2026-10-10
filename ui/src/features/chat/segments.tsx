@@ -378,6 +378,8 @@ export function TimelineSegsView({
   streaming,
   onUserToggle,
   stripReport = false,
+  autoOpenCallKey,
+  onConsumeAutoOpen,
 }: {
   timeline: TimelineSeg[];
   toolsMap: Record<string, ToolView>;
@@ -386,6 +388,12 @@ export function TimelineSegsView({
   /** 是否剥离 `<report>` 协议标记（仅子代理过程流抽屉开启，见 stripReportMarkers）。
    *  默认 false：主聊天正文引用该标记是合法内容，不可全局剥离。 */
   stripReport?: boolean;
+  /** 自动弹预览信号（[docs/preview-skill](../../../../docs/preview-skill.md)）：命中的 widget 工具卡落地即弹框。
+   *  刻意不设默认值：子代理过程抽屉 `SubagentDrawer` 调本组件时不传这两项 → 抽屉内的 widget 不会自动弹框
+   *  （抽屉本身已在展示子代理的完整过程，再叠一个自动弹框只会糊住抽屉内容），这是有意为之。 */
+  autoOpenCallKey?: string | null;
+  /** 卡片已消费该信号后回抛（清掉 store 里的信号，保证一次性、不重放） */
+  onConsumeAutoOpen?: (callKey: string) => void;
 }) {
   const { t } = useTranslation();
   // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
@@ -419,7 +427,15 @@ export function TimelineSegsView({
           // 但那是修复前就存在的情况，不是回归；此处不引入按 callKey 关联 sub_id 的精确匹配（事件侧
           // 无该关联字段，属于契约变更，另开）。
           if (tool?.tool === "subagent" && tool.status !== "error") return null;
-          return tool ? <ToolCallCard key={seg.callKey} tool={tool} onToggle={onUserToggle} /> : null;
+          return tool ? (
+            <ToolCallCard
+              key={seg.callKey}
+              tool={tool}
+              onToggle={onUserToggle}
+              autoOpenCallKey={autoOpenCallKey}
+              onConsumeAutoOpen={onConsumeAutoOpen}
+            />
+          ) : null;
         }
         if (seg.kind === "sub") {
           return <SubagentItemCard key={seg.subId} subId={seg.subId} />;

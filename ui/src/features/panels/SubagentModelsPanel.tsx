@@ -11,7 +11,7 @@
 // - 「继承父会话」= UI 哨兵 `INHERIT_SENTINEL`（绝不可能撞 kebab-case wire id）；
 //   选中后内部翻译回 `null` 写 store（与后端 Option<model_id> 同形）。
 import { useEffect, useMemo, useState } from "react";
-import { App, Flex, Select, Space, Tag } from "antd";
+import { App, Flex, Select, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { useSettings } from "../../stores/settings";
@@ -98,41 +98,41 @@ export default function SubagentModelsPanel() {
 
   return (
     <div className="subagent-models-panel setting-anchor" data-setting-id="subagentModels">
-      <Space direction="vertical" style={{ width: "100%" }} size={12}>
-        <div className="dim subagent-models-hint">{t("settings.subagentModelsHint")}</div>
-        {agents.map((agent) => {
-          const value = current(agent.name);
-          const isReadonly = READONLY_ROLES.has(agent.name);
-          return (
-            <Flex key={agent.name} align="center" gap={12} wrap="nowrap" className="subagent-models-row">
-              <Flex flex="0 0 200px" align="center" gap={8}>
-                <strong>{agent.name}</strong>
-                {isReadonly && <Tag className="subagent-models-readonly-tag">{t("settings.subagentReadonly")}</Tag>}
-              </Flex>
-              <Select
-                className="subagent-models-select"
-                style={{ minWidth: 280 }}
-                value={value}
-                placeholder={t("settings.subagentInherit")}
-                allowClear={false}
-                onChange={(v) => void handleChange(agent.name, v)}
-                optionFilterProp="label"
-              >
-                <Select.Option value={INHERIT_SENTINEL}>{t("settings.subagentInherit")}</Select.Option>
-                {grouped.map((g) => (
-                  <Select.OptGroup key={g.providerId} label={g.providerName}>
-                    {g.items.map((m) => (
-                      <Select.Option key={m.id} value={m.id} label={`${g.providerName} · ${m.model}`}>
-                        {m.model}
-                      </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                ))}
-              </Select>
+      {/* 行节奏全部交给 settings-theme.css 的 .subagent-models-*（行纵向 padding + 行间分隔线 +
+          控件右对齐 w-wide 档）——与同页 .settings-collection-row / .settings-provider-model 同规格。
+          勿再在本组件里加内联宽度或 Space 间距，否则会退回「行糊成一片 + 控件贴左」的旧观感。 */}
+      <div className="settings-section-intro">{t("settings.subagentModelsHint")}</div>
+      {agents.map((agent) => {
+        const value = current(agent.name);
+        const isReadonly = READONLY_ROLES.has(agent.name);
+        return (
+          <div key={agent.name} className="subagent-models-row">
+            <Flex className="subagent-models-role" align="center">
+              <strong>{agent.name}</strong>
+              {isReadonly && <Tag className="subagent-models-readonly-tag">{t("settings.subagentReadonly")}</Tag>}
             </Flex>
-          );
-        })}
-      </Space>
+            <Select
+              className="subagent-models-select w-wide"
+              value={value}
+              placeholder={t("settings.subagentInherit")}
+              allowClear={false}
+              onChange={(v) => void handleChange(agent.name, v)}
+              optionFilterProp="label"
+            >
+              <Select.Option value={INHERIT_SENTINEL}>{t("settings.subagentInherit")}</Select.Option>
+              {grouped.map((g) => (
+                <Select.OptGroup key={g.providerId} label={g.providerName}>
+                  {g.items.map((m) => (
+                    <Select.Option key={m.id} value={m.id} label={`${g.providerName} · ${m.model}`}>
+                      {m.model}
+                    </Select.Option>
+                  ))}
+                </Select.OptGroup>
+              ))}
+            </Select>
+          </div>
+        );
+      })}
     </div>
   );
 }

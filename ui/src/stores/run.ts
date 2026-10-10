@@ -47,6 +47,7 @@ export type {
   TimelineSeg,
   ToolView,
   UiItem,
+  WidgetAutoOpen,
 } from "./run.types";
 import type { ComposerDraft, HistoryPaging, PendingImage, SubStream, SubView, TabRunState, TimelineSeg, ToolView, UiItem } from "./run.types";
 
@@ -68,6 +69,12 @@ export interface RunStore {
   /** 子代理卡单独停止该子代理（主代理会收到 E_SUBAGENT_STOPPED 并询问用户是否重派） */
   stopSubagent(sessionId: string | null, subId: string): Promise<void>;
   resolveAsk(askId: string, value: any): Promise<void>;
+  /** [docs/preview-skill](../../../docs/preview-skill.md)：置位「先看预览」信号——批准门选 preview 时由 AskPanel 调用。
+   *  previewOnly 语义，**与切档无关**（预览项不带 mode，故不构成批准、不切档）；桶不存在则不新建（纯 UI 信号不凭空造桶）。 */
+  armWidgetAutoOpen(sessionId: string): void;
+  /** [docs/preview-skill](../../../docs/preview-skill.md)：消费信号——UI 弹完预览后按 callKey 消费；
+   *  callKey 不匹配则什么都不做（防「A 卡的信号被 B 卡消费」），命中才清空，故可重渲染时幂等重入。 */
+  consumeWidgetAutoOpen(sessionId: string, callKey: string): void;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复） */
   runQueueNext(sessionId: string): Promise<void>;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：队列项立即运行（运行中 = 先打断当前运行） */
@@ -579,6 +586,27 @@ export const useRun = create<RunStore>()(
       await ipc.resolveAsk(sessionId, askId, value);
     },
 
+    // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」置位——整体替换（不带旧 callKey）：
+    // 新的置位意味着用户又点了一次预览，之前锁定的卡不该再被弹。
+    // 桶不存在直接返回（M-1 同款守卫）：这是纯 UI 信号，凭空建桶会让已关 Tab 复活。
+    armWidgetAutoOpen(sessionId) {
+      set((s) => {
+        const t = s.tabs[sessionId];
+        if (!t) return;
+        t.widgetAutoOpen = { armed: true };
+      });
+    },
+
+    // 消费：callKey 必须命中才清——重渲染时另一张卡误调 consume 不会吃掉本卡的信号
+    consumeWidgetAutoOpen(sessionId, callKey) {
+      set((s) => {
+        const t = s.tabs[sessionId];
+        if (!t) return;
+        if (t.widgetAutoOpen?.callKey !== callKey) return;
+        t.widgetAutoOpen = null;
+      });
+    },
+
     // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复）
     async runQueueNext(sessionId) {
       const t = get().tabs[sessionId];
@@ -763,6 +791,26 @@ export const useRun = create<RunStore>()(
         // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：每次成功文件写递增信号；文件页签据此去抖拉取最新登记
         if (ok && (p.tool === "create" || p.tool === "edit")) {
           t.writeTick += 1;
+        }
+        // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」信号锁定到本 run 第一张合格的 widget。
+        // 四条同时满足才置位（任一不满足则完全不碰信号——失败 / 别的工具 / 空 html 都在本 run 内继续等下一张）：
+        //   ① 本轮确实成功（tool:error 的 render_html 没有可弹的东西）；
+        //   ② 是主会话的 render_html 工具（子代理的渲染结果走上面的 subStreams 早退分支，不得打断用户的视图）；
+        //   ③ 用户确实在批准门点了预览（否则普通 render_html 绝不自动弹框）；
+        //   ④ 出参里有非空 html（工具契约校验过长度，但出参仍可能被后端改写，空的就没有可弹内容）。
+        // 置位是**整体替换**：armed 随之消失，一次性语义由此成立（无「已关 armed 未置 callKey」的中间态）。
+        // 为什么靠「走不同代码路径」而不是给 ToolView 打来源标记：恢复态与实时态的工具卡字段上完全同形，
+        // 恢复路径（restoreFromMessages / applyToolOutcomes / backfillToolOutcomes）**不经过** onToolResult，
+        // 天然不触发——不往 ToolView 加来源字段是本仓既有惯例（先例：runMetrics 只由实时路径建立）。
+        const html = p.outcome?.data?.html;
+        if (
+          ok &&
+          p.tool === "render_html" &&
+          t.widgetAutoOpen?.armed === true &&
+          typeof html === "string" &&
+          html !== ""
+        ) {
+          t.widgetAutoOpen = { callKey: p.call_key };
         }
         // 先查后建：工具卡锚点可能落在更早的 assistant 项（跑批期间 notice 插队会另建末项），
         // 只查末项会另建第二张卡、旧卡永久 running。命中即原地落定，不白建流式项
