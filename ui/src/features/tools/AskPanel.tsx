@@ -485,8 +485,14 @@ export default function AskPanel() {
                   {/* docs/ask-approval-shape-note-nav：单选指示物（选中跟随高亮——此形态点击即应答，高亮 = 待确认项） */}
                   <span className={`opt-box radio${cursor === i ? " checked" : ""}`} aria-hidden />
                   <span className="idx">{i + 1}.</span>
-                  <span className="label">{o.label}</span>
-                  <span className="desc">{o.desc}</span>
+                  {/* [docs/ask-option-desc-wrap] 选项内容列容器：标题行与其下的说明上下排布、两者左边界对齐。
+                      纯 CSS 无法把第二行缩进到标签起点，故必须有这么一层列容器（.opt-body）。 */}
+                  <div className="opt-body">
+                    <div className="opt-head">
+                      <span className="label">{o.label}</span>
+                    </div>
+                    <span className="desc">{o.desc}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -530,11 +536,17 @@ export default function AskPanel() {
                       {/* docs/ask-approval-shape-note-nav：多选 = 复选框 / 单选 = 单选框——视觉声明选择语义 */}
                       <span className={`opt-box ${approvalShape || singleQ ? "radio" : "check"}${on ? " checked" : ""}`} aria-hidden />
                       <span className="idx">{i + 1}.</span>
-                      <span className="label">{opt.label}</span>
-                      {/* docs/ask-approval-shape-note-nav：推荐从 ✓ 后缀改为描边 pill——✓ 与复选框视觉相撞 */}
-                      {opt.recommended && <span className="rec-pill">{t("ask.recommended")}</span>}
-                      {/* 选项说明行：后端 description 优先；完全访问档恒定追加兜底风险说明（见 optionDesc） */}
-                      {desc && <span className="desc">{desc}</span>}
+                      {/* [docs/ask-option-desc-wrap] 选项内容列容器：标题行（标签 + 推荐 chip）与说明行上下排布，
+                          说明左边界对齐标签起点。opt-box / idx 仍是 .ask-opt 的直系子元素（整行可点靠冒泡）。 */}
+                      <div className="opt-body">
+                        <div className="opt-head">
+                          <span className="label">{opt.label}</span>
+                          {/* docs/ask-approval-shape-note-nav：推荐从 ✓ 后缀改为 chip——✓ 与复选框视觉相撞 */}
+                          {opt.recommended && <span className="rec-pill">{t("ask.recommended")}</span>}
+                        </div>
+                        {/* 选项说明行：后端 description 优先；完全访问档恒定追加兜底风险说明（见 optionDesc） */}
+                        {desc && <span className="desc">{desc}</span>}
+                      </div>
                     </div>
                   );
                 })}
