@@ -153,13 +153,11 @@ async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
   });
   // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
   void useSessions.getState().syncPrefs(tab.sessionId);
-  // M4：同进程关 Tab 不打断后端运行——重开时若仍在运行则恢复运行态
-  void ipc
-    .sessionRunning(tab.sessionId)
-    .then((running) => {
-      if (running) useRun.getState().markRunning(tab.sessionId);
-    })
-    .catch(() => {});
+  // M4：同进程关 Tab 不打断后端运行——重开时与后端**双向**对账。
+  // [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：原先这里只置 true
+  // （`if (running) markRunning(...)`），陈旧的 `running = true` 永远不会被纠正——注释自称「漂移防护」，
+  // 却恰好漏掉本缺陷所属的「后端已停、前端还认为在跑」那个方向。
+  void useRun.getState().reconcileRun(tab.sessionId);
   await run.refreshGit(tab.sessionId);
   void ipc
     .getTokenBreakdown(tab.sessionId)

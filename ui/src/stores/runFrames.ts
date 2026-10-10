@@ -222,6 +222,21 @@ export function closeRunningTools(t: TabRunState, subId?: string) {
   for (const st of Object.values(t.subStreams)) settleRunningTools(st.toolsMap);
 }
 
+/** 「是否仍有在途工具卡」的**只读**判据（[docs/run-terminal-event-fallback](../../docs/run-terminal-event-fallback.md)）：
+ * run 终态看门狗用它决定本地还有没有未收敛状态。
+ *
+ * **必须与 {@link settleRunningTools} 同判据（running / waiting）、与 {@link closeRunningTools} 无 subId
+ * 分支同扫描范围（全部 assistant 项 + 全部 subStreams）** —— 两处一旦漂移，看门狗就会出现
+ * 「谓词说已收敛、实际还有卡」或反之的时灵时不灵。改动本函数时须同步那两处。 */
+export function hasRunningTools(t: TabRunState): boolean {
+  const unsettled = (map: Record<string, ToolView>) =>
+    Object.values(map).some((tool) => tool.status === "running" || tool.status === "waiting");
+  for (const it of t.items) {
+    if (it.kind === "assistant" && unsettled(it.toolsMap)) return true;
+  }
+  return Object.values(t.subStreams).some((st) => unsettled(st.toolsMap));
+}
+
 /** 将一个 Channel 帧归一到 Tab 状态（就地变异草稿；帧到达顺序 = timeline 顺序）。
  *  导出以便测试驱动真实帧序列（[docs/thinking-interleave-report](../../../docs/thinking-interleave-report.md) 契约：delta_text / delta_thinking / tool_progress）。 */
 export function applyFrameToTab(t: TabRunState, frame: Frame) {
