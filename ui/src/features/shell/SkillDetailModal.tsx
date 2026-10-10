@@ -65,7 +65,8 @@ export default function SkillDetailModal({
     >
       {skill && (
         <div className="skill-detail">
-          <p className="dim">{skill.description}</p>
+          {/* description/whenToUse 可能为空串：无条件渲染会留下真实空 <p> 造成多余垂直空白，故一律条件渲染 */}
+          {!!skill.description && <p className="dim">{skill.description}</p>}
           {!!skill.whenToUse && (
             <p className="dim">
               {t("skills.detailWhen")}：{skill.whenToUse}

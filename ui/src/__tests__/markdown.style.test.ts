@@ -16,8 +16,11 @@ describe("markdown 主题感（docs/markdown-style-refresh）", () => {
     }
   });
 
-  it("共享组包含 .sub-drawer-stream .md（子代理过程流也吃这套契约）", () => {
-    expect(appCss).toMatch(/:is\(\.assistant \.md, \.sub-drawer-stream \.md, \.plan-body\.md, \.updater-notes-body\.md\)/);
+  it("共享组包含 .sub-drawer-stream .md（子代理过程流也吃这套契约）与 .skill-body.md（技能详情正文）", () => {
+    // 只断言「成员在列表里」，不钉全量顺序与项数：共享组是开放的消费点集合，
+    // 往后新增容器（.skill-body.md 等）不应打破本用例。逗号列表的顺序对 CSS 无语义。
+    expect(appCss).toMatch(/:is\([^*]+?\.sub-drawer-stream \.md[^*]+?\)/);
+    expect(appCss).toMatch(/:is\([^*]+?\.skill-body\.md[^*]+?\)/);
   });
 
   it("表格 th 底色 + 行 hover + .table-wrap 横向滚动", () => {
