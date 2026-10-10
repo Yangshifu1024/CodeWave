@@ -213,9 +213,19 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
     },
     "run:inject": (p) => {
       set((s) => {
-        const t = s.tabs[p.session];
+        const t = s.tabs[p?.session];
         if (!t) return;
-        t.items.push({ kind: "notice", text: i18n.t("notice.injected", { n: p?.count ?? 1 }) });
+        // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：drain_inject 把注入正文随 texts 带回，
+        // 有正文时用「注入 N 条消息：」的 notice + injectedTexts（由 ChatMessages 逐条渲染）；
+        // texts 缺省/为空（ask 方案批准注入、旧后端）时完全回落原键 notice.injected，不带 injectedTexts。
+        const texts = Array.isArray(p?.texts)
+          ? p.texts.filter((x: unknown): x is string => typeof x === "string" && x.trim() !== "")
+          : [];
+        t.items.push(
+          texts.length > 0
+            ? { kind: "notice", text: i18n.t("notice.injectedText", { n: p?.count ?? texts.length }), injectedTexts: texts }
+            : { kind: "notice", text: i18n.t("notice.injected", { n: p?.count ?? 1 }) },
+        );
       });
     },
     "session:title": (p) => {

@@ -332,6 +332,9 @@ export default {
       "历史已停止增长（已达 {{size}} / 上限 {{threshold}}）。请压缩上下文或新开会话；已有历史未被删除。",
     runFailed: "运行失败",
     injected: "注入 {{n}} 条消息",
+    // injected / injectedText 一体两面：后者用于 run:inject 带 texts 时，在同一行通知后跟注入正文；
+    // texts 缺省（ask 批准注入、旧后端）仍回落前者，故两键均保留
+    injectedText: "注入 {{n}} 条消息：",
     compacting: "上下文压缩中…{{before}}",
     compactingShort: "上下文压缩中…",
     tokensAbout: "（约 {{n}} tokens）",

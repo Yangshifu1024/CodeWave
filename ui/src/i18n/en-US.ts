@@ -338,6 +338,10 @@ export default {
       "History has stopped growing ({{size}} of the {{threshold}} limit). Compact the context or start a new session; nothing already saved was deleted.",
     runFailed: "Run failed",
     injected: "Injected {{n}} message(s)",
+    // injected / injectedText are two faces of the same notice: the latter lets run:inject carry
+    // `texts` and render the injected bodies right after the one-line notice; when texts is absent
+    // (ask approval injection, older backend) the former is still the fallback, so keep both keys
+    injectedText: "Injected {{n}} message(s): ",
     compacting: "Compacting context…{{before}}",
     compactingShort: "Compacting context…",
     tokensAbout: " (~{{n}} tokens)",

@@ -48,6 +48,14 @@ function createMd() {
     tokens[idx].attrSet("rel", "noopener");
     return defLink ? defLink(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
   };
+  // 表格包一层 .table-wrap（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：
+  // app.css 里的 `.table-wrap { overflow-x: auto }` 此前是死 CSS——本文件没有任何规则产出这个类，
+  // 于是宽表格在窄容器里被 `overflow-x: hidden` 静默裁掉且无法横向滚动（markdown-it 默认只 push
+  // table_open/table_close，renderToken 输出裸 <table>）。这里补上唯一的生产点。
+  // 窄表格仍然撑满容器宽度（`.table-wrap > table { width: 100% }`），与既有观感一致。
+  // 注意：只接管首尾 token 的输出，thead/tbody/tr/th/td 仍走默认 renderToken，配对不受影响。
+  md.renderer.rules.table_open = () => '<div class="table-wrap"><table>';
+  md.renderer.rules.table_close = () => "</table></div>";
   installMath(md);
   return md;
 }

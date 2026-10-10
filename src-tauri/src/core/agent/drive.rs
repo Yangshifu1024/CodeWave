@@ -710,8 +710,12 @@ pub(crate) fn split_report(raw: &str) -> (String, bool) {
     (body.trim().to_string(), true)
 }
 
+/// 注入正文回显的单条上限（字符数）：事件载荷与前端 notice 的展示预算。
+/// 只影响 `run:inject` 的 `texts` 预览，不影响进入历史的完整消息（模型看到的仍是全文）。
+const INJECT_TEXT_PREVIEW_CHARS: usize = 200;
+
 /// 消化已接纳消息，统一事件/checkpoint/收据时序。收尾时空队列会原子关闭接纳窗口。
-async fn drain_inject(
+pub(super) async fn drain_inject(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
     run_id: &str,
@@ -723,6 +727,14 @@ async fn drain_inject(
     if count == 0 {
         return 0;
     }
+    // 事件载荷回带注入正文（仅供前端 notice 展示，不进模型上下文、不增计费、不动落盘格式）：
+    // 必须在下方消费循环【之前】收集——循环按值消费了 messages，到 emit 处已读不到。
+    let texts: Vec<String> = messages
+        .iter()
+        .map(|m| {
+            crate::core::session_log::trunc(&m.message.text_joined(), INJECT_TEXT_PREVIEW_CHARS)
+        })
+        .collect();
     let mut receipts = Vec::with_capacity(count);
     {
         let mut history = lock_ok(&rt.history);
@@ -735,7 +747,7 @@ async fn drain_inject(
         core.sink.emit(
             &rt.id,
             "run:inject",
-            serde_json::json!({"session": rt.id, "run_id": run_id, "count": count}),
+            serde_json::json!({"session": rt.id, "run_id": run_id, "count": count, "texts": texts}),
         );
     }
     let _ = checkpoint(core, rt).await;
@@ -2061,10 +2073,15 @@ fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        NormalizedCall, Reasoning400, batch_digest, classify_reasoning_400, stalled,
-        update_reasoning_sticky,
+        INJECT_TEXT_PREVIEW_CHARS, NormalizedCall, Reasoning400, batch_digest,
+        classify_reasoning_400, stalled, update_reasoning_sticky,
     };
+    use crate::core::agent::SessionRuntime;
+    use crate::core::agent::guards::lock_ok;
+    use crate::core::agent::runtime::{AgentCore, EventSink, Frame};
     use crate::core::sessions::SaveReport;
+    use crate::core::types::SessionId;
+    use std::sync::Arc;
 
     /// 构造归一化工具调用（`batch_digest` 单测用）。
     fn call(name: &str, args: serde_json::Value) -> NormalizedCall {
@@ -2425,6 +2442,169 @@ mod tests {
             let digest = batch_digest(&[call(name, args)]);
             assert!(!digest.has_non_readonly, "{name} 只读调用不得重置停滞计数");
         }
+    }
+
+    // ---- run:inject 载荷回带注入正文（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）----
+
+    /// 记录原始 `emit` 事件（`drain_inject` 的 `run:inject` 不走 `channel_frame`）。
+    #[derive(Default)]
+    struct InjectEventSink(std::sync::Mutex<Vec<serde_json::Value>>);
+    impl EventSink for InjectEventSink {
+        fn channel_frame(&self, _s: &SessionId, _f: &Frame) {}
+        fn emit(&self, _s: &SessionId, e: &str, p: serde_json::Value) {
+            if e == "run:inject" {
+                self.0.lock().unwrap().push(p);
+            }
+        }
+    }
+
+    /// 带记录型 sink 的 core（消息不消费，测试只关心事件载荷）。
+    fn inject_test_core() -> (Arc<AgentCore>, Arc<SessionRuntime>, Arc<InjectEventSink>) {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let mut cfg = crate::core::config::ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            models: vec![crate::core::config::ProviderModel::default()],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+        let sink = Arc::new(InjectEventSink::default());
+        let core = Arc::new(AgentCore::new(
+            cfg,
+            sink.clone() as Arc<dyn EventSink>,
+            Arc::new(crate::core::sessions::SessionStore::new(
+                roots.data_dir.clone(),
+            )),
+            reqwest::Client::new(),
+            roots.data_dir.clone(),
+        ));
+        let rt = core.get_or_create_session(
+            "inject-text-payload",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        (core, rt, sink)
+    }
+
+    /// `texts` 逐条对应注入消息（顺序 = FIFO），`count` 与 `texts` 长度一致。
+    ///
+    /// 判别力验证：把收集点挪到消费循环【之后】（`messages` 已被按值消费）本用例转红——
+    /// 那时拿不到任何文本，`texts` 会退化为空。
+    #[tokio::test]
+    async fn drain_inject_payload_carries_injected_texts() {
+        let (core, rt, sink) = inject_test_core();
+        let _window = rt.begin_injections();
+        let first = rt.enqueue_injection("先看错误栈".into()).unwrap();
+        let second = rt.enqueue_injection("别改 IPC 契约".into()).unwrap();
+
+        let n = super::drain_inject(&core, &rt, "run_texts", true, false).await;
+        assert_eq!(n, 2);
+        assert!(first.await.unwrap().is_ok());
+        assert!(second.await.unwrap().is_ok());
+
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "一次消化只发一条 run:inject");
+        let p = &events[0];
+        assert_eq!(p["count"], serde_json::json!(2));
+        assert_eq!(p["run_id"], serde_json::json!("run_texts"));
+        assert_eq!(
+            p["texts"],
+            serde_json::json!(["先看错误栈", "别改 IPC 契约"]),
+            "texts 必须按 FIFO 顺序回带每条注入正文"
+        );
+        // 历史仍进全文（回显截断不得影响模型看到的内容）
+        let hist = lock_ok(&rt.history);
+        assert!(hist.iter().any(|m| m.text_joined() == "先看错误栈"));
+        assert!(hist.iter().any(|m| m.text_joined() == "别改 IPC 契约"));
+    }
+
+    /// 单条注入：载荷形状与文案所需的 `count` / `texts` 都是 1。
+    #[tokio::test]
+    async fn drain_inject_payload_single_message() {
+        let (core, rt, sink) = inject_test_core();
+        let _window = rt.begin_injections();
+        let receipt = rt
+            .enqueue_injection("改用 tailwind 而不是 antd".into())
+            .unwrap();
+        assert_eq!(
+            super::drain_inject(&core, &rt, "run_one", true, false).await,
+            1
+        );
+        assert!(receipt.await.unwrap().is_ok());
+
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["count"], serde_json::json!(1));
+        assert_eq!(
+            events[0]["texts"],
+            serde_json::json!(["改用 tailwind 而不是 antd"])
+        );
+    }
+
+    /// 长正文按字符边界截断到展示预算（避免草稿里的 `@路径` 追加把事件载荷撑爆），
+    /// 但**进入历史的仍是全文** —— 回显是展示层预算，不是内容裁剪。
+    #[tokio::test]
+    async fn drain_inject_payload_truncates_long_text_only_for_echo() {
+        let (core, rt, sink) = inject_test_core();
+        let long = "长".repeat(INJECT_TEXT_PREVIEW_CHARS + 500);
+        let _window = rt.begin_injections();
+        let receipt = rt.enqueue_injection(long.clone()).unwrap();
+        assert_eq!(
+            super::drain_inject(&core, &rt, "run_long", true, false).await,
+            1
+        );
+        assert!(receipt.await.unwrap().is_ok());
+
+        let events = sink.0.lock().unwrap();
+        let texts = events[0]["texts"].as_array().unwrap();
+        assert_eq!(texts.len(), 1);
+        let echoed = texts[0].as_str().unwrap();
+        // 不写死省略标记的字面量：按「截到预算 + 标记」计，与 session_log::trunc 的实现同源
+        const MARK: &str = "…(truncated)";
+        assert!(
+            echoed.ends_with(MARK),
+            "超长正文必须带截断标记，实际：{echoed:?}"
+        );
+        assert_eq!(
+            echoed.chars().count(),
+            INJECT_TEXT_PREVIEW_CHARS + MARK.chars().count(),
+            "回显必须恰好是「预算 + 标记」"
+        );
+        assert!(
+            lock_ok(&rt.history).iter().any(|m| m.text_joined() == long),
+            "进入历史的必须是全文（回显截断不得影响模型看到的内容）"
+        );
+    }
+
+    /// `emit_events=false`（子代理 / 任务运行）不得发事件，但历史照常追加。
+    #[tokio::test]
+    async fn drain_inject_no_event_when_emit_disabled() {
+        let (core, rt, sink) = inject_test_core();
+        let _window = rt.begin_injections();
+        let receipt = rt.enqueue_injection("静默注入".into()).unwrap();
+        assert_eq!(
+            super::drain_inject(&core, &rt, "run_quiet", false, false).await,
+            1
+        );
+        assert!(receipt.await.unwrap().is_ok());
+        assert!(
+            sink.0.lock().unwrap().is_empty(),
+            "emit_events=false 时不得发 run:inject"
+        );
+        assert!(
+            lock_ok(&rt.history)
+                .iter()
+                .any(|m| m.text_joined() == "静默注入"),
+            "即便不发事件，历史也必须追加"
+        );
     }
 }
 

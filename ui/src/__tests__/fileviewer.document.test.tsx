@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import "../i18n"; // 独立挂载 FileViewerModal 必须先初始化 i18next（文案全走 t()）
-import FileViewerModal from "../features/files/FileViewerModal";
+import FileViewerModal, { VIEWER_WIDTH_TABLE, VIEWER_WIDTH_TEXT } from "../features/files/FileViewerModal";
 import { useRun } from "../stores/run";
 
 const mocks = vi.hoisted(() => ({
@@ -155,5 +155,74 @@ describe("文本编码提示", () => {
     await waitFor(() => expect(mocks.readFile).toHaveBeenCalled());
     expect(document.body.textContent ?? "").not.toContain("GBK");
     expect(document.body.textContent ?? "").not.toContain("乱码");
+  });
+});
+
+describe("markdown 预览（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）", () => {
+  const MD_WITH_TABLE = "# 计划\n\n| 项 | 处置 |\n| --- | --- |\n| a | 上提 domain |\n";
+
+  it("宽表格被 .table-wrap 包裹（滚动容器真实存在，不再静默裁切）", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/plan.md", size: 40, encoding: "utf-8", content: MD_WITH_TABLE,
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector(".viewer-md.md .table-wrap table")).toBeTruthy());
+    // 内容不丢：被包裹的是结构，不是文字
+    expect(document.querySelector(".viewer-md.md")?.textContent ?? "").toContain("上提 domain");
+  });
+
+  it("不再复用聊天区 .assistant 容器（那套有 860px 行长上限 + overflow-x:hidden）", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/plan.md", size: 40, encoding: "utf-8", content: MD_WITH_TABLE,
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector(".viewer-md.md")).toBeTruthy());
+    expect(document.querySelector(".assistant")).toBeNull();
+  });
+
+  it("弹窗宽度是响应式而非固定 760px（断言导出的宽度契约）", () => {
+    // happy-dom 不做布局，且其 CSS 校验器不认 min() 这类函数值（DOM inline width 会被丢弃），
+    // 所以这里断言宽度常量本身，而不是从 DOM 上读像素。
+    expect(VIEWER_WIDTH_TEXT).toContain("vw");
+    expect(VIEWER_WIDTH_TABLE).toContain("vw");
+    expect(VIEWER_WIDTH_TEXT).not.toBe("760px");
+    // 表格类必须比正文类更宽（取 min() 里的第一个 px 值）
+    const px = (w: string) => Number(/min\((\d+)px/.exec(w)?.[1]);
+    expect(px(VIEWER_WIDTH_TABLE)).toBeGreaterThan(px(VIEWER_WIDTH_TEXT));
+  });
+
+  it("表格类文件走 wide 分支（SheetView 出现，而正文类的 .viewer-md 不出现）", async () => {
+    mocks.preview.mockImplementation(async (_sid: string, _p: string, opts?: { sheet?: string }) => {
+      if (!opts?.sheet) return { sheets: [{ name: "Sheet1", rows: 1, cols: 1 }] };
+      return { sheet: "Sheet1", totalRows: 1, totalCols: 1, text: "值\n" };
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/book.xlsx" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("值")).toBeTruthy());
+    // wide 由 phase === "sheet" 决定；这里钉住的是「表格类进 sheet 分支」这个真实行为
+    expect(document.querySelector(".viewer-md.md")).toBeNull();
+  });
+});
+
+// [docs/plan-modal-table-scroll]：预览弹框换容器后，mermaid/katex 的样式必须仍然可达——
+// 那 8 条规则此前全挂 .assistant .md 前缀，换容器即失配（公式丢 pre-wrap、katex-display 丢滚动）。
+// happy-dom 不加载 app.css，所以这里断言的是「占位符确实渲染进了预览容器」这个可达前提，
+// 样式层叠由 markdown.style.test.ts 的 :is() 组成员断言兜底。
+describe("预览弹框内的图表占位符可达性", () => {
+  it("mermaid 围栏渲染成 .ws-diagram 占位并落在 .viewer-md.md 内", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/plan.md", size: 40, encoding: "utf-8",
+      content: "# 计划\n\n```mermaid\ngraph TD\nA-->B\n```\n",
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector(".viewer-md.md .ws-diagram")).toBeTruthy());
+  });
+
+  it("块级公式渲染成 .ws-math 占位并落在 .viewer-md.md 内", async () => {
+    mocks.readFile.mockResolvedValue({
+      path: "/ws/plan.md", size: 40, encoding: "utf-8",
+      content: "# 计划\n\n$$\n\\\\int_0^1 x\\\\,dx\n$$\n",
+    });
+    render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector(".viewer-md.md .ws-math")).toBeTruthy());
   });
 });
