@@ -21,6 +21,13 @@ const SHEET_EXTS = new Set(["xlsx", "xlsm"]);
 const TEXT_TABLE_EXTS = new Set(["csv", "tsv"]);
 const DOC_EXTS = new Set(["docx"]);
 
+/** 弹窗宽度（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：响应式而非固定 px。
+ *  此前是 760 / 1100 定值——大屏偏小、窄窗靠 antd 的 maxWidth 钳制。min(…, 94vw) 两头兼顾，
+ *  表格类留最宽（列多），正文类次之。导出是为了让测试直接断言契约：happy-dom 的 CSS 校验器
+ *  不认 min() 这类函数值，DOM 上的 inline width 会被丢弃，按像素断言不可靠。 */
+export const VIEWER_WIDTH_TEXT = "min(920px, 94vw)";
+export const VIEWER_WIDTH_TABLE = "min(1200px, 94vw)";
+
 function mimeOf(path: string): string {
   const e = extOf(path);
   if (e === "svg") return "image/svg+xml";
@@ -237,7 +244,10 @@ export default function FileViewerModal({
       open={!!target}
       onCancel={onClose}
       footer={null}
-      width={wide ? 1100 : 760}
+      // 响应式宽度（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：此前 760/1100 是
+      // 固定 px，大屏下偏小、窄窗下靠 antd 的 maxWidth 钳制；min(…, 94vw) 两头兼顾。antd 6 的 width
+      // 支持 string（见 antd/es/modal/interface.d.ts），vw 在窄窗兜底不溢出窗口。
+      width={wide ? VIEWER_WIDTH_TABLE : VIEWER_WIDTH_TEXT}
       title={<span title={target}>{name}</span>}
       styles={{ body: { maxHeight: "70vh", overflow: "auto", paddingTop: 12 } }}
     >
@@ -295,14 +305,16 @@ export default function FileViewerModal({
             {t("files.docHint")}
             {st.truncated ? ` · ${t("files.docTruncated")}` : ""}
           </div>
-          <div className="assistant">
+          {/* .viewer-md.md = 预览专用容器（此前复用聊天区 .assistant，被 860px 行长上限 +
+              overflow-x:hidden 裁掉宽表格；见 [docs/plan-modal-table-scroll] 与 app.css 共享组注释） */}
+          <div className="viewer-md md">
             <div ref={bodyRef} className="md" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         </div>
       ) : st.phase === "markdown" ? (
         <>
           <EncodingNote encoding={st.encoding} />
-          <div className="assistant">
+          <div className="viewer-md md">
             <div ref={bodyRef} className="md" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         </>
