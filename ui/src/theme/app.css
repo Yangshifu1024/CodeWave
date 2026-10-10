@@ -331,6 +331,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 @media (prefers-reduced-motion: reduce) {
   .thinking-block .thinking-roll.rolling { animation: none; }
   .thinking-block .thinking-roll-line { transition: none; }
+  /* 打字机逐字揭示（[docs/typewriter-stream](../../../docs/typewriter-stream.md)）：JS 侧 useTypewriter
+     已按 prefers-reduced-motion 短路成整段直出（首帧即全文、不排 rAF），这里只是 belt-and-suspenders；
+     刻意不加闪烁光标 —— .cursor 类名与 CSS cursor 属性同名冲突，是历史误伤点（见下方 .cursor 注释）。 */
   /* 流式等待指示（下方 .ws-streaming-indicator）在减弱动效偏好下停转：
      antd 图标的旋转只挂在 `.anticon-spin` 这一条规则上，作用域收在本类里关掉，不波及其他位置的加载图标。 */
   .ws-streaming-indicator .anticon-spin { animation: none; }
