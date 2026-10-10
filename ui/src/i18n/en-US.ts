@@ -54,6 +54,10 @@ export default {
     exitCode: "Exit code", output: "Output", noOutput: "(no output)",
     stopService: "Stop", readLog: "Read log",
     argsTooLarge: "(args too large to show diff)", serviceRunning: "Running", serviceStopped: "Stopped",
+    // Third state of the tri-state: no running:false has arrived (exited/removed) and no authoritative
+    // snapshot backs it either (old history / all pushes lost). Must NOT claim "Stopped" here — that
+    // would hide the stop button and leave an orphaned process holding a port. Unknown is unknown.
+    serviceUnknown: "Status unknown",
     grepHits: "{{n}} matches in {{m}} files", truncated: "(truncated)",
     imageLoading: "Loading image…", imageUnavailable: "Image unavailable (file may have been moved or deleted): {{path}}",
     imageNotSent: "This model has image input disabled — the image was not sent",

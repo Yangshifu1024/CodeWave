@@ -16,6 +16,21 @@ pub async fn stop_service(
     Ok(())
 }
 
+/// 列出当前全部存活的后台 service（只读权威快照）。
+///
+/// 工具卡的实时状态走 `service:update` 推送，那是增量通道：事件丢帧或静默期无输出时，
+/// 前端会永久停在错误状态。本命令是对账兜底——投影与工具 `list` 共用
+/// [`crate::tools::service::service_info`]，保证两端字段永不漂移。
+#[tauri::command]
+pub async fn list_services(core: Core<'_>) -> Result<Vec<serde_json::Value>, String> {
+    Ok(core
+        .services
+        .list()
+        .iter()
+        .map(|h| crate::tools::service::service_info(h.as_ref()))
+        .collect())
+}
+
 // ---------- git diff/log（[docs/p1-plan](../../../../docs/p1-plan.md) §6.4）----------
 
 /// 列出计划任务（含下次运行时间与最近状态）。

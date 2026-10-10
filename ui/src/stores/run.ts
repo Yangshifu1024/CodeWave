@@ -32,6 +32,7 @@ import {
   historyStatusNotice,
   miscHandlers,
   runLifecycleHandlers,
+  scheduleServiceReconcile,
   subHandlers,
   toolHandlers,
 } from "./runHandlers";
@@ -127,6 +128,35 @@ export interface RestoreMeta {
 
 /** 恢复回填用的最小 set 契约（helper 定义在 store 之外，避免把 immer 的完整签名搬进来） */
 type RestoreSet = (fn: (s: any) => void) => void;
+
+/**
+ * 把历史恢复出来的 service 卡的 `running` 降为 `undefined`（未知）。
+ *
+ * 落盘的 `running: true` 只是**启动当时**的快照：进程可能已退出、被 stop、或随应用重启
+ * 被回收。直接沿用它会得到「永久误报运行中」——比误报已停止更坏，因为用户会相信服务还活着。
+ * 降为未知后，界面既不谎报运行中、也不谎报已停止，且 `reconcileServices` 会用
+ * `list_services` 的进程实况尽快覆写回真值。
+ */
+function demoteRestoredServiceState(set: RestoreSet, sessionId: string): void {
+  set((s: any) => {
+    const t = s.tabs[sessionId];
+    if (!t) return;
+    // 两种形状都要认：主会话是 assistant 项的 toolsMap，子代理流 SubStream 是平铺的 toolsMap
+    // （工具卡不在 timeline 里，见 stores/runFrames.ts 的 closeRunningTools 遍历口径）
+    const demote = (tools: any) => {
+      for (const tool of Object.values<any>(tools ?? {})) {
+        if (tool?.tool !== "service") continue;
+        if (tool.outcome?.data?.running === undefined) continue;
+        tool.outcome = { ...tool.outcome, data: { ...tool.outcome.data, running: undefined } };
+      }
+    };
+    for (const item of t.items ?? []) {
+      if (item?.kind !== "assistant") continue;
+      demote(item.toolsMap);
+    }
+    for (const st of Object.values<any>(t.subStreams ?? {})) demote(st.toolsMap);
+  });
+}
 /** `load_tool_outcomes` 的行形态（与 ipc/client.ts 的返回类型一致） */
 type ToolOutcomeRow = { call_id: string; outcome: any; duration_ms?: number | null };
 
@@ -885,6 +915,11 @@ export const useRun = create<RunStore>()(
       // 只对「历史文本解析失败」的调用发起一次批量 IPC（lossyToolKeys 与 restoredToolData 同判据）；
       // 子代理卡顺带把合成 key 改名成真实 sub_id 并补回被截断的 report。
       backfillToolOutcomes(set, sessionId, lossyToolKeys(msgs), undefined, built.subByKey);
+      // service 卡校准：历史里的 `running` 只是**启动当时**的快照，进程可能早已退出或被回收。
+      // 恢复出来的落盘快照一律先降为未知，再用 list_services 的进程实况覆写——
+      // 否则就是「永久误报运行中」（比误报已停止更坏：用户以为服务还活着，实际早没了）。
+      demoteRestoredServiceState(set, sessionId);
+      scheduleServiceReconcile(set, get);
     },
 
     /** 加载更早**一段**历史（批2 P3 分页前翻）：把返回的一段**前置**到转录头部。
@@ -1005,6 +1040,11 @@ export const useRun = create<RunStore>()(
         });
         // 过程流里的工具卡同样按 sidecar 回填（子代理历史存的也是被截断的模型侧文本）
         backfillToolOutcomes(set, sid, lossyToolKeys(msgs), subId);
+        // 归档子代理的过程流是**懒加载**的：上面的降级与对账发生在首屏 restoreFromMessages，
+        // 彼时这条流还是空的（toolsMap = {}），service 卡此刻才第一次出现——必须在此补做，
+        // 否则子代理启动的服务在恢复后永远停在落盘快照（要么误报运行中，要么永远「未知」）。
+        demoteRestoredServiceState(set, sid);
+        scheduleServiceReconcile(set, get);
       } catch {
         /* 拉取失败保持降级展示（task + 最终报告） */
       }
