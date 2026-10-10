@@ -53,7 +53,7 @@
 | 打字机 | `TypewriterText` 只作用于助手文本段（`segments.tsx:451`，开关 `streaming && i === tailIdx`）；子代理卡走 `segments.tsx:440` 的 `<SubagentItemCard>`，独立组件 |
 | `web_fetch` 无超时导致真挂起 | 3 个子代理均正常返回，非挂起 |
 | **子代理真挂起 / 审批拒绝后永久阻塞** | **全量 20 份会话日志的 spawn↔返回配对统计：零挂起**，每个 `sub_id` 都只 spawn 一次且都有返回 |
-| **桶不存在 / `subs.find` 未命中** | 实时运行中 `sub.tokens` 的**唯一**写入点是 `sub:usage`（`runHandlers.ts:477`；`run.ts:243` 那处在 `applyRestoredEnded`，属恢复路径）。**token 数有值即证明 `s.tabs[p.session]` 与 `subs.find(subId)` 双双命中**——而 `sub:done` 用的是**同一套**查法。故此分支不成立 |
+| **桶不存在 / `subs.find` 未命中** | 实时运行中 `sub.tokens` 的**唯一**写入点是 `sub:usage`（`runHandlers.ts:477`；`run.ts:243` 那处在 `applyRestoredEnded`，属恢复路径）。卡片确实渲染 token（`SubagentItemCard.tsx:69`：`{sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok`，`fmtTokens` 的 `k` 后缀正对应现象里的「168.8k / 139.2k / 80.8k」——反证这些数字读自卡片）⇒ **token 有值即证明 `s.tabs[p.session]` 与 `subs.find(subId)` 双双命中**。而 `sub:done` 用的是**同一套**查法，故此分支不成立 |
 | **重复条目（同一 sub_id 两条）** | 日志显示每个 `sub_id` 只 spawn 一次；且抽屉 `find` 取首个匹配，重复时只会命中已收敛的那条 |
 
 ### 本轮追加：重复条目假设的排除与断点收窄
