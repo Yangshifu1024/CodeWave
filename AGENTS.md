@@ -1,6 +1,6 @@
 # CodeWave · AGENTS.md
 
-> 项目入口指南。CodeWave 是 local-first 桌面 AI 编程 Agent：Tauri 2 + 纯 Rust 后端，React 19 + antd 6 前端。
+> 项目入口指南。CodeWave 是桌面 AI 编程 Agent：Tauri 2 + 纯 Rust 后端，React 19 + antd 6 前端。
 > 核心概念：**项目 = 单个主目录**——项目数据存于主目录下 `.codewave/`；临时会话免目录直接开聊（[docs/session-semantics-and-ui-batch](./docs/session-semantics-and-ui-batch.md)）。
 
 ## 必读文档
@@ -16,7 +16,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 ## 核心约束
 
 - **git 写操作默认由用户执行**：commit / push / merge / branch / stash 等 AI 不主动碰；用户明确要求或授权时可执行（范围以当次授权为准）。例外：用户批准计划 = 预授权创建并切换计划所示分支（标准工作流 S5/S6、plan 档 P3，[docs/plan-branch-proposal.md](./docs/plan-branch-proposal.md)）；commit / push / merge 仍由用户执行
-- **本地优先**：数据、配置、会话均在本地 `~/.codewave`；API key 入系统钥匙串，不落明文
+- **数据与密钥落位**：全局数据（配置、会话、日志）在 `~/.codewave`，项目托管数据在 `<主目录>/.codewave/`；API key 入系统钥匙串，配置文件不落明文
 - **纯 Rust 后端，零框架耦合**：`core/` 不依赖 tauri；只有 `lib.rs` 与 `host/` 允许 `use tauri::*`；IPC 命令只做校验 + 转调 core
 - **数据目录 `.codewave`**：路径约定随 2026-09-13 品牌改名定稿（原 `.wavestudio`，无自动迁移），勿再建议改名
 - **项目 = 名称 + 单一主目录**；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/oss-prep-batch](./docs/oss-prep-batch.md)：legacy 目录回退已移除）；`ProjectEntry.allowed_dirs`（serde default）记用户「始终允许」的项目外目录，会话创建/恢复时并入 `extra_roots`
@@ -31,8 +31,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 用途 | 命令 | 说明 |
 |---|---|---|
-| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（本地实测 **1177 passed / 3 ignored**；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行；以本地最新全绿为准）；**0 warning 基线**（2026-10-10 清掉最后 7 条 clippy 警告：`drive.rs` 三处 `needless_borrow`（steer 改动带入）、`openers/mod.rs` unneeded return、`postcheck.rs` unused import、`command/tests.rs` 两处——**新增警告一律当场修，不要攒**）；CI 用 `cargo test --workspace` |
-| 前端测试 | `pnpm --dir ui test` | 基线全绿（本地实测 **1229 passed / 102 文件**，以本地最新全绿为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
+| 后端测试 | `cargo test` | 在 `src-tauri/` 执行；基线全绿（用例数以本机实跑输出为准；LSP 机制删除后 `tests/` 集成测试目录为空；个别 `cfg(unix)` 用例仅 macOS 执行）；**0 warning 基线**（新增警告一律当场修，不要攒）；CI 用 `cargo test --workspace` |
+| 前端测试 | `pnpm --dir ui test` | 基线全绿（用例数以本机实跑输出为准；antd 已升 6.6，Tabs 用 tabPlacement/start） |
 | 前端构建 | `pnpm --dir ui build` | type check + vite build |
 | 开发调试 | `pnpm tauri dev` | 仓库根执行 |
 | 打包 | `pnpm tauri build --debug` | 仓库根执行 |
@@ -49,11 +49,12 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 
 | 层 | 职责 | 约束 |
 |---|---|---|
-| `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、quota（订阅额度：凭证链 + 7 家适配器）、openers（文件管理器与编辑器探测/打开）、scheduler、sessions、stats | 不依赖 tauri |
+| `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、quota（订阅额度：数据源是 `config.providers`，不再读 opencode 配置与 auth.json；7 家适配器 OpenCodeGo / DeepSeek / MiniMaxIntl / MiniMaxCn / Kimi / Zhipu / Zai）、openers（文件管理器与编辑器探测/打开）、scheduler、sessions、stats | 不依赖 tauri |
 | `host/` | commands（全部 IPC 命令）、events（EventSink）、keyring | 除 `lib.rs` 外唯一允许 `use tauri::*`；命令只校验 + 转调 core |
 | `provider/` | LLM 供应商层：anthropic / openai_chat / openai_responses 三协议 + dto / keys / proxy / retry / sse | 协议差异不出本层 |
-| `tools/` | 工具实现（ToolKind 分 ReadOnly / FileWrite / Network / Interactive）；`tools/document/` = Office 与 PDF 的读/生成/保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)） | 纯函数化 |
+| `tools/` | 工具实现（ToolKind 五类：ReadOnly / FileWrite / Network / Interactive / Meta，`scheduled_task` 等操作 agent 自身状态的工具属 Meta）；`tools/document/` = Office 与 PDF 的读/生成/保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)） | 纯函数化 |
 | `agents/` | 内置子代理角色注册表（explore/backend-dev/frontend-dev/app-dev/reviewer/product-manager/code-reviewer/tester/title 定义 + 别名归一查找），被 `tools/subagent` 注入消费；title 例外——仅供 `core/title.rs` 自动命名消费（[docs/session-auto-title](./docs/session-auto-title.md)），不进 subagent 角色枚举 | 纯数据不依赖 tauri；编排角色已内置为标准工作流常驻提示（[docs/standard-workflow](./docs/standard-workflow.md)），不是本表角色 |
+| `core/agent/` | 编排主循环的现行机制（此前未收录）：`runtime.rs` 的 **inject 通道**（运行中注入消息**不结束当前 run**，即 steer，[docs/steer-run-inject](./docs/steer-run-inject.md)）、`text_ask.rs`（模型把 ask 透传成正文 XML 时的文本兜底）、`supervise.rs`（错误信号监管：重复失败 / 空转看门狗的纠偏与终止） | 不依赖 tauri |
 | `safety/` | approval 审批门（默认无限等待用户应答；`auto_confirm` 勾选后 5 分钟自动确认推荐选项，[docs/session-nav-row-states](./docs/session-nav-row-states.md)）、fence 命令安全围栏（L1 黑名单 → L2 AST → L3 高危模式） | |
 | `git/` | git2 只读集成（status / diff / log） | 只读，不提供写操作 |
 | `skills/` `mcp/` `memory.rs` | 技能扫描（项目 `<主目录>/.codewave/skills`[project_dir] > 全局 `~/.codewave/skills`[data_dir] > 工作区 `.agents/skills` `.claude/skills` > `~/.agents/skills` 与 `~/.claude/skills` 兼容 > 内置；托管目录技能可在设置页删除，兼容/内置来源不可删，[docs/slash-skills-and-dollar-agents](./docs/slash-skills-and-dollar-agents.md)；注意 rt.data_dir 恒为全局，项目数据目录走 rt.project_dir）、rmcp 客户端（stdio + streamable-http）、记忆系统 | |
@@ -61,8 +62,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 前端 `ui/src/`：
 
 - `ipc/client.ts` 是唯一 invoke 入口；`ipc/types.ts` 为前后端契约类型
-- zustand 4 store：`run.ts`（每 Tab 运行态，immer 中间件做流式高频更新）、`sessions.ts`（Tab/项目/会话）、`settings.ts`、`ui.ts`
-- `features/`：chat / shell（ProjectNav 导航：临时会话区 + 项目→会话树 + 任务区；RightBar 常驻右边栏：Git/模型/项目目录/会话信息）/ panels（设置/任务/统计）/ tools / workspace / subagent
+- zustand 5 store：`run.ts`（每 Tab 运行态，immer 中间件做流式高频更新）、`sessions.ts`（Tab/项目/会话）、`settings.ts`、`ui.ts`、`tasks.ts`（计划任务列表单一数据源）、`updater.ts`（更新状态机）
+- `features/`：chat / shell（ProjectNav 导航：临时会话区 + 项目→会话树 + 任务区；RightBar 常驻右边栏，4 页签 info / logs / files / changes，Git 已收进「变更」页签，数据目录与会话信息在设置页「关于」）/ panels（设置 10 页 3 组：外观与模型 / 安全与能力 / 诊断与其他；TasksPage 为覆盖式全屏页、TokenStatsModal 为统计弹框）/ files（文件面板与查看器、表格与 PDF 预览）/ tools（ask 面板、工具卡、组件预览）/ workspace（仅 ChangesPanel：工作区 vs HEAD 聚合 diff）/ subagent / quota
 - 左侧导航是一切会话/项目入口；顶栏只有 Tab 条与功能按钮（无「选择工作区」「新 Tab」）
 
 ## 契约锚点（改前必读）
@@ -98,7 +99,8 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - antd `TextArea` 的 `autoSize` 会在 DOM 里另放一个测量用 textarea：测试里用 `getByPlaceholderText` 定位真身，别用 `querySelector("textarea")`（拿到替身后 fireEvent.change 静默无效）
 - 草稿里有些内容**不在正文文本里**（文件引用 chip 存 `refs`、图片存 `images`）：凡「覆盖草稿」的链路（`ws:composer-fill`、队列编辑、历史召回）必须连带覆盖它们，只 `setText` 盖不住
 - 触发菜单/回填要看**真实光标**：`onChange` 只给文本与 `selectionStart`，点击与方向键移动光标**不过** `onChange`（靠 `onSelect/onClick/onKeyUp` 补同步）；测试里要指定光标位置时给 `fireEvent.change` 传 `target.selectionStart`（不传就是文末，happy-dom 与浏览器一致）
-- 测试里的 mock server 别「读完一次就 `drop(sock)`」：临时端口是共享资源——① 带未读数据 close 在 Windows 上会发 RST（客户端的「半截响应」因此忽 RST 忽 EOF）；② 任务结束后 listener 释放的临时端口可能被**并发用例**的 listener 抢到，客户端于是拿到别的用例的响应（表现为毫不相干的错误变体）。做法：listener 用 `Arc` 持有并活到用例结束 + 读干请求头（到 `\r\n\r\n`）+ `shutdown()` 写半部优雅收尾。2026-09-21 修 `provider::tests_integration::midstream_disconnect_maps_to_network` 的间歇性 `got Server("")` 即此二因（当时 20 次跑 4 次红，修后 30 次模块连跑 + 8 次全量跑 0 红）
+- 测试里的 mock server 别「读完一次就 `drop(sock)`」：临时端口是共享资源——① 带未读数据 close 在 Windows 上会发 RST（客户端的「半截响应」因此忽 RST 忽 EOF）；② 任务结束后 listener 释放的临时端口可能被**并发用例**的 listener 抢到，客户端于是拿到别的用例的响应（表现为毫不相干的错误变体）。做法：listener 用 `Arc` 持有并活到用例结束 + 读干请求头（到 `\r\n\r\n`）+ `shutdown()` 写半部优雅收尾。`provider::tests_integration::midstream_disconnect_maps_to_network` 的间歇性 `got Server("")` 即此二因
+- 写入后检查的结论必须写进 `outcome.data.check`（`compact_for_model` **只序列化 `data`**），写进 `warnings` 模型一个字都收不到——LSP 机制的校验结论当年就栽在这里，已整体删除（[docs/post-write-check-plan](./docs/post-write-check-plan.md)）
 
 ## 可用专门代理
 

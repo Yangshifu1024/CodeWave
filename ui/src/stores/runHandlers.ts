@@ -1,4 +1,4 @@
-// 后端事件 handler 工厂 —— 30 键事件面（契约测试锚点；键名不可增删）。
+// 后端事件 handler 工厂 —— 29 键事件面（契约测试锚点；键名不可增删）。
 // 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。

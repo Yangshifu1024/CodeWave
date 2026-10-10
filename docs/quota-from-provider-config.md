@@ -70,7 +70,7 @@ quota_snapshots(active_provider_id) → QuotaSection（五类行 / 折叠 / 去�
 | `QuotaSnapshot.last_ok_at` | 无 | `Option<String>`（RFC3339；ok 行 = 本次成功时刻） |
 | `QuotaEntry.status` | 无 | `Option<String>`（窗口级上游 status） |
 | 新文件 | — | `~/.codewave/quota.json` |
-| 事件面 | 28 键 | **不变**（未新增事件） |
+| 事件面 | 28 键（本批时点） | **不变**（未新增事件；现行 29 键，由 `ui/src/__tests__/events.contract.test.ts` 断言） |
 | localStorage `ws_rb_quota_expanded` | 存 kind 串（`opencode-go` …） | 存 uuid；读取时按当前 providers 过滤，旧值一次性失效（表现为已展开行折叠一次），脏值不回写 |
 
 ## 5. `~/.codewave/quota.json`

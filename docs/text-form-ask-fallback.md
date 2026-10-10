@@ -49,7 +49,7 @@
 
 后端剥的是**落盘历史**，而这段协议原文早已随流式帧进了**当轮气泡**（帧已下发、无法回收）。且正文经 **64ms 节流**下发（`stream_flush_loop`，run 收尾才最终冲刷），而 `ask:opened` 在流结束后**几毫秒**就到——最后那个窗口里的尾巴（往往正是 `</ask>`）会在 `ask:opened` **之后**才到达。**只剥一次必然漏**（这与 `features/chat/segments.tsx` 的 `stripReportMarkers` 注释同源：剥离放在渲染时，因为增量会把标记切两片）。
 
-做法：`ask:opened` 的可选字段 `text_recovered`（携带被剥离的块原文；**普通 ask 不出现该键**）→ 前端把它记为**当轮状态**（`tab.textRecovered`）→ 在**每帧文本增量落地之后**与 `ask:opened` 当刻各剥一次（幂等：`includes` 守卫 + `replace(..., "") + trimEnd()`，与后端 `strip_block` 同口径）→ `run:done` 清空。事件键名与 30 键不动，只增一个可选载荷字段。
+做法：`ask:opened` 的可选字段 `text_recovered`（携带被剥离的块原文；**普通 ask 不出现该键**）→ 前端把它记为**当轮状态**（`tab.textRecovered`）→ 在**每帧文本增量落地之后**与 `ask:opened` 当刻各剥一次（幂等：`includes` 守卫 + `replace(..., "") + trimEnd()`，与后端 `strip_block` 同口径）→ `run:done` 清空。事件键名与 29 键不动，只增一个可选载荷字段。
 
 ### 4) 可诊断性：step 级响应形态日志
 
@@ -58,7 +58,7 @@
 ## 四、反向纪律（勿再破）
 
 - **绝不为 `edit` / `command` 等写类工具做文本兜底**：那会把「看不到问题」升级为「任意代码执行」（模型复述一段被读进来的 XML 即触发执行）。只做 `ask`，且只做「提问」这一种语义。
-- 不碰 provider 层；不改 `approval_shape` / `is_preview_option` / `preview_option_ids` / `selected_target_mode` / `plan_approval_gate` / `text_turn_action` 决策矩阵；事件面 **30 键与 `ask:opened` 键名不动**（只增可选字段 `text_recovered`）。
+- 不碰 provider 层；不改 `approval_shape` / `is_preview_option` / `preview_option_ids` / `selected_target_mode` / `plan_approval_gate` / `text_turn_action` 决策矩阵；事件面 **29 键与 `ask:opened` 键名不动**（只增可选字段 `text_recovered`）。
 - `rt.text_ask_block` 是**当轮**标注：run 起点复位 + `AskTool` 打开卡片时 `take()`，真实 ask 绝不带 `text_recovered`（有 e2e 钉死）。别把它挪进 `SessionPrefs`（prefs 是前端整体替换写的事实源，会被补丁冲掉）。
 - 解析器只认**精确标签形态**（`<tag>` / `</tag>`，内层带属性即放弃）；`<ask>` 必须独占起始行——别为了「多救几个案例」把判据放宽，误弹卡（把讲解协议的正文当成提问）比漏救更伤用户。
 
@@ -83,6 +83,8 @@ curl -sS -N https://api.minimax.cn/anthropic/v1/messages \
 - 再把 `base_url` 换成官方 `https://api.minimaxi.com/anthropic`（国际 `https://api.minimax.io/anthropic`）复跑对比。注意仓库记录的官方 CN 域名是 `api.minimaxi.com` / `minimaxi.com`，**没有 `minimax.cn`**。
 
 ## 七、验证（本批实测）
+
+> 下表是**本批次的验证快照**，记录的是当时实跑的数字；基线以本机当前实跑为准（事件面现行 **29 键**，由 `ui/src/__tests__/events.contract.test.ts` 硬断言守护）。
 
 | 命令 | 结果 |
 |---|---|

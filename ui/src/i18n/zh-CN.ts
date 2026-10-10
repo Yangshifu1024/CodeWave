@@ -194,7 +194,7 @@ export default {
     // —— 关于页：只读身份与入口（批④ 登记进注册表，使批③ 搜索可命中） ——
     aboutVersion: "版本",
     aboutVersionHint: "当前运行的版本，由应用自身报告（含 commit 短 sha 时一并展示）",
-    aboutSlogan: "本地优先的桌面 AI 编程 Agent",
+    aboutSlogan: "桌面 AI 编程 Agent",
     aboutAppData: "数据目录",
     aboutAppDataHint: "配置 / 会话 / 技能等托管数据的全局目录（~/.codewave）",
     aboutOpenAppData: "打开数据目录",

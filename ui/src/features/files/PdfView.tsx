@@ -49,7 +49,7 @@ export default function PdfView({
     (async () => {
       const pdfjs = await import("pdfjs-dist");
       // worker 走 ?url：vite 会把 node_modules 里的 worker 脚本打进产物并给同源相对路径，
-      // 运行时零下载（比用 jsDelivr 之类的 CDN 更符合本应用的本地优先约定）。
+      // 运行时零下载（本应用不依赖任何外部 CDN，产物自包含）。
       const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
       pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
       const chunks: Uint8Array[] = [];

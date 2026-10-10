@@ -75,10 +75,7 @@ pub async fn execute_batch(
         // 原路径整批 reject：ask/wait 必须独占，行为零变化。
         let mut results = Vec::new();
         for c in &calls {
-            let out = ToolOutcome::err(
-                "E_BATCH_POLICY",
-                "ask/wait 类工具必须是批次中唯一的调用",
-            );
+            let out = ToolOutcome::err("E_BATCH_POLICY", "ask/wait 类工具必须是批次中唯一的调用");
             emit_result(&sink, rt, run_id, &batch_id, c, &out, 0);
             // vision 传 false：本路径只会产出错误结果，不可能带图片
             results.push(model_content(core, rt, c, &out, None, false));
@@ -2418,7 +2415,12 @@ mod tests {
         };
         let calls = vec![
             mk("c1-read", "read", serde_json::json!({"path": "/nope"}), 0),
-            mk("c2-sug", "suggest", serde_json::json!({"items": ["授权 commit 提交", "本地验证"]}), 1),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["授权 commit 提交", "本地验证"]}),
+                1,
+            ),
         ];
         let out = execute_batch(
             &core,
@@ -2440,14 +2442,16 @@ mod tests {
         );
         assert_eq!(items[1], "本地验证");
         // read 必被 E_BATCH_POLICY 拒
-        let read_err = out.results.iter().any(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                tool_use_id,
-                is_error: true,
-                ..
-            } if tool_use_id == "c1-read"
-        ));
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-read"
+            )
+        });
         assert!(read_err, "read 必被拒：执行结果");
     }
 
@@ -2479,8 +2483,18 @@ mod tests {
             }
         };
         let calls = vec![
-            mk("c1-grep", "grep", serde_json::json!({"path": "/nope", "pattern": "x"}), 0),
-            mk("c2-sug", "suggest", serde_json::json!({"items": ["再看看"]}), 1),
+            mk(
+                "c1-grep",
+                "grep",
+                serde_json::json!({"path": "/nope", "pattern": "x"}),
+                0,
+            ),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["再看看"]}),
+                1,
+            ),
         ];
         let out = execute_batch(
             &core,
@@ -2493,15 +2507,20 @@ mod tests {
             "run-c2",
         )
         .await;
-        assert!(out.suggest_items.is_some(), "suggest 应装入 suggest_items：执行结果");
-        let grep_err = out.results.iter().any(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                tool_use_id,
-                is_error: true,
-                ..
-            } if tool_use_id == "c1-grep"
-        ));
+        assert!(
+            out.suggest_items.is_some(),
+            "suggest 应装入 suggest_items：执行结果"
+        );
+        let grep_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-grep"
+            )
+        });
         assert!(grep_err, "grep 必被拒：执行结果");
     }
 
@@ -2526,7 +2545,8 @@ mod tests {
             vec![],
         );
         // §8.1 三件套：本 run 碰过 plan + todos 含 InProgress 项
-        rt.plan_called_this_run.store(true, std::sync::atomic::Ordering::SeqCst);
+        rt.plan_called_this_run
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         *rt.todos.lock().unwrap() = vec![crate::tools::plan::Todo {
             title: "补单测".into(),
             status: crate::tools::plan::TodoStatus::InProgress,
@@ -2541,7 +2561,12 @@ mod tests {
         };
         let calls = vec![
             mk("c1-read", "read", serde_json::json!({"path": "/nope"}), 0),
-            mk("c2-sug", "suggest", serde_json::json!({"items": ["授权 commit"]}), 1),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["授权 commit"]}),
+                1,
+            ),
         ];
         let out = execute_batch(
             &core,
@@ -2573,14 +2598,16 @@ mod tests {
             "错误码必须是 E_PLAN_PENDING：执行结果"
         );
         // read 仍被 E_BATCH_POLICY 拒
-        let read_err = out.results.iter().any(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                tool_use_id,
-                is_error: true,
-                ..
-            } if tool_use_id == "c1-read"
-        ));
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-read"
+            )
+        });
         assert!(read_err, "read 必被拒：执行结果");
     }
 
@@ -2623,34 +2650,28 @@ mod tests {
         // 立刻 cancel：让 ask 不阻塞等应答
         let cancel = tokio_util::sync::CancellationToken::new();
         cancel.cancel();
-        let out = execute_batch(
-            &core,
-            &rt,
-            calls,
-            &[],
-            false,
-            true,
-            cancel,
-            "run-c4",
-        )
-        .await;
+        let out = execute_batch(&core, &rt, calls, &[], false, true, cancel, "run-c4").await;
         // ask 路径整批 reject 并 return —— results 里两条都 is_error=true
-        let ask_err = out.results.iter().any(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                tool_use_id,
-                is_error: true,
-                ..
-            } if tool_use_id == "c1-ask"
-        ));
-        let read_err = out.results.iter().any(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                tool_use_id,
-                is_error: true,
-                ..
-            } if tool_use_id == "c2-read"
-        ));
+        let ask_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-ask"
+            )
+        });
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c2-read"
+            )
+        });
         assert!(ask_err, "ask 必被拒：执行结果");
         assert!(read_err, "read 必被拒：执行结果");
         assert!(out.suggest_items.is_none(), "ask 路径不带 suggest");
@@ -2684,30 +2705,24 @@ mod tests {
             }
         };
         let calls = vec![
-            mk("c1-wait", "wait", serde_json::json!({"seconds": 1, "reason": "测试"}), 0),
+            mk(
+                "c1-wait",
+                "wait",
+                serde_json::json!({"seconds": 1, "reason": "测试"}),
+                0,
+            ),
             mk("c2-sug", "suggest", serde_json::json!({"items": ["x"]}), 1),
         ];
         // wait 阻塞中我们立刻 cancel —— 触发 E_CANCELLED 而非真等 1 秒
         let cancel = tokio_util::sync::CancellationToken::new();
         cancel.cancel();
-        let out = execute_batch(
-            &core,
-            &rt,
-            calls,
-            &[],
-            false,
-            true,
-            cancel,
-            "run-c5",
-        )
-        .await;
-        let all_rejected = out.results.iter().all(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                is_error: true,
-                ..
-            }
-        ));
+        let out = execute_batch(&core, &rt, calls, &[], false, true, cancel, "run-c5").await;
+        let all_rejected = out.results.iter().all(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult { is_error: true, .. }
+            )
+        });
         assert!(
             all_rejected,
             "wait+suggest 必须都被拒（wait 走真独占路径）：执行结果"
@@ -2769,15 +2784,20 @@ mod tests {
             "两条 call 必产 2 条 ToolResult：执行结果"
         );
         // 两条都成功
-        let both_ok = out.results.iter().all(|c| matches!(
-            c,
-            crate::core::types::Content::ToolResult {
-                is_error: false,
-                ..
-            }
-        ));
+        let both_ok = out.results.iter().all(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    is_error: false,
+                    ..
+                }
+            )
+        });
         assert!(both_ok, "两条 suggest 都应成功：执行结果");
         // suggest_items 装入（具体内容由遍历顺序决定，这里仅断言非空）
-        assert!(out.suggest_items.is_some(), "至少一条 suggest 应装入：执行结果");
+        assert!(
+            out.suggest_items.is_some(),
+            "至少一条 suggest 应装入：执行结果"
+        );
     }
 }

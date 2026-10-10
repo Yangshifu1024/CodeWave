@@ -197,7 +197,7 @@ export default {
     // —— About page: read-only identity and entry points (batch ④ registers them so batch ③ search can hit them) ——
     aboutVersion: "Version",
     aboutVersionHint: "The version currently running, reported by the app itself (includes the short commit sha when available)",
-    aboutSlogan: "Local-first desktop AI coding agent",
+    aboutSlogan: "Desktop AI coding agent",
     aboutAppData: "Data folder",
     aboutAppDataHint: "Global folder holding managed data such as config, sessions and skills — ~/.codewave",
     aboutOpenAppData: "Open data folder",

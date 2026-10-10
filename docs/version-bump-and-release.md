@@ -15,7 +15,7 @@
 | `src-tauri/Cargo.lock` | Rust 锁文件 | `cargo update -w`（只同步工作区成员自身版本，不动三方依赖） |
 | `pnpm-lock.yaml` | pnpm 锁文件 | `pnpm install --lockfile-only`（只改锁文件不装依赖） |
 
-用法：`pnpm bump 0.2.1`（接受 `v` 前缀与 `-预发布` 后缀）。**纯版本 bump 实际只改 5 个文件**——pnpm-lock.yaml
+用法：`pnpm bump 0.2.1`（接受 `v` 前缀与 `-预发布` 后缀）。**纯版本 bump 实际只改 5 个文件**（4 个版本号落点 + `src-tauri/Cargo.lock`）——pnpm-lock.yaml
 不记录工作区包版本，锁文件刷新对纯版本 bump 是 no-op（保留该步骤是为了维持「锁文件与 package.json 一致」的
 不变量，即 2026-09-13 CI `ERR_PNPM_OUTDATED_LOCKFILE` 事故的教训，见 [docs/composer-per-tab-draft](./composer-per-tab-draft.md) 同日记录）。
 
@@ -35,6 +35,8 @@
 6. **推送**：`git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z`；可 `gh run watch` 盯流水线，结束后提醒人工 Publish draft。
 
 ## 3 验证
+
+> 下列 `0.2.0` 等版本号是 2026-09-13 批次的历史举例（真实回环验证记录）；**当前版本以 `package.json` 等落点为准**（本分支撰写时为 0.8.7）。
 
 - 非法入参（`abc` / 缺参）→ usage + exit 1；
 - 同版本 `pnpm bump 0.2.0` → 全部落点改写成功、锁文件刷新 no-op、`git status` 无差异；
