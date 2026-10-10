@@ -244,10 +244,13 @@ export function hasRunningTools(t: TabRunState): boolean
 
 ## 遗留
 
-- **队列不恢复（本方案未覆盖）**：`run:done` handler 收尾后会调 `runQueueNext(p.session)` 续跑队列下一条。
-  该事件丢失时，看门狗虽能把界面收敛，但**队列里排队的消息永远不会被启动**——用户侧的观感是
-  「我排队的第二条没人理」。修它要动队列续跑语义（可能与 in-flight 的 `runQueueNext` 竞态、
-  需要幂等护栏），风险高于本次其余三步，故**单独立项**，不在本 PR 范围内。
+- **队列不会自动续跑（但本修复顺带把它救回来了）**：`runQueueNext` 的自动调用点只有 `run:done`
+  handler 一处（`runHandlers.ts`）；`run:error` / `run:cancelled` 本就按设计暂停、等用户点「继续」。
+  该事件丢失时队列不会自动出队——**但修复前这也不是死局**：队列同样卡死，因为
+  `QueuePanel.tsx:128` 的「继续」按钮渲染条件是 `!running`，而 `running` 正卡在 true，
+  **按钮永远不渲染**，用户连手动救都做不到。本修复把 `running` 收敛为 false 后该按钮重新出现，
+  一键即可恢复队列。⇒ 自动续跑仍缺（要动队列续跑语义、且需与 in-flight 的 `runQueueNext`
+  竞态防护，风险高于本次其余三步，单独立项），但**「队列彻底搁浅且无法自救」已被本修复消除**。
 - **子代理终态事件的根因仍未定位**，已收窄到「事件投递丢失」单一分支（推导见
   [subagent-terminal-event-loss.md](./subagent-terminal-event-loss.md)）。本方案**不替代**根因定位，
   它是在无法修复投递的前提下对丢失做免疫。
