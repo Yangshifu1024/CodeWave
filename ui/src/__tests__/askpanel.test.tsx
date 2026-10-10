@@ -1499,3 +1499,112 @@ describe("AskPanel planCard 与互斥推断", () => {
     expect(document.querySelectorAll('.ask-opt[role="checkbox"]')).toHaveLength(2);
   });
 });
+
+
+// ---------- 选项排版：说明独占下一行 + 与标题左边界对齐（[docs/ask-option-desc-wrap]） ----------
+// happy-dom 不做布局，「下一行 + 左边界对齐」无法直接量；只能钉住它的**结构前提**：
+// 说明与标题同处 .opt-body 列容器、且说明是标题行（.opt-head）的下一个兄弟——
+// 两者同列 + head 在前，即「独占下一行且左边界一致」。谁把 .desc 挪回 .ask-opt 平级就会红。
+describe("AskPanel 选项说明独占下一行（结构契约）", () => {
+  afterEach(() => {
+    cleanup();
+    calls.length = 0;
+    useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+    useRun.setState((s) => {
+      s.tabs = {};
+      s.drafts = {};
+    });
+  });
+
+  /** 断言某形态下所有选项行都满足「desc 在 .opt-body 内、排在 .opt-head 之后」 */
+  function expectDescBelowHead(label: string) {
+    const opt = Array.from(document.querySelectorAll(".ask-opt")).find((el) =>
+      el.textContent?.includes(label),
+    ) as HTMLElement | undefined;
+    expect(opt, `未找到选项行：${label}`).toBeTruthy();
+    const desc = opt!.querySelector(".desc") as HTMLElement | null;
+    expect(desc, `选项 ${label} 没有 .desc 节点`).toBeTruthy();
+    // 同列：desc 的最近列容器祖先就是这一行的 .opt-body
+    expect(desc!.closest(".opt-body"), "desc 必须在 .opt-body 内（与标题同列，才能左边界对齐）").toBeTruthy();
+    const body = desc!.closest(".opt-body") as HTMLElement;
+    // 列容器的第一个元素子节点必须是标题行，desc 紧随其后 → 说明落在标题下一行
+    expect(body.firstElementChild?.className).toContain("opt-head");
+    expect(body.firstElementChild?.nextElementSibling).toBe(desc);
+    // 指示物 / 序号仍是 .ask-opt 的直系子元素（整行可点与选中态高亮都依赖这层结构）
+    const direct = Array.from(opt!.children).map((c) => (c as HTMLElement).className);
+    expect(direct.some((c) => c.includes("opt-box")), "opt-box 必须是 .ask-opt 直系子元素").toBe(true);
+    expect(direct.some((c) => c.includes("idx")), "idx 必须是 .ask-opt 直系子元素").toBe(true);
+    expect(direct.some((c) => c.includes("opt-body")), "opt-body 必须是 .ask-opt 直系子元素").toBe(true);
+  }
+
+  it("单选（single: true）：说明独占下一行、与标题左边界对齐", () => {
+    seedAsk({
+      askId: "lay1", kind: "ask",
+      questions: [{
+        id: "q1", question: "选一个", single: true,
+        options: [{ id: "a", label: "走只读索引", description: "避开 load() 的写副作用" }],
+      }],
+    });
+    render(<AskPanel />);
+    expectDescBelowHead("走只读索引");
+  });
+
+  it("多选（single: false）：说明独占下一行、与标题左边界对齐", () => {
+    seedAsk({
+      askId: "lay2", kind: "ask",
+      questions: [{
+        id: "q1", question: "选择要执行的模块", single: false,
+        options: [{ id: "ma", label: "模块甲", description: "改动最小但覆盖面窄" }],
+      }],
+    });
+    render(<AskPanel />);
+    expectDescBelowHead("模块甲");
+  });
+
+  it("命令审批（allow/always/deny）：说明同样独占下一行", () => {
+    seedAsk({ askId: "lay3", kind: "approval", title: "高危命令确认", detail: "$ cmd", allowAlways: false });
+    render(<AskPanel />);
+    expectDescBelowHead("允许");
+    expectDescBelowHead("拒绝");
+  });
+
+  it("推荐 chip 留在标题行内（不与说明同行混排）", () => {
+    seedAsk({
+      askId: "lay4", kind: "ask",
+      questions: [{
+        id: "q1", question: "选一个",
+        options: [
+          { id: "rec", label: "推荐项", description: "这样最稳", recommended: true },
+          { id: "other", label: "另一项", description: "那样更快" },
+        ],
+      }],
+    });
+    render(<AskPanel />);
+    const pill = document.querySelector(".rec-pill") as HTMLElement;
+    expect(pill?.textContent).toBe("推荐");
+    // chip 在 .opt-head（标题行）内，且不是 .desc 的一部分
+    expect(pill?.closest(".opt-head")).toBeTruthy();
+    expect(pill?.closest(".desc")).toBeNull();
+    // 未标 recommended 的选项不渲染 chip
+    expect(document.querySelectorAll(".rec-pill")).toHaveLength(1);
+  });
+
+  it("点击说明文字同样选中该选项（整行可点靠冒泡，结构改动不得误伤）", () => {
+    seedAsk({
+      askId: "lay5", kind: "ask",
+      questions: [{
+        id: "q1", question: "选一个", single: true,
+        options: [{ id: "a", label: "只读索引", description: "点我这段说明也会选中上面那项" }],
+      }],
+    });
+    render(<AskPanel />);
+    const desc = document.querySelector(".ask-opt .desc") as HTMLElement;
+    fireEvent.click(desc);
+    // 单选互斥：该行被勾选（.opt-box.radio.checked）
+    expect(document.querySelectorAll(".opt-box.radio.checked")).toHaveLength(1);
+    // 非批准形态点击只选中、不直提
+    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false);
+    fireEvent.click(btnByText("提交回答"));
+    return waitFor(() => expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["a"]));
+  });
+});

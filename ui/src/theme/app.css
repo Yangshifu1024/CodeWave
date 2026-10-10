@@ -639,27 +639,40 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .ask-options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .ask-opt {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 8px;
+  display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: 8px;
   cursor: pointer; font-size: 13px; min-width: 0;
+  /* [docs/ask-option-desc-wrap] 选项行首行盒高度显式声明：idx / 指示物 / 标签首行基线由此对齐，
+     不依赖上游继承（.ask-card 若另有 line-height 会让首行错位）。标题行自身的基线对齐在 .opt-head 内做。 */
+  line-height: 18px;
 }
-.ask-opt:hover { background: var(--ws-highlight); }
-.ask-opt.kb { background: var(--ws-highlight); }
-.ask-opt.picked { background: rgba(127, 127, 127, 0.16); }
+/* 关注中的选项行加左侧墨条（hover / 键盘高亮 / 已选中）——[docs/ask-option-desc-wrap]：
+   用 inset 阴影而非 border-left，不占布局宽度（各选项行内容左边界保持一致）、随 8px 圆角裁剪。
+   静止态不加：推荐项的常显区分由 .rec-pill chip 承担，满屏墨条只是噪音。
+   三条墨条声明并入各自的背景规则（每个选择器只留一条规则体，样式契约测试 ruleBody 取首个匹配）。 */
+.ask-opt:hover { background: var(--ws-highlight); box-shadow: inset 2px 0 0 var(--ws-accent); }
+.ask-opt.kb { background: var(--ws-highlight); box-shadow: inset 2px 0 0 var(--ws-accent); }
+.ask-opt.picked { background: rgba(127, 127, 127, 0.16); box-shadow: inset 2px 0 0 var(--ws-accent); }
 .ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
 .ask-opt .label { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
-/* 选项描述完整折行显示（[docs/ask-option-desc-wrap](../../../docs/ask-option-desc-wrap.md)）：
-   原为单行省略号（`nowrap` + `ellipsis`），长说明只显半句——用户看不全“选它会发生什么”。
-   现在与标签同行时占据剩余宽度（flex-basis 240px，短描述保持紧凑的单行观感）；
-   剩余列宽不足 240px（长标签 / 窄窗口）时整段落到下一行并完整折行，不再截断。 */
+/* 选项内容列容器（[docs/ask-option-desc-wrap]）：把「标题行」与「说明行」上下排布并左对齐——
+   .ask-opt 本身只是 [指示物 | 序号 | 列容器] 三段，换行与缩进对齐全部由这一层负责。 */
+.ask-opt .opt-body { flex: 1; flex-direction: column; min-width: 0; row-gap: 3px; }
+.ask-opt .opt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+/* 选项说明：**独占标题下一行**并与标题左边界对齐（[docs/ask-option-desc-wrap](../../../docs/ask-option-desc-wrap.md)）。
+   此前是「同行优先」（flex: 1 1 240px + .ask-opt 的 flex-wrap: wrap）：描述挤在标签右侧剩余列宽里、
+   被压成窄长条逐字折行。缩进对齐无法用纯 CSS 实现（第二行会左对齐到行内边距而非标签起点），
+   故改为 JSX 加一层 .opt-body 列容器、描述作为块级兄弟落下——不限高、不限长、完整折行。 */
 .ask-opt .desc {
-  flex: 1 1 240px; min-width: 0;
+  min-width: 0;
   color: var(--ws-dim); font-size: 12px; line-height: 1.5;
   white-space: normal; overflow-wrap: anywhere;
 }
 /* ---------- [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：选项前导指示物——多选=复选框 / 单选=单选框；视觉直接声明交互语义。
    纯视觉零事件（整行可点）；picked = 墨色 accent 填充 + 反色对勾线 / 居中墨点，亮暗自适应 ---------- */
 .ask-opt .opt-box {
-  flex: none; width: 14px; height: 14px; align-self: center; position: relative;
+  /* 选项行变多行后按「垂直居中于整行」会把指示物压向说明行；改为对齐首行（margin-top 补足 14px 指示物
+     在 18px 行盒内的居中偏移），始终指向标题。 */
+  flex: none; width: 14px; height: 14px; align-self: flex-start; margin-top: 2px; position: relative;
   pointer-events: none; border: 1.5px solid var(--ws-border); background: var(--ws-panel);
   transition: border-color 0.15s, background 0.15s;
 }
@@ -676,10 +689,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   content: ""; position: absolute; inset: 0; margin: auto; width: 6px; height: 6px;
   border-radius: 50%; background: var(--ws-accent);
 }
-/* 推荐标记：✓ 后缀退役（与对勾视觉混淆）→ 小描边 pill（与 .ask-tag 同语言） */
+/* 推荐标记：✓ 后缀退役（与对勾视觉混淆）→ chip（[docs/ask-option-desc-wrap]）。
+   原为 11px + --ws-dim 描边灰字，在 13px 标题旁几乎读不出是标签；改为 accent 同色系 chip 后一眼可辨。
+   底色用 color-mix 半透明而非 accent 实心：--ws-accent 取自 antd colorPrimaryText（ui/src/theme/bridge.tsx），
+   是**前景色**且暗色下为提亮灰，当底会翻成亮块、「反色字」在暗色下则是暗底暗字。
+   半透明底 + accent 字属同色系明度分层，亮/暗两主题都可读（暗色下字底对比约 5.6:1，过 AA）。 */
 .ask-opt .rec-pill {
   flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px;
-  color: var(--ws-dim); border: 1px solid var(--ws-border);
+  color: var(--ws-accent); background: color-mix(in srgb, var(--ws-accent) 16%, transparent);
 }
 /* 题干 = 卡片视觉入口：大一档字号 + medium 字重（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)；原 13px/400 与正文无层级） */
 .ask-card .q-text { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--ws-text-1); line-height: 1.55; }

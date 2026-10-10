@@ -26,10 +26,47 @@ describe("AskPanel 选项描述排版契约", () => {
     expect(body).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
-  it("描述与标签同行时自动占满剩余宽度，列宽不足则整段落下一行", () => {
-    expect(ruleBody(".ask-opt")).toMatch(/flex-wrap:\s*wrap/);
-    expect(ruleBody(".ask-opt .desc")).toMatch(/flex:\s*1 1 240px/);
+  it("描述独占下一行：由 .opt-body 列容器承载换行，且左边界与标题对齐", () => {
+    // 缩进对齐（第二行对齐到标签起点）纯 CSS 做不到，必须靠 JSX 加一层列容器——
+    // 故这里断言容器存在且为列向，而不是断言某个 flex 基准宽度。
+    const body = ruleBody(".ask-opt .opt-body");
+    expect(body).toMatch(/flex:\s*1/);
+    expect(body).toMatch(/flex-direction:\s*column/);
+    expect(body).toMatch(/min-width:\s*0/);
+    // 标题行：标签与推荐 chip 同行、基线对齐；flex-wrap 保留在**这一层**（超长标题自身仍可折行）
+    const head = ruleBody(".ask-opt .opt-head");
+    expect(head).toMatch(/display:\s*flex/);
+    expect(head).toMatch(/align-items:\s*baseline/);
+    expect(head).toMatch(/gap:\s*8px/);
+    // 描述已是列容器内的块级项：不得再有同行 flex 基准宽度（旧实现是 flex: 1 1 240px）
+    expect(ruleBody(".ask-opt .desc")).not.toMatch(/flex:\s*1 1/);
     expect(ruleBody(".ask-opt .desc")).toMatch(/min-width:\s*0/);
+    // 换行职责已从 .ask-opt 移交列容器：行本身不再需要 wrap
+    expect(ruleBody(".ask-opt")).not.toMatch(/flex-wrap:\s*wrap/);
+    expect(ruleBody(".ask-opt")).toMatch(/align-items:\s*flex-start/);
+  });
+
+  it("多行下指示物对齐标题首行（不随描述变长而漂移）", () => {
+    expect(ruleBody(".ask-opt .opt-box")).toMatch(/align-self:\s*flex-start/);
+    // 首行行盒高度显式声明，不依赖上游继承
+    expect(ruleBody(".ask-opt")).toMatch(/line-height:\s*18px/);
+  });
+
+  it("关注中的选项行显示左侧墨条（inset 阴影，不占布局宽度）", () => {
+    // 分三条写：ruleBody 是逐字面正则匹配，逗号合并选择器取不到规则体
+    for (const sel of [".ask-opt:hover", ".ask-opt.kb", ".ask-opt.picked"]) {
+      expect(ruleBody(sel)).toMatch(/box-shadow:\s*inset 2px 0 0 var\(--ws-accent\)/);
+    }
+  });
+
+  it("推荐 chip 走 accent 同色系半透明底（暗色下不翻成亮块），且无硬编码色值", () => {
+    const body = ruleBody(".ask-opt .rec-pill");
+    // 不能用 accent 实心底：--ws-accent 是 antd colorPrimaryText 派生的**前景色**、暗色下为提亮灰，
+    // 当底会翻成亮块。半透明底 + accent 字属同色系明度分层，两主题都可读。
+    expect(body).toMatch(/background:\s*color-mix\(in srgb, var\(--ws-accent\) 16%, transparent\)/);
+    expect(body).toMatch(/color:\s*var\(--ws-accent\)/);
+    expect(body).not.toMatch(/#[0-9a-fA-F]{3,6}/);
+    expect(body).not.toMatch(/border:\s*1px/);
   });
 
   it("长标签不再把描述挤到看不见（标签可收缩并可断行）", () => {
