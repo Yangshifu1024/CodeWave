@@ -454,6 +454,8 @@ export default {
     stop: "停止该子代理",
     endedEarly: "提前结束",
     endedBudget: "预算耗尽",
+    /* partial = 跑满步数预算才交汇报：拿到了成果但未必做完，不得与「真做完」同档绿勾 */
+    endedPartial: "预算耗尽·未完成",
     /* 抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）：mode = 档位名（复用 composer.mode* 键） */
     modeLine: "权限模式：{{mode}}",
     modeInherited: "（继承自主会话）",

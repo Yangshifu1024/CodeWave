@@ -81,8 +81,8 @@ export interface SubView {
   status: "running" | "done" | "error";
   /** 收尾时的真实已启动步数（sub:done 刷新，纠正轮询采样滞后） */
   stepsUsed?: number;
-  /** 收尾原因（sub:done）：report = 正常汇报收尾；budget = 预算耗尽；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示 */
-  ended?: "report" | "budget" | "no_report";
+  /** 收尾原因（sub:done）：report = 正常汇报收尾；partial = 跑满预算才交汇报（成果在手未必做完）；budget = 预算耗尽未交汇报；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)） */
+  ended?: "report" | "partial" | "budget" | "no_report";
   /** 运行摘录（sub:step 采样） */
   detail?: string;
   /** 当前权限档位（sub:step 每步上报；归档 / 旧数据缺省 → 抽屉不渲染档位行） */

@@ -169,8 +169,13 @@ function applyToolOutcomes(map: Record<string, any>, rows: ToolOutcomeRow[]): vo
   }
 }
 
+/** 合法的 `ended` 线协议值集合（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+ *  恢复路径读到的是**任意历史 JSON**，白名单校验后筛不到就当缺省（绿勾）——不得用 `as` 强转放行未知值。 */
+const SUB_ENDED_VALUES = new Set(["report", "partial", "budget", "no_report"]);
+
 /** 子代理卡改名：合成 key（`restored:<callKey>`，历史文本被截断时无从得知真实 sub_id）→ sidecar 里的真实 sub_id。
- *  不改名抽屉就拉不到真实过程流（load_subagent_history 认真实 id）；顺带补回被父历史截断的 report。 */
+ *  不改名抽屉就拉不到真实过程流（load_subagent_history 认真实 id）；顺带补回被父历史截断的 report
+ *  与收尾形态（`ended` / `steps_used`）——不补则重开历史会话时所有子代理卡恒显绿勾。 */
 function renameRestoredSubs(t: TabRunState, rows: ToolOutcomeRow[], subByKey: Record<string, string>): void {
   for (const row of rows) {
     const from = subByKey[row.call_id];
@@ -189,11 +194,22 @@ function renameRestoredSubs(t: TabRunState, rows: ToolOutcomeRow[], subByKey: Re
     if (sv) {
       sv.subId = to;
       if (typeof data.report === "string") sv.report = data.report;
+      applyRestoredEnded(sv, data);
     }
     const st = t.subStreams[from];
     if (st && !t.subStreams[to]) t.subStreams[to] = st;
     delete t.subStreams[from];
   }
+}
+
+/** 从子代理工具出参回填收尾形态、真实步数与 token 数（历史文本解析得出来的场合直接用；sidecar 回填共用本函数）。
+ *  字段可能不存在（更早的会话 / 被截断的出参）→ 保持 `undefined` / 0，缺省仍是绿勾，向后兼容不得破坏。 */
+function applyRestoredEnded(sv: SubView, data: any): void {
+  if (!data || typeof data !== "object") return;
+  if (typeof data.ended === "string" && SUB_ENDED_VALUES.has(data.ended)) sv.ended = data.ended;
+  if (typeof data.steps_used === "number" && Number.isFinite(data.steps_used)) sv.step = data.steps_used;
+  // tokens 与 steps_used 同层出参（subagent.rs 的 ToolOutcome.data），一并回填则重开会话不丢 token 数
+  if (typeof data.tokens === "number" && Number.isFinite(data.tokens)) sv.tokens = data.tokens;
 }
 
 /** 一次批量 IPC 拉回完整出参并回填：主会话卡片与子代理过程抽屉（subId）两处共用。
@@ -366,10 +382,14 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
             // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：subagent 调用 → 子代理卡片锚点（替代通用工具卡）；归档卡可点击回看完整过程
             let subId: string | null = null;
             let report: string | undefined;
+            let endedData: any;
             try {
               const d = JSON.parse(toolResults[callKey]?.content ?? "");
               if (d && typeof d.sub_id === "string") subId = d.sub_id;
               if (d && typeof d.report === "string") report = d.report;
+              // 收尾形态与真实步数一并从出参取（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+              // 不取则重开历史会话时所有子代理卡恒显绿勾（撞顶 / 提前退出都看不出来）；合法值校验在 applyRestoredEnded。
+              endedData = d;
             } catch {
               /* 旧会话 outcome 被截断/缺失：回退合成 key；抽屉降级展示 task + report（无过程流） */
             }
@@ -377,7 +397,7 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
             // 记下「callKey → 当前 sub key」：合成 key 待 sidecar 回填后改名成真实 sub_id（见 renameRestoredSubs）
             subByKey[callKey] = key;
             timeline.push({ kind: "sub", subId: key });
-            restoredSubs.push({
+            const restored: SubView = {
               subId: key,
               role: args.role ?? "agent",
               name: null,
@@ -389,7 +409,9 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
               lastTools: [],
               status: "done",
               report,
-            });
+            };
+            applyRestoredEnded(restored, endedData);
+            restoredSubs.push(restored);
             restoredStreams[key] = { timeline: [], toolsMap: {}, status: "done", gen: 0, loaded: false };
           } else {
             timeline.push({ kind: "tool", callKey });
