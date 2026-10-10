@@ -18,7 +18,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "../../i18n";
 import { ipc } from "../../ipc/client";
 import type { ProjectEntry, ScheduledTask, SessionMeta } from "../../ipc/types";
-import { MANAGED_DIR_NAME } from "../../utils/path";
+import { MANAGED_DIR_NAME, baseName } from "../../utils/path";
 import { useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
 import { useUi } from "../../stores/ui";
@@ -190,7 +190,12 @@ export default function ProjectNav() {
 
   async function pickDirectory() {
     const dir = await ipc.selectWorkspaceDir();
-    if (dir) setProjDir(dir);
+    // 提前 return 是硬要求：baseName(null) 会因其 `|| p` 兜底得到字面量 "null"，
+    // 用户点「取消选择目录」就会把项目名填成 null 这个字符串
+    if (!dir) return;
+    setProjDir(dir);
+    // 新建项目时名称留空 → 用目录名兜底（编辑已有项目不联动：改个路径不该顺手改名）
+    if (editing === null && !projName.trim()) setProjName(baseName(dir));
   }
 
   async function saveProject() {
@@ -204,6 +209,9 @@ export default function ProjectNav() {
         // 新项目数据目录 = <主目录>/.codewave（需求 1.5）；既有项目保留原值
         data_dir: editing?.data_dir ?? `${projDir}/${MANAGED_DIR_NAME}`,
         created_at: editing?.created_at ?? new Date().toISOString(),
+        // 刻意不写 `?? []`：undefined 不上 wire → 后端识别为「未携带」→ 沿用磁盘旧值
+        // （此前这里漏抄该字段，导致前端每次保存都把用户「始终允许的目录」静默清空）
+        allowed_dirs: editing?.allowed_dirs,
       };
       if (editing) {
         await useSessions.getState().updateProject(entry);

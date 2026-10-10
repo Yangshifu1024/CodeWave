@@ -66,7 +66,9 @@
 
 - 后端 M2：AGENTS.md/CODEWAVE.md/CODEGRAPH 等项目指令文件只扫主目录（extra 根的规则不注入）——涉及提示词结构与 cache 断点，需单独设计
 - 后端 M6：build_stream_request 每步重复读注册表/记忆（与 [docs/code-review-findings](./code-review-findings.md) M11 cache-first 快照同方向）
-- 后端 L1 相对路径跨根歧义静默主目录胜出、L2 roots/extra_roots 双份事实、L3 `<project>` 段格式串与 context.rs 重复、L4 索引 LRU 淘汰后项目会话降级、L5 save_project 后端零校验、L7 Windows 路径无 CI 验证
+- 后端 L1 相对路径跨根歧义静默主目录胜出、L2 roots/extra_roots 双份事实、L3 `<project>` 段格式串与 context.rs 重复、L4 索引 LRU 淘汰后项目会话降级、L7 Windows 路径无 CI 验证
+- 后端 L5 save_project 后端零校验 —— **已收口**（[project-name-autofill-and-allowed-dirs](./project-name-autofill-and-allowed-dirs.md)）：校验分三层，host 命令 `validate_save_input` 管用户输入准入、core `save_project_input` 兜底空主目录（防 CWD 污染）、内部 `save_project` **刻意不拦空名**（否则 `create_session` 回写会让存量空名项目建不出会话）；命令体抽 `persist_project` 让接线进测试边界
+- 本批新登记（同上文档）：改主目录致项目从左栏消失（`data_dir` 保留旧目录 + 索引指新目录 → 重启读不到，已由 `normalize_data_dir` 第三分支修复）、空主目录在进程 CWD 下建目录且索引被跳过（项目永久不可见也删不掉，已在 mkdir 前 bail）、`allowed_dirs` 静默丢失（前端类型无此字段 + 手抄漏字段 + 后端整份覆盖，已用三态入参 DTO 修复并补双向契约测试）
 - 前端 M-7 已修（见上）；M-10 Escape 作用域残留（antd 静态 confirm 场景）、L-1/L-3（`/` 前缀回车语义）、L-4 key 用索引、L-6 GitDiffModal 无 catch、L-7 SettingsModal 原地改 state、L-8 死代码 `st()`/恒等三元、L-9 dirName 五处重复、L-10 冒烟 fixture 缺 project_id/roots、L-11 hljs 全量进主 chunk、L-12 窄选择器/smooth scroll
 - 测试盲区：fence 数值写目标对抗用例、delete_project 命令级级联竞态用例、mcp 项目级覆盖用例（config merging 现仅 user vs 代码仓）
 

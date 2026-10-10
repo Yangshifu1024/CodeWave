@@ -296,6 +296,10 @@ export interface ProjectEntry {
   directory: string;
   data_dir?: string | null;
   created_at: string;
+  /** 已允许访问的外部目录：用户拖入项目目录外文件时选「始终允许」后记在这里。
+   *  **wire 语义（务必配注释）**：字段缺失（undefined）= 本次未携带 → 后端沿用磁盘旧值；
+   *  传 `[]` = 显式清空。故组装 entry 时**不要**写 `?? []`。 */
+  allowed_dirs?: string[];
 }
 
 // ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)） ----------

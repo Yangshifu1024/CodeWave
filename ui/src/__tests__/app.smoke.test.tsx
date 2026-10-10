@@ -49,6 +49,14 @@ const resolveAskLog: any[] = [];
 // Controls the activate_and_show return value (toggles the titlebar fallback case; null → frontend falls back to custom)
 const titlebarState: { result: "custom" | "native" | null } = { result: null };
 
+// Controls the select_workspace_dir return value (null → emulate cancelling directory selection; the new
+// name-autofill case needs to pin down the "cancel → must not become the string null" early-return)
+const selectDirState: { value: string | null } = { value: "/tmp/ws" };
+
+// Captures save_project payloads (guards allowed_dirs no longer being silently dropped; invoke arg shape is
+// invoke("save_project", { entry }) per ipc/client.ts:15)
+const saveProjectLog: any[] = [];
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: any) => {
     switch (cmd) {
@@ -57,9 +65,9 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "get_config": return fixtureConfig;
       case "list_sessions": return [fixtureSession];
       case "list_projects": return [];
-      case "save_project": return null;
+      case "save_project": saveProjectLog.push(args?.entry); return null;
       case "delete_project": return { deleted_sessions: 0 };
-      case "select_workspace_dir": return "/tmp/ws";
+      case "select_workspace_dir": return selectDirState.value;
       case "load_session": return fixtureMessages;
       case "git_status": return { repo: false, entries: [] };
       case "git_user_info": return { name: "测试用户", email: "tester@example.com" };
@@ -166,6 +174,9 @@ afterEach(() => {
   localStorage.removeItem("ws_right_bar_open");
   // Clear run state (incl. ask) between cases: since [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) an active ask covers the Composer; leftovers would hide the input from later cases
   useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
+  // Mock capture state also resets per case: polluting the directory-select/project-save mock with the previous case's state breaks ordering assertions
+  selectDirState.value = "/tmp/ws";
+  saveProjectLog.length = 0;
 });
 
 describe("App 渲染冒烟", () => {
@@ -486,6 +497,152 @@ describe("App 渲染冒烟", () => {
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(screen.getByText("我的项目")).toBeTruthy(), { timeout: 3000 });
+    // 回归：选择目录不得覆盖已手输的名称（自动填充只在名称为空时发生）
+    expect((screen.getByPlaceholderText("例如：CodeWave") as HTMLInputElement).value).toBe("我的项目");
+  });
+
+  // ---------- 项目名称按目录名自动填充（零新增文案；行为全部靠输入框 value 断言） ----------
+  /** 找到项目弹框里的「选择目录」按钮（antd 两字按钮会插空格，先去空白再 includes） */
+  function pickDirBtn(): HTMLButtonElement {
+    const b = Array.from(document.querySelectorAll("button")).find(
+      (x) => (x.textContent ?? "").replace(/\s/g, "").includes("选择目录"),
+    ) as HTMLButtonElement | undefined;
+    if (!b) throw new Error("找不到按钮：选择目录");
+    return b;
+  }
+
+  /** 弹框里的「保存」按钮 */
+  function saveBtn(): HTMLButtonElement {
+    return Array.from(document.querySelectorAll("button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === "保存",
+    ) as HTMLButtonElement;
+  }
+
+  function nameBox(): HTMLInputElement {
+    return screen.getByPlaceholderText("例如：CodeWave") as HTMLInputElement;
+  }
+
+  /** 打开「新建项目」弹框并返回项目名输入框 */
+  async function openCreateModal(): Promise<HTMLInputElement> {
+    fireEvent.click(document.querySelector('button[title="新建项目"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.getByText("项目名称")).toBeTruthy());
+    return nameBox();
+  }
+
+  /** 清掉弹框/项目列表状态（弹框关闭动画在 happy-dom 不跑，只复位 store + 重挂） */
+  it("新建项目 + 名称留空：选目录后自动填入目录名", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    fireEvent.click(pickDirBtn());
+    // 回归：新建时名称为空应被目录末段名兜底（免得用户建项目必先手输一个名字）
+    await waitFor(() => expect(name.value).toBe("ws"));
+    // 名称非空后保存按钮解禁（否则自动填了名还存不了，等于没填）
+    await waitFor(() => expect(saveBtn().disabled).toBe(false));
+  });
+
+  it("新建项目 + 已手输名称：选目录不覆盖", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    fireEvent.change(name, { target: { value: "我的项目" } });
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(screen.getByText("/tmp/ws")).toBeTruthy());
+    // 回归：用户已敲的名字永远优先于目录名兜底
+    expect(name.value).toBe("我的项目");
+  });
+
+  it("新建项目 + 名称仅空白：视为空，选目录后自动填目录名", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    fireEvent.change(name, { target: { value: "   " } });
+    fireEvent.click(pickDirBtn());
+    // 回归：判据必须用 trim()（与保存按钮禁用判据同表达式），否则空白名会永远压住自动填充
+    await waitFor(() => expect(name.value).toBe("ws"));
+  });
+
+  it("新建项目：第二次选目录不改名（名称非空即永不改动）", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(name.value).toBe("ws"));
+    selectDirState.value = "/tmp/other";
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(screen.getByText("/tmp/other")).toBeTruthy());
+    // 回归：零状态语义——一旦有了名称（哪怕是自动填的）就不再跟随目录变；否则用户的改名会被静默回滚
+    expect(name.value).toBe("ws");
+  });
+
+  it("新建项目：清掉目录 Tag 后名称保留，重选目录也不改名", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(name.value).toBe("ws"));
+    fireEvent.click(document.querySelector(".ant-tag-close-icon") as HTMLElement);
+    await waitFor(() => expect(saveBtn().disabled).toBe(true));
+    // 回归：清目录不得顺手清名称
+    expect(name.value).toBe("ws");
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(saveBtn().disabled).toBe(false));
+    // 回归：重选目录（名字非空）不更新名称
+    expect(name.value).toBe("ws");
+  });
+
+  it("新建项目：取消选择目录时名称不得变成字符串 null", async () => {
+    await mountApp();
+    const name = await openCreateModal();
+    selectDirState.value = null;
+    fireEvent.click(pickDirBtn());
+    await new Promise((r) => setTimeout(r, 100));
+    // 回归：baseName 的 `|| p` 兜底会把 null 变成字面量 "null"，必须提前 return
+    expect(name.value).toBe("");
+    expect(saveBtn().disabled).toBe(true);
+  });
+
+  it("编辑已有项目：选目录完全不联动名称", async () => {
+    await mountApp();
+    useSessions.setState({
+      projects: [{ id: "p1", name: "已有项目", directory: "/tmp/a", created_at: "2026-08-30T00:00:00Z" }],
+    });
+    selectDirState.value = "/tmp/b";
+    fireEvent.click(document.querySelector('button[title="管理项目"]') as HTMLButtonElement);
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已有项目"));
+    fireEvent.click(document.querySelector('button[title="编辑目录/重命名"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.getByText("编辑项目")).toBeTruthy());
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(screen.getByText("/tmp/b")).toBeTruthy());
+    // 回归：改个路径不该顺手改名（仅新建时联动）
+    expect(nameBox().value).toBe("已有项目");
+  });
+
+  it("编辑已有项目：保存时 payload 携带原 allowed_dirs（不再静默丢失）", async () => {
+    await mountApp();
+    useSessions.setState({
+      projects: [{
+        id: "p1", name: "已有项目", directory: "/tmp/a",
+        created_at: "2026-08-30T00:00:00Z", allowed_dirs: ["/tmp/outside"],
+      }],
+    });
+    fireEvent.click(document.querySelector('button[title="管理项目"]') as HTMLButtonElement);
+    await waitFor(() => expect(document.body.textContent ?? "").toContain("已有项目"));
+    fireEvent.click(document.querySelector('button[title="编辑目录/重命名"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.getByText("编辑项目")).toBeTruthy());
+    fireEvent.change(nameBox(), { target: { value: "改名后" } });
+    fireEvent.click(saveBtn());
+    // 回归：前端组装 entry 时漏抄 allowed_dirs → 用户「始终允许的目录」每次保存都被静默清空
+    await waitFor(() => expect(saveProjectLog.length).toBe(1), { timeout: 3000 });
+    expect(saveProjectLog[0]?.allowed_dirs).toEqual(["/tmp/outside"]);
+  });
+
+  it("新建项目：保存时 payload 不携带 allowed_dirs（undefined → 后端沿用旧值）", async () => {
+    await mountApp();
+    await openCreateModal();
+    fireEvent.click(pickDirBtn());
+    await waitFor(() => expect(nameBox().value).toBe("ws"));
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(saveProjectLog.length).toBe(1), { timeout: 3000 });
+    // 回归：绝不能写 `?? []` —— 后端语义是「键缺失 = 未携带」而「[] = 显式清空」，
+    // 写成 [] 就会把用户已有allowed_dirs清空；这里必须是 undefined
+    // （对象上可能是 `allowed_dirs: undefined` 的自有键，JSON 序列化时会被抹掉，故 wire 上即「未携带」）
+    expect(saveProjectLog[0]?.allowed_dirs).toBeUndefined();
   });
 
   it("删除项目：影响说明确认后级联删除", async () => {

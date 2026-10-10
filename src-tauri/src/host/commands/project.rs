@@ -10,12 +10,27 @@ pub async fn list_projects(
 }
 
 /// 保存（新增或更新）项目；data_dir 随保存归一化持久化。
+/// 入参用 ProjectSaveInput（allowed_dirs 三态：缺省 = 沿用旧值），落盘仍是 ProjectEntry。
+/// 校验在这里做（IPC 命令只做校验 + 转调 core）；**刻意不校验 name 以外的历史脏数据**——
+/// 内部回写路径（create_session）不经过本命令，core 层也不拦空名，历史项目仍可建会话。
 #[tauri::command]
 pub async fn save_project(
     core: Core<'_>,
-    entry: crate::core::projects::ProjectEntry,
+    entry: crate::core::projects::ProjectSaveInput,
 ) -> Result<(), String> {
-    crate::core::projects::save_project(&core.data_dir, &entry).map_err(err)
+    persist_project(&core.data_dir, &entry)
+}
+
+/// 命令体的「先校验、再转调 core」抽成同步函数，让**接线顺序**本身进测试边界：
+/// 只测 core 的 `validate_save_input` 纯函数的话，把命令体里这行校验删掉仍然全绿，
+/// 而 name 在 core 层是刻意不拦的（历史空名项目要能建会话）——空名项目就会从 IPC 入口直接落盘。
+/// （与 `apply_page_save_shape` 同一用意：原缺陷是「入口少做了一次」，只测辅助函数守不住调用点。）
+fn persist_project(
+    data_dir: &std::path::Path,
+    input: &crate::core::projects::ProjectSaveInput,
+) -> Result<(), String> {
+    crate::core::projects::validate_save_input(&input.name, &input.directory).map_err(err)?;
+    crate::core::projects::save_project_input(data_dir, input).map_err(err)
 }
 
 // ---------- 配置 ----------
@@ -318,6 +333,65 @@ mod tests {
         assert_eq!(updated.ui.language, "en-US");
         assert_eq!(updated.ui.ai_language.as_deref(), Some("English"));
         assert_eq!(updated.compact_threshold, 0.8);
+    }
+
+    /// save_project 命令体的接线（命令调用的同一个函数）：空名 / 空主目录必须在**落盘前**被拦下。
+    /// 🔴 防的回归：把命令体的校验那行删掉——只测 core 纯函数时全绿，而 name 在 core 层刻意不拦，
+    /// 空名项目就能从 IPC 入口落盘（L5「save_project 后端零校验」的回归入口）。
+    #[test]
+    fn save_project_command_validates_before_writing() {
+        // 主目录也放临时目录里：万一校验被删，落盘只会脏到 tempdir，绝不碰用户目录或进程 cwd
+        let data_dir = tempfile::tempdir().expect("临时数据目录");
+        let home = tempfile::tempdir().expect("临时项目主目录");
+        let input = |name: &str, directory: &str| crate::core::projects::ProjectSaveInput {
+            id: "p1".into(),
+            name: name.into(),
+            directory: directory.into(),
+            data_dir: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            allowed_dirs: None,
+        };
+        let managed = home.path().join(crate::core::config::MANAGED_DIR_NAME);
+        let index = data_dir.path().join("projects").join("directories.json");
+
+        // 空项目名（含全空白）
+        for name in ["", "   "] {
+            let e = persist_project(data_dir.path(), &input(name, home.path().to_str().unwrap()))
+                .expect_err("空项目名必须被拦下");
+            assert!(e.contains("项目名称"), "应报名称错，实际：{e}");
+        }
+        // 空主目录（含全空白）
+        for dir in ["", "   "] {
+            let e = persist_project(data_dir.path(), &input("真实项目", dir))
+                .expect_err("空项目主目录必须被拦下");
+            assert!(e.contains("项目主目录"), "应报主目录错，实际：{e}");
+        }
+
+        // 失败路径无副作用：既没写 project.json（连托管目录都没建），也没登记发现索引
+        assert!(
+            !managed.join("project.json").exists(),
+            "校验失败不得留下 project.json"
+        );
+        assert!(!index.exists(), "校验失败不得写入发现索引");
+        assert!(
+            crate::core::projects::load(data_dir.path()).is_empty(),
+            "校验失败后不得有项目可被列出"
+        );
+
+        // 合法值照常落盘（否则上面前面的断言会因「压根没写」而失去意义）
+        persist_project(
+            data_dir.path(),
+            &input("真实项目", home.path().to_str().unwrap()),
+        )
+        .expect("合法入参必须保存成功");
+        assert!(
+            managed.join("project.json").is_file(),
+            "合法入参必须落 project.json"
+        );
+        assert!(index.is_file(), "合法入参必须登记发现索引");
+        let listed = crate::core::projects::load(data_dir.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "真实项目");
     }
 
     /// 旧配置没这两个字段也必须能读（serde default 向前兼容，不得报错）。
