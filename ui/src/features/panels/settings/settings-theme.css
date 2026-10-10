@@ -561,6 +561,31 @@
 .settings-theme-root .settings-provider-action-button { width: 100%; }
 .settings-theme-root .settings-provider-delete.ant-btn-dangerous { color: var(--ws-text-2); }
 .settings-theme-root .settings-provider-empty { margin: 24px 0; }
+/* 子代理模型覆盖行：与 .settings-collection-row 同规格——
+   行纵向 padding + 行间 1px 分隔线（末行去线）+ space-between 把控件推到右缘。
+   角色名列 flex:1 + 省略号，Select 走 .w-wide 宽度档（勿在 SubagentModelsPanel 里写内联宽度或 Space 间距）。 */
+.settings-theme-root .subagent-models-panel { display: flex; width: 100%; min-width: 0; flex-direction: column; }
+.settings-theme-root .subagent-models-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--settings-row-gap);
+  padding: var(--settings-row-padding-block) 0;
+  border-bottom: 1px solid var(--ws-border);
+}
+.settings-theme-root .subagent-models-row:last-child { border-bottom: 0; }
+.settings-theme-root .subagent-models-role { flex: 1; min-width: 0; gap: 8px; }
+.settings-theme-root .subagent-models-role strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ws-text-1);
+  font-size: var(--settings-field-title-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-theme-root .subagent-models-readonly-tag.ant-tag { flex: none; margin-inline-end: 0; }
+.settings-theme-root .subagent-models-select { flex: none; }
 .settings-theme-root .settings-collection-info { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 6px; }
 .settings-theme-root .settings-collection-description {
   overflow: hidden;
@@ -727,6 +752,8 @@
   .settings-theme-root .settings-provider-form .w-wide { max-width: 100%; }
   .settings-theme-root .settings-provider-model-editor .settings-provider-model-form { grid-template-columns: minmax(0, 1fr); }
   .settings-theme-root .settings-collection-row { align-items: stretch; flex-direction: column; gap: 12px; }
+  .settings-theme-root .subagent-models-row { align-items: stretch; flex-direction: column; gap: 12px; }
+  .settings-theme-root .subagent-models-select.w-wide { width: 100%; }
   .settings-theme-root .settings-provider-cards { grid-template-columns: minmax(0, 1fr); }
   .settings-theme-root .settings-provider-model { align-items: flex-start; flex-direction: column; gap: 6px; }
   .settings-theme-root .settings-provider-model-details { width: 100%; flex-wrap: wrap; }
