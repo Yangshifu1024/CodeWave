@@ -1,5 +1,9 @@
 //! 批次执行策略（[docs/p0-plan](../../../docs/p0-plan.md) §6.1.1 / §6.3.3）：
-//! Interactive 工具必须独占批次 → 写冲突拒绝 → 文件写串行 / 其余并发上限 4 → panic 兜底。
+//! Interactive 工具按工具名分级独占 → 写冲突拒绝 → 文件写串行 / 其余并发上限 4 → panic 兜底。
+//! —— ask/wait 阻塞用户/阻塞 sleep，与并发工具语义冲突，仍整批 reject；
+//! —— suggest 仅「成功 + emit chip」，与并发工具无副作用，可与 read/grep/list_files 同批
+//!    （[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)）。同批含 ask/wait 与
+//!    suggest 时仍归 ask/wait 路径（整批 reject），避免阻塞 + 收尾语义错乱。
 
 use crate::core::agent::{AgentCore, EventSink, NormalizedCall, SessionRuntime};
 use crate::core::session_log;
@@ -52,19 +56,28 @@ pub async fn execute_batch(
         c.index = i;
     }
 
-    // (1) Interactive 工具必须独占批次
-    let has_interactive = calls
-        .iter()
-        .any(|c| core.tools.get(&c.name).map(|t| t.kind()) == Some(ToolKind::Interactive));
-    if has_interactive && calls.len() > 1 {
+    // (1) Interactive 工具独占批次——按工具名分级（[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)）：
+    //   - ask / wait：阻塞用户/阻塞 sleep，与并发工具语义冲突，整批 reject 并 return；
+    //   - suggest：emit chip + 装入 suggest_items 即结束 run，无副作用——与非 Interactive
+    //     工具同批时，仅 reject 非 suggest 调用，suggest 走 (3) 的 spawn 路径正常执行
+    //     （含 §8.1 E_PLAN_PENDING 门——该门在 SuggestTool::run 的 emit 之前判定）。
+    //   - 同批含 ask/wait 与 suggest：归 ask/wait 路径（整批 reject），避免阻塞 + 收尾语义错乱。
+    // outcomes 预分配：(1) 已 reject 的 call 直接置位，让 (3) spawn 循环按
+    // outcomes[i].is_some() 跳过——既不让 reject 的调用二次执行，也避免 JoinSet 重复挂载。
+    let mut outcomes: Vec<Option<(ToolOutcome, Vec<Content>)>> = vec![None; calls.len()];
+    let has_ask_or_wait = calls.iter().any(|c| {
+        let n = c.name.as_str();
+        (n == "ask" || n == "wait")
+            && core.tools.get(n).map(|t| t.kind()) == Some(ToolKind::Interactive)
+    });
+    let has_suggest = calls.iter().any(|c| c.name == "suggest");
+    if has_ask_or_wait && calls.len() > 1 {
+        // 原路径整批 reject：ask/wait 必须独占，行为零变化。
         let mut results = Vec::new();
         for c in &calls {
-            let out = ToolOutcome::err(
-                "E_BATCH_POLICY",
-                "ask/wait/suggest 类工具必须是批次中唯一的调用",
-            );
+            let out = ToolOutcome::err("E_BATCH_POLICY", "ask/wait 类工具必须是批次中唯一的调用");
             emit_result(&sink, rt, run_id, &batch_id, c, &out, 0);
-            // vision 传 false：本路径（ask/wait/suggest 违反独占）只会产出错误结果，不可能带图片
+            // vision 传 false：本路径只会产出错误结果，不可能带图片
             results.push(model_content(core, rt, c, &out, None, false));
         }
         return BatchOutcome {
@@ -73,6 +86,20 @@ pub async fn execute_batch(
             plan_approved: false,
             call_summary: Vec::new(),
         };
+    } else if has_suggest && calls.len() > 1 {
+        // suggest 单独可放行：预置非 suggest 调用的 reject 结果，让 (3) spawn 循环跳过；
+        // suggest 调用继续走原路径（§8.1 E_PLAN_PENDING 门 + emit run:suggestions 同步完成）。
+        for c in &calls {
+            if c.name == "suggest" {
+                continue;
+            }
+            let out = ToolOutcome::err(
+                "E_BATCH_POLICY",
+                "suggest 不可与其他工具同批调用——把 suggest 单独放在下一个批次（其它调用已拒绝）",
+            );
+            emit_result(&sink, rt, run_id, &batch_id, c, &out, 0);
+            outcomes[c.index] = Some((out, Vec::new()));
+        }
     }
 
     // (2) 同一批次内对同一物理路径的多次写入全部拒绝
@@ -104,7 +131,7 @@ pub async fn execute_batch(
     // 收口与 cancel 竞速：取消时 abort 全部在途工具任务（闸/锁等待不再永久挂起，
     // command 任务经 kill_on_drop 回收子进程），并为未完成调用合成 E_CANCELLED 结果——
     // 批次必有完整结果，历史不留悬空 tool_use，drive_agent 得以返回并走「被用户取消」收尾
-    let mut outcomes: Vec<Option<(ToolOutcome, Vec<Content>)>> = vec![None; calls.len()];
+    // outcomes 已在 (1) 预分配；这里直接复用（不要重新 vec![None; …]，否则 (1) reject 的项被重置）。
     let mut join = tokio::task::JoinSet::new();
     // 同批乐观豁免：本批含 plan 调用 → 本轮写调用放行（模型同批建计划说明意图存在；
     // 门基于批次入口快照判定，JoinSet 并发下共享同一快照行为一致，不做逐 call 重评估）
@@ -113,6 +140,11 @@ pub async fn execute_batch(
     let todos_snapshot = rt.todos.lock().unwrap().clone();
 
     for (i, call) in calls.iter().enumerate() {
+        // 策略（1）已 reject 的 call：在 (1) 已经写入 outcomes、emit_result、写会话日志；
+        // 这里直接跳过，不让 JoinSet 二次挂载，否则 (4) 装 results 时会被覆盖为新值。
+        if outcomes[i].is_some() {
+            continue;
+        }
         // Plan 档硬门（缺陷修复）：exclude_tools 此前只过滤发给模型的工具列表；
         // 模型坚持调用被排除工具（如 plan 档下的 edit）时仍会真实执行——它拿到
         // 「请重新 read」式错误并按提示重试，形成死循环。现于 spawn 前按本 run 生效的
@@ -1515,7 +1547,7 @@ mod tests {
             false,
         )
         .await;
-        assert!(out.ok, "{out:?}");
+        assert!(out.ok, "执行结果");
         // command 的帧由独立任务异步发出：留出窗口，确保结论是「根本不发」而非「还没发到」
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -1587,7 +1619,7 @@ mod tests {
             false,
         )
         .await;
-        assert!(out.ok, "{out:?}");
+        assert!(out.ok, "执行结果");
 
         // 进度帧由独立任务异步发出（读通道 + 节流）：轮询等它到位
         let mut seen = false;
@@ -2348,6 +2380,424 @@ mod tests {
         assert!(
             edit_err.is_none(),
             "edit 不应被拦（豁免不看 plan 调用结果）：{edit_err:?}"
+        );
+    }
+
+    // ===== 方案 C：suggest 可与只读工具同批（[docs/suggest-mixed-batch]）=====
+
+    /// C1：suggest + read 同批 → read 被 E_BATCH_POLICY 拒绝，suggest 走原路径成功并装入 suggest_items。
+    /// 守的是策略（1）的「suggest 单独放行 + 非 suggest 调用 reject」分流逻辑。
+    #[tokio::test]
+    async fn suggest_mixed_with_read_rejects_read_passes_suggest() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "sug-mix-c1",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk("c1-read", "read", serde_json::json!({"path": "/nope"}), 0),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["授权 commit 提交", "本地验证"]}),
+                1,
+            ),
+        ];
+        let out = execute_batch(
+            &core,
+            &rt,
+            calls,
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run-c1",
+        )
+        .await;
+        let items = out
+            .suggest_items
+            .expect("suggest 走原路径应装入 suggest_items");
+        assert!(
+            items[0].contains("commit"),
+            "commit 建议必须置顶，实际：{items:?}"
+        );
+        assert_eq!(items[1], "本地验证");
+        // read 必被 E_BATCH_POLICY 拒
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-read"
+            )
+        });
+        assert!(read_err, "read 必被拒：执行结果");
+    }
+
+    /// C2：suggest + grep 同批 —— 验证另一只读工具也走同一分流路径。
+    #[tokio::test]
+    async fn suggest_mixed_with_grep_rejects_grep_passes_suggest() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "sug-mix-c2",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk(
+                "c1-grep",
+                "grep",
+                serde_json::json!({"path": "/nope", "pattern": "x"}),
+                0,
+            ),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["再看看"]}),
+                1,
+            ),
+        ];
+        let out = execute_batch(
+            &core,
+            &rt,
+            calls,
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run-c2",
+        )
+        .await;
+        assert!(
+            out.suggest_items.is_some(),
+            "suggest 应装入 suggest_items：执行结果"
+        );
+        let grep_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-grep"
+            )
+        });
+        assert!(grep_err, "grep 必被拒：执行结果");
+    }
+
+    /// C3：suggest + read 同批 + §8.1 plan_pending 门触发 → suggest 走 E_PLAN_PENDING，
+    /// read 走 E_BATCH_POLICY，suggest_items=None。守的是 §8.1 门在 batch 策略之后仍生效。
+    #[tokio::test]
+    async fn suggest_mixed_with_plan_pending_blocks_suggest_via_e_plan_pending() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "sug-mix-c3",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        // §8.1 三件套：本 run 碰过 plan + todos 含 InProgress 项
+        rt.plan_called_this_run
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        *rt.todos.lock().unwrap() = vec![crate::tools::plan::Todo {
+            title: "补单测".into(),
+            status: crate::tools::plan::TodoStatus::InProgress,
+        }];
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk("c1-read", "read", serde_json::json!({"path": "/nope"}), 0),
+            mk(
+                "c2-sug",
+                "suggest",
+                serde_json::json!({"items": ["授权 commit"]}),
+                1,
+            ),
+        ];
+        let out = execute_batch(
+            &core,
+            &rt,
+            calls,
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run-c3",
+        )
+        .await;
+        // §8.1：suggest 必被 E_PLAN_PENDING 拦下，suggest_items=None
+        assert!(
+            out.suggest_items.is_none(),
+            "plan 未收尾时 suggest 必被 §8.1 门拦下：执行结果"
+        );
+        let sug_err = out.results.iter().find_map(|c| match c {
+            crate::core::types::Content::ToolResult {
+                tool_use_id,
+                content,
+                is_error: true,
+            } if tool_use_id == "c2-sug" => Some(content.clone()),
+            _ => None,
+        });
+        assert!(sug_err.is_some(), "suggest 必返 E_PLAN_PENDING：执行结果");
+        assert!(
+            sug_err.unwrap().contains("E_PLAN_PENDING"),
+            "错误码必须是 E_PLAN_PENDING：执行结果"
+        );
+        // read 仍被 E_BATCH_POLICY 拒
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-read"
+            )
+        });
+        assert!(read_err, "read 必被拒：执行结果");
+    }
+
+    /// C4：ask + read 同批 —— ask 仍真独占，整批 reject 并 return（零退化锚点）。
+    #[tokio::test]
+    async fn ask_with_read_still_rejects_entire_batch() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "ask-mix-c4",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk(
+                "c1-ask",
+                "ask",
+                serde_json::json!({"questions": [{"id": "q1", "question": "继续?", "single": true, "options": [{"id": "y", "label": "是"}, {"id": "n", "label": "否"}]}]}),
+                0,
+            ),
+            mk("c2-read", "read", serde_json::json!({"path": "/nope"}), 1),
+        ];
+        // 立刻 cancel：让 ask 不阻塞等应答
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        let out = execute_batch(&core, &rt, calls, &[], false, true, cancel, "run-c4").await;
+        // ask 路径整批 reject 并 return —— results 里两条都 is_error=true
+        let ask_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c1-ask"
+            )
+        });
+        let read_err = out.results.iter().any(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } if tool_use_id == "c2-read"
+            )
+        });
+        assert!(ask_err, "ask 必被拒：执行结果");
+        assert!(read_err, "read 必被拒：执行结果");
+        assert!(out.suggest_items.is_none(), "ask 路径不带 suggest");
+    }
+
+    /// C5：wait + suggest 同批 —— wait 真独占，整批 reject（含 suggest）。
+    #[tokio::test]
+    async fn wait_with_suggest_still_rejects_entire_batch() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "wait-sug-c5",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk(
+                "c1-wait",
+                "wait",
+                serde_json::json!({"seconds": 1, "reason": "测试"}),
+                0,
+            ),
+            mk("c2-sug", "suggest", serde_json::json!({"items": ["x"]}), 1),
+        ];
+        // wait 阻塞中我们立刻 cancel —— 触发 E_CANCELLED 而非真等 1 秒
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        let out = execute_batch(&core, &rt, calls, &[], false, true, cancel, "run-c5").await;
+        let all_rejected = out.results.iter().all(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult { is_error: true, .. }
+            )
+        });
+        assert!(
+            all_rejected,
+            "wait+suggest 必须都被拒（wait 走真独占路径）：执行结果"
+        );
+        assert!(out.suggest_items.is_none(), "wait 路径下 suggest 也不放行");
+    }
+
+    /// C6：两条 suggest 同批 —— 模型笔误时的兜底契约。
+    /// 当前 (1) 分流逻辑下：(1) 仅跳过非 suggest 调用，两条 suggest 都「不被 reject」；
+    /// 两条都进入 (3) spawn 循环被实际执行，results 完整。BatchOutcome.suggest_items 按 results
+    /// 遍历顺序保留最后一条 suggest 的 items。
+    /// 契约：(a) 不 panic；(b) results 完整（每条 call 一条 ToolResult）；(c) suggest_items 装入但只一条。
+    /// 若以后收紧为「批内只允许一条 suggest」，本测试需相应更新——届时会改 C6 期望为整批 reject。
+    #[tokio::test]
+    async fn two_suggests_in_one_batch_executes_both_no_panic() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt = core.get_or_create_session(
+            "two-sug-c6",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let mk = |id: &str, name: &str, args: serde_json::Value, index: usize| {
+            crate::core::agent::NormalizedCall {
+                id: id.into(),
+                name: name.into(),
+                args,
+                index,
+            }
+        };
+        let calls = vec![
+            mk("c1-sug", "suggest", serde_json::json!({"items": ["a"]}), 0),
+            mk("c2-sug", "suggest", serde_json::json!({"items": ["b"]}), 1),
+        ];
+        let out = execute_batch(
+            &core,
+            &rt,
+            calls,
+            &[],
+            false,
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            "run-c6",
+        )
+        .await;
+        // 不 panic + results 完整（两条 call → 两条 ToolResult）
+        assert_eq!(
+            out.results.len(),
+            2,
+            "两条 call 必产 2 条 ToolResult：执行结果"
+        );
+        // 两条都成功
+        let both_ok = out.results.iter().all(|c| {
+            matches!(
+                c,
+                crate::core::types::Content::ToolResult {
+                    is_error: false,
+                    ..
+                }
+            )
+        });
+        assert!(both_ok, "两条 suggest 都应成功：执行结果");
+        // suggest_items 装入（具体内容由遍历顺序决定，这里仅断言非空）
+        assert!(
+            out.suggest_items.is_some(),
+            "至少一条 suggest 应装入：执行结果"
         );
     }
 }

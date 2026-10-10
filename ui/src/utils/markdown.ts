@@ -185,3 +185,39 @@ export function renderMarkdown(src: string, diagramPending?: string): string {
   const attr = md.utils.escapeHtml(diagramPending);
   return html.replace(/<div class="ws-diagram"/g, `<div class="ws-diagram" data-pending="${attr}"`);
 }
+
+
+/**
+ * 用户气泡的 markdown 渲染（[docs/markdown-style-refresh]）：保守子集。
+ *
+ * 关键约束：
+ * - 不渲染 math（既无 ws-math 占位，也无 katex 升级——用户消息不进入图表/公式管道）
+ * - 不升级 mermaid（fence 走普通 escape，输出代码块，不返 ws-diagram）
+ * - 不注入 target="_blank"，链接走 linkhandler.ts 的 document 委托 → IPC open_url 走系统浏览器
+ * - 失败兜底：md.render 抛错时回退到空串（调用方再走原纯文本路径）
+ *
+ * 实现路径：复用同一个 markdown-it 实例（md），渲染后做一次后处理：
+ * 1) <span class="ws-math"…>/<div class="ws-math"…> → 还原为可见源串（$<code>…</code>$）
+ * 2) <div class="ws-diagram"…> → 改写为 <pre class="hljs"><code>（mermaid 当代码块）
+ * 3) 移除 target="_blank" 与 rel="noopener"（链接行为交还 linkhandler）
+ */
+export function renderUserMarkdown(src: string): string {
+  try {
+    return postProcessForUser(md.render(src ?? ""));
+  } catch {
+    return "";
+  }
+}
+
+function postProcessForUser(html: string): string {
+  // 后处理 1：math 占位 → 可见源串（inline 与 block）
+  html = html.replace(/<span class="ws-math"[^>]*>([\s\S]*?)<\/span>/g, (_m, c) => "$<code>" + c + "</code>$");
+  html = html.replace(/<div class="ws-math"[^>]*>([\s\S]*?)<\/div>/g, (_m, c) => "\n\n$$$\n" + c + "\n$$$\n");
+  // 后处理 2：mermaid 占位 → 当代码块（保留原转义后的内容）
+  html = html.replace(/<div class="ws-diagram"[^>]*>([\s\S]*?)<\/div>/g, (_m, c) => '<pre class="hljs"><code>' + c + "</code></pre>");
+  // 后处理 3：链接去 target/rel —— 走 linkhandler 委托
+  html = html.replace(/ target="_blank"/g, "");
+  html = html.replace(/ rel="noopener"/g, "");
+  return html;
+}
+

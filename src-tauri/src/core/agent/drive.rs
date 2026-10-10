@@ -1898,6 +1898,10 @@ async fn run_tool_batch(
     // （主会话 + 本 run 碰过计划 + has_pending → 返回 E_PLAN_PENDING），故到这里的
     // `suggest_items` 必定为 None、batch_done 不会被置位。**勿在本处新增旁路**（例如
     // 「主会话一律忽略 suggest」或「有 suggestions 就收尾」），否则未完成计划可被绕开。
+    //
+    // suggest 可与 read/grep/list_files 等非 Interactive 工具同批（[docs/suggest-mixed-batch](../../../../docs/suggest-mixed-batch.md)）：
+    // 批次策略（1）已为 suggest 单独放行，suggest 仍走原 SuggestTool::run，§8.1 plan 门先于 emit 判定，
+    // 因此 `BatchOutcome.suggest_items` 的填充时机与语义与此前完全一致——本处的「勿新增旁路」注释天然兼容。
     if let Some(items) = batch_out.suggest_items {
         return (Some(items), true, batch_out.call_summary);
     }

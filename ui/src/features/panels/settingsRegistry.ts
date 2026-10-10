@@ -122,6 +122,8 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "providers", labelKey: "settings.providers", page: "providers", keywords: ["provider", "供应商", "供应商配置", "模型", "模型配置", "api", "base url", "key"] },
   { id: "active_model_id", labelKey: "settings.active", page: "providers", keywords: ["active", "当前", "活跃模型", "current model", "默认模型"] },
   { id: "ui.ai_language", labelKey: "settings.aiLanguage", page: "providers", width: "mid", keywords: ["ai", "language", "回复语言", "ai 语言"] },
+  // 内置子代理按角色模型覆盖（每个角色可单独指定模型，未指定跟随父会话）
+  { id: "subagentModels", labelKey: "settings.subagentModels", page: "providers", keywords: ["subagent", "子代理", "子代理模型", "内置子代理", "角色模型"] },
 
   // ---------- 网络与连接 ----------
   { id: "network.proxy", labelKey: "settings.proxyMode", page: "network", width: "wide", keywords: ["proxy", "代理", "socks", "http"] },
@@ -225,6 +227,7 @@ export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   "disabled_skills", // 整行技能行（名称 / 来源 / 开关 / 删除）
   "providers", // 供应商卡片网格 + 单供应商弹框复合容器
   "active_model_id", // 无独立控件：模型列表里的「当前」标记，由删除/首个模型回卷决定
+  "subagentModels", // 整行 8 角色 × 模型下拉复合容器，宽度由容器决定
   "app.check_updates", // 动作按钮（检查更新），宽度随文案
   "app.cleanup_now", // 动作按钮（立即清理），宽度随文案；禁用原因说明跟在按钮后，整行不设档
   "app.cleanup_status", // 整行只读信息项：标签 + extra 说明 + 「时间 · 删除条数」回显，无独立控件
@@ -265,6 +268,7 @@ export type SettingFieldPath =
   | "ui.ai_language"
   | "providers"
   | "active_model_id"
+  | "subagentModels"
   | "network.proxy"
   | "network.allow_private_network"
   | "approval.enabled"
@@ -296,7 +300,7 @@ export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
   // 界面页：主题与双字体槽是 localStorage 偏好、界面语言是即时生效项 ——
   // 本页没有可保存的改动，故**永不亮脏点**（有意为之，见 docs/settings-ia.md）。
   appearance: ["ui.theme", "ui.font_sans", "ui.font_mono", "ui.language"],
-  providers: ["providers", "active_model_id", "ui.ai_language"],
+  providers: ["providers", "active_model_id", "ui.ai_language", "subagentModels"],
   network: ["network.proxy", "network.allow_private_network"],
   security: [
     "approval.enabled",
@@ -333,6 +337,13 @@ export const PAGE_FIELD_EXCEPTIONS: string[] = [];
  * 新增设置项必须登记，只新增文案必须在此显式分类（并说明为何不属可配置项）。
  */
 export const SHELL_SETTING_KEYS: string[] = [
+  // —— 子代理按角色模型覆盖（[docs/subagent-model-override]）：设置项 "subagentModels" 已登记；
+  //    以下四项为复合容器 SubagentModelsPanel 的从属文案（顶部提示 / 占位档 / 只读角标 / 保存失败）。 ——
+  "subagentModelsHint",
+  "subagentInherit",
+  "subagentReadonly",
+  "subagentSaveFailed",
+
   // —— 页壳与离开拦截：全屏页容器自身的文案，与任何设置项无关 ——
   // 保存 / 已保存 / 取消 / 删除已收进 `common` 段（批④；common.* 不是 settings.*，
   // 不进本清单也不进注册表，见 docs/settings-terminology.md）

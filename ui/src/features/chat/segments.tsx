@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Collapse } from "antd";
 import { useTranslation } from "react-i18next";
 import { renderMarkdown } from "../../utils/markdown";
@@ -33,6 +33,193 @@ export function stripReportMarkers(text: string): string {
   // trim：标记通常独自占一整行，剥掉后会留下前后空行
   return text.replace(/<\/?report>/g, "").trim();
 }
+
+// ---------- 打字机逐字揭示（[docs/typewriter-stream](../../../../docs/typewriter-stream.md)） ----------
+//
+// 助手回复在流式输出时逐字铺开，接近 ChatGPT / Codex 的观感。四条硬约束：
+// 1) 揭示游标只放组件局部 state，**绝不写 store** —— ChatMessages.tsx 的 contentLen 依赖 text
+//    字符总数，若逐帧写 store 会让自动跟随 effect 以 60fps 触发 jumpToBottom + upgradeDiagrams，
+//    撞既有滚动豁免逻辑（onWheel 上滚清窗口），用户上滚会被反复拽回底部。
+// 2) 唯一开关 = 既有的 `streaming && i === tailIdx` —— 会话恢复 / 翻页加载的项恒 streaming:false
+//    （run.ts 的恢复路径），天然整段直出、绝不重播，无需任何额外判断。
+// 3) report 标记先剥离再切片 —— 切片会把 <report> 切成两片，破坏 stripReportMarkers 的完整性前提。
+// 4) 不加闪烁光标 —— .cursor 类名与 CSS cursor 属性同名冲突，是历史误伤点（app.css 明确警告）。
+
+/** 基础揭示速度（字/秒）：跟随数据时的原速基准。快模型靠自动追赶追平，慢模型原速不拖尾。 */
+const BASE_CPS = 90;
+/** 积压追赶增益：积压越多，每帧推进越快，避免长回复末尾长时间慢放。 */
+const CATCHUP_GAIN = 0.05;
+/** 思考静默阈值（ms）：模型停顿超过此值后回来，直接放行不逐字（否则像"慢放堆积文本"）。 */
+const SILENT_THRESHOLD_MS = 800;
+/** 首帧基础配额（字）：首帧就不能是 0 —— 否则会闪一下空白，且同步断言 / 辅助技术读不到内容。
+首帧给一小段，之后由 rAF 逐帧推进，观感仍是逐字。 */
+const FIRST_FRAME_CHARS = 12;
+
+/** 游标收敛到 [0, len]：目标变短（如 report 剥离后）不越界，也不倒退。 */
+export function clampReveal(v: number, len: number): number {
+  if (Number.isNaN(v) || v <= 0) return 0;
+  if (!Number.isFinite(v) || v > len) return len;
+  return Math.floor(v);
+}
+
+/**
+ * 按帧推进揭示游标（纯函数，无计时器无 DOM —— 可直接单测）。
+ *
+ * 跟随数据 + 自动追赶：每帧基础步长按 BASE_CPS 折算，再乘以「积压越大推进越快」的追赶增益。
+ * 三种特殊情形：
+ * - `silentMs > SILENT_THRESHOLD_MS`：思考停顿过久后回来，直接放行到全文（不慢放）。
+ * - `finishing`（streaming 翻 false / 用户中断）：一次性放行到全文（收尾即完整，不拖尾）。
+ * - 游标已追上目标：原样返回（追平即停，由调用方停 rAF）。
+ *
+ * 返回值恒在 [0, len] 且单调不减。
+ */
+export function advanceReveal(
+  prev: number,
+  len: number,
+  dtMs: number,
+  opts?: { silentMs?: number; finishing?: boolean },
+): number {
+  const target = clampReveal(prev, len);
+  if (target >= len) return len;
+  const silent = opts?.silentMs ?? 0;
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? dtMs : 0;
+  // 静默过久 → 直接放行（不逐字慢放堆积文本）
+  if (silent > SILENT_THRESHOLD_MS) return len;
+  const backlog = len - target;
+  if (backlog <= 0) return len;
+  // dt 为 0（首帧 / 同帧重复调用）→ 按最小步长 1 字推进，保证单调不减且可见
+  const basePerFrame = dt > 0 ? (BASE_CPS * dt) / 1000 : 1;
+  // 追赶增益：积压越多推进越快；上限 8 字/帧，避免长回复瞬间跳完失去打字机观感
+  const catchUp = Math.min(8, 1 + backlog * CATCHUP_GAIN);
+  const step = basePerFrame * catchUp;
+  // 收尾 / 中断（streaming 翻 false / 用户停止）：**一次性放行到全文**。
+  // 为什么不用「预算内摊分」：摊分需要「进入收尾时的初始剩余量」才能定出固定步长，
+  // 而 backlog 每帧递减会让步长同步缩水、帧数按对数级膨胀（实测 300 字要 47 帧 ≈ 750ms，
+  // 反而比直接放行更拖沓，正是 O-3 要避免的「拖尾」）。收尾本就应立即呈现完整内容。
+  if (opts?.finishing) return len;
+  // 不足 1 字时仍保证至少 1 字（单调不减的可观测保证）
+  const next = target + Math.max(1, Math.floor(step));
+  return clampReveal(next, len);
+}
+
+/** 按游标切片（纯函数）：revealed 恒在 [0, text.length] 内。 */
+export function sliceRevealed(text: string, revealed: number): string {
+  const n = clampReveal(revealed, text.length);
+  return n >= text.length ? text : text.slice(0, n);
+}
+
+/** 是否处于"减弱动态效果"偏好（读一次即缓存：系统级设置，运行期不会变）。 */
+let reducedMotionCache: boolean | null = null;
+export function prefersReducedMotion(): boolean {
+  if (reducedMotionCache !== null) return reducedMotionCache;
+  try {
+    reducedMotionCache = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    reducedMotionCache = false;
+  }
+  return reducedMotionCache;
+}
+
+/** 仅供测试重置缓存（生产路径不调用）。 */
+export function __resetReducedMotionCache(): void {
+  reducedMotionCache = null;
+}
+
+function TypewriterText({
+  text,
+  active,
+  diagramPending,
+}: {
+  text: string;
+  active: boolean;
+  diagramPending?: string;
+}) {
+  // active 由 true 翻 false 即收尾（定稿 / 用户中断）：此时按 FINISH_BUDGET_MS 快速追平后直出。
+  const revealed = useTypewriter(text, active);
+  const visible = sliceRevealed(text, revealed);
+  const html = renderMarkdown(visible, diagramPending);
+  return <div className="md" data-streaming={active || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/**
+ * 打字机 hook：返回当前应揭示的字符数。
+ *
+ * 三态直出（均首帧同步生效，不依赖 rAF）：
+ * - `active === false`（非流式 / 非尾段 / 定稿）→ text.length
+ * - prefers-reduced-motion → text.length
+ *
+ * 其余情况走 rAF 循环按帧推进；游标追上目标即停并释放 rAF。
+ * 游标存于局部 state，绝不写 store（见文件头约束 1）。
+ */
+function useTypewriter(
+  text: string,
+  active: boolean,
+  opts?: { finishing?: boolean },
+): number {
+  const len = text.length;
+  const [revealed, setRevealed] = useState(() =>
+    active && !prefersReducedMotion() ? Math.min(len, FIRST_FRAME_CHARS) : len,
+  );
+  const rafRef = useRef(0);
+  const lastTsRef = useRef(0);
+  const silentRef = useRef(0);
+  const finishingRef = useRef(false);
+
+  useEffect(() => {
+    finishingRef.current = opts?.finishing ?? false;
+  }, [opts?.finishing]);
+
+  // 非流式 / reduced-motion：直出，且不留 rAF
+  useEffect(() => {
+    if (!active || prefersReducedMotion()) {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+      setRevealed(len);
+      return;
+    }
+    // 目标变短（report 剥离等）：先收敛，绝不越界
+    setRevealed((r) => clampReveal(r, len));
+  }, [active, len]);
+
+  const tick = useCallback(() => {
+    const dt = lastTsRef.current ? Math.max(0, performance.now() - lastTsRef.current) : 0;
+    lastTsRef.current = performance.now();
+    setRevealed((prev) => {
+      const next = advanceReveal(prev, len, dt, {
+        silentMs: silentRef.current,
+        finishing: finishingRef.current,
+      });
+      // 追平即停：不再排下一帧
+      if (next >= len) {
+        rafRef.current = 0;
+        return len;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+      return next;
+    });
+  }, [len]);
+
+  // 启动 / 续跑 rAF 循环（仅在 active 且未追平时）
+  useEffect(() => {
+    if (!active || prefersReducedMotion()) return;
+    if (revealed >= len) return;
+    if (rafRef.current) return;
+    lastTsRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(tick);
+    // 卸载时清理
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+    };
+  }, [active, revealed, len, tick]);
+
+  return active && !prefersReducedMotion() ? clampReveal(revealed, len) : len;
+}
+
 
 // 思考标题右侧占满余下头部空间的通栏走马灯（[docs/thinking-marquee-rewrite](../../../../docs/thinking-marquee-rewrite.md)）：显示思考文本的最新一行。
 // 一行先锚定在左缘；溢出通栏后自右向左爬行、最新内容钉在右缘（tail-follow）；只有流真正
@@ -237,12 +424,25 @@ export function TimelineSegsView({
         if (seg.kind === "sub") {
           return <SubagentItemCard key={seg.subId} subId={seg.subId} />;
         }
-        // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由
+        // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由。
+        // 注意：剥离必须在打字机切片**之前** —— 切片会把 <report> 切成两片，破坏剥离的完整性前提。
         const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
-        // 流式条目绕过缓存（文本每帧增长，避免前缀污染缓存）
         // mermaid 占位提示的文案走 i18n（写死在 CSS / HTML 里的中文在英文界面会露馅）
         const diagramPending = t("chat.diagramPending");
-        const html = streaming && i === tailIdx ? renderMarkdown(text, diagramPending) : renderCached(text, diagramPending);
+        // 流式尾段走打字机（逐字揭示）；其余段（定稿 / 历史 / 中间段）完全走原 renderCached，一字不改。
+        // 唯一开关 = 既有的 `streaming && i === tailIdx`：会话恢复与翻页加载的项恒 streaming=false，
+        // 因此天然整段直出、绝不重播（打字机的"老会话不重播"不需要额外判断）。
+        if (streaming && i === tailIdx) {
+          return (
+            <TypewriterText
+              key={i}
+              text={text}
+              active={streaming}
+              diagramPending={diagramPending}
+            />
+          );
+        }
+        const html = renderCached(text, diagramPending);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
         return <div key={i} className="md" data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}

@@ -25,6 +25,8 @@ const DEFAULT_CONFIG: ConfigState = {
   shell: { selection: null },
   // 会话保留期与清理：null = 不清理（与后端默认值同源，绝不把「删数据」当默认）
   sessions: { retention_days: null },
+  // 内置子代理按角色模型覆盖：缺省全部跟随父会话（与后端 ConfigState.subagent_models 默认空 HashMap 同源）
+  subagent_models: {},
 };
 
 /** 设置 store 契约：加载 / 保存全局配置 */

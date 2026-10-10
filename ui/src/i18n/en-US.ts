@@ -216,6 +216,8 @@ export default {
     maxTokensHint: "Max output per reply (thinking included); replies are truncated when it runs out. Too small cuts long replies short.",
     contextWindowHint: "Only used for the auto-compaction threshold and usage display; it does not affect per-reply output length.",
     active: "Active",
+    subagentModels: "Subagent Models", subagentModelsHint: "Unset roles keep following the parent session (matching the current global active model)",
+    subagentInherit: "Inherit from parent session", subagentReadonly: "Read-only", subagentSaveFailed: "Save failed",
     addProvider: "Add provider", editProvider: "Edit provider", editProviderAction: "Edit", providerDone: "Done", backToProvider: "Back to provider",
     addProviderHint: "Configure a fully custom API endpoint and its initial models.",
     providerName: "Name", providerNamePh: "e.g. Zhipu GLM",

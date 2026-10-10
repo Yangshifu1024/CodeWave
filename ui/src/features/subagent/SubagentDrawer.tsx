@@ -6,6 +6,7 @@ import type { ApprovalMode } from "../../ipc/types";
 import { useActiveRun, useRun } from "../../stores/run";
 import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
+import { renderUserMarkdown } from "../../utils/markdown";
 
 /** 子代理抽屉可用宽度：45% 视口，夹在 360–560 之间。 */
 function drawerWidth(): number {
@@ -258,7 +259,7 @@ export default function SubagentDrawer() {
                 {sub.task}
               </div>
             ) : (
-              <div className="bubble user-bubble">{sub.task}</div>
+              <div className="bubble user-bubble md" dangerouslySetInnerHTML={{ __html: renderUserMarkdown(sub.task) }} />
             )}
           </div>
         )}
