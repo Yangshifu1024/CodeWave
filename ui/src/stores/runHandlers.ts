@@ -388,6 +388,7 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
           questions: p.questions,
           switchToAutoEdit: p.switch_to_auto_edit,
           allowAlways: p.allow_always,
+          approvalKind: p.approval_kind,
           planFile: p.plan_file ?? null,
           planBody: p.plan_body ?? null,
           approval: p.approval,

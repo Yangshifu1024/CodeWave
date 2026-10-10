@@ -33,6 +33,7 @@ describe("ask:opened 批准门选档", () => {
       plan_file: "/ws/.codewave/tasks/plan-x.md",
       plan_body: "## 完整方案\n1. 改 A\n2. 验证 B",
       allow_always: true,
+      approval_kind: "scope",
       questions: [{
         id: "q1", question: "【方案】第一步",
         options: [
@@ -46,6 +47,8 @@ describe("ask:opened 批准门选档", () => {
     expect(ask.planFile).toBe("/ws/.codewave/tasks/plan-x.md");
     expect(ask.planBody).toBe("## 完整方案\n1. 改 A\n2. 验证 B");
     expect(ask.allowAlways).toBe(true);
+    // [docs/plan-mode-workflow] §7.3：范围门语义标记原样落到 AskState（驱动按钮文案）
+    expect(ask.approvalKind).toBe("scope");
     expect(ask.questions![0].options!.map((o) => o.mode)).toEqual(["auto_edit", "full_access", undefined]);
   });
 

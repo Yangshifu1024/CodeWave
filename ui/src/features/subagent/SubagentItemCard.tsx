@@ -8,9 +8,27 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-/** 提前结束判定：已收尾且收尾原因不是约定汇报（旧数据无 ended 字段 → 视为正常收尾，保持绿勾向后兼容） */
+/** 收尾警示判定（反向判定，勿改回白名单式）：**只有** `report`（真正交完）与缺省（旧数据无
+ *  ended 字段）算绿勾，其余任何 `ended` 值一律算异常收尾。
+ *
+ *  白名单写法（`ended === "budget" || ended === "no_report"`）会在后端新增枚举值时静默漏判——新增的
+ *  `partial`（跑满预算才交汇报）就是这样一度落回绿勾，把半成品当成做完展示。
+ *  [docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) */
 function isEarlyEnded(sub: SubView): boolean {
-  return sub.status === "done" && (sub.ended === "budget" || sub.ended === "no_report");
+  return sub.status === "done" && sub.ended != null && sub.ended !== "report";
+}
+
+/** 收尾原因 → 警示文案（四态映射）：缺省不渲染（`isEarlyEnded` 已挡），未知值回落「提前结束」
+ *  （宁可与提前退出同类，也不静默隐藏异常收尾）。 */
+function endedWarnLabel(ended: SubView["ended"]): string {
+  switch (ended) {
+    case "partial":
+      return "subagent.endedPartial";
+    case "budget":
+      return "subagent.endedBudget";
+    default:
+      return "subagent.endedEarly";
+  }
 }
 
 // 单个子代理卡片：从 timeline 锚点渲染（与工具卡同机制，在调用点穿插）。
@@ -23,6 +41,8 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
   const sub = useActiveRun().subs.find((x) => x.subId === subId);
   if (!sub) return null;
   const stop = () => void useRun.getState().stopSubagent(null, sub.subId);
+  const abnormal = isEarlyEnded(sub);
+  const warnKey = abnormal ? endedWarnLabel(sub.ended) : null;
   return (
     <div
       className={`sub-card st-${sub.status}`}
@@ -40,16 +60,14 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
       {sub.description && <span className="sub-card-desc">· {sub.description}</span>}
       <span className="sub-card-meta">
         {sub.status === "running" && <LoadingOutlined spin />}
-        {sub.status === "done" && !isEarlyEnded(sub) && <CheckOutlined />}
-        {sub.status === "done" && isEarlyEnded(sub) && (
-          // 提前退出警示：橙色（需注意），颜色取主题桥的 antd colorWarning，不硬编码色值
+        {sub.status === "done" && !abnormal && <CheckOutlined />}
+        {sub.status === "done" && abnormal && (
+          // 异常收尾警示：橙色（需注意），颜色取主题桥的 antd colorWarning，不硬编码色值；不用红色（红在本项目 = 危险）
           <ExclamationCircleOutlined style={{ color: "var(--ws-warn)" }} />
         )}
         {sub.status === "error" && <CloseOutlined />}
         {sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok
-        {sub.status === "done" && isEarlyEnded(sub) && (
-          <span className="sub-card-warn">· {sub.ended === "budget" ? t("subagent.endedBudget") : t("subagent.endedEarly")}</span>
-        )}
+        {warnKey && <span className="sub-card-warn">· {t(warnKey)}</span>}
       </span>
       {/* 停止按钮（仅运行中）：stopPropagation 防止误开抽屉；点击 = 单独停止该子代理 */}
       {sub.status === "running" && (

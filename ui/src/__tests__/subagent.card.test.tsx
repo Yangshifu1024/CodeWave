@@ -1,5 +1,6 @@
 // SubagentItemCard 收尾原因徽标（defect: 子代理提前退出却显示绿色成功态）：
-// ended = "no_report" / "budget" 视为疑似提前结束（橙色警示），ended 缺省 / "report" 保持绿勾（旧数据向后兼容）。
+// ended 只要不是 "report" 就视为异常收尾（橙色警示），ended 缺省 / "report" 保持绿勾（旧数据向后兼容）。
+// 判定必须是**反向式**（非 report 即警示），白名单式会在后端新增枚举值时静默漏判——partial 即这样一度落回绿勾。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import "../i18n"; // directly mounted components must explicitly init i18next (no global entry outside App.tsx)
@@ -102,5 +103,49 @@ describe("SubagentItemCard 收尾原因徽标", () => {
     expect(c.querySelector(".anticon-check")).not.toBeNull();
     expect(c.querySelector(".anticon-exclamation-circle")).toBeNull();
     expect(c.textContent).not.toContain("提前结束");
+  });
+
+  // [docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)：partial = 跑满步数预算才交汇报，
+  // 成果在手但未必做完——不得与真做完同档绿勾。
+  it("ended: partial → 橙色警示图标 + 「预算耗尽·未完成」文案（不再显示绿勾）", () => {
+    const c = card({ ended: "partial", step: 60, maxSteps: 60 });
+    expect(c.querySelector(".anticon-check")).toBeNull();
+    const warn = c.querySelector(".anticon-exclamation-circle") as HTMLElement;
+    expect(warn).not.toBeNull();
+    // 警示色走主题桥的 antd colorWarning，不硬编码色值
+    expect(warn.style.color).toBe("var(--ws-warn)");
+    expect(c.querySelector(".sub-card-warn")?.textContent).toContain("预算耗尽·未完成");
+    // 不与另两个警示文案混淆：partial 有汇报（拿到成果），budget / no_report 压根没汇报
+    expect(c.textContent).not.toContain("提前结束");
+    expect(c.querySelector(".sub-card-warn")?.textContent).not.toBe("· 预算耗尽");
+    expect(c.textContent).toContain("60/60");
+  });
+
+  // 回归钉子：判定方向是**反向式**的，任何非 "report" 值一律不得出绿勾——
+  // 白名单式判定（列举已知异常值）会在后端新增 ended 值时静默漏判，这正是本轮修的缺陷。
+  it.each([
+    ["budget", "预算耗尽"],
+    ["partial", "预算耗尽·未完成"],
+    ["no_report", "提前结束"],
+  ] as const)("ended: %s → 橙警示、无绿勾（反向判定的回归钉子）", (ended, label) => {
+    const c = card({ ended });
+    expect(c.querySelector(".anticon-check")).toBeNull();
+    expect(c.querySelector(".anticon-exclamation-circle")).not.toBeNull();
+    expect(c.querySelector(".sub-card-warn")?.textContent).toContain(label);
+  });
+
+  it("未知 ended 值（后端新增枚举、前端未跟进）也走警示，不得落回绿勾", () => {
+    const c = card({ ended: "brand_new" as any });
+    expect(c.querySelector(".anticon-check")).toBeNull();
+    expect(c.querySelector(".anticon-exclamation-circle")).not.toBeNull();
+    // 未知值回落「提前结束」：宁可与提前退出同类，也不静默隐藏异常收尾
+    expect(c.querySelector(".sub-card-warn")?.textContent).toContain("提前结束");
+  });
+
+  it("运行中的子代理（ended 已到达的归档态例外）→ 不出绿勾也不出警示", () => {
+    const c = card({ status: "running", ended: "partial" });
+    expect(c.querySelector(".anticon-check")).toBeNull();
+    expect(c.querySelector(".anticon-exclamation-circle")).toBeNull();
+    expect(c.querySelector(".sub-card-warn")).toBeNull();
   });
 });

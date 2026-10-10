@@ -46,6 +46,8 @@ export interface AskState {
   switchToAutoEdit?: boolean;
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：命令审批显示「始终允许本项目」第三选项 */
   allowAlways?: boolean;
+  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（once = 单次操作审批；scope = G3 范围门）——驱动按钮文案；缺省 = once */
+  approvalKind?: "once" | "scope";
   /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」打开）；[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：无真实方案时为 null */
   planFile?: string | null;
   /** [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：后端下发的真实方案正文（与 planFile 同源；AskPanel 卡片正文与「复制计划全文」用此字段渲染）；null/缺省 = 不渲染计划卡 */
@@ -81,8 +83,8 @@ export interface SubView {
   status: "running" | "done" | "error";
   /** 收尾时的真实已启动步数（sub:done 刷新，纠正轮询采样滞后） */
   stepsUsed?: number;
-  /** 收尾原因（sub:done）：report = 正常汇报收尾；budget = 预算耗尽；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示 */
-  ended?: "report" | "budget" | "no_report";
+  /** 收尾原因（sub:done）：report = 正常汇报收尾；partial = 跑满预算才交汇报（成果在手未必做完）；budget = 预算耗尽未交汇报；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)） */
+  ended?: "report" | "partial" | "budget" | "no_report";
   /** 运行摘录（sub:step 采样） */
   detail?: string;
   /** 当前权限档位（sub:step 每步上报；归档 / 旧数据缺省 → 抽屉不渲染档位行） */

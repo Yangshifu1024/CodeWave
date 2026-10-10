@@ -90,6 +90,45 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(payload.always).toBe(false);
   });
 
+  // [docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7.3：范围门与命令审批的按钮后果
+  // 完全不同，共用一套文案会让用户误判实际行为（后端已把「允许」改成并入基线而非仅此一次）。
+  it("范围门审批（approvalKind=scope）渲染范围门专属文案：允许=纳入范围、始终允许=本会话不再询问", () => {
+    seedAsk({
+      askId: "scope1",
+      kind: "approval",
+      title: "计划外步骤确认",
+      detail: "执行中出现已批准方案之外的新步骤",
+      allowAlways: true,
+      approvalKind: "scope",
+    });
+    render(<AskPanel />);
+    expect(screen.getByText("纳入本次已批准范围")).toBeTruthy();
+    expect(screen.getByText("本会话后续新增都不再询问")).toBeTruthy();
+    // label 也按语义切：后端 scope_allowed 是会话级内存态，「始终允许本项目」与实际作用域不符
+    expect(screen.getByText("本会话始终允许")).toBeTruthy();
+    // 命令审批那套文案不得出现
+    expect(screen.queryByText("仅允许这一次")).toBeNull();
+    expect(screen.queryByText("后续相同命令不再询问")).toBeNull();
+    expect(screen.queryByText("始终允许本项目")).toBeNull();
+  });
+
+  it("命令审批（approvalKind 缺省）保持原「仅允许这一次」文案，不被范围门文案污染", () => {
+    seedAsk({
+      askId: "scope2",
+      kind: "approval",
+      title: "高危命令确认",
+      detail: "$ rm -rf x",
+      allowAlways: true,
+    });
+    render(<AskPanel />);
+    expect(screen.getByText("仅允许这一次")).toBeTruthy();
+    expect(screen.getByText("后续相同命令不再询问")).toBeTruthy();
+    expect(screen.queryByText("纳入本次已批准范围")).toBeNull();
+    // 命令审批的「始终允许」确实是项目级（MCP always_allow 持久化到 server 作用域），label 不该被切
+    expect(screen.getByText("始终允许本项目")).toBeTruthy();
+    expect(screen.queryByText("本会话始终允许")).toBeNull();
+  });
+
   it("计划卡片：渲染计划全文 + 「查看完整计划」打开文件查看器", async () => {
     seedAsk({
       askId: "a3", kind: "ask",

@@ -15,6 +15,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../ipc/client", () => ({
   ipc: {
     startChat: vi.fn(async () => "run-1"),
+    // 恢复路径的完整出参回填（[docs/session-restore-fidelity]）：默认可空，具体用例用 mockResolvedValueOnce 注入
+    loadToolOutcomes: vi.fn(async (): Promise<any[]> => []),
     loadSubagentHistory: vi.fn(async (_sid: string, subId: string) =>
       subId === "sub_9"
         ? [
@@ -226,6 +228,93 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     const t = tabOf(session);
     expect((t.items[0] as any).timeline[0].subId).toBe("restored:call-old");
     expect(t.subs[0].subId).toBe("restored:call-old");
+  });
+
+  // 恢复路径曾不读 ended / steps_used → 重开历史会话时所有子代理卡恒显绿勾（撞顶、提前退出都看不出来）。
+  it("恢复路径回填 ended / step：出参带收尾形态时不再恒显绿勾", () => {
+    useRun.getState().restoreFromMessages(session, [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call-p", name: "subagent", args: { task: "T", role: "explore", maxSteps: 60 } },
+          { type: "tool_use", id: "call-r", name: "subagent", args: { task: "T2", role: "explore", maxSteps: 60 } },
+          { type: "tool_use", id: "call-n", name: "subagent", args: { task: "T3", role: "explore", maxSteps: 60 } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          // partial = 跑满预算才交汇报：恢复后必须原样保留，卡片据此显橙警示
+          { type: "tool_result", tool_use_id: "call-p", content: JSON.stringify({ sub_id: "sub_p", steps_budget: 60, steps_used: 60, ended: "partial", report: "半成品" }), is_error: false },
+          { type: "tool_result", tool_use_id: "call-r", content: JSON.stringify({ sub_id: "sub_r", steps_budget: 60, steps_used: 12, ended: "report", report: "完成" }), is_error: false },
+          // 旧会话出参不带 ended / steps_used → 保持缺省 / 0（绿勾，向后兼容不得破坏）
+          { type: "tool_result", tool_use_id: "call-n", content: JSON.stringify({ sub_id: "sub_n", report: "老数据" }), is_error: false },
+        ],
+      },
+    ] as any);
+    const subs = tabOf(session).subs;
+    const p = subs.find((x) => x.subId === "sub_p")!;
+    expect(p.ended).toBe("partial");
+    expect(p.step).toBe(60);
+    expect(p.report).toBe("半成品");
+    const r = subs.find((x) => x.subId === "sub_r")!;
+    expect(r.ended).toBe("report");
+    expect(r.step).toBe(12);
+    // 向后兼容：更早的会话出参无收尾字段 → ended 缺省、step 保持 0
+    const n = subs.find((x) => x.subId === "sub_n")!;
+    expect(n.ended).toBeUndefined();
+    expect(n.step).toBe(0);
+  });
+
+  it("恢复路径：未知 ended 值 / 非法 steps_used 不写入（不得强转放行）", () => {
+    useRun.getState().restoreFromMessages(session, [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call-x", name: "subagent", args: { task: "T", role: "explore", maxSteps: 10 } }],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool_result", tool_use_id: "call-x", content: JSON.stringify({ sub_id: "sub_x", ended: "brand_new", steps_used: "12" }), is_error: false },
+        ],
+      },
+    ] as any);
+    const sv = tabOf(session).subs[0];
+    // 白名单校验：未知值当缺省（绿勾），步数只认 number
+    expect(sv.ended).toBeUndefined();
+    expect(sv.step).toBe(0);
+  });
+
+  // sidecar 回填（历史出参被截断 → 合成 restored key）走 renameRestoredSubs，共享同一套回填函数
+  it("sidecar 回填路径：改名同时补回 ended / step（合成 key → 真实 sub_id）", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.loadToolOutcomes as any).mockResolvedValueOnce([
+      {
+        call_id: "call-cut",
+        outcome: { ok: true, data: { sub_id: "sub_cut", steps_used: 60, ended: "budget", report: "半截报告" } },
+      },
+    ]);
+    useRun.getState().restoreFromMessages(session, [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call-cut", name: "subagent", args: { task: "T", role: "explore", maxSteps: 60 } }],
+      },
+      {
+        role: "tool",
+        // 出参被截断：既无 sub_id 也无 ended（白名单校验路径的前提）
+        content: [{ type: "tool_result", tool_use_id: "call-cut", content: `{"sub_id":"sub_cu`, is_error: false }],
+      },
+    ] as any);
+    expect(tabOf(session).subs[0].subId).toBe("restored:call-cut");
+    // backfillToolOutcomes 是异步 IPC（.then），推进微任务队列后生效
+    await vi.waitFor(() => {
+      const sv = tabOf(session).subs.find((x) => x.subId === "sub_cut");
+      expect(sv).toBeTruthy();
+      expect(sv!.ended).toBe("budget");
+      expect(sv!.step).toBe(60);
+      expect(sv!.report).toBe("半截报告");
+    });
+    expect((tabOf(session).items[0] as any).timeline[0].subId).toBe("sub_cut");
   });
 
   it("openSubDrawer 按需拉取过程历史并重建消息流（运行中不拉取）", async () => {

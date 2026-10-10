@@ -16,6 +16,78 @@ pub const MAX_STEPS: usize = 1000;
 /// 全局子代理并发上限。
 pub const MAX_CONCURRENT: usize = 4;
 
+/// 子代理收尾形态：稳定字符串，进 `ended` 字段（事件载荷 / 工具出参 / 会话日志）。
+///
+/// 四象限判据由 [`ended_of`] 单点决定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+///
+/// | 跑满预算 | 带 `<report>` | ended | 语义 |
+/// |---|---|---|---|
+/// | 否 | 是 | [`Report`](Self::Report) | 主动完成后按约定汇报 |
+/// | 是 | 是 | [`Partial`](Self::Partial) | **撞上限才交汇报**：拿到了成果但未必做完 |
+/// | 是 | 否 | [`Budget`](Self::Budget) | 撞上限且未交汇报 |
+/// | 否 | 否 | [`NoReport`](Self::NoReport) | 提前退出且未交汇报 |
+///
+/// `Partial` 是本枚举存在的唯一理由：`force_report` 会在撞顶前一步逼出一份汇报
+/// （预算耗尽前强制汇报一轮），而旧判据「有没有 `<report>` 标签」把它与真正做完的汇报
+/// 混为一谈——主代理因此不知道自己被砍断过，只能读报告正文推断缺口再派一次
+/// （探路与实现成本付两遍）。
+///
+/// 注意：值名是**线协议**（前端 `run.types.ts` / `ipc/types.ts` 两处联合类型 + i18n 文案
+/// 依赖），改名即破坏兼容，必须同步前端。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SubEnded {
+    /// 主动完成后按约定汇报（`ended = "report"`）
+    Report,
+    /// 跑满步数预算才收尾、但交了汇报：成果在手，未完成清单见报告正文（`ended = "partial"`）
+    Partial,
+    /// 跑满步数预算且未交汇报（`ended = "budget"`）
+    Budget,
+    /// 未跑满就结束、且未交汇报（`ended = "no_report"`）
+    NoReport,
+}
+
+impl SubEnded {
+    /// 稳定字符串形态（wire 值）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubEnded::Report => "report",
+            SubEnded::Partial => "partial",
+            SubEnded::Budget => "budget",
+            SubEnded::NoReport => "no_report",
+        }
+    }
+
+    /// 是否算「按约定交出了成果」。
+    ///
+    /// 仅 [`Report`](Self::Report) 为真——`Partial` 已交汇报但**未必做完**（撞顶逼出来的），
+    /// 不能与真收尾同等对待。此谓词是 `analysis_done` 置位（plan 档 G2 分析闸）
+    /// 与文案分档的共同单一事实源。
+    pub fn is_delivered(self) -> bool {
+        matches!(self, SubEnded::Report)
+    }
+}
+
+/// 子代理收尾形态判定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+///
+/// 抽成纯函数而非内联三元：四象限是**跨模块契约**（事件载荷 + 前端徽标 + 分析闸），
+/// 内联写法难以写单测，而本判定此前零 Rust 覆盖——正是「半成品伪装成成功」
+/// 能长期存在的原因。
+///
+/// - `tagged`：报告带 `<report>` 标记（`split_report` 的第二个返回值）
+/// - `steps_used` / `max_steps`：已启动步数 / 预算（`step_count` 是「已启动步数」口径，
+///   每步开头写 `step + 1`，故真正跑完预算时恰等于 `max_steps`）
+pub fn ended_of(steps_used: usize, max_steps: usize, tagged: bool) -> SubEnded {
+    // 撞顶判定用 >=：steps_used 是已启动步数，撞顶时恰等于 max_steps（不小于）。
+    let exhausted = steps_used >= max_steps;
+    match (tagged, exhausted) {
+        (true, false) => SubEnded::Report,
+        // 撞顶才交汇报 —— 与 Report 的唯一差别就在这里，前端据此显橙警示而非绿勾。
+        (true, true) => SubEnded::Partial,
+        (false, true) => SubEnded::Budget,
+        (false, false) => SubEnded::NoReport,
+    }
+}
+
 /// 当前活跃子代理计数（并发上限依据）。
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
@@ -523,22 +595,16 @@ impl Tool for SubagentTool {
                 // <report> 标记只用于收尾判定（drive 层 text_turn_action），不进入汇报正文
                 //（[docs/subagent-text-turn-premature-exit]）
                 let (clean_report, tagged) = crate::core::agent::split_report(&report);
-                // 收尾原因：带标记 = 按约定汇报；步数用尽 = 预算耗尽；否则 = 未按约定汇报即结束
-                //（前端据此显示橙色警示而非绿色钩，不再让提前退出伪装成成功）
+                // 收尾形态：四象限单点判定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+                // 关键修复——`Partial`（撞顶才交汇报）原先与 `Report` 同判 `report`，
+                // 让主代理无从判断子代理是否被砍断，只能读报告正文推断缺口再派（成本付两遍）。
                 let steps_used = sub_rt.step_count.load(std::sync::atomic::Ordering::SeqCst);
-                // step_count 是「已启动步数」（每步开头写 step+1，见驱动循环顶）：
-                // 真正跑完预算时 steps_used == max_steps，故用 >= 而非 >=
-                let ended = if tagged {
-                    "report"
-                } else if steps_used >= max_steps {
-                    "budget"
-                } else {
-                    "no_report"
-                };
+                let ended = ended_of(steps_used, max_steps, tagged);
+                let ended_str = ended.as_str();
                 crate::core::session_log::info(
                     &ctx.rt,
                     &format!(
-                        "子代理 [{sub_id}] 返回（input {}/output {} tokens，步数 {steps_used}/{max_steps}，收尾 {ended}）：{}",
+                        "子代理 [{sub_id}] 返回（input {}/output {} tokens，步数 {steps_used}/{max_steps}，收尾 {ended_str}）：{}",
                         usage.input,
                         usage.output,
                         crate::core::session_log::trunc(&clean_report, 400)
@@ -547,7 +613,12 @@ impl Tool for SubagentTool {
                 // G2（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）+ arch 批准闸（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：pm/tester 分析子代理成功返回 → 置分析产物标记。
                 // 跨档置位：标记只在批准执行点（ask 批准闸）消费，其余档位置位无副作用；
                 // arch 流程在 ConfirmEach 档发起批准同样依赖该标记。
-                if is_analysis_role(&args.role) {
+                //
+                // **必须按 `is_delivered()` 过滤**（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+                // `Partial` 是撞顶逼出来的半成品分析，`Budget`/`NoReport` 更是压根没交分析。
+                // 旧判据只看「结果是否 Ok」，半成品 pm/tester 报告照样置位 → plan 档在分析
+                // 不完整的情况下放行批准闸（跨机制静默提权路径，且此前无任何测试覆盖）。
+                if ended.is_delivered() && is_analysis_role(&args.role) {
                     ctx.rt
                         .analysis_done
                         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -570,7 +641,7 @@ impl Tool for SubagentTool {
                     &ctx.rt.id,
                     "sub:done",
                     json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
-                            "steps_used": steps_used, "ended": ended }),
+                            "steps_used": steps_used, "ended": ended_str }),
                 );
                 // 收尾形态：仅「按约定汇报」（ended == "report"）算成功完成。
                 // budget（步数耗尽）/ no_report（未交汇报）都是**没拿到成果**，
@@ -586,7 +657,10 @@ impl Tool for SubagentTool {
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
                     // 供会话恢复关联过程历史文件（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
                     json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps,
-                            "steps_used": steps_used, "ended": ended, "report": clean_report }),
+                            "steps_used": steps_used, "ended": ended_str, "report": clean_report,
+                            // tokens 同层输出：恢复路径回填卡片 token 数的唯一来源
+                            //（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) §4）
+                            "tokens": usage.input + usage.output }),
                 )
             }
             Err(crate::provider::dto::ProviderError::Cancelled) => {
@@ -718,6 +792,56 @@ mod tests {
         assert_eq!(DEFAULT_STEPS, 25);
         assert_eq!(MAX_STEPS, 1000);
         assert_eq!(MAX_CONCURRENT, 4);
+    }
+
+    /// 四象限判据的完整矩阵（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+    ///
+    /// `Partial` 是本轮新增分支，也是旧判据的漏网之鱼：撞顶 + 交汇报原先被判 `report`
+    /// （= 真做完），前端显绿勾、主代理以为拿到了成果。
+    #[test]
+    fn ended_of_four_quadrants() {
+        // 未跑满 + 有汇报 = 真正做完
+        assert_eq!(ended_of(30, 60, true), SubEnded::Report);
+        assert_eq!(ended_of(0, 60, true), SubEnded::Report);
+        // 撞顶 + 有汇报 = 半成品（本轮修复的核心：原先与 Report 同判）
+        assert_eq!(ended_of(60, 60, true), SubEnded::Partial);
+        // 撞顶 + 无汇报 = 预算耗尽且没交
+        assert_eq!(ended_of(60, 60, false), SubEnded::Budget);
+        // 未跑满 + 无汇报 = 提前退出
+        assert_eq!(ended_of(5, 60, false), SubEnded::NoReport);
+    }
+
+    /// `step_count` 是「已启动步数」口径（每步开头写 `step + 1`），故真正跑完预算时
+    /// 恰等于 `max_steps` 而非大于它——`>=` 与 `>` 在撞顶边界上行为不同，此处钉死 `>=`。
+    #[test]
+    fn ended_of_exhaustion_boundary_is_inclusive() {
+        // 恰好等于预算 = 撞顶
+        assert_eq!(ended_of(60, 60, true), SubEnded::Partial);
+        assert_eq!(ended_of(60, 60, false), SubEnded::Budget);
+        // 差一步 = 尚未撞顶
+        assert_eq!(ended_of(59, 60, true), SubEnded::Report);
+        assert_eq!(ended_of(59, 60, false), SubEnded::NoReport);
+    }
+
+    /// `is_delivered` 是 `analysis_done` 置位（plan 档 G2 分析闸）的唯一判据：
+    /// 只有真做完的 `Report` 才算交出了成果。`Partial` 虽是 Ok 结果，但它是撞顶逼出来的
+    /// 半成品分析，放行批准闸 = 静默提权。
+    #[test]
+    fn only_report_counts_as_delivered() {
+        assert!(SubEnded::Report.is_delivered());
+        for e in [SubEnded::Partial, SubEnded::Budget, SubEnded::NoReport] {
+            assert!(!e.is_delivered(), "{e:?} 不得计为已交付成果");
+        }
+    }
+
+    /// wire 值稳定性：前端 `run.types.ts` / `ipc/types.ts` 两处联合类型与 i18n 文案
+    /// 按字符串依赖这些值，改名即破坏兼容。
+    #[test]
+    fn ended_wire_values_are_stable() {
+        assert_eq!(SubEnded::Report.as_str(), "report");
+        assert_eq!(SubEnded::Partial.as_str(), "partial");
+        assert_eq!(SubEnded::Budget.as_str(), "budget");
+        assert_eq!(SubEnded::NoReport.as_str(), "no_report");
     }
 
     #[tokio::test]

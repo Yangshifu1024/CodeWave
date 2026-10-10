@@ -422,6 +422,8 @@ export interface AskOpenedEvent {
   plan_body?: string;
   /** 命令审批「始终允许本项目」第三选项 */
   allow_always?: boolean;
+  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（`once` = 单次操作审批；`scope` = G3 范围门）——决定按钮文案；缺省 = `once` */
+  approval_kind?: "once" | "scope";
   /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */
   switch_to_auto_edit?: boolean;
   /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准形形状标记（后端宽松识别 = 单一事实源：单题 + id/label 命中批准协议） */
@@ -526,8 +528,8 @@ export interface SubagentEvent {
   task?: string;
   /** 收尾时的真实已启动步数（sub:done；轮询采样可能滞后，以它刷新最终展示） */
   steps_used?: number;
-  /** 收尾原因（sub:done）：report = 按约定带 <report> 标记正常汇报；budget = 步数预算耗尽；no_report = 未按约定汇报即结束（疑似提前退出） */
-  ended?: "report" | "budget" | "no_report";
+  /** 收尾原因（sub:done）：report = 未跑满且按约定带 <report> 标记正常汇报；partial = 跑满步数预算才交汇报（成果在手未必做完）；budget = 跑满预算且未交汇报；no_report = 未跑满且未按约定汇报即结束（疑似提前退出）；[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) */
+  ended?: "report" | "partial" | "budget" | "no_report";
   /** 子代理当前权限档位（sub:step 每步上报；过程抽屉据此显示档位行，缺省 = 不显示） */
   approval_mode?: ApprovalMode;
 }

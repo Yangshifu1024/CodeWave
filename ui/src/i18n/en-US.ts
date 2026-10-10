@@ -72,6 +72,9 @@ export default {
     note: "Note (optional)", submit: "Submit", next: "Next question", timeoutHint: "No response in 120s is treated as deny",
     waitingConfirm: "Waiting for confirmation",
     allowDesc: "Allow just this once", alwaysAllow: "Always allow in this project", alwaysAllowDesc: "Same commands won't ask again",
+    /* G3 范围门（[docs/plan-mode-workflow] §7.3）：同一组按钮在范围门语义下后果完全不同 */
+    scopeAllowDesc: "Add these steps to the approved scope", scopeAlwaysAllowDesc: "Never ask again for new steps in this session",
+    scopeAlwaysAllow: "Always allow in this session",
     denyDesc: "Deny this time", confirm: "Confirm", ignore: "Skip",
     keyHint: "Tab / arrow keys to select, Enter to confirm (click the card first)",
     keyHintMulti: "Tab / arrow keys to select, Space to toggle; Enter = next question / submit",
@@ -466,6 +469,8 @@ export default {
     stop: "Stop this subagent",
     endedEarly: "Ended early",
     endedBudget: "Budget exhausted",
+    /* partial = report handed in only after the step budget ran out: results in hand, work possibly unfinished */
+    endedPartial: "Budget hit · incomplete",
     /* Drawer header mode line ([docs/mode-gate-and-subagent-sync]): mode = label from composer.mode* keys */
     modeLine: "Permission mode: {{mode}}",
     modeInherited: " (inherited from the main session)",
