@@ -2,6 +2,7 @@
 //! 每次运行使用全新隔离上下文（复用主循环）。supervisor 每 15s tick 一次。
 
 use crate::core::agent::SessionRuntime;
+use crate::core::wait_targets::{TargetKind, TargetState};
 use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -483,6 +484,15 @@ async fn run_task_locked(
         "scheduled:fired",
         json!({ "name": task.name, "id": task.id }),
     );
+    // 登记为可等待目标（`wait` 的 until 可等它跑完）：计划任务无 running 中间态，
+    // `last_status` 在 run 期间是**上一次**的旧值，故拿它当 baseline——
+    // 内核的 is_completed() 以「终态 + 观测值 ≠ 基线」判定本次 run 已完成。
+    // 登记表与 ScheduledTask 解耦：不动结构体，避免打破本文件内大量结构体字面量。
+    core.wait_targets.register(
+        task.id.clone(),
+        TargetKind::ScheduledTask,
+        task.last_status.clone(),
+    );
     // 评审 H4：任务必须跑在所属项目的多根快照内（此前会抓「某个会话的 workspace」，
     // 随机跑在错误位置）
     let Some((workspace, pid, project_dir, extra_roots)) = task_scope(&core, &task) else {
@@ -494,6 +504,14 @@ async fn run_task_locked(
                 t.last_summary = Some("所属项目不存在或无有效目录".into());
             }
         }
+        // 跳过也是本次 run 的完成（状态已从基线变为 skipped）；终态取 Failed——
+        // 它没有拿到成果，wait 超时时看到的摘要已说明原因。
+        core.wait_targets.finish(
+            &task.id,
+            TargetState::Failed,
+            Some("skipped: 所属项目不存在或无有效目录".to_string()),
+            Some("skipped".to_string()),
+        );
         core.tasks
             .record_run(
                 &task.id,
@@ -566,6 +584,19 @@ async fn run_task_locked(
             t.last_summary = Some(summary.clone());
         }
     }
+    // run 结束置终态（判定「本次已完成」交给内核：终态 + 观测值 ≠ 登记基线）。
+    // status == "ok" 归 Succeeded，"error" 归 Failed。status 单独传给内核做基线比对——
+    // 摘要（自由文本）不能拿来比基线（状态串），两者不同类型。
+    core.wait_targets.finish(
+        &task.id,
+        if status == "ok" {
+            TargetState::Succeeded
+        } else {
+            TargetState::Failed
+        },
+        Some(summary.clone()),
+        Some(status.clone()),
+    );
     // 执行记录（新的在前，上限 20）+ 落盘：record_run 落盘时连带写入上一步的
     // last_status / last_summary（同一份快照）
     core.tasks

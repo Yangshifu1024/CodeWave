@@ -17,7 +17,7 @@ import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
 import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, stripRecoveredInTab } from "./runFrames";
 import type { RunStore } from "./run";
-import type { UiItem } from "./run.types";
+import type { TabRunState, UiItem } from "./run.types";
 
 /** immer set：对 store 草稿原地变异 */
 type SetFn = (fn: (s: WritableDraft<RunStore>) => void) => void;
@@ -120,6 +120,27 @@ function hasTrailingNoticeText(items: readonly UiItem[], text: string): boolean 
   return false;
 }
 
+/** 子代理卡兜底收尾（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+ *  主 run 收尾时，仍停在 `running` 的子代理卡一律落定——`sub:done` / `sub:error` 是子代理卡**唯一**的
+ *  收尾途径（主会话工具有 `closeRunningTools` 兜底，子代理侧此前没有），一旦那一帧丢了，卡片就永久转圈、
+ *  composer 的运行中计数也永久不归零（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）。
+ *
+ *  为什么可以在这里无条件收敛：主 run 收尾时，子代理要么已完成（终态事件先到，无影响）、要么已随主 run 级联
+ *  取消（后端 `parent_cancel` 传递），不存在「仍在跑」的真子代理——故不会误杀。
+ *  `ended: "no_report"` 而非静默改 done：报告可能已到（`sub:report` 先于 `sub:done` 发射），
+ *  卡片仍应按「未按约定汇报」口径展示橙色警示，不伪装成干净完成。
+ *  幂等：已终态的卡不动，重复调 run:done 无副作用。 */
+function settleRunningSubs(t: TabRunState): void {
+  for (const sub of t.subs) {
+    if (sub.status !== "running") continue;
+    sub.status = "done";
+    if (!sub.ended) sub.ended = "no_report";
+  }
+  for (const st of Object.values(t.subStreams)) {
+    if (st.status === "running") st.status = "done";
+  }
+}
+
 /** 运行生命周期（11 键）：start/done/error/cancelled/inject/retry + 自动命名 + 计划任务 toast + 计划 todos + 目标状态 */
 export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
@@ -156,6 +177,9 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         closeStreamingAssistantItems(t);
         // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
         closeRunningTools(t);
+        // 子代理卡兜底（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+        // sub:done 丢了就永久转圈（子代理侧无兜底），主 run 收尾时统一收敛
+        settleRunningSubs(t);
         if (p.suggestions) t.suggestions = p.suggestions;
         // [docs/session-history-limits](../../../docs/session-history-limits.md)：历史保存不干净时向本会话转录补一条提示。
         // 载荷仅在「拒存 / 有损保存」时才带 history_save（干净路径零打扰）；保存结果由后端在 run 收尾检查点上报，
@@ -190,6 +214,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // 兜底收尾：failure 路径同样扫全部 assistant 项（不只是末项），同 run:done
         closeStreamingAssistantItems(t);
         closeRunningTools(t);
+        // 子代理卡兜底（docs/subagent-terminal-event-loss）：error 路径同样收敛，同 run:done
+        settleRunningSubs(t);
         // errorKind 携带后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）：auth/billing 有设置快捷入口
         t.items.push({ kind: "error", text: String(p?.error ?? i18n.t("notice.runFailed")), errorKind: p?.kind });
       });
@@ -205,6 +231,8 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         // 兜底收尾：取消路径同样扫全部 assistant 项（不只是末项），同 run:done（必须在 push notice 之前，保证语义清晰）
         closeStreamingAssistantItems(t);
         closeRunningTools(t);
+        // 子代理卡兜底（docs/subagent-terminal-event-loss）：cancelled 路径同样收敛，同 run:done
+        settleRunningSubs(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
       // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：「↑ 立即」不再走打断路径
@@ -420,6 +448,11 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
       set((s) => {
         const sub = s.tabs[p.session]?.subs.find((x) => x.subId === p.sub_id);
         if (!sub) return;
+        // 已收尾的子代理不再接受进度采样（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+        // 后端 `sub:done`（subagent.rs:569）先于 `progress.abort()`（:629）发射，中间隔着
+        // save_sub_history + stats 记录；该窗口内到达的迟到 tick 会把 `sub.step` 覆写回轮询采样值，
+        // 表现为「卡片已翻 ✓ 但步数还在跳」。守卫兼作子代理已收尾的语义边界。
+        if (sub.status !== "running") return;
         sub.step = p.step ?? sub.step;
         // 批准门选档（[docs/mode-gate-and-subagent-sync]）：子代理当前档位每步上报，过程抽屉显示档位行；
         // 旧后端 / 归档回放不带该字段 → 保持原值（不写成 undefined，避免抽屉出现空档位）

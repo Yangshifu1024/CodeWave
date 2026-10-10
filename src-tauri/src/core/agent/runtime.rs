@@ -446,6 +446,11 @@ pub struct AgentCore {
     pub subs: DashMap<String, Arc<SessionRuntime>>,
     /// Serialize start checks across sessions sharing a working directory.
     pub start_gate: Mutex<()>,
+    /// 可等待目标登记表（`wait` 工具 `until` 条件等待的数据面）。
+    /// 独立于 services/subs/tasks 三张表：子代理完成即从 subs 移除、service 自然退出不移除、
+    /// 计划任务无 running 中间态——反查既有表都分不清「已完成」与「不存在」。
+    /// （[docs/wait-conditional-wait](../../../docs/wait-conditional-wait.md)）
+    pub wait_targets: crate::core::wait_targets::WaitTargets,
 }
 
 impl AgentCore {
@@ -473,6 +478,7 @@ impl AgentCore {
             tasks: std::sync::Arc::new(crate::core::scheduler::TaskTable::new(data_dir.clone())),
             subs: DashMap::new(),
             start_gate: Mutex::new(()),
+            wait_targets: crate::core::wait_targets::WaitTargets::default(),
         }
     }
 

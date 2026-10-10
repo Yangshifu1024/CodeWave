@@ -408,4 +408,182 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect(mainTl.map((s) => s.kind)).toEqual(["sub", "text"]);
     expect((mainTl[1] as any).text).toBe("主流");
   });
+
+  // ===== [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md) =====
+  // 子代理终态事件一旦丢失，卡片永久转圈且 composer 计数不归零。本组钉死兜底与次生修复。
+
+  describe("子代理卡收尾兜底（subagent-terminal-event-loss）", () => {
+    function seedRunningSub(subId: string) {
+      useRun.setState((s) => {
+        const t = s.tabs[session]!;
+        t.subs.push({
+          subId, role: "explore", name: null, description: "d",
+          step: 3, maxSteps: 25, tokens: 100, lastTools: [],
+          status: "running",
+        });
+        t.subStreams[subId] = { timeline: [], toolsMap: {}, status: "running", gen: 0, loaded: false };
+      });
+    }
+
+    it("run:done 兜底：残留 running 的子代理卡收敛为 done（终态事件丢了也不永久转圈）", () => {
+      const h = handlers();
+      seedRunningSub("sub_lost");
+      expect(tabOf(session).subs[0].status).toBe("running");
+      // 终态事件从未到达（模拟丢帧）：直接投喂主 run 收尾
+      h["run:done"]({ session, run_id: "r1" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(tabOf(session).subStreams.sub_lost.status).toBe("done");
+      // 兜底标记为「未按约定汇报」而非伪装成干净完成（卡片按橙色警示口径展示）
+      expect(sub.ended).toBe("no_report");
+    });
+
+    it("run:done 兜底幂等：已终态的子代理不被改写（不污染正常 sub:done 路径）", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_ok", role: "explore", description: "d", max_steps: 5 });
+      h["sub:done"]({ session, sub_id: "sub_ok", steps_used: 4, ended: "report" });
+      h["run:done"]({ session, run_id: "r2" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      // 正常路径的 ended 不被兜底覆写
+      expect(sub.ended).toBe("report");
+      expect(sub.step).toBe(4);
+    });
+
+    it("run:error 与 run:cancelled 同样收敛残留 running 的子代理卡", () => {
+      const h = handlers();
+      seedRunningSub("sub_e");
+      h["run:error"]({ session, error: "boom" });
+      expect(tabOf(session).subs[0].status).toBe("done");
+
+      useRun.setState((s) => {
+        const t = s.tabs[session]!;
+        t.running = true;
+        t.subs.push({
+          subId: "sub_c", role: "explore", name: null, description: "d",
+          step: 1, maxSteps: 25, tokens: 0, lastTools: [], status: "running",
+        });
+        t.subStreams.sub_c = { timeline: [], toolsMap: {}, status: "running", gen: 0, loaded: false };
+      });
+      h["run:cancelled"]({ session });
+      expect(tabOf(session).subs.find((s) => s.subId === "sub_c")!.status).toBe("done");
+    });
+
+    it("sub:step 次生：已收尾的子代理不再被迟到 tick 覆写步数", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_s", role: "explore", description: "d", max_steps: 40 });
+      h["sub:done"]({ session, sub_id: "sub_s", steps_used: 34, ended: "report" });
+      expect(tabOf(session).subs[0].step).toBe(34);
+      // 后端 sub:done 先于 progress.abort() 发射，窗口内的迟到 tick 不得覆写最终步数
+      h["sub:step"]({ session, sub_id: "sub_s", step: 12, tool: "read" });
+      expect(tabOf(session).subs[0].step).toBe(34);
+    });
+
+    it("sub:step 仍正常更新 running 状态子代理的步数（守卫不误伤）", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_r", role: "explore", description: "d", max_steps: 40 });
+      h["sub:step"]({ session, sub_id: "sub_r", step: 7, tool: "grep", detail: "d1" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("running");
+      expect(sub.step).toBe(7);
+      expect(sub.detail).toBe("d1");
+      expect(sub.lastTools).toEqual(["grep"]);
+    });
+  });
+
+  // ===== [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)：tool:result 二道兜底 =====
+  // run 收尾兜底只在主 run 结束时收敛；「子代理早已返回、主 run 还在跑」的那段窗口里卡片照样一直转圈
+  // （单个 run 实测可达数分钟）。tool:result 与 sub:done 出自同一个 task 的相邻位置，是现存第二可靠的收尾信号。
+
+  describe("子代理终态二道兜底 · tool:result（subagent-terminal-event-loss）", () => {
+    function seedRunningSub(subId: string) {
+      useRun.setState((s) => {
+        const t = s.tabs[session]!;
+        t.subs.push({
+          subId, role: "explore", name: null, description: "d",
+          step: 3, maxSteps: 25, tokens: 100, lastTools: [], status: "running",
+        });
+        t.subStreams[subId] = { timeline: [], toolsMap: {}, status: "running", gen: 0, loaded: false };
+      });
+    }
+
+    /** 投喂一条 subagent 工具结果（后端 ToolOutcome::ok 的 data 首键即 sub_id，见 subagent.rs） */
+    function subagentResult(ok: boolean, data: any, tool = "subagent") {
+      useRun.getState().onToolResult(
+        session,
+        {
+          session, run_id: "r", batch_id: "b", call_index: 0, call_key: "b:0",
+          tool, args_preview: "", outcome: { ok, data }, duration_ms: 1200,
+        } as any,
+        ok,
+      );
+    }
+
+    it("sub:done 丢失时按 outcome 的 sub_id 就地收敛，并回填 ended / steps_used / report", () => {
+      seedRunningSub("sub_tr");
+      expect(tabOf(session).subs[0].status).toBe("running");
+      // 终态三帧（report / usage / done）全部未到达，只剩 tool:result 到达
+      subagentResult(true, { sub_id: "sub_tr", role: "explore", steps_budget: 25, steps_used: 18, ended: "report", report: "子代理结论" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(sub.ended).toBe("report");
+      expect(sub.step).toBe(18);
+      expect(sub.report).toBe("子代理结论");
+      expect(tabOf(session).subStreams.sub_tr.status).toBe("done");
+    });
+
+    it("幂等：sub:done 已收尾的卡不被兜底改写（不覆盖正常路径带回的终态字段）", () => {
+      const h = handlers();
+      h["sub:spawn"]({ session, sub_id: "sub_idem", role: "explore", description: "d", max_steps: 40 });
+      h["sub:report"]({ session, sub_id: "sub_idem", report: "事件带的报告" });
+      h["sub:done"]({ session, sub_id: "sub_idem", steps_used: 34, ended: "report" });
+      subagentResult(true, { sub_id: "sub_idem", steps_used: 99, ended: "budget", report: "兜底报告" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(sub.ended).toBe("report");
+      expect(sub.step).toBe(34);
+      expect(sub.report).toBe("事件带的报告");
+    });
+
+    it("守卫不误伤：非 subagent 工具的结果即使带 sub_id 也不改动子代理状态", () => {
+      seedRunningSub("sub_x");
+      subagentResult(true, { sub_id: "sub_x" }, "read");
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("running");
+      expect(sub.ended).toBeUndefined();
+    });
+
+    it("失败路径不由兜底收敛：outcome 不带 sub_id 时保持 running（仍交 sub:error / run 收尾兜底）", () => {
+      seedRunningSub("sub_fail");
+      subagentResult(false, null);
+      expect(tabOf(session).subs[0].status).toBe("running");
+    });
+
+    it("outcome 缺 ended 时保守落 no_report，不伪装成干净完成", () => {
+      seedRunningSub("sub_noended");
+      subagentResult(true, { sub_id: "sub_noended" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(sub.ended).toBe("no_report");
+    });
+
+    // 钉死「ended 不按枚举白名单过滤」：白名单写法在后端扩展 ended 时会把新值静默漏判成
+    // no_report —— docs/subagent-budget-and-ended.md 就 `partial` 明确警告过这一点。
+    // 本分支的 SubView["ended"] 仍是三值（PR #126 未合），partial 走 as-any 载荷进，
+    // 断言的是**运行时行为**：值原样保留，不被改写。
+    it("ended 原样保留后端送来的值，不按枚举白名单过滤（后端新增 ended 时不静默漏判）", () => {
+      seedRunningSub("sub_partial");
+      subagentResult(true, { sub_id: "sub_partial", steps_used: 60, ended: "partial" });
+      const sub = tabOf(session).subs[0];
+      expect(sub.status).toBe("done");
+      expect(sub.ended).toBe("partial");
+      expect(sub.step).toBe(60);
+    });
+
+    it("ended 非字符串时落 no_report（脏值不被放行）", () => {
+      seedRunningSub("sub_dirty");
+      subagentResult(true, { sub_id: "sub_dirty", ended: 42 });
+      expect(tabOf(session).subs[0].ended).toBe("no_report");
+    });
+  });
 });

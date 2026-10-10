@@ -1,6 +1,7 @@
 //! service 工具：长驻后台进程（dev server 等）的启停与日志尾读，512KB 滚动缓冲。
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
+use crate::core::wait_targets::{TargetKind, TargetState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -251,6 +252,9 @@ impl Tool for ServiceTool {
                     return ToolOutcome::err("E_SERVICE_STOPPING", error);
                 }
                 ctx.core.services.remove(&id);
+                // 登记表条目随显式 stop 一并移除：service 不再存在，等待它没有意义
+                // （自然退出不同——services 表不删，登记表也刻意留终态条目供 wait 事后回查）。
+                ctx.core.wait_targets.remove(&id);
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "service:update",
@@ -396,6 +400,10 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     let svc_id = id.clone();
     let ticker_log = log.clone();
     let ticker_done = done.clone();
+    // 登记表句柄：ticker 顺带把日志尾写进可等待目标，让 `wait` 的 `match.text` 在服务
+    // **运行期间**就是活日志判据（而不是只能等进程退出后才命中）。
+    let ticker_core = ctx.core.clone();
+    let ticker_svc_id = id.clone();
     let _ticker = tokio::spawn(async move {
         // 首拍必发：无输出的服务（如 `sleep 300`）tail 恒为空，若只在 tail 变化时推送，
         // 这类服务一个事件都不发，前端永远拿不到「已启动」这一事实（工具卡只能靠 tail 判存活）。
@@ -404,6 +412,11 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
             tokio::time::sleep(Duration::from_millis(1000)).await;
             let tail = ticker_log.tail(2000);
             let running = !ticker_done.load(std::sync::atomic::Ordering::SeqCst);
+            // 无条件写入（含空串）：服务无输出时 tail 恒为空，但「它还活着」本身就是
+            // wait 超时时该看到的证据，不能因为空而丢（[docs/wait-conditional-wait](../../docs/wait-conditional-wait.md)）。
+            ticker_core
+                .wait_targets
+                .update_text(&ticker_svc_id, tail.clone());
             if Some(&tail) != last_tail.as_ref() {
                 sink.emit(
                     &session,
@@ -424,6 +437,10 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     let session2 = ctx.rt.id.clone();
     let svc2 = id.clone();
     let stop_token = cancel.clone();
+    // 收尾闭包需访问登记表：spawn 进的是 'static 任务，拿 Arc<AgentCore> 的 clone
+    // （AgentCore 句柄本就是 Arc，见 ToolCtx.core）；不去动 wait_targets.rs 的内部结构。
+    let exit_core = ctx.core.clone();
+    let exit_log = log.clone();
     tokio::spawn(async move {
         loop {
             let result = tokio::select! {
@@ -445,6 +462,15 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         let _ = pump_a.await;
         let _ = pump_b.await;
         done2.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 登记表置终态：进程退出即成功结束——service 的 exit code 语义目前仓库无消费方
+        // （ServiceHandle 不留存退出码），臆造失败判定会凭空造出不存在的事实。
+        // 摘要取环形日志尾，与 ticker 推送同口径。
+        exit_core.wait_targets.finish(
+            &svc2,
+            TargetState::Succeeded,
+            Some(exit_log.tail(2000)),
+            None,
+        );
         sink2.emit(
             &session2,
             "service:update",
@@ -473,6 +499,10 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         }
         return ToolOutcome::err("E_SERVICE_FULL", e);
     }
+    // 入表成功后才登记为可等待目标（两条容量早退路径不登记：它们要么已停掉、要么已撤销）
+    ctx.core
+        .wait_targets
+        .register(id.clone(), TargetKind::Service, None);
     ToolOutcome::ok(
         json!({ "id": id, "pid": pid, "purpose": args.purpose, "owner_root_id": owner.id,
                 "running": true,
