@@ -53,6 +53,10 @@ export default {
     exitCode: "退出码", output: "输出", noOutput: "（无输出）",
     stopService: "停止服务", readLog: "读日志",
     argsTooLarge: "（参数过大，无法展示 diff）", serviceRunning: "运行中", serviceStopped: "已停止",
+    // 三态的第三态：既没收到 running:false（exited/removed），也没有权威快照可依
+    // （旧历史 / 推送全丢）。此时**不得**谎报「已停止」——那会让停止按钮一并消失，
+    // 形成占端口的僵尸服务。未知就是未知。
+    serviceUnknown: "状态未知",
     grepHits: "{{n}} 处命中 / {{m}} 文件", truncated: "（已截断）",
     imageLoading: "图片加载中…", imageUnavailable: "图片无法显示（文件可能已被移动或删除）：{{path}}",
     imageNotSent: "当前模型未开启图片输入，图片未发送给模型",

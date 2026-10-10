@@ -391,6 +391,7 @@ pub fn run() {
             host::commands::git_user_info,
             host::commands::get_token_breakdown,
             host::commands::stop_service,
+            host::commands::list_services,
             host::commands::set_font_prefs,
             host::commands::mcp_list_config,
             host::commands::mcp_save_config,

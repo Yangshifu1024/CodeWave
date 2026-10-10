@@ -511,24 +511,175 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
       });
     },
     "service:update": (p) => {
-      // M-9：tail 更新 / removed / exited 都要反映到 service 工具卡（状态翻「running → stopped」）
+      // M-9：tail 更新 / removed / exited 都要反映到 service 工具卡。
+      // `running` 是进程存活事实（后端 service.rs 的 done 标志），与 tail 是否有内容无关：
+      // 无输出的服务 tail 恒为空，早期用 `tail` 当存活代理会让卡片永久误报「已停止」。
       set((s) => {
-        const t = s.tabs[p.session];
-        if (!t) return;
-        for (const item of t.items) {
-          if (item.kind !== "assistant") continue;
-          for (const tool of Object.values(item.toolsMap)) {
-            if (tool.tool !== "service") continue;
+        // 子代理启动的服务，其 session = sub_id、不在 tabs 顶层——必须走属主查找
+        // （对齐 run.ts onToolResult 的 subStreams 路由），否则该服务的事件永久静默丢弃。
+        const targets = serviceStreams(s, p.session);
+        if (targets.length === 0) {
+          droppedServiceUpdates += 1;
+          return;
+        }
+        for (const tools of targets) {
+          for (const tool of tools) {
             const sid = tool.outcome?.data?.id;
             const hit = (p.removed && sid === p.removed) || (p.id && sid === p.id);
             if (!hit) continue;
             const data = { ...tool.outcome.data };
             if (typeof p.tail === "string") data.tail = p.tail;
-            if (p.removed || p.exited) data.tail = "";
+            if (p.removed || p.exited) {
+              data.tail = "";
+              data.running = false;
+            } else if (typeof p.running === "boolean") {
+              data.running = p.running;
+            }
             tool.outcome = { ...tool.outcome, data };
           }
         }
+        // 收到事件即重置静默计时（推送停了不代表服务死了，见 reconcileServices）
+        lastServiceUpdateAt = Date.now();
       });
     },
   };
+}
+
+/**
+ * 收集一批工具锚点里的 service 卡。
+ *
+ * 两种**形状不同**的容器都要认（这是本函数存在的唯一理由，写错任一处都会让
+ * 子代理启动的服务收不到任何状态更新）：
+ * - 主会话：assistant 项，每项自带 `toolsMap`
+ * - 子代理流 `SubStream`：**平铺**的 `toolsMap`（工具卡不在 `timeline` 里——
+ *   `timeline` 只有 tool/text/thinking 等 seg，见 `closeRunningTools` 的遍历口径）
+ */
+function serviceToolsOf(container: any): any[] {
+  const out: any[] = [];
+  if (!container) return out;
+  if (Array.isArray(container)) {
+    for (const item of container) {
+      if (item?.kind !== "assistant") continue;
+      for (const tool of Object.values<any>(item.toolsMap ?? {})) {
+        if (tool?.tool === "service") out.push(tool);
+      }
+    }
+    return out;
+  }
+  for (const tool of Object.values<any>(container.toolsMap ?? {})) {
+    if (tool?.tool === "service") out.push(tool);
+  }
+  return out;
+}
+
+/**
+ * 定位承载 session 的 service 工具锚点集合。
+ *
+ * 子代理启动的服务，其 session = sub_id，**不在** `tabs` 顶层而是挂在所属 Tab 的
+ * `subStreams` 下（对齐 run.ts `onToolResult` 的路由），早期只查 `tabs[session]` 会让
+ * 子代理启动的服务事件永久静默丢弃。返回集合而非单个 toolsMap：同一 session 在重名
+ * Tab 下可有多份视图。
+ */
+function serviceStreams(s: WritableDraft<RunStore>, session: string): any[][] {
+  const out: any[][] = [];
+  const push = (tools: any[]) => {
+    if (tools.length > 0) out.push(tools);
+  };
+  push(serviceToolsOf(s.tabs[session]?.items));
+  for (const tb of Object.values(s.tabs)) {
+    if (tb.subStreams[session]) push(serviceToolsOf(tb.subStreams[session]));
+  }
+  return out;
+}
+
+// ---------- service 状态对账（推送通道的拉取兜底）----------
+
+/** 因 session 未就绪而丢弃的 service 事件数（诊断面板可读；推送通道天然不可靠） */
+let droppedServiceUpdates = 0;
+/** 最近一次收到 service:update 的时刻 */
+let lastServiceUpdateAt = Date.now();
+/** 已排定的对账定时器（同一时刻至多一个） */
+let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 静默超过该时长就拉一次权威快照——静默期不等于进程已死 */
+const SERVICE_SILENCE_MS = 3000;
+
+/** 累计丢弃的 service 事件数（供诊断面板读取；推送通道天生不可靠，丢帧本身不是异常） */
+export function droppedServiceUpdateCount(): number {
+  return droppedServiceUpdates;
+}
+
+/** 测试钩子：重置模块级对账状态（避免用例间残留定时器与时间戳） */
+export function __resetServiceReconcileForTest(): void {
+  droppedServiceUpdates = 0;
+  lastServiceUpdateAt = Date.now();
+  if (reconcileTimer) {
+    clearTimeout(reconcileTimer);
+    reconcileTimer = null;
+  }
+}
+
+/** 当前 store 里是否存在 service 工具卡（决定对账是否有意义） */
+function hasServiceCard(get: GetFn): boolean {
+  const s = get();
+  for (const tb of Object.values(s.tabs ?? {})) {
+    if (serviceToolsOf(tb.items).length > 0) return true;
+    for (const st of Object.values<any>(tb.subStreams ?? {})) {
+      if (serviceToolsOf(st).length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 用 `list_services` 权威快照校准所有 service 工具卡的 `running`。
+ *
+ * 推送是增量通道，丢一帧就永久停在错误状态（关 Tab / 分页未加载 / 子代理流未挂载）。
+ * 本函数是唯一的兜底：把「落盘快照已过期」也一并修正——历史恢复出来的卡 `running`
+ * 是启动当时的值，可能早已失效，这里以进程实况覆盖。
+ * `set` 由调用方（run.ts）注入：本文件不得运行时 import store（会与 run.ts 形成循环依赖），
+ * 只保留 type-only 引用。
+ */
+export async function reconcileServices(set: SetFn, get: GetFn): Promise<void> {
+  // 无卡可校准时早退：既是廉价短路，也断了链式重排的续航（无卡无对账需求）
+  if (!hasServiceCard(get)) return;
+  const infos = await ipc.listServices();
+  const live = new Set(infos.map((x) => x.id));
+  const running = new Set(infos.filter((x) => x.running).map((x) => x.id));
+  set((s) => {
+    for (const tb of Object.values(s.tabs)) {
+      const apply = (tools: any[]) => {
+        for (const tool of tools) {
+          const id = tool.outcome?.data?.id;
+          if (typeof id !== "string") continue;
+          const alive = live.has(id);
+          const next = alive ? running.has(id) : false;
+          if (tool.outcome?.data?.running === next) continue;
+          tool.outcome = { ...tool.outcome, data: { ...tool.outcome.data, running: next } };
+        }
+      };
+      apply(serviceToolsOf(tb.items));
+      for (const st of Object.values<any>(tb.subStreams)) apply(serviceToolsOf(st));
+    }
+  });
+}
+
+/**
+ * 按需排定一次对账（防抖）。`set` 由调用方注入；拉取失败静默——对账是兵底路，
+ * 拉不到就保持上一次的已知状态，绝不反向写回一个未经证实的值。
+ */
+export function scheduleServiceReconcile(set: SetFn, get: GetFn): void {
+  if (reconcileTimer) return;
+  reconcileTimer = setTimeout(() => {
+    reconcileTimer = null;
+    const silentFor = Date.now() - lastServiceUpdateAt;
+    // 自维持重排：无论本轮是否触发拉取都排下一轮，否则「推送刚到过 → 本轮跳过 → 无人再排」
+    // 会让拉取兜底永久失效（而它恰恰是事件全丢时唯一的纠错手段）。
+    // 链在无 service 卡时靠 hasServiceCard 早退自行停住，不会变成常驻轮询。
+    scheduleServiceReconcile(set, get);
+    if (silentFor < SERVICE_SILENCE_MS) return;
+    void reconcileServices(set, get).catch(() => {
+      /* 对账是兵底路：拉取失败不打断界面 */
+    });
+  }, SERVICE_SILENCE_MS);
 }

@@ -142,6 +142,22 @@ impl ServiceHandle {
     }
 }
 
+/// 服务状态的权威投影：工具 `list` 与只读 IPC `list_services` 共用同一份序列化，
+/// 避免两处字段漂移（`running` 是进程存活事实，不是「日志非空」的代理）。
+pub fn service_info(h: &ServiceHandle) -> Value {
+    json!({
+        "id": h.id,
+        "name": h.name,
+        "command": h.command,
+        "pid": h.pid,
+        "uptime_secs": h.uptime_secs(),
+        "log_bytes": h.log.len(),
+        "owner_root_id": h.owner_root_id,
+        "purpose": h.purpose,
+        "running": !h.done.load(std::sync::atomic::Ordering::SeqCst),
+    })
+}
+
 /// 服务表：进程内全部运行中后台服务的并发映射。
 #[derive(Default)]
 pub struct ServiceTable {
@@ -238,7 +254,7 @@ impl Tool for ServiceTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "service:update",
-                    json!({ "session": ctx.rt.id, "removed": id }),
+                    json!({ "session": ctx.rt.id, "removed": id, "running": false }),
                 );
                 ToolOutcome::ok(json!({ "stopped": id }))
             }
@@ -248,11 +264,7 @@ impl Tool for ServiceTool {
                     .services
                     .list()
                     .iter()
-                    .map(|h| {
-                        json!({ "id": h.id, "name": h.name, "command": h.command,
-                                "pid": h.pid, "uptime_secs": h.uptime_secs(), "log_bytes": h.log.len(),
-                                "owner_root_id": h.owner_root_id, "purpose": h.purpose })
-                    })
+                    .map(|h| service_info(h))
                     .collect();
                 ToolOutcome::ok(json!({ "services": items }))
             }
@@ -384,19 +396,22 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     let ticker_log = log.clone();
     let ticker_done = done.clone();
     let _ticker = tokio::spawn(async move {
-        let mut last_tail = String::new();
+        // 首拍必发：无输出的服务（如 `sleep 300`）tail 恒为空，若只在 tail 变化时推送，
+        // 这类服务一个事件都不发，前端永远拿不到「已启动」这一事实（工具卡只能靠 tail 判存活）。
+        let mut last_tail: Option<String> = None;
         loop {
             tokio::time::sleep(Duration::from_millis(1000)).await;
             let tail = ticker_log.tail(2000);
-            if tail != last_tail {
+            let running = !ticker_done.load(std::sync::atomic::Ordering::SeqCst);
+            if Some(&tail) != last_tail.as_ref() {
                 sink.emit(
                     &session,
                     "service:update",
-                    json!({ "session": session, "id": svc_id, "tail": tail }),
+                    json!({ "session": session, "id": svc_id, "tail": tail, "running": running }),
                 );
-                last_tail = tail;
+                last_tail = Some(tail);
             }
-            if ticker_done.load(std::sync::atomic::Ordering::SeqCst) {
+            if !running {
                 break;
             }
         }
@@ -432,7 +447,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         sink2.emit(
             &session2,
             "service:update",
-            json!({"session":session2,"id":svc2,"exited":true}),
+            json!({"session":session2,"id":svc2,"exited":true,"running":false}),
         );
     });
     // 目标模式已删除：owner 取 ctx.rt 自身（服务表按 owner_root_id 清理）。
@@ -458,7 +473,9 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         return ToolOutcome::err("E_SERVICE_FULL", e);
     }
     ToolOutcome::ok(
-        json!({ "id": id, "pid": pid, "purpose": args.purpose, "owner_root_id": owner.id, "note": "用 read 查看日志；stop 停止（进程树）" }),
+        json!({ "id": id, "pid": pid, "purpose": args.purpose, "owner_root_id": owner.id,
+                "running": true,
+                "note": "用 read 查看日志；stop 停止（进程树）" }),
     )
 }
 
@@ -539,6 +556,172 @@ mod tests {
         assert!(out.ok);
         let out = tool.run(&ctx, serde_json::json!({"action":"list"})).await;
         assert_eq!(out.data["services"].as_array().unwrap().len(), 0);
+    }
+
+    /// start 出参必须自报 `running: true`，且**不得**带 `tail`。
+    ///
+    /// 工具卡早期用 `data.tail` 代理进程存活，于是无输出的服务（`tail` 恒为空）
+    /// 永久显示「已停止」且停止按钮一并消失。反向也要钉住：有人为了「修好」而在出参里
+    /// 塞一个空 `tail`，那只是把同一个 bug 换个位置——状态必须由 `running` 承载。
+    #[tokio::test]
+    async fn start_outcome_declares_running_and_omits_tail() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt =
+            core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::AutoEdit,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        let ctx = ToolCtx {
+            core: core.clone(),
+            rt,
+            batch_id: "b".into(),
+            call_index: 0,
+            call_key: "b:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let out = ServiceTool
+            .run(
+                &ctx,
+                serde_json::json!({"action":"start","name":"quiet","command":"sleep 30"}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(
+            out.data["running"],
+            serde_json::json!(true),
+            "{:?}",
+            out.data
+        );
+        assert!(
+            out.data.get("tail").is_none(),
+            "start 出参不得携带 tail（它只是日志，不是存活事实）：{:?}",
+            out.data
+        );
+
+        let id = out.data["id"].as_str().unwrap().to_string();
+        // list（list_services IPC 的同一投影）必须也带 running
+        let listed = ServiceTool
+            .run(&ctx, serde_json::json!({"action":"list"}))
+            .await;
+        let item = &listed.data["services"][0];
+        assert_eq!(item["id"], serde_json::json!(id));
+        assert_eq!(item["running"], serde_json::json!(true), "{item:?}");
+
+        let _ = ServiceTool
+            .run(&ctx, serde_json::json!({"action":"stop","id":id}))
+            .await;
+    }
+
+    /// 无输出的服务也必须发出首个 `service:update`（ticker 首拍必发）。
+    ///
+    /// 回归背景：ticker 原来只在 `tail != last_tail` 时推，而 `last_tail` 初值是空串——
+    /// 无输出服务的 `tail` 恒为空，条件恒假，**一个事件都不发**，前端永远拿不到「已启动」。
+    /// 这里用捕获 sink 断言首拍存在且 `running == true`。
+    #[tokio::test]
+    async fn ticker_emits_first_update_even_while_silent() {
+        use std::sync::Mutex;
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        struct CaptureSink(Arc<Mutex<Vec<serde_json::Value>>>);
+        impl crate::core::agent::EventSink for CaptureSink {
+            fn channel_frame(
+                &self,
+                _s: &crate::core::types::SessionId,
+                _f: &crate::core::agent::Frame,
+            ) {
+            }
+            fn emit(&self, _s: &crate::core::types::SessionId, e: &str, p: serde_json::Value) {
+                if e == "service:update" {
+                    self.0.lock().unwrap().push(p);
+                }
+            }
+        }
+
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        // make_core 固定用 NoopSink（吞事件），这里自建 core 以捕获 service:update
+        let mut cfg = crate::core::config::ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            models: vec![crate::core::config::ProviderModel::default()],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+        let core = Arc::new(crate::AgentCore::new(
+            cfg,
+            Arc::new(CaptureSink(seen.clone())),
+            Arc::new(crate::core::sessions::SessionStore::new(
+                roots.data_dir.clone(),
+            )),
+            reqwest::Client::new(),
+            roots.data_dir.clone(),
+        ));
+        let rt =
+            core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::AutoEdit,
+            model_id: None,
+            reasoning_effort: None,
+        });
+        let ctx = ToolCtx {
+            core: core.clone(),
+            rt,
+            batch_id: "b".into(),
+            call_index: 0,
+            call_key: "b:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let out = ServiceTool
+            .run(
+                &ctx,
+                serde_json::json!({"action":"start","name":"quiet","command":"sleep 30"}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let id = out.data["id"].as_str().unwrap().to_string();
+
+        // 跨过两个 ticker 周期（首拍 1s）
+        tokio::time::sleep(Duration::from_millis(2600)).await;
+        let events = seen.lock().unwrap().clone();
+        assert!(
+            !events.is_empty(),
+            "无输出的服务也必须至少收到一次 service:update（否则卡片无从得知已启动）"
+        );
+        assert!(
+            events.iter().any(|e| e["id"] == serde_json::json!(id)),
+            "事件必须带服务 id：{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| e["running"] == serde_json::json!(true)),
+            "存活期间 running 恒为 true：{events:?}"
+        );
+
+        let _ = ServiceTool
+            .run(&ctx, serde_json::json!({"action":"stop","id":id}))
+            .await;
+        // 退出/移除必须把 running 翻 false（否则卡片停在「假运行中」）
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let after = seen.lock().unwrap().clone();
+        assert!(
+            after
+                .iter()
+                .any(|e| e["running"] == serde_json::json!(false)),
+            "stop 后必须发 running:false：{after:?}"
+        );
     }
 
     // ===== 目标档服务测试已整体移除 =====
