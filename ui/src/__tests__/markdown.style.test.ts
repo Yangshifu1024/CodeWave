@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderMarkdown } from "../utils/markdown";
 
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
 
@@ -27,6 +28,37 @@ describe("markdown 主题感（docs/markdown-style-refresh）", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+\.table-wrap\s*\{\s*overflow-x:\s*auto/);
     expect(appCss).toMatch(/:is\([^*]+?\)\s+th\s*\{\s*background:\s*var\(--ws-bg-nav\)/);
     expect(appCss).toMatch(/:is\([^*]+?\)\s+tr:hover\s+td\s*\{\s*background:\s*var\(--ws-bg-nav\)/);
+  });
+
+  // [docs/plan-modal-table-scroll]：上条用例曾只守 CSS 文本、不断言 DOM，于是 `.table-wrap` 长期是个
+  // 零生产点的死规则（markdown-it 默认输出裸 <table>），宽表格被 overflow-x:hidden 静默裁掉。
+  // 本条把契约补成「CSS + DOM 双守」：样式写了就必须真有这个包裹元素。
+  it("渲染层真的产出 .table-wrap 包裹（CSS 死规则的解药）", () => {
+    const html = renderMarkdown("| 项 | 处置 |\n| --- | --- |\n| a | b |");
+    expect(html).toContain('<div class="table-wrap"><table>');
+    expect(html).toContain("</table></div>");
+    // 包裹层不得嵌套（markdown-it 无嵌套表格语法，出现即说明配对错乱）
+    expect(html).not.toContain('<div class="table-wrap"><div class="table-wrap">');
+  });
+
+  // 预览弹框容器此前是 .assistant，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格
+  it("共享组包含 .viewer-md.md（文件预览弹框正文），且不吃聊天区 860px 行长上限", () => {
+    expect(appCss).toMatch(/:is\([^*]+?\.viewer-md\.md[^*]+?\)/);
+    expect(appCss).toMatch(/\.viewer-md\.md\s*\{[^}]*max-width:\s*100%/);
+  });
+
+  // [docs/plan-modal-table-scroll]：mermaid / katex 那组规则此前全挂 `.assistant .md` 前缀，
+  // 预览弹框换容器后整体失配（公式丢 pre-wrap 兜底、.katex-display 丢横向滚动、mermaid 丢底色）。
+  // 本条钉住「它们也走共享组」，防下一个新增预览容器再次踩同一个坑。
+  it("mermaid / katex 规则也走共享 :is() 组，不再只挂 .assistant 前缀", () => {
+    for (const sel of [".ws-diagram", ".ws-diagram svg", ".ws-diagram-error", ".ws-math-raw", ".katex-display"]) {
+      expect(appCss).toMatch(new RegExp(`:is\\([^*]+?\\)\\s+${sel.replace(/[.[\]/]/g, "\\$&")}\\s*\\{`));
+    }
+    // 流式占位规则（含 [data-streaming] 限定）也必须在共享组内
+    expect(appCss).toMatch(/:is\([^*]+?\.md\[data-streaming\][^*]+?\)\s+\.ws-diagram\s*\{\s*opacity/);
+    // 旧前缀不得残留（残留即意味着有人又把新容器排除在外）
+    expect(appCss).not.toMatch(/^\.assistant \.md \.ws-/m);
+    expect(appCss).not.toMatch(/^\.assistant \.md \.katex/m);
   });
 
   it("链接走 var(--ws-accent) + 下划线 + 偏移", () => {

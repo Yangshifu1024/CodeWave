@@ -211,12 +211,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .assistant .md { max-width: 860px; min-width: 0; overflow-x: hidden; }
 /* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡 + 更新弹窗发布说明 + 技能详情正文（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
    inline code chip、表格等全部无样式；[docs/updater-notes-markdown-and-progress-throttle](../../../docs/docs/updater-notes-markdown-and-progress-throttle.md) 把更新弹窗的发布说明也并入本组；
-   .skill-body.md = 技能详情弹框的 SKILL.md 正文，此前漏在本组外——正文段落无间距、代码块无 github 底色、Copy 按钮不显形、表格无边框）。
+   .skill-body.md = 技能详情弹框的 SKILL.md 正文，此前漏在本组外——正文段落无间距、代码块无 github 底色、Copy 按钮不显形、表格无边框；
+   .viewer-md.md = 文件预览弹框的 markdown/doc 正文，此前复用聊天区 .assistant 容器，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）。
    新增消费点一律往这里的 :is() 里加容器选择器，不要另抄一套排版。 */
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) p { margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) p { margin: 0.4em 0; }
 /* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) .code-wrap { position: relative; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) .code-wrap > pre { margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .code-wrap { position: relative; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .code-wrap > pre { margin: 0.4em 0; }
 .code-copy {
   position: absolute; top: 6px; right: 6px; z-index: 2;
   height: 22px; padding: 0 8px;
@@ -227,69 +228,79 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   cursor: pointer; user-select: none;
 }
 /* 代码块悬停时显示按钮；复制成功/失败态保持可见 1.5s（类由 codecopy.ts 驱动） */
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) .code-wrap:hover .code-copy,
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .code-wrap:hover .code-copy,
 .code-copy:focus-visible,
 .code-copy-done { opacity: 1; visibility: visible; }
 .code-copy:hover { color: var(--ws-text-1); border-color: var(--ws-dim); }
 .code-copy-done { color: var(--ws-ok, #1f8f4d); }
 .code-copy-fail { color: var(--ws-err); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre,
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre,
 .code-block {
   border-radius: 8px; padding: 10px 12px; overflow-x: auto;
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
 /* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
    与左侧导航同色，整体观感统一（[docs/ask-ink-accent-and-composer-cover]）。 */
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-comment { color: var(--ws-hl-comment); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-keyword { color: var(--ws-hl-keyword); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-string { color: var(--ws-hl-string); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-number { color: var(--ws-hl-number); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-title { color: var(--ws-hl-name); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) pre .hljs-built_in { color: var(--ws-hl-built); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) table { border-collapse: collapse; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) .table-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--ws-border); border-radius: 6px; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) .table-wrap > table { width: 100%; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: 12.5px; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) th { background: var(--ws-bg-nav); font-weight: 600; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) tr:hover td { background: var(--ws-bg-nav); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-comment { color: var(--ws-hl-comment); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-keyword { color: var(--ws-hl-keyword); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-string { color: var(--ws-hl-string); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-number { color: var(--ws-hl-number); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-title { color: var(--ws-hl-name); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-built_in { color: var(--ws-hl-built); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) table { border-collapse: collapse; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; border-radius: 6px; }
+/* wrapper 不再自带边框（[docs/plan-modal-table-scroll]）：它与内部 th/td 的 1px 边框同时存在会叠成双层网格。
+   max-width:100% 是滚动的关键——它把 wrapper 钉在容器宽度内，宽表格才会溢出成可滚动区。
+   （min-width 对块级盒实际是 no-op，写着是为了与 .assistant/.md 的 min-width:0 惯例一致，兼作意图声明。） */
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .table-wrap > table { width: 100%; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: 12.5px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th { background: var(--ws-bg-nav); font-weight: 600; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) tr:hover td { background: var(--ws-bg-nav); }
 /* 标题：渐变 + 紧凑（[docs/markdown-style-refresh]） */
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) :is(h1, h2, h3, h4, h5, h6) {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.8em 0 0.3em; font-weight: 600; line-height: 1.4; color: var(--ws-text-1);
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h1 { font-size: 18.5px; margin-top: 1em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h2 { font-size: 16.5px; margin-top: 0.9em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h3 { font-size: 15px; margin-top: 0.8em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h4 { font-size: 14px; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h5, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) h6 { font-size: 13.5px; color: var(--ws-text-2); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) p { line-height: 1.7; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) a {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h1 { font-size: 18.5px; margin-top: 1em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h2 { font-size: 16.5px; margin-top: 0.9em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h3 { font-size: 15px; margin-top: 0.8em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h4 { font-size: 14px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h5, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h6 { font-size: 13.5px; color: var(--ws-text-2); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) p { line-height: 1.7; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) a {
   color: var(--ws-accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px;
   text-decoration-color: color-mix(in srgb, var(--ws-accent) 50%, transparent);
   transition: color 0.12s ease, text-decoration-color 0.12s ease;
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) a:hover { color: var(--ws-text-1); text-decoration-color: var(--ws-text-1); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) :is(ul, ol) { padding-inline-start: 22px; margin: 0.4em 0; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) li { margin: 0.15em 0; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) li::marker { color: var(--ws-dim); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) li > p { margin: 0.2em 0; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) blockquote {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) a:hover { color: var(--ws-text-1); text-decoration-color: var(--ws-text-1); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(ul, ol) { padding-inline-start: 22px; margin: 0.4em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) li { margin: 0.15em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) li::marker { color: var(--ws-dim); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) li > p { margin: 0.2em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) blockquote {
   border-left: 3px solid var(--ws-accent);
   padding: 2px 12px; margin: 0.6em 0; border-radius: 0 6px 6px 0;
   color: var(--ws-text-2);
   background: color-mix(in srgb, var(--ws-accent) 4%, transparent);
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) blockquote > :first-child { margin-top: 0.4em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) blockquote > :last-child { margin-bottom: 0.4em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) hr { border: 0; border-top: 1px solid var(--ws-border); margin: 1em 0; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) del { color: var(--ws-dim); text-decoration: line-through; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) mark { background: color-mix(in srgb, var(--ws-warn, #d4a106) 30%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) sub, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) sup { font-size: 0.75em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) input[type="checkbox"] { margin-right: 6px; transform: translateY(1px); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) strong { font-weight: 600; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md) em { font-style: italic; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) blockquote > :first-child { margin-top: 0.4em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) blockquote > :last-child { margin-bottom: 0.4em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) hr { border: 0; border-top: 1px solid var(--ws-border); margin: 1em 0; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) del { color: var(--ws-dim); text-decoration: line-through; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) mark { background: color-mix(in srgb, var(--ws-warn, #d4a106) 30%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) sub, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) sup { font-size: 0.75em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) input[type="checkbox"] { margin-right: 6px; transform: translateY(1px); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) strong { font-weight: 600; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) em { font-style: italic; }
+
+/* 文件预览弹框正文（.viewer-md.md）：不吃聊天区那套 860px 行长上限——预览本就靠滚动读，
+   行长约束是聊天排版的刻意约束，用在这里只会静默裁掉宽表格（[docs/plan-modal-table-scroll]）。
+   overflow-x 留 hidden 是与 .assistant .md 的既有行为对齐：宽内容由各自的 .table-wrap / pre 承接滚动，
+   不滚整个正文。注意 .assistant .md 本就不匹配这个容器（无 .assistant 祖先），本规则是显式重声明，
+   不依赖层叠覆盖。 */
+.viewer-md.md { max-width: 100%; min-width: 0; overflow-x: hidden; }
 
 /* 思考块：antd Collapse ghost 面板（默认收起）；样式微调仍走 token */
 .thinking-block.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
@@ -1503,29 +1514,33 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 .rb-quota-updated { font-size: 11px; white-space: nowrap; }
 
 /* ---------- mermaid / katex（B4） ---------- */
-.assistant .md .ws-diagram {
+/* [docs/plan-modal-table-scroll](../../docs/plan-modal-table-scroll.md)]：此前这组规则全部挂在 `.assistant .md`
+   前缀下，导致预览弹框一旦换容器（非 .assistant）就整体失配——公式丢 pre-wrap 兜底、.katex-display 丢
+   横向滚动、mermaid 丢底色。改走共享 :is() 组，与 markdown 排版规则同源（消费点集合同一条，见上方注释）。 */
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-diagram {
   overflow-x: auto; background: var(--ws-code-bg); border-radius: 8px;
   padding: 10px; margin: 0.5em 0; text-align: center;
 }
-.assistant .md .ws-diagram svg { max-width: 100%; height: auto; }
-/* 流式期间的 mermaid 占位：推迟到消息定稿再渲染，半透明 + 提示（防流式期间滚动风暴） */
-.assistant .md[data-streaming] .ws-diagram { opacity: 0.6; }
-.assistant .md[data-streaming] .ws-diagram::after {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-diagram svg { max-width: 100%; height: auto; }
+/* 流式期间的 mermaid 占位：推迟到消息定稿再渲染，半透明 + 提示（防流式期间滚动风暴）。
+   data-streaming 只存在于聊天区（segments.tsx），其余容器本就没有该属性，规则对其无副作用。 */
+:is(.assistant .md[data-streaming], .sub-drawer-stream .md[data-streaming], .plan-body.md[data-streaming], .updater-notes-body.md[data-streaming], .skill-body.md[data-streaming], .viewer-md.md[data-streaming]) .ws-diagram { opacity: 0.6; }
+:is(.assistant .md[data-streaming], .sub-drawer-stream .md[data-streaming], .plan-body.md[data-streaming], .updater-notes-body.md[data-streaming], .skill-body.md[data-streaming], .viewer-md.md[data-streaming]) .ws-diagram::after {
   /* 提示文案由 markdown 渲染器写进 data-pending（i18n 键 chat.diagramPending）：CSS 只负责位置与样式。
      写死在 CSS 里的中文进不了 i18n，英文界面会露中文（版式审计发现）；attr() 让两侧各司其职。 */
   content: attr(data-pending);
   display: block; margin-top: 4px; text-align: left;
   font-size: 11px; color: var(--ws-dim);
 }
-.assistant .md .ws-diagram-error {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-diagram-error {
   white-space: pre-wrap; text-align: left; font-family: var(--ws-font-mono);
   font-size: 12px; color: var(--ws-err);
 }
-.assistant .md .ws-math-raw {
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-math-raw {
   font-family: var(--ws-font-mono); font-size: 12.5px;
   white-space: pre-wrap; color: var(--ws-text-2);
 }
-.assistant .md .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
 
 /* antd 6 sets radio-group font-size to zero to remove inline-block whitespace. Restore text sizing. */
 .proxy-mode-list { font-size: var(--ws-font-size); }
