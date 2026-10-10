@@ -477,29 +477,21 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
       });
     },
     "sub:done": (p: SubagentEvent) => {
-      // 诊断探针（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
-      // 子代理卡永久停在「运行中」时，用这三条日志 + 后端 emit 日志二分定位断点，定位后整体移除。
-      console.log("[subdiag] enter", p.session, p.sub_id, p.steps_used, p.ended);
-      try {
-        set((s) => {
-          const t = s.tabs[p.session];
-          if (!t) return;
-          const sub = t.subs.find((x) => x.subId === p.sub_id);
-          if (sub) {
-            sub.status = "done";
-            // 收尾刷新：轮询采样可能滞后于真实步数，以事件携带的最终值纠正
-            if (typeof p.steps_used === "number") sub.step = p.steps_used;
-            if (p.ended) sub.ended = p.ended;
-          }
-          const st = t.subStreams[p.sub_id];
-          if (st) st.status = "done";
-          // 只扫该子流：子代理结束时主会话可能仍在跑，不得误伤主会话在途工具
-          closeRunningTools(t, p.sub_id);
-        });
-        console.log("[subdiag] committed");
-      } catch (e) {
-        console.error("[subdiag] producer THREW", e);
-      }
+      set((s) => {
+        const t = s.tabs[p.session];
+        if (!t) return;
+        const sub = t.subs.find((x) => x.subId === p.sub_id);
+        if (sub) {
+          sub.status = "done";
+          // 收尾刷新：轮询采样可能滞后于真实步数，以事件携带的最终值纠正
+          if (typeof p.steps_used === "number") sub.step = p.steps_used;
+          if (p.ended) sub.ended = p.ended;
+        }
+        const st = t.subStreams[p.sub_id];
+        if (st) st.status = "done";
+        // 只扫该子流：子代理结束时主会话可能仍在跑，不得误伤主会话在途工具
+        closeRunningTools(t, p.sub_id);
+      });
     },
     "sub:error": (p: SubagentEvent) => {
       set((s) => {

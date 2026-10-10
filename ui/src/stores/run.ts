@@ -17,6 +17,7 @@ import {
   applyFrameToTab,
   applyToolStart,
   blank,
+  closeRunningTools,
   currentAssistantIm,
   ensureToolAnchorIm,
   findToolViewInItems,
@@ -856,6 +857,46 @@ export const useRun = create<RunStore>()(
         if (t.runMetrics) t.runMetrics.toolMs += p.duration_ms ?? 0;
         // 同上：落定即清进度尾部（主会话与子代理流两处同步）
         tool.progressTail = "";
+        // [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)：子代理终态**二道兜底**。
+        // 本块位于主会话分支——子代理内部的工具结果已在上面的 !t 早退分支返回，故只认主会话自己的 subagent 调用。
+        //
+        // 为什么需要第二道：`sub:done` / `sub:error` 是子代理卡唯一的收尾途径（主会话工具有 closeRunningTools
+        // 兜底、子代理侧此前没有），丢一帧即永久「运行中」——composer 运行中计数不归零、停止按钮不消失。
+        // 而 `tool:result` 与那三帧**出自同一个 task 的相邻位置**：sub:done 在 tool.run 返回前 emit、
+        // tool:result 在 batch 层拿到返回值后 emit（同 batch.rs），是现存第二可靠的收尾信号。
+        // 「subagent 工具返回」本身即证明该子代理已结束，故据 outcome 就地收敛，不依赖那三帧。
+        //
+        // 覆盖范围 = 仅成功路径：后端失败/取消分支的 `ToolOutcome::err` 不带 sub_id（见 subagent.rs 的
+        // E_SUBAGENT_STOPPED / E_SUBAGENT），故这两路仍由 sub:error + run 收尾兜底（settleRunningSubs）接管。
+        //
+        // 幂等：`status !== "running"` 直接跳过。正常 sub:done 先到时卡片已是终态，此处不碰，
+        // 不会用兜底口径覆盖 sub:done 带回的 ended / steps_used / report。
+        if (p.tool === "subagent") {
+          const data = p.outcome?.data;
+          const subId = data?.sub_id;
+          if (typeof subId === "string") {
+            const sub = t.subs.find((x) => x.subId === subId);
+            if (sub && sub.status === "running") {
+              sub.status = "done";
+              // ended 回填：保留后端送来的**任意字符串**，只在非字符串时落 no_report。
+              // 刻意不做枚举白名单过滤——白名单写法会在后端扩展 ended 时把新值静默漏判成
+              // no_report（docs/subagent-budget-and-ended.md 就 `partial` 明确警告过这一点：
+              // 「后端新增枚举时静默漏判、落回绿勾，即本 bug 在新值上重现」）。
+              // 这里先用 typeof 守住运行时形状，再按当前分支的 SubView["ended"] 收窄写入；
+              // PR #126（ended 扩四值加 partial）合入后 partial 无需改动即被正确保留。
+              // 非字符串 → no_report：保守口径，不伪装成「按约定汇报」的干净完成。
+              const rawEnded: unknown = data?.ended;
+              sub.ended = (typeof rawEnded === "string" ? rawEnded : "no_report") as SubView["ended"];
+              if (typeof data?.steps_used === "number") sub.step = data.steps_used;
+              // report 可能已由 sub:report 事件先行到达（内容同为后端剥离过的 clean_report），故只在空时补
+              if (!sub.report && typeof data?.report === "string") sub.report = data.report;
+              const st = t.subStreams[subId];
+              if (st) st.status = "done";
+              // 该子流内仍在途的工具卡一并落定（同 sub:done；只扫该子流，不误伤主会话在途工具）
+              closeRunningTools(t, subId);
+            }
+          }
+        }
       });
     },
 

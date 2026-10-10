@@ -75,7 +75,7 @@ impl EventSink for TauriSink {
             .app
             .emit_to(tauri::EventTarget::labeled("main"), event, payload)
         {
-            tracing::warn!(target: "sub_diag", event, err = %e, "事件发射失败（前端收不到）");
+            tracing::warn!(event, err = %e, "事件发射失败（前端收不到）");
         }
     }
 
