@@ -12,7 +12,7 @@
 
 - 每个供应商可配置任意 HTTP 请求头，随该供应商的所有 LLM 请求发送。
 - 头值支持动态占位符 `${session_id}`（满足 `x-opencode-session` 的「每会话稳定」语义——静态值无法表达）。
-- 默认发送 `User-Agent: CodeWave/<版本> (+local-first desktop agent)`（`src-tauri/src/util/mod.rs::USER_AGENT`），
+- 默认发送 `User-Agent: CodeWave/<版本> (+desktop agent)`（`src-tauri/src/util/mod.rs::USER_AGENT`，由 `concat!("CodeWave/", env!("CARGO_PKG_VERSION"), " (+desktop agent)")` 拼成；version 取 `CARGO_PKG_VERSION`），
   且允许被自定义同名头覆盖（满足「专属 UA」）。
 - 明文存储与回显（与 `base_url` 同级；用户自行承担放入 token 的风险，文档明示）。
 
@@ -90,7 +90,7 @@
 | `User-Agent` | `CodeWave/0.3.4` |
 | `x-opencode-session` | `${session_id}` |
 
-未填 `User-Agent` 时仍会发送默认的 `CodeWave/<版本>`。
+未填 `User-Agent` 时仍会发送默认的 `CodeWave/<版本> (+desktop agent)`。
 
 ## 决策记录
 

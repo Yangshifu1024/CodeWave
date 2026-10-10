@@ -6,8 +6,11 @@
 > 「工具与集成 → 技能」空列表时显示的是**「暂无会话」**（借用了 `sessions.empty`）。
 >
 > **后续变更（2026-09-20，[post-write-check-plan](./post-write-check-plan.md)）**：写入后语义校验（LSP）机制整体删除，
-> 改为 **写入后检查**（`settings.postWriteCheck` 分组 + `post_write_check.*` 四项）；本文中
-> 「写入后**语义**校验」/ `settings.validation` 相关条目均为历史记录，现行定名为「写入后检查」。
+> 改为 **写入后检查**（`settings.postWriteCheck` 分组 + `post_write_check.*` 四项，对应后端 `PostWriteCheckSettings` / 配置字段
+> `post_write_check`）；**LSP 机制已于该批次删除，`settings.lspJavaCost`、`lsp.confirmCost`、`chat/LspGuideCard.tsx`
+> 及 `lsp.*` 文案段均不再存在**（`src-tauri/src/lsp/` 目录亦已移除）。本文中
+> 「写入后**语义**校验」/ `settings.validation` / `LspGuideCard` 相关条目均为**历史决策记录**（保留当时的推理），
+> 现行定名为「写入后检查」。
 
 本批**不做**（边界）：后端任何改动（`src-tauri/**` 零 diff）；代码标识符（组件名 / 文件名 / 注册表导出名与 id / 配置字段路径 / CSS 类名 / localStorage 键）；
 全 8 页说明位大改造；第三方许可清单生成与许可证全文页；构建信息 / 平台 / 架构；批①-③ 的任何能力回退；新设置项功能与配置字段；i18n 机制更换与第三语言；GUI 自动点验。
@@ -21,7 +24,7 @@
 | 已保存 | 已保存 | Saved | `common.saved` | 同上 |
 | 取消 | 取消 | Cancel | `common.cancel` | 同上 |
 | 内置来源 | 内置 | Built-in | `common.builtin` | 技能来源标签（右栏技能行与设置页技能行共用同一词） |
-| 写后校验 | 写入后**语义**校验 | Post-write **semantic** validation | `settings.validation` | 用户可见名一律「语义」；旧的「语法」写法全批清零 |
+| 写后校验 | 写入后**语义**校验 | Post-write **semantic** validation | `settings.validation`（**已于 2026-09-20 退役**，现行 `settings.postWriteCheck` =「写入后检查」/ Post-write check） | 用户可见名一律「语义」；旧的「语法」写法全批清零（历史规则） |
 | 删除技能 | 删除技能 | Delete skill | `settings.deleteSkill` | **带宾语**且用于 `aria-label`：屏幕阅读器需要完整动作名，**不并入** `common.delete` |
 
 **「同义键」的判定 = 值与语境皆同者。**
@@ -41,7 +44,7 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 
 1. `common.*`：**跨页面复用、无宾语、语境相同**的动作 / 状态词。新增键前先问两句——「有超过一个页面用它吗？」「两处宾语一样吗？」——都为「是」才进 `common`。
 2. `settings.*`：设置页专属（页壳文案、项名、从属文案）。收敛后**设置页不得引用任何非 `settings.*` / `common.*` 的键**（守门用例 ②）。
-3. 其他页面段（`nav.*` / `sessions.*` / `tasks.*` / `queue.*` / `rightbar.*` / `composer.*` / `lsp.*` …）：各自功能的专属文案。
+3. 其他页面段（`nav.*` / `sessions.*` / `tasks.*` / `queue.*` / `rightbar.*` / `composer.*` / `lsp.*` …）：各自功能的专属文案（`lsp.*` 段已随 LSP 机制于 2026-09-20 删除）。
    **跨页借用即缺陷**——本批修的两处（`sessions.empty`、`composer.effortDefault`）都是「设置页借了别的页面的键」。
 4. `common` 不是垃圾桶：只有「同一句话被两处以上引用」才收敛；一次性文案留在页面段。
 
@@ -49,8 +52,9 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 
 **键名前缀 = 页面 / 功能归属，不追技术栈名。**
 
-- 因此 `validation*` 一族键名**不改**：它们与后端 config 字段路径同源（`validation.lsp.*` ↔ `ValidationSettings`），注册表的 `id` 就是字段路径，责任边界清楚；
+- 因此 `validation*` 一族键名**不改**（当时）：它们与后端 config 字段路径同源（`validation.lsp.*` ↔ `ValidationSettings`），注册表的 `id` 就是字段路径，责任边界清楚；
   若改成 `lsp*`，等于把「设置项归属（工具与集成页）」与「实现技术（LSP）」绑死，将来换实现（或 JSON 走内置解析这类非 LSP 路径）就要改键名与注册表 id。
+  **该结论已于 2026-09-20 作废**：后端换成 `PostWriteCheckSettings` / `post_write_check.*`，键名与配置字段一同迁移为 `postWriteCheck*`（见页首后续变更）。
 - 同理 `settings.mcp` 留在原段：MCP 是功能名（用户找它的词），不是技术栈名。
 - 推论：键名与**实现**解耦、与**页面归属**耦合；重命名只应发生在「归属变了」时（如本批 `about.*` → `settings.about*`）。
 
@@ -90,9 +94,11 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 
 ### 4.5 同义整句合并
 
+> **历史决策（LSP 机制已于 2026-09-20 整体删除）**：以下两个键与 `LspGuideCard.tsx` 均已不存在；保留本节是为记录**当时如何处置同义键**的推理（该推理对任何后续同义键合并仍然成立）。
+
 `lsp.confirmCost` 与 `settings.lspJavaCost` 是同一句话（启用 Java 校验的代价）。
 
-**保留 `settings.lspJavaCost`，删除 `lsp.confirmCost`**，`LspGuideCard.tsx` 的 `confirm_enable` 卡片改引 `settings.lspJavaCost`。理由：
+**（当时的处置）保留 `settings.lspJavaCost`，删除 `lsp.confirmCost`**，`LspGuideCard.tsx` 的 `confirm_enable` 卡片改引 `settings.lspJavaCost`。理由：
 
 1. 它落在 `settings.*` 段 → 受注册表引用闭包守护；`lsp.*` 段不在闭包扫描范围内，留着等于无人拦；
 2. 句子**自含主语**（「启用 **Java** 语义校验…」），而引导卡只在 Java 的 `confirm_enable` 场景出现，直接引用即可读完整；
@@ -121,7 +127,7 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 | # | 位置 | 变更 | 语言 |
 |---|---|---|---|
 | 1 | `ProvidersPanel.tsx:233` / `:573` / `:632`（三个 Popconfirm 标题）+ `:576`（删除按钮文案）= **4 处** | `Remove` → `Delete` | 仅 en |
-| 2 | `LspGuideCard.tsx:101` 引导卡 Java 代价**整句**（改引 `settings.lspJavaCost`） | 句子换措辞（补上「Java」主词，与 `settings.validation` 同源） | **中英双语** |
+| 2 | `LspGuideCard.tsx:101` 引导卡 Java 代价**整句**（改引 `settings.lspJavaCost`；**组件已于 2026-09-20 随 LSP 机制删除**） | 句子换措辞（补上「Java」主词，与 `settings.validation` 同源） | **中英双语** |
 
 成因：① 统一到 `common.delete` 的 en 写法；② 同义整句合并保留的是 `settings.lspJavaCost`（§4.5），它的值与 `lsp.confirmCost` 本就不同——
 引导卡上这句**中英双语都变了**（旧：`启用后会启动 jdtls 并解析依赖树…` / `Enabling starts jdtls and resolves…`；
@@ -141,7 +147,7 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
      或在显式豁免清单 `NON_SETTINGS_PANEL_SEGMENTS`（粒度：「**文件 → 段**」而不是「整文件」）内；
    - **非 panels 目录**（批④ 返工补的逃逸面）：每个文件进「**文件 → 允许段**」白名单（`FEATURE_FILE_SEGMENTS`，**精确到文件，不做整目录放行**），
      允许段只能是共享段（`app.` / `common.`）、本目录自有段（`DIR_OWNED_SEGMENTS`）或登记在案的跨段借用（`CROSS_SEGMENT_BORROWINGS`，逐条写理由）——
-     本批自己新增的 `chat/LspGuideCard.tsx → settings.lspJavaCost` 就是最后一类（首条登记项）；
+     本批自己新增的 `chat/LspGuideCard.tsx → settings.lspJavaCost` 就是最后一类（首条登记项；**该登记项已于 2026-09-20 随组件删除而移除**）；
    - **变量拼出的键名**（批④ 返工补）：`t(` 调用点分三类（字面 / 内联字面 / 纯动态）并要求对账，
      纯动态的调用点（`t(key)`、`t(LANG_LABEL_KEY[lang])`）必须进 `DYNAMIC_KEY_CALLS` 逐条登记理由 —— 否则改引他段键也不会红；
    - 反向守卫：白名单 / 豁免清单都不悬空（登记了却已不存在 = 清单过时）；**正则失效守卫** —— 源码里出现 `t(` 的页体必须被扫到 ≥1 个字面键。
@@ -190,10 +196,10 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 | `ui/src/i18n/zh-CN.ts` / `en-US.ts` | 新增 `common` 段（5 键）；删除 17 个旧键 + `about` 段；新增 `settings.skillsEmpty` / `aiLanguagePlaceholder` / 15 个 `settings.about*`；`settings.validation` 值改「写入后语义校验」 |
 | `ui/src/features/panels/settingsRegistry.ts` | 关于页 5 个只读入口登记（含 keywords）+ `WIDTH_EXEMPT_ITEM_IDS` 扩容；`SHELL_SETTING_KEYS` 去掉 `save/saved/cancel/remove`、补 about 从属文案 |
 | `ui/src/features/panels/AboutSettings.tsx` | 版式重排（5 处）+ 两个新入口 + `entryRow` 复用 |
-| `ui/src/features/panels/SettingsPage.tsx` / `ProvidersPanel.tsx` / `TaskCenterPanel.tsx` / `ui/src/features/shell/ProjectNav.tsx` / `RightBar.tsx` / `ui/src/features/chat/QueuePanel.tsx` / `LspGuideCard.tsx` | 引用点切换（见 §4） |
+| `ui/src/features/panels/SettingsPage.tsx` / `ProvidersPanel.tsx` / `TaskCenterPanel.tsx` / `ui/src/features/shell/ProjectNav.tsx` / `RightBar.tsx` / `ui/src/features/chat/QueuePanel.tsx` / `LspGuideCard.tsx`（后者已于 2026-09-20 删除） | 引用点切换（见 §4） |
 | `ui/src/theme/app.css` | 关于页：`.about-body` 直接左对齐、移除 `.about-actions` 与覆盖式兜底规则（类名不动） |
 | `ui/src/__tests__/{i18n.keys,settings.registry}.test.ts` | 四条守门（§5）；批④ 返工：非 panels 目录的「文件 → 允许段」白名单 + 变量键名登记 + 文档检查数组补全 + 新增键全量对偶 |
-| `ui/src/__tests__/{settings.page,app.smoke,lsp.guide-card}.test.tsx` | 受术语与文案变更影响的断言更新 + 关于页四入口 IPC 用例 + 关于页只读条目可搜用例 |
+| `ui/src/__tests__/{settings.page,app.smoke,lsp.guide-card}.test.tsx`（`lsp.guide-card.test.tsx` 已随 LSP 机制删除） | 受术语与文案变更影响的断言更新 + 关于页四入口 IPC 用例 + 关于页只读条目可搜用例 |
 | `ui/src/__tests__/{settings.skills,rightbar.skills}.test.tsx` | 技能空态的 DOM 断言（批④ 返工补：设置页「暂无技能」/ 右栏「暂无可用技能」，且不得退回「暂无会话」） |
 
 ## 8. 人工验证清单
@@ -201,10 +207,10 @@ zh 侧本就有别（「暂无技能」/「暂无可用技能」），且两处�
 1. 「工具与集成 → 技能」空态显示**「暂无技能」**（不再是「暂无会话」）。
 2. 各处删除按钮 / 确认框文案一致（会话行、项目、供应商、模型、命令白名单、SDK 根目录、计划任务、队列）。
 3. 供应商 / 模型删除按钮**英文**已为 `Delete`（中文不变）——共 **4 处**：三个确认框标题（模型行 / 供应商编辑视图 / 供应商列表行）+ 1 个删除按钮（供应商编辑视图）。
-4. 设置项标题为**「写入后语义校验」**，与文档一处不差。
+4. 设置项标题为**「写入后语义校验」**，与文档一处不差。（**历史验证项**；2026-09-20 后现行定名为「写入后检查」/ Post-write check）
 5. **引导卡 Java 代价整句（中英双语都变了）**：未启用 Java 校验时点「启用」前的引导卡正文应分别为
    「启用 Java 语义校验会启动 jdtls 并解析依赖树，可能耗时数分钟、占用 GB 级内存。」/ `Enabling Java semantic checks starts jdtls and resolves the dependency tree; it may take minutes and use gigabytes of memory.`
-   （切界面语言各看一遍；旧文案是「启用后会启动 jdtls…」）。
+   （切界面语言各看一遍；旧文案是「启用后会启动 jdtls…」）。**本条为历史验证项，引导卡与 Java 校验已于 2026-09-20 随 LSP 机制删除。**
 6. 右栏信息页「技能」段为空时显示**「暂无可用技能」**（英文 `No skills yet`），不是「无活动会话」。
 7. 关于页：五行只读入口版式与其余 7 页一致（标签 + 灰字说明），「打开日志目录」「查看许可证」可点并生效。
 8. 批③ 搜索能命中关于页的**版本 / 数据目录 / 日志目录 / 代码仓库 / 许可证**五个条目（此前只有 2 项）。

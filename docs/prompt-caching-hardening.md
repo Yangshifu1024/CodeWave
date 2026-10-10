@@ -71,7 +71,7 @@ CodeWave 对应现状（本批次前即已具备）：
 ## 4 明确不做（含重议判据）
 
 - **OpenAI Responses `store:true` + `previous_response_id` 链式引用**：服务端留存完整对话与
-  local-first/BYOK 隐私立场冲突；事实源挪到服务端与多 key failover / 模型切换 / 压缩重写历史 /
+  BYOK 隐私立场冲突；事实源挪到服务端与多 key failover / 模型切换 / 压缩重写历史 /
   会话导入导出相斥；成本收益已被 prompt_cache_key + 自动缓存拿走大半。重议：出现显式服务端
   留存换成本诉求时做 opt-in
 - **Anthropic 1h extended TTL**：缓存写价 1.25x→2x（+60%），只在「空闲 >5min 回来」场景受益；

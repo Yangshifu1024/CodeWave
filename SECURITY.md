@@ -6,7 +6,7 @@
 
 ## 如何报告漏洞
 
-CodeWave 是本地优先应用：数据、API Key、会话记录均在用户本机。涉及以下面的问题请按安全漏洞对待：
+CodeWave 把数据、API Key、会话记录都放在用户本机。涉及以下面的问题请按安全漏洞对待：
 
 - API Key 越过系统钥匙串落明文，或被发送到非用户配置的端点
 - 工具写操作逃逸会话可写根（路径边界 `tools/pathutil.rs`）、命令围栏（`safety/fence`）被绕过
@@ -26,4 +26,4 @@ CodeWave 是本地优先应用：数据、API Key、会话记录均在用户本�
 - 文件写操作经 `tools/pathutil.rs` 的 `safe_join` / `resolve_write` 边界校验（拒 `..` 逃逸与绝对路径注入）
 - 命令执行先过三层静态围栏（`safety/fence`：删除黑名单 → AST 写目标分析 → 高危模式审批）
 - 写类工具按会话权限档位（plan / confirm_each / auto_edit / full_access）走审批门
-- 更新器（tauri-plugin-updater）默认停用且无预置端点；启用前无自动更新链路
+- 更新器（tauri-plugin-updater）**已启用**（`tauri.conf.json` 的 `plugins.updater.active: true`、`createUpdaterArtifacts: true`，签名公钥与端点指向 GitHub Release 的 `latest.json`）；应用启动 3 秒后静默检查一次，有新版才弹窗（`ui/src/utils/updateCheck.ts` + `stores/updater.ts` 的 8 相位状态机 + `panels/UpdateModal.tsx`），可在设置页「关于」页用「启动时自动检查更新」开关关闭（`ws_auto_update`）
