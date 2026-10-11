@@ -6,14 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Modal, Segmented, theme } from "antd";
 import { useTranslation } from "react-i18next";
-
-/** 按 colorBgBase 亮度判定当前主题亮暗（与 theme/bridge.tsx 的 isDarkBase 同法：取值仍是 antd token，不新增依赖）。 */
-function isDarkBase(colorBgBase: string): boolean {
-  const hex = colorBgBase.replace("#", "");
-  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return false;
-  const n = parseInt(hex, 16);
-  return 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 128;
-}
+import { isDarkBase } from "../../theme/colors";
 
 /** 复制反馈复位延时（与 utils/codecopy.ts 的 1.5s 同口径）。 */
 const COPY_FLASH_MS = 1500;
