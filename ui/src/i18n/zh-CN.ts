@@ -1,4 +1,20 @@
 export default {
+  dashboard: {
+    title: "运行总览", subtitle: "跨会话查看当前活动与需要你处理的事项", refresh: "刷新", back: "返回会话", untitled: "未命名会话",
+    activeSessions: "活跃会话", needsYou: "需要你回应", runningSubs: "运行中子代理", advancing: "正在推进",
+    session: "所属会话", subagent: "子代理", project: "项目会话", temporary: "临时会话", mainAgent: "主代理",
+    running: "运行中", waiting: "等待你回应", approval: "待审批", answer: "待回答", goApprove: "前往审批", goAnswer: "前往回答",
+    openSession: "打开会话", openParent: "打开所属会话", details: "查看详情", agentDetails: "子代理详情",
+    role: "角色", task: "任务摘录", stepsBudget: "步骤预算", latest: "最近活动", lastTool: "最近工具",
+    summaryHint: "这里展示运行摘要；步骤表示预算消耗，不是完成百分比。完整过程请到所属会话查看。",
+    reportTitle: "报告摘录", noReport: "尚无可用报告", noActivity: "暂无活动摘录",
+    done: "正常结束", error: "失败", cancelled: "用户停止", report: "已汇报", partial: "部分报告", budget: "预算耗尽", no_report: "未汇报",
+    recent: "最近结束（{{n}}）", recentHint: "仅保留本次应用进程的近期结果", noRecent: "暂无近期结果",
+    empty: "当前没有运行中的会话", allWaiting: "当前活跃会话均在等待你回应", loading: "正在获取运行状态…",
+    syncFailed: "同步失败，已保留上次状态", lastSync: "上次同步：{{time}}", askExpired: "这个询问已结束，正在刷新运行总览",
+    openFailed: "打开会话失败：{{error}}", sessionMissing: "会话已删除或无法找到", sessionClosed: "会话在恢复期间已关闭，请重新打开",
+    seconds: "{{n}} 秒", minutes: "{{n}} 分钟", subsCount: "{{n}} 个子代理",
+  },
   // 跨页通用动作（批④ 术语统一：[docs/settings-terminology](../../../docs/settings-terminology.md)）。
   // 只有「值与语境皆同」的词才并入本段（判定与选段规则见该文档）；带宾语 / 语境不同的动作
   // （如 settings.deleteSkill「删除技能」、settings.mcpSave「保存并重连」）留在各自页面段。

@@ -58,6 +58,7 @@ interface UiState {
   /** 设置/清除关 Tab 请求（null = 关闭弹窗） */
   setCloseTabRequest(key: string | null): void;
   tasksOpen: boolean;
+  dashboardOpen: boolean;
   statsOpen: boolean;
   /** 左栏会话树「显示更多」的展开集合（key = 分组 key，如 `proj:<项目 id>`）。
    *  放 store 而不是组件 useState / 模块内存：hydrate（异步读盘）晚于 ProjectNav 首渲染，
@@ -133,6 +134,7 @@ export const useUi = create<UiState>((set, get) => ({
     set({ closeTabRequest: key });
   },
   tasksOpen: false,
+  dashboardOpen: false,
   statsOpen: false,
   treeExpand: {},
   treeCollapsed: false,

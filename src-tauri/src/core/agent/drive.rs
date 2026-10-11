@@ -134,6 +134,12 @@ pub async fn run_chat(
     run_id: String,
 ) {
     let sink = core.sink.clone();
+    // 覆盖装载/收尾等 drive catch 之外的 panic，以及任务未来被丢弃的退出路径。
+    let _run_cleanup = RunCleanupGuard {
+        rt: rt.clone(),
+        core: core.clone(),
+        run_id: run_id.clone(),
+    };
     let run_started = std::time::Instant::now();
     rt.injected_plan_snapshot_for_run
         .store(false, Ordering::SeqCst);
@@ -330,6 +336,38 @@ pub async fn run_chat(
             // 本 run 的耗时/TTFT 观测（仅主会话步计入：压缩/命名/子代理/任务走 record，计时全 0）
             *rt.run_timing.lock().unwrap(),
         );
+    }
+}
+
+/// 正常终态已发布时无操作；异常退出必须释放运行槽位并收口总览。
+struct RunCleanupGuard {
+    rt: Arc<SessionRuntime>,
+    core: Arc<AgentCore>,
+    run_id: String,
+}
+
+impl Drop for RunCleanupGuard {
+    fn drop(&mut self) {
+        let snapshot = self.rt.run_snapshot();
+        if !snapshot.running || snapshot.run_id.as_deref() != Some(self.run_id.as_str()) {
+            return;
+        }
+        if let Some(cancel) = lock_ok(&self.rt.active_cancel).take() {
+            cancel.cancel();
+        }
+        cancel_session_subagents(&self.core, &self.rt);
+        self.rt.close_injections();
+        lock_ok(&self.rt.asks).clear();
+        let mut terminal = RunTerminal::new(&self.run_id, RunTerminalKind::Error);
+        terminal.error = Some("运行任务异常终止".into());
+        self.rt.finish_run(terminal);
+        // 外部 sink 若异常，不让 unwind 中的第二次 panic 阻断摘要收尾。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.core.sink.emit(
+            &self.rt.id, "run:error",
+            serde_json::json!({"session": self.rt.id, "run_id": self.run_id, "error": "运行任务异常终止", "kind": "protocol"}),
+        )
+        }));
     }
 }
 

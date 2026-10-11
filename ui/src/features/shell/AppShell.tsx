@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Avatar, Button, Layout, Modal, Tooltip } from "antd";
-import { BarChartOutlined, ClockCircleOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, ClockCircleOutlined, DashboardOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { useRun } from "../../stores/run";
@@ -27,6 +27,7 @@ import SettingsPage from "../panels/SettingsPage";
 import UpdateModal from "../panels/UpdateModal";
 import TasksPage from "../panels/TasksPage";
 import TokenStatsModal from "../panels/TokenStatsModal";
+import RuntimeDashboard from "../dashboard/RuntimeDashboard";
 import RightBar from "./RightBar";
 import ProjectNav from "./ProjectNav";
 import ResizeHandle from "./ResizeHandle";
@@ -428,7 +429,7 @@ export default function AppShell() {
         // （[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)、
         //  [docs/tasks-module-polish](../../../../docs/tasks-module-polish.md)）。
         // 任何情况下都不得因全屏页而停止运行中会话。
-        if (useUi.getState().settingsOpen || useUi.getState().tasksOpen) return;
+        if (useUi.getState().settingsOpen || useUi.getState().tasksOpen || useUi.getState().dashboardOpen) return;
         // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行（两个全屏页同列：页内也归自己处置）
         const target = e.target as HTMLElement | null;
         if (target?.closest(".settings-shell, .tasks-shell, .ant-modal, .ant-drawer, .ant-popover, .ant-select-dropdown, .ant-input, textarea, input")) return;
@@ -455,6 +456,7 @@ export default function AppShell() {
   const notifications = useUi((s) => s.notifications);
   const settingsOpen = useUi((s) => s.settingsOpen);
   const tasksOpen = useUi((s) => s.tasksOpen);
+  const dashboardOpen = useUi((s) => s.dashboardOpen);
   const statsOpen = useUi((s) => s.statsOpen);
   // 全屏覆盖页（设置 / 计划任务）共用一个让位开关：两者都是「贴在内层 Layout 上的覆盖层 + 工作区照旧挂载」，
   // 让位集合必须一致（Sider / Content / 两条栏宽分隔条），否则会出现「页盖住了、键盘焦点却还在工作区里」的裂缝。
@@ -490,6 +492,12 @@ export default function AppShell() {
         >
           {/* 左栏开合入口收口到标题栏 Logo（悬停同位交换箭头，docs/titlebar-logo-toggle）；侧栏内不再有开关按钮 */}
           <div className="sider-body">
+            <Button style={{ margin: "12px 12px 0", flex: "none" }} icon={<DashboardOutlined />}
+              type={dashboardOpen ? "primary" : "default"} aria-pressed={dashboardOpen}
+              onClick={() => {
+                useRun.getState().closeSubDrawer(activeKey);
+                useUi.setState({ dashboardOpen: true });
+              }}>{t("dashboard.title")}</Button>
             <div className="sider-nav">
               <ProjectNav />
             </div>
@@ -499,8 +507,10 @@ export default function AppShell() {
         <Content
           className={workspaceCovered ? "workspace-covered" : undefined}
           aria-hidden={workspaceCovered || undefined}
-          style={{ height: "100%", display: "flex", background: "var(--ws-bg-main)" }}
+          style={{ height: "100%", display: "flex", position: "relative", background: "var(--ws-bg-main)" }}
         >
+          <div className={dashboardOpen ? "workspace-covered" : undefined} aria-hidden={dashboardOpen || undefined}
+            style={{ flex: 1, minWidth: 0, display: "flex", height: "100%" }}>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
             <InterruptBanner />
             <ChatMessages />
@@ -508,6 +518,8 @@ export default function AppShell() {
             {activeKey && <Composer />}
           </div>
           <RightBar />
+          </div>
+          {dashboardOpen && !workspaceCovered && <RuntimeDashboard />}
         </Content>
 
         {/* 栏宽分隔条（绝对定位在栏边界；折叠态不渲染 = 拖动不抢折叠入口）。
@@ -536,7 +548,7 @@ export default function AppShell() {
             offset={rightBarWidth}
             label={t("app.resizeRight")}
             disabled={rightBarWidth < storedRightBarWidth}
-            covered={workspaceCovered}
+            covered={workspaceCovered || dashboardOpen}
             onWidth={setRightBarWidth}
             onReset={() => setRightBarWidth(RB_W_DEFAULT)}
           />

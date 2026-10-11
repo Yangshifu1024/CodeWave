@@ -166,6 +166,7 @@ impl Tool for AskTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        let run_id = ctx.rt.run_snapshot().run_id;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
@@ -195,7 +196,7 @@ impl Tool for AskTool {
         );
         let plan_file = usable.as_deref().and_then(|body| save_plan_file(ctx, body));
         let mut ask_opened = json!({
-            "session": ctx.rt.id, "ask_id": ask_id, "kind": "ask",
+            "session": ctx.rt.id, "run_id": run_id, "ask_id": ask_id, "kind": "ask",
             "questions": args.questions,
             // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
             "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),

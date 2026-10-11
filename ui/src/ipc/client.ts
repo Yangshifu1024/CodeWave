@@ -5,12 +5,15 @@
  * 组件不得直接 import @tauri-apps/api，新增命令一律收敛在此处。
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { SessionRunSnapshot } from "./types";
+import type { ActivitySnapshot, AskOpenedEvent, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
 import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
+  getActivitySnapshot: () => invoke<ActivitySnapshot>("get_activity_snapshot"),
+  getActivityAsk: (sessionId: string, runId: string, askId: string) =>
+    invoke<AskOpenedEvent | null>("get_activity_ask", { sessionId, runId, askId }),
 
   listProjects: () => invoke<ProjectEntry[]>("list_projects"),
   saveProject: (entry: ProjectEntry) => invoke<void>("save_project", { entry }),

@@ -15,7 +15,7 @@
 
 ## 基准与方案
 
-- 2026-10-11 · [runtime-dashboard.md](./runtime-dashboard.md) — 运行总览设计与实施方案草案：会话列表、代理层级展开、待处理置顶、全局摘要与对账；布局方向已确认，实施待批准。
+- 2026-10-11 · [runtime-dashboard.md](./runtime-dashboard.md) — 运行总览需求、实施方案与验证报告：独立进程快照、会话与代理层级、待处理回跳、有界终态及并发恢复；含标题栏随页面切换的回访修复、检查结果与手动验收清单。
 
 - 2026-10-11 · [release-review-remediation.md](./release-review-remediation.md) — 发版审查 8 项缺陷、队列续跑与服务日志遗漏的修复契约、回归验证与手动检查清单。
 

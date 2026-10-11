@@ -1,4 +1,20 @@
 export default {
+  dashboard: {
+    title: "Runtime overview", subtitle: "Current activity and requests across sessions", refresh: "Refresh", back: "Back to session", untitled: "Untitled session",
+    activeSessions: "Active sessions", needsYou: "Needs your response", runningSubs: "Running subagents", advancing: "In progress",
+    session: "Parent session", subagent: "Subagent", project: "Project session", temporary: "Temporary session", mainAgent: "Main agent",
+    running: "Running", waiting: "Waiting for you", approval: "Approval needed", answer: "Answer needed", goApprove: "Go to approval", goAnswer: "Go to question",
+    openSession: "Open session", openParent: "Open parent session", details: "View details", agentDetails: "Subagent details",
+    role: "Role", task: "Task excerpt", stepsBudget: "Step budget", latest: "Latest activity", lastTool: "Latest tool",
+    summaryHint: "This is an activity summary. Steps indicate budget usage, not completion. View the full process in the parent session.",
+    reportTitle: "Report excerpt", noReport: "No report available yet", noActivity: "No activity excerpt yet",
+    done: "Run ended", error: "Failed", cancelled: "Stopped by user", report: "Reported", partial: "Partial report", budget: "Budget exhausted", no_report: "No report",
+    recent: "Recently ended ({{n}})", recentHint: "Recent results from this app process only", noRecent: "No recent results",
+    empty: "No sessions running", allWaiting: "All active sessions are waiting for you", loading: "Loading runtime state…",
+    syncFailed: "Sync failed; previous state retained", lastSync: "Last sync: {{time}}", askExpired: "This request has ended. Refreshing the overview",
+    openFailed: "Could not open session: {{error}}", sessionMissing: "Session was deleted or cannot be found", sessionClosed: "Session closed while restoring. Please reopen it",
+    seconds: "{{n}} seconds", minutes: "{{n}} minutes", subsCount: "{{n}} subagents",
+  },
   // Cross-page shared actions (batch ④ terminology unification: [docs/settings-terminology](../../../docs/settings-terminology.md)).
   // Only words with the same value *and* context merge here; actions taking an object or living in a
   // different context (settings.deleteSkill, settings.mcpSave) stay in their own page segment.

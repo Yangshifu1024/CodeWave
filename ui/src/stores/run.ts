@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
-import type { Breakdown, HistoryBoundary, HistoryStatus, Message, SessionPaging, ToolResultEvent, ToolStartEvent } from "../ipc/types";
+import type { AskOpenedEvent, Breakdown, HistoryBoundary, HistoryStatus, Message, SessionPaging, ToolResultEvent, ToolStartEvent } from "../ipc/types";
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
@@ -33,6 +33,7 @@ import {
   compactHandlers,
   hasUnsettledRunState,
   historyStatusNotice,
+  hydrateAsk,
   miscHandlers,
   runLifecycleHandlers,
   scheduleServiceReconcile,
@@ -75,6 +76,7 @@ export interface RunStore {
   /** 子代理卡单独停止该子代理（主代理会收到 E_SUBAGENT_STOPPED 并询问用户是否重派） */
   stopSubagent(sessionId: string | null, subId: string): Promise<void>;
   resolveAsk(askId: string, value: any): Promise<void>;
+  restoreAsk(payload: AskOpenedEvent): void;
   /** [docs/preview-skill](../../../docs/preview-skill.md)：置位「先看预览」信号——批准门选 preview 时由 AskPanel 调用。
    *  previewOnly 语义，**与切档无关**（预览项不带 mode，故不构成批准、不切档）；桶不存在则不新建（纯 UI 信号不凭空造桶）。 */
   armWidgetAutoOpen(sessionId: string): void;
@@ -1207,16 +1209,16 @@ export const useRun = create<RunStore>()(
 
     async refreshGit(sessionId = null) {
       const id = sessionId ?? useSessions.getState().activeKey;
-      if (!id) return;
+      if (!id || !get().tabs[id]) return;
+      const epoch = get().tabs[id].runEpoch;
       try {
         const gitEntries = await ipc.gitStatus(id);
         set((s) => {
-          if (!s.tabs[id]) s.tabs[id] = blank();
-          s.tabs[id].gitEntries = gitEntries as any;
+          if (s.tabs[id] && s.tabs[id].runEpoch === epoch) s.tabs[id].gitEntries = gitEntries as any;
         });
       } catch {
         set((s) => {
-          if (s.tabs[id]) s.tabs[id].gitEntries = null;
+          if (s.tabs[id] && s.tabs[id].runEpoch === epoch) s.tabs[id].gitEntries = null;
         });
       }
     },
@@ -1224,6 +1226,9 @@ export const useRun = create<RunStore>()(
     // ---------- 事件路由（事件面 = 契约测试锚点；键名不可增删） ----------
     // handler 体以族为单位收敛在 runHandlers.ts 的工厂里；本方法保持唯一注册点
     // （AppShell 经 bindEvents 绑定一次），键集合不得变化。
+    restoreAsk(payload) {
+      hydrateAsk(set, payload);
+    },
     bindGlobalHandlers() {
       return {
         ...runLifecycleHandlers(set, get),

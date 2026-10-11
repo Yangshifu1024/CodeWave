@@ -4,6 +4,7 @@ import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } fro
 import { useTranslation } from "react-i18next";
 import type { ApprovalMode } from "../../ipc/types";
 import { useActiveRun, useRun } from "../../stores/run";
+import { useUi } from "../../stores/ui";
 import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
 import { renderUserMarkdown } from "../../utils/markdown";
@@ -14,6 +15,7 @@ import { renderUserMarkdown } from "../../utils/markdown";
 export default function SubagentDrawer() {
   const { t } = useTranslation();
   const active = useActiveRun();
+  const dashboardOpen = useUi((s) => s.dashboardOpen);
   const { open, subId } = active.subDrawer;
   const sub = (subId && active.subs.find((x) => x.subId === subId)) || null;
   const stream = (subId && active.subStreams[subId]) || null;
@@ -167,7 +169,7 @@ export default function SubagentDrawer() {
 
   return (
     <Drawer
-      open={open && !!sub}
+      open={open && !!sub && !dashboardOpen}
       onClose={() => useRun.getState().closeSubDrawer()}
       placement="right"
       // 使用视口单位，窗口缩放时仍占一半宽度，无需等待关闭后重新计算。

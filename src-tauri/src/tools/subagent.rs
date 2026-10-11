@@ -354,6 +354,8 @@ impl Tool for SubagentTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        // 在等待并发槽位之前固化所属主 run，迟到轮询不能误归到下一轮同名子代理。
+        let parent_run_id = ctx.rt.run_snapshot().run_id;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
@@ -409,7 +411,7 @@ impl Tool for SubagentTool {
         ctx.core.sink.emit(
             &ctx.rt.id,
             "sub:spawn",
-            json!({ "session": ctx.rt.id, "sub_id": sub_id, "role": args.role,
+            json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "role": args.role,
                     "name": agent_def.map(|d| d.name), "task": args.task.clone(),
                     "description": description, "max_steps": max_steps }),
         );
@@ -427,8 +429,15 @@ impl Tool for SubagentTool {
         );
 
         // 独立 runtime（继承 workspace/data_dir/extra_roots）+ 注册（支持 StopSubagent）
-        let sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
+        let mut sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
+        if let Some(sub) = std::sync::Arc::get_mut(&mut sub_rt) {
+            // 工具入口已固化身份，等待并发槽位后也沿用同一轮。
+            sub.root_run_id = parent_run_id.clone();
+        }
         ctx.core.subs.insert(sub_id.clone(), sub_rt.clone());
+        ctx.core
+            .activity
+            .register_sub(&ctx.rt, &sub_rt, parent_run_id.as_deref());
         // 登记为可等待目标（`wait` 的 until 可等它收尾）：放在 spawn 真正成功之后——
         // 抢占并发槽位失败等早退路径都不会走到这里，不会留下永远等不到的 running 条目。
         ctx.core
@@ -512,6 +521,7 @@ impl Tool for SubagentTool {
         let session = ctx.rt.id.clone();
         let sub2 = sub_id.clone();
         let step_rt = sub_rt.clone();
+        let progress_run_id = parent_run_id.clone();
         // 步数进度事件：轮询 history（每 800ms）携带内部 run 摘录（前端子代理卡展开可见）
         let progress = tokio::spawn(async move {
             loop {
@@ -530,7 +540,7 @@ impl Tool for SubagentTool {
                 // 当前档位（B2）：子 rt 的 prefs 由 drive 层每步按父档同步，故此处即实时值。
                 // 载荷只**新增**字段，事件键名与 29 键契约不变（前端据它显示子代理卡档位）。
                 let approval_mode = step_rt.prefs().approval_mode;
-                sink.emit(&session, "sub:step", json!({ "session": session, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail, "approval_mode": approval_mode }));
+                sink.emit(&session, "sub:step", json!({ "session": session, "run_id": progress_run_id, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail, "approval_mode": approval_mode }));
             }
         });
 
@@ -540,6 +550,7 @@ impl Tool for SubagentTool {
         let mut cleanup = SubCleanupGuard {
             core: core.clone(),
             session: ctx.rt.id.clone(),
+            parent_run_id: parent_run_id.clone(),
             sub_id: sub_id.clone(),
             sub_rt: sub_rt.clone(),
             progress,
@@ -636,20 +647,20 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:report",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "report": clean_report.clone() }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "report": clean_report.clone() }),
                 );
                 // sub:usage 先于 sub:done（前端卡先展示 token 数再完成）
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:usage",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": {
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": {
                         "input": usage.input, "output": usage.output,
                     } }),
                 );
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:done",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": usage,
                             "steps_used": steps_used, "ended": ended_str }),
                 );
                 // 部分汇报也取得成果，wait 成功与工具成功一致；完整分析批准仍由
@@ -689,7 +700,7 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:error",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "error": ui_err }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "error": ui_err, "cancelled": true, "steps_used": sub_rt.step_count.load(Ordering::SeqCst) }),
                 );
                 ToolOutcome::err("E_SUBAGENT_STOPPED", tool_msg)
             }
@@ -698,7 +709,7 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:error",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "error": e.to_string() }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "error": e.to_string(), "steps_used": sub_rt.step_count.load(Ordering::SeqCst) }),
                 );
                 ToolOutcome::err("E_SUBAGENT", format!("子代理执行失败：{e}"))
             }
@@ -715,6 +726,7 @@ impl Tool for SubagentTool {
 struct SubCleanupGuard {
     core: std::sync::Arc<crate::core::agent::AgentCore>,
     session: String,
+    parent_run_id: Option<String>,
     sub_id: String,
     sub_rt: std::sync::Arc<crate::core::agent::SessionRuntime>,
     progress: tokio::task::JoinHandle<()>,
@@ -742,8 +754,14 @@ impl Drop for SubCleanupGuard {
         // NoopSink（测试）默认无操作；无通道时零副作用。
         self.core.sink.unbind_sub_channel(&self.sub_id);
         if self.armed {
+            // 先收口观察摘要再做历史 IO；panic 路不能因落盘失败留住运行中条目。
+            self.core.sink.emit(
+                &self.session,
+                "sub:error",
+                json!({ "session": self.session, "run_id": self.parent_run_id, "sub_id": self.sub_id, "error": "子代理内部异常终止", "steps_used": self.sub_rt.step_count.load(Ordering::SeqCst) }),
+            );
             // panic 路同样尽力落盘已产生的过程历史（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
-            let h = self.sub_rt.history.lock().unwrap();
+            let h = crate::core::agent::lock_ok(&self.sub_rt.history);
             match self
                 .core
                 .store
@@ -768,11 +786,6 @@ impl Drop for SubCleanupGuard {
                 }
             }
             drop(h);
-            self.core.sink.emit(
-                &self.session,
-                "sub:error",
-                json!({ "session": self.session, "sub_id": self.sub_id, "error": "子代理内部异常终止" }),
-            );
         }
     }
 }

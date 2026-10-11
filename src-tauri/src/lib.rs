@@ -430,6 +430,8 @@ pub fn run() {
             host::commands::get_ui_state,
             host::commands::set_ui_state,
             host::commands::list_running_sessions,
+            host::commands::get_activity_snapshot,
+            host::commands::get_activity_ask,
             host::commands::resolve_exit_request,
             host::commands::clear_session_interrupt,
             host::commands::preview_session_cleanup,

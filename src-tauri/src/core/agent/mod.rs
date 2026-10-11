@@ -26,5 +26,6 @@ pub use drive::{
     subagent_drive_params,
 };
 pub(crate) use guards::{CompactingGuard, lock_ok};
+pub(crate) use runtime::RunTerminalKind;
 pub use runtime::{AgentCore, EventSink, Frame, RunSnapshot, SessionRuntime};
 pub use supervise::{CallSig, IdlePolicy};

@@ -171,6 +171,8 @@ pub struct SessionRuntime {
     /// 是否有 run 进行中（start_chat 以 swap 抢占，结束时恒复位）
     pub running: Arc<AtomicBool>,
     run_snapshot: Mutex<RunSnapshot>,
+    /// 纯观察摘要的弱引用；终态发布后清理，不参与运行互斥或审批决策。
+    activity: std::sync::Weak<crate::core::activity::ActivityState>,
     /// 压缩互斥（TOCTOU 修复）：手动/自动压缩期间置位；期间 start_chat 与二次压缩被拒
     pub compacting: AtomicBool,
     /// 文件操作互斥（edit 工具的进程级文件写互斥）
@@ -238,6 +240,9 @@ pub struct SessionRuntime {
     /// 产物归属（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：子代理 runtime 指向主会话 id，写操作登记到主会话名下；
     /// 主会话 / 任务运行 = None
     pub root_session_id: Option<String>,
+    /// 子代理出生时冻结的根 run 身份；其自己的 RunSnapshot 不代表所属主 run。
+    /// 嵌套子代理继续继承同一根身份，审批事件不能按父会话当前 run 回查。
+    pub root_run_id: Option<String>,
     /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：任务运行的隔离 runtime（无产物消费方；跳过登记避免边车泄漏）
     pub is_task_runtime: bool,
     /// 是否主会话 runtime（真正的用户会话）：子代理/任务运行为 false——checkpoint
@@ -293,6 +298,17 @@ impl SessionRuntime {
         }
         snapshot.running = false;
         snapshot.terminal = Some(terminal);
+        let run_id = snapshot.run_id.clone().unwrap_or_default();
+        let status = match snapshot.terminal.as_ref().map(|t| &t.kind) {
+            Some(RunTerminalKind::Done) => "done",
+            Some(RunTerminalKind::Cancelled) => "cancelled",
+            _ => "error",
+        };
+        // 先发布摘要终态再释放运行槽位，防新 start 覆盖尚未归档的旧轮。
+        // 锁序 snapshot → activity；摘要对账先释放 activity 后读取 runtime。
+        if let Some(activity) = self.activity.upgrade() {
+            activity.finish(&self.id, &run_id, status);
+        }
         self.running.store(false, Ordering::SeqCst);
     }
 
@@ -373,6 +389,7 @@ impl SessionRuntime {
             run_lock: Arc::new(tokio::sync::Mutex::new(())),
             running: Arc::new(AtomicBool::new(false)),
             run_snapshot: Mutex::new(RunSnapshot::default()),
+            activity: std::sync::Weak::new(),
             compacting: AtomicBool::new(false),
             file_ops: Arc::new(tokio::sync::Mutex::new(())),
             sem_tools: Arc::new(Semaphore::new(4)),
@@ -397,6 +414,7 @@ impl SessionRuntime {
             scope_denied_titles: Mutex::new(Vec::new()),
             scope_gate_lock: tokio::sync::Mutex::new(()),
             root_session_id: None,
+            root_run_id: None,
             is_task_runtime: false,
             is_main_session: false,
             step_count: std::sync::atomic::AtomicUsize::new(0),
@@ -440,6 +458,10 @@ impl SessionRuntime {
             r.project_id = parent.project_id.clone();
             r.roots = parent.roots.clone();
             r.project_dir = parent.project_dir.clone();
+            r.root_run_id = parent
+                .root_run_id
+                .clone()
+                .or_else(|| parent.run_snapshot().run_id);
             // 继承父会话的粘性剥思考标记（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
             // 同一进程内同一 provider 的端点特性一致，子代理不必在首个请求上再撞一次 400。
             // 继承的是「当前值」：父此后由 400 分类自愈（`Demanded` 复位）时已存在的子 runtime 不跟随
@@ -497,6 +519,7 @@ impl SessionRuntime {
 /// Agent 编排核心：配置 + 会话表 + 各子系统（工具注册表/存储/键池/MCP/统计/任务表）的聚合根，
 /// 由 host 层构造并以 Arc 全局共享。
 pub struct AgentCore {
+    pub activity: Arc<crate::core::activity::ActivityState>,
     /// 全局配置（RwLock；save_config 热更新写、各处读）
     pub cfg: std::sync::RwLock<ConfigState>,
     /// 活跃会话运行时表：session id → runtime
@@ -544,7 +567,13 @@ impl AgentCore {
         client: reqwest::Client,
         data_dir: PathBuf,
     ) -> Self {
+        let activity = Arc::new(crate::core::activity::ActivityState::default());
+        let sink = Arc::new(crate::core::activity::ActivitySink {
+            activity: activity.clone(),
+            downstream: sink,
+        });
         AgentCore {
+            activity,
             cfg: std::sync::RwLock::new(cfg),
             sessions: DashMap::new(),
             sink,
@@ -600,6 +629,7 @@ impl AgentCore {
             r.roots = roots;
             r.project_dir = project_dir;
             r.is_main_session = true;
+            r.activity = Arc::downgrade(&self.activity);
             *r.extra_roots.lock().unwrap() = extra_roots;
             *r.prefs.lock().unwrap() = initial_prefs;
         }
@@ -671,6 +701,7 @@ impl AgentCore {
             }
         };
         let core = self.clone();
+        self.activity.begin(&rt, &run_id);
         tokio::spawn(run_chat(core, rt, user, run_id.clone()));
         Ok(run_id)
     }
@@ -883,6 +914,486 @@ mod tests {
             model_id: None,
             reasoning_effort: None,
         }
+    }
+
+    fn activity_begin(h: &Harness, run_id: &str) {
+        assert!(h.rt.begin_run(run_id));
+        h.core.activity.begin(&h.rt, run_id);
+    }
+
+    fn activity_emit(h: &Harness, event: &str, payload: serde_json::Value) {
+        h.core.sink.emit(&h.rt.id, event, payload);
+    }
+
+    #[test]
+    fn activity_run_identity_rejects_old_events_and_late_finish() {
+        let h = harness();
+        activity_begin(&h, "first");
+        activity_emit(
+            &h,
+            "tool:start",
+            serde_json::json!({"run_id":"first", "tool":"read"}),
+        );
+        assert_eq!(
+            h.core.activity.snapshot().sessions[0].activity,
+            "执行工具 read"
+        );
+        h.rt.finish_run(RunTerminal::new("first", RunTerminalKind::Done));
+        activity_begin(&h, "second");
+        let (tx, _rx) = oneshot::channel();
+        h.rt.open_ask("old-ask", tx);
+        activity_emit(
+            &h,
+            "ask:opened",
+            serde_json::json!({"run_id":"first", "ask_id":"old-ask", "kind":"ask"}),
+        );
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"first", "sub_id":"old", "role":"tester"}),
+        );
+        activity_emit(&h, "tool:result", serde_json::json!({"run_id":"first"}));
+        h.rt.finish_run(RunTerminal::new("first", RunTerminalKind::Error));
+        let snapshot = h.core.activity.snapshot();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].run_id, "second");
+        assert_eq!(snapshot.sessions[0].activity, "准备运行");
+        assert!(snapshot.sessions[0].subs.is_empty());
+        assert!(snapshot.sessions[0].waiting.is_empty());
+        assert_eq!(snapshot.recent.len(), 1);
+        assert_eq!(snapshot.recent[0].run_id, "first");
+        assert_eq!(snapshot.recent[0].status, "done");
+    }
+
+    #[test]
+    fn activity_waiter_filters_and_recovers_original_payload() {
+        let h = harness();
+        activity_begin(&h, "run");
+        let (tx, rx) = oneshot::channel();
+        h.rt.open_ask("q", tx);
+        let payload = serde_json::json!({"ask_id":"q", "kind":"ask", "questions":[{"header":"目标", "question":"选择目标", "options":[{"id":"approve", "mode":"auto_edit"}]}], "plan_body":"完整原方案"});
+        activity_emit(&h, "ask:opened", payload.clone());
+        activity_emit(
+            &h,
+            "ask:opened",
+            serde_json::json!({"ask_id":"phantom", "kind":"approval"}),
+        );
+        let snapshot = h.core.activity.snapshot();
+        assert_eq!(snapshot.sessions[0].waiting.len(), 1);
+        assert_eq!(snapshot.sessions[0].waiting[0].detail, "选择目标");
+        assert_eq!(h.core.activity.ask(&h.rt.id, "run", "q"), Some(payload));
+        assert!(h.core.activity.ask(&h.rt.id, "wrong-run", "q").is_none());
+        drop(rx);
+        assert!(h.core.activity.ask(&h.rt.id, "run", "q").is_none());
+        assert!(h.core.activity.snapshot().sessions[0].waiting.is_empty());
+    }
+
+    #[test]
+    fn activity_sub_approval_validates_child_waiter_and_clears_on_root_terminal() {
+        let h = harness();
+        activity_begin(&h, "run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"child", "role":"tester", "max_steps":90}),
+        );
+        let child = SessionRuntime::new_sub(&h.rt, "child".into());
+        h.core.activity.register_sub(&h.rt, &child, Some("run"));
+        let (tx, _rx) = oneshot::channel();
+        child.open_ask("sub-approval", tx);
+        let payload = serde_json::json!({"ask_id":"sub-approval", "kind":"approval", "sub_id":"child", "title":"执行命令", "detail":"请求确认"});
+        activity_emit(&h, "ask:opened", payload.clone());
+        assert!(h.rt.asks.lock().unwrap().is_empty());
+        assert_eq!(h.core.activity.snapshot().sessions[0].waiting.len(), 1);
+        assert_eq!(
+            h.core.activity.ask(&h.rt.id, "run", "sub-approval"),
+            Some(payload)
+        );
+        h.rt.finish_run(RunTerminal::new("run", RunTerminalKind::Cancelled));
+        let snapshot = h.core.activity.snapshot();
+        assert!(snapshot.sessions.is_empty());
+        assert!(
+            h.core
+                .activity
+                .ask(&h.rt.id, "run", "sub-approval")
+                .is_none()
+        );
+        assert_eq!(snapshot.recent[0].status, "cancelled");
+        assert_eq!(snapshot.recent[1].status, "cancelled");
+    }
+
+    #[test]
+    fn activity_sub_terminal_ignores_late_step_and_preserves_budget_report() {
+        let h = harness();
+        activity_begin(&h, "run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"child", "role":"tester", "task":"任务", "max_steps":90}),
+        );
+        activity_emit(
+            &h,
+            "sub:step",
+            serde_json::json!({"sub_id":"child", "step":18, "detail":"读文件", "tool":"read"}),
+        );
+        activity_emit(
+            &h,
+            "sub:report",
+            serde_json::json!({"sub_id":"child", "report":"部分成果"}),
+        );
+        activity_emit(
+            &h,
+            "sub:done",
+            serde_json::json!({"sub_id":"child", "steps_used":90, "ended":"partial"}),
+        );
+        let before = h.core.activity.snapshot();
+        activity_emit(
+            &h,
+            "sub:step",
+            serde_json::json!({"sub_id":"child", "step":100, "detail":"迟到步骤"}),
+        );
+        activity_emit(
+            &h,
+            "sub:error",
+            serde_json::json!({"sub_id":"child", "error":"迟到错误"}),
+        );
+        let after = h.core.activity.snapshot();
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.sessions[0].subs[0].status, "done");
+        assert_eq!(after.sessions[0].subs[0].step, 90);
+        assert_eq!(after.sessions[0].subs[0].ended.as_deref(), Some("partial"));
+        assert_eq!(after.recent.len(), 1);
+        assert_eq!(
+            after.recent[0].sub.as_ref().unwrap().report.as_deref(),
+            Some("部分成果")
+        );
+    }
+
+    #[test]
+    fn activity_recent_and_active_completed_children_are_bounded() {
+        let h = harness();
+        activity_begin(&h, "run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"still-running", "role":"tester"}),
+        );
+        for i in 0..70 {
+            let id = format!("s{i}");
+            activity_emit(
+                &h,
+                "sub:spawn",
+                serde_json::json!({"run_id":"run", "sub_id":id, "role":"tester", "task":"长".repeat(1000)}),
+            );
+            activity_emit(
+                &h,
+                "sub:report",
+                serde_json::json!({"sub_id":id, "report":"长".repeat(3000)}),
+            );
+            activity_emit(
+                &h,
+                "sub:done",
+                serde_json::json!({"sub_id":id, "ended":"budget"}),
+            );
+        }
+        let snapshot = h.core.activity.snapshot();
+        assert_eq!(snapshot.recent.len(), 50);
+        assert_eq!(snapshot.sessions[0].subs.len(), 51);
+        assert!(
+            snapshot.sessions[0]
+                .subs
+                .iter()
+                .any(|s| s.sub_id == "still-running" && s.status == "running")
+        );
+        assert_eq!(
+            snapshot.recent[0]
+                .sub
+                .as_ref()
+                .unwrap()
+                .task
+                .chars()
+                .count(),
+            500
+        );
+        assert_eq!(
+            snapshot.recent[0]
+                .sub
+                .as_ref()
+                .unwrap()
+                .report
+                .as_ref()
+                .unwrap()
+                .chars()
+                .count(),
+            2000
+        );
+        h.rt.finish_run(RunTerminal::new("run", RunTerminalKind::Done));
+        assert_eq!(h.core.activity.snapshot().recent.len(), 50);
+    }
+
+    #[test]
+    fn activity_works_without_tabs_or_delivered_webview_events() {
+        let h = harness();
+        let core = AgentCore::new(
+            ConfigState::default(),
+            Arc::new(super::super::test_support::NoopSink),
+            h.core.store.clone(),
+            reqwest::Client::new(),
+            h.core.data_dir.clone(),
+        );
+        let rt = core.get_or_create_session(
+            "background",
+            h.rt.workspace.clone(),
+            Some("project".into()),
+            vec![],
+            None,
+            vec![],
+        );
+        assert!(rt.begin_run("run"));
+        core.activity.begin(&rt, "run");
+        core.sink.emit(
+            &rt.id,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"s", "role":"tester"}),
+        );
+        let snapshot = core.activity.snapshot();
+        assert_eq!(snapshot.sessions[0].session_id, "background");
+        assert_eq!(snapshot.sessions[0].project_id.as_deref(), Some("project"));
+        assert_eq!(snapshot.sessions[0].subs.len(), 1);
+        rt.finish_run(RunTerminal::new("run", RunTerminalKind::Error));
+        assert!(core.activity.snapshot().sessions.is_empty());
+        assert_eq!(core.activity.snapshot().recent[0].status, "error");
+    }
+
+    #[test]
+    fn activity_closed_waiter_and_missing_terminal_event_reconcile() {
+        let h = harness();
+        activity_begin(&h, "run");
+        let (tx, rx) = oneshot::channel();
+        h.rt.open_ask("q", tx);
+        activity_emit(
+            &h,
+            "ask:opened",
+            serde_json::json!({"ask_id":"q", "kind":"ask"}),
+        );
+        assert!(h.rt.resolve_ask("q", serde_json::json!({"answer":"yes"})));
+        drop(rx);
+        assert!(h.core.activity.snapshot().sessions[0].waiting.is_empty());
+        // 模拟旧运行实现/事件丢失，仅运行真值释放，快照读取必须收口。
+        h.rt.running.store(false, Ordering::SeqCst);
+        let snapshot = h.core.activity.snapshot();
+        assert!(snapshot.sessions.is_empty());
+        assert_eq!(snapshot.recent[0].status, "error");
+    }
+
+    #[tokio::test]
+    async fn activity_run_panic_before_drive_cleans_waiters_and_cancels_children() {
+        let h = harness();
+        activity_begin(&h, "panic-run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"panic-run", "sub_id":"child", "role":"tester"}),
+        );
+        let child = SessionRuntime::new_sub(&h.rt, "child".into());
+        let cancel = CancellationToken::new();
+        child.step_count.store(7, Ordering::SeqCst);
+        *child.active_cancel.lock().unwrap() = Some(cancel.clone());
+        h.core.subs.insert(child.id.clone(), child.clone());
+        h.core
+            .activity
+            .register_sub(&h.rt, &child, Some("panic-run"));
+        let (tx, _rx) = oneshot::channel();
+        h.rt.open_ask("q", tx);
+        activity_emit(
+            &h,
+            "ask:opened",
+            serde_json::json!({"ask_id":"q", "kind":"ask"}),
+        );
+        // 模拟装载前历史锁被早先 panic 毒化：此路径在原 drive catch 外。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = h.rt.history.lock().unwrap();
+            panic!("poison history before run");
+        }));
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            super::super::drive::run_chat(
+                h.core.clone(),
+                h.rt.clone(),
+                Message::user_text("运行"),
+                "panic-run".into(),
+            ),
+        ))
+        .await;
+        assert!(result.is_err());
+        assert!(!h.rt.run_snapshot().running);
+        assert!(h.rt.asks.lock().unwrap().is_empty());
+        assert!(cancel.is_cancelled());
+        let snapshot = h.core.activity.snapshot();
+        assert!(snapshot.sessions.is_empty());
+        assert_eq!(snapshot.recent[0].status, "error");
+        assert_eq!(snapshot.recent[1].sub.as_ref().unwrap().status, "error");
+        assert_eq!(snapshot.recent[1].sub.as_ref().unwrap().step, 7);
+    }
+
+    #[test]
+    fn activity_individual_child_cancel_is_explicit_and_not_error() {
+        let h = harness();
+        activity_begin(&h, "run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"child", "role":"tester"}),
+        );
+        activity_emit(
+            &h,
+            "sub:error",
+            serde_json::json!({"sub_id":"child", "cancelled":true, "error":"用户停止", "steps_used":3}),
+        );
+        let snapshot = h.core.activity.snapshot();
+        assert_eq!(snapshot.sessions[0].subs[0].status, "cancelled");
+        assert_eq!(snapshot.sessions[0].subs[0].step, 3);
+        assert_eq!(snapshot.recent[0].status, "cancelled");
+    }
+
+    /// 走真实审批生产节点，验证原载荷携带的是出生时的根 run 而非子的空快照。
+    #[tokio::test]
+    async fn activity_real_child_approval_freezes_root_run_identity() {
+        use crate::safety::approval::{ApprovalKind, ApprovalRequest, confirm};
+        let h = harness();
+        activity_begin(&h, "first");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"first", "sub_id":"child", "role":"tester"}),
+        );
+        let child = SessionRuntime::new_sub(&h.rt, "child".into());
+        assert!(child.run_snapshot().run_id.is_none());
+        assert_eq!(child.root_run_id.as_deref(), Some("first"));
+        let nested = SessionRuntime::new_sub(&child, "nested".into());
+        assert_eq!(nested.root_run_id.as_deref(), Some("first"));
+        h.core.activity.register_sub(&h.rt, &child, Some("first"));
+
+        let spawn = |cancel: CancellationToken| {
+            let child = child.clone();
+            let sink = h.core.sink.clone();
+            tokio::spawn(async move {
+                confirm(
+                    &child,
+                    &sink,
+                    ApprovalRequest {
+                        title: "命令审批".into(),
+                        detail: "cargo test".into(),
+                        allow_always: false,
+                        kind: ApprovalKind::Once,
+                        auto_confirm: false,
+                    },
+                    &cancel,
+                )
+                .await
+            })
+        };
+        let task = spawn(CancellationToken::new());
+        let ask_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(id) =
+                    h.sink
+                        .events
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find_map(|(_, event, payload)| {
+                            (event == "ask:opened")
+                                .then(|| payload["ask_id"].as_str().unwrap().to_string())
+                        })
+                {
+                    break id;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let payload = h.core.activity.ask(&h.rt.id, "first", &ask_id).unwrap();
+        assert_eq!(payload["run_id"], "first");
+        assert_eq!(payload["sub_id"], "child");
+        assert_eq!(h.core.activity.snapshot().sessions[0].waiting.len(), 1);
+        child.resolve_ask(&ask_id, serde_json::json!({"approved":false}));
+        assert!(!task.await.unwrap().approved);
+
+        h.rt.finish_run(RunTerminal::new("first", RunTerminalKind::Done));
+        activity_begin(&h, "second");
+        let cancel = CancellationToken::new();
+        let old_child_task = spawn(cancel.clone());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let count = h
+                    .sink
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, event, _)| event == "ask:opened")
+                    .count();
+                if count == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let events = h.sink.events.lock().unwrap().clone();
+        let late = &events
+            .iter()
+            .rev()
+            .find(|(_, e, _)| e == "ask:opened")
+            .unwrap()
+            .2;
+        assert_eq!(late["run_id"], "first", "旧子代理不能借父会话新轮身份提问");
+        assert!(h.core.activity.snapshot().sessions[0].waiting.is_empty());
+        cancel.cancel();
+        assert!(!old_child_task.await.unwrap().approved);
+    }
+
+    #[test]
+    fn activity_completed_children_keep_latest_completion_not_latest_spawn() {
+        let h = harness();
+        activity_begin(&h, "run");
+        activity_emit(
+            &h,
+            "sub:spawn",
+            serde_json::json!({"run_id":"run", "sub_id":"early-long", "role":"tester"}),
+        );
+        for i in 0..51 {
+            let id = format!("s{i}");
+            activity_emit(
+                &h,
+                "sub:spawn",
+                serde_json::json!({"run_id":"run", "sub_id":id, "role":"tester"}),
+            );
+            activity_emit(
+                &h,
+                "sub:done",
+                serde_json::json!({"sub_id":id, "ended":"report"}),
+            );
+        }
+        activity_emit(
+            &h,
+            "sub:done",
+            serde_json::json!({"sub_id":"early-long", "ended":"report"}),
+        );
+        let snapshot = h.core.activity.snapshot();
+        let subs = &snapshot.sessions[0].subs;
+        assert_eq!(subs.len(), 50);
+        assert!(
+            subs.iter()
+                .any(|s| s.sub_id == "early-long" && s.status == "done")
+        );
+        assert!(!subs.iter().any(|s| s.sub_id == "s0" || s.sub_id == "s1"));
+        assert_eq!(
+            snapshot.recent[0].sub.as_ref().unwrap().sub_id,
+            "early-long"
+        );
     }
 
     fn configure_two_models(h: &Harness) {

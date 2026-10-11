@@ -18,6 +18,7 @@ import Composer from "../features/chat/Composer";
 import { useRun, type SubView, type SubStream } from "../stores/run";
 import { applyFrameToTab } from "../stores/runFrames";
 import { useSessions } from "../stores/sessions";
+import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 
 function subView(over: Partial<SubView> = {}): SubView {
@@ -60,10 +61,12 @@ function seedTab(session: string, subs: SubView[], streams: Record<string, SubSt
 }
 
 beforeEach(() => {
+  useUi.setState({ dashboardOpen: false });
   useRun.setState({ tabs: {}, drafts: {} });
 });
 
 afterEach(() => {
+  useUi.setState({ dashboardOpen: false });
   cleanup();
   useRun.setState({ tabs: {}, drafts: {} });
 });
@@ -92,6 +95,15 @@ describe("SubagentItemCard（docs/subagent-interaction-drawer）", () => {
 });
 
 describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
+  it("总览开启时不弹后台子代理过程抽屉，返回后过程数据仍可用", () => {
+    useUi.setState({ dashboardOpen: true });
+    seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
+    render(<AntApp><SubagentDrawer /></AntApp>);
+    expect(document.querySelector(".ant-drawer-open")).toBeNull();
+    act(() => useUi.setState({ dashboardOpen: false }));
+    expect(document.querySelector(".ant-drawer-open")).toBeTruthy();
+    expect(useRun.getState().tabs.s1.subStreams.sub_1.timeline).toHaveLength(1);
+  });
   it("渲染头部（左上角关闭 + 名称 · 任务 + 状态）与任务块/过程流", () => {
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
     render(

@@ -2,6 +2,7 @@
 //! 各领域子模块持有命令 fn；本枢纽 re-export 它们，使 lib.rs `generate_handler!` 注册的
 //! `host::commands::xxx` 路径保持稳定。
 
+mod activity;
 mod agents;
 mod git;
 mod logs;
@@ -19,6 +20,7 @@ mod ui_state;
 mod util;
 mod workspace;
 
+pub use activity::*;
 pub use agents::*;
 pub use git::*;
 pub use logs::*;

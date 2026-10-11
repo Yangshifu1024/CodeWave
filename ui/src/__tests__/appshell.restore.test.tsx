@@ -230,7 +230,7 @@ afterEach(() => {
   cleanup();
   // zustand store 是模块级单例：面板开关 / 请求位 / 树态复位，避免弹窗与快照串味
   useUi.setState({
-    settingsOpen: false, tasksOpen: false, statsOpen: false,
+    settingsOpen: false, tasksOpen: false, statsOpen: false, dashboardOpen: false,
     exitRequest: null, closeTabRequest: null,
     treeExpand: {}, treeCollapsed: false, rightBarOpen: true, rbTab: "info",
     notifications: [], mcpStatus: [], // 中断提示条用例会产生 toast（6 秒后自行消失），别漏给后面的用例
@@ -498,6 +498,27 @@ describe("关 Tab 二次确认（会话保存与恢复优化 · 批1）", () => 
 });
 
 describe("现场态落盘与中断提示条（会话保存与恢复优化 · 批1）", () => {
+  it("总览保留导航与聊天挂载，背景运行不会被 Escape 停止", async () => {
+    h.state.sessions = [meta("s1")];
+    h.state.uiState = uiSnapshot(["s1"], "s1");
+    vi.mocked(ipc.getActivitySnapshot).mockResolvedValue({ revision: 1, sampled_at_ms: 1, sessions: [], recent: [] });
+    await mountApp();
+    await waitFor(() => expect(useRun.getState().tabs.s1).toBeTruthy());
+    const cancel = vi.spyOn(useRun.getState(), "cancel").mockResolvedValue();
+    const composer = document.querySelector(".composer");
+    act(() => {
+      useRun.getState().markRunning("s1");
+      useRun.getState().setDraftText("保留草稿", "s1");
+      useUi.setState({ dashboardOpen: true });
+    });
+    await waitFor(() => expect(document.querySelector(".runtime-dashboard")).toBeTruthy());
+    expect(document.querySelector(".project-nav")).toBeTruthy();
+    expect(document.querySelector(".composer")).toBe(composer);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(useRun.getState().drafts.s1.text).toBe("保留草稿");
+    cancel.mockRestore();
+  });
   it("落盘不变量：挂载即打开 store→落盘订阅；防抖窗口内不写，到期后写入最新现场态", async () => {
     h.state.sessions = [meta("s1"), meta("s2")];
     h.state.uiState = uiSnapshot(["s1", "s2"], "s1");

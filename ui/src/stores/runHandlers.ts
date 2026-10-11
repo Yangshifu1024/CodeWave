@@ -445,13 +445,44 @@ export function toolHandlers(get: GetFn): Record<string, (p: any) => void> {
   };
 }
 
+const askCloseObservers = new Map<string, Set<{ askId: string; closed(): void }>>();
+
+/** 仅在回跳 IPC 在途时观察目标关闭，无历史集合与跨会话代际误判。 */
+export function watchAskClosed(sessionId: string, askId: string, closed: () => void): () => void {
+  const item = { askId, closed };
+  const observers = askCloseObservers.get(sessionId) ?? new Set();
+  observers.add(item);
+  askCloseObservers.set(sessionId, observers);
+  return () => {
+    observers.delete(item);
+    if (!observers.size) askCloseObservers.delete(sessionId);
+  };
+}
+
+/** 实时事件与总览回跳共用载荷映射；恢复不产生第二次失焦通知。 */
+export function hydrateAsk(set: SetFn, p: AskOpenedEvent): void {
+  set((s) => {
+    const t = s.tabs[p.session];
+    if (!t) return;
+    if (p.text_recovered) {
+      t.textRecovered = p.text_recovered;
+      stripRecoveredInTab(t);
+    }
+    t.ask = {
+      askId: p.ask_id, kind: p.kind, title: p.title, detail: p.detail,
+      questions: p.questions, switchToAutoEdit: p.switch_to_auto_edit,
+      allowAlways: p.allow_always, approvalKind: p.approval_kind,
+      planFile: p.plan_file ?? null, planBody: p.plan_body ?? null,
+      approval: p.approval, approveId: p.approve_id ?? null,
+    };
+  });
+}
+
 /** ask/审批（2 键）：打开询问卡 + 失焦通知；close 清空 */
 export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
     "ask:opened": (p: AskOpenedEvent) => {
-      set((s) => {
-        const t = s.tabs[p.session];
-        if (!t) return; // M-1：不重建桶——避免无人能应答的幽灵审批
+      // M-1：不重建桶——避免无人能应答的幽灵审批。
         // 文本形态 ask 兜底（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：后端剥的是**落盘历史**，
         // 而这段协议原文早已随流式帧进了**当轮气泡**（帧已下发、无法回收）——这里补剥当轮气泡。
         // 剥离实现与后端 `text_ask::strip_block`（`replacen(block, "", 1)` + `trim_end()`）同口径，统一在
@@ -462,26 +493,7 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
         // 每帧文本落地消费，`run:done` 清空（标记只在本轮有效）。
         // 纪律：这是**流式文本**的清理，绝不改 `t.ask` 内容、不给卡片加来源标注（产品决定：不标注，
         // 免得用户以为提问不可信）。
-        const recovered = p.text_recovered;
-        if (recovered) {
-          t.textRecovered = recovered;
-          stripRecoveredInTab(t); // 帧先到齐的常见序：此刻就剥一次，不等下一帧
-        }
-        t.ask = {
-          askId: p.ask_id,
-          kind: p.kind,
-          title: p.title,
-          detail: p.detail,
-          questions: p.questions,
-          switchToAutoEdit: p.switch_to_auto_edit,
-          allowAlways: p.allow_always,
-          approvalKind: p.approval_kind,
-          planFile: p.plan_file ?? null,
-          planBody: p.plan_body ?? null,
-          approval: p.approval,
-          approveId: p.approve_id ?? null,
-        };
-      });
+      hydrateAsk(set, p);
       // [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：窗口失焦时系统通知（聚焦时不发，应用内 ask 窗口可见）；点击回跳走 [docs/notification-click-reveal](../../../docs/notification-click-reveal.md) 链路。
       // 仅在桶存在（有人能应答）时发送，与 M-1 守卫一致
       if (get().tabs[p.session] && !document.hasFocus()) {
@@ -494,8 +506,15 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
       }
     },
     "ask:closed": (p) => {
+      for (const observer of askCloseObservers.get(p.session) ?? []) {
+        if (!p.ask_id || observer.askId === p.ask_id) observer.closed();
+      }
       set((s) => {
-        if (s.tabs[p.session]) s.tabs[p.session].ask = null;
+        const t = s.tabs[p.session];
+        if (t) {
+          // 同一根会话可能有多个子代理询问，关闭另一项不得清掉当前展示项。
+          if (!p.ask_id || t.ask?.askId === p.ask_id) t.ask = null;
+        }
       });
     },
   };

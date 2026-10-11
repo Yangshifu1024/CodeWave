@@ -566,6 +566,7 @@ const SHARED_SEGMENTS = ["app.", "common."];
  * 因此任何非设置页文件引用它都必须登记（批④ 自己新增的 `LspGuideCard → settings.lspJavaCost` 就是这一格）。
  */
 const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
+  dashboard: ["dashboard."], // 运行总览页面与代理活动摘要
   chat: ["chat.", "composer.", "notice.", "queue."], // 消息区 / 输入区 / 引导条 / 运行队列
   files: ["files."], // 会话产物与文件列表
   quota: [], // 额度与余额：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
@@ -583,6 +584,7 @@ const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
  * 新增文件 / 新增段：先想清楚归属再登记（未登记即判红——这正是本表的用意）。
  */
 const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
+  "dashboard/RuntimeDashboard.tsx": ["dashboard."], // 总览状态、层级、详情与回跳反馈
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
@@ -592,12 +594,12 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "files/FileViewerModal.tsx": ["files."], // 产物预览弹窗
   "files/FilesPanel.tsx": ["files."], // 产物登记列表
   "quota/QuotaSection.tsx": ["rightbar."], // 额度段挂在右栏信息页，沿用 rightbar.*
-  "shell/AppShell.tsx": ["app.", "closeTab.", "exitApp.", "git.", "nav."], // 壳层：顶栏动作 / 两个拦截框 / git 身份条 / 中断提示
+  "shell/AppShell.tsx": ["app.", "closeTab.", "exitApp.", "git.", "nav.", "dashboard."], // 壳层：顶栏动作 / 拦截框 / git 身份 / 总览入口
   "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
   "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
   "shell/RightBar.tsx": ["common.", "rightbar."], // 目标段已随目标模式整体删除移除
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
-  "shell/TopBar.tsx": ["app.", "settings.", "titlebar."], // 顶栏：app.* 折叠/统计动作；titlebar.* 标题栏；settings.* 见 CROSS_SEGMENT_BORROWINGS
+  "shell/TopBar.tsx": ["app.", "settings.", "tasks.", "dashboard.", "titlebar."], // 顶栏：app.* 折叠动作；titlebar.* 会话胶囊；覆盖页标题见 CROSS_SEGMENT_BORROWINGS
   "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
@@ -611,6 +613,9 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
  * 否则「允许段清单」会变成一张谁都可以往上加段的橡皮图章。
  */
 const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
+  "shell/AppShell.tsx": {
+    "dashboard.": "固定总览入口复用总览页标题 dashboard.title，两处显示同一页面名称",
+  },
   "chat/Composer.tsx": {
     "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
     "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
@@ -620,6 +625,8 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   },
   "shell/TopBar.tsx": {
     "settings.": "设置页全屏打开时顶栏左段标题复用 settings.title（设置页外壳的页面标题，与 SettingsPage 用同一字面）；顶栏在不同模式下显示两套标题（会话标题 / 设置页标题），写 titlebar.* 反而是新增概念——「顶栏的设置页标题」不属于 titlebar 段语义",
+    "tasks.": "计划任务页覆盖工作区时，顶栏复用实际页面的 tasks.title，避免显示后台会话或总览标题",
+    "dashboard.": "运行总览覆盖工作区时，顶栏复用 dashboard.title，与页面标题及导航入口保持一致",
   },
   "subagent/SubagentDrawer.tsx": {
     "composer.": "抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",
@@ -635,6 +642,10 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
  * 键值域由别处守护：注册表用例（labelKey / PAGE_LABEL_KEY）与 i18n 双侧键集合用例。
  */
 const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
+  "dashboard/RuntimeDashboard.tsx": {
+    "t(statusKey(sub.status, sub.ended)": "子代理状态按 STATUS_KEYS / ENDING_KEYS 的完整枚举映射到 dashboard 段",
+    "t(statusKey(item.status, item.ended)": "近期结果状态使用同一枚举映射，取消与失败优先于收尾形态",
+  },
   "panels/SettingsPage.tsx": {
     "t(item.labelKey)": "搜索命中行的项名由注册表 labelKey 派生",
     "t(PAGE_LABEL_KEY[item.page])": "搜索命中行的所属页名由注册表页名键派生",
