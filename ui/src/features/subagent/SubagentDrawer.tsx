@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Drawer, Tag, Tooltip } from "antd";
 import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -7,11 +7,6 @@ import { useActiveRun, useRun } from "../../stores/run";
 import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
 import { renderUserMarkdown } from "../../utils/markdown";
-
-/** 子代理抽屉可用宽度：45% 视口，夹在 360–560 之间。 */
-function drawerWidth(): number {
-  return Math.min(560, Math.max(360, Math.round(window.innerWidth * 0.45)));
-}
 
 /** 子代理过程抽屉（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）：右侧滑入、默认常显（首个子代理启动即弹出）。
  *  关闭只置 open=false 不销毁——流式数据留存于 subStreams，可经聊天卡 / Composer 指示器重进；
@@ -23,13 +18,6 @@ export default function SubagentDrawer() {
   const sub = (subId && active.subs.find((x) => x.subId === subId)) || null;
   const stream = (subId && active.subStreams[subId]) || null;
   const running = sub?.status === "running";
-  // 经 useMemo 在打开时重算宽度——open 翻转的同一渲染内取值就绪（useEffect 里的 ref 写入
-  // 落在渲染之后且不触发重渲染，关闭期间 resize 曾以旧宽度打开抽屉）；antd 6 的 size 接受数字
-  // open 不是宽度的输入，而是「打开这一刻重算」的触发器：drawerWidth() 读的是窗口/DOM 尺寸，
-  // 状态写入发生在渲染之后，删掉这个依赖会以旧宽度打开抽屉
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const width = useMemo(() => drawerWidth(), [open]);
-
   // 轻量贴底：内容增长即滚到底部；滚轮上滚 = 阅读意图，暂停跟随。
   // 移植自 ChatMessages（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：程序化跳转声明豁免窗口 + **实际落点**，onScroll 吞掉
   // 自身触发的滚动事件，仅用户驱动滚动才重判钉住状态——否则触控板小幅上滚（<40px）
@@ -182,8 +170,9 @@ export default function SubagentDrawer() {
       open={open && !!sub}
       onClose={() => useRun.getState().closeSubDrawer()}
       placement="right"
-      size={width}
-      mask={false}
+      // 使用视口单位，窗口缩放时仍占一半宽度，无需等待关闭后重新计算。
+      size="50vw"
+      mask={{ closable: true }}
       destroyOnHidden={false}
       closable={false}
       className="sub-drawer"

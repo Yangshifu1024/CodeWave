@@ -15,6 +15,8 @@
 
 ## 基准与方案
 
+- 2026-10-11 · [runtime-dashboard.md](./runtime-dashboard.md) — 运行总览设计与实施方案草案：会话列表、代理层级展开、待处理置顶、全局摘要与对账；布局方向已确认，实施待批准。
+
 - 2026-10-11 · [release-review-remediation.md](./release-review-remediation.md) — 发版审查 8 项缺陷、队列续跑与服务日志遗漏的修复契约、回归验证与手动检查清单。
 
 验证：`cargo test` 1213 passed / clippy 0 warning、`pnpm --dir ui test` 1352 passed / 110 文件（新增 28 例）、`ui build` + `lint` + `pnpm prepr` 8/8 通过。
