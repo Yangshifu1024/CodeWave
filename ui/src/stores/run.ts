@@ -22,6 +22,7 @@ import {
   ensureToolAnchorIm,
   findToolViewInItems,
   messagesToSubStream,
+  nextRunEpoch,
   scanToolResults,
   restoredToolData,
   safeArgsPreview,
@@ -38,6 +39,7 @@ import {
   settleRun,
   subHandlers,
   toolHandlers,
+  touchServiceRevision,
 } from "./runHandlers";
 
 export type {
@@ -114,9 +116,8 @@ export interface RunStore {
   /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
   openSubDrawer(sessionId: string | null, subId: string): Promise<void>;
   /** [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：run 终态对账（**双向**）。
-   *  后端 `session_running` 是独立于事件管线的可靠真值（`core/agent/runtime.rs` 的 `swap(true)` 置位、
-   *  `drive.rs` 所有退出路径 `store(false)` 复位）。此前的前端对账只置 true、不置回 false，
-   *  恰好漏掉「后端已停、前端还认为在跑」这个方向——即本缺陷所属方向。 */
+   *  后端 `session_run_snapshot` 在同一锁内读取 running / run_id / 最近终态。
+   *  本地 epoch 屏蔽旧响应与启动窗口；同 run_id 的正常 done 才自动续队，取消/失败保持暂停。 */
   reconcileRun(sessionId: string): Promise<void>;
   closeSubDrawer(sessionId?: string | null): void;
   refreshGit(sessionId?: string | null): Promise<void>;
@@ -533,7 +534,9 @@ export const useRun = create<RunStore>()(
     markRunning(sessionId) {
       set((s) => {
         if (!s.tabs[sessionId]) s.tabs[sessionId] = blank();
-        s.tabs[sessionId].running = true;
+        const t = s.tabs[sessionId];
+        if (!t.running) t.runEpoch = nextRunEpoch();
+        t.running = true;
       });
     },
 
@@ -580,9 +583,15 @@ export const useRun = create<RunStore>()(
         });
         return true;
       }
+      const epoch = nextRunEpoch();
       set((s) => {
         if (!s.tabs[sessionId]) s.tabs[sessionId] = blank();
         const t = s.tabs[sessionId];
+        t.runEpoch = epoch;
+        t.startPending = true;
+        t.pendingRunTerminals = {};
+        t.pendingRunTerminalOverflow = false;
+        t.runId = null;
         // 本地回显含图片缩略图（后端落盘由 startChat 负责；重开会话经 restoreFromMessages 恢复）
         t.items.push({
           kind: "user",
@@ -603,24 +612,37 @@ export const useRun = create<RunStore>()(
       channel.onmessage = (frame) => {
         set((s) => {
           const t = s.tabs[sessionId];
-          if (!t) return;
+          if (!t || t.runEpoch !== epoch || !t.running) return;
           // 帧归一统一走 applyFrameToTab（帧到达顺序 = timeline 展示顺序）
           applyFrameToTab(t, frame);
         });
       };
       try {
         const runId = await ipc.startChat(sessionId, text, images ?? [], channel);
+        const pendingTab = get().tabs[sessionId];
+        const deferred = pendingTab?.runEpoch === epoch ? pendingTab.pendingRunTerminals?.[runId] : undefined;
+        let reconcileOverflow = false;
         // run_id 落进运行态（失败路径不写）
         set((s) => {
           const t = s.tabs[sessionId];
-          if (t) t.runId = runId;
+          if (t?.runEpoch === epoch) {
+            reconcileOverflow = t.pendingRunTerminalOverflow ?? false;
+            t.runId = runId;
+            t.startPending = false;
+            t.pendingRunTerminals = undefined;
+            t.pendingRunTerminalOverflow = false;
+          }
         });
+        if (deferred) runLifecycleHandlers(set, get)[`run:${deferred.event}`](deferred.payload);
+        else if (reconcileOverflow) await get().reconcileRun(sessionId);
         return true;
       } catch (e) {
         set((s) => {
           const t = s.tabs[sessionId];
           if (!t) return;
-          t.running = false;
+          if (t.runEpoch !== epoch) return;
+          settleRun(t);
+          t.queueResumeAfterInjection = false;
           t.items.push({ kind: "error", text: String(e) });
         });
         return false;
@@ -823,6 +845,7 @@ export const useRun = create<RunStore>()(
     },
 
     onToolResult(sessionId, p, ok) {
+      if (p.tool === "service") touchServiceRevision(p.outcome?.data?.id);
       set((s) => {
         const t = s.tabs[sessionId];
         // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理内部的工具结果（session = sub_id，无对应 Tab）→ 路由进所属会话的子代理流
@@ -927,6 +950,7 @@ export const useRun = create<RunStore>()(
           }
         }
       });
+      if (p.tool === "service") scheduleServiceReconcile(set, get);
     },
 
     onToolStart(sessionId, p) {
@@ -1126,27 +1150,48 @@ export const useRun = create<RunStore>()(
      *  而 `sub:spawn` 建卡不检查它，此时子代理卡仍是 running（证据 5）。
      *
      *  「问不到后端就维持现状」：探测失败绝不能反推成「已结束」——那会误杀正在跑的 run。
-     *  本地已收敛时直接短路，连 IPC 都不发。 */
+     *  启动回执未到时不探测；收敛后以运行代次丢弃仍在途的查询响应。 */
     async reconcileRun(sessionId) {
       const t0 = get().tabs[sessionId];
-      if (!t0) return;
+      if (!t0 || t0.startPending) return;
       const needSettle = hasUnsettledRunState(t0);
-      let running: boolean;
+      const epoch = t0.runEpoch;
+      let snapshot;
       try {
-        running = await ipc.sessionRunning(sessionId);
+        snapshot = await ipc.sessionRunSnapshot(sessionId);
       } catch {
         return;
       }
-      if (running) {
+      const current = get().tabs[sessionId];
+      if (!snapshot || typeof snapshot.running !== "boolean") return;
+      if (!current || current.runEpoch !== epoch || current.startPending) return;
+      if (snapshot.running) {
         // true 方向：后端在跑而本地没置位（例如 run:start 丢帧、或关 Tab 期间起的 run）
-        if (!get().tabs[sessionId]?.running) get().markRunning(sessionId);
+        if (!current.running) get().markRunning(sessionId);
+        set((s) => {
+          const t = s.tabs[sessionId];
+          if (t && snapshot.run_id) {
+            if (t.runId && t.runId !== snapshot.run_id) t.runEpoch = nextRunEpoch();
+            t.runId = snapshot.run_id;
+          }
+        });
         return;
       }
       if (!needSettle) return;
+      if (current.runId && snapshot.run_id !== current.runId) return;
+      const terminal = snapshot.terminal;
+      if (terminal && current.runId === terminal.run_id && snapshot.run_id === terminal.run_id) {
+        const p = { ...terminal, session: sessionId, kind: terminal.error_kind };
+        runLifecycleHandlers(set, get)[`run:${terminal.kind}`](p);
+        return;
+      }
       set((s) => {
         const t = s.tabs[sessionId];
         // 探测期间可能已正常收到 run:done 收敛过；settleRun 幂等，重复调用无副作用
-        if (t) settleRun(t);
+        if (t) {
+          settleRun(t);
+          t.queueResumeAfterInjection = false;
+        }
       });
     },
 

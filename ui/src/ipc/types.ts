@@ -152,6 +152,20 @@ export interface LogFileContent { content: string; truncated: boolean }
  * `running` 是进程存活事实，**不可**用「日志非空」代理：无输出的服务 tail 恒为空，
  * 那会让工具卡永久误报已停止。字段无 `tail`——日志只走 `service:update` 增量推送。
  */
+/** 后端锁内读取的运行与终态快照；空闲事实与终态内容原子发布。 */
+export interface SessionRunSnapshot {
+  running: boolean;
+  run_id: string | null;
+  terminal: {
+    run_id: string;
+    kind: "done" | "error" | "cancelled";
+    suggestions?: string[];
+    error?: string;
+    error_kind?: string;
+    history_save?: HistorySaveReport | null;
+  } | null;
+}
+
 export interface ServiceInfo {
   id: string;
   name: string;

@@ -30,7 +30,7 @@
 
 判据单点定义在 `subagent.rs` 的 `ended_of(steps_used, max_steps, tagged)`（抽成纯函数而非内联三元——四象限是跨模块契约，此前内联写法导致该判定**零 Rust 测试覆盖**）。撞顶判定用 `>=`：`step_count` 是「已启动步数」（每步开头写 `step + 1`），真正跑完预算时恰等于 `max_steps`。
 
-`ended` 落地三处（本轮）：会话日志、`sub:done` 事件载荷、`ToolOutcome.data`。`TargetState` 的映射（[`feat/wait-until-targets`](./wait-conditional-wait.md) 分支上的 `wait_targets.finish`）**尚未合入 main**，属待落地项。
+`ended` 落地三处：会话日志、`sub:done` 事件载荷、`ToolOutcome.data`。条件等待已合入；[发版审查修复](./release-review-remediation.md) 同步了 `TargetState` 映射：有成果的 `partial` 为 `Succeeded`，完整分析交付才置 `analysis_done`，二者使用独立判据。
 
 ### 已知局限：`partial` 无法区分「被砍断」与「恰好在最后一步做完」
 

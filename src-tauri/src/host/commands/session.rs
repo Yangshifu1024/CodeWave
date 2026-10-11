@@ -576,6 +576,18 @@ pub async fn session_running(core: Core<'_>, session_id: String) -> Result<bool,
         .unwrap_or(false))
 }
 
+/// 带身份和终态的权威快照；补偿终态事件丢失，布尔探测入口仍保留。
+#[tauri::command]
+pub async fn session_run_snapshot(
+    core: Core<'_>,
+    session_id: String,
+) -> Result<crate::core::agent::RunSnapshot, String> {
+    Ok(core
+        .session(&session_id)
+        .map(|rt| rt.run_snapshot())
+        .unwrap_or_default())
+}
+
 /// 清除会话中断标记（批1）：前端「已读 / 续跑」后调用，幂等；会话不存在时静默成功。
 #[tauri::command]
 pub async fn clear_session_interrupt(core: Core<'_>, session_id: String) -> Result<(), String> {

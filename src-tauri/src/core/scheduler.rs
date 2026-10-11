@@ -485,8 +485,7 @@ async fn run_task_locked(
         json!({ "name": task.name, "id": task.id }),
     );
     // 登记为可等待目标（`wait` 的 until 可等它跑完）：计划任务无 running 中间态，
-    // `last_status` 在 run 期间是**上一次**的旧值，故拿它当 baseline——
-    // 内核的 is_completed() 以「终态 + 观测值 ≠ 基线」判定本次 run 已完成。
+    // 每轮登记都会重置上一轮终态；baseline 仅供诊断，连续两轮状态相同也算完成。
     // 登记表与 ScheduledTask 解耦：不动结构体，避免打破本文件内大量结构体字面量。
     core.wait_targets.register(
         task.id.clone(),
@@ -504,7 +503,7 @@ async fn run_task_locked(
                 t.last_summary = Some("所属项目不存在或无有效目录".into());
             }
         }
-        // 跳过也是本次 run 的完成（状态已从基线变为 skipped）；终态取 Failed——
+        // 跳过也是本次 run 的完成；终态取 Failed——
         // 它没有拿到成果，wait 超时时看到的摘要已说明原因。
         core.wait_targets.finish(
             &task.id,
@@ -584,9 +583,8 @@ async fn run_task_locked(
             t.last_summary = Some(summary.clone());
         }
     }
-    // run 结束置终态（判定「本次已完成」交给内核：终态 + 观测值 ≠ 登记基线）。
-    // status == "ok" 归 Succeeded，"error" 归 Failed。status 单独传给内核做基线比对——
-    // 摘要（自由文本）不能拿来比基线（状态串），两者不同类型。
+    // run 结束置本轮终态，status == "ok" 归 Succeeded，"error" 归 Failed。
+    // 状态与摘要分别保留供诊断；是否完成不依赖与上轮状态的比较。
     core.wait_targets.finish(
         &task.id,
         if status == "ok" {

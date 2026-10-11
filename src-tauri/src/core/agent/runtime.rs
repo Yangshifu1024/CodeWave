@@ -95,6 +95,51 @@ pub trait EventSink: Send + Sync {
     fn unbind_sub_channel(&self, _sub: &SessionId) {}
 }
 
+/// 可回查的 run 终态；前端据此区分队列可续跑的成功与需要停下的错误/取消。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTerminalKind {
+    Done,
+    Error,
+    Cancelled,
+}
+
+/// 最近 run 的完整收尾回执，与事件载荷共用字段供界面回填。
+#[derive(Debug, Clone, Serialize)]
+pub struct RunTerminal {
+    pub run_id: String,
+    pub kind: RunTerminalKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_save: Option<serde_json::Value>,
+}
+
+impl RunTerminal {
+    pub(super) fn new(run_id: &str, kind: RunTerminalKind) -> Self {
+        Self {
+            run_id: run_id.into(),
+            kind,
+            suggestions: None,
+            error: None,
+            error_kind: None,
+            history_save: None,
+        }
+    }
+}
+
+/// 只保留最近一轮；与 running 标志在同一临界区发布，避免跨轮拼接。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RunSnapshot {
+    pub running: bool,
+    pub run_id: Option<String>,
+    pub terminal: Option<RunTerminal>,
+}
+
 /// 会话运行时：一个会话的全部可变状态（历史/计划 todos/偏好/取消/互斥/流缓冲等），
 /// 以 Arc 在 core/host/tools 间共享。字段自带锁，跨 await 持锁一律短临界区。
 pub struct SessionRuntime {
@@ -125,6 +170,7 @@ pub struct SessionRuntime {
     pub run_lock: Arc<tokio::sync::Mutex<()>>,
     /// 是否有 run 进行中（start_chat 以 swap 抢占，结束时恒复位）
     pub running: Arc<AtomicBool>,
+    run_snapshot: Mutex<RunSnapshot>,
     /// 压缩互斥（TOCTOU 修复）：手动/自动压缩期间置位；期间 start_chat 与二次压缩被拒
     pub compacting: AtomicBool,
     /// 文件操作互斥（edit 工具的进程级文件写互斥）
@@ -184,6 +230,8 @@ pub struct SessionRuntime {
     pub scope_expanded: std::sync::atomic::AtomicBool,
     /// G3：用户对计划外步骤选了「本次会话允许」（此后新增静默放行）
     pub scope_allowed: std::sync::atomic::AtomicBool,
+    /// G3：已拒绝的新标题；相同范围继续阻断写通道，不重复询问。
+    pub scope_denied_titles: Mutex<Vec<String>>,
     /// G3 范围确认的单飞锁：同批并发写的多个写工具只弹一张确认卡
     /// （command 工具是 ReadOnly、走并发闸，逐 call 求值会重复弹窗）。
     pub scope_gate_lock: tokio::sync::Mutex<()>,
@@ -216,6 +264,38 @@ pub struct SessionRuntime {
 }
 
 impl SessionRuntime {
+    /// 读取运行标志与最近终态的同一时刻快照；不访问历史或磁盘。
+    pub fn run_snapshot(&self) -> RunSnapshot {
+        let state = super::guards::lock_ok(&self.run_snapshot);
+        let mut snapshot = state.clone();
+        snapshot.running = self.running.load(Ordering::SeqCst);
+        snapshot
+    }
+
+    fn begin_run(&self, run_id: &str) -> bool {
+        let mut snapshot = super::guards::lock_ok(&self.run_snapshot);
+        if self.running.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        *snapshot = RunSnapshot {
+            running: true,
+            run_id: Some(run_id.into()),
+            terminal: None,
+        };
+        true
+    }
+
+    /// 旧轮迟到收尾不得覆盖新轮；终态完成保存后才允许下一轮启动。
+    pub(super) fn finish_run(&self, terminal: RunTerminal) {
+        let mut snapshot = super::guards::lock_ok(&self.run_snapshot);
+        if snapshot.run_id.as_deref() != Some(terminal.run_id.as_str()) {
+            return;
+        }
+        snapshot.running = false;
+        snapshot.terminal = Some(terminal);
+        self.running.store(false, Ordering::SeqCst);
+    }
+
     /// 开启当前 run 的接纳窗口。与发送/收尾使用同一锁，避免检查标志后发送的 TOCTOU。
     pub(super) fn begin_injections(&self) -> InjectionGuard<'_> {
         let _gate = super::guards::lock_ok(&self.inject_rx);
@@ -292,6 +372,7 @@ impl SessionRuntime {
             inject_accepting: AtomicBool::new(false),
             run_lock: Arc::new(tokio::sync::Mutex::new(())),
             running: Arc::new(AtomicBool::new(false)),
+            run_snapshot: Mutex::new(RunSnapshot::default()),
             compacting: AtomicBool::new(false),
             file_ops: Arc::new(tokio::sync::Mutex::new(())),
             sem_tools: Arc::new(Semaphore::new(4)),
@@ -313,6 +394,7 @@ impl SessionRuntime {
             approved_plan: Mutex::new(None),
             scope_expanded: std::sync::atomic::AtomicBool::new(false),
             scope_allowed: std::sync::atomic::AtomicBool::new(false),
+            scope_denied_titles: Mutex::new(Vec::new()),
             scope_gate_lock: tokio::sync::Mutex::new(()),
             root_session_id: None,
             is_task_runtime: false,
@@ -544,20 +626,21 @@ impl AgentCore {
         images: Vec<crate::core::prefs::ImageIn>,
     ) -> anyhow::Result<String> {
         let _start_guard = self.start_gate.lock().unwrap();
-        if rt.running.swap(true, Ordering::SeqCst) {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        if !rt.begin_run(&run_id) {
             anyhow::bail!("该会话已有运行中的任务");
         }
         // 压缩互斥：压缩占位期间拒绝新 run（TOCTOU 守卫——running 检查通过后压缩
         // 仍可能整体替换历史）
         if rt.compacting.load(Ordering::SeqCst) {
-            rt.running.store(false, Ordering::SeqCst);
+            rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
             anyhow::bail!("上下文压缩进行中，请稍后重试");
         }
         {
             let cfg = self.cfg.read().unwrap();
             let prefs = rt.prefs();
             if crate::core::prefs::effective_model(&cfg, &prefs).is_none() {
-                rt.running.store(false, Ordering::SeqCst);
+                rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
                 anyhow::bail!("请先在设置中配置并选择模型");
             }
         }
@@ -587,7 +670,6 @@ impl AgentCore {
                 created_at: None,
             }
         };
-        let run_id = uuid::Uuid::new_v4().to_string();
         let core = self.clone();
         tokio::spawn(run_chat(core, rt, user, run_id.clone()));
         Ok(run_id)
@@ -676,6 +758,70 @@ mod tests {
     use super::*;
     use crate::core::prefs::{ApprovalMode, EffortLevel, SessionPrefs};
     use crate::core::types::SessionId;
+
+    #[test]
+    fn terminal_snapshot_keeps_result_and_rejects_stale_finish() {
+        let h = harness();
+        assert!(h.rt.run_snapshot().run_id.is_none());
+        assert!(h.rt.begin_run("first"));
+        assert!(!h.rt.begin_run("duplicate"));
+        assert!(h.rt.run_snapshot().running);
+        h.rt.finish_run(RunTerminal {
+            run_id: "first".into(),
+            kind: RunTerminalKind::Done,
+            suggestions: Some(vec!["继续".into()]),
+            error: None,
+            error_kind: None,
+            history_save: Some(serde_json::json!({"history_status":"warned"})),
+        });
+        let ended = serde_json::to_value(h.rt.run_snapshot()).unwrap();
+        assert_eq!(ended["running"], false);
+        assert_eq!(ended["terminal"]["kind"], "done");
+        assert_eq!(ended["terminal"]["suggestions"][0], "继续");
+        assert!(h.rt.begin_run("second"));
+        h.rt.finish_run(RunTerminal::new("first", RunTerminalKind::Error));
+        let current = h.rt.run_snapshot();
+        assert!(current.running);
+        assert_eq!(current.run_id.as_deref(), Some("second"));
+        assert!(current.terminal.is_none());
+        h.rt.finish_run(RunTerminal::new("second", RunTerminalKind::Cancelled));
+        assert!(!h.rt.run_snapshot().running);
+        assert_eq!(
+            serde_json::to_value(h.rt.run_snapshot()).unwrap()["terminal"]["kind"],
+            "cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_snapshot_steer_checkpoint_does_not_end_run() {
+        let h = harness();
+        assert!(h.rt.begin_run("steer"));
+        let _window = h.rt.begin_injections();
+        let receipt = h.rt.enqueue_injection("补充约束".into()).unwrap();
+        assert_eq!(
+            super::super::drive::drain_inject(&h.core, &h.rt, "steer", true, false).await,
+            1
+        );
+        assert!(receipt.await.unwrap().is_ok());
+        assert!(
+            h.rt.run_snapshot().running,
+            "steer 只保存注入消息，不收尾当前 run"
+        );
+        assert!(h.rt.run_snapshot().terminal.is_none());
+        assert!(!h.rt.begin_run("parallel"), "steer 后仍拒绝并发新 run");
+    }
+
+    #[tokio::test]
+    async fn run_snapshot_cancel_without_injection_publishes_cancelled() {
+        let h = harness();
+        assert!(h.rt.begin_run("cancel"));
+        super::super::drive::mark_cancelled(&h.core, &h.rt, "cancel").await;
+        let snapshot = serde_json::to_value(h.rt.run_snapshot()).unwrap();
+        assert_eq!(snapshot["running"], false);
+        assert_eq!(snapshot["terminal"]["run_id"], "cancel");
+        assert_eq!(snapshot["terminal"]["kind"], "cancelled");
+        assert!(h.rt.begin_run("next"));
+    }
 
     /// 记录事件的测试 sink（不关心具体事件名，仅作 runtime 装配）。
     #[derive(Default)]

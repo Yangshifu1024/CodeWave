@@ -16,7 +16,7 @@
 // 惯例：唯一 invoke 入口 ui/src/ipc/client 必须 mock（不直接 mock @tauri-apps/api/core）；
 // zustand store 是模块级单例，逐用例重建态桶（踩坑清单）；runHandlers 有模块级计数与防抖定时器，
 // 每个用例前调 `__resetServiceReconcileForTest()`。
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcMock = vi.hoisted(() => ({
   listServices: vi.fn(async (): Promise<any[]> => []),
@@ -126,12 +126,16 @@ function mountServiceCardInSubStream(subId: string, key: string, id: string) {
 
 beforeEach(() => {
   __resetServiceReconcileForTest();
-  ipcMock.listServices.mockClear();
+  ipcMock.listServices.mockReset();
   ipcMock.listServices.mockResolvedValue([]);
   useRun.setState((s) => {
     s.tabs = {};
     s.tabs[SESSION] = blankTab();
   });
+});
+afterEach(() => {
+  __resetServiceReconcileForTest();
+  vi.useRealTimers();
 });
 
 /** blank() 的镜像（含 usage，逐字段照抄 runFrames.blank 的默认态） */
@@ -170,23 +174,23 @@ describe("service:update 事件落到工具卡", () => {
     expect(card("c-tail").outcome.data.running).toBe(true);
   });
 
-  it("exited 事件：目标卡 running=false 且 tail 清空", () => {
+  it("exited 事件：目标卡 running=false 且已有 tail 保留", () => {
     seedServiceCard("c-exit", "svc_b", { tail: "booting…" });
     expect(card("c-exit").outcome.data.tail).toBe("booting…");
 
     handlers()["service:update"]({ session: SESSION, id: "svc_b", exited: true });
 
     expect(card("c-exit").outcome.data.running).toBe(false);
-    expect(card("c-exit").outcome.data.tail).toBe("");
+    expect(card("c-exit").outcome.data.tail).toBe("booting…");
   });
 
-  it("removed 事件：目标卡 running=false（且 tail 清空）", () => {
+  it("removed 事件：目标卡 running=false 且已有 tail 保留", () => {
     seedServiceCard("c-rm", "svc_c", { tail: "log line" });
 
     handlers()["service:update"]({ session: SESSION, removed: "svc_c" });
 
     expect(card("c-rm").outcome.data.running).toBe(false);
-    expect(card("c-rm").outcome.data.tail).toBe("");
+    expect(card("c-rm").outcome.data.tail).toBe("log line");
   });
 
   // B3：无输出服务（如 `sleep 300`）的 tail 恒空 —— tail 为空不得被读成「已停止」
@@ -346,6 +350,56 @@ describe("会话恢复：落盘 running 快照必须降级", () => {
 });
 
 describe("list_services 对账（推送通道的拉取兜底）", () => {
+  it("实时新建卡自动启动轮询，另一服务每秒输出也不能饿死退出纠错", async () => {
+    vi.useFakeTimers();
+    ipcMock.listServices.mockResolvedValue([{ id: "svc_a", running: true }]);
+    seedServiceCard("c-a", "svc_a");
+    seedSecondServiceCard("c-b", "svc_b");
+    for (let n = 0; n < 3; n++) {
+      handlers()["service:update"]({ session: SESSION, id: "svc_a", tail: `line ${n}`, running: true });
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(ipcMock.listServices).toHaveBeenCalledTimes(1);
+    expect(card("c-b").outcome.data.running).toBe(false);
+  });
+
+  it("无卡时停止定时器；新卡出现再次启动", async () => {
+    vi.useFakeTimers();
+    seedServiceCard("c-a", "svc_a");
+    useRun.getState().dispose(SESSION);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(ipcMock.listServices).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    useRun.setState((s) => { s.tabs[SESSION] = blankTab(); });
+    seedServiceCard("c-b", "svc_b");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ipcMock.listServices).toHaveBeenCalledTimes(1);
+  });
+
+  it("拉取期间不重叠请求，旧快照不得覆盖后来到达的退出事件", async () => {
+    vi.useFakeTimers();
+    let reply!: (v: any[]) => void;
+    ipcMock.listServices.mockImplementationOnce(() => new Promise((r) => { reply = r; }));
+    seedServiceCard("c-a", "svc_a", { tail: "before" });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(ipcMock.listServices).toHaveBeenCalledTimes(1);
+    handlers()["service:update"]({ session: SESSION, id: "svc_a", exited: true, tail: "final" });
+    reply([{ id: "svc_a", running: true }]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(card("c-a").outcome.data.running).toBe(false);
+    expect(card("c-a").outcome.data.tail).toBe("final");
+  });
+
+  it("拉取失败保持已知状态并继续重试", async () => {
+    vi.useFakeTimers();
+    ipcMock.listServices.mockRejectedValueOnce(new Error("ipc down"));
+    seedServiceCard("c-a", "svc_a");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(card("c-a").outcome.data.running).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(card("c-a").outcome.data.running).toBe(false);
+  });
   it("listServices 返回实况后，卡的 running 被覆写为权威值", async () => {
     ipcMock.listServices.mockResolvedValue([
       { id: "svc_a", running: true },

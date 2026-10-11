@@ -3,6 +3,8 @@
 > 缺陷修复。2026-10-11 深度排查产出，同日实施（分支 `fix/run-terminal-event-fallback`）。
 > 上游：[subagent-terminal-event-loss.md](./subagent-terminal-event-loss.md)（子代理终态事件丢失的定位与三层兜底）。
 
+> 后续：[发版审查修复](./release-review-remediation.md) 已将布尔回查升级为 `session_run_snapshot`（运行态、run_id、完整终态），增加 Tab 生命周期代数与启动中保护；正常完成事件丢失时可自动续队列，错误/取消保持暂停。下文的证据与初版方案保留为历史记录。
+
 ## 结论
 
 **子代理卡的修复（#127）只堵住了链条的一环。链条本身仍然成立：run 的终态没有独立真值对账，
@@ -244,13 +246,7 @@ export function hasRunningTools(t: TabRunState): boolean
 
 ## 遗留
 
-- **队列不会自动续跑（但本修复顺带把它救回来了）**：`runQueueNext` 的自动调用点只有 `run:done`
-  handler 一处（`runHandlers.ts`）；`run:error` / `run:cancelled` 本就按设计暂停、等用户点「继续」。
-  该事件丢失时队列不会自动出队——**但修复前这也不是死局**：队列同样卡死，因为
-  `QueuePanel.tsx:128` 的「继续」按钮渲染条件是 `!running`，而 `running` 正卡在 true，
-  **按钮永远不渲染**，用户连手动救都做不到。本修复把 `running` 收敛为 false 后该按钮重新出现，
-  一键即可恢复队列。⇒ 自动续跑仍缺（要动队列续跑语义、且需与 in-flight 的 `runQueueNext`
-  竞态防护，风险高于本次其余三步，单独立项），但**「队列彻底搁浅且无法自救」已被本修复消除**。
+- **队列自动续跑遗漏已补齐**：[发版审查修复](./release-review-remediation.md) 以匹配 run_id 的明确 `done` 快照复用完成 handler；事件与快照重复到达只出队一次。`error` / `cancelled` 继续按设计暂停。只有布尔空闲、缺失终态时仅恢复输入与手动继续入口，不臆测成功。
 - **子代理终态事件的根因仍未定位**，已收窄到「事件投递丢失」单一分支（推导见
   [subagent-terminal-event-loss.md](./subagent-terminal-event-loss.md)）。本方案**不替代**根因定位，
   它是在无法修复投递的前提下对丢失做免疫。

@@ -161,6 +161,8 @@ impl Tool for PlanTool {
                 if let Err(e) = validate_todos(&todos) {
                     return ToolOutcome::err("E_PLAN_INVALID", e);
                 }
+                // 与范围询问共用单飞锁，防止应答期间替换计划后被旧应答误放行。
+                let scope_guard = ctx.rt.scope_gate_lock.lock().await;
                 // G3（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）：存在批准后基线时，全量替换按标题集合 diff。
                 // 判定口径走 classify_new_todos 而非裸 diff：批准时登记的是「文件级改动点」，S6 执行时又要求把
                 // 范围切成人名任务包并补验证项，写法必然被改写（`包 A（backend-dev）：新增 core/x.rs` vs
@@ -206,6 +208,7 @@ impl Tool for PlanTool {
                     }
                 }
                 *ctx.rt.todos.lock().unwrap() = todos.clone();
+                drop(scope_guard);
                 // 本 run 真的改过计划（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
                 // 计划未收尾的收尾门只看本标记，否则上个 run 的陈旧计划会劫持本 run 的普通提问。
                 // 置位点在写入成功之后——被档位排除/参数非法的调用并未改变计划。
@@ -431,11 +434,6 @@ fn strip_task_pkg_prefix(s: &str) -> String {
     cur
 }
 
-/// 括号内文字的字符数上限（含头尾空白，`:extend` 等标识符正好卡在这里）。
-/// 真正的角色/包标识很短，而「顺手」「数据库」「含删除」这类普通语义短语虽短但含中文（由
-/// [`is_agent_id_token`] 拦），更长一点的括号补语则靠这条上限拦。
-const ROLE_PAREN_MAX_CHARS: usize = 24;
-
 /// 「任务包」/「包」字头汉字（后者是前者的后缀，两条都要覆盖）。
 const PKG_PREFIX_WORDS: [&str; 2] = ["\u{4EFB}\u{52A1}\u{5305}", "\u{5305}"];
 
@@ -445,7 +443,7 @@ const PKG_PREFIX_WORDS: [&str; 2] = ["\u{4EFB}\u{52A1}\u{5305}", "\u{5305}"];
 /// 剥掉就是静默放行真新增（**这是安全门：误报可以放过、误放不行**）。
 /// 枚举而非纯形态推断，是因为「无空格 + 无中文逗号」这类形态信号分不开 `backend-dev` 与
 /// `migration` / `nocache`（一个英文语义短语的括号定语形态与角色标识完全一致）。
-/// 词表与注册表同源；模型自造非规范角色名时走下面的形态兜底，代价是多弹一次门。
+/// 词表与注册表同源；另保留已有 docs-writer 装饰，其余未知角色按新增范围处理。
 const KNOWN_AGENT_ROLES: [&str; 9] = [
     "explore",
     "backend-dev",
@@ -460,16 +458,16 @@ const KNOWN_AGENT_ROLES: [&str; 9] = [
 
 /// 任务包前缀段的判据（只用于「这整段是不是标签」的判断，**不用于判定正文语义**）。
 ///
-/// ## 三条判据（任一命中即认）
-/// - **A · 配对括号内是角色/包标识**：括号必须真配对，且括号内命中 [`KNOWN_AGENT_ROLES`]
-///   词表（`包 A（backend-dev）` / `包 C（代码审查 reviewer）`），或整体符合
-///   [`is_agent_id_token`] 形态（无空白、无中文逗号、无括号、≤24 字符且至少一个 ASCII
-///   字母或数字）。
+/// ## 整段判据
+/// - 主体必须是包序号或纯 ASCII 短标识，不能携带中文或英文动作。
+/// - 可选角色括号必须全部真配对，且每段括号内命中 [`KNOWN_AGENT_ROLES`]
+///   词表（`包 A（backend-dev）` / `包 C（代码审查 reviewer）`）或明确兼容的 docs-writer；
+///   不能用 kebab/snake 形态推断角色，因为 delete-db 同样满足形态。
 /// - **B · `包` / `任务包` 字头 + 真包序号**：`包 A` / `包1` / `任务包C` / `包 A2`。
 ///   「包」字头本身**不是**信号：`包管理策略重构 (含删除)：更新 README` 的主体是
 ///   「包管理策略重构」——管理策略重构是计划外步骤，只因字头是「包」就整段丢弃会静默放行。
-/// - **C · 字母与数字混排的短标识**（`pkgB` / `pkg_2`）：排除版本号形态
-///   （`v2: 修 schema` 说的是「按 v2 修」，剥掉会让归一化与基线错位）。
+/// - **C · 明确的 ASCII 包序号**（`pkgB` / `pkg_2`）：必须 pkg 开头，后接序号。
+///   任意含数字词（delete-db2）及版本号（v2）都不能当装饰。
 ///
 /// ## 被这张表堵住的静默放行（审查员实测复现，基线 → 当前标题 → 应判 New）
 /// | 基线 | 当前标题 | 旧判据 |
@@ -487,134 +485,55 @@ fn looks_like_label(head: &str) -> bool {
     if h.is_empty() {
         return false;
     }
-    let pkg_head = PKG_PREFIX_WORDS.iter().any(|w| h.starts_with(w));
-    // 底线兜底（两轮审查逼出来的）：标签只允许「包/任务包 字头 + 包序号 + 可选括号角色」
-    // 这一种结构，**不得携带任何其他汉字**。否则 `修 p0 崩溃：更新 README`（判据 C）、
-    // `包 A 顺手删库：更新 README`（判据 B）会把整个中文子动作当成标签剥掉，剩下的正文
-    // 命中基线 → 判细化 → 真新增静默放行且不弹门。
-    // 注意这条**不能**写成「含 CJK 即否」——真实标签 `包 A（backend-dev）：` 本身就含「包」字，
-    // 那样会把本次要修的降噪也一起砍掉；所以只查「包字头与括号之外」的汉字。
-    if has_stray_cjk_outside(h) {
+    // 整段必须是包标识 + 可选角色括号；不能只识别其中一部分就剥掉整段。
+    let split = h
+        .find(['(', ')', '\u{FF08}', '\u{FF09}'])
+        .unwrap_or(h.len());
+    let label = h[..split].trim();
+    if !has_pkg_ordinal(label) && !has_ascii_pkg_ordinal(label) {
         return false;
     }
-    // 判据 C 先跑（最窄的形态判据），命中即止
-    if has_latin_digit_id_shape(h) {
-        return true;
-    }
-    // 判据 B：`包 A（backend-dev）` 尾部的括号定语走 A，其余 `包 A` / `任务包C` 走包序号
-    if paren_content_is_agent_id(h) || (pkg_head && has_pkg_ordinal(h)) {
-        return true;
-    }
-    false
-}
-
-/// 判据 C：字母与数字混排的**纯 ASCII 短标识**（`任务包C` 里的 C、`pkgB` / `pkg_2`）。
-///
-/// 汉字正文已由 `looks_like_label` 的兜底拦掉（标签只有包字头 + 括号角色两种带汉字的成分），
-/// 所以走到这里的 head 若被认可，剩下的就是纯 ASCII 短标识。
-fn has_latin_digit_id_shape(h: &str) -> bool {
-    let has_latin = h.chars().any(|c| c.is_ascii_alphabetic());
-    let has_digit = h.chars().any(|c| c.is_ascii_digit());
-    if !has_latin || !has_digit || h.chars().count() > 24 {
-        return false;
-    }
-    // 版本号形态例外：`v2:` / `V1:` / `v10:` 的字母+数字混排与 `pkgB` 在形态上无法区分，
-    // 但前者是正文的一部分（`v2: 修 schema` 说的是「按 v2 修 schema`），剥掉会让归一化
-    // 结果与基线错位。版本号形态有固定文法（单字母 v + 数字 + 可选 .数字），据此排除。
-    let is_version_tag = {
-        let mut cs = h.chars();
-        let lead = cs.next();
-        matches!(lead, Some('v') | Some('V'))
-            && cs.clone().next().is_some_and(|c| c.is_ascii_digit())
-            && cs.all(|c| c.is_ascii_digit() || c == '.')
-    };
-    !is_version_tag
-}
-
-/// 配对括号与其内部原文，顺序按左括号在串中的位置。**嵌套 / 类别错配（`（backend-dev)`）
-/// / 残缺一律返回空**——错配形态无法从本段判断哪层才是标签，保守起见一律不剥；
-/// 「无括号」与「括号结构坏掉」都归为空，两者在下游都是「不认标签」，故不必区分。
-fn paired_paren_inners(h: &str) -> Vec<String> {
-    let mut stack: Vec<(usize, char)> = Vec::new(); // (左括号字节偏移, 左括号字符)
-    let mut out: Vec<String> = Vec::new();
-    for (b, c) in h.char_indices() {
-        match c {
-            '(' | '\u{FF08}' => {
-                stack.push((b, c));
-                if stack.len() > 1 {
-                    return Vec::new(); // 嵌套
-                }
-            }
-            ')' | '\u{FF09}' => match stack.pop() {
-                Some((ob, o_open)) if is_open_paren(o_open) && is_close_paren(c) => {
-                    out.push(h[ob + o_open.len_utf8()..b].to_string());
-                }
-                _ => return Vec::new(), // 类别错配：栈空（`)(` 顺序错乱）或中英文括号混用
-            },
-            _ => {}
+    let mut suffix = h[split..].trim();
+    while !suffix.is_empty() {
+        let (open, close) = match suffix.chars().next() {
+            Some('(') => ('(', ')'),
+            Some('\u{FF08}') => ('\u{FF08}', '\u{FF09}'),
+            _ => return false,
+        };
+        let inner_start = open.len_utf8();
+        let Some(end) = suffix[inner_start..].find(['(', ')', '\u{FF08}', '\u{FF09}']) else {
+            return false;
+        };
+        let end = inner_start + end;
+        if !suffix[end..].starts_with(close) {
+            return false;
         }
+        let role = suffix[inner_start..end].trim();
+        // 保留已有规范中文角色写法；其余括号正文仍按不确定的新增范围处理。
+        if role != "代码审查 reviewer" && !is_agent_id_token(role) {
+            return false;
+        }
+        suffix = suffix[end + close.len_utf8()..].trim();
     }
-    out
+    true
 }
 
-/// 判据 A：括号必须真配对，且**至少一对**括号内是角色/包标识。
-///
-/// 旧实现只数 `(` 与 `)` 的个数是否相等，于是 `删库 )( ：…`（顺序错乱）与
-/// `删库 (a)：回滚 (b)：…`（单字母“定语”）都整段被丢——两层标签剥完剩下正文，
-/// 于是一个真新增步骤静默变成了「细化」。
-fn paren_content_is_agent_id(h: &str) -> bool {
-    paired_paren_inners(h).iter().any(|raw| {
-        let t = raw.trim();
-        // 长度按字符算（中文按 1 字计，否则纯中文定语得靠词表逐条枚举）
-        !t.is_empty() && t.chars().count() <= ROLE_PAREN_MAX_CHARS && is_agent_id_token(t)
-    })
+/// ASCII 包标签只接受 pkg + 明确序号；不靠字母数字形态猜测正文语义。
+fn has_ascii_pkg_ordinal(h: &str) -> bool {
+    let lower = h.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("pkg") else {
+        return false;
+    };
+    is_pkg_ordinal(rest.trim_start_matches([' ', '-', '_', '.']))
 }
 
-fn is_open_paren(c: char) -> bool {
-    matches!(c, '(' | '\u{FF08}')
-}
-
-fn is_close_paren(c: char) -> bool {
-    matches!(c, ')' | '\u{FF09}')
-}
-
-/// 角色/包标识的形态判据（判据 A 的白名单之外的兜底）。
-///
-/// **硬条件**（缺一不可）：“无空白/无中文逗号” + “无 CJK 汉字” + “无括号” + “≤24 字符”
-/// + **“至少一个 ASCII 字母或数字”**。
-///
-/// 最后一条不可省：形如 `删库 (a)` 的括号定语里没有字母数字，光靠长度与分隔符判据会把它放过去。
-/// “无 CJK” 一条同时挡掉 `(顺手)` / `(可选)` / `(含删除)`（纯中文）；它在**白名单之前**执行，
-/// 所以规范角色名里带中文说明时（`包 C（代码审查 reviewer）`）会落到下面的 kebab 兜底而剥得掉，
-/// 而未收录的自造中文定语按不确定处理 → 多弹一次门，宁可误报不可误放。
+/// 角色必须有明确语义，未知 kebab/snake 词不能仅凭形态获准剥离。
 fn is_agent_id_token(t: &str) -> bool {
-    if t.chars().count() > ROLE_PAREN_MAX_CHARS {
-        return false;
-    }
-    if t.chars()
-        .any(|c| c.is_whitespace() || matches!(c, '\u{FF0C}' | '\u{3001}' | '\u{3002}'))
-    {
-        return false;
-    }
-    if t.chars().any(is_cjk) {
-        return false;
-    }
-    if t.contains(['(', ')', '\u{FF08}', '\u{FF09}']) {
-        return false;
-    }
-    if KNOWN_AGENT_ROLES.contains(&t) {
-        return true;
-    }
-    if !t.chars().any(|c| c.is_ascii_alphanumeric()) {
-        return false; // `a` / `b` / `：` 这类纯符号或纯标点的“定语”不是标识
-    }
-    // kebab / snake / 点分隔形态：backend-dev / pkg_2 / reviewer.v2
-    // （判据 C 只管「字母+数字混排」，`pkgB` / `docs-writer` 这类没数字的落到这里）
-    t.contains(['-', '_', '.'])
+    KNOWN_AGENT_ROLES.contains(&t) || t == "docs-writer"
 }
 
 /// 判据 B：`包` / `任务包` 后面必须跟一个**包序号形态**（`包 A` / `包1` / `任务包C` /
-/// `包 A2`），可有可无的分隔（空格/连字符/下划线/点/右括号）。
+/// `包 A2`），字头与序号间允许空格/连字符/下划线/点；必须完整消费余下文本。
 ///
 /// 「包管理策略重构」的「管理」不是序号 → 不认；「包 A2（backend-dev）」的序号是 `A2` → 认。
 fn has_pkg_ordinal(h: &str) -> bool {
@@ -625,45 +544,20 @@ fn has_pkg_ordinal(h: &str) -> bool {
     else {
         return false;
     };
-    let ordinal: String = rest
-        .trim_start_matches([' ', '\u{3000}', '-', '_', '.', ')', '\u{FF09}'])
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric())
-        .collect();
-    !ordinal.is_empty()
+    let ordinal = rest.trim_start_matches([' ', '\u{3000}', '-', '_', '.']);
+    is_pkg_ordinal(ordinal)
 }
 
-/// 包字头形态里是否残留了**不属于标签**的汉字（即包序号之后的正文尾巴）。
-///
-/// 标签段只允许两种汉字：`包` / `任务包` 字头本身，以及括号内的角色定语
-/// （`包 A（代码审查 reviewer）`）。其余位置的汉字都是正文——`包 A 顺手删库`、
-/// `包B 删库跑路` 的序号后面还跟着中文动作，那不是标签，整段被剥等于静默放行真新增。
-fn has_stray_cjk_outside(h: &str) -> bool {
-    let mut in_paren = false;
-    for c in h.chars() {
-        match c {
-            '(' | '\u{FF08}' => in_paren = true,
-            ')' | '\u{FF09}' => in_paren = false,
-            _ if is_cjk(c) => {
-                if !in_paren && !PKG_PREFIX_WORDS.iter().any(|w| w.contains(c)) {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-    }
-    false
+/// 单字母可附数字或纯数字；英文动作词不能充当序号。
+fn is_pkg_ordinal(ordinal: &str) -> bool {
+    let mut chars = ordinal.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric() && chars.all(|c| c.is_ascii_digit())
 }
 
-/// 是否是 CJK 汉字（含中日韩统一表意文字与扩展 A）。
-fn is_cjk(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2FA1F
-    )
-}
-
-/// 子串判定的长度下限（归一化后按 **UTF-8 字节** 计，不是字符数）。
+/// 子串判定的长度下限（归一化后按字符计）。
 ///
 /// **为什么要下限**：子串是「细化成基线的一部分」，但**短片段天然是长句的子串**，
 /// 去掉下限等于给任何计划外动作开后门——基线 `新增 core/x.rs + 单测`，执行时冒出
@@ -1046,6 +940,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn classify_task_pkg_must_validate_entire_prefix() {
+        for cur in [
+            "包 A（delete-db）：更新 README",
+            "包 A（delete_database）：更新 README",
+            "包 deleteDatabase：更新 README",
+            "delete2Database：更新 README",
+            "delete-db2：更新 README",
+            "包 A（删除数据库）：更新 README",
+            "包 A（backend-dev）（删除数据库）：更新 README",
+            "包 A（backend-dev）delete database：更新 README",
+            "包 A delete database：更新 README",
+            "pkg2 delete database：更新 README",
+            "包 A（backend-dev）（：更新 README",
+            "包 A（backend-dev)：更新 README",
+            "包 A）（backend-dev）：更新 README",
+            "包 A（backend-dev（tester））：更新 README",
+        ] {
+            assert_eq!(
+                classify_new_todos(&["更新 README".into()], &[cur.into()]),
+                vec![(cur.into(), NewTodoClass::New(cur.into()))],
+                "包标签不得吞掉语义正文或未配对括号：{cur}"
+            );
+        }
+    }
+
     /// 第二轮审查的绕过：「中文子动作 + 一个 ASCII 字母数字 + 冒号」是模型写 todo 的极常见形态。
     /// 初版的判据 C（head 含字母+数字即算标签）与判据 B（包字头 + 真序号）会把整个
     /// 中��子动作当成标签剥掉，剩下的正文命中基线 → 判细化 → 真新增静默放行。
@@ -1100,7 +1020,7 @@ mod tests {
             ("改前端", "任务包C：改前端"),
             ("新增 core/x.rs", "包1(backend-dev):新增 core/x.rs"),
             ("新增 core/x.rs", "包 B（frontend-dev）：新增 core/x.rs"),
-            // 词表未收录的自造角色名（kebab 兜底）
+            // 明确保留的历史 docs-writer 标签
             ("新增 core/x.rs", "包 C（docs-writer）：新增 core/x.rs"),
             // 包序号带分隔与多字符（判据 B）
             ("新增 core/x.rs", "包-2：新增 core/x.rs"),

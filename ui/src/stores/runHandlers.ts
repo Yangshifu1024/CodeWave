@@ -15,7 +15,7 @@ import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
-import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, hasRunningTools, stripRecoveredInTab } from "./runFrames";
+import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, hasRunningTools, nextRunEpoch, stripRecoveredInTab } from "./runFrames";
 import type { RunStore } from "./run";
 import type { TabRunState, UiItem } from "./run.types";
 
@@ -155,9 +155,14 @@ function settleRunningSubs(t: TabRunState): void {
  *
  *  幂等：各项判据都是「只在仍是未收敛态时才动」，重复调用无副作用。 */
 export function settleRun(t: TabRunState): void {
-  // 本地运行态一并落定。三个 handler 此前各自在调本函数**之前**就设了 running=false，
-  // 但看门狗 / 对账路径不经过 handler —— 后端已空闲而本地仍显示「运行中」同样是卡死的一种形态，
-  // 故收敛体自身必须负责置位（幂等，重复设无副作用）。
+  if (hasUnsettledRunState(t) || t.startPending) t.runEpoch = nextRunEpoch();
+  if (t.runId) t.lastSettledRunId = t.runId;
+  t.startPending = false;
+  t.pendingRunTerminals = undefined;
+  t.pendingRunTerminalOverflow = false;
+  t.textRecovered = null;
+  t.widgetAutoOpen = null;
+  // 生命周期与对账统一在这里置空闲，先推进 epoch，避免旧查询复活或旧 channel 写入。
   t.running = false;
   // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
   // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
@@ -181,20 +186,55 @@ export function hasUnsettledRunState(t: TabRunState): boolean {
   return hasRunningTools(t);
 }
 
+/** 未收到 start_chat 身份时，任何终态都可能属于旧 run；确认身份后才消费。
+ * 至多暂存 16 个身份，超界后由 snapshot 补偿，内存不会随会话运行次数增长。 */
+function deferPendingTerminal(set: SetFn, get: GetFn, event: "done" | "error" | "cancelled", p: any): boolean {
+  const before = get().tabs[p.session];
+  if (!before?.startPending || before.runId) return false;
+  set((s) => {
+    const t = s.tabs[p.session];
+    if (!t?.startPending || t.runId) return;
+    if (typeof p.run_id !== "string") {
+      t.pendingRunTerminalOverflow = true;
+      return;
+    }
+    const events = t.pendingRunTerminals ??= {};
+    if (!events[p.run_id] && Object.keys(events).length >= 16) {
+      delete events[Object.keys(events)[0]];
+      t.pendingRunTerminalOverflow = true;
+    }
+    events[p.run_id] = { event, payload: p };
+  });
+  return true;
+}
+
 /** 运行生命周期（11 键）：start/done/error/cancelled/inject/retry + 自动命名 + 计划任务 toast + 计划 todos + 目标状态 */
 export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
     "run:start": (p) => {
+      const before = get().tabs[p.session];
+      // 已知身份即使已空闲也不能被迟到 start 改写；外部新 run 由权威快照认领。
+      if (p.run_id && before?.runId && p.run_id !== before.runId) {
+        void get().reconcileRun(p.session);
+        return;
+      }
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return; // M-1：已关 Tab 的迟到事件不重建状态桶
+        if (t.startPending && !t.runId) return; // 身份只信 start_chat 回执，避免旧 start 劫持新启动。
+        if (p.run_id && (t.lastDoneRunId === p.run_id || t.lastSettledRunId === p.run_id)) return;
+        if (!t.running) t.runEpoch = nextRunEpoch();
+        if (p.run_id) t.runId = p.run_id;
         t.running = true;
         currentAssistantIm(t);
       });
     },
     "run:done": (p) => {
+      if (deferPendingTerminal(set, get, "done", p)) return;
       markUnreadIfAway(p?.session);
       const before = get().tabs[p.session];
+      if (p?.run_id && before?.lastSettledRunId === p.run_id) return;
+      if (p?.run_id && before?.runId && p.run_id !== before.runId) return;
       if (!before?.running) {
         // 幂等守卫照旧早退，但**早退不等于无事可做**（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md) 证据 5）：
         // `run:start` 丢失时 `t.running` 恒为 false，而 `sub:spawn` 建卡不检查它——
@@ -218,7 +258,6 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         if (p?.run_id) t.lastDoneRunId = p.run_id;
-        t.running = false;
         t.queueResumeAfterInjection = t.queue.some((q) => q.injecting);
         // 文本形态 ask 的待剥状态只在本轮有效（[docs/text-form-ask-fallback]）：清空后下一轮的增量不再被剥
         t.textRecovered = null;
@@ -250,11 +289,14 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       void get().runQueueNext(p.session);
     },
     "run:error": (p) => {
+      if (deferPendingTerminal(set, get, "error", p)) return;
       markUnreadIfAway(p?.session); // docs/ask-ink-accent-and-composer-cover：失败收尾同样算会话结束
+      const before = get().tabs[p.session];
+      if (p?.run_id && before?.lastSettledRunId === p.run_id) return;
+      if (p?.run_id && before?.runId && p.run_id !== before.runId) return;
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return;
-        t.running = false;
         t.queueResumeAfterInjection = false;
         // [docs/preview-skill](../../../docs/preview-skill.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
@@ -266,10 +308,13 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       });
     },
     "run:cancelled": (p) => {
+      if (deferPendingTerminal(set, get, "cancelled", p)) return;
+      const before = get().tabs[p.session];
+      if (p?.run_id && before?.lastSettledRunId === p.run_id) return;
+      if (p?.run_id && before?.runId && p.run_id !== before.runId) return;
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return;
-        t.running = false;
         t.queueResumeAfterInjection = false;
         // [docs/preview-skill](../../../docs/preview-skill.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
@@ -603,10 +648,10 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
             const sid = tool.outcome?.data?.id;
             const hit = (p.removed && sid === p.removed) || (p.id && sid === p.id);
             if (!hit) continue;
+            touchServiceRevision(sid);
             const data = { ...tool.outcome.data };
             if (typeof p.tail === "string") data.tail = p.tail;
             if (p.removed || p.exited) {
-              data.tail = "";
               data.running = false;
             } else if (typeof p.running === "boolean") {
               data.running = p.running;
@@ -614,8 +659,6 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
             tool.outcome = { ...tool.outcome, data };
           }
         }
-        // 收到事件即重置静默计时（推送停了不代表服务死了，见 reconcileServices）
-        lastServiceUpdateAt = Date.now();
       });
     },
   };
@@ -672,13 +715,18 @@ function serviceStreams(s: WritableDraft<RunStore>, session: string): any[][] {
 
 /** 因 session 未就绪而丢弃的 service 事件数（诊断面板可读；推送通道天然不可靠） */
 let droppedServiceUpdates = 0;
-/** 最近一次收到 service:update 的时刻 */
-let lastServiceUpdateAt = Date.now();
+/** 每个服务的事件版本；请求期间更新的卡不能被旧快照覆盖。 */
+const serviceRevisions = new Map<string, number>();
+let reconcileInFlight: Promise<void> | null = null;
+let reconcileGeneration = 0;
+export function touchServiceRevision(id: unknown): void {
+  if (typeof id === "string") serviceRevisions.set(id, (serviceRevisions.get(id) ?? 0) + 1);
+}
 /** 已排定的对账定时器（同一时刻至多一个） */
 let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** 静默超过该时长就拉一次权威快照——静默期不等于进程已死 */
-const SERVICE_SILENCE_MS = 3000;
+/** 固定间隔校准，任何服务持续输出都不应压制其他服务的纠错。 */
+const SERVICE_RECONCILE_MS = 3000;
 
 /** 累计丢弃的 service 事件数（供诊断面板读取；推送通道天生不可靠，丢帧本身不是异常） */
 export function droppedServiceUpdateCount(): number {
@@ -688,7 +736,9 @@ export function droppedServiceUpdateCount(): number {
 /** 测试钩子：重置模块级对账状态（避免用例间残留定时器与时间戳） */
 export function __resetServiceReconcileForTest(): void {
   droppedServiceUpdates = 0;
-  lastServiceUpdateAt = Date.now();
+  serviceRevisions.clear();
+  reconcileGeneration += 1;
+  reconcileInFlight = null;
   if (reconcileTimer) {
     clearTimeout(reconcileTimer);
     reconcileTimer = null;
@@ -719,25 +769,44 @@ function hasServiceCard(get: GetFn): boolean {
 export async function reconcileServices(set: SetFn, get: GetFn): Promise<void> {
   // 无卡可校准时早退：既是廉价短路，也断了链式重排的续航（无卡无对账需求）
   if (!hasServiceCard(get)) return;
-  const infos = await ipc.listServices();
-  const live = new Set(infos.map((x) => x.id));
-  const running = new Set(infos.filter((x) => x.running).map((x) => x.id));
-  set((s) => {
-    for (const tb of Object.values(s.tabs)) {
-      const apply = (tools: any[]) => {
-        for (const tool of tools) {
-          const id = tool.outcome?.data?.id;
-          if (typeof id !== "string") continue;
-          const alive = live.has(id);
-          const next = alive ? running.has(id) : false;
-          if (tool.outcome?.data?.running === next) continue;
-          tool.outcome = { ...tool.outcome, data: { ...tool.outcome.data, running: next } };
-        }
-      };
-      apply(serviceToolsOf(tb.items));
-      for (const st of Object.values<any>(tb.subStreams)) apply(serviceToolsOf(st));
+  if (reconcileInFlight) return reconcileInFlight;
+  const generation = reconcileGeneration;
+  const revisions = new Map(serviceRevisions);
+  const epochs = new Map(Object.entries(get().tabs).map(([sid, t]) => [sid, t.runEpoch]));
+  const knownIds = new Set<string>();
+  for (const tb of Object.values(get().tabs)) {
+    for (const tool of serviceToolsOf(tb.items)) if (typeof tool.outcome?.data?.id === "string") knownIds.add(tool.outcome.data.id);
+    for (const st of Object.values(tb.subStreams)) {
+      for (const tool of serviceToolsOf(st)) if (typeof tool.outcome?.data?.id === "string") knownIds.add(tool.outcome.data.id);
     }
-  });
+  }
+  for (const id of serviceRevisions.keys()) if (!knownIds.has(id)) serviceRevisions.delete(id);
+  const work = (async () => {
+    const infos = await ipc.listServices();
+    if (generation !== reconcileGeneration) return;
+    const live = new Set(infos.map((x) => x.id));
+    const running = new Set(infos.filter((x) => x.running).map((x) => x.id));
+    set((s) => {
+      for (const [sid, tb] of Object.entries(s.tabs)) {
+        if (!epochs.has(sid) || epochs.get(sid) !== tb.runEpoch) continue;
+        const apply = (tools: any[]) => {
+          for (const tool of tools) {
+            const id = tool.outcome?.data?.id;
+            if (typeof id !== "string" || !knownIds.has(id) || (revisions.get(id) ?? 0) !== (serviceRevisions.get(id) ?? 0)) continue;
+            const next = live.has(id) ? running.has(id) : false;
+            if (tool.outcome?.data?.running === next) continue;
+            tool.outcome = { ...tool.outcome, data: { ...tool.outcome.data, running: next } };
+          }
+        };
+        apply(serviceToolsOf(tb.items));
+        for (const st of Object.values<any>(tb.subStreams)) apply(serviceToolsOf(st));
+      }
+    });
+  })();
+  reconcileInFlight = work;
+  try { await work; } finally {
+    if (reconcileInFlight === work) reconcileInFlight = null;
+  }
 }
 
 /**
@@ -745,17 +814,19 @@ export async function reconcileServices(set: SetFn, get: GetFn): Promise<void> {
  * 拉不到就保持上一次的已知状态，绝不反向写回一个未经证实的值。
  */
 export function scheduleServiceReconcile(set: SetFn, get: GetFn): void {
-  if (reconcileTimer) return;
+  if (reconcileTimer || !hasServiceCard(get)) return;
+  const generation = reconcileGeneration;
   reconcileTimer = setTimeout(() => {
     reconcileTimer = null;
-    const silentFor = Date.now() - lastServiceUpdateAt;
-    // 自维持重排：无论本轮是否触发拉取都排下一轮，否则「推送刚到过 → 本轮跳过 → 无人再排」
-    // 会让拉取兜底永久失效（而它恰恰是事件全丢时唯一的纠错手段）。
-    // 链在无 service 卡时靠 hasServiceCard 早退自行停住，不会变成常驻轮询。
-    scheduleServiceReconcile(set, get);
-    if (silentFor < SERVICE_SILENCE_MS) return;
+    if (!hasServiceCard(get)) {
+      serviceRevisions.clear();
+      reconcileGeneration += 1;
+      return;
+    }
     void reconcileServices(set, get).catch(() => {
       /* 对账是兵底路：拉取失败不打断界面 */
+    }).finally(() => {
+      if (generation === reconcileGeneration) scheduleServiceReconcile(set, get);
     });
-  }, SERVICE_SILENCE_MS);
+  }, SERVICE_RECONCILE_MS);
 }

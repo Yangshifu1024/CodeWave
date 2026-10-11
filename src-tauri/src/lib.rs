@@ -367,6 +367,7 @@ pub fn run() {
             host::commands::start_chat,
             host::commands::cancel_run,
             host::commands::session_running,
+            host::commands::session_run_snapshot,
             host::commands::set_session_prefs,
             host::commands::get_session_prefs,
             host::commands::restore_legacy_model_prefs,

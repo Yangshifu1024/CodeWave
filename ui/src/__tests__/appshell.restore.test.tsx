@@ -77,6 +77,7 @@ const h = vi.hoisted(() => {
     listProjects: fn(async () => []),
     loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
+    sessionRunSnapshot: fn(async () => ({ running: false, run_id: null, terminal: null })),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
     restoreLegacyModelPrefs: fn(async () => undefined),
     connectMcp: fn(async () => ({ started: [], failed: [] })),
@@ -291,7 +292,7 @@ describe("AppShell 启动链路（会话保存与恢复优化 · 批1）", () =>
     // 活跃 Tab 急切加载：loadSession + 运行参数 + 后端运行态都要问一遍（骨架 Tab 不走这条，见下一条用例）
     await waitFor(() => expect(ipc.loadSession).toHaveBeenCalledWith("s1", "/tmp/s1"));
     expect(ipc.getSessionPrefs).toHaveBeenCalledWith("s1");
-    expect(ipc.sessionRunning).toHaveBeenCalledWith("s1");
+    expect(ipc.sessionRunSnapshot).toHaveBeenCalledWith("s1");
 
     // bindEvents 注册生效：handler 表里每个键都真的 listen 上了（键集合由 events.contract.test.ts 守护）
     const keys = Object.keys(useRun.getState().bindGlobalHandlers());

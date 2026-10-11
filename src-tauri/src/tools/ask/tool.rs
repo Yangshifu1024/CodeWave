@@ -372,6 +372,7 @@ impl Tool for AskTool {
                 return err;
             }
             // G3 基线：门已保证 todos 非空；重新批准新方案时重置上一轮的范围状态（Y5：防止陈旧批准跨轮携带）
+            let scope_guard = ctx.rt.scope_gate_lock.lock().await;
             let titles: Vec<String> = ctx
                 .rt
                 .todos
@@ -382,12 +383,14 @@ impl Tool for AskTool {
                 .collect();
             let titles_count = titles.len();
             *ctx.rt.approved_plan.lock().unwrap() = Some(titles);
+            ctx.rt.scope_denied_titles.lock().unwrap().clear();
             ctx.rt
                 .scope_allowed
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             ctx.rt
                 .scope_expanded
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            drop(scope_guard);
             ctx.core
                 .set_session_mode_and_persist(&ctx.rt, switch_target);
             crate::core::session_log::info(
