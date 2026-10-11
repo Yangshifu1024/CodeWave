@@ -28,7 +28,7 @@ wait(seconds, reason, until?)
 {
   "until": {
     "target": "svc_1a2b3c4d",     // service / subagent / scheduled_task 回执 id
-    "state":   "done",             // 可选，缺省 done = 任意终态（成功或失败都算结束）
+    "state":   "done",             // 可选；未传 match 时缺省 done，match-only 不要求终态
     "match":   { "text": "ready in" }  // 可选，摘要含该子串（大小写不敏感）
   }
 }
@@ -36,6 +36,7 @@ wait(seconds, reason, until?)
 
 - `state`：`done`（任意终态）/ `exited`（仅 `Succeeded`）/ `failed`（仅 `Failed`）
 - `match.text` 与 `state` 是 **AND** 关系，两个都写则必须同时满足
+- 仅传 `match` 时在运行中也可命中（如 dev server ready）；两个都省略才默认 `done`，显式 `done` + `match` 必须终态且匹配
 - `seconds` 在传 `until` 时是**最长等待上限**，不再是「一定要睡满」
 
 ### 出参语义
@@ -61,7 +62,7 @@ wait(seconds, reason, until?)
 |---|---|---|
 | 子代理完成即从 `core.subs` 移除（成功 / 失败 / panic **同一条** remove） | `tools/subagent.rs` | 轮询间隙反查分不清「已完成」与「从不存在」 |
 | service 自然退出**不移除**，仅显式 stop 才删 | `tools/service.rs` | 照抄这张表的生命周期，本表会**只增不减** |
-| 计划任务无 running 中间态、无 run id，`last_status` 只在 run 结束时写 | `core/scheduler.rs` | 只能靠「状态 ≠ 基线」判定本次完成 |
+| 计划任务无 running 中间态、无 run id，`last_status` 只在 run 结束时写 | `core/scheduler.rs` | 两轮相同状态无法区分，必须按登记轮次重置并显式收尾 |
 
 因此 `core/wait_targets.rs` 是**独立登记表**：条目自带终态标志，由各对象**收尾路径显式置位**，终态**只前进不后退**。
 
@@ -69,7 +70,7 @@ wait(seconds, reason, until?)
 
 | 目标 | 登记 | 置终态 | 移除 |
 |---|---|---|---|
-| service | `start` 成功入表（`try_insert` 之后，两条容量早退路径不登记） | 进程退出确认处（reaper 闭包），恒为 `Succeeded`——退出码语义仓库无消费方，臆造失败判定等于凭空造事实 | `stop` action |
+| service | `start` 成功入表并登记后才释放 reaper（容量失败不登记，仍回收进程） | 进程退出确认处（reaper 闭包），恒为 `Succeeded`——退出码语义仓库无消费方，臆造失败判定等于凭空造事实 | `stop` action |
 | 子代理 | spawn 真正成功后 | **`SubCleanupGuard::Drop` 内，严格早于 `subs.remove`**——成功/取消/provider 错误/panic 共用本路径 | 不移除（TTL 淘汰） |
 | 计划任务 | **run 启动时**（`run_task_locked`），`baseline` = 本轮开始前的 `last_status` | run 正常收尾 + skipped 早退两处 | 不移除（TTL 淘汰） |
 
@@ -77,7 +78,7 @@ wait(seconds, reason, until?)
 
 **① 为什么不是「create 时登记」**：`once:` 任务在 create 之后根本没有 run，create 时登记会让条目永远停在 `Running`，`wait` 只能空转到超时；也无法表达「等下一次触发」。按 run 登记，语义是「等**这次** run 跑完」，与用户意图一致。
 
-**② 基线为什么必须比状态、而不是比摘要**：`last_status`（`"ok"`）与 `last_summary`（自由文本）是**两种不同类型**。早期版本拿 summary 比 status，结果恒真，基线守卫退化成死代码——二次运行时被上一轮终态直接判为已完成，`every:30 m` 级任务必中。现在用独立的 `observed_status` 字段（Mutex）与 `baseline` 同类型比较，且 `register` 在有基线时调 `begin_round` **重置**上一轮的终态与观测值。
+**② 基线只作诊断，不作完成门槛**：每轮 `ScheduledTask` 登记在同一锁内重置状态、摘要与终态时间，`finish` 显式完成本轮；连续两轮 `ok` / `error` / `skipped` 都可完成，且无上轮状态时也重置。`baseline` 与 `observed_status` 保留各自的诊断语义。[发版审查修复](./release-review-remediation.md) 删除了「状态必须不同」的错误门槛。
 
 > 注：`ScheduledTask` 结构体**没有 `Default`**，给它加字段会逐字打破 `scheduler.rs` 内约 15 处测试结构体字面量。登记表与该结构体**刻意解耦**。
 
@@ -112,9 +113,9 @@ ticker_core.wait_targets.update_text(&ticker_svc_id, tail.clone());
 
 方案实现后由 reviewer + 交叉核对发现，均已修复并补回归测试：
 
-**🔴 计划任务二次运行立即误报「已完成」**：`register` 原为幂等不重置，上一轮的终态与 `observed_status` 留在条目里，二次运行 `wait` 秒回。修法：`register` 在 `baseline.is_some()` 时调 `begin_round` 重置状态/摘要/观测值/基线（无基线的 service / 子代理**不重置**——它们一生命周期只登记一次，重置会把终态抹掉让 wait 反过来等不到）。
+**🔴 计划任务二次运行立即误报「已完成」**：`register` 原为幂等不重置，二次运行被上轮终态直接满足。现按 `ScheduledTask` 类别每轮重置，不再靠是否有基线决定；service / 子代理单生命周期登记仍幂等。后续审查又修复了连续同状态无法完成及跨锁读到混合快照的问题，见[发版审查修复](./release-review-remediation.md)。
 
-**🔴 `match.text` 在终态前恒不可用**：`text` 唯一写入点是 `finish`（进程退出），于是「等 dev server 日志 ready」这个旗舰场景必然空转，且 `observed.text` 也缺失，模型超时时拿不到任何证据——与工具 description 向模型作出的承诺直接相悖。修法：新增 `update_text`，由 service 既有 ticker 写入（见 §6）。
+**🔴 `match.text` 在终态前恒不可用**：初版仅在 `finish` 写文本，后由 service ticker 的 `update_text` 补活日志；后续审查修复判据仍隐含 `done` 的缺口，仅传 match 时不再要求退出（见 §3 与[发版审查修复](./release-review-remediation.md)）。
 
 两者同源，都由 `wait_targets` 的单测钉死。
 

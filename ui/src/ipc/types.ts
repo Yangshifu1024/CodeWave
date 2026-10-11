@@ -152,6 +152,20 @@ export interface LogFileContent { content: string; truncated: boolean }
  * `running` 是进程存活事实，**不可**用「日志非空」代理：无输出的服务 tail 恒为空，
  * 那会让工具卡永久误报已停止。字段无 `tail`——日志只走 `service:update` 增量推送。
  */
+/** 后端锁内读取的运行与终态快照；空闲事实与终态内容原子发布。 */
+export interface SessionRunSnapshot {
+  running: boolean;
+  run_id: string | null;
+  terminal: {
+    run_id: string;
+    kind: "done" | "error" | "cancelled";
+    suggestions?: string[];
+    error?: string;
+    error_kind?: string;
+    history_save?: HistorySaveReport | null;
+  } | null;
+}
+
 export interface ServiceInfo {
   id: string;
   name: string;
@@ -436,6 +450,55 @@ export interface AskOpenedEvent {
    *  `<ask>…</ask>` 原文。流式帧早已把这段协议原文送到前端且无法回收，前端据此从**当轮气泡**里精确剔除它；
    *  真实工具调用发起的 ask（普通路径）不出现该键。 */
   text_recovered?: string;
+}
+
+/** 本进程的运行观察快照；独立于打开的 Tab，不是权限或编排事实源。 */
+export interface ActivitySnapshot {
+  revision: number;
+  sampled_at_ms: number;
+  sessions: ActivitySession[];
+  recent: ActivityRecent[];
+}
+export interface ActivityWaiting {
+  ask_id: string;
+  kind: "ask" | "approval";
+  title: string;
+  detail: string;
+}
+export interface ActivitySub {
+  sub_id: string;
+  role: string;
+  name: string | null;
+  task: string;
+  step: number;
+  max_steps: number;
+  detail: string;
+  last_tool: string | null;
+  status: "running" | "done" | "error" | "cancelled";
+  ended: "report" | "partial" | "budget" | "no_report" | null;
+  report: string | null;
+}
+export interface ActivitySession {
+  session_id: string;
+  run_id: string;
+  title: string;
+  project_id: string | null;
+  started_at_ms: number;
+  activity: string;
+  waiting: ActivityWaiting[];
+  subs: ActivitySub[];
+}
+export interface ActivityRecent {
+  id: string;
+  kind: "session" | "subagent";
+  session_id: string;
+  run_id: string;
+  title: string;
+  project_id: string | null;
+  status: "done" | "error" | "cancelled";
+  ended: ActivitySub["ended"];
+  finished_at_ms: number;
+  sub: ActivitySub | null;
 }
 
 /** git status 行条目：index/worktree 两区 × new/modified/deleted/renamed 状态位 */

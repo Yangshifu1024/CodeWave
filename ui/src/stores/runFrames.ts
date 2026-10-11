@@ -12,11 +12,16 @@ import type {
   UsageTotals,
 } from "./run.types";
 
+let runEpoch = 0;
+/** 跨 Tab 生命周期唯一的本地代次（不与 provider 的 streamGen 混用）。 */
+export function nextRunEpoch(): number { return ++runEpoch; }
+
 /** Tab 运行态初值工厂 */
 export function blank(): TabRunState {
   return {
     items: [],
     running: false,
+    runEpoch: nextRunEpoch(),
     streamGen: 0,
     ask: null,
     breakdown: null,

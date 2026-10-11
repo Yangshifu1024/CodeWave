@@ -1081,6 +1081,32 @@ async fn confirm_each_arch_gate_full_access_freezes_baseline() {
 }
 
 #[tokio::test]
+async fn new_plan_approval_resets_previous_scope_denial() {
+    let ctx = plan_ctx();
+    register_todos(&ctx, &["重新批准的步骤"]);
+    ctx.rt
+        .analysis_done
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    ctx.rt
+        .scope_denied_titles
+        .lock()
+        .unwrap()
+        .push("此前拒绝的步骤".into());
+    ctx.rt
+        .scope_expanded
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let outcome =
+        drive_ask_with_answer(&ctx, approval_gate_args(true), gate_answer("approve")).await;
+    assert!(outcome.ok);
+    assert!(ctx.rt.scope_denied_titles.lock().unwrap().is_empty());
+    assert!(
+        !ctx.rt
+            .scope_expanded
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
 async fn full_access_choice_still_blocked_by_empty_todos() {
     // C6：选完全访问档也仍要过批准门（G3 todos 非空）
     let ctx = plan_ctx();

@@ -110,6 +110,8 @@ interface SessionsState {
   applyTitle(sessionId: string, title: string): void;
   /** 通知点击回跳：Tab 已开则直接切 activeKey，否则从会话列表重开；找不到（已删除）返回 false 交调用方处理 */
   revealSession(sessionId: string): boolean;
+  /** 等待实际内容恢复后再激活；总览回跳必须使用本入口，失败向调用方抛出。 */
+  openSessionReady(sessionId: string): Promise<void>;
   cycleTab(dir: 1 | -1): void;
   /** 更新会话运行参数（本地乐观更新 + 后端镜像；失败回滚并 toast） */
   updatePrefs(key: string, patch: Partial<SessionPrefs>): Promise<void>;
@@ -129,15 +131,38 @@ const prefsSeq = new Map<string, number>();
  *  抛出交给调用方浮出（H-4：loadSession 失败不得静默）。
  *  meta 可选（[docs/session-history-limits](../../../docs/session-history-limits.md)）：历史保存状态（history_status）挂在会话索引上，
  *  重开/重启后仍可见——调用方没拿到 meta 时回退到本 store 的会话列表快照（不新增 IPC）。 */
-async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
+const tabLoads = new Map<string, Promise<void>>();
+const tabLoadEpochs = new Map<string, number>();
+
+function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
+  const pending = tabLoads.get(tab.sessionId);
+  if (pending) return pending;
+  const epoch = tabLoadEpochs.get(tab.sessionId) ?? 0;
+  const task = doLoadTabContent(tab, meta, epoch).finally(() => {
+    if (tabLoads.get(tab.sessionId) === task) tabLoads.delete(tab.sessionId);
+  });
+  tabLoads.set(tab.sessionId, task);
+  return task;
+}
+
+async function doLoadTabContent(tab: Tab, meta: SessionMeta | undefined, epoch: number): Promise<void> {
+  const stillOpen = () => (tabLoadEpochs.get(tab.sessionId) ?? 0) === epoch
+    && useSessions.getState().tabs.some((t) => t.key === tab.key);
   // 批2 P3：`load_session` 返回 `{ messages, paging }`——`messages` 只是**最近一段**（display 口径），
   // 更早内容由用户点「加载更早的」时按段前翻（run.loadEarlier）。
   const page = await ipc.loadSession(tab.sessionId, tab.workspace);
+  // 加载期间用户关闭了 Tab：不得恢复已被 dispose 的桶。
+  if (!stillOpen()) {
+    throw new Error(i18n.t("dashboard.sessionClosed"));
+  }
   // 重启恢复的骨架 Tab 带有旧 ui-state 的显式模型/力度选择；仅旧边车可接纳迁移。
   // 在聊天内容进入运行态前完成，避免后端默认值覆盖旧快照或用户操作与迁移交错。
   if (tab.loaded === false) {
     await ipc.restoreLegacyModelPrefs(tab.sessionId, tab.prefs.model_id, tab.prefs.reasoning_effort)
       .catch((e) => useUi.getState().toast(String(e)));
+  }
+  if (!stillOpen()) {
+    throw new Error(i18n.t("dashboard.sessionClosed"));
   }
   const run = useRun.getState();
   run.initTab(tab.sessionId);
@@ -157,8 +182,10 @@ async function loadTabContent(tab: Tab, meta?: SessionMeta): Promise<void> {
   // [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：原先这里只置 true
   // （`if (running) markRunning(...)`），陈旧的 `running = true` 永远不会被纠正——注释自称「漂移防护」，
   // 却恰好漏掉本缺陷所属的「后端已停、前端还认为在跑」那个方向。
-  void useRun.getState().reconcileRun(tab.sessionId);
+  await useRun.getState().reconcileRun(tab.sessionId);
+  if (!stillOpen()) throw new Error(i18n.t("dashboard.sessionClosed"));
   await run.refreshGit(tab.sessionId);
+  if (!stillOpen()) throw new Error(i18n.t("dashboard.sessionClosed"));
   void ipc
     .getTokenBreakdown(tab.sessionId)
     .then((b) => useRun.getState().setBreakdown(tab.sessionId, b))
@@ -256,6 +283,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   activate(key) {
     const tab = get().tabs.find((t) => t.key === key);
     if (!tab) return;
+    useUi.setState({ dashboardOpen: false });
     set({ activeKey: key });
     if (tab.loaded === false) {
       // 先置已加载再拉取：连点行/快捷键切 Tab 不会并发重复拉；失败保持已加载标记，
@@ -328,6 +356,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       useRun.getState().initTab(tab.sessionId);
       void ipc.mcpConnect(tab.sessionId).catch(() => {});
       await get().refresh();
+      useUi.setState({ dashboardOpen: false });
     } catch (e) {
       useUi.getState().toast(String(e)); // M-6：失败不再静默
     } finally {
@@ -355,6 +384,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       useRun.getState().initTab(tab.sessionId);
       void ipc.mcpConnect(tab.sessionId).catch(() => {});
       await get().refresh();
+      useUi.setState({ dashboardOpen: false });
     } catch (e) {
       useUi.getState().toast(String(e));
     } finally {
@@ -387,6 +417,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
       applyRetainedContent(tab.sessionId);
       // meta 直接得自调用方（左栏/通知回跳的会话条目），历史保存状态一并带进恢复
       await loadTabContent(tab, meta);
+      useUi.setState({ dashboardOpen: false });
     } catch (e) {
       // H-4（迁移中遗失项）：loadSession 失败必须浮出，绝不静默成未处理的 rejection；
       // Tab 保留（骨架仍在），用户可重新从导航打开重试
@@ -403,6 +434,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
       useUi.getState().setCloseTabRequest(key);
       return;
     }
+    tabLoadEpochs.set(key, (tabLoadEpochs.get(key) ?? 0) + 1);
+    tabLoads.delete(key);
     set((s) => {
       const tabs = s.tabs.filter((t) => t.key !== key);
       const activeKey =
@@ -480,6 +513,42 @@ export const useSessions = create<SessionsState>((set, get) => ({
     if (!meta) return false;
     void get().openSession(meta); // 内部自带去重（已打开则聚焦）并恢复运行态
     return true;
+  },
+
+  async openSessionReady(sessionId) {
+    let tab = get().tabs.find((t) => t.sessionId === sessionId);
+    if (!tab) {
+      let meta = get().sessions.find((m) => m.id === sessionId);
+      if (!meta) {
+        // 新会话可能尚未进入左栏索引，回读一次；读取失败直接报告。
+        const sessions = await ipc.listSessions();
+        set({ sessions, sessionsLoadFailed: false });
+        meta = sessions.find((m) => m.id === sessionId);
+      }
+      if (!meta) throw new Error(i18n.t("dashboard.sessionMissing"));
+      // await 期间可能已由另一入口打开；避免创建重复 Tab。
+      tab = get().tabs.find((t) => t.sessionId === sessionId);
+      if (!tab) {
+        tab = {
+          key: meta.id, sessionId: meta.id, workspace: meta.workspace,
+          title: meta.title, projectId: meta.project_id, createdAt: meta.created_at,
+          prefs: { ...DEFAULT_PREFS }, loaded: false,
+        };
+        const created = tab;
+        set((s) => ({ tabs: [...s.tabs, created] }));
+        applyRetainedContent(tab.sessionId);
+      }
+    }
+    const pending = tabLoads.get(sessionId);
+    if (pending) await pending;
+    else if (tab.loaded === false || !useRun.getState().tabs[sessionId]) {
+      await loadTabContent(tab);
+    }
+    if (!get().tabs.some((t) => t.sessionId === sessionId)) {
+      throw new Error(i18n.t("dashboard.sessionClosed"));
+    }
+    set((s) => ({ tabs: s.tabs.map((t) => t.sessionId === sessionId ? { ...t, loaded: true } : t) }));
+    get().activate(tab.key);
   },
 
   cycleTab(dir) {

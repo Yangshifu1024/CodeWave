@@ -39,7 +39,7 @@ R1–R4 合起来会形成**僵尸服务**：进程占着端口与内存，界�
 `service:update` 是增量推送，天生会丢帧：Tab 未挂载、分页未加载、子代理流未就绪、静默期无输出。任何一次丢失都让状态永久停在错的地方。所以另加只读 IPC `list_services` 做对账：
 
 - 后端抽出 `pub fn service_info(h: &ServiceHandle) -> Value`，工具 `list` 与新 IPC **共用同一份投影**——两处序列化不会漂移
-- 前端 `reconcileServices(set, get)` 按权威快照覆写所有 service 卡的 `running`；`scheduleServiceReconcile` 以 3s 防抖、**自维持链式重排**（否则「本轮刚收到过推送 → 跳过 → 无人再排」会让兜底永久失效），无 service 卡时靠 `hasServiceCard` 早退自行停住
+- 前端 `reconcileServices(set, get)` 按权威快照覆写所有 service 卡的 `running`；有服务卡时每 3s 拉取，推送不重置周期，避免其它服务的持续日志饿死静默退出的服务；无服务卡时停住，避免重叠请求与迟到快照（[发版审查修复](./release-review-remediation.md)）。退出/停止事件携带最终 tail；服务从快照消失时只更新状态，保留已知日志。
 - `ServiceInfo` 前后端 9 个字段逐一对齐；`purpose` 经 `#[serde(rename_all = "snake_case")]` 确为 `"development" | "preview"`
 
 ## 三、落盘快照不可信（B1）

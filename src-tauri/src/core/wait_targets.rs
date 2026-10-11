@@ -83,20 +83,18 @@ impl TargetState {
 pub struct WaitTarget {
     id: String,
     kind: TargetKind,
-    /// 终态：由各对象收尾路径经 [`WaitTargets::finish`] 显式置位，**只前进不后退**。
-    state: Mutex<TargetState>,
-    /// 最近进展摘要：service = 环形日志尾，子代理 = report，任务 = last_summary。
-    /// 既是 `match.text` 的判据源，也是 `observed.text` 的证据源。
-    text: Mutex<Option<String>>,
-    /// 登记时的状态基线。计划任务专用：开新一轮 run 时被刷新为「本轮开始前的
-    /// `last_status`」，同时 `observed_status` 清空，等本轮真的写回状态。
-    baseline: Mutex<Option<String>>,
-    /// 本轮观测到的状态值（当前 `last_status`）。与 `baseline` **同类型**、只做
-    /// 「变没变」的比较——拿 `last_summary`（自由文本）去比 `last_status` 是两种不同
-    /// 类型的比较，结果恒真，会让基线守卫退化成死代码。
-    observed_status: Mutex<Option<String>>,
-    /// 进入终态的时刻，用于惰性淘汰。
-    ended_at: Mutex<Option<SystemTime>>,
+    /// 本轮状态、摘要与时间原子读写，防止轮询拼出跨轮快照。
+    data: Mutex<TargetData>,
+}
+
+#[derive(Debug)]
+struct TargetData {
+    state: TargetState,
+    text: Option<String>,
+    /// 上轮状态仅作诊断；连续两轮相同结果仍是两次完成。
+    baseline: Option<String>,
+    observed_status: Option<String>,
+    ended_at: Option<SystemTime>,
 }
 
 impl WaitTarget {
@@ -105,11 +103,13 @@ impl WaitTarget {
         Arc::new(WaitTarget {
             id,
             kind,
-            state: Mutex::new(TargetState::Running),
-            text: Mutex::new(None),
-            baseline: Mutex::new(baseline),
-            observed_status: Mutex::new(None),
-            ended_at: Mutex::new(None),
+            data: Mutex::new(TargetData {
+                state: TargetState::Running,
+                text: None,
+                baseline,
+                observed_status: None,
+                ended_at: None,
+            }),
         })
     }
 
@@ -125,70 +125,53 @@ impl WaitTarget {
 
     /// 当前状态快照（锁内取值后立即释放，调用方不持锁）。
     pub fn state(&self) -> TargetState {
-        *self.state.lock().unwrap()
+        self.data.lock().unwrap().state
     }
 
     /// 最近进展摘要快照（`match.text` 判据与 `observed.text` 都读它）。
     pub fn text(&self) -> Option<String> {
-        self.text.lock().unwrap().clone()
+        self.data.lock().unwrap().text.clone()
     }
 
     /// 登记时的状态基线（计划任务专用）。
     pub fn baseline(&self) -> Option<String> {
-        self.baseline.lock().unwrap().clone()
+        self.data.lock().unwrap().baseline.clone()
     }
 
     /// 进入终态的时刻。
     pub fn ended_at(&self) -> Option<SystemTime> {
-        *self.ended_at.lock().unwrap()
+        self.data.lock().unwrap().ended_at
     }
 
     /// 是否已达成「本次运行已完成」。
     ///
-    /// 计划任务的 `last_status` 在 run 期间是**上一次的旧值**，没有 running 中间态，
-    /// 所以光看终态不够：上一轮跑完的终态会在下一轮开跑时依旧留在条目里。仅靠终态
-    /// 判定会让**二次运行立即误报已完成**（`every:30 m` 级任务必中）。`register`
-    /// 开新一轮时把 `observed_status` 清成 `None`（`Running` 本就没有状态值），
-    /// 必须等本轮真的写回状态才判完成。
-    ///
-    /// `observed_status` 缺失时**保守判为未完成**：宁可多等一轮也不能提前收工。
+    /// 每轮登记已清除旧终态，只有本轮 `finish` 才能置终态。
+    /// 连续两轮同为 ok/error/skipped 不影响完成判定。
     pub fn is_completed(&self) -> bool {
-        let state = self.state();
-        if !state.is_terminal() {
-            return false;
-        }
-        match self.baseline() {
-            // 无基线（service / 子代理）：终态即完成
-            None => true,
-            // 有基线（计划任务）：本轮状态必须与登记时的基线不同
-            Some(base) => self.observed_status().is_some_and(|cur| cur != base),
-        }
-    }
-
-    /// 本轮观测到的状态值（计划任务 = 当前 `last_status`；其余恒为 None）。
-    fn observed_status(&self) -> Option<String> {
-        self.observed_status.lock().unwrap().clone()
+        self.state().is_terminal()
     }
 
     /// 开新一轮（仅计划任务）：重置回进行中、刷新基线、清空本轮观测值与终态时刻。
     ///
-    /// 上一轮遗留的终态与 `observed_status` 必须一起清——只清终态的话，
-    /// `observed_status` 仍是上一轮的 `last_status`，`is_completed` 会拿它与新基线比，
-    /// 在两次运行结果相同时（都是 `ok`）漏判完成。
+    /// 所有可变字段在同一临界区重置，轮询不会读到上轮状态配本轮摘要。
     fn begin_round(&self, baseline: Option<String>) {
-        *self.state.lock().unwrap() = TargetState::Running;
-        *self.text.lock().unwrap() = None;
-        *self.observed_status.lock().unwrap() = None;
-        *self.ended_at.lock().unwrap() = None;
-        *self.baseline.lock().unwrap() = baseline;
+        *self.data.lock().unwrap() = TargetData {
+            state: TargetState::Running,
+            text: None,
+            baseline,
+            observed_status: None,
+            ended_at: None,
+        };
     }
 
     /// 供 `wait` 的 `match.text` 判据使用的观察面（状态 + 摘要）。
     pub fn observed(&self) -> TargetObservation {
+        let data = self.data.lock().unwrap();
         TargetObservation {
             kind: self.kind,
-            status: self.state().as_str().to_string(),
-            text: self.text(),
+            state: data.state,
+            status: data.state.as_str().to_string(),
+            text: data.text.clone(),
         }
     }
 }
@@ -198,6 +181,8 @@ impl WaitTarget {
 pub struct TargetObservation {
     /// 目标类别。
     pub kind: TargetKind,
+    /// 与 text 同一临界区读取的状态，用于条件判定。
+    pub state: TargetState,
     /// 状态字符串（running / succeeded / failed）。
     pub status: String,
     /// 最近进展摘要（可能为 None，也可能被调用方截断）。
@@ -217,12 +202,12 @@ pub struct WaitTargets {
 impl WaitTargets {
     /// 登记一个可等待目标（`baseline` 仅计划任务需要）。返回 `Arc` 供调用方后续置终态。
     ///
-    /// 幂等分两种语义，由 `baseline` 是否为 `Some` 区分：
+    /// 幂等分两种语义，由目标类别区分：
     ///
-    /// - **有基线（计划任务）= 开新一轮**：`every:30 m` 的任务每轮都会调到这里，
+    /// - **计划任务 = 开新一轮**：`every:30 m` 的任务每轮都会调到这里，
     ///   上一轮遗留的终态必须重置回 `Running`、基线刷新为本轮开始前的 `last_status`、
     ///   `observed_status` 清空。不重置的话，二次运行会被上一轮的终态直接判为已完成。
-    /// - **无基线（service / 子代理）= 只登记一次**：重复调用返回已有条目，
+    /// - **service / 子代理 = 只登记一次**：重复调用返回已有条目，
     ///   **不覆盖**（覆盖会丢掉已记录的终态，让 wait 反而等不到结束）。
     pub fn register(
         &self,
@@ -231,24 +216,26 @@ impl WaitTargets {
         baseline: Option<String>,
     ) -> Arc<WaitTarget> {
         let id = id.into();
-        let restart = baseline.is_some();
-        if let Some(existing) = self.targets.get(&id) {
-            let arc = existing.value().clone();
-            drop(existing); // 先释放分片读锁再返回值
-            if restart {
-                arc.begin_round(baseline);
+        match self.targets.entry(id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(existing) => {
+                let arc = existing.get().clone();
+                if kind == TargetKind::ScheduledTask {
+                    arc.begin_round(baseline);
+                }
+                arc
             }
-            return arc;
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                let entry = WaitTarget::new(id, kind, baseline);
+                slot.insert(entry.clone());
+                entry
+            }
         }
-        let entry = WaitTarget::new(id.clone(), kind, baseline);
-        self.targets.insert(id, entry.clone());
-        entry
     }
 
     /// 置终态。由各对象的**收尾路径**调用（必须早于该对象从其既有表中被移除，
     /// 否则 `wait` 轮询会错过事件）。终态只前进不后退：已是终态时不再改写。
     ///
-    /// `status` 仅计划任务传（当前 `last_status`），供 `is_completed` 与基线比对。
+    /// `status` 仅计划任务传（当前 `last_status`），供诊断；不与上轮字面值比对。
     pub fn finish(
         &self,
         id: &str,
@@ -261,18 +248,14 @@ impl WaitTargets {
         };
         let arc = entry.value().clone();
         drop(entry);
-        if let Some(t) = text {
-            *arc.text.lock().unwrap() = Some(t);
-        }
-        if let Some(s) = status {
-            *arc.observed_status.lock().unwrap() = Some(s);
-        }
-        let mut slot = arc.state.lock().unwrap();
-        if slot.is_terminal() {
+        let mut data = arc.data.lock().unwrap();
+        if data.state.is_terminal() {
             return; // 终态不可回退
         }
-        *slot = state;
-        *arc.ended_at.lock().unwrap() = Some(SystemTime::now());
+        data.text = text;
+        data.observed_status = status;
+        data.state = state;
+        data.ended_at = Some(SystemTime::now());
     }
 
     /// 只更新最近进展摘要，**不动状态**。
@@ -287,7 +270,10 @@ impl WaitTargets {
         };
         let arc = entry.value().clone();
         drop(entry);
-        *arc.text.lock().unwrap() = Some(text.into());
+        let mut data = arc.data.lock().unwrap();
+        if !data.state.is_terminal() {
+            data.text = Some(text.into());
+        }
     }
 
     /// 按 id 取目标。不存在返回 None（调用方据此报 `E_NOT_FOUND`）。
@@ -321,30 +307,86 @@ impl WaitTargets {
     /// （默认 1 小时），只为阻止长时间运行的应用无限增长。
     fn sweep_expired(&self) {
         let now = SystemTime::now();
-        let stale: Vec<String> = self
-            .targets
-            .iter()
-            .filter(|e| match (e.value().state(), e.value().ended_at()) {
-                // 进行中：永不淘汰（否则等一个正在跑的任务会被凭空判成「不存在」）
-                (TargetState::Running, _) => false,
-                // 终态但没有时刻（理论上不可达）：保守保留
-                (_, None) => false,
-                (_, Some(at)) => now
-                    .duration_since(at)
-                    .map(|d| d >= ENTRY_TTL)
-                    .unwrap_or(false),
-            })
-            .map(|e| e.key().clone())
-            .collect();
-        for id in stale {
-            self.targets.remove(&id);
-        }
+        // 分片写锁内按同一快照判定并移除，避免先挑中旧终态、开新轮后再删除运行目标。
+        self.targets.retain(|_, entry| {
+            let data = entry.data.lock().unwrap();
+            !data.state.is_terminal()
+                || data.ended_at.is_none_or(|at| {
+                    now.duration_since(at)
+                        .map_or(true, |elapsed| elapsed < ENTRY_TTL)
+                })
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 连续两轮相同状态仍是两次完成；开新一轮不得沿用旧终态或旧摘要。
+    #[test]
+    fn scheduled_repeated_status_completes_each_round() {
+        let targets = WaitTargets::default();
+        for (status, state) in [
+            ("ok", TargetState::Succeeded),
+            ("error", TargetState::Failed),
+            ("skipped", TargetState::Failed),
+        ] {
+            let id = format!("task_{status}");
+            targets.register(&id, TargetKind::ScheduledTask, None);
+            targets.finish(&id, state, Some("第一轮".into()), Some(status.into()));
+            assert!(targets.lookup(&id).unwrap().is_completed());
+            targets.register(&id, TargetKind::ScheduledTask, Some(status.into()));
+            let next = targets.lookup(&id).unwrap();
+            assert!(!next.is_completed());
+            assert_eq!(next.text(), None);
+            targets.finish(&id, state, Some("第二轮".into()), Some(status.into()));
+            assert!(
+                targets.lookup(&id).unwrap().is_completed(),
+                "第二轮 {status} 也已完成"
+            );
+        }
+    }
+
+    #[test]
+    fn scheduled_round_without_status_baseline_still_resets_terminal() {
+        let targets = WaitTargets::default();
+        targets.register("task_new", TargetKind::ScheduledTask, None);
+        targets.finish("task_new", TargetState::Failed, Some("旧轮".into()), None);
+        targets.register("task_new", TargetKind::ScheduledTask, None);
+        let fresh = targets.lookup("task_new").unwrap().observed();
+        assert_eq!(fresh.state, TargetState::Running);
+        assert_eq!(fresh.text, None);
+    }
+
+    /// reset/finish 与轮询并发时，状态与摘要必须属于同一轮。
+    #[test]
+    fn observation_never_mixes_running_state_with_previous_round_report() {
+        let targets = Arc::new(WaitTargets::default());
+        targets.register("task_atomic", TargetKind::ScheduledTask, Some("ok".into()));
+        let writer = targets.clone();
+        let updating = std::thread::spawn(move || {
+            for _ in 0..2000 {
+                writer.register("task_atomic", TargetKind::ScheduledTask, Some("ok".into()));
+                writer.finish(
+                    "task_atomic",
+                    TargetState::Succeeded,
+                    Some("本轮完成".into()),
+                    Some("ok".into()),
+                );
+            }
+        });
+        let target = targets.lookup("task_atomic").unwrap();
+        for _ in 0..4000 {
+            let observed = target.observed();
+            match observed.state {
+                TargetState::Running => assert_eq!(observed.text, None),
+                TargetState::Succeeded => assert_eq!(observed.text.as_deref(), Some("本轮完成")),
+                TargetState::Failed => panic!("没有失败的执行路径"),
+            }
+        }
+        updating.join().unwrap();
+    }
 
     #[test]
     fn register_then_lookup_returns_running_target() {
@@ -385,9 +427,9 @@ mod tests {
         t.finish("sub_a", TargetState::Succeeded, None, None);
         let e = t.lookup("sub_a").unwrap();
         assert_eq!(e.state(), TargetState::Failed);
-        // text 仍可更新（摘要不是判据）
+        // 后到的收尾也不得改写与首个终态配对的摘要。
         t.finish("sub_a", TargetState::Failed, Some("tail".into()), None);
-        assert_eq!(t.lookup("sub_a").unwrap().text().as_deref(), Some("tail"));
+        assert_eq!(t.lookup("sub_a").unwrap().text().as_deref(), Some("boom"));
     }
 
     /// 🔴 回归（审查发现）：`update_text` 必须能在**进程还活着**时把日志尾写进登记表。
@@ -431,10 +473,9 @@ mod tests {
         assert!(t.lookup("ghost").is_none());
     }
 
-    /// 计划任务没有 running 中间态：`last_status` 在 run 期间是上一次的旧值，
-    /// 故「完成」要求本轮状态 ≠ 登记基线，否则登记后立刻误判完成。
+    /// 不同状态的本轮收尾同样算完成。
     #[test]
-    fn scheduled_task_needs_status_change_from_baseline() {
+    fn scheduled_task_different_status_still_completes() {
         let t = WaitTargets::default();
         t.register("task_a", TargetKind::ScheduledTask, Some("ok".into()));
         // run 结束：终态 + 状态写回（基线 "ok" → 本轮 "error"）
@@ -445,13 +486,12 @@ mod tests {
             Some("error".into()),
         );
         let e = t.lookup("task_a").unwrap();
-        assert!(e.is_completed(), "状态已变化 → 本次 run 完成");
+        assert!(e.is_completed(), "本次 run 已显式收尾");
     }
 
-    /// 摘要（自由文本）与基线（状态串）**不可互相比较**：本轮摘要字面上就写着 "ok"，
-    /// 而基线也是 "ok"——拿 text 比 baseline 会在两次运行都成功时永远判不出变化。
+    /// 是否完成不比较摘要或基线；相同 ok 状态的本轮终态也应被承认。
     #[test]
-    fn scheduled_task_compares_status_not_summary() {
+    fn scheduled_task_completion_does_not_compare_status_or_summary() {
         let t = WaitTargets::default();
         t.register("task_c", TargetKind::ScheduledTask, Some("ok".into()));
         // 本轮状态**没变**（仍是 ok），只是摘要里恰好出现 "ok" 字样
@@ -462,16 +502,15 @@ mod tests {
             Some("ok".into()),
         );
         assert!(
-            !t.lookup("task_c").unwrap().is_completed(),
-            "状态未变 → 不是本次 run 的完成"
+            t.lookup("task_c").unwrap().is_completed(),
+            "完成由本轮 finish 决定，摘要和上轮状态不参与判定"
         );
     }
 
     /// 🔴 回归（审查发现）：计划任务**二次运行**不得被上一轮的终态直接判为已完成。
     ///
     /// 复现序列：`every:30 m` 任务第一轮跑完（终态 + status 写回），第二轮开跑时
-    /// 再次 `register`——若不重置条目，`is_completed()` 会拿上一轮的 `observed_status`
-    /// 与新基线比较而立即命中，`wait` 每次都秒回，任务等于没被等到。
+    /// 再次 `register`——若不重置条目，`is_completed()` 会拿上一轮终态立即命中。
     #[test]
     fn second_scheduled_task_round_resets_previous_terminal() {
         let t = WaitTargets::default();
@@ -502,18 +541,17 @@ mod tests {
         assert!(t.lookup("task_d").unwrap().is_completed());
     }
 
-    /// 同理：第二轮**结果与第一轮相同**（都是 ok）时，基线与观测值相等 → 不判完成。
-    /// 这是 `begin_round` 必须清空 `observed_status` 的理由——只清终态会漏判。
+    /// 第二轮结果与第一轮相同（都是 ok）也必须能完成。
     #[test]
-    fn second_round_with_same_status_is_not_completed() {
+    fn second_round_with_same_status_is_completed() {
         let t = WaitTargets::default();
         t.register("task_e", TargetKind::ScheduledTask, None);
         t.finish("task_e", TargetState::Succeeded, None, Some("ok".into()));
         t.register("task_e", TargetKind::ScheduledTask, Some("ok".into()));
         t.finish("task_e", TargetState::Succeeded, None, Some("ok".into()));
         assert!(
-            !t.lookup("task_e").unwrap().is_completed(),
-            "状态与基线相同 → 本次尚未观测到变化"
+            t.lookup("task_e").unwrap().is_completed(),
+            "状态相同但本轮已收尾"
         );
     }
 
@@ -571,7 +609,7 @@ mod tests {
         // 把终态条目的时刻推到 TTL 之前
         {
             let e = t.lookup("svc_done").unwrap();
-            *e.ended_at.lock().unwrap() =
+            e.data.lock().unwrap().ended_at =
                 Some(SystemTime::now() - ENTRY_TTL - Duration::from_secs(1));
         }
         let got = t.lookup("svc_done");
@@ -598,7 +636,7 @@ mod tests {
         t.finish("svc_old", TargetState::Succeeded, None, None);
         {
             let e = t.lookup("svc_old").unwrap();
-            *e.ended_at.lock().unwrap() =
+            e.data.lock().unwrap().ended_at =
                 Some(SystemTime::now() - ENTRY_TTL - Duration::from_secs(1));
         }
         assert_eq!(t.ids(), vec!["svc_old"], "ids 不应清扫");

@@ -177,6 +177,14 @@ export interface TabRunState {
   items: UiItem[];
   /** 是否有运行中的任务 */
   running: boolean;
+  /** 本地生命周期代次：启动、收尾和重新开桶都会变化，拦截异步旧查询/旧 channel。 */
+  runEpoch?: number;
+  /** start_chat 尚未确认：后端空闲快照不得覆盖乐观启动状态。 */
+  startPending?: boolean;
+  /** 启动回执前的终态按 run_id 暂存（至多 16 个身份）；回执后只重放当前身份。 */
+  pendingRunTerminals?: Record<string, { event: "done" | "error" | "cancelled"; payload: any }>;
+  /** 暂存超界或缺少身份时，在启动回执后用权威快照补偿。 */
+  pendingRunTerminalOverflow?: boolean;
   /** 代际阈值：run:retry 后低于该代际的 delta 帧一律丢弃（review C2） */
   streamGen: number;
   /** 当前询问/审批卡（null = 无） */
@@ -219,6 +227,8 @@ export interface TabRunState {
   lastDoneRunId: string | null;
   /** 最近一次起 run 的 run_id（`start_chat` 的返回值；缺省 = 本 Tab 尚未起过 run） */
   runId?: string | null;
+  /** 已收尾的最新 run；新一轮启动回执前也能拒绝旧终态事件。 */
+  lastSettledRunId?: string | null;
   /** 压缩进行中（run:compacting 与 run:compacted/failed 之间）：CompactButton loading + notice 去重 */
   compacting: boolean;
   /** 会话级用量累加（usage 帧此前被丢弃，工具条「命中」显示的唯一数据源）。

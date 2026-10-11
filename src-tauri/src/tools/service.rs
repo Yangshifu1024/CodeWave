@@ -258,7 +258,8 @@ impl Tool for ServiceTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "service:update",
-                    json!({ "session": ctx.rt.id, "removed": id, "running": false }),
+                    json!({ "session": ctx.rt.id, "removed": id, "running": false,
+                            "tail": h.log.tail(2000) }),
                 );
                 ToolOutcome::ok(json!({ "stopped": id }))
             }
@@ -404,7 +405,12 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     // **运行期间**就是活日志判据（而不是只能等进程退出后才命中）。
     let ticker_core = ctx.core.clone();
     let ticker_svc_id = id.clone();
-    let _ticker = tokio::spawn(async move {
+    let (ticker_registered_tx, ticker_registered_rx) = tokio::sync::oneshot::channel();
+    let ticker = tokio::spawn(async move {
+        // 容量拒绝没有可展示的服务，不能在清理较慢时发出孤立的运行中事件。
+        if !ticker_registered_rx.await.unwrap_or(false) {
+            return;
+        }
         // 首拍必发：无输出的服务（如 `sleep 300`）tail 恒为空，若只在 tail 变化时推送，
         // 这类服务一个事件都不发，前端永远拿不到「已启动」这一事实（工具卡只能靠 tail 判存活）。
         let mut last_tail: Option<String> = None;
@@ -441,7 +447,12 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     // （AgentCore 句柄本就是 Arc，见 ToolCtx.core）；不去动 wait_targets.rs 的内部结构。
     let exit_core = ctx.core.clone();
     let exit_log = log.clone();
+    // reaper 可以先启动以承担容量拒绝的进程回收，但必须等登记结果才能写终态。
+    // 正常路径 register → send(true) → recv：快退进程也不能先 finish 后 register。
+    // 拒绝路径 send(false) 只回收，不登记永远 Running 的等待目标。
+    let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
+        let registered = registered_rx.await.unwrap_or(false);
         loop {
             let result = tokio::select! {
                 result = child.wait() => result,
@@ -461,20 +472,28 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         }
         let _ = pump_a.await;
         let _ = pump_b.await;
-        done2.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 收尾前等待 ticker 停住，避免它把先前读取的 running:true 排在 exited 后。
+        ticker.abort();
+        let _ = ticker.await;
         // 登记表置终态：进程退出即成功结束——service 的 exit code 语义目前仓库无消费方
         // （ServiceHandle 不留存退出码），臆造失败判定会凭空造出不存在的事实。
         // 摘要取环形日志尾，与 ticker 推送同口径。
-        exit_core.wait_targets.finish(
-            &svc2,
-            TargetState::Succeeded,
-            Some(exit_log.tail(2000)),
-            None,
-        );
+        let final_tail = exit_log.tail(2000);
+        if registered {
+            exit_core.wait_targets.finish(
+                &svc2,
+                TargetState::Succeeded,
+                Some(final_tail.clone()),
+                None,
+            );
+        }
+        // 先发布权威状态再发事件，事件触发的 list_services 不能读到 running:true。
+        // pumps/ticker 均已结束，stop_service 此时返回也能取得完整末段日志。
+        done2.store(true, std::sync::atomic::Ordering::SeqCst);
         sink2.emit(
             &session2,
             "service:update",
-            json!({"session":session2,"id":svc2,"exited":true,"running":false}),
+            json!({"session":session2,"id":svc2,"exited":true,"running":false,"tail":final_tail}),
         );
     });
     // 目标模式已删除：owner 取 ctx.rt 自身（服务表按 owner_root_id 清理）。
@@ -492,6 +511,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         done,
     });
     if let Err(e) = ctx.core.services.try_insert(handle.clone()) {
+        let _ = ticker_registered_tx.send(false);
+        let _ = registered_tx.send(false);
         if let Err(stopping) = stop_service(&handle).await {
             // Preserve ownership even when capacity rejection cannot finish cleanup.
             ctx.core.services.services.insert(id.clone(), handle);
@@ -503,6 +524,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     ctx.core
         .wait_targets
         .register(id.clone(), TargetKind::Service, None);
+    let _ = ticker_registered_tx.send(true);
+    let _ = registered_tx.send(true);
     ToolOutcome::ok(
         json!({ "id": id, "pid": pid, "purpose": args.purpose, "owner_root_id": owner.id,
                 "running": true,
@@ -513,6 +536,203 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CaptureServiceSink {
+        events: Arc<std::sync::Mutex<Vec<Value>>>,
+        core: Arc<std::sync::Mutex<std::sync::Weak<crate::AgentCore>>>,
+    }
+    impl crate::core::agent::EventSink for CaptureServiceSink {
+        fn channel_frame(&self, _: &crate::core::types::SessionId, _: &crate::core::agent::Frame) {}
+        fn emit(&self, _: &crate::core::types::SessionId, event: &str, mut payload: Value) {
+            if event == "service:update" {
+                // 事件消费当刻读取 list_services 共用的投影，验证权威状态先于通知。
+                if let Some(core) = self.core.lock().unwrap().upgrade()
+                    && let Some(id) = payload["id"].as_str()
+                    && let Some(handle) = core.services.get(id)
+                {
+                    payload["listed_running"] = service_info(&handle)["running"].clone();
+                }
+                self.events.lock().unwrap().push(payload);
+            }
+        }
+    }
+
+    fn captured_ctx(
+        events: Arc<std::sync::Mutex<Vec<Value>>>,
+    ) -> (ToolCtx, tempfile::TempDir, tempfile::TempDir) {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let mut cfg = crate::core::config::ConfigState::default();
+        cfg.providers.push(crate::core::config::ProviderConfig {
+            models: vec![crate::core::config::ProviderModel::default()],
+            ..Default::default()
+        });
+        cfg.active_model_id = Some(cfg.providers[0].models[0].id.clone());
+        let core_ref = Arc::new(std::sync::Mutex::new(std::sync::Weak::new()));
+        let core = Arc::new(crate::AgentCore::new(
+            cfg,
+            Arc::new(CaptureServiceSink {
+                events,
+                core: core_ref.clone(),
+            }),
+            Arc::new(crate::core::sessions::SessionStore::new(
+                roots.data_dir.clone(),
+            )),
+            reqwest::Client::new(),
+            roots.data_dir.clone(),
+        ));
+        *core_ref.lock().unwrap() = Arc::downgrade(&core);
+        let rt = core.get_or_create_session(
+            "service-test",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+            ..Default::default()
+        });
+        (
+            ToolCtx {
+                core,
+                rt,
+                batch_id: "b".into(),
+                call_index: 0,
+                call_key: "b:0".into(),
+                cancel: tokio_util::sync::CancellationToken::new(),
+            },
+            ws,
+            dd,
+        )
+    }
+
+    /// 工具真实启动进程；退出和移除载荷都必须保留末段日志（不依赖 ticker 首拍）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fast_exit_is_waitable_and_terminal_events_keep_final_tail() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (ctx, _ws, _dd) = captured_ctx(seen.clone());
+        let out = ServiceTool
+            .run(
+                &ctx,
+                json!({"action": "start", "command": "echo final-tail"}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        let id = out.data["id"].as_str().unwrap();
+        assert!(out.data.get("tail").is_none());
+        let wait = super::super::wait::WaitTool
+            .run(&ctx, json!({"seconds": 5, "until": {"target": id}}))
+            .await;
+        assert_eq!(
+            wait.data["outcome"], "condition_met",
+            "短命进程也必须有终态：{wait:?}"
+        );
+        assert_eq!(wait.data["observed"]["status"], "succeeded");
+        assert!(
+            wait.data["observed"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("final-tail")
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["id"] == id && p["exited"] == true)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("退出事件必须发出");
+        let stopped = ServiceTool
+            .run(&ctx, json!({"action": "stop", "id": id}))
+            .await;
+        assert!(stopped.ok, "{stopped:?}");
+        let events = seen.lock().unwrap();
+        for key in ["exited", "removed"] {
+            let event = events
+                .iter()
+                .find(|p| {
+                    if key == "exited" {
+                        p["id"] == id && p["exited"] == true
+                    } else {
+                        p["removed"] == id
+                    }
+                })
+                .expect("必须发终态事件");
+            assert_eq!(event["running"], false);
+            if key == "exited" {
+                assert_eq!(
+                    event["listed_running"], false,
+                    "事件触发的快照不可把服务复活"
+                );
+            }
+            assert!(
+                event["tail"]
+                    .as_str()
+                    .is_some_and(|tail| tail.contains("final-tail")),
+                "{key} 应保留日志：{event}"
+            );
+        }
+    }
+
+    /// 容量拒绝也必须回收刚启动的真实进程，且不登记永远 running 的等待目标。
+    #[tokio::test]
+    async fn capacity_rejection_reaps_process_without_registering_wait_target() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (ctx, _ws, _dd) = captured_ctx(seen.clone());
+        for n in 0..16 {
+            let handle = Arc::new(ServiceHandle {
+                id: format!("existing_{n}"),
+                owner_root_id: ctx.rt.id.clone(),
+                purpose: ServicePurpose::Development,
+                name: "已退出服务".into(),
+                command: "".into(),
+                started_at: SystemTime::now(),
+                pid: 0,
+                log: RingLog::new(),
+                cancel: tokio_util::sync::CancellationToken::new(),
+                done: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            });
+            ctx.core.services.try_insert(handle).unwrap();
+        }
+        let out = ServiceTool
+            .run(&ctx, json!({"action": "start", "command": "sleep 30"}))
+            .await;
+        assert_eq!(
+            out.error.as_ref().map(|e| e.code.as_str()),
+            Some("E_SERVICE_FULL"),
+            "{out:?}"
+        );
+        assert_eq!(ctx.core.services.list().len(), 16);
+        assert!(
+            ctx.core.wait_targets.ids().is_empty(),
+            "失败启动不留下等待目标"
+        );
+        let events = seen.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["exited"] == true && event["running"] == false),
+            "拒绝的进程必须确认退出：{events:?}"
+        );
+        assert!(
+            events.iter().all(|event| event["running"] == false),
+            "拒绝服务不能公布运行中状态"
+        );
+    }
 
     /// service 环形日志的写作入口必须清洗：带色输出不得把 ANSI 转义写进日志。
     #[test]

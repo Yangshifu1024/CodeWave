@@ -583,7 +583,7 @@ async fn run_tool(
     // - g3_write_channel 只看工具形态与入参（本次调用固有，不随会话状态变化），可无锁求值；
     // - g3_gate 含状态判据（scope_expanded / scope_allowed / 基线），一律在单飞锁内重新求值。
     // 于是纯只读命令永不排队等锁，而两条写通道之间严格串行——同批 3~4 条带写目标的命令
-    // 只弹一张卡（先到的那次已消费 scope_expanded，后到的重新求值为 false 直接放行）。
+    // 只弹一张卡；批准后共享基线，拒绝后共享拒绝结果并持续阻断。
     let g3_write_channel = |ctx: &ToolCtx| -> bool {
         match tool.kind() {
             ToolKind::FileWrite => true,
@@ -702,6 +702,25 @@ async fn run_tool(
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 merge_into_approved_baseline(&ctx.rt, &refinements);
             } else {
+                // 用户已拒绝的范围不得因同批排队或下一批调用而绕过，也无需再次询问。
+                let denied_scope: Vec<String> = new_titles
+                    .iter()
+                    .map(|title| crate::tools::plan::normalize_title(title))
+                    .collect();
+                let scope_already_denied = {
+                    let denied = ctx.rt.scope_denied_titles.lock().unwrap();
+                    denied_scope.iter().all(|title| denied.contains(title))
+                };
+                if scope_already_denied {
+                    return (
+                        ToolOutcome::err(
+                            "E_SCOPE_DENIED",
+                            "用户已拒绝此计划外范围。请先用 plan 收窄到已批准的 todos 范围。",
+                        ),
+                        Vec::new(),
+                        0,
+                    );
+                }
                 let auto_confirm = ctx.core.cfg.read().unwrap().approval.auto_confirm;
                 let ok = crate::safety::approval::confirm(
                     &ctx.rt,
@@ -744,13 +763,12 @@ async fn run_tool(
                         .scope_expanded
                         .store(false, std::sync::atomic::Ordering::SeqCst);
                 } else {
-                    // 拒绝：消费本轮的范围扩张标记。保留它会让同批下一条写操作立刻弹同一张卡
-                    //（用户已明确拒绝过，问一次就够）；下一个 run 若模型又改了计划，plan.rs 会
-                    // 重新置位，那时再问是合理的。代价：同批其余已排队的写操作不再被拦，
-                    // 模型侧靠 E_SCOPE_DENIED 收窄——用「放行后续」换「不重复打扰」是有意取舍。
-                    ctx.rt
-                        .scope_expanded
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    let mut denied = ctx.rt.scope_denied_titles.lock().unwrap();
+                    for title in denied_scope {
+                        if !denied.contains(&title) {
+                            denied.push(title);
+                        }
+                    }
                     return (
                         ToolOutcome::err(
                             "E_SCOPE_DENIED",
@@ -2070,11 +2088,7 @@ mod tests {
             1,
             "写目标命令必须恰好弹一张计划外步骤确认：{entries:?}"
         );
-        // 拒绝必须消费本轮范围标记（同 run 内不再重弹），否则每条写命令都弹一次
-        assert!(
-            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
-            "拒绝后必须清掉 scope_expanded，否则同批下一条写命令会再弹同一张卡"
-        );
+        assert!(rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst));
         assert!(
             !rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
             "拒绝不得置 scope_allowed"
@@ -2361,10 +2375,10 @@ mod tests {
         );
     }
 
-    /// 拒绝后本 run 内不再重弹：第二条写操作不再弹卡（标记已被消费）。
+    /// 拒绝后的同批与后续批写操作持续被阻断，同一范围只询问一次。
     #[tokio::test]
     async fn g3_denial_does_not_reprompt_within_run() {
-        let (_ws, core, rt, log) = g3_scope_fixture_with_log();
+        let (ws, core, rt, log) = g3_scope_fixture_with_log();
         let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
         let cancel = tokio_util::sync::CancellationToken::new();
         let out = tokio::time::timeout(
@@ -2372,7 +2386,10 @@ mod tests {
             execute_batch(
                 &core,
                 &rt,
-                vec![g3_write_call("t1", 0, "echo a > g3_deny.txt")],
+                vec![
+                    g3_write_call("t1", 0, "echo a > g3_deny.txt"),
+                    g3_write_call("t1b", 1, "echo a > g3_deny_same_batch.txt"),
+                ],
                 &[],
                 false,
                 false,
@@ -2388,16 +2405,10 @@ mod tests {
             "拒绝必须落 E_SCOPE_DENIED：{:?}",
             first_error(&out.results)
         );
-        assert!(
-            !rt.scope_expanded.load(std::sync::atomic::Ordering::SeqCst),
-            "拒绝必须消费本轮 scope_expanded"
-        );
+        assert!(!ws.path().join("g3_deny.txt").exists());
+        assert!(!ws.path().join("g3_deny_same_batch.txt").exists());
 
-        // 同 run 的下一条写操作：不得再弹同一张卡。
-        // 取舍（有代码注释为证）：拒绝时已消费 scope_expanded，因此**同批已排队但尚未进门的**
-        // 写操作也会被放行。这是拿「不再重复打扰」换的——被拒的那条已经落 E_SCOPE_DENIED，
-        // 模型侧会收窄范围后重试；同批剩余调用若被逐个拦下，用户反而要回答 N 次同一问题。
-        // 真正的越界写入仍有 fence / 写入门 / 下一 run 的重新置位兼底，不构成安全缺口。
+        // 下一批即使换了 run id，也不得绕过同一拒绝范围。
         let log_before = log.lock().unwrap().len();
         let out = execute_batch(
             &core,
@@ -2407,12 +2418,12 @@ mod tests {
             false,
             false,
             cancel,
-            "run1",
+            "run2",
         )
         .await;
         assert!(
-            first_error(&out.results).is_none(),
-            "拒绝后同 run 内不应再拦：{:?}",
+            first_error(&out.results).is_some_and(|e| e.contains("E_SCOPE_DENIED")),
+            "拒绝后后续写必须继续阻断：{:?}",
             first_error(&out.results)
         );
         let log_after = log.lock().unwrap();
@@ -2425,11 +2436,122 @@ mod tests {
             "拒绝后本 run 内不得重弹同一张卡：{:?}",
             &log_after[log_before..]
         );
-        // 但下一 run 若模型又改了计划，plan.rs 会重新置位 → 那时再问是合理的
+        assert!(!ws.path().join("g3_deny2.txt").exists());
         assert!(
             !rt.scope_allowed.load(std::sync::atomic::Ordering::SeqCst),
             "拒绝不得置 scope_allowed"
         );
+    }
+
+    #[tokio::test]
+    async fn g3_denied_scope_can_narrow_then_true_new_scope_is_asked() {
+        let (ws, core, rt, log) = g3_scope_fixture_with_log();
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": false }));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("deny", 0, "echo x > denied.txt")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert!(answerer.await.unwrap());
+        assert_error_contains(&out.results, "E_SCOPE_DENIED");
+
+        // 只改包标签仍是同一拒绝范围：不重问且不能写。
+        let plan_call = |id: &str, title: &str| crate::core::agent::NormalizedCall {
+            id: id.into(),
+            name: "plan".into(),
+            index: 0,
+            args: serde_json::json!({ "todos": [{ "title": title, "status": "pending" }] }),
+        };
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![plan_call("rewrite", "包 A（backend-dev）：计划外新增步骤")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert!(first_error(&out.results).is_none());
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("deny-again", 0, "echo x > denied_again.txt")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert_error_contains(&out.results, "E_SCOPE_DENIED");
+        assert!(!ws.path().join("denied_again.txt").exists());
+        assert_eq!(event_count(&log.lock().unwrap(), "ask:opened"), 1);
+
+        // 通过公开 plan 工具收窄回基线，后续写操作恢复。
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![plan_call("narrow", "已批准的步骤")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert!(first_error(&out.results).is_none());
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("allowed", 0, "echo x > narrowed.txt")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert!(first_error(&out.results).is_none());
+        assert!(ws.path().join("narrowed.txt").exists());
+        assert_eq!(event_count(&log.lock().unwrap(), "ask:opened"), 1);
+
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![plan_call("new-scope", "另一项真正新增的工作")],
+            &[],
+            false,
+            false,
+            cancel.clone(),
+            "run1",
+        )
+        .await;
+        assert!(first_error(&out.results).is_none());
+        let answerer = g3_answer_spawner(rt.clone(), serde_json::json!({ "approved": true }));
+        let out = execute_batch(
+            &core,
+            &rt,
+            vec![g3_write_call("new-write", 0, "echo x > new_scope.txt")],
+            &[],
+            false,
+            false,
+            cancel,
+            "run1",
+        )
+        .await;
+        assert!(answerer.await.unwrap());
+        assert!(first_error(&out.results).is_none());
+        assert!(ws.path().join("new_scope.txt").exists());
+        assert_eq!(event_count(&log.lock().unwrap(), "ask:opened"), 2);
     }
 
     /// 「本会话始终允许」应答：置 scope_allowed（保留会话级永久放行语义）+ 清扩张标记。

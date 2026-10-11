@@ -62,12 +62,13 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 前端 `ui/src/`：
 
 - `ipc/client.ts` 是唯一 invoke 入口；`ipc/types.ts` 为前后端契约类型
-- zustand 5 store：`run.ts`（每 Tab 运行态，immer 中间件做流式高频更新）、`sessions.ts`（Tab/项目/会话）、`settings.ts`、`ui.ts`、`tasks.ts`（计划任务列表单一数据源）、`updater.ts`（更新状态机）
+- zustand 5 store：`run.ts`（每 Tab 运行态，immer 中间件做流式高频更新）、`activity.ts`（当前进程会话与子代理总览快照）、`sessions.ts`（Tab/项目/会话）、`settings.ts`、`ui.ts`、`tasks.ts`（计划任务列表单一数据源）、`updater.ts`（更新状态机）
 - `features/`：chat / shell（ProjectNav 导航：临时会话区 + 项目→会话树 + 任务区；RightBar 常驻右边栏，4 页签 info / logs / files / changes，Git 已收进「变更」页签，数据目录与会话信息在设置页「关于」）/ panels（设置 10 页 3 组：外观与模型 / 安全与能力 / 诊断与其他；TasksPage 为覆盖式全屏页、TokenStatsModal 为统计弹框）/ files（文件面板与查看器、表格与 PDF 预览）/ tools（ask 面板、工具卡、组件预览）/ workspace（仅 ChangesPanel：工作区 vs HEAD 聚合 diff）/ subagent / quota
 - 左侧导航是一切会话/项目入口；顶栏只有 Tab 条与功能按钮（无「选择工作区」「新 Tab」）
 
 ## 契约锚点（改前必读）
 
+- **运行总览**：修改跨会话状态、待处理回跳或子代理总览时先读 [runtime-dashboard](./docs/runtime-dashboard.md)；后端 `core/activity.rs` 提供独立于 Tab 的观察摘要，前端 `stores/activity.ts` 消费同一快照。询问回跳以真实 responder 与 run 身份校验，恢复后沿用原 AskPanel。
 - **事件面 29 键**（`lsp:server_missing` 已随 LSP 机制删除，见 [docs/post-write-check-plan](./docs/post-write-check-plan.md)；`goal:update` 已随目标模式整体删除移除）：handler 键名定义于 `ui/src/stores/run.ts` 的 `bindGlobalHandlers()`（事件键对象在 `stores/runHandlers.ts`；events.ts 是通用 bind），前后端契约受 `events.contract.test.ts` 双向守护，勿改键名
 - **文档工具与保真修改（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）**：`read_document` / `write_document` / `edit_document` 三个工具按扩展名分派表格、Word、PDF；保真修改一律走「解开压缩包 → 只替换目标内部文件 → 其余原样搬运重打包」，**绝不整份解析重建**（重建会丢图表、数据透视表、迷你图）；`read` 拒收二进制文档（按扩展名 + NUL 字节内容探测）并点名该用哪个工具；界面预览复用 `read_document` 的实现（`read_for_preview`），不给预览单写一套解析；最低 Rust 版本 **1.98**
 - **SessionMeta `project_id + roots` 快照**是 @ 提及 / git 聚合的唯一数据源，勿绕过回查注册表（左栏文件树已随 [docs/workspace-explorer-removal-and-chat-scrollbar](./docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除）

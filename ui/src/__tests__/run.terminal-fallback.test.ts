@@ -7,8 +7,11 @@ import { blank, settleRunningTools } from "../stores/runFrames";
 import { hasUnsettledRunState, settleRun } from "../stores/runHandlers";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
+import type { SessionRunSnapshot } from "../ipc/types";
 
 const sessionRunning = vi.fn(async () => false);
+const sessionRunSnapshot = vi.fn(async (): Promise<SessionRunSnapshot> => ({ running: false, run_id: null, terminal: null }));
+const startChat = vi.fn(async () => "run-1");
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -19,7 +22,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("../ipc/client", () => ({
   ipc: {
-    startChat: vi.fn(async () => "run-1"),
+    startChat: (...args: any[]) => startChat(...(args as [])),
+    sessionRunSnapshot: (...args: any[]) => sessionRunSnapshot(...(args as [])),
+    gitStatus: vi.fn(async () => ({ repo: false, entries: [] })),
     loadToolOutcomes: vi.fn(async (): Promise<any[]> => []),
     loadSubagentHistory: vi.fn(async () => []),
     sessionRunning: (...args: any[]) => sessionRunning(...(args as [])),
@@ -88,6 +93,10 @@ describe("run 终态兜底链（docs/run-terminal-event-fallback）", () => {
   beforeEach(() => {
     sessionRunning.mockReset();
     sessionRunning.mockResolvedValue(false);
+    sessionRunSnapshot.mockReset();
+    sessionRunSnapshot.mockImplementation(async () => ({ running: await sessionRunning(), run_id: null, terminal: null }));
+    startChat.mockReset();
+    startChat.mockResolvedValue("run-1");
     useRun.setState({ tabs: {} });
   });
 
@@ -175,6 +184,237 @@ describe("run 终态兜底链（docs/run-terminal-event-fallback）", () => {
   });
 
   describe("③ reconcileRun 双向对账", () => {
+    it("A/B收尾后idle迟到Astart不得改身份，Bidle快照保持已收敛", async () => {
+      seedStuck();
+      useRun.setState((s) => { s.tabs[SESSION].runId = "A"; });
+      handlers()["run:done"]({ session: SESSION, run_id: "A" });
+      await useRun.getState().send("B任务", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "run-1" });
+      sessionRunSnapshot.mockResolvedValue({ running: false, run_id: "run-1", terminal: { run_id: "run-1", kind: "done" } });
+      handlers()["run:start"]({ session: SESSION, run_id: "A" });
+      await useRun.getState().reconcileRun(SESSION);
+      expect(tabOf().running).toBe(false);
+      expect(tabOf().runId).toBe("run-1");
+    });
+
+    it("idle期间不同身份的真实外部run由权威running快照认领", async () => {
+      seedStuck();
+      useRun.setState((s) => { s.tabs[SESSION].runId = "old"; });
+      handlers()["run:done"]({ session: SESSION, run_id: "old" });
+      sessionRunSnapshot.mockResolvedValue({ running: true, run_id: "external", terminal: null });
+      handlers()["run:start"]({ session: SESSION, run_id: "external" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(sessionRunSnapshot).toHaveBeenCalled();
+      expect(tabOf().running).toBe(true);
+      expect(tabOf().runId).toBe("external");
+    });
+    it.each(["start", "error", "cancelled"])("A/B 已收尾后 C 回执未到，迟到 A 的 %s 不得劫持 C", async (kind) => {
+      seedStuck();
+      useRun.setState((s) => { s.tabs[SESSION].runId = "A"; });
+      handlers()["run:done"]({ session: SESSION, run_id: "A" });
+      await useRun.getState().send("B任务", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "run-1" });
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("C任务", [], SESSION);
+      const epoch = tabOf().runEpoch;
+      handlers()[`run:${kind}`]({ session: SESSION, run_id: "A", error: "old error" });
+      expect(tabOf().running).toBe(true);
+      expect(tabOf().startPending).toBe(true);
+      expect(tabOf().runId).toBeNull();
+      expect(tabOf().runEpoch).toBe(epoch);
+      started("C");
+      await send;
+      expect(tabOf().running).toBe(true);
+      expect(tabOf().runId).toBe("C");
+    });
+
+    it.each(["done", "error", "cancelled"])("当前 %s 早于 startChat 回执，身份确认后仍处理终态", async (kind) => {
+      seedStuck();
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("快速任务", [], SESSION);
+      handlers()["run:start"]({ session: SESSION, run_id: "current" });
+      handlers()[`run:${kind}`]({ session: SESSION, run_id: "current", error: "current error" });
+      started("current");
+      await send;
+      expect(tabOf().running).toBe(false);
+      expect(tabOf().runId).toBe("current");
+      expect(tabOf().startPending).toBe(false);
+    });
+
+    it("启动终态暂存最多16身份，超界淘汰当前终态后由snapshot补偿", async () => {
+      seedStuck();
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("快速任务", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "current" });
+      for (let n = 0; n < 20; n++) {
+        handlers()["run:error"]({ session: SESSION, run_id: `old-${n}`, error: "old error" });
+      }
+      expect(Object.keys(tabOf().pendingRunTerminals ?? {})).toHaveLength(16);
+      expect(tabOf().running).toBe(true);
+      sessionRunSnapshot.mockResolvedValue({ running: false, run_id: "current", terminal: { run_id: "current", kind: "done" } });
+      started("current");
+      await send;
+      expect(sessionRunSnapshot).toHaveBeenCalledTimes(1);
+      expect(tabOf().running).toBe(false);
+      expect(tabOf().lastDoneRunId).toBe("current");
+      expect(tabOf().pendingRunTerminals).toBeUndefined();
+    });
+
+    it("关闭重开后旧启动回执与暂存终态不得写新桶", async () => {
+      seedStuck();
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("旧任务", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "old" });
+      useRun.getState().dispose(SESSION);
+      seedStuck();
+      const before = JSON.stringify(tabOf());
+      started("old");
+      await send;
+      expect(JSON.stringify(tabOf())).toBe(before);
+    });
+
+    it("自动续队已开始后旧空闲查询返回，不得收掉新 ask", async () => {
+      seedStuck();
+      let reply!: (v: SessionRunSnapshot) => void;
+      sessionRunSnapshot.mockImplementationOnce(() => new Promise((r) => { reply = r; }));
+      const stale = useRun.getState().reconcileRun(SESSION);
+      await useRun.getState().send("队列下一轮", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "old" });
+      useRun.setState((s) => { s.tabs[SESSION].ask = { askId: "new-ask", kind: "ask" }; });
+      reply({ running: false, run_id: "old", terminal: { run_id: "old", kind: "done" } });
+      await stale;
+      expect(tabOf().running).toBe(true);
+      expect(tabOf().ask?.askId).toBe("new-ask");
+    });
+
+    it("收尾事件先于启动回执：回执后正常续队，旧 channel 不得写入下一轮", async () => {
+      seedStuck();
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const oldSend = useRun.getState().send("快速旧任务", [], SESSION);
+      const channel = (startChat.mock.calls as any)[0][3];
+      handlers()["run:start"]({ session: SESSION, run_id: "old" });
+      await useRun.getState().send("下一轮", [], SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "old" });
+      started("old");
+      await oldSend;
+      await Promise.resolve();
+      const before = JSON.stringify(tabOf());
+      channel.onmessage({ type: "delta_text", text: "旧半帧" });
+      expect(JSON.stringify(tabOf())).toBe(before);
+      expect(tabOf().runId).toBe("run-1");
+    });
+
+    it("已在运行新 run，旧 start/error/cancelled 都不得改动", () => {
+      seedStuck();
+      useRun.setState((s) => { s.tabs[SESSION].runId = "new"; });
+      const before = JSON.stringify(tabOf());
+      for (const kind of ["start", "error", "cancelled", "done"]) {
+        handlers()[`run:${kind}`]({ session: SESSION, run_id: "old", error: "old error" });
+      }
+      expect(JSON.stringify(tabOf())).toBe(before);
+    });
+
+    it("空闲快照身份不符，不得收尾或续队当前 run", async () => {
+      seedStuck();
+      useRun.setState((s) => {
+        s.tabs[SESSION].runId = "new";
+        s.tabs[SESSION].queue = [{ id: "q", text: "keep" }];
+      });
+      sessionRunSnapshot.mockResolvedValue({ running: false, run_id: "old", terminal: { run_id: "old", kind: "done" } });
+      await useRun.getState().reconcileRun(SESSION);
+      expect(tabOf().running).toBe(true);
+      expect(startChat).not.toHaveBeenCalled();
+    });
+    it("查询旧空闲状态后 send 尚未返回时不得结束乐观启动的新 run", async () => {
+      seedStuck();
+      let reply!: (v: SessionRunSnapshot) => void;
+      sessionRunSnapshot.mockImplementationOnce(() => new Promise((r) => { reply = r; }));
+      const stale = useRun.getState().reconcileRun(SESSION);
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("下一轮", [], SESSION);
+      reply({ running: false, run_id: "old", terminal: null });
+      await stale;
+      expect(tabOf().running).toBe(true);
+      started("new");
+      await send;
+    });
+
+    it("查询开始时已在等待 startChat 的回执，空闲快照也不得收尾", async () => {
+      seedStuck();
+      settleNow();
+      let started!: (v: string) => void;
+      startChat.mockImplementationOnce(() => new Promise((r) => { started = r; }));
+      const send = useRun.getState().send("新任务", [], SESSION);
+      await useRun.getState().reconcileRun(SESSION);
+      expect(tabOf().running).toBe(true);
+      started("new");
+      await send;
+    });
+
+    it("查询旧 running 后收到 done，不得由旧 true 响应复活", async () => {
+      seedStuck();
+      let reply!: (v: SessionRunSnapshot) => void;
+      sessionRunSnapshot.mockImplementationOnce(() => new Promise((r) => { reply = r; }));
+      const stale = useRun.getState().reconcileRun(SESSION);
+      handlers()["run:done"]({ session: SESSION, run_id: "old" });
+      reply({ running: true, run_id: "old", terminal: null });
+      await stale;
+      expect(tabOf().running).toBe(false);
+    });
+
+    it("关闭重开同会话 id，不得套用关闭前的响应", async () => {
+      seedStuck();
+      let reply!: (v: SessionRunSnapshot) => void;
+      sessionRunSnapshot.mockImplementationOnce(() => new Promise((r) => { reply = r; }));
+      const stale = useRun.getState().reconcileRun(SESSION);
+      useRun.getState().dispose(SESSION);
+      seedStuck();
+      reply({ running: false, run_id: "old", terminal: null });
+      await stale;
+      expect(tabOf().running).toBe(true);
+    });
+
+    it("只有当前 run 的 authoritative done 可以续队，重复查询只消费一次", async () => {
+      seedStuck();
+      useRun.setState((s) => {
+        s.tabs[SESSION].runId = "old";
+        s.tabs[SESSION].queue = [{ id: "next", text: "续队" }, { id: "later", text: "后续" }];
+      });
+      sessionRunSnapshot.mockResolvedValue({ running: false, run_id: "old", terminal: { run_id: "old", kind: "done" } });
+      await Promise.all([useRun.getState().reconcileRun(SESSION), useRun.getState().reconcileRun(SESSION)]);
+      expect(startChat).toHaveBeenCalledTimes(1);
+      expect(tabOf().queue.map((q) => q.id)).toEqual(["later"]);
+      expect(tabOf().running).toBe(true);
+    });
+
+    it.each(["error", "cancelled"] as const)("权威 %s 收尾保持队列暂停且清理本轮标记", async (kind) => {
+      seedStuck();
+      useRun.setState((s) => {
+        const t = s.tabs[SESSION];
+        t.runId = "old";
+        t.queue = [{ id: "next", text: "续队" }];
+        t.textRecovered = "<ask>";
+        t.widgetAutoOpen = { armed: true };
+      });
+      sessionRunSnapshot.mockResolvedValue({ running: false, run_id: "old", terminal: { run_id: "old", kind } });
+      await useRun.getState().reconcileRun(SESSION);
+      expect(startChat).not.toHaveBeenCalled();
+      expect(tabOf().queue).toHaveLength(1);
+      expect(tabOf().textRecovered).toBeNull();
+      expect(tabOf().widgetAutoOpen).toBeNull();
+    });
     it("后端已空闲 → 收敛（原先只有 true 方向，陈旧的 running 永远不被纠正）", async () => {
       seedStuck({ running: false });
       sessionRunning.mockResolvedValue(false);

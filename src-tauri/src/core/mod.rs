@@ -2,6 +2,9 @@
 //! projects（目录式项目注册表）、scheduler、sessions、stats、session_log 等。
 //! 分层规则：本层不依赖 tauri，事件经 EventSink trait 由 host 层注入（docs/02-technical-design.md）。
 
+pub mod activity;
+#[cfg(test)]
+mod activity_tests;
 pub mod agent;
 pub mod config;
 pub mod context;

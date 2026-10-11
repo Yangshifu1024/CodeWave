@@ -42,7 +42,7 @@ spawn → sink.bind_sub_channel(parent, sub)
 | `ipc/client.ts` | `loadSubagentHistory(sessionId, subId)` |
 | `stores/run.ts` | ① `SubView` 加 `name/task`；新增 `SubStream`（timeline/toolsMap/status/gen/loaded）与 `TabRunState.subStreams`、`subDrawer`（**per-Tab**）；② `applyFrameToTab` 拦截信封帧 → 新导出 `applyFrameToSub`（镜像主归约：delta 追加、tool_progress 落锚，惰性建流——channel 帧与 sub:spawn 事件分属两链路无到达序保证；流按 status 收口丢弃迟到帧）；③ `onToolResult`：session 无对应 Tab 时按 `subStreams` 反查归属 Tab 回填子代理工具卡，create/edit 同步 bump `writeTick`（[docs/session-artifacts-and-files-tab](./session-artifacts-and-files-tab.md) 归属语义顺带补全——此前子代理写文件不刷新 Files 页签）；④ `send()` **移除 `t.subs = []`**（归档化）；⑤ `sub:spawn` 初始化流 + **运行数 0→1 自动弹抽屉**；`sub:done/error` 同步收口流；⑥ `restoreFromMessages` 预扫 tool_result，`tool_use(name="subagent")` → `{kind:"sub"}` 锚点 + 归档 SubView（outcome 解析 `sub_id/role/report`，旧会话无 sub_id 合成 `restored:<callId>` 降级）+ 空流注册；⑦ `openSubDrawer`（归档子代理首次打开按需拉历史 → `messagesToSubStream` 重建；运行中不拉）/ `closeSubDrawer`（只关不销毁） |
 | `features/chat/segments.tsx`（新） | 自 ChatMessages 抽取 `renderCached`/`ThinkingBlock`/`TimelineSegsView`（thinking/工具卡/子代理卡/markdown 正文按 timeline 序渲染），主聊天与过程抽屉共用同一套视觉；ChatMessages.AssistantMessage 改为消费 `TimelineSegsView`（渲染逻辑零变化纯搬移） |
-| `features/subagent/SubagentDrawer.tsx`（新） | antd Drawer：`placement="right"`、`mask={false}`（常显监控不挡操作）、`destroyOnHidden={false}`（关闭不销毁）、自定义宽度 `min(560px, 45vw)` 走 `styles.wrapper`（antd 6 `width` prop 弃用告警）；自绘头部**左上角关闭** + 机器人 + 「子智能体 <规范名> · <任务>」+ 状态 Tag；正文 = 任务首块（user 气泡）+ `TimelineSegsView` 实时/重建消息流（流式光标/自动贴底跟随、滚轮上滚暂停）；降级分支（无过程文件）显示任务 + 最终汇报 + 说明行 |
+| `features/subagent/SubagentDrawer.tsx`（新） | antd Drawer：`placement="right"`、`mask={{ closable: true }}`（2026-10-11 追加：外部点击关闭）、`destroyOnHidden={false}`（关闭不销毁）、`size="50vw"`（占应用窗口宽度一半、随缩放更新）；自绘头部**左上角关闭** + 机器人 + 「子智能体 <规范名> · <任务>」+ 状态 Tag；正文 = 任务首块（user 气泡）+ `TimelineSegsView` 实时/重建消息流（流式光标/自动贴底跟随、滚轮上滚暂停）；降级分支（无过程文件）显示任务 + 最终汇报 + 说明行 |
 | `features/subagent/SubagentItemCard.tsx` | 重写为单行可点击卡：「子智能体」+ 规范名胶囊 + 「·」+ description（省略）+ 状态图标（运行中 spinner/✓/✕）+ `step/maxSteps · N tok`；点击 → `openSubDrawer`（Enter/Space 可达） |
 | `features/chat/Composer.tsx` | `.toolbar-left` 权限胶囊后加指示器：运行数 0 隐藏；=1 机器人+数字、点击直达抽屉；>1 向上 Dropdown（`placement="topLeft"`）列出各子代理（角色/描述/状态着色）选择后打开 |
 | `features/shell/AppShell.tsx` | 挂载 `<SubagentDrawer/>`（per-Tab 状态，切换 Tab 各自记忆） |
@@ -59,16 +59,16 @@ spawn → sink.bind_sub_channel(parent, sub)
 
 - 运行中状态不跨进程重启：恢复语义 = 聊天卡 + 完整过程回看（运行数徽标天然为 0）。
 - 旧会话（本批次前）无过程落盘：抽屉降级显示任务 + 最终汇报（outcome 截断到连 report 都缺失时显示说明行）。
-- 抽屉 overlay 覆盖 RightBar 与聊天区右侧；`mask=false` 不阻塞主区交互。
+- 抽屉宽度为应用窗口的 50%；外部遮罩点击只关闭抽屉，不透传点击给下层按钮。关闭不停止子代理、不清理过程数据。
 - 子代理 Channel 绑定进程内常驻（数量 ≤ 并发上限 4 的累计值，无害）；窗口关闭时 channel 发送失败仅 debug 日志。
 
 ## 七、手动验证清单（GUI 不做自动点验）
 
 1. **单子代理实时抽屉**：让主代理委派一个子代理（如 `$explore` 调研任务）→ 聊天出现「Ⓐ 子智能体 explore · <任务>」单行卡；Composer 左下出现 🤖1；右侧自动滑出抽屉，逐字显示子代理的思考/正文/工具卡（工具卡可展开看结果），流式光标 + 贴底跟随。
 2. **多子代理**：让主代理并行委派两个子代理 → 指示器变 🤖2，点击弹向上菜单列出两者（运行中橙点）；选择另一个 → 抽屉切换；聊天中两张卡各就各位。
-3. **关闭不销毁**：抽屉左上角 ✕ 关闭 → 主界面恢复；点 🤖（或聊天卡）→ 重新打开且过程内容完整未丢失。
+3. **关闭不销毁**：分别用左上角 ✕ 与点击抽屉外部关闭 → 主界面恢复；点击抽屉内部不关闭；点 🤖（或聊天卡）→ 重新打开且过程内容完整未丢失，运行中的子代理继续工作。
 4. **收口**：子代理完成 → 卡变 ✓ 与步数/token 定格、抽屉状态 Tag 变「已完成」；全部结束后 🤖 指示器消失；抽屉仍可停留在已完成视图。
 5. **回看**：同会话发起新任务（多轮后）→ 上一轮子代理卡仍在原位，点击仍可打开完整过程（归档未清）。
 6. **会话恢复**：切换到别的会话再切回（或关 Tab 重开）→ 历史中子代理调用显示为子代理卡（不再是通用工具卡），点击 → 抽屉从落盘历史重建完整消息流（思考/工具卡/汇报）。
 7. **降级**：打开一个本批次之前的旧会话中的子代理卡 → 抽屉显示任务 + 最终汇报与「未记录过程详情」说明，不报错。
-8. **暗色/窄窗**：暗色主题下抽屉与卡片配色正常；窄窗口抽屉宽度收窄至 ≤45vw。
+8. **暗色/窗口缩放**：暗色主题下抽屉与卡片配色正常；抽屉打开期间缩放窗口，宽度始终为视口的 50%，不再受 360–560px 限制。

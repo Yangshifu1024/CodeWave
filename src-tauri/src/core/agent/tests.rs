@@ -913,7 +913,11 @@ async fn running_flag_resets_after_run_ends() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(!rt.running.load(Ordering::SeqCst), "run 应在超时前结束");
-    let _ = run1;
+    let snapshot = serde_json::to_value(rt.run_snapshot()).unwrap();
+    assert_eq!(snapshot["run_id"], run1);
+    assert_eq!(snapshot["terminal"]["kind"], "error");
+    assert_eq!(snapshot["terminal"]["error_kind"], "auth");
+    assert!(snapshot["terminal"]["error"].as_str().is_some());
     let run2 = core.start_chat(rt, "second".into(), vec![]);
     assert!(run2.is_ok(), "C1 回归：第二次 start 被拒：{:?}", run2.err());
 }

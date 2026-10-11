@@ -42,6 +42,12 @@ export default function TopBar() {
   const explorerOpen = useSessions((s) => s.explorerOpen);
   const rightBarOpen = useUi((s) => s.rightBarOpen);
   const settingsOpen = useUi((s) => s.settingsOpen);
+  const tasksOpen = useUi((s) => s.tasksOpen);
+  const dashboardOpen = useUi((s) => s.dashboardOpen);
+  // 覆盖页标题优先于保留挂载的后台会话；任务/设置打开时总览会暂时让位。
+  const pageTitle = settingsOpen ? t("settings.title")
+    : tasksOpen ? t("tasks.title")
+    : dashboardOpen ? t("dashboard.title") : null;
   // 工作区跟随 Sider；设置/任务全屏页跟随对应导航宽度，保证顶栏分界连续。
   const { nav: navWidth, windowWidth } = useDisplayWidths();
   const fullscreenOpen = useUi((s) => s.settingsOpen || s.tasksOpen);
@@ -81,8 +87,8 @@ export default function TopBar() {
             )}
           </button>
         </Tooltip>}
-        {settingsOpen ? (
-          <span className="tb-title">{t("settings.title")}</span>
+        {pageTitle ? (
+          <span className="tb-title">{pageTitle}</span>
         ) : tab ? (
           <>
             <span className="tb-title" title={tab.title}>

@@ -1,7 +1,7 @@
 // TopBar content contract ([docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md) two-segment; [docs/titlebar-logo-toggle](../../../docs/titlebar-logo-toggle.md) Logo toggles the left bar + history nav removed):
 // render TopBar directly + craft data via store setState (invoke returns [] everywhere, covering unexpected calls during mount).
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import { App } from "antd";
 import "../i18n";
 import TopBar, { SIDER_W_CLOSED, SIDER_W_OPEN } from "../features/shell/TopBar";
@@ -54,12 +54,40 @@ afterEach(() => {
   useRun.setState((s) => {
     s.tabs = {}; s.drafts = {};
   });
-  useUi.setState({ rightBarOpen: true, settingsOpen: false, tasksOpen: false, navWidth: SIDER_W_OPEN });
+  useUi.setState({ rightBarOpen: true, settingsOpen: false, tasksOpen: false, dashboardOpen: false, navWidth: SIDER_W_OPEN });
   localStorage.removeItem("ws_right_bar_open");
   localStorage.removeItem("ws_explorer_open");
 });
 
 describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
+  it.each([true, false])("进入运行总览显示页面标题，退出后恢复会话或空态（有会话=%s）", (hasTab) => {
+    if (hasTab) {
+      useSessions.setState({
+        tabs: [tab({ sessionId: "s1", title: "子代理审查最新提交", projectId: "p1", workspace: "D:\\Code\\CodeWave" })],
+        activeKey: "s1",
+      });
+      seedRun("s1", { repo: true, entries: [], branch: "feat/runtime-dashboard" });
+    }
+    renderBar();
+    act(() => useUi.setState({ dashboardOpen: true }));
+    expect(document.querySelector(".tb-title")?.textContent).toBe("运行总览");
+    expect(document.querySelectorAll(".tb-pill")).toHaveLength(0);
+    act(() => useUi.setState({ dashboardOpen: false }));
+    expect(document.querySelector(".tb-title")?.textContent).toBe(hasTab ? "子代理审查最新提交" : "CodeWave");
+    expect(document.querySelectorAll(".tb-pill")).toHaveLength(hasTab ? 2 : 0);
+  });
+
+  it.each([
+    ["settingsOpen", "设置"],
+    ["tasksOpen", "计划任务"],
+  ] as const)("总览被%s覆盖时，标题跟随实际页面并在退出后恢复", (page, title) => {
+    useUi.setState({ dashboardOpen: true, [page]: true });
+    renderBar();
+    expect(document.querySelector(".tb-title")?.textContent).toBe(title);
+    act(() => useUi.setState({ [page]: false }));
+    expect(document.querySelector(".tb-title")?.textContent).toBe("运行总览");
+  });
+
   it("两段容器与中段弹性区都带 drag-region；无活动会话显示占位标题、无胶囊", () => {
     renderBar();
     for (const sel of [".tb-left-seg", ".tb-main-seg", ".tb-flex"]) {

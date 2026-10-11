@@ -95,6 +95,11 @@ pub async fn confirm(
     req: ApprovalRequest,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> ConfirmOutcome {
+    let run_id = if rt.root_session_id.is_some() {
+        rt.root_run_id.clone()
+    } else {
+        rt.run_snapshot().run_id
+    };
     let ask_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
     rt.open_ask(&ask_id, tx);
@@ -122,7 +127,7 @@ pub async fn confirm(
         &emit_session,
         "ask:opened",
         json!({
-            "session": emit_session, "ask_id": ask_id, "kind": "approval",
+            "session": emit_session, "run_id": run_id, "ask_id": ask_id, "kind": "approval",
             "title": req.title, "detail": req.detail,
             "allow_always": req.allow_always,
             "approval_kind": req.kind.wire(),

@@ -77,6 +77,7 @@ const h = vi.hoisted(() => {
     listProjects: fn(async () => []),
     loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
+    sessionRunSnapshot: fn(async () => ({ running: false, run_id: null, terminal: null })),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
     restoreLegacyModelPrefs: fn(async () => undefined),
     connectMcp: fn(async () => ({ started: [], failed: [] })),
@@ -229,7 +230,7 @@ afterEach(() => {
   cleanup();
   // zustand store 是模块级单例：面板开关 / 请求位 / 树态复位，避免弹窗与快照串味
   useUi.setState({
-    settingsOpen: false, tasksOpen: false, statsOpen: false,
+    settingsOpen: false, tasksOpen: false, statsOpen: false, dashboardOpen: false,
     exitRequest: null, closeTabRequest: null,
     treeExpand: {}, treeCollapsed: false, rightBarOpen: true, rbTab: "info",
     notifications: [], mcpStatus: [], // 中断提示条用例会产生 toast（6 秒后自行消失），别漏给后面的用例
@@ -291,7 +292,7 @@ describe("AppShell 启动链路（会话保存与恢复优化 · 批1）", () =>
     // 活跃 Tab 急切加载：loadSession + 运行参数 + 后端运行态都要问一遍（骨架 Tab 不走这条，见下一条用例）
     await waitFor(() => expect(ipc.loadSession).toHaveBeenCalledWith("s1", "/tmp/s1"));
     expect(ipc.getSessionPrefs).toHaveBeenCalledWith("s1");
-    expect(ipc.sessionRunning).toHaveBeenCalledWith("s1");
+    expect(ipc.sessionRunSnapshot).toHaveBeenCalledWith("s1");
 
     // bindEvents 注册生效：handler 表里每个键都真的 listen 上了（键集合由 events.contract.test.ts 守护）
     const keys = Object.keys(useRun.getState().bindGlobalHandlers());
@@ -497,6 +498,27 @@ describe("关 Tab 二次确认（会话保存与恢复优化 · 批1）", () => 
 });
 
 describe("现场态落盘与中断提示条（会话保存与恢复优化 · 批1）", () => {
+  it("总览保留导航与聊天挂载，背景运行不会被 Escape 停止", async () => {
+    h.state.sessions = [meta("s1")];
+    h.state.uiState = uiSnapshot(["s1"], "s1");
+    vi.mocked(ipc.getActivitySnapshot).mockResolvedValue({ revision: 1, sampled_at_ms: 1, sessions: [], recent: [] });
+    await mountApp();
+    await waitFor(() => expect(useRun.getState().tabs.s1).toBeTruthy());
+    const cancel = vi.spyOn(useRun.getState(), "cancel").mockResolvedValue();
+    const composer = document.querySelector(".composer");
+    act(() => {
+      useRun.getState().markRunning("s1");
+      useRun.getState().setDraftText("保留草稿", "s1");
+      useUi.setState({ dashboardOpen: true });
+    });
+    await waitFor(() => expect(document.querySelector(".runtime-dashboard")).toBeTruthy());
+    expect(document.querySelector(".project-nav")).toBeTruthy();
+    expect(document.querySelector(".composer")).toBe(composer);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(useRun.getState().drafts.s1.text).toBe("保留草稿");
+    cancel.mockRestore();
+  });
   it("落盘不变量：挂载即打开 store→落盘订阅；防抖窗口内不写，到期后写入最新现场态", async () => {
     h.state.sessions = [meta("s1"), meta("s2")];
     h.state.uiState = uiSnapshot(["s1", "s2"], "s1");

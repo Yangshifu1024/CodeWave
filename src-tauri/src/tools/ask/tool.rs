@@ -166,6 +166,7 @@ impl Tool for AskTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        let run_id = ctx.rt.run_snapshot().run_id;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
@@ -195,7 +196,7 @@ impl Tool for AskTool {
         );
         let plan_file = usable.as_deref().and_then(|body| save_plan_file(ctx, body));
         let mut ask_opened = json!({
-            "session": ctx.rt.id, "ask_id": ask_id, "kind": "ask",
+            "session": ctx.rt.id, "run_id": run_id, "ask_id": ask_id, "kind": "ask",
             "questions": args.questions,
             // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
             "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
@@ -372,6 +373,7 @@ impl Tool for AskTool {
                 return err;
             }
             // G3 基线：门已保证 todos 非空；重新批准新方案时重置上一轮的范围状态（Y5：防止陈旧批准跨轮携带）
+            let scope_guard = ctx.rt.scope_gate_lock.lock().await;
             let titles: Vec<String> = ctx
                 .rt
                 .todos
@@ -382,12 +384,14 @@ impl Tool for AskTool {
                 .collect();
             let titles_count = titles.len();
             *ctx.rt.approved_plan.lock().unwrap() = Some(titles);
+            ctx.rt.scope_denied_titles.lock().unwrap().clear();
             ctx.rt
                 .scope_allowed
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             ctx.rt
                 .scope_expanded
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            drop(scope_guard);
             ctx.core
                 .set_session_mode_and_persist(&ctx.rt, switch_target);
             crate::core::session_log::info(

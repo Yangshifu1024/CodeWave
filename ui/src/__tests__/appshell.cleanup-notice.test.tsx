@@ -76,6 +76,7 @@ const h = vi.hoisted(() => {
     listProjects: fn(async () => []),
     loadSession: fn(async () => FIRST_PAGE),
     sessionRunning: fn(async () => false),
+    sessionRunSnapshot: fn(async () => ({ running: false, run_id: null, terminal: null })),
     getSessionPrefs: fn(async () => ({ ...PREFS })),
     connectMcp: fn(async () => ({ started: [], failed: [] })),
     getTokenBreakdown: fn(async () => ({

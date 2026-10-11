@@ -65,6 +65,15 @@ impl SubEnded {
     pub fn is_delivered(self) -> bool {
         matches!(self, SubEnded::Report)
     }
+
+    /// 等待目标是否取得成果：完整汇报和预算耗尽时的部分汇报都算成功。
+    /// 与分析批准门刻意分开，partial 保住成果但不能解锁不完整分析。
+    pub fn wait_state(self) -> TargetState {
+        match self {
+            SubEnded::Report | SubEnded::Partial => TargetState::Succeeded,
+            SubEnded::Budget | SubEnded::NoReport => TargetState::Failed,
+        }
+    }
 }
 
 /// 子代理收尾形态判定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
@@ -345,6 +354,8 @@ impl Tool for SubagentTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        // 在等待并发槽位之前固化所属主 run，迟到轮询不能误归到下一轮同名子代理。
+        let parent_run_id = ctx.rt.run_snapshot().run_id;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
@@ -400,7 +411,7 @@ impl Tool for SubagentTool {
         ctx.core.sink.emit(
             &ctx.rt.id,
             "sub:spawn",
-            json!({ "session": ctx.rt.id, "sub_id": sub_id, "role": args.role,
+            json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "role": args.role,
                     "name": agent_def.map(|d| d.name), "task": args.task.clone(),
                     "description": description, "max_steps": max_steps }),
         );
@@ -418,8 +429,15 @@ impl Tool for SubagentTool {
         );
 
         // 独立 runtime（继承 workspace/data_dir/extra_roots）+ 注册（支持 StopSubagent）
-        let sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
+        let mut sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
+        if let Some(sub) = std::sync::Arc::get_mut(&mut sub_rt) {
+            // 工具入口已固化身份，等待并发槽位后也沿用同一轮。
+            sub.root_run_id = parent_run_id.clone();
+        }
         ctx.core.subs.insert(sub_id.clone(), sub_rt.clone());
+        ctx.core
+            .activity
+            .register_sub(&ctx.rt, &sub_rt, parent_run_id.as_deref());
         // 登记为可等待目标（`wait` 的 until 可等它收尾）：放在 spawn 真正成功之后——
         // 抢占并发槽位失败等早退路径都不会走到这里，不会留下永远等不到的 running 条目。
         ctx.core
@@ -503,6 +521,7 @@ impl Tool for SubagentTool {
         let session = ctx.rt.id.clone();
         let sub2 = sub_id.clone();
         let step_rt = sub_rt.clone();
+        let progress_run_id = parent_run_id.clone();
         // 步数进度事件：轮询 history（每 800ms）携带内部 run 摘录（前端子代理卡展开可见）
         let progress = tokio::spawn(async move {
             loop {
@@ -521,7 +540,7 @@ impl Tool for SubagentTool {
                 // 当前档位（B2）：子 rt 的 prefs 由 drive 层每步按父档同步，故此处即实时值。
                 // 载荷只**新增**字段，事件键名与 29 键契约不变（前端据它显示子代理卡档位）。
                 let approval_mode = step_rt.prefs().approval_mode;
-                sink.emit(&session, "sub:step", json!({ "session": session, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail, "approval_mode": approval_mode }));
+                sink.emit(&session, "sub:step", json!({ "session": session, "run_id": progress_run_id, "sub_id": sub2, "step": steps, "tool": last_tool, "detail": detail, "approval_mode": approval_mode }));
             }
         });
 
@@ -531,6 +550,7 @@ impl Tool for SubagentTool {
         let mut cleanup = SubCleanupGuard {
             core: core.clone(),
             session: ctx.rt.id.clone(),
+            parent_run_id: parent_run_id.clone(),
             sub_id: sub_id.clone(),
             sub_rt: sub_rt.clone(),
             progress,
@@ -627,34 +647,26 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:report",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "report": clean_report.clone() }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "report": clean_report.clone() }),
                 );
                 // sub:usage 先于 sub:done（前端卡先展示 token 数再完成）
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:usage",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": {
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": {
                         "input": usage.input, "output": usage.output,
                     } }),
                 );
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:done",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "usage": usage,
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": usage,
                             "steps_used": steps_used, "ended": ended_str }),
                 );
-                // 收尾形态 → wait 目标终态：仅 `Report` 算成功完成。
-                // `Partial` / `Budget` / `NoReport` 都是**没拿到成果**——`Partial` 虽交了汇报，
-                // 但是撞顶逼出来的半成品、主代理无从知道自己被砍断过（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)），
-                // 对 wait 的「等到子代理完成」而言不成立，归 Failed。
-                // 判据取 `is_delivered()`：它是 `analysis_done` 置位（plan 档 G2 分析闸）
-                // 与文案分档的**共同单一事实源**，两处共用可防口径漂移。
+                // 部分汇报也取得成果，wait 成功与工具成功一致；完整分析批准仍由
+                // is_delivered 单独守护。Budget/NoReport 没交汇报，保持失败。
                 // report 全文按 2000 字符截断作终态摘要（避免大报告长期占内存）。
-                cleanup.final_state = if ended.is_delivered() {
-                    TargetState::Succeeded
-                } else {
-                    TargetState::Failed
-                };
+                cleanup.final_state = ended.wait_state();
                 cleanup.final_text = Some(crate::core::session_log::trunc(&clean_report, 2000));
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
@@ -688,7 +700,7 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:error",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "error": ui_err }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "error": ui_err, "cancelled": true, "steps_used": sub_rt.step_count.load(Ordering::SeqCst) }),
                 );
                 ToolOutcome::err("E_SUBAGENT_STOPPED", tool_msg)
             }
@@ -697,7 +709,7 @@ impl Tool for SubagentTool {
                 ctx.core.sink.emit(
                     &ctx.rt.id,
                     "sub:error",
-                    json!({ "session": ctx.rt.id, "sub_id": sub_id, "error": e.to_string() }),
+                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "error": e.to_string(), "steps_used": sub_rt.step_count.load(Ordering::SeqCst) }),
                 );
                 ToolOutcome::err("E_SUBAGENT", format!("子代理执行失败：{e}"))
             }
@@ -714,6 +726,7 @@ impl Tool for SubagentTool {
 struct SubCleanupGuard {
     core: std::sync::Arc<crate::core::agent::AgentCore>,
     session: String,
+    parent_run_id: Option<String>,
     sub_id: String,
     sub_rt: std::sync::Arc<crate::core::agent::SessionRuntime>,
     progress: tokio::task::JoinHandle<()>,
@@ -741,8 +754,14 @@ impl Drop for SubCleanupGuard {
         // NoopSink（测试）默认无操作；无通道时零副作用。
         self.core.sink.unbind_sub_channel(&self.sub_id);
         if self.armed {
+            // 先收口观察摘要再做历史 IO；panic 路不能因落盘失败留住运行中条目。
+            self.core.sink.emit(
+                &self.session,
+                "sub:error",
+                json!({ "session": self.session, "run_id": self.parent_run_id, "sub_id": self.sub_id, "error": "子代理内部异常终止", "steps_used": self.sub_rt.step_count.load(Ordering::SeqCst) }),
+            );
             // panic 路同样尽力落盘已产生的过程历史（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
-            let h = self.sub_rt.history.lock().unwrap();
+            let h = crate::core::agent::lock_ok(&self.sub_rt.history);
             match self
                 .core
                 .store
@@ -767,11 +786,6 @@ impl Drop for SubCleanupGuard {
                 }
             }
             drop(h);
-            self.core.sink.emit(
-                &self.session,
-                "sub:error",
-                json!({ "session": self.session, "sub_id": self.sub_id, "error": "子代理内部异常终止" }),
-            );
         }
     }
 }
@@ -835,6 +849,115 @@ mod tests {
         for e in [SubEnded::Partial, SubEnded::Budget, SubEnded::NoReport] {
             assert!(!e.is_delivered(), "{e:?} 不得计为已交付成果");
         }
+    }
+
+    /// 真实工具调用跨 provider/drive/清理边界：partial 保住成果，但不解锁分析批准门。
+    #[tokio::test]
+    async fn partial_report_is_successful_wait_target_without_approving_analysis() {
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        let server_listener = listener.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = server_listener.accept().await.unwrap();
+            // 读干请求头和正文，避免 Windows 带未读请求关闭发 RST。
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0, "请求不能提前断开");
+                request.extend_from_slice(&buf[..n]);
+                if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&request[..header_end]);
+                    let len = header
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= header_end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"<report>已完成 A，B 待补</report>\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = super::super::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        {
+            let mut cfg = core.cfg.write().unwrap();
+            cfg.providers[0].base_url = format!("http://127.0.0.1:{port}/v1");
+            cfg.providers[0].keys = vec!["test-key".into()];
+        }
+        let rt = core.get_or_create_session(
+            "partial-test",
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let ctx = ToolCtx {
+            core,
+            rt,
+            batch_id: "b".into(),
+            call_index: 0,
+            call_key: "b:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            SubagentTool.run(
+                &ctx,
+                json!({
+                    "task": "分析需求并返回已有成果", "role": "product-manager", "maxSteps": 1
+                }),
+            ),
+        )
+        .await
+        .expect("工具应完成");
+        server.await.unwrap();
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.data["ended"], "partial");
+        assert_eq!(out.data["report"], "已完成 A，B 待补");
+        assert!(
+            !ctx.rt.analysis_done.load(Ordering::SeqCst),
+            "partial 不能批准不完整分析"
+        );
+        let id = out.data["sub_id"].as_str().unwrap();
+        let wait = super::super::wait::WaitTool
+            .run(
+                &ctx,
+                json!({"seconds": 1, "until": {"target": id, "state": "exited"}}),
+            )
+            .await;
+        assert_eq!(
+            wait.data["outcome"], "condition_met",
+            "工具成功与 wait 成功应一致：{wait:?}"
+        );
+        assert_eq!(wait.data["observed"]["status"], "succeeded");
+        let failed = super::super::wait::WaitTool
+            .run(
+                &ctx,
+                json!({"seconds": 1, "until": {"target": id, "state": "failed"}}),
+            )
+            .await;
+        assert_eq!(failed.data["outcome"], "timeout", "partial 不等于失败");
     }
 
     /// wire 值稳定性：前端 `run.types.ts` / `ipc/types.ts` 两处联合类型与 i18n 文案

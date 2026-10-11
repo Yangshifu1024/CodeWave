@@ -12,7 +12,7 @@
 //! 「未完成」空转到超时。
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
-use crate::core::wait_targets::{TargetState, WaitTarget};
+use crate::core::wait_targets::{TargetObservation, TargetState, WaitTarget};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +34,7 @@ pub struct WaitTool;
 struct Until {
     /// 目标 id。
     target: String,
-    /// 终态判据（缺省 = 任意终态）。
+    /// 显式终态判据；省略且带 match 时只等文本，两个都省略时默认等 done。
     state: Option<StateWant>,
     /// 摘要子串判据（大小写不敏感）；与 `state` 是 **AND** 关系。
     match_text: Option<String>,
@@ -43,6 +43,8 @@ struct Until {
 /// 显式声明的终态判据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StateWant {
+    /// 任意终态。
+    Done,
     /// 仅 `TargetState::Succeeded` 命中。
     Exited,
     /// 仅 `TargetState::Failed` 命中。
@@ -62,11 +64,12 @@ struct TargetObservationLite {
 
 impl Until {
     /// 出参里的 `until` 回显面（归一化后：缺省的 `state` 不补全，让模型看清
-    /// 「我没写 state = 任意终态」）。
+    /// 「我是否显式要求终态」）。
     fn echo(&self) -> Value {
         let mut v = json!({ "target": self.target });
         if let Some(s) = self.state {
             v["state"] = json!(match s {
+                StateWant::Done => "done",
                 StateWant::Exited => "exited",
                 StateWant::Failed => "failed",
             });
@@ -79,13 +82,15 @@ impl Until {
 
     /// 判定当前快照是否命中：state（若声明）与 match_text（若声明）**同时**满足。
     ///
-    /// `state` 缺省 = 任意终态即命中（`is_completed`）；显式 `exited` 时仅
+    /// `state` 与 match 都缺省时等任意终态；只带 match 时允许在运行中命中。
+    /// 显式 `exited` 时仅
     /// `Succeeded` 命中、`Failed` **不算**（继续等到超时），显式 `failed` 反之。
-    fn matches(&self, t: &WaitTarget) -> bool {
+    fn matches(&self, t: &TargetObservation) -> bool {
         let state_ok = match self.state {
-            None => t.is_completed(),
-            Some(StateWant::Exited) => t.state() == TargetState::Succeeded,
-            Some(StateWant::Failed) => t.state() == TargetState::Failed,
+            None if self.match_text.is_some() => true,
+            None | Some(StateWant::Done) => t.state.is_terminal(),
+            Some(StateWant::Exited) => t.state == TargetState::Succeeded,
+            Some(StateWant::Failed) => t.state == TargetState::Failed,
         };
         if !state_ok {
             return false;
@@ -94,32 +99,21 @@ impl Until {
             None => true,
             // 大小写不敏感的子串匹配；text 为 None 时不命中。
             Some(needle) => t
-                .text()
+                .text
+                .as_ref()
                 .is_some_and(|hay| hay.to_lowercase().contains(&needle.to_lowercase())),
         }
     }
 }
 
 impl TargetObservationLite {
-    /// 从目标快照取观测（`text` 限长）。锁 poisoned 时**不 panic**：`WaitTarget`
-    /// 内部用 `lock().unwrap()`，一旦某次探测 panic 中断了持锁线程，本工具不能
-    /// 跟着崩。`kind` 是字段读取（无锁）始终可靠。
-    fn of(t: &WaitTarget) -> Self {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (t.state().as_str().to_string(), t.text())
-        })) {
-            Ok((status, text)) => TargetObservationLite {
-                kind: t.kind().as_str(),
-                status,
-                text: text.map(|s| truncate_bytes(&s, OBSERVED_TEXT_BYTES)),
-                probe_error: None,
-            },
-            Err(_) => TargetObservationLite {
-                kind: t.kind().as_str(),
-                status: "unknown".to_string(),
-                text: None,
-                probe_error: Some("目标快照读取失败（锁 poisoned），本轮保守判为未命中".into()),
-            },
+    /// 判据与回显共用同一原子快照（`text` 限长）。
+    fn of(t: TargetObservation) -> Self {
+        TargetObservationLite {
+            kind: t.kind.as_str(),
+            status: t.status,
+            text: t.text.map(|s| truncate_bytes(&s, OBSERVED_TEXT_BYTES)),
+            probe_error: None,
         }
     }
 
@@ -150,12 +144,24 @@ fn truncate_bytes(s: &str, max: usize) -> String {
 
 /// 探测一次：返回 `(是否命中, 观测快照)`。
 ///
-/// 判据与取快照都可能被锁 poison 打断，两者各自 `catch_unwind`：判据失败→保守
+/// 取快照可能被锁 poison 打断，`catch_unwind` 后保守
 /// 判未命中（宁可多等一轮，也不能把「没看到」当成「已完成」）。
 fn probe(until: &Until, target: &Arc<WaitTarget>) -> (bool, TargetObservationLite) {
-    let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| until.matches(target)))
-        .unwrap_or(false);
-    (hit, TargetObservationLite::of(target))
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| target.observed())) {
+        Ok(snapshot) => (
+            until.matches(&snapshot),
+            TargetObservationLite::of(snapshot),
+        ),
+        Err(_) => (
+            false,
+            TargetObservationLite {
+                kind: target.kind().as_str(),
+                status: "unknown".into(),
+                text: None,
+                probe_error: Some("目标快照读取失败（锁 poisoned），本轮保守判为未命中".into()),
+            },
+        ),
+    }
 }
 
 #[async_trait::async_trait]
@@ -181,12 +187,12 @@ impl Tool for WaitTool {
       "description": "可选：条件等待。命中条件即提前结束等待；省略它 = 纯计时等待。目标必须已有可等待的 id（本会话 service / subagent / scheduled_task 工具回执），wait 不会启动任何任务。",
       "properties": {
         "target": {"type": "string", "description": "目标 id：service / subagent / scheduled_task 工具回执里的 id"},
-        "state": {"type": "string", "enum": ["done", "exited", "failed"], "description": "等待哪种终态；缺省 done = 任意终态（成功或失败都算结束）"},
+        "state": {"type": "string", "enum": ["done", "exited", "failed"], "description": "显式等待终态：done = 任意终态，exited = 成功，failed = 失败。省略且给 match 时只等文本（运行中日志也可命中）；state 与 match 都省略时默认 done"},
         "match": {
           "type": "object",
           "additionalProperties": false,
           "required": ["text"],
-          "description": "可选：额外要求最近进展摘要（service 为日志尾、子代理为 report、计划任务为上次摘要）包含指定子串，大小写不敏感。与 state 是 AND 关系（两个都写则必须同时满足）",
+          "description": "可选：要求最近进展摘要（service 为活日志尾、子代理为 report、计划任务为本轮摘要）包含指定子串，大小写不敏感。省略 state 时独立判定；显式给 state 时是 AND 关系",
           "properties": {"text": {"type": "string", "description": "最近进展摘要（service 为日志尾）包含该子串即命中；大小写不敏感"}}
         }
       }
@@ -348,7 +354,7 @@ fn parse_until(args: &Value) -> UntilArg {
     }
     let state = match u.get("state") {
         None => None,
-        Some(Value::String(s)) if s == "done" => None, // done = 缺省语义
+        Some(Value::String(s)) if s == "done" => Some(StateWant::Done),
         Some(Value::String(s)) if s == "exited" => Some(StateWant::Exited),
         Some(Value::String(s)) if s == "failed" => Some(StateWant::Failed),
         Some(_) => return UntilArg::Invalid("until.state 只能是 done / exited / failed"),
@@ -466,6 +472,52 @@ mod tests {
     // ── 条件等待（until）────────────────────────────────────────────────
 
     use crate::core::wait_targets::TargetKind;
+
+    /// 只声明日志条件时，服务仍存活也应立即命中；显式终态条件仍须等待收尾。
+    #[tokio::test(start_paused = true)]
+    async fn live_ready_log_matches_only_when_terminal_state_is_not_requested() {
+        let ctx = ctx();
+        ctx.core
+            .wait_targets
+            .register("svc_ready", TargetKind::Service, None);
+        ctx.core
+            .wait_targets
+            .update_text("svc_ready", "Server READY on port 5173");
+        let out = WaitTool
+            .run(
+                &ctx,
+                json!({"seconds": 2, "until": {
+                    "target": "svc_ready", "match": {"text": "ready"}
+                }}),
+            )
+            .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.data["outcome"], "condition_met");
+        assert_eq!(out.data["waited_seconds"], 0);
+        assert_eq!(out.data["observed"]["status"], "running");
+        for state in ["done", "exited", "failed"] {
+            let out = WaitTool
+                .run(
+                    &ctx,
+                    json!({"seconds": 1, "until": {
+                        "target": "svc_ready", "state": state, "match": {"text": "ready"}
+                    }}),
+                )
+                .await;
+            assert_eq!(out.data["outcome"], "timeout", "explicit {state}: {out:?}");
+            assert_eq!(out.data["until"]["state"], state);
+        }
+        let out = WaitTool
+            .run(
+                &ctx,
+                json!({"seconds": 1, "until": {"target": "svc_ready"}}),
+            )
+            .await;
+        assert_eq!(
+            out.data["outcome"], "timeout",
+            "无 match/state 仍默认等待终态"
+        );
+    }
 
     /// 条件满足提前结束：目标 5s 后完成、上限 3600s → 明显早退。
     #[tokio::test(start_paused = true)]
@@ -682,7 +734,7 @@ mod tests {
                 json!({
                     "seconds": 2,
                     "reason": "终态到了但摘要不含 ready",
-                    "until": {"target": "svc_e", "match": {"text": "ready"}}
+                    "until": {"target": "svc_e", "state": "done", "match": {"text": "ready"}}
                 }),
             )
             .await;
@@ -744,7 +796,7 @@ mod tests {
         assert_eq!(out.data["waited_seconds"], 0);
     }
 
-    /// `state:"done"` 与省略等价（任意终态均命中）。
+    /// 显式 `state:"done"` 在任意终态均命中。
     #[tokio::test]
     async fn explicit_done_matches_any_terminal_state() {
         let ctx = ctx();
