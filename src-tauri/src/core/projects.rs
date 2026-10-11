@@ -4,7 +4,7 @@
 //! ——项目散落在用户代码目录里，全局扫描代价高；索引 + 快照查找双保险。
 //! 会话加载是快照语义：create 时目录 → runtime roots；此后项目变更不影响已打开会话。
 
-use super::config::{LEGACY_MANAGED_DIR_NAME, MANAGED_DIR_NAME};
+use super::config::MANAGED_DIR_NAME;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -286,13 +286,11 @@ fn comparable_path(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// data_dir 归一化（三条分支，抽出来供 save_project 与 save_project_input 共用）：
+/// data_dir 归一化（两条分支，抽出来供 save_project 与 save_project_input 共用）：
 /// ① 空 / 全空白 → `<主目录>/.codewave`；
-/// ② 指向旧默认位置 `<主目录>/.wavestudio` → 重算到新约定位置
-///    （用户手动改名自救时，持久化值不允许继续指向旧名）；
-/// ③ **父目录与当前主目录不一致**（即主目录被改过）→ 重算到 `<新主目录>/.codewave`。
+/// ② **父目录与当前主目录不一致**（即主目录被改过）→ 重算到 `<新主目录>/.codewave`。
 ///
-/// ③ 是「项目从左栏消失」的根因：前端编辑项目时会把**旧** data_dir 原样回传，
+/// ② 是「项目从左栏消失」的根因：前端编辑项目时会把**旧** data_dir 原样回传，
 /// 于是索引被改指到新主目录、project.json 却仍留在旧目录下 → `load()` 读不到，
 /// 项目既不可见也删不掉。跟随主目录重算才是一致行为。
 ///
@@ -310,24 +308,14 @@ fn normalize_data_dir(entry: &mut ProjectEntry) {
         entry.data_dir = Some(new_default(&entry.directory));
         return;
     }
-    // project_data_dir 对已 Some 的值原样返回，因此旧默认位置与「主目录已变」的归一化必须在此显式重建
-    let stale_legacy = current == new_default_of(&entry.directory, LEGACY_MANAGED_DIR_NAME);
+    // project_data_dir 对已 Some 的值原样返回，因此「主目录已变」的归一化必须在此显式重建
     let follows_directory = Path::new(current)
         .parent()
         .map(|p| comparable_path(p) == comparable_path(Path::new(&entry.directory)))
         .unwrap_or(false);
-    if stale_legacy || !follows_directory {
+    if !follows_directory {
         entry.data_dir = Some(new_default(&entry.directory));
     }
-}
-
-/// <主目录>/<托管目录名> 的字符串形态（Windows 上必须经 Path::join：
-/// canonicalize 得到的 `\\?\` verbatim 路径与正斜杠字符串直接拼接会 ERROR_INVALID_NAME）。
-fn new_default_of(directory: &str, managed_dir_name: &str) -> String {
-    Path::new(directory)
-        .join(managed_dir_name)
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// 读磁盘上已存在的那一份 entry（按 id）：索引反查旧主目录 → 只读那一个 project.json。
@@ -499,33 +487,6 @@ mod tests {
         let dd = tempfile::tempdir().unwrap();
         assert!(save_project(dd.path(), &entry(dd.path(), "../evil", "E")).is_err());
         assert!(delete_project(dd.path(), "..").is_err());
-    }
-
-    #[test]
-    fn stale_legacy_data_dir_renormalized_on_save() {
-        // 手工迁移场景：用户把 <主目录>/.wavestudio 改名 .codewave 后，
-        // 残留旧默认位置 data_dir 的条目保存时必须重归一化到新约定位置
-        let dd = tempfile::tempdir().unwrap();
-        let ws = tempfile::tempdir().unwrap();
-        let dir = std::fs::canonicalize(ws.path())
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let mut e = entry(dd.path(), "p-mig", "迁移项目");
-        e.directory = dir.clone();
-        e.data_dir = Some(
-            std::path::PathBuf::from(&dir)
-                .join(LEGACY_MANAGED_DIR_NAME)
-                .to_string_lossy()
-                .into_owned(),
-        );
-        save_project(dd.path(), &e).unwrap();
-        let found = find(dd.path(), "p-mig").unwrap();
-        let expected = std::path::PathBuf::from(&dir)
-            .join(MANAGED_DIR_NAME)
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(found.data_dir.as_deref(), Some(expected.as_str()));
     }
 
     #[test]

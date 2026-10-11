@@ -215,7 +215,7 @@
 - 2026-09-06 · [session-pref-switch-toast.md](./session-pref-switch-toast.md) — 模式/模型切换 toast + 生效时机确认（prefs 全程 Mutex 实时读取，运行中切换下一轮生效）
 - 2026-09-06 · [auth-error-guidance.md](./auth-error-guidance.md) — 认证失败引导批次：可读供应商错误文案 + run:error 附结构化 kind + 错误卡直达供应商设置 + key 冷却随保存清零
 - 2026-09-07 · [subagent-ghost-session-fix.md](./subagent-ghost-session-fix.md) — 缺陷修复：子代理/任务运行 checkpoint 泄漏进主会话索引（项目下 untitled 幽灵会话）——runtime 加 is_main_session 身份字段 + checkpoint 早退 + 启动时存量清理
-- 2026-09-13 · [codewave-rename-and-oss-prep.md](./codewave-rename-and-oss-prep.md) — 品牌改名 CodeWave 批次（数据目录 `.codewave` 常量收拢 / bundle id+keyring 换新 / `CODEWAVE.md` 指令兼容）+ 开源前审查与修复（license 元数据 / CoC / SECURITY / README 重写 / 残留清理，🔴 0 · 🟡 4 全修）
+- 2026-09-13 · [codewave-rename-and-oss-prep.md](./codewave-rename-and-oss-prep.md) — CodeWave 标识统一与开源整备（数据目录常量 / bundle id / keyring / license / CoC / SECURITY / README）；2026-10-11 移除旧品牌兼容逻辑、迁移说明及相关记录。
 - 2026-09-13 · [version-bump-and-release.md](./version-bump-and-release.md) — 版本升级与发版流程（参照 PlanWave 移植）：`pnpm bump <x.y.z>` 统一改 4 处版本号 + 刷新两锁文件（守卫修正：按正则命中判失败，同版本 no-op 合法）+ `/codewave-release` 发版技能（门禁 → bump → commit → 确认后推 tag 触发 draft Release 三平台构建）
 - 2026-09-14 · [macos-signing-and-notarization.md](./macos-signing-and-notarization.md) — macOS Developer ID 签名 + 公证操作指南：证书 → App Store Connect API key → 6 个 GitHub secrets → release.yml 管道补缺（`AuthKey.p8` 写入 + 绝对路径）→ draft 发版验证，参照 GitWave 同款已验证实现
 - 2026-09-14 · [prompt-caching-hardening.md](./prompt-caching-hardening.md) — Prompt 缓存命中强化批次（对标 V2EX Ally「高缓存命中」：三件套已落地，做真实增量）：system prompt run 内字节冻结 + Anthropic 断点重排（tools / system 双块 / 末条 / 历史代际滞回锚点）+ 统计面板命中率与口径修复（anthropic/openai input 语义差异），含 store:true 链式引用与 1h TTL 的不做判据

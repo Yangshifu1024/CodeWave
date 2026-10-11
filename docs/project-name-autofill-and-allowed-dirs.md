@@ -141,7 +141,7 @@ TS 新增 11 条：9 条行为（自动填 / 已填不覆盖 / 仅空白视为�
 
 - **旧 `.codewave` 目录不自动清理**：主目录变更后新位置会重建托管目录，但**旧位置的数据保留不删**（自动删除用户目录属危险行为）。如需迁移旧数据或提示用户手动清理，另开批次。
 - **`comparable_path` 两侧都失败时按字面比较**：`D:\Code\a` 与 `D:/Code/a` 这类分隔符差异会误判为「主目录已变」→ 触发一次**幂等重写**（重算值与原值等价，无数据损失）。
-- **host 层校验接线已有用例**；`read_existing` 的 id 不一致防御、`normalize_data_dir` 的 `stale_legacy` 分支当前无独立正例用例（前者已被 `merge_never_crosses_ids` 后半段覆盖，后者属 legacy 清理范畴）。
+- **host 层校验接线已有用例**；`read_existing` 的 id 不一致防御已被 `merge_never_crosses_ids` 后半段覆盖。
 
 ## 九、验证
 

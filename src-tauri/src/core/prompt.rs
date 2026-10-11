@@ -144,7 +144,6 @@ pub fn assemble(
     // 第 4 层：项目指令
     let project_files = [
         "CODEWAVE.md",
-        "WAVESTUDIO.md", // 改名前旧指令文件名，兼容读取
         "AGENTS.md",
         "agents.md",
         "CLAUDE.md",
@@ -152,10 +151,6 @@ pub fn assemble(
     ];
     let mut loaded = String::new();
     for f in project_files {
-        // 新旧名互斥：CODEWAVE.md 存在时跳过旧名，避免指令双份注入
-        if f == "WAVESTUDIO.md" && workspace.join("CODEWAVE.md").is_file() {
-            continue;
-        }
         let p = workspace.join(f);
         if let Ok(content) = std::fs::read(&p) {
             let content = String::from_utf8_lossy(&content);
@@ -348,31 +343,16 @@ mod tests {
     }
 
     #[test]
-    fn project_instructions_codewave_shadows_legacy_name() {
+    fn project_instructions_loads_codewave() {
         let ws = tempfile::tempdir().unwrap();
         let cfg = ConfigState::default();
-        // 新旧指令文件并存 → 只注入新名，旧名跳过（防双份/矛盾指令）
-        std::fs::write(ws.path().join("CODEWAVE.md"), "new-wave instructions").unwrap();
-        std::fs::write(ws.path().join("WAVESTUDIO.md"), "legacy instructions").unwrap();
+        std::fs::write(ws.path().join("CODEWAVE.md"), "codewave instructions").unwrap();
         let out = assemble(ws.path(), &cfg, &[], "bash", "", "", None, None);
         assert!(
             out.contains("<project-instructions"),
             "存在指令文件时应注入第 4 层"
         );
-        assert!(out.contains("new-wave instructions"));
-        assert!(
-            !out.contains("legacy instructions"),
-            "CODEWAVE.md 在场时必须跳过 WAVESTUDIO.md"
-        );
-
-        // 只有旧名（存量项目未改名）→ 兼容读取仍生效
-        let ws2 = tempfile::tempdir().unwrap();
-        std::fs::write(ws2.path().join("WAVESTUDIO.md"), "legacy instructions").unwrap();
-        let out = assemble(ws2.path(), &cfg, &[], "bash", "", "", None, None);
-        assert!(
-            out.contains("legacy instructions"),
-            "旧指令文件名应兼容读取"
-        );
+        assert!(out.contains("codewave instructions"));
     }
 
     #[test]

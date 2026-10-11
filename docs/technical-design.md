@@ -19,7 +19,7 @@
 | D3 | 前端栈 | **Vue 3 + Naive UI + Pinia**（状态用 Pinia 分层） | 2026-08-30 |
 | D4 | 命令安全策略 | **静态围栏 + 危险命令确认弹窗**（弹窗默认开启，设置可关） | 2026-08-30 |
 | D5 | Git 集成 | **git2-rs**（rust-lang/git2-rs，libgit2 绑定）只读集成；P0 前移构建验证，功能 P1 | 2026-08-30 |
-| D6 | 包标识与品牌 | bundle id `xyz.yangshifu.codewave`；数据目录 `~/.codewave/`；keyring 服务名 `codewave.yangshifu.xyz`。原值（2026-08-30 拍板）：`work.gitwave.studio` / `~/.wavestudio/` / `studio.gitwave.work`，2026-09-13 随品牌改名 CodeWave 变更（旧目录/钥匙串不自动迁移） | 2026-08-30 |
+| D6 | 包标识与品牌 | bundle id `xyz.yangshifu.codewave`；数据目录 `~/.codewave/`；keyring 服务名 `codewave.yangshifu.xyz` | 2026-09-13 |
 | D7 | 发布形态 | **私有项目起步**：不做签名/更新服务器，`tauri build` 产物自用；协议暂不设 | 2026-08-30 |
 | D8 | 应用名 | **CodeWave** | 2026-08-29 |
 
@@ -441,7 +441,7 @@ repair  ：剥离悬空 tool_use；丢弃孤儿 tool_result；tool_use id 配对
 | 1 | 核心行为规范：优先级总声明、讨论/实现判别、工具策略、批量与编辑纪律、输出风格、安全边界、平台信息（内含标准工作流常驻段） |
 | 2 | Skills 元数据（仅 name/description/whenToUse 索引） |
 | 3 | 记忆索引（`memories/*.md` 路径 + 描述，条数有上限） |
-| 4 | 项目指令：工作区 `CODEWAVE.md` / `AGENTS.md` / `CLAUDE.md`（新名在场时跳过旧名兼容读取） |
+| 4 | 项目指令：工作区 `CODEWAVE.md` / `AGENTS.md` / `CLAUDE.md` |
 | 5 | 项目图谱：`CODEGRAPH.md`（若存在）+ `.codewave/lessons.md` 经验 |
 | 6 | 用户自定义提示词 |
 
