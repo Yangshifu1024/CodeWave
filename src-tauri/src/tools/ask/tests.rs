@@ -130,7 +130,7 @@ fn args_deserialize_camel_case_skip_analysis() {
     .expect("camelCase 反序列化必须成功");
     assert_eq!(args.skip_analysis, Some(true));
 
-    // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划批准形 ask → 完整方案落盘到 .codewave/tasks/plan-*.md
+    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：计划批准形 ask → 完整方案落盘到 .codewave/tasks/plan-*.md
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
@@ -168,7 +168,7 @@ fn args_deserialize_camel_case_skip_analysis() {
     assert_eq!(args.lightweight, Some(true));
 }
 
-/// [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件落盘后登记归属（kind = plan）；
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：计划文件落盘后登记归属（kind = plan）；
 /// 临时会话（工作区 = 全局数据目录）的**双层路径** `.codewave/.codewave/tasks/` 被正确解析；
 /// 右栏「文件」数据源不返回计划文件；会话清理时计划文件被连带删除。
 #[test]
@@ -280,7 +280,7 @@ fn wants_mode_switch_matrix() {
         true,
         false
     ));
-    // ConfirmEach：arch 标记或有效应答（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)），任一通道都切；标记通道无需批准命中
+    // ConfirmEach：arch 标记或有效应答（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)），任一通道都切；标记通道无需批准命中
     assert!(wants_mode_switch(
         ApprovalMode::ConfirmEach,
         true,
@@ -352,7 +352,7 @@ fn wants_mode_switch_matrix() {
 #[test]
 fn wants_mode_switch_valid_answer_docs35() {
     use crate::core::prefs::ApprovalMode;
-    // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：ConfirmEach 有任一有效应答即切换（无需标记/批准形）；任意应答不改变 Plan 协议
+    // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：ConfirmEach 有任一有效应答即切换（无需标记/批准形）；任意应答不改变 Plan 协议
     assert!(wants_mode_switch(
         ApprovalMode::ConfirmEach,
         false,
@@ -453,7 +453,7 @@ fn plan_body_prefers_explicit_plan_field() {
 
 #[test]
 fn plan_body_no_usable_source_returns_none() {
-    // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
     // 显式 plan 为空 + 本轮正文也不带来信息增量 → 不落盘不显示计划卡。
     // 新语义取代旧的「回退为题干拼接」（后者产生「空壳计划卡」）。
     let qs = vec![Question {
@@ -572,8 +572,8 @@ fn arch_gate_shape_requires_single_question_with_approve_option() {
     assert!(!arch_gate_shape(&[no_approve]));
 }
 
-// ---------- [docs/ask-ignore-not-answered-fix](../../../../docs/ask-ignore-not-answered-fix.md)：忽略（全空应答）显式失败回归 ----------
-// ---------- [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形宽松检测（单一事实源） ----------
+// ---------- [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：忽略（全空应答）显式失败回归 ----------
+// ---------- [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形宽松检测（单一事实源） ----------
 
 fn opt(id: &str, label: &str) -> Option2 {
     Option2 {
@@ -805,7 +805,7 @@ fn single_true_does_not_override_approval_shape() {
 
 #[tokio::test]
 async fn label_matched_approve_still_switches_plan() {
-    // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：id 自拟（execute）但 label 合规 → 批准命中不再静默失效，
+    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：id 自拟（execute）但 label 合规 → 批准命中不再静默失效，
     // Plan 档仍过门 → 冻结基线 → 切 AutoEdit → plan_approved
     let ctx = plan_ctx();
     register_todos(&ctx, &["a"]);

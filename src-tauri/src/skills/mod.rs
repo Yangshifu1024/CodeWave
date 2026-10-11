@@ -1,5 +1,5 @@
-//! 技能系统（[docs/p1-plan](../../../docs/p1-plan.md) §5.1）：多目录扫描 + YAML frontmatter + 索引注入 + slash/工具双通道。
-//! 加载路径（[docs/slash-skills-and-dollar-agents](../../../docs/slash-skills-and-dollar-agents.md)）：
+//! 技能系统（[docs/technical-design](../../../docs/technical-design.md)）：多目录扫描 + YAML frontmatter + 索引注入 + slash/工具双通道。
+//! 加载路径（[docs/mcp-and-skills](../../../docs/mcp-and-skills.md)）：
 //! `.codewave/skills`（项目会话 = project_dir `<主目录>/.codewave/skills`；临时/全局 = data_dir `~/.codewave/skills`）、
 //! `.agents/skills` 与 `.claude/skills`（工作区级）+ `~/.agents/skills` 与 `~/.claude/skills`（用户级只读兼容）+ 内置。
 //! 注意 rt.data_dir 恒为全局数据目录（见 get_or_create_session），项目数据目录经 rt.project_dir 传入。
@@ -93,7 +93,7 @@ pub fn parse_skill_md(text: &str, fallback_name: &str) -> Option<Skill> {
 }
 
 /// 内置技能（原文随仓库分发；repo-index / doc-convert。原 arch 编排剧本已内置为标准工作流，
-/// 常驻注入 core/prompt.rs WORKFLOW_SECTION，[docs/standard-workflow](../../../docs/standard-workflow.md)）。
+/// 常驻注入 core/prompt.rs WORKFLOW_SECTION，[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
 pub fn builtin_skills() -> Vec<(&'static str, &'static str)> {
     vec![
         (

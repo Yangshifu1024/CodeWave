@@ -1,7 +1,7 @@
-// 常驻右侧栏（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：Tabs 四页签 [信息 | 日志 | 文件 | 变更]（[docs/rightbar-visual-batch](../../../../docs/rightbar-visual-batch.md) 调序，信息为默认页签）
+// 常驻右侧栏（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：Tabs 四页签 [信息 | 日志 | 文件 | 变更]（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 调序，信息为默认页签）
 // 变更 = 工作区 vs HEAD 的多根聚合 diff（原 GitDiffModal 面板化）；信息 = 项目目录 / 会话 / 技能 / 当前计划；
-// 日志 = 会话黑盒 / 全局滚动日志（[docs/session-logging-report](../../../../docs/session-logging-report.md)）；文件 = 会话产物登记列表（create/edit 边车），点击弹窗查看
-// 隐藏时保持挂载（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)）：宽度经 0.2s 过渡收零（裁切式收缩）；visibility 待动画结束后才隐藏，
+// 日志 = 会话黑盒 / 全局滚动日志（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）；文件 = 会话产物登记列表（create/edit 边车），点击弹窗查看
+// 隐藏时保持挂载（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：宽度经 0.2s 过渡收零（裁切式收缩）；visibility 待动画结束后才隐藏，
 // 轮询 hook 均以 rightBarOpen 门控——隐藏即停轮询。顶栏切换按钮是唯一开合入口；
 // rbTab 上收到 ui store 供外部切换（Composer 命令等）
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,7 +36,7 @@ import { useDisplayWidths } from "./useDisplayWidths";
  * - 额度与余额：顶替原「会话」段（开始时间信息已删）；行集合 = CodeWave 供应商配置，与凭证链无关；
  * - 技能 / 当前计划：antd Collapse，默认展开，折叠态记 localStorage（全局一份）。
  *
- * [docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)
+ * [docs/chat-and-interface](../../../../docs/chat-and-interface.md)
  */
 function InfoPanel({ visible }: { visible: boolean }) {
   const { t } = useTranslation();
@@ -204,7 +204,7 @@ function lineClass(line: string): string {
   return "";
 }
 
-/** 日志页签（[docs/session-logging-report](../../../../docs/session-logging-report.md)）：会话视图（细粒度黑盒）/ 全局视图（tracing 滚动日志）。仅激活时轮询。 */
+/** 日志页签（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：会话视图（细粒度黑盒）/ 全局视图（tracing 滚动日志）。仅激活时轮询。 */
 function LogPanel({ visible }: { visible: boolean }) {
   const { t } = useTranslation();
   const tab = useActiveTab();
@@ -352,16 +352,16 @@ export default function RightBar() {
   const { rightBar: rightBarWidth } = useDisplayWidths();
   const tab = useActiveTab();
   const sessionId = tab?.sessionId ?? null;
-  // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)：隐藏时传 null——面板关闭期间产物列表停止刷新
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：隐藏时传 null——面板关闭期间产物列表停止刷新
   const { files, refresh } = useSessionFiles(rightBarOpen ? sessionId : null);
   const [viewing, setViewing] = useState<string | null>(null);
   // 查看弹窗随面板一起关闭（评审 🟢2）：其 Portal 渲染到 <body>，会逃出外壳的 visibility:hidden
-  // 悬浮在隐藏面板之上；[docs/titlebar-content-batch](../../../../docs/titlebar-content-batch.md) 的隐藏即卸载曾恰好掩盖了这一点。
+  // 悬浮在隐藏面板之上；[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的隐藏即卸载曾恰好掩盖了这一点。
   useEffect(() => {
     if (!rightBarOpen && viewing) setViewing(null);
   }, [rightBarOpen, viewing]);
 
-  // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)：隐藏时保持挂载——类名翻转为 .right-bar-closed（width/padding 经 0.2s 缓动收零、
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：隐藏时保持挂载——类名翻转为 .right-bar-closed（width/padding 经 0.2s 缓动收零、
   // visibility 待动画结束后隐藏）；顶栏切换按钮是唯一开合入口
   return (
     <div

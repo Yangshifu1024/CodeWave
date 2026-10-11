@@ -1,4 +1,4 @@
-//! 工具入参 fuzz 测试（[docs/p0-plan](../../../docs/p0-plan.md) §13 质量底线：无 panic 路径）。
+//! 工具入参 fuzz 测试（[docs/technical-design](../../../docs/technical-design.md) 质量底线：无 panic 路径）。
 //! 确定性短跑版本（固定 LCG 种子，500 轮 × 多种畸形输入形态），验证参数解析层
 //!（serde 解析 / parse_or_salvage / collect_unknown_fields）在任何输入下都不 panic。
 

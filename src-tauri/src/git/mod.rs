@@ -1,2 +1,2 @@
-//! Read-only git integration (git2-rs, [docs/p0-plan](../../../docs/p0-plan.md) §9).
+//! Read-only git integration (git2-rs, [docs/technical-design](../../../docs/technical-design.md)).
 pub mod status;

@@ -1,4 +1,4 @@
-// 选项互斥语义启发式推断（[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)）。
+// 选项互斥语义启发式推断（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）。
 // 形态优先级（AskPanel 调用方口径）：批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底。
 // 模型未声明 single 时，按本函数的判定结果决定 radio / checkbox 渲染；显式 single=false 永远多选。
 import type { AskOptionPayload, AskQuestionPayload } from "../../ipc/types";

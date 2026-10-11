@@ -27,7 +27,7 @@ pub(crate) fn lock_ok<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// 压缩互斥 RAII（[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）：acquire 以 swap(true) 抢占槽位，失败返回 None
+/// 压缩互斥 RAII（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：acquire 以 swap(true) 抢占槽位，失败返回 None
 /// （其余路径一律不得手工构造——错误构造的 Drop 会清掉别人的槽位）。Drop 恒复位 compacting：
 /// 若 compact_history panic unwind 后不复位，start_chat 将永远拒绝新 run，会话直接变砖。
 pub(crate) struct CompactingGuard {

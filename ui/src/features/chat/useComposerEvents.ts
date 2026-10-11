@@ -1,7 +1,7 @@
-// Composer 全局窗口事件（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：三个监听契约属于应用行为面——
+// Composer 全局窗口事件（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 重构）：三个监听契约属于应用行为面——
 // ws:focus-composer（Cmd/Ctrl+L，由 AppShell 派发）、ws:composer-fill（用户消息「修改」，由 ChatMessages 派发）、
-// ws:composer-insert（技能详情「使用」，由右栏 SkillDetailModal 派发，[docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）；事件名勿改。
-// [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：引用 chip 不在正文里，fill 的「覆盖」语义因此必须显式带上 refs
+// ws:composer-insert（技能详情「使用」，由右栏 SkillDetailModal 派发，[docs/mcp-and-skills](../../../../docs/mcp-and-skills.md)）；事件名勿改。
+// [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：引用 chip 不在正文里，fill 的「覆盖」语义因此必须显式带上 refs
 // （否则上一份草稿的引用会被悄悄带进改后的消息）；insert 是追加语义，保留现有引用不动。
 import { useEffect } from "react";
 import type { PendingImage } from "../../stores/run.types";
@@ -17,7 +17,7 @@ export function useComposerEvents(opts: {
   setRefs: React.Dispatch<React.SetStateAction<string[]>>;
   recalledImages: (imgs: { mediaType: string; data: string }[]) => PendingImage[];
   /** 文本被本 hook 直接覆盖/追加后的通知（新长度）：Composer 据此作废触发片段并收敛光标
-   *  （[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)：这类改写不过 onChange） */
+   *  （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)：这类改写不过 onChange） */
   onTextReplaced?: (len: number) => void;
 }) {
   const { taRef, setText, setImages, setRefs, recalledImages, onTextReplaced } = opts;

@@ -14,7 +14,7 @@
  *  · 未识别的 transport 取值（如 `"sse"`）原样保留，交由后端给出定向报错，前端不改写语义；
  *  · 只在「键与值都为空」时丢弃表格行（点了「＋」没填的行）。
  *
- * 形状见 [docs/mcp-module-rebuild](../../../docs/mcp-module-rebuild.md) §2.1。
+ * 形状见 [docs/mcp-and-skills](../../../docs/mcp-and-skills.md)。
  */
 
 /** 工具过滤模式（与后端 `ToolFilterMode` 对齐）。 */

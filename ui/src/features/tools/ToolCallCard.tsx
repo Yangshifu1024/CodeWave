@@ -21,7 +21,7 @@ const VERBS: Record<string, string> = {
 
 interface EditFileView { path: string; diff: { type: string; text: string }[] }
 
-/** 出错时降级为中性展示的错误码 → 文案键（docs/ask-ignore-not-answered-fix.md 的展示层配套）：
+/** 出错时降级为中性展示的错误码 → 文案键（docs/plan-and-approval.md 的展示层配套）：
  *  后端把「忽略 / 取消」按 err 返回是模型侧硬信号（防误读为默许），运行/子代理结束时仍在途的工具卡也带 err，
  *  但用户视角只是「没完成」。渲染层按错误码降为中性灰 + 各自的措辞，其余错误仍红色「失败」。
  *  store 三路（实时/历史恢复/子代理流）共用本组件，一处修复全覆盖；模型侧语义零改动。 */
@@ -35,7 +35,7 @@ const NEUTRAL_ERR_KEYS: Record<string, string> = {
 /** 工具调用卡实现：头部为状态点 + 动作词 + 工具名 + 摘要 + 耗时；展开体按工具类型分派
  *  （read 列内容 / edit 展示 diff / command 展示输出 / grep 列命中 / 其余 JSON）。
  *
- *  自动弹预览（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门选「先看预览」后，
+ *  自动弹预览（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门选「先看预览」后，
  *  ChatMessages 把 store 的一次性信号 `autoOpenCallKey` 透传下来；命中本卡且确有 html 时自动弹框，
  *  并回抛 `onConsumeAutoOpen` 让上层把信号清掉（一次性、不重放）。
  *  刻意保持「纯展示 + 回调」形态：不直接 import useRun / useSessions，也不持有全局态——
@@ -55,7 +55,7 @@ function ToolCallCardImpl({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  // render_html 的弹框预览开关（[docs/html-preview-modal](../../../../docs/html-preview-modal.md)）：
+  // render_html 的弹框预览开关（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
   // 卡片内不再内嵌渲染 HTML，只留头部入口；状态放卡片本地——卡片卸载（切 Tab/会话、历史重建）即关闭，
   // 不必为它动 ui store（也避开 store 单例在测试间残留的坑）
   const [widgetOpen, setWidgetOpen] = useState(false);
@@ -65,7 +65,7 @@ function ToolCallCardImpl({
   // data 会退化成 { restored: true } 占位 → 没有 html，此时入口不渲染、只给一行提示（不点了报错）
   const widgetHtml: string = typeof data.html === "string" ? data.html : "";
   const hasWidget = tool.tool === "render_html" && widgetHtml !== "";
-  // 自动弹预览：[docs/preview-skill] 的「先看预览」→ 合格 widget 落地后不必回聊天区点那个很小的头部按钮。
+  // 自动弹预览：[docs/plan-and-approval] 的「先看预览」→ 合格 widget 落地后不必回聊天区点那个很小的头部按钮。
   // 判据复用既有 hasWidget（出参真有 html）；信号被消费后 autoOpenCallKey 变 null，effect 自然不再满足条件，
   // 所以无需额外 ref 记「已消费」——也天然保证「同一张卡不会因反复渲染而二次消费」。
   // 依赖数组含 hasWidget：运行中该卡的出参是后到的，命中信号但此刻尚无 html → 不消费也不弹，

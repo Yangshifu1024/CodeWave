@@ -15,7 +15,7 @@ export default {
     openFailed: "打开会话失败：{{error}}", sessionMissing: "会话已删除或无法找到", sessionClosed: "会话在恢复期间已关闭，请重新打开",
     seconds: "{{n}} 秒", minutes: "{{n}} 分钟", subsCount: "{{n}} 个子代理",
   },
-  // 跨页通用动作（批④ 术语统一：[docs/settings-terminology](../../../docs/settings-terminology.md)）。
+  // 跨页通用动作（批④ 术语统一：[docs/settings-guide](../../../docs/settings-guide.md)）。
   // 只有「值与语境皆同」的词才并入本段（判定与选段规则见该文档）；带宾语 / 语境不同的动作
   // （如 settings.deleteSkill「删除技能」、settings.mcpSave「保存并重连」）留在各自页面段。
   common: {
@@ -53,12 +53,12 @@ export default {
     diff: "变更",
     tasks: "任务",
     stats: "统计",
-    // 启动自动清理的轻提示（[docs/session-cleanup](../../../docs/session-cleanup.md)）：应用启动时后端已按保留期清理一次，
+    // 启动自动清理的轻提示（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：应用启动时后端已按保留期清理一次，
     // 确有删除才提示，挂在外壳的启动流程里（AppShell），故放应用级共享段 app.*
     cleanupAutoDone: "已按保留期清理 {{n}} 个会话",
   },
   // `about` 段已随批④ 整体迁入 settings.about*（理由：注册表引用闭包只扫 settings.* 前缀，
-  // 迁入后这些键才受契约测试守护）——[docs/settings-terminology](../../../docs/settings-terminology.md)
+  // 迁入后这些键才受契约测试守护）——[docs/settings-guide](../../../docs/settings-guide.md)
   tools: {
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
     command: "命令", grep: "搜索", ask: "提问", web_fetch: "抓取网页", http_request: "HTTP 请求",
@@ -77,7 +77,7 @@ export default {
     imageLoading: "图片加载中…", imageUnavailable: "图片无法显示（文件可能已被移动或删除）：{{path}}",
     imageNotSent: "当前模型未开启图片输入，图片未发送给模型",
     rawData: "原始数据", notePrefix: "补充：",
-    // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
+    // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
     preview: "预览", previewUnavailable: "历史未保留预览内容", previewChars: "{{n}} 字符",
     copyHtml: "复制源码", copied: "已复制", copyFailed: "复制失败",
     reload: "重新加载", bgLight: "浅色底", bgDark: "深色底",
@@ -87,7 +87,7 @@ export default {
     note: "补充说明（可选）", submit: "提交回答", next: "下一题", timeoutHint: "120 秒未响应将视为拒绝",
     waitingConfirm: "等待确认",
     allowDesc: "仅允许这一次", alwaysAllow: "始终允许本项目", alwaysAllowDesc: "后续相同命令不再询问",
-    /* G3 范围门（[docs/plan-mode-workflow] §7.3）：同一组按钮在范围门语义下后果完全不同——「允许」是把计划外步骤
+    /* G3 范围门（[docs/plan-and-approval]）：同一组按钮在范围门语义下后果完全不同——「允许」是把计划外步骤
        纳入已批准范围（不是只放行这一次），「始终允许」才是本会话后续新增都不再询问。缺这两组文案会让用户误判实际行为 */
     scopeAllowDesc: "纳入本次已批准范围", scopeAlwaysAllowDesc: "本会话后续新增都不再询问",
     scopeAlwaysAllow: "本会话始终允许",
@@ -101,7 +101,7 @@ export default {
     prevPage: "上一题", nextPage: "下一题",
     recommended: "推荐",
     switchHint: "提交后将切换到自动编辑档",
-    /* 批准门选档（[docs/mode-gate-and-subagent-sync]）：完全访问档选项的兜底风险说明——
+    /* 批准门选档（[docs/plan-and-approval]）：完全访问档选项的兜底风险说明——
        与后端 description **并存**（叠在模型文案之后），模型自带 description 也顶不掉它 */
     fullAccessRisk: "跳过所有审批弹窗，灾难级命令仍拦截",
     /* 后端 description 与兜底风险文案之间的分隔（中文用全角分号，不放空格） */
@@ -109,7 +109,7 @@ export default {
   },
   settings: {
     title: "设置",
-    // 10 页（[docs/settings-ia](../../../docs/settings-ia.md)）：页名键 + 左导航三组标题。
+    // 10 页（[docs/settings-guide](../../../docs/settings-guide.md)）：页名键 + 左导航三组标题。
     // 旧页名键 general / appearance / security / network 与 settings.accent 已随重划零引用删除；
     // providers / mcp / skills 仍在用（分别是供应商列表、MCP 服务器、技能三个设置项的显示名）——
     // 其中 mcp / skills 自 MCP 与技能拆成独立页起，同时充当这两页的页名（PAGE_LABEL_KEY 直接引用）。
@@ -156,7 +156,7 @@ export default {
     shellLimited: "（有限支持）", shellDetectFailed: "Shell 探测失败，仅显示自动选项",
     shellNotDetected: "所选 shell 未检测到，执行时将回退到自动探测的 shell",
     shellNoPath: "该 shell 无固定可执行文件路径（如 WSL 发行版）",
-    // 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）：下拉 / 动作按钮 / 只读状态行
+    // 会话保留期与清理（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：下拉 / 动作按钮 / 只读状态行
     sessionRetention: "会话保留期",
     sessionRetentionHint: "超过保留期的会话在启动和保存设置时清理，以最近打开或修改时间为准。默认不清理。",
     cleanupNever: "不清理",
@@ -305,7 +305,7 @@ export default {
     // 技能区空态（批④ 修缺陷：此前借用 sessions.empty → 技能列表为空时显示「暂无会话」）
     skillsEmpty: "暂无技能",
     deleteSkill: "删除技能", deleteSkillConfirm: "删除技能「{{name}}」？将同时删除其文件，不可恢复", deleteSkillSuccess: "已删除技能：{{name}}", deleteSkillFailed: "删除失败",
-    // 全屏设置页容器（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)）
+    // 全屏设置页容器（[docs/settings-guide](../../../docs/settings-guide.md)）
     backToWorkspace: "返回工作区",
     runningCount: "{{n}} 个会话运行中", runningHint: "打开设置期间会话照常运行；点此返回工作区",
     dirtyHint: "有未保存的改动",
@@ -317,7 +317,7 @@ export default {
     leaveTitle: "有未保存的设置改动",
     leaveDesc: "离开前请选择如何处理这些改动；取消按钮会直接放弃全部未保存改动。",
     leaveSave: "保存并离开", leaveDiscard: "放弃改动", leaveStay: "留在原地",
-    // 批③ 搜索（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)）；
+    // 批③ 搜索（[docs/settings-guide](../../../docs/settings-guide.md)）；
     // 2026-09 移除「显示进阶项」开关，showAdvanced / advancedHint 文案一并清除
     searchPlaceholder: "搜索设置项…",
     searchResults: "搜索结果",
@@ -335,11 +335,11 @@ export default {
     cancelled: "已取消",
     compactSummary: "（压缩摘要）",
     // 内部提示（<continue-notice> / <tool-args-rejected> / <text-turn-limit> 等）是后端注入
-    // 给模型看的指令，恢复历史时不以 user 气泡原样展示 XML（[docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4）
+    // 给模型看的指令，恢复历史时不以 user 气泡原样展示 XML（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）
     internalHint: "（系统内部续跑提示）",
     needSession: "请先在左侧导航新建或选择一个会话",
     taskDone: "任务完成",
-    // 历史 8MB 上限的越限可见性（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+    // 历史 8MB 上限的越限可见性（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
     // 有损保存 / 超限拒存两种口径，run:done 载荷与恢复时的 SessionMeta.history_status 共用
     historyDegraded: "历史未完整保存：{{images}} 张图片、{{rounds}} 轮对话被省略（重开后可能看不到）。",
     historyRejected:
@@ -429,7 +429,7 @@ export default {
     cacheHit: "命中",
     // Popover 详情（hover 进度圈弹出）：当前上下文 / 压缩阈值 / 缓存命中 三行键
     ctxCurrent: "当前上下文",
-    // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/composer-token-rate]）
+    // Composer 工具条：本轮生成速率段（行内值）+ 悬浮明细（[docs/chat-and-interface]）
     rateRunning: "在跑",
     rateTitle: "本轮生成速率",
     rateTtft: "首步 TTFT（首个输出增量，含思考）",
@@ -447,9 +447,9 @@ export default {
     pasteFilesHint: "仅支持图片，其他文件请用 @ 引用路径",
     visionUnsupported: "当前模型不支持图片，请移除附件或切换视觉模型",
     recalledImage: "历史图片 {{n}}",
-    // [docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)：文件引用以 chip 展示（悬停看完整路径）
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：文件引用以 chip 展示（悬停看完整路径）
     removeRef: "移除该引用",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：附件扩展到任意文件 + 项目外目录放行
+    // [docs/documents](../../../docs/documents.md)：附件扩展到任意文件 + 项目外目录放行
     fileRef: "文件引用",
     fileRefHint: "按路径引用，不复制副本；模型需要时会自己去读",
     fileTooMany: "最多 {{n}} 个附件",
@@ -480,7 +480,7 @@ export default {
     endedBudget: "预算耗尽",
     /* partial = 跑满步数预算才交汇报：拿到了成果但未必做完，不得与「真做完」同档绿勾 */
     endedPartial: "预算耗尽·未完成",
-    /* 抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）：mode = 档位名（复用 composer.mode* 键） */
+    /* 抽屉头部档位行（[docs/plan-and-approval]）：mode = 档位名（复用 composer.mode* 键） */
     modeLine: "权限模式：{{mode}}",
     modeInherited: "（继承自主会话）",
   },
@@ -536,7 +536,7 @@ export default {
     refresh: "刷新", openDir: "目录", noLogFiles: "暂无日志文件",
     logFileKb: "{{name}}（{{kb}}KB）", noActiveSession: "无活动会话", noLogs: "（暂无日志）",
     tailOnly: "仅显示最近 {{n}} 行（更早内容见日志文件）",
-    // 额度段（[docs/quota-from-provider-config]）：行集合 = CodeWave 供应商配置
+    // 额度段（[docs/providers-and-network]）：行集合 = CodeWave 供应商配置
     quota: "额度与余额", quotaRefresh: "刷新额度", quotaLoading: "读取中…", quotaRetry: "重试",
     quotaRemaining: "剩余 {{pct}}", quotaResetSoon: "不足 1 分钟后重置",
     quotaResetMinutes: "{{m}} 分钟后重置", quotaResetHours: "{{h}} 小时 {{m}} 分后重置",
@@ -570,7 +570,7 @@ export default {
     totalCount: "共 {{n}} 个", noActiveSession: "无活动会话",
     openSessionHint: "打开会话后此处展示该会话产出的文件", emptySession: "本会话暂无产出文件",
     lastOpEdit: "改", lastOpCreate: "新", deleted: "已删除", cannotPreview: "无法预览",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：表格 / 文档 / PDF 预览
+    // [docs/documents](../../../docs/documents.md)：表格 / 文档 / PDF 预览
     sheetTab: "表格", textTab: "文字", sheetPick: "工作表",
     sheetPage: "第 {{from}}–{{to}} 行 · 共 {{total}} 行",
     sheetEmpty: "这张工作表没有内容",
@@ -582,7 +582,7 @@ export default {
     docTruncated: "文档较长，这里只显示了前一部分",
     encodingUnknown: "这个文件不是 UTF-8 / GBK 编码，下面显示的是宽松解码的结果，可能有乱码。建议先转成 UTF-8。",
     encodingGbk: "文件按 GBK 编码解码（中文环境里导出的表格常见这种编码）。",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：修改回退
+    // [docs/documents](../../../docs/documents.md)：修改回退
     restore: "回退",
     restoreTitle: "回退到改动前的版本",
     restoreDesc: "选一份备份还原回文件原来的位置。回退前会把当前内容也备份一份，所以回退本身也能再撒回。",

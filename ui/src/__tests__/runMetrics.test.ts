@@ -1,4 +1,4 @@
-// 本轮（单 run）计数（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：
+// 本轮（单 run）计数（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // runMetrics 的惰性建立 / 累加 / 归零，以及「工具等待只算本轮」「无数据不造桶」「迟到 usage 帧仍累加」三条纪律。
 // store 直驱（不经 UI）：帧归一走 applyFrameToTab / applyUsageFrame，工具结果走 onToolResult。
 import { describe, it, expect, vi, beforeEach } from "vitest";

@@ -1,4 +1,4 @@
-// 模型摊平工具（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：providers 嵌套 models → 菜单/守卫消费的摊平视图。
+// 模型摊平工具（[docs/providers-and-network](../../../docs/providers-and-network.md)）：providers 嵌套 models → 菜单/守卫消费的摊平视图。
 // wire id 即显示名；顺序 = provider 顺序 × 各 provider 内模型顺序（模型菜单分组遵循此序）。
 import type { ConfigState, FlatModel } from "../ipc/types";
 
@@ -42,7 +42,7 @@ export function activeProviderIdOf(
 }
 
 /**
- * 缓存计费语义（[docs/prompt-caching-hardening](../../../docs/prompt-caching-hardening.md)）：
+ * 缓存计费语义（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
  * `anthropic_messages` 的 `usage.input` **不含**缓存部分（真输入 = input + cache_read + cache_write）；
  * `openai_chat` / `openai_responses` 的 `input` **已包含** `cached_tokens`（cache_read 是 input 的子集）。
  * 两套口径的「命中率分母」不同，必须按协议区分——混淆会让 openai 系命中率系统性偏低。

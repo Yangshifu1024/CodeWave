@@ -42,26 +42,26 @@ const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "full_a
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
  *  / 触发技能菜单、$ 触发子代理菜单、@ 触发提及菜单（↑↓ 导航、Enter/Tab 选中）；
  *  IME 组合期按键全部放行。ask 弹出时提问卡整体覆盖本组件与队列面板，回答后原样恢复
- * （草稿存 run store 每 Tab 桶，不丢）。触发符语义见 [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)。 */
+ * （草稿存 run store 每 Tab 桶，不丢）。触发符语义见 [docs/mcp-and-skills](../../../../docs/mcp-and-skills.md)。 */
 export default function Composer() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const active = useActiveRun();
-  // [docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)：运行中的子代理（Composer 指示器的计数与菜单数据源）
+  // [docs/subagents](../../../../docs/subagents.md)：运行中的子代理（Composer 指示器的计数与菜单数据源）
   const runningSubs = active.subs.filter((s) => s.status === "running");
   const tab = useActiveTab();
   const contextPct = useContextPct();
   const compactThreshold = useSettings((s) => s.config?.compact_threshold ?? 0.6);
   const config = useSettings((s) => s.config);
   const prefs = tab?.prefs ?? { approval_mode: "auto_edit" as ApprovalMode, model_id: null, reasoning_effort: null };
-  // 会话级缓存命中率：分母口径随**生效模型的协议**（[docs/prompt-caching-hardening](../../../../docs/prompt-caching-hardening.md)）——
+  // 会话级缓存命中率：分母口径随**生效模型的协议**（[docs/providers-and-network](../../../../docs/providers-and-network.md)）——
   // anthropic 的 input 不含缓存、openai 的 input 已含 cached_tokens；语义解析不到（未配置模型 / 供应商已删）时
   // 不显示命中段：宁可缺省也不猜口径。分子与分母同源，title 复用同一分母
   const cacheSem = cacheSemanticsOf(config, prefs.model_id);
   const cacheHit = cacheSem ? cacheHitRate(active, cacheSem) : null;
   const hitDenom = cacheSem && active.usage ? cacheDenominator(active.usage, cacheSem) : 0;
   const updatePrefs = useSessions((s) => s.updatePrefs);
-  // [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)：ask/审批弹出时提问卡覆盖整个输入区（zcode 式：ask 面板是唯一底部输入），
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：ask/审批弹出时提问卡覆盖整个输入区（zcode 式：ask 面板是唯一底部输入），
   // Composer 本体与队列面板暂不渲染、回答后原样恢复；草稿存 run store 每 Tab 桶，子树卸载不丢
   const askActive = !!active.ask;
 
@@ -74,7 +74,7 @@ export default function Composer() {
   const setText = useRun.getState().setDraftText;
   const setImages = useRun.getState().setDraftImages;
   const setRefs = useRun.getState().setDraftRefs;
-  // 流光显隐（[docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)）：输入框聚焦态——仅输入框聚焦或任务进行中时出现
+  // 流光显隐（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：输入框聚焦态——仅输入框聚焦或任务进行中时出现
   const [composerFocused, setComposerFocused] = useState(false);
   // 隐藏走 composer-beam-idle（app.css 中 display:none），动画停摆、零绘制
   const beamActive = active.running || composerFocused;
@@ -87,14 +87,14 @@ export default function Composer() {
   // / @ $ 菜单的宽度上限来源：输入卡片实测宽度（长 description 不再撑出视口，见下方 menuStyle）
   const cardRef = useRef<HTMLDivElement>(null);
   const [menuWidth, setMenuWidth] = useState(0);
-  // 工具条分级显示（[docs/composer-responsive-toolbar]）：根据 composer 卡片实测宽度切三档。
+  // 工具条分级显示（[docs/chat-and-interface]）：根据 composer 卡片实测宽度切三档。
   // 复用下方 ResizeObserver 测宽，零额外监听。
   // 阈值：narrow < 600（常规非全宽窗口都进窄档，只显 +、模式图标、压缩、发送）；
   //      medium 600-820（图标 + 模型名 + 力度文字 + 发送）；
   //      normal ≥ 820（全显：toolbar-info + provider/model + chev）。
   type ComposerWidth = "narrow" | "medium" | "normal";
   const [composerWidth, setComposerWidth] = useState<ComposerWidth>("normal");
-  // 光标位置（触发判定与回填的唯一锚点，[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)）：
+  // 光标位置（触发判定与回填的唯一锚点，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
   // onChange 拿事件里的 selectionStart；点击/方向键移光标不过 onChange，由 onSelect/onClick/onKeyUp 补同步。
   // ref 供事件回调读即时值，state 供**渲染期复验**（菜单开合要判「trigger 在当前位置是否仍成立」）
   const caretRef = useRef(0);
@@ -112,9 +112,9 @@ export default function Composer() {
     moveCaret(len);
   };
 
-  // 聚焦关注点的 hooks（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
+  // 聚焦关注点的 hooks（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 重构）：附件 / 全局事件 / 历史召回 / 提及·技能·子代理菜单
   //
-  // 项目外目录放行（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+  // 项目外目录放行（[docs/documents](../../../../docs/documents.md)）：
   // 判定与放行都在后端，这里是「问一次」的桥——把 resolve 存起来，等用户点完三选一再让流程继续。
   // 用 Promise 而不是「先弹框、下次事件再续跑」：一次拖入多个外部文件时流程要原地暂停，
   // 拆成状态机会把后面每个文件的处理都变成回调套回调。
@@ -139,14 +139,14 @@ export default function Composer() {
     setImages,
     // 显式锁定当前 Tab：判定与放行都是异步的，期间切 Tab 也不能把引用写进别的会话
     sessionId: tab?.key ?? null,
-    // [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：引用记进草稿 refs（chip 展示），
+    // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：引用记进草稿 refs（chip 展示），
     // 不再往正文里押 `@路径`（发送前一刻由 mergeRefs 合成）
     onRefs: (incoming) => setRefs((cur) => addRefs(cur ?? [], incoming), tab?.key),
     askExternalDir,
   });
   const { images, recalledImages, addPaths, onPaste } = attachments;
 
-  /** 系统拖入的文件（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+  /** 系统拖入的文件（[docs/documents](../../../../docs/documents.md)）：
    *  网页层的 ondrop 在窗口开启系统拖放后不再触发，只能走 Tauri 事件通道。 */
   const [dropping, setDropping] = useState(false);
   useEffect(() => {
@@ -196,7 +196,7 @@ export default function Composer() {
   });
   const mentions = useComposerMentions({
     setActiveIndex,
-    // 提及选中文件 → 进引用 chip（引用不再写进正文，[docs/composer-file-ref-chips]）
+    // 提及选中文件 → 进引用 chip（引用不再写进正文，[docs/chat-and-interface]）
     addFileRef: (path) => setRefs((cur) => addRefs(cur ?? [], [path]), tab?.key),
     // 回填只替换「光标处那段触发片段」（实现在下方 replaceFragment）
     replaceFragment,
@@ -223,9 +223,9 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabKey]);
 
-  // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：队列条目「编辑」-> 文本、引用与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
+  // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：队列条目「编辑」-> 文本、引用与附件回填输入框并聚焦（附件复用历史召回图片同一兜底：上限 4 张 / 20MB）。
   // 队列条目文本是发送时合成过的（含末尾 `@路径`），回填前先经 recoverRefs 抽回引用 chip
-  // （[docs/composer-file-ref-chips]；带回往门禁，手打形态不解析）
+  // （[docs/chat-and-interface]；带回往门禁，手打形态不解析）
   // 回填显式锁定点击所在 Tab：effect 提交前切 Tab 也不会把队列内容写进新会话、或因消费落空而二次回填
   const draftFromQueue = active.draftFromQueue;
   useEffect(() => {
@@ -248,17 +248,17 @@ export default function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftFromQueue, tab?.key, recalledImages]);
 
-  // 会话生效模型：会话覆盖 -> 全局活跃（展示与发送守卫同一数据源，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)；摊平视图 [docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
+  // 会话生效模型：会话覆盖 -> 全局活跃（展示与发送守卫同一数据源，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)；摊平视图 [docs/providers-and-network](../../../../docs/providers-and-network.md)）
   const globalModel = findModel(config, config?.active_model_id ?? null);
   const sessionModel = prefs.model_id ? findModel(config, prefs.model_id) : null;
   const effectiveModel = sessionModel ?? globalModel;
   const effortValue: EffortLevel | "default" = prefs.reasoning_effort ?? "default";
 
   // （命令入口已自 / 菜单移除：git/diff/tasks/stats 走顶栏四入口、compact 走工具条按钮，
-  //   [docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）
+  //   [docs/mcp-and-skills](../../../../docs/mcp-and-skills.md)）
 
   /** 从 + 菜单插入触发字符（@ / / / $）：插到**光标处**（原来追加到末尾），并把光标推到插入内容之后；
-   *  菜单开合交给 onInputChange 按光标前片段重新判定（[docs/composer-trigger-caret]）。 */
+   *  菜单开合交给 onInputChange 按光标前片段重新判定（[docs/chat-and-interface]）。 */
   function insertTrigger(ch: string) {
     const caretNow = clampCaret(text, caretRef.current);
     const before = text.slice(0, caretNow);
@@ -307,7 +307,7 @@ export default function Composer() {
 
   // 菜单键盘导航：↑↓ 移动高亮，Enter/Tab 选中；取模防越界（列表变短也安全）
   // 三个互斥菜单共用同一高亮下标：/ 技能 -> $ 子代理 -> @ 提及
-  // 开合由「光标处的触发片段 + 候选结果」共同决定（[docs/composer-trigger-caret]：不再从整段 text 派生）。
+  // 开合由「光标处的触发片段 + 候选结果」共同决定（[docs/chat-and-interface]：不再从整段 text 派生）。
   // trigger 只是「上一次输入判定的快照」：光标可能已被方向键/点击移走（或文本被外部链路改写），
   // 渲染期用当前光标复验——不成立就当没有触发片段，菜单随之收起，不会按过期片段回填
   const hit = trigger && trigger.end === caret ? trigger : null;
@@ -338,7 +338,7 @@ export default function Composer() {
     const native = e.nativeEvent as KeyboardEvent;
     if (native.isComposing || native.keyCode === 229 || composingRef.current) return;
     if (e.key === "Tab" && e.shiftKey) {
-      // Shift+Tab：四档权限模式循环（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md)）；放在菜单/发送处理之前，@/$ 菜单开着也能切
+      // Shift+Tab：四档权限模式循环（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）；放在菜单/发送处理之前，@/$ 菜单开着也能切
       e.preventDefault();
       const next = MODE_ORDER[(MODE_ORDER.indexOf(prefs.approval_mode) + 1) % MODE_ORDER.length];
       switchMode(next);
@@ -425,7 +425,7 @@ export default function Composer() {
       draftRef.current = null;
     }
     setText(v);
-    // 触发判定：只看**光标前的片段**（[docs/composer-trigger-caret]）。
+    // 触发判定：只看**光标前的片段**（[docs/chat-and-interface]）。
     // `/`、`$` 限消息开头（模型侧「消息以 /<name> / $<role> 开头」才是点名）；`@` 行首或空白后即可。
     const caretNext =
       caretFromEvent != null ? clampCaret(v, caretFromEvent) : clampCaret(v, v.length);
@@ -454,7 +454,7 @@ export default function Composer() {
   // ---------- 发送 ----------
 
   async function send() {
-    // 引用不在正文里（[docs/composer-file-ref-chips]）：发送前一刻合成 `@路径` 追加到末尾，
+    // 引用不在正文里（[docs/chat-and-interface]）：发送前一刻合成 `@路径` 追加到末尾，
     // 送给后端与模型的内容与改造前完全一致（chip 只是展示层）
     const v = mergeRefs(text, refs);
     if (!v) return;
@@ -463,7 +463,7 @@ export default function Composer() {
       useUi.getState().showSettings("providers");
       return;
     }
-    // vision 软阻断：模型声明不支持图片（vision === false）且有附件时拦截（自 [docs/provider-management-refactor](../../../../docs/provider-management-refactor.md) 起为硬布尔）
+    // vision 软阻断：模型声明不支持图片（vision === false）且有附件时拦截（自 [docs/providers-and-network](../../../../docs/providers-and-network.md) 起为硬布尔）
     if (images.length > 0 && effectiveModel && !effectiveModel.vision) {
       message.warning(t("composer.visionUnsupported"));
       return;
@@ -525,7 +525,7 @@ export default function Composer() {
     ctxTier === "yellow" ? "#fadb14" :  // 黄：antd 标准 yellow-5，与 RB 配额黄同源
     "var(--ws-ok)";                       // ok：绿
 
-  // ---------- 本轮生成速率（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)） ----------
+  // ---------- 本轮生成速率（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)） ----------
 
   // 数据源是 run store 的 runMetrics（不是组件 state）：ask 弹窗遮住 Composer 导致卸载后恢复仍同值。
   // 无数据（从未发过本轮 / 本轮还没收到 usage 帧 / 整页重载回 blank 桶）时 rate 为 null → 整段不渲染，
@@ -570,14 +570,14 @@ export default function Composer() {
     auto_edit: <CheckCircleOutlined />,
     full_access: <SafetyCertificateOutlined />,
   };
-  // 权限档着色（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md) §5）：plan 不着色；
+  // 权限档着色（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：plan 不着色；
   // confirm = 绿 / auto = 黄 / full = 红。同一映射同时供给触发胶囊（按钮 className）与下拉项（rich 标题着色）
   const modeClass: Partial<Record<ApprovalMode, string>> = {
     confirm_each: "approval-confirm",
     auto_edit: "approval-auto",
     full_access: "approval-full",
   };
-  // 菜单点击与 Shift+Tab 共用（[docs/composer-shift-tab-mode-cycle](../../../../docs/composer-shift-tab-mode-cycle.md)）。后端在每次 LLM 轮 / 工具调用时实时读取 prefs，
+  // 菜单点击与 Shift+Tab 共用（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。后端在每次 LLM 轮 / 工具调用时实时读取 prefs，
   // 因此流式进行中切档也会在下一个请求 / 下一次工具调用生效
   const switchMode = (mode: ApprovalMode) => {
     void updatePrefs(tab?.key ?? "", { approval_mode: mode });
@@ -598,7 +598,7 @@ export default function Composer() {
     onClick: ({ key }) => switchMode(key as ApprovalMode),
   };
 
-  // 模型菜单分组 = 供应商（config 顺序即菜单顺序，[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）；空名回退「其他」
+  // 模型菜单分组 = 供应商（config 顺序即菜单顺序，[docs/providers-and-network](../../../../docs/providers-and-network.md)）；空名回退「其他」
   const modelMenu: MenuProps = {
     selectedKeys: effectiveModel ? [effectiveModel.id] : [],
     items: [
@@ -765,9 +765,9 @@ export default function Composer() {
       <ExternalDirPrompt dir={extDir} onDecide={decideExternalDir} />
 
       <div className="composer">
-        {/* 多条流光边框（docs/antd6-upgrade-and-composer-border-beam，antd 6 BorderBeam）：条纹均匀分布；颜色跟随主题强调色，
+        {/* 多条流光边框（docs/chat-and-interface，antd 6 BorderBeam）：条纹均匀分布；颜色跟随主题强调色，
             antd 内部已处理 prefers-reduced-motion 隐藏。
-            时机收敛（docs/ask-ink-accent-and-composer-cover）：仅输入框聚焦 / 任务进行中显示（原 :focus-within 强调色边框取消，
+            时机收敛（docs/chat-and-interface）：仅输入框聚焦 / 任务进行中显示（原 :focus-within 强调色边框取消，
             流光即聚焦反馈）；时长不变：空闲 12s 慢速巡航、任务运行 3s 提速 */}
         <BorderBeam
           count={3}
@@ -796,7 +796,7 @@ export default function Composer() {
                   </span>
                 ))}
               </Image.PreviewGroup>
-              {/* 文件引用 chip（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)）：
+              {/* 文件引用 chip（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
                   与图片缩略图同处一个容器、同一套 .attach-chip 视觉；只显示文件名，悬停（title）看完整引用路径。
                   引用本体住在草稿 refs 里（不在正文），故删除 chip 只动 refs，不碰正文 */}
               {refs.map((ref) => (
@@ -859,7 +859,7 @@ export default function Composer() {
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
-              {/* docs/subagent-interaction-drawer：运行中子代理指示器（计数 = 运行中子代理数，0 隐藏）。
+              {/* docs/subagents：运行中子代理指示器（计数 = 运行中子代理数，0 隐藏）。
                   单个时点击直达过程抽屉；多个时弹向上菜单、选中后打开。 */}
               {runningSubs.length === 1 && (
                 <Button

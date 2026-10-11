@@ -15,7 +15,7 @@ export default {
     openFailed: "Could not open session: {{error}}", sessionMissing: "Session was deleted or cannot be found", sessionClosed: "Session closed while restoring. Please reopen it",
     seconds: "{{n}} seconds", minutes: "{{n}} minutes", subsCount: "{{n}} subagents",
   },
-  // Cross-page shared actions (batch ④ terminology unification: [docs/settings-terminology](../../../docs/settings-terminology.md)).
+  // Cross-page shared actions (batch ④ terminology unification: [docs/settings-guide](../../../docs/settings-guide.md)).
   // Only words with the same value *and* context merge here; actions taking an object or living in a
   // different context (settings.deleteSkill, settings.mcpSave) stay in their own page segment.
   common: {
@@ -53,13 +53,13 @@ export default {
     diff: "Changes",
     tasks: "Tasks",
     stats: "Stats",
-    // Startup auto-cleanup notice (docs/session-cleanup.md): the backend already cleaned up once at launch,
+    // Startup auto-cleanup notice (docs/sessions-and-projects.md): the backend already cleaned up once at launch,
     // so the toast appears only when something was actually deleted; it lives in the app shell startup flow
     cleanupAutoDone: "Cleaned up {{n}} session(s) by the retention period",
   },
   // The `about` segment moved into settings.about* (batch ④): the registry's reference closure only
   // scans the settings.* prefix, so only after the move are these keys guarded by the contract test.
-  // See [docs/settings-terminology](../../../docs/settings-terminology.md)
+  // See [docs/settings-guide](../../../docs/settings-guide.md)
   tools: {
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
     command: "Command", grep: "Search", ask: "Ask", web_fetch: "Web fetch", http_request: "HTTP request",
@@ -78,7 +78,7 @@ export default {
     imageLoading: "Loading image…", imageUnavailable: "Image unavailable (file may have been moved or deleted): {{path}}",
     imageNotSent: "This model has image input disabled — the image was not sent",
     rawData: "Raw data", notePrefix: "Note: ",
-    // render_html preview modal (see [docs/html-preview-modal](../../../docs/html-preview-modal.md))
+    // render_html preview modal (see [docs/chat-and-interface](../../../docs/chat-and-interface.md))
     preview: "Preview", previewUnavailable: "Preview content was not kept in history", previewChars: "{{n}} chars",
     copyHtml: "Copy HTML", copied: "Copied", copyFailed: "Copy failed",
     reload: "Reload", bgLight: "Light", bgDark: "Dark",
@@ -88,7 +88,7 @@ export default {
     note: "Note (optional)", submit: "Submit", next: "Next question", timeoutHint: "No response in 120s is treated as deny",
     waitingConfirm: "Waiting for confirmation",
     allowDesc: "Allow just this once", alwaysAllow: "Always allow in this project", alwaysAllowDesc: "Same commands won't ask again",
-    /* G3 范围门（[docs/plan-mode-workflow] §7.3）：同一组按钮在范围门语义下后果完全不同 */
+    /* G3 范围门（[docs/plan-and-approval]）：同一组按钮在范围门语义下后果完全不同 */
     scopeAllowDesc: "Add these steps to the approved scope", scopeAlwaysAllowDesc: "Never ask again for new steps in this session",
     scopeAlwaysAllow: "Always allow in this session",
     denyDesc: "Deny this time", confirm: "Confirm", ignore: "Skip",
@@ -101,7 +101,7 @@ export default {
     prevPage: "Previous question", nextPage: "Next question",
     recommended: "Recommended",
     switchHint: "Submitting will switch to auto-edit mode",
-    /* Mode gate ([docs/mode-gate-and-subagent-sync]): fallback risk note for the full-access option —
+    /* Mode gate ([docs/plan-and-approval]): fallback risk note for the full-access option —
        appended **always**, after the backend description (a model-authored description cannot suppress it) */
     fullAccessRisk: "Skips all approval prompts; disaster-level commands are still blocked",
     /* Separator between the backend description and the fallback risk note */
@@ -109,7 +109,7 @@ export default {
   },
   settings: {
     title: "Settings",
-    // 10 pages ([docs/settings-ia](../../../docs/settings-ia.md)): page-name keys + the three nav group titles.
+    // 10 pages ([docs/settings-guide](../../../docs/settings-guide.md)): page-name keys + the three nav group titles.
     // Retired page-name keys (general / appearance / security / network) and settings.accent are gone (zero references);
     // providers / mcp / skills stay (they name the provider list, MCP servers and skills items) — since MCP and
     // skills became their own pages, mcp / skills double as those pages' name keys (referenced by PAGE_LABEL_KEY).
@@ -157,7 +157,7 @@ export default {
     shellLimited: "(limited support)", shellDetectFailed: "Shell detection failed; only the auto option is shown",
     shellNotDetected: "The selected shell was not detected; execution will fall back to the auto-detected shell",
     shellNoPath: "This shell has no fixed executable path (e.g. WSL distros)",
-    // Session retention and cleanup (docs/session-cleanup.md): dropdown / action button / read-only status row
+    // Session retention and cleanup (docs/sessions-and-projects.md): dropdown / action button / read-only status row
     sessionRetention: "Session retention",
     sessionRetentionHint: "Sessions past the retention period are cleaned up at startup and when settings are saved, based on the last open or modification time. Off by default.",
     cleanupNever: "Never",
@@ -308,7 +308,7 @@ export default {
     // list displayed “No sessions yet”)
     skillsEmpty: "No skills yet",
     deleteSkill: "Delete skill", deleteSkillConfirm: "Delete skill \"{{name}}\"? Its files will be removed and cannot be recovered", deleteSkillSuccess: "Deleted skill: {{name}}", deleteSkillFailed: "Delete failed",
-    // Full-screen settings page shell ([docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md))
+    // Full-screen settings page shell ([docs/settings-guide](../../../docs/settings-guide.md))
     backToWorkspace: "Back to workspace",
     runningCount: "{{n}} running", runningHint: "Sessions keep running while settings is open; click to return to the workspace",
     dirtyHint: "Unsaved changes",
@@ -320,7 +320,7 @@ export default {
     leaveTitle: "Unsaved settings changes",
     leaveDesc: "Choose what to do with these changes before leaving; the cancel button discards everything without asking again.",
     leaveSave: "Save and leave", leaveDiscard: "Discard changes", leaveStay: "Stay here",
-    // Batch ③ search ([docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md));
+    // Batch ③ search ([docs/settings-guide](../../../docs/settings-guide.md));
     // 2026-09 removed the "Show advanced" toggle, so showAdvanced / advancedHint keys are dropped
     searchPlaceholder: "Search settings…",
     searchResults: "Search results",
@@ -339,11 +339,11 @@ export default {
     compactSummary: "(compaction summary)",
     // Backend-injected instructions for the model (<continue-notice> / <tool-args-rejected> /
     // <text-turn-limit> …); rendered as a plain notice instead of a user bubble with raw XML
-    // ([docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4)
+    // ([docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md))
     internalHint: "(internal continuation prompt)",
     needSession: "Create or select a session in the left nav first",
     taskDone: "Task completed",
-    // History 8 MB cap visibility ([docs/session-history-limits](../../../docs/session-history-limits.md)):
+    // History 8 MB cap visibility ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)):
     // lossy save / rejected save, shared by the run:done payload and SessionMeta.history_status on restore
     historyDegraded: "History saved incompletely: {{images}} image(s) and {{rounds}} round(s) were dropped.",
     historyRejected:
@@ -436,7 +436,7 @@ export default {
     cacheHit: "hit",
     // Popover detail (hover progress ring): current context / compression threshold / cache hit rate keys
     ctxCurrent: "Current context",
-    // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/composer-token-rate])
+    // Composer toolbar: this run's generation rate (inline value) + hover details ([docs/chat-and-interface])
     rateRunning: "Running",
     rateTitle: "Generation rate (this run)",
     rateTtft: "First-step TTFT (first output delta, incl. thinking)",
@@ -454,9 +454,9 @@ export default {
     pasteFilesHint: "Only images can be pasted; for other files use @ to reference the path",
     visionUnsupported: "Current model does not support images; remove attachments or switch to a vision model",
     recalledImage: "Recalled image {{n}}",
-    // [docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md): file references shown as chips (hover for full path)
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md): file references shown as chips (hover for full path)
     removeRef: "Remove this reference",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): attachments extended to any file + outside-directory grant
+    // [docs/documents](../../../docs/documents.md): attachments extended to any file + outside-directory grant
     fileRef: "File reference",
     fileRefHint: "Referenced by path, no copy is made; the model reads it when needed",
     fileTooMany: "At most {{n}} attachments",
@@ -487,7 +487,7 @@ export default {
     endedBudget: "Budget exhausted",
     /* partial = report handed in only after the step budget ran out: results in hand, work possibly unfinished */
     endedPartial: "Budget hit · incomplete",
-    /* Drawer header mode line ([docs/mode-gate-and-subagent-sync]): mode = label from composer.mode* keys */
+    /* Drawer header mode line ([docs/plan-and-approval]): mode = label from composer.mode* keys */
     modeLine: "Permission mode: {{mode}}",
     modeInherited: " (inherited from the main session)",
   },
@@ -543,7 +543,7 @@ export default {
     refresh: "Refresh", openDir: "Folder", noLogFiles: "No log files",
     logFileKb: "{{name}} ({{kb}}KB)", noActiveSession: "No active session", noLogs: "(no logs yet)",
     tailOnly: "Showing the last {{n}} lines (older content is in the log files)",
-    // Quota section ([docs/quota-from-provider-config]): rows mirror the CodeWave provider config
+    // Quota section ([docs/providers-and-network]): rows mirror the CodeWave provider config
     quota: "Quota & credits", quotaRefresh: "Refresh quota", quotaLoading: "Loading…", quotaRetry: "Retry",
     quotaRemaining: "{{pct}} left", quotaResetSoon: "Resets in under a minute",
     quotaResetMinutes: "Resets in {{m}} min", quotaResetHours: "Resets in {{h}} h {{m}} min",
@@ -577,7 +577,7 @@ export default {
     totalCount: "{{n}} in total", noActiveSession: "No active session",
     openSessionHint: "Files produced by the session appear here once it is open", emptySession: "No files produced in this session yet",
     lastOpEdit: "Edited", lastOpCreate: "New", deleted: "Deleted", cannotPreview: "Preview unavailable",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): spreadsheet / document / PDF preview
+    // [docs/documents](../../../docs/documents.md): spreadsheet / document / PDF preview
     sheetTab: "Sheet", textTab: "Text", sheetPick: "Worksheet",
     sheetPage: "Rows {{from}}–{{to}} of {{total}}",
     sheetEmpty: "This worksheet has no content",
@@ -589,7 +589,7 @@ export default {
     docTruncated: "The document is long; only the first part is shown here",
     encodingUnknown: "This file is neither UTF-8 nor GBK; what you see below is a lenient decode and may contain mojibake. Convert it to UTF-8 first.",
     encodingGbk: "The file was decoded as GBK (common for spreadsheets exported on Chinese systems).",
-    // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md): restore an earlier version
+    // [docs/documents](../../../docs/documents.md): restore an earlier version
     restore: "Restore",
     restoreTitle: "Restore an earlier version",
     restoreDesc: "Pick a backup to put back in the file's original location. The current content is backed up first, so a restore can itself be undone.",

@@ -394,7 +394,7 @@ describe("restoreAnchor 还原锚点", () => {
   });
 });
 
-describe("程序化跳底的目标与豁免判定（[docs/chat-autoscroll-regression-fix](../../../docs/chat-autoscroll-regression-fix.md)）", () => {
+describe("程序化跳底的目标与豁免判定（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）", () => {
   it("bottomScrollTarget 取浏览器实际落点（scrollHeight - clientHeight，钳到 0）", () => {
     expect(bottomScrollTarget({ scrollHeight: 1000, clientHeight: 600 })).toBe(400);
     expect(bottomScrollTarget({ scrollHeight: 300, clientHeight: 600 })).toBe(0); // 内容不足一屏

@@ -1,4 +1,4 @@
-// Office 与 PDF 预览（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）：
+// Office 与 PDF 预览（[docs/documents](../../../docs/documents.md)）：
 // 表格视图渲染与工作表切换 / PDF 扫描件提示 / 非文档类型仍走原有通道（回归）。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -158,7 +158,7 @@ describe("文本编码提示", () => {
   });
 });
 
-describe("markdown 预览（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）", () => {
+describe("markdown 预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）", () => {
   const MD_WITH_TABLE = "# 计划\n\n| 项 | 处置 |\n| --- | --- |\n| a | 上提 domain |\n";
 
   it("宽表格被 .table-wrap 包裹（滚动容器真实存在，不再静默裁切）", async () => {
@@ -203,7 +203,7 @@ describe("markdown 预览（[docs/plan-modal-table-scroll](../../../docs/plan-mo
   });
 });
 
-// [docs/plan-modal-table-scroll]：预览弹框换容器后，mermaid/katex 的样式必须仍然可达——
+// [docs/chat-and-interface]：预览弹框换容器后，mermaid/katex 的样式必须仍然可达——
 // 那 8 条规则此前全挂 .assistant .md 前缀，换容器即失配（公式丢 pre-wrap、katex-display 丢滚动）。
 // happy-dom 不加载 app.css，所以这里断言的是「占位符确实渲染进了预览容器」这个可达前提，
 // 样式层叠由 markdown.style.test.ts 的 :is() 组成员断言兜底。

@@ -105,7 +105,7 @@ describe("SubagentItemCard 收尾原因徽标", () => {
     expect(c.textContent).not.toContain("提前结束");
   });
 
-  // [docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)：partial = 跑满步数预算才交汇报，
+  // [docs/subagents](../../../docs/subagents.md)：partial = 跑满步数预算才交汇报，
   // 成果在手但未必做完——不得与真做完同档绿勾。
   it("ended: partial → 橙色警示图标 + 「预算耗尽·未完成」文案（不再显示绿勾）", () => {
     const c = card({ ended: "partial", step: 60, maxSteps: 60 });

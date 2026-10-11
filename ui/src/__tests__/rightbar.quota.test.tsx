@@ -1,4 +1,4 @@
-// 额度与余额段（[docs/quota-from-provider-config](../../../docs/quota-from-provider-config.md)）：
+// 额度与余额段（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
 // 行集合 = CodeWave 供应商配置。用例覆盖五类行（ok / error / invalid / rejected / no_key / unsupported）、
 // unsupported > 3 家折叠、标题消歧、窗口状态标签、灰行「去设置」跳转、空态文案、配置变化 debounce 重拉、
 // 可见性门控，以及全部纯函数（风险分级 / 摘要 / 倒计时 / 消歧 / 折叠判定 / 状态归一 / 相对时间）。

@@ -1,4 +1,4 @@
-// 批准门选档（[docs/mode-gate-and-subagent-sync]）store 层：ask:opened 载荷的选项 `mode` 透传到 AskState，
+// 批准门选档（[docs/plan-and-approval]）store 层：ask:opened 载荷的选项 `mode` 透传到 AskState，
 // AskPanel 据此判定「批准类选项」（直提 + 按实际档位同步胶囊）。
 import { describe, expect, it, vi } from "vitest";
 
@@ -47,7 +47,7 @@ describe("ask:opened 批准门选档", () => {
     expect(ask.planFile).toBe("/ws/.codewave/tasks/plan-x.md");
     expect(ask.planBody).toBe("## 完整方案\n1. 改 A\n2. 验证 B");
     expect(ask.allowAlways).toBe(true);
-    // [docs/plan-mode-workflow] §7.3：范围门语义标记原样落到 AskState（驱动按钮文案）
+    // [docs/plan-and-approval]：范围门语义标记原样落到 AskState（驱动按钮文案）
     expect(ask.approvalKind).toBe("scope");
     expect(ask.questions![0].options!.map((o) => o.mode)).toEqual(["auto_edit", "full_access", undefined]);
   });

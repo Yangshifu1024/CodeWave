@@ -23,7 +23,7 @@ pub(super) const ERROR_CAP: usize = 500;
 /// 400）。这里统一保证「无论历史为何，出网副本必满足 wire 不变量」。不改写
 /// `rt.history`（但会置位每 run 一次的瞬态注入标志）。
 ///
-/// 粘性剥思考分支（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 粘性剥思考分支（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 /// 会话级标记 `reasoning_rejected` 置位（该端点不认 `reasoning_content`，见 drive.rs 的
 /// 400 分类）时，副本先行剥掉全部 Thinking 块。这与 `repair::sanitize` 兜底是两层保险：
 /// sanitize 是**一次性**历史修复（400 后改写 `rt.history`），而粘性标记保的是「此后每次
@@ -72,7 +72,7 @@ pub(super) fn messages_for_request(
     messages
 }
 
-/// 出网副本剥思考（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 出网副本剥思考（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 /// 仅当会话级标记 `reasoning_rejected` 置位时调用——该上游不认 `reasoning_content` 字段，
 /// 每次回传都会 400。只丢 Thinking 块，Text / ToolUse / ToolResult / Image 一律不动。
 /// 返回被丢弃的思考块数。
@@ -199,7 +199,7 @@ pub(super) async fn build_stream_request(
 ) -> Result<(crate::core::config::ModelConfig, StreamRequest), String> {
     let cfg = core.cfg.read().unwrap().clone();
     let prefs = rt.prefs();
-    // 会话模型覆盖优先；覆盖悬空（模型已删）回落全局 active（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+    // 会话模型覆盖优先；覆盖悬空（模型已删）回落全局 active（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     let model = match crate::core::prefs::effective_model(&cfg, &prefs) {
         Some(m) => m,
         None => {
@@ -328,7 +328,7 @@ fn gen_anchor_next(cur: Option<usize>, n: usize) -> Option<usize> {
 }
 
 /// 增量收集：StreamDelta → 流缓冲（节流）+ Assembled 双路写入。
-/// `anchor` = 本次尝试的请求发出时刻（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）；
+/// `anchor` = 本次尝试的请求发出时刻（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）；
 /// 返回值第二项 = TTFT（首个**任意类型**增量到达时的墙钟，含 thinking；全程无增量 → None）。
 /// 只读观测：不改 delta 语义、不碰 anthropic SSE 收尾路径。
 pub(super) async fn collect_deltas(
@@ -541,7 +541,7 @@ mod anchor_tests {
     }
 
     // 缺陷修复：出网副本不得丢弃 `Content::Thinking`——它是 run 内回传 reasoning_content
-    // 的唯一载体（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)），
+    // 的唯一载体（[docs/providers-and-network](../../../../docs/providers-and-network.md)），
     // 丢了修复就失效（上游判 400）。反例参照：`repair::sanitize` 会丢思考（400 降级阀），
     // 出网副本路径不走它。
     #[test]

@@ -37,7 +37,7 @@ fn concurrent_upsert_keeps_all_entries() {
     assert_eq!(store.load_index().sessions.len(), 8);
 }
 
-/// [docs/subagent-interaction-drawer](../../../../../docs/subagent-interaction-drawer.md)：子代理过程历史存取往返；不进索引；缺失返回空；
+/// [docs/subagents](../../../../../docs/subagents.md)：子代理过程历史存取往返；不进索引；缺失返回空；
 /// 删除父会话级联清理。
 #[test]
 fn sub_history_round_trip_not_indexed_and_cascade_removed() {
@@ -164,7 +164,7 @@ fn thinking_assistant(text: &str) -> Message {
     }
 }
 
-/// [docs/reasoning-content-passthrough](../../../../../docs/reasoning-content-passthrough.md)：
+/// [docs/providers-and-network](../../../../../docs/providers-and-network.md)：
 /// 8MB 上限回退路径只剥图、**绝不丢思考**。丢思考会让该会话重启后无 `reasoning_content`
 /// 可回传，OpenAI 兼容 thinking 上游多轮必然 400 且不可自愈；而剥图已足够减负。
 /// 这是 store 层对 `repair::sanitize_keep_thinking` 的端到端守护（保存 → 读回）。
@@ -345,7 +345,7 @@ fn corrupted_legacy_history_loads_empty_instead_of_failing() {
         .unwrap();
     assert!(store.load_history("ok").is_ok());
 }
-/// [docs/session-artifacts-and-files-tab](../../../../../docs/session-artifacts-and-files-tab.md)：同路径去重合并（first/last/count 语义）；不同路径各自成条。
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：同路径去重合并（first/last/count 语义）；不同路径各自成条。
 #[test]
 fn artifact_append_dedups_and_merges() {
     let dir = tempfile::tempdir().unwrap();
@@ -373,7 +373,7 @@ fn artifact_append_dedups_and_merges() {
     assert!(store.load_artifacts("s2").is_empty());
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../../docs/session-artifacts-and-files-tab.md)：remove 级联产物边车，也顺带删除曾泄漏的 todos 边车。
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：remove 级联产物边车，也顺带删除曾泄漏的 todos 边车。
 #[test]
 fn remove_cascades_sidecars() {
     let dir = tempfile::tempdir().unwrap();
@@ -401,7 +401,7 @@ fn remove_cascades_sidecars() {
     assert!(store.load_artifacts("s1").is_empty());
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../../docs/session-artifacts-and-files-tab.md)：损坏边车静默回空（登记表只是辅助视图，绝不阻断会话）。
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：损坏边车静默回空（登记表只是辅助视图，绝不阻断会话）。
 #[test]
 fn corrupted_artifacts_sidecar_isolated() {
     let dir = tempfile::tempdir().unwrap();
@@ -547,7 +547,7 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
-/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：上次打开时间落盘后不被检查点抹掉；
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：上次打开时间落盘后不被检查点抹掉；
 /// 缺席会话不得凭空造条目；旧索引（无该字段）仍可读。
 #[test]
 fn last_opened_at_survives_checkpoint_and_legacy_index_loads() {
@@ -595,7 +595,7 @@ fn last_opened_at_survives_checkpoint_and_legacy_index_loads() {
     assert!(!dir2.path().join("sessions/index.json.corrupt").exists());
 }
 
-/// [docs/session-cleanup](../../../../../docs/session-cleanup.md) §3-24：10 分钟窗口内重复打开不写索引。
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)-24：10 分钟窗口内重复打开不写索引。
 #[test]
 fn touch_open_is_throttled_within_ten_minutes() {
     let dir = tempfile::tempdir().unwrap();
@@ -636,7 +636,7 @@ fn touch_open_is_throttled_within_ten_minutes() {
     ));
 }
 
-/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：计划文件产物的登记/过滤/粘性。
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：计划文件产物的登记/过滤/粘性。
 #[test]
 fn artifact_kind_plan_registered_filtered_and_sticky() {
     let dir = tempfile::tempdir().unwrap();
@@ -682,7 +682,7 @@ fn artifact_kind_plan_registered_filtered_and_sticky() {
     assert!(json.contains("\"kind\": \"file\""), "{json}");
 }
 
-/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：批量删除索引行只写一次索引，
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：批量删除索引行只写一次索引，
 /// 并清掉内存运行集合（否则迟到写入会带着 running 复活索引行）。
 #[test]
 fn remove_many_writes_index_once_and_clears_memory_running() {
@@ -716,7 +716,7 @@ fn remove_many_writes_index_once_and_clears_memory_running() {
     assert_eq!(store.index_write_count(), before);
 }
 
-/// [docs/session-cleanup](../../../../../docs/session-cleanup.md)：索引可信判定——
+/// [docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)：索引可信判定——
 /// 文件缺失或内容损坏都不可信（清理据此拒绝扫索引外残留），能解析才可信；
 /// 而且「曾损坏未复原」（index.json.corrupt 遗留）同样是持久的不可信信号——
 /// 否则真实启动序列会把守卫顶掉：改名保全后紧接着写回的合法空索引看起来完全可信。
@@ -790,7 +790,7 @@ fn purge_non_session_entries_removes_ghosts_keeps_real() {
 }
 
 // ---------- 历史 8MB 上限：图片外置 / 越限状态 / 按轮降级 ----------
-// （[docs/session-history-limits](../../../../../docs/session-history-limits.md)）
+// （[docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)）
 
 /// 测试用：一段 JSON 文本 gzip 落盘。
 fn gzip_bytes(s: &str) -> Vec<u8> {
@@ -1284,7 +1284,7 @@ fn sub_history_shares_ladder_but_never_rejects() {
 }
 
 // ---------- 并发保存：GC 不得删掉磁盘历史仍引用的 blob ----------
-// （[docs/session-history-limits](../../../../../docs/session-history-limits.md)）
+// （[docs/sessions-and-projects](../../../../../docs/sessions-and-projects.md)）
 
 /// 测试用：从落盘历史 JSON 里取出全部图片 blob 引用（不依赖落盘 DTO 的可见性）。
 fn blob_refs(json: &str) -> Vec<String> {

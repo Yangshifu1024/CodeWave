@@ -1,4 +1,4 @@
-// Composer 工具条速率段（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：
+// Composer 工具条速率段（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 上下文/命中挪到进度圈 hover 的 Popover 后，速率独立住在 .toolbar-info 直接子级。
 // 「在跑」点随 running 显隐而终值保留；无数据（无 runMetrics / 本轮还没拿到耗时）整段不渲染。
 // Composer 独立挂载（与 composer.fileref.test.tsx 同一套环境种子）。

@@ -26,9 +26,9 @@ export type UiItem =
   | { kind: "user"; text: string; createdAt?: string; images?: { mediaType: string; data: string }[] }
   | { kind: "assistant"; timeline: TimelineSeg[]; toolsMap: Record<string, ToolView>; streaming: boolean; createdAt?: string }
   | { kind: "sub"; subId: string }
-  /** injectedTexts：run:inject 带 texts 时的注入正文（[docs/steer-run-inject](../../../docs/steer-run-inject.md)）；缺省 = 无正文可渲染（ask 批准注入 / 旧后端），仍回落 notice.injected */
+  /** injectedTexts：run:inject 带 texts 时的注入正文（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）；缺省 = 无正文可渲染（ask 批准注入 / 旧后端），仍回落 notice.injected */
   | { kind: "notice"; text: string; injectedTexts?: string[] }
-  /** errorKind = 后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；auth/billing 渲染「打开模型设置」快捷入口 */
+  /** errorKind = 后端 ProviderError 分类（[docs/providers-and-network](../../../docs/providers-and-network.md)）；auth/billing 渲染「打开模型设置」快捷入口 */
   | { kind: "error"; text: string; errorKind?: string };
 
 /** assistant 项的收窄别名（Extract 自 UiItem） */
@@ -42,17 +42,17 @@ export interface AskState {
   detail?: string;
   /** 问题列表（带 mode 的选项 = 批准类选项：选中即直提并把胶囊切到该档位；缺 mode = 非批准类） */
   questions?: AskQuestionPayload[];
-  /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档 */
+  /** arch 审批门（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：批准后把权限胶囊同步为自动编辑档 */
   switchToAutoEdit?: boolean;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：命令审批显示「始终允许本项目」第三选项 */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：命令审批显示「始终允许本项目」第三选项 */
   allowAlways?: boolean;
-  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（once = 单次操作审批；scope = G3 范围门）——驱动按钮文案；缺省 = once */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：审批语义类别（once = 单次操作审批；scope = G3 范围门）——驱动按钮文案；缺省 = once */
   approvalKind?: "once" | "scope";
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」打开）；[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：无真实方案时为 null */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：计划文件路径（计划卡「查看完整计划」打开）；[docs/plan-and-approval](../../../docs/plan-and-approval.md)：无真实方案时为 null */
   planFile?: string | null;
-  /** [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：后端下发的真实方案正文（与 planFile 同源；AskPanel 卡片正文与「复制计划全文」用此字段渲染）；null/缺省 = 不渲染计划卡 */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：后端下发的真实方案正文（与 planFile 同源；AskPanel 卡片正文与「复制计划全文」用此字段渲染）；null/缺省 = 不渲染计划卡 */
   planBody?: string | null;
-  /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准形标记 + 批准项 id（后端宽松识别；驱动 AskPanel 单选互斥与直提判定） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准形标记 + 批准项 id（后端宽松识别；驱动 AskPanel 单选互斥与直提判定） */
   approval?: boolean;
   approveId?: string | null;
 }
@@ -83,7 +83,7 @@ export interface SubView {
   status: "running" | "done" | "error";
   /** 收尾时的真实已启动步数（sub:done 刷新，纠正轮询采样滞后） */
   stepsUsed?: number;
-  /** 收尾原因（sub:done）：report = 正常汇报收尾；partial = 跑满预算才交汇报（成果在手未必做完）；budget = 预算耗尽未交汇报；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)） */
+  /** 收尾原因（sub:done）：report = 正常汇报收尾；partial = 跑满预算才交汇报（成果在手未必做完）；budget = 预算耗尽未交汇报；no_report = 未汇报即结束（疑似提前退出）；缺省 = 旧数据，按正常收尾展示（[docs/subagents](../../../docs/subagents.md)） */
   ended?: "report" | "partial" | "budget" | "no_report";
   /** 运行摘录（sub:step 采样） */
   detail?: string;
@@ -93,7 +93,7 @@ export interface SubView {
   report?: string;
 }
 
-/** 每个子代理独立的消息流（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：帧归一的产物，由过程抽屉渲染；归档子代理按需从后端重建。
+/** 每个子代理独立的消息流（[docs/subagents](../../../docs/subagents.md)）：帧归一的产物，由过程抽屉渲染；归档子代理按需从后端重建。
  *  生命周期跟随 Tab（dispose 即丢弃），跨运行保留——任务结束后仍可回看。 */
 export interface SubStream {
   timeline: TimelineSeg[];
@@ -120,7 +120,7 @@ export interface PendingImage {
 export interface ComposerDraft {
   text: string;
   images: PendingImage[];
-  /** 文件引用（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：输入框里以 chip 展示。
+  /** 文件引用（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：输入框里以 chip 展示。
    *  引用不再是正文文本——发送前一刻由 mergeRefs 合成 `@<ref>` 追加到正文末尾（模型所见与改造前一致）。 */
   refs: string[];
 }
@@ -156,7 +156,7 @@ export interface HistoryPaging {
   failed?: boolean;
 }
 
-/** 批准门「先看预览」后的 widget 自动弹框信号（[docs/preview-skill](../../../docs/preview-skill.md)）。
+/** 批准门「先看预览」后的 widget 自动弹框信号（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
  *  一次性、仅本 run 内有效：
  *  - `armed: true` = 用户刚在批准门选了「先看预览」，等待本 run 第一张合格 widget 落地；
  *  - `callKey: string` = 已锁定那张卡，UI 据此自动弹框（弹完由 consume 清空）。
@@ -189,13 +189,13 @@ export interface TabRunState {
   streamGen: number;
   /** 当前询问/审批卡（null = 无） */
   ask: AskState | null;
-  /** 「文本形态 ask」当轮被后端从正文里剥掉的协议原文（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：
+  /** 「文本形态 ask」当轮被后端从正文里剥掉的协议原文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
    *  `ask:opened.text_recovered` 落地。存在的意义是**后到的文本增量仍要继续补剥**——正文经 64ms 节流下发，
    *  `</ask>` 尾巴常在 ask:opened **之后**才作为 delta_text 到达，只在 ask:opened 那一刻剥一次会被后到的帧又追加回去
    *  （消费方见 `runFrames.ts` 的 `stripRecoveredInTab`）。只在本轮有效：`run:done` 清空。
    *  可选 + 缺省 = 本轮没有「文本恢复」的询问（真实工具调用路径 / 旧后端 / 测试夹具字面量）。 */
   textRecovered?: string | null;
-  /** [docs/preview-skill](../../../docs/preview-skill.md)：批准门选「先看预览」后的一次性 widget 自动弹框信号（纯 UI 信号，不落盘）。
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准门选「先看预览」后的一次性 widget 自动弹框信号（纯 UI 信号，不落盘）。
    *  可选 + 缺省 = 本 Tab 没有待弹的预览——刻意不进 `blank()`（同 `usage` / `runMetrics` 的约定：约 26 个测试文件
    *  逐字构造 TabRunState 字面量，加必填字段会全炸）。收尾三兄弟（run:done / run:error / run:cancelled）清空，
    *  即「本 run 内未落地的预览信号作废，不跨轮补弹」。 */
@@ -207,23 +207,23 @@ export interface TabRunState {
   suggestions: string[];
   /** 子代理卡片列表 */
   subs: SubView[];
-  /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：每个子代理独立消息流（key = subId），过程抽屉数据源 */
+  /** [docs/subagents](../../../docs/subagents.md)：每个子代理独立消息流（key = subId），过程抽屉数据源 */
   subStreams: Record<string, SubStream>;
-  /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：过程抽屉状态（按 Tab 记忆；关闭置 open=false 不销毁流数据） */
+  /** [docs/subagents](../../../docs/subagents.md)：过程抽屉状态（按 Tab 记忆；关闭置 open=false 不销毁流数据） */
   subDrawer: { open: boolean; subId: string | null };
   /** git 状态缓存（null = 非 repo / 未知） */
   gitEntries: { repo: boolean; entries: any[]; branch?: string | null } | null;
-  /** [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：成功 create/edit 写信号（每次 +1）；右栏文件页签据此刷新 */
+  /** [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：成功 create/edit 写信号（每次 +1）；右栏文件页签据此刷新 */
   writeTick: number;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：运行队列（运行中提交的新任务，当前任务完成后依序执行） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：运行队列（运行中提交的新任务，当前任务完成后依序执行） */
   queue: QueueItem[];
   /** 正常 done 因注入占用而等待结算后续队；cancelled/error 必须清掉。 */
   queueResumeAfterInjection?: boolean;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：待「立即运行」项（cancel 完成后立即出队执行） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：待「立即运行」项（cancel 完成后立即出队执行） */
   pendingItemId: string | null;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：队列项编辑回填草稿（文本 + 附件；Composer 消费后清除） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：队列项编辑回填草稿（文本 + 附件；Composer 消费后清除） */
   draftFromQueue: { text: string; images?: { mime: string; data: string }[] } | null;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：最近一次 run:done 的 run_id（对 suggest 双 done 去重；done1 同步出队并翻转 running 使旧守卫失效） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：最近一次 run:done 的 run_id（对 suggest 双 done 去重；done1 同步出队并翻转 running 使旧守卫失效） */
   lastDoneRunId: string | null;
   /** 最近一次起 run 的 run_id（`start_chat` 的返回值；缺省 = 本 Tab 尚未起过 run） */
   runId?: string | null;
@@ -236,7 +236,7 @@ export interface TabRunState {
    *  可选：仅 runtime 新建的桶（blank()）必定有值，测试夹具的历史字面量可缺省——
    *  消费方（applyUsageFrame / cacheHitRate / Composer）均已做缺省处理。 */
   usage?: UsageTotals;
-  /** **本轮**（单次 run）计数（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：工具条速率段与 tooltip 的唯一数据源。
+  /** **本轮**（单次 run）计数（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：工具条速率段与 tooltip 的唯一数据源。
    *  与 `usage` 的关键差别是「不跨 run 累加」——`send()` 处归零，否则速率会跨轮累积失真。
    *  可选：缺省 = 本轮无 usage 数据（旧后端 / 重挂载后未收到帧）→ 速率段整体隐藏。 */
   runMetrics?: RunMetrics;
@@ -258,7 +258,7 @@ export interface TabRunState {
   boundaries?: HistoryBoundary[];
 }
 
-/** 本轮运行计数（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。派生展示口径全在
+/** 本轮运行计数（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。派生展示口径全在
  *  `features/chat/composerMetrics.ts`（纯函数，不依赖 store），此处只描述字段来源。 */
 export interface RunMetrics {
   /** Σ 本轮**被计入步**的 output（仅 `duration_ms > 0` 的帧，与 `genMs`/`steps` 同域） */

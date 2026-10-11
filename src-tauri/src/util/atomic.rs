@@ -1,4 +1,4 @@
-//! Atomic write: temp file + rename; Windows keeps a .bak backup first ([docs/p0-plan](../../../docs/p0-plan.md) §3.3).
+//! Atomic write: temp file + rename; Windows keeps a .bak backup first ([docs/technical-design](../../../docs/technical-design.md)).
 
 use std::fs;
 use std::io::Write;

@@ -1,4 +1,4 @@
-// 与 Rust 侧 serde 结构一一对应（[docs/technical-design](../../../docs/technical-design.md) §5 协议；手写绑定 = [docs/technical-design](../../../docs/technical-design.md) 预留的 specta 兜底路径）
+// 与 Rust 侧 serde 结构一一对应（[docs/technical-design](../../../docs/technical-design.md) 协议；手写绑定 = [docs/technical-design](../../../docs/technical-design.md) 预留的 specta 兜底路径）
 
 /** 会话 id（后端 uuid；前端 Tab 的 key 与之等值） */
 export type SessionId = string;
@@ -26,7 +26,7 @@ export interface Message { role: Role; content: Content[]; created_at?: string |
 /** 供应商 API 协议形态（provider 层三协议，协议差异不出该层） */
 export type ApiFormat = "openai_chat" | "anthropic_messages" | "openai_responses";
 
-/** provider 下的模型条目（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：wire id 即显示名；上下文窗口/输出/vision 类型一切以用户输入为准 */
+/** provider 下的模型条目（[docs/providers-and-network](../../../docs/providers-and-network.md)）：wire id 即显示名；上下文窗口/输出/vision 类型一切以用户输入为准 */
 export interface ProviderModel {
   id: string;
   /** wire 模型 id（请求体 model 字段） */
@@ -40,7 +40,7 @@ export interface ProviderModel {
   video: boolean;
 }
 
-/** 模型 provider（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：端点 + 协议 + key 池 + 自带模型列表（无内置目录） */
+/** 模型 provider（[docs/providers-and-network](../../../docs/providers-and-network.md)）：端点 + 协议 + key 池 + 自带模型列表（无内置目录） */
 export interface ProviderConfig {
   id: string;
   name: string;
@@ -48,11 +48,11 @@ export interface ProviderConfig {
   base_url: string;
   keys: string[];
   models: ProviderModel[];
-  /** 供应商级自定义请求头（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：值支持 ${session_id} 占位符；明文存储 */
+  /** 供应商级自定义请求头（[docs/providers-and-network](../../../docs/providers-and-network.md)）：值支持 ${session_id} 占位符；明文存储 */
   headers: HeaderPair[];
 }
 
-/** 自定义请求头条目（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)） */
+/** 自定义请求头条目（[docs/providers-and-network](../../../docs/providers-and-network.md)） */
 export interface HeaderPair {
   name: string;
   value: string;
@@ -68,7 +68,7 @@ export interface FlatModel {
   video: boolean;
 }
 
-// ---------- 会话级运行参数（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)，与 core/prefs.rs 一一对应） ----------
+// ---------- 会话级运行参数（[docs/chat-and-interface](../../../docs/chat-and-interface.md)，与 core/prefs.rs 一一对应） ----------
 
 /** 权限四档：逐条确认 / 自动编辑 / 计划 / 完全访问 */
 export type ApprovalMode = "confirm_each" | "auto_edit" | "plan" | "full_access";
@@ -88,7 +88,7 @@ export interface ImageIn { mime: string; data: string }
 export const DEFAULT_PREFS: SessionPrefs = { approval_mode: "plan", model_id: null, reasoning_effort: null };
 
 /** 审批门设置（fence 判定后的交互策略） */
-export interface ApprovalSettings { enabled: boolean; confirm_outside_create: boolean; confirm_git_push: boolean; /** docs/ask-ink-accent-and-composer-cover：无应答 5 分钟后自动确认推荐选项；false = 永不超时（无限等待） */ auto_confirm: boolean; command_allowlist: string[] }
+export interface ApprovalSettings { enabled: boolean; confirm_outside_create: boolean; confirm_git_push: boolean; /** docs/chat-and-interface：无应答 5 分钟后自动确认推荐选项；false = 永不超时（无限等待） */ auto_confirm: boolean; command_allowlist: string[] }
     /** shell 探测结果（list_available_shells 返回；kind 为 posix|powershell|cmd|wsl；auto = 即自动探测默认项） */
     export interface ShellInfo { id: string; name: string; path: string | null; kind: string; limited: boolean; auto: boolean }
 /** shell 选择配置（null = 自动：执行时由后端自动探测） */
@@ -106,11 +106,11 @@ export interface UiPrefs {
   /** 等宽字体（代码与日志），同上。 */
   font_mono?: string;
 }
-/** [docs/session-logging-report](../../../docs/session-logging-report.md)：全局日志级别（RUST_LOG 优先）+ 会话详尽模式（LLM 请求/响应全文进会话日志） */
+/** [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：全局日志级别（RUST_LOG 优先）+ 会话详尽模式（LLM 请求/响应全文进会话日志） */
 export interface LogConfig { level: string; session_verbose: boolean }
 /** 全局配置（config schema v2，与 Rust 侧 ConfigState 一一对应；新字段必须 serde default 向前兼容） */
 export interface ConfigState {
-  /** schema 版本（v2 = providers 嵌套 models，见 [docs/provider-management-refactor](../../../docs/provider-management-refactor.md)） */
+  /** schema 版本（v2 = providers 嵌套 models，见 [docs/providers-and-network](../../../docs/providers-and-network.md)） */
   schema_version: number;
   providers: ProviderConfig[];
   /** 活跃模型（指向摊平后的模型条目 id，null = 未配置） */
@@ -119,10 +119,10 @@ export interface ConfigState {
   network: { allow_private_network: boolean };
   /** 上下文占用超过该比例触发自动压缩 */
   compact_threshold: number;
-  /** 自动压缩超时秒数（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md) 起可配） */
+  /** 自动压缩超时秒数（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 起可配） */
   compact_timeout_seconds: number;
   approval: ApprovalSettings;
-  /** 写入后检查命令设置（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)） */
+  /** 写入后检查命令设置（[docs/tools-and-safety](../../../docs/tools-and-safety.md)） */
   post_write_check: PostWriteCheckSettings;
   ui: UiPrefs;
   /** 用户自定义系统提示词附加段（null = 无） */
@@ -132,7 +132,7 @@ export interface ConfigState {
   log: LogConfig;
   /** shell 选择（shell-selection-batch：可选 = 后端 serde default 向前兼容；null/缺省 = 自动探测） */
   shell?: ShellConfig;
-  /** 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）：`retention_days` = 保留天数（1/3/7/14/30），
+  /** 会话保留期与清理（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：`retention_days` = 保留天数（1/3/7/14/30），
    *  `null` = 不清理（默认）。可选 = 后端 serde default 向前兼容（同 `shell?` 口径），读取请用
    *  `config.sessions?.retention_days ?? null`——老配置里没有这一段。 */
   sessions?: { retention_days: number | null };
@@ -141,7 +141,7 @@ export interface ConfigState {
   subagent_models?: Record<string, string | null>;
 }
 
-/** [docs/session-logging-report](../../../docs/session-logging-report.md)：运行日志读取契约（全局滚动日志 / 会话日志） */
+/** [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：运行日志读取契约（全局滚动日志 / 会话日志） */
 export interface LogFileEntry { name: string; size: number; modified: string | null }
 /** 日志内容：truncated = 尾部截断读取 */
 export interface LogFileContent { content: string; truncated: boolean }
@@ -178,7 +178,7 @@ export interface ServiceInfo {
   running: boolean;
 }
 
-/** [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：会话产物登记（create/edit 边车 + 统计），first_op/last_op ∈ "create" | "edit" */
+/** [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：会话产物登记（create/edit 边车 + 统计），first_op/last_op ∈ "create" | "edit" */
 export interface SessionFileEntry {
   path: string;
   first_op: "create" | "edit";
@@ -190,7 +190,7 @@ export interface SessionFileEntry {
   size: number;
 }
 
-/** [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：文档修改前留下的备份（界面「回退」入口的数据源）；at 是备份时刻（RFC3339） */
+/** [docs/documents](../../../docs/documents.md)：文档修改前留下的备份（界面「回退」入口的数据源）；at 是备份时刻（RFC3339） */
 export interface DocumentBackupEntry {
   path: string;
   at: string;
@@ -288,13 +288,13 @@ export interface SessionMeta {
   running: boolean;
   /** 上次运行被中断的标记（崩溃 = crash / 正常退出前中止 = quit；null = 无中断）；清除走 clear_session_interrupt */
   interrupted: { kind: "crash" | "quit"; at: string } | null;
-  /** 上次历史保存的状态（[docs/session-history-limits](../../../docs/session-history-limits.md)；缺省 = 干净）。
+  /** 上次历史保存的状态（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)；缺省 = 干净）。
    *  挂在索引上——历史写失败时索引仍能写成功，这是「重启后仍可见」的载体：只要状态在就每次打开该会话都提示，
    *  后端下一次干净保存后自动清空（前端不做「已读」交互、不加本地持久化）。 */
   history_status?: HistoryStatus;
 }
 
-/** 历史保存状态（[docs/session-history-limits](../../../docs/session-history-limits.md) + 批2 体积约束）：与后端
+/** 历史保存状态（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) + 批2 体积约束）：与后端
  *  `HistoryStatus` **同一枚举**——`SessionMeta.history_status`（索引侧，重启后仍在）与 `run:done.history_save`
  *  （当次保存结果）共用，前端两条链路因此共用一套文案。四个变体分两类语义，文案**刻意区分**：
  *  - 未完整保存：`degraded` = 有损保存（剥掉图片 payload / 按轮丢弃历史）；`rejected` = 超限拒存
@@ -334,7 +334,7 @@ export interface ProjectEntry {
   allowed_dirs?: string[];
 }
 
-// ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)） ----------
+// ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)） ----------
 
 /** 清理预览：按给定保留期算出将删除的会话条数 + 前几条标题，以及索引外的残留文件数
  *  （保存前的确认框数据源；纯读，不删任何东西）。
@@ -348,7 +348,7 @@ export interface CleanupOutcome { ids: string[]; deleted: number; failed: number
 /** 上次清理记录（存后端，重启后仍在；启动时的自动清理也计入） */
 export interface CleanupStatus { last_run_at: string | null; last_deleted: number; last_failed: number }
 
-// ---------- 「清理旧格式历史」（分段 JSONL 落地后的显式入口；[docs/session-history-limits]） ----------
+// ---------- 「清理旧格式历史」（分段 JSONL 落地后的显式入口；[docs/sessions-and-projects]） ----------
 
 /** 旧格式历史清理预览（`preview_legacy_history_cleanup`）；纯读，不删任何文件。
  *  `cleanable_*` = 已有新格式段数据、可以安全删的旧 `.json.gz`；
@@ -378,7 +378,7 @@ export type Frame =
       duration_ms?: number | null;
       /** 首个任意类型增量（text 或 thinking）的延迟；缺省 = 无数据 */
       ttft_ms?: number | null }
-  /** 子代理帧信封（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：在父会话通道上区分来源，按 sub_id 路由进过程抽屉消息流 */
+  /** 子代理帧信封（[docs/subagents](../../../docs/subagents.md)）：在父会话通道上区分来源，按 sub_id 路由进过程抽屉消息流 */
   | { type: "sub"; sub_id: string; frame: Frame };
 
 // ---------- 事件 payload ----------
@@ -432,21 +432,21 @@ export interface AskOpenedEvent {
   title?: string; detail?: string;
   /** 计划文件路径（计划卡「查看完整计划」打开后端落盘的计划文件） */
   plan_file?: string | null;
-  /** [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」；缺省走 `skip_serializing_if`（后端仅在有可用方案时下传） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」；缺省走 `skip_serializing_if`（后端仅在有可用方案时下传） */
   plan_body?: string;
   /** 命令审批「始终允许本项目」第三选项 */
   allow_always?: boolean;
-  /** [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3：审批语义类别（`once` = 单次操作审批；`scope` = G3 范围门）——决定按钮文案；缺省 = `once` */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：审批语义类别（`once` = 单次操作审批；`scope` = G3 范围门）——决定按钮文案；缺省 = `once` */
   approval_kind?: "once" | "scope";
-  /** arch 审批门（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */
+  /** arch 审批门（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：批准后把权限胶囊同步为自动编辑档（多余字段，零新增事件键） */
   switch_to_auto_edit?: boolean;
-  /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准形形状标记（后端宽松识别 = 单一事实源：单题 + id/label 命中批准协议） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准形形状标记（后端宽松识别 = 单一事实源：单题 + id/label 命中批准协议） */
   approval?: boolean;
-  /** [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md)：批准项 id（前端单选互斥/直提判定用；null = 未识别，前端回退严格判定） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准项 id（前端单选互斥/直提判定用；null = 未识别，前端回退严格判定） */
   approve_id?: string | null;
   /** 子代理审批（2026-09-11 tester 卡死修复）：事件挂主会话下发后，来源子代理 id；null = 主会话审批 */
   sub_id?: string | null;
-  /** [docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)：文本形态 ask 兜底时从正文里剥离的
+  /** [docs/chat-and-interface](../../../docs/chat-and-interface.md)：文本形态 ask 兜底时从正文里剥离的
    *  `<ask>…</ask>` 原文。流式帧早已把这段协议原文送到前端且无法回收，前端据此从**当轮气泡**里精确剔除它；
    *  真实工具调用发起的 ask（普通路径）不出现该键。 */
   text_recovered?: string;
@@ -553,7 +553,7 @@ export interface ScheduledTask {
 }
 
 /** 按维度聚合的 token 用量。四把耗时字段可选（serde default）：
- *  旧记录（[docs/composer-token-rate] 之前）没有它们 → 统计面板总览的加权三项必须**把这类记录整条排除**
+ *  旧记录（[docs/chat-and-interface] 之前）没有它们 → 统计面板总览的加权三项必须**把这类记录整条排除**
  *  （分子分母同域），否则「分子含全部 output、分母只含部分耗时」会把速率算虚高。 */
 export interface ModelAgg {
   input: number; output: number; cache_read: number; cache_write: number; runs: number;
@@ -585,19 +585,19 @@ export interface SubagentEvent {
   detail?: string;
   /** 最终报告（sub:report） */
   report?: string;
-  /** 注册表规范角色名（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)，展示优先于原始 role 字符串） */
+  /** 注册表规范角色名（[docs/subagents](../../../docs/subagents.md)，展示优先于原始 role 字符串） */
   name?: string | null;
-  /** 完整任务文本（截断至 2000 字符，过程抽屉首块展示，[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)） */
+  /** 完整任务文本（截断至 2000 字符，过程抽屉首块展示，[docs/subagents](../../../docs/subagents.md)） */
   task?: string;
   /** 收尾时的真实已启动步数（sub:done；轮询采样可能滞后，以它刷新最终展示） */
   steps_used?: number;
-  /** 收尾原因（sub:done）：report = 未跑满且按约定带 <report> 标记正常汇报；partial = 跑满步数预算才交汇报（成果在手未必做完）；budget = 跑满预算且未交汇报；no_report = 未跑满且未按约定汇报即结束（疑似提前退出）；[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) */
+  /** 收尾原因（sub:done）：report = 未跑满且按约定带 <report> 标记正常汇报；partial = 跑满步数预算才交汇报（成果在手未必做完）；budget = 跑满预算且未交汇报；no_report = 未跑满且未按约定汇报即结束（疑似提前退出）；[docs/subagents](../../../docs/subagents.md) */
   ended?: "report" | "partial" | "budget" | "no_report";
   /** 子代理当前权限档位（sub:step 每步上报；过程抽屉据此显示档位行，缺省 = 不显示） */
   approval_mode?: ApprovalMode;
 }
 
-// ---------- 额度与余额 / 打开器（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）----------
+// ---------- 额度与余额 / 打开器（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）----------
 
 /** 已检测到的编辑器（后端候选表顺序：VS Code → Cursor → Windsurf → Zed → Sublime Text → Notepad++ → JetBrains 组） */
 export interface EditorInfo {
@@ -624,7 +624,7 @@ export interface QuotaEntry {
 }
 
 /**
- * 一家供应商的快照状态（行集合 = CodeWave 供应商配置，见 [docs/quota-from-provider-config](../../../docs/quota-from-provider-config.md)）：
+ * 一家供应商的快照状态（行集合 = CodeWave 供应商配置，见 [docs/providers-and-network](../../../docs/providers-and-network.md)）：
  * - ok：查到了额度；error：查询失败（可重试）；invalid：密钥读取失败（重试无用）；
  * - rejected：查询被拒（401/403/404 且该家**从未成功过**，密钥或套餐被拒，重试无用）——这条定义决定了
  *   它的 `last_ok_at` 恒为 null；反过来「曾成功过的 401/403/404」一律归 `error`，历史成功记录就是两者的分界；
@@ -653,7 +653,7 @@ export interface QuotaSnapshot {
   last_ok_at: string | null;
 }
 
-// ---------- 写入后检查命令（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)） ----------
+// ---------- 写入后检查命令（[docs/tools-and-safety](../../../docs/tools-and-safety.md)） ----------
 // 取代 LSP 写后语义校验：create/edit 成功后执行用户配置的一条命令，结论进工具结果 data。
 
 /** 写入后检查设置（与后端 core/config.rs 的 PostWriteCheckSettings 一一对应） */
@@ -676,7 +676,7 @@ export const DEFAULT_POST_WRITE_CHECK: PostWriteCheckSettings = {
   tail_chars: 3000,
 };
 
-// ---------- MCP（[docs/mcp-module-rebuild](../../../docs/mcp-module-rebuild.md) §2.7）----------
+// ---------- MCP（[docs/mcp-and-skills](../../../docs/mcp-and-skills.md)）----------
 // 作用域只有两层：global（`<data_dir>/mcp.json`）与 project（`<project_dir>/mcp.json`）。
 
 /** MCP 配置作用域 */

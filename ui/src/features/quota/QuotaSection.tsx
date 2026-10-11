@@ -1,4 +1,4 @@
-// 额度与余额段（[docs/quota-from-provider-config](../../../../docs/quota-from-provider-config.md)）。
+// 额度与余额段（[docs/providers-and-network](../../../../docs/providers-and-network.md)）。
 //
 // 行集合 = CodeWave 供应商配置：后端 `quota_snapshots` 已按「可查询类在前（配置顺序）、unsupported 殿后」排好序，
 // 前端不再重排序。五类行：

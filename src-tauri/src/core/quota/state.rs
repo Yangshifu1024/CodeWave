@@ -8,7 +8,7 @@
 //!
 //! 兼容性：结构体级 `#[serde(default)]`——旧文件缺字段透明取默认，绝不因解析失败 panic。
 //!
-//! 启动期自愈（[`heal`]，见 [docs/quota-from-provider-config](../../../../docs/quota-from-provider-config.md)）：
+//! 启动期自愈（[`heal`]，见 [docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 //! 本文件是「曾成功过」的**唯一持久载体**，写坏后 `load` 只会回退默认，于是所有曾经成功过的
 //! 供应商会被误判成「从未成功过」（401/403/404 渲染为「查询被拒」这一误导性结论），且损坏状态
 //! 每次启动重复告警、永不收敛。故启动时走一次「要么不管、要么修好」的自愈：

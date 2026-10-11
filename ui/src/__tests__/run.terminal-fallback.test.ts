@@ -1,4 +1,4 @@
-// run 终态兜底链（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)）store 级测试。
+// run 终态兜底链（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）store 级测试。
 //
 // 覆盖四件事：① 共享收敛体 settleRun（含新增的 t.ask 一格）② run:done 幂等早退时仍收敛
 // ③ reconcileRun 双向对账 ④ hasUnsettledRunState / hasRunningTools 的判据（看门狗的正确性依赖它们）。
@@ -89,7 +89,7 @@ function settleNow() {
   });
 }
 
-describe("run 终态兜底链（docs/run-terminal-event-fallback）", () => {
+describe("run 终态兜底链（docs/runtime-and-scheduling）", () => {
   beforeEach(() => {
     sessionRunning.mockReset();
     sessionRunning.mockResolvedValue(false);

@@ -1,4 +1,4 @@
-//! Anthropic Messages 协议适配器（手写薄层，[docs/technical-design](../../../docs/technical-design.md) §4.2.2）。
+//! Anthropic Messages 协议适配器（手写薄层，[docs/technical-design](../../../docs/technical-design.md)）。
 //! 显式声明 prompt cache 断点（最多 4 个，当前用 3）：tools 段末尾 + system 稳定主块 +
 //! 最后一条消息的末尾 content block；另有历史代际断点（cache_gen_index）复用消息末块标注。
 
@@ -83,7 +83,7 @@ pub fn build_body(req: &StreamRequest) -> Value {
         body["tools"] = Value::Array(tools);
     }
     // 请求级 reasoning effort → extended thinking（budget 按 max_tokens 比例取值，夹取到 [1024, max_tokens-1]）。
-    // ⚠ 已知风险（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）：Thinking block 不回放进历史，多轮工具循环在部分端点可能 400——
+    // ⚠ 已知风险（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：Thinking block 不回放进历史，多轮工具循环在部分端点可能 400——
     // 已通过 e2e_real_glm thinking 变体验证；失败时回退为本协议不发 thinking。
     if let Some(effort) = req.reasoning_effort
         && let Some(budget) = thinking_budget(req.model.max_tokens, effort)
@@ -357,7 +357,7 @@ pub async fn stream(
     if !key.is_empty() {
         req = req.header("x-api-key", &key);
     }
-    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/providers-and-network](../../../docs/providers-and-network.md)
     req =
         crate::provider::headers::apply_request_headers(req, &model.headers, session_id.as_deref());
     let resp = tokio::select! {
@@ -680,7 +680,7 @@ mod tests {
         );
     }
 
-    /// [docs/prompt-caching-hardening]：system 双块与历史代际断点——extra 非空时 system 拆两块
+    /// [docs/providers-and-network]：system 双块与历史代际断点——extra 非空时 system 拆两块
     /// 且只有稳定主块带断点；cache_gen_index 指向的内部消息末块标代际断点，与末条消息断点互不覆盖。
     #[test]
     fn system_extra_block_and_gen_breakpoint() {
@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn thinking_budget_mapping_and_clamp() {
-        // [docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)：effort → extended thinking，budget = pct × max_tokens，夹取到 [1024, max_tokens-1]
+        // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：effort → extended thinking，budget = pct × max_tokens，夹取到 [1024, max_tokens-1]
         let mut req = StreamRequest {
             model: ModelConfig {
                 model: "claude-x".into(),

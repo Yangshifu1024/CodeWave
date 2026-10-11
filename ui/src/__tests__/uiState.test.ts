@@ -260,7 +260,7 @@ describe("快照往返（buildSnapshot → 磁盘 → loadUiState → 落 store�
     expect(snap.tabs.items.s2.projectId).toBe("p1");
     expect(snap.activeProject).toBe("p1");
     expect(snap.tree.unread).toEqual({ s2: true });
-    // 草稿快照带上引用 chip（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)：缺字段的旧快照按空处理）
+    // 草稿快照带上引用 chip（[docs/chat-and-interface](../../../docs/chat-and-interface.md)：缺字段的旧快照按空处理）
     expect(snap.drafts.s2).toEqual({ text: "半段草稿", images: [], refs: [] });
     expect(snap.queue.s2[0]).toEqual({ id: "q1", text: "排队任务", images: [{ mime: "image/png", data: "AAA" }] });
     expect(snap.panels.s1.todos).toEqual([{ title: "跑测试", status: "in_progress" }]);
@@ -448,7 +448,7 @@ describe("关 Tab：内容保留 / 丢弃 / 回填", () => {
     expect(tabHasPendingContent("s1")).toBe(true); // 只有附件也算
     useRun.getState().clearDraft("s1");
     useRun.getState().setDraftRefs(["report.xlsx"], "s1");
-    expect(tabHasPendingContent("s1")).toBe(true); // 只有引用 chip 也算（[docs/composer-file-ref-chips]）
+    expect(tabHasPendingContent("s1")).toBe(true); // 只有引用 chip 也算（[docs/chat-and-interface]）
     useRun.getState().clearDraft("s1");
     useRun.setState((s) => {
       s.tabs.s1.queue = [{ id: "q1", text: "排队" }];

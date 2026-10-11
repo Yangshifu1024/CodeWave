@@ -1,4 +1,4 @@
-// 内部提示在恢复历史时的可见性（[docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4）：
+// 内部提示在恢复历史时的可见性（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
 //
 //   后端 drive 把 `<continue-notice>` / `<tool-args-rejected>` / `<text-turn-limit>` /
 //   `<budget-notice>` / `<final-report>` / `<supervision-notice>` / `<supervision-escalated>`

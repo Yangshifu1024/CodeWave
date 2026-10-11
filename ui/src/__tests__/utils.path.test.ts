@@ -1,4 +1,4 @@
-// baseName: path tail extraction with Windows/POSIX separator normalization ([docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// baseName: path tail extraction with Windows/POSIX separator normalization ([docs/development](../../../docs/development.md) coverage batch)
 // shortestUniqueLabels: same-name files in different dirs get widened segments (tool card head summary)
 import { describe, it, expect } from "vitest";
 import { baseName, shortestUniqueLabels } from "../utils/path";

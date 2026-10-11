@@ -692,7 +692,7 @@ impl Tool for CommandTool {
             None => default_cwd,
         };
 
-        // fence + 审批（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认弹窗，灾难级仍拦截）
+        // fence + 审批（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 权限档：FullAccess 跳过确认弹窗，灾难级仍拦截）
         let mode = ctx.execution_approval_mode();
         let policy = ctx.fence_policy();
         match crate::safety::fence::check_command_policy(&args.command, &cwd, &roots, policy) {
@@ -711,7 +711,7 @@ impl Tool for CommandTool {
                         );
                     }
                 } else {
-                    // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：「始终允许本项目」白名单命中 → 免询问；灾难级永不适用白名单，仍需确认。
+                    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：「始终允许本项目」白名单命中 → 免询问；灾难级永不适用白名单，仍需确认。
                     // 匹配 key = cwd + 完整命令文本（cwd 是会话固定的 temps/ 目录且随项目走 → 白名单不跨项目）。
                     // 已知竞态：对 host save_config 的读改写 / 并发「始终允许」写入，后写者胜
                     // （与 toggle_skill 同为既有模式）；窗口极小，留待将来统一修复。
@@ -750,7 +750,7 @@ impl Tool for CommandTool {
                                 format!("命令将修改工作区文件：{target}\n\n{}", args.command),
                             ),
                         };
-                        // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：灾难级确认永不搭自动确认超时
+                        // [docs/testing](../../../../docs/testing.md)：灾难级确认永不搭自动确认超时
                         let auto_confirm = crate::safety::approval::effective_auto_confirm(
                             ctx.core.cfg.read().unwrap().approval.auto_confirm,
                             is_disaster,
@@ -850,7 +850,7 @@ async fn run_process(
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 4096];
         // 每条流各持一个清洗器：剥 ANSI/控制序列 + 跨块安全解码（不把多字节字符切出替换符），
-        // 见 tools/sanitize.rs 与 [docs/command-output-ansi-sanitize-plan](../../../../docs/command-output-ansi-sanitize-plan.md)
+        // 见 tools/sanitize.rs 与 [docs/tools-and-safety](../../../../docs/tools-and-safety.md)
         let mut clean = crate::tools::sanitize::OutputSanitizer::new();
         loop {
             match s.read(&mut buf).await {
@@ -958,7 +958,7 @@ async fn run_process(
         _ = tokio::time::sleep(timeout) => {
             stop_command_tree(child.as_mut()).await;
             let _ = pump.await;
-            // 若 pump 持锁时 panic 会中毒锁：用 lock_ok 清理，避免二次 panic（[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md) 评审修复）
+            // 若 pump 持锁时 panic 会中毒锁：用 lock_ok 清理，避免二次 panic（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 评审修复）
             let mut c = crate::core::agent::lock_ok(&collector);
             let tail = model_tail(&mut c, full_output, "timeout");
             return ToolOutcome::err("E_TIMEOUT", format!("命令超时（{}s）已终止进程树。\n部分输出（尾部）：\n{tail}", timeout.as_secs()));

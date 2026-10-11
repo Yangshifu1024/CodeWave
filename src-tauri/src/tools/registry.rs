@@ -41,7 +41,7 @@ impl ToolRegistry {
         reg!(crate::tools::skill::SkillTool);
         reg!(crate::tools::subagent::SubagentTool);
         reg!(crate::tools::scheduled_task::ScheduledTaskTool);
-        // 文档批次（docs/office-and-pdf-support）
+        // 文档批次（docs/documents）
         reg!(crate::tools::document::read::ReadDocumentTool);
         reg!(crate::tools::document::write::WriteDocumentTool);
         reg!(crate::tools::document::edit::EditDocumentTool);

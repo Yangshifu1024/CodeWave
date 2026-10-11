@@ -1,4 +1,4 @@
-//! 会话历史的**落盘形态**（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+//! 会话历史的**落盘形态**（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
 //! 与内存 / wire 用的 [`Content`] 分开的一套 DTO，唯一的差别是图片。
 //!
 //! 为什么要另立 DTO：`Content` 同时是内存模型与 wire 模型——给它加可选字段会撞三协议
@@ -11,7 +11,7 @@
 //!   （旧数据的 tag 是 `image`，靠 serde alias 兼容，因此旧会话照常可读、无不可逆迁移）。
 //!
 //! 读回时 blob 缺失（被手工删掉 / 磁盘损坏）降级为占位文本——不报错、不 panic、
-//! 不阻断会话加载（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）。
+//! 不阻断会话加载（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
 
 use crate::core::sessions::{SessionStore, image_blobs};
 use crate::core::types::{Content, Message, Role};

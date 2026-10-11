@@ -1,4 +1,4 @@
-//! 防御性历史修复管线（[docs/p0-plan](../../../../docs/p0-plan.md) §8.2）：
+//! 防御性历史修复管线（[docs/technical-design](../../../../docs/technical-design.md)）：
 //! sanitize（去 system、修截断 args、折叠重复；图片剥离与思考保留按变体拆分）
 //! → trim（预算内按轮边界裁剪）→
 //! repair（tool_use/tool_result 配对不变量）。全部纯函数。
@@ -8,7 +8,7 @@ use crate::util::token_est::est_tokens_message;
 
 /// 保存前处理，返回警告列表。图片 payload 保留——重开会话后消息附件仍可显示
 /// （token 估算按每图 1600，与会话未关闭时同语义；存储侧有 gzip + 8MB 上限兜底）。
-/// 思考块同样保留（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 思考块同样保留（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 /// OpenAI 兼容的 thinking 上游要求多轮历史 assistant 消息回传 `reasoning_content`，
 /// 落盘时剥离思考会让重启后的会话无数据可回传，多轮必然 400。
 pub fn prepare_for_save(mut msgs: Vec<Message>) -> Vec<Message> {
@@ -36,7 +36,7 @@ pub fn sanitize(msgs: &mut Vec<Message>) -> Vec<String> {
 
 /// sanitize（会话保存变体）：去 system、**保思考**、修截断工具参数、折叠重复
 /// tool_use；图片 payload 保留（重开后附件仍显示）。
-/// 保留思考的理由见 [docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)：
+/// 保留思考的理由见 [docs/providers-and-network](../../../../docs/providers-and-network.md)：
 /// OpenAI 兼容的 thinking 上游要求多轮历史回传 `reasoning_content`，落盘中剥离即永久丢失；
 /// Anthropic 侧因 thinking 签名约束仍在出站丢弃思考，与本文件无关。
 pub fn sanitize_for_save(msgs: &mut Vec<Message>) -> Vec<String> {
@@ -114,7 +114,7 @@ fn ensure_parseable_args(args: &serde_json::Value) -> Result<serde_json::Value, 
     }
 }
 
-/// 截断 args 打捞（[docs/p0-plan](../../../../docs/p0-plan.md) §6.3.2）：扫描字符串，补齐缺失的 `}` `]` 与尾逗号。
+/// 截断 args 打捞（[docs/technical-design](../../../../docs/technical-design.md)）：扫描字符串，补齐缺失的 `}` `]` 与尾逗号。
 pub fn parse_or_salvage(s: &str) -> Option<serde_json::Value> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
         return Some(v);
@@ -156,7 +156,7 @@ pub fn parse_or_salvage(s: &str) -> Option<serde_json::Value> {
 /// 不可解析参数的诊断摘要（仅供日志，**不参与任何解析决策**、行为零变化）：长度 +
 /// 首尾各 200 字符（换行/回车转义）+ serde 解析错误原文。
 ///
-/// 为什么需要（[docs/rejected-call-silent-finish]）：被拒调用的 args 既不进历史也不上 wire，
+/// 为什么需要（[docs/runtime-and-scheduling]）：被拒调用的 args 既不进历史也不上 wire，
 /// 会话日志此前只有「工具名 + 长度」，事后无法回答「这段 JSON 为什么不可解析」——
 /// 8531 字符的 `ask` 参数即因此成为永久悬案（模型侧与用户侧都拿不到方案全文）。
 pub fn diagnose_unparsable(s: &str) -> String {
@@ -220,7 +220,7 @@ pub fn repair(msgs: &mut Vec<Message>) {
     // **不得**改为「跨到下一个 assistant 消息处补」或「合并进已有 Tool 消息」——
     // 两种改法都会在中间插入非 tool_result 的 user 消息，
     // 而 Anthropic 要求 tool_use 后必须紧接 tool_result turn
-    // （[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
+    // （[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）。
     let mut patched: Vec<Message> = Vec::with_capacity(msgs.len());
     for m in msgs.drain(..) {
         let missing: Vec<String> = m
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(msgs[1].content.len(), 0);
     }
 
-    /// 补位必须**紧跟**产生 tool_use 的 assistant 消息（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
+    /// 补位必须**紧跟**产生 tool_use 的 assistant 消息（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）。
     ///
     /// 这条测试钉死的是位置语义，不是某个返回值：wire 组装（`stream.rs` 的
     /// `messages_for_request`）会把每条 `Role::Tool` 各自折成一条独立 user 消息且
@@ -437,7 +437,7 @@ mod tests {
         assert!(v.is_none()); // 字符串中部截断不可信
     }
 
-    // [docs/arithmetic-audit](../../../../docs/arithmetic-audit.md)#6：keep_last=0 且仅一轮超预算时没有 starts[1]——必须全裁
+    // [docs/testing](../../../../docs/testing.md)#6：keep_last=0 且仅一轮超预算时没有 starts[1]——必须全裁
     // 而非索引 panic
     #[test]
     fn trim_keep_last_zero_single_round_no_panic() {
@@ -562,7 +562,7 @@ mod tests {
         assert!(matches!(&msgs[1].content[0], Content::Text { text } if text.contains("omitted")));
     }
 
-    // 思考块的落盘 / 兜底分叉（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+    // 思考块的落盘 / 兜底分叉（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
     // OpenAI 兼容的 thinking 上游要求历史 assistant 消息回传 `reasoning_content`，
     // 落盘剥离思考 = 重启后无数据可回传，多轮必然 400，因此保存与 8MB 回退变体必须保思考。
 

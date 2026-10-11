@@ -8,7 +8,7 @@ use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-/// [docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)：子代理帧信封的序列化形态（前端 types.ts Frame 联合类型的 serde 锚点）。
+/// [docs/subagents](../../../../docs/subagents.md)：子代理帧信封的序列化形态（前端 types.ts Frame 联合类型的 serde 锚点）。
 #[test]
 fn frame_sub_envelope_serialization_shape() {
     let f = Frame::Sub {
@@ -39,8 +39,8 @@ fn budget_notice_step_at_20_percent_remaining() {
     }
 }
 
-/// 无工具调用回合的处置矩阵（[docs/subagent-text-turn-premature-exit](../../../../docs/subagent-text-turn-premature-exit.md)、
-/// [docs/steer-run-inject](../../../../docs/steer-run-inject.md)、[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）：
+/// 无工具调用回合的处置矩阵（[docs/subagents](../../../../docs/subagents.md)、
+/// [docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)、[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
 /// 主会话无计划时语义不变；steer 与「计划未收尾」两个维度各自压过 `finish_on_text`；
 /// 子代理/任务须带 `<report>` 标记收尾，否则有界续跑，超限显式失败。
 ///
@@ -57,7 +57,7 @@ fn text_turn_action_matrix() {
         text_turn_action("", true, false, 9, false, false),
         TextTurnAction::Finish
     );
-    // ①’ 主会话 + 被拒调用 → 继续（[docs/rejected-call-silent-finish]）
+    // ①’ 主会话 + 被拒调用 → 继续（[docs/runtime-and-scheduling]）
     assert_eq!(
         text_turn_action("下面是完整方案", true, true, 0, false, false),
         TextTurnAction::Continue
@@ -116,7 +116,7 @@ fn text_turn_action_matrix() {
     );
 }
 
-/// steer 强制续跑标记的判定（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+/// steer 强制续跑标记的判定（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
 /// 用户中途提交的消息被消化后，模型这一回合即便输出纯文本也**不得**收尾——
 /// 否则用户看到的是「话进了历史、run 却已用旧上下文答完退出」。
 ///
@@ -654,7 +654,7 @@ async fn consecutive_text_turns_stop_at_limit() {
 
 #[tokio::test]
 async fn stream_request_bytes_stable_across_calls() {
-    // [docs/p1-plan](../../../../docs/p1-plan.md) §8 质量门：同一会话连续请求必须前缀字节相等（缓存优先）
+    // [docs/technical-design](../../../../docs/technical-design.md) 质量门：同一会话连续请求必须前缀字节相等（缓存优先）
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
@@ -769,7 +769,7 @@ async fn dirty_history_messages_stay_byte_stable() {
 
 #[tokio::test]
 async fn system_prompt_frozen_within_run() {
-    // [docs/prompt-caching-hardening]：run 内 system 稳定主块冻结——文件变更不穿透当前 run
+    // [docs/providers-and-network]：run 内 system 稳定主块冻结——文件变更不穿透当前 run
     //（保 provider 前缀缓存），新 run（drive_agent 起点清空冻结）才重新组装纳入新内容
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
@@ -803,7 +803,7 @@ async fn system_prompt_frozen_within_run() {
 
 #[tokio::test]
 async fn cache_gen_anchor_hysteresis() {
-    // [docs/prompt-caching-hardening]：代际断点锚点滞回——漂移未超 1/4 保持不动（命中刷新
+    // [docs/providers-and-network]：代际断点锚点滞回——漂移未超 1/4 保持不动（命中刷新
     // TTL），超阈值才前移（触发一次段重写）；历史不足 16 条不启用
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
@@ -933,7 +933,7 @@ impl EventSink for CaptureSink {
 
 #[test]
 fn flush_segments_emits_frames_in_segment_order() {
-    // 评审 T1：段顺序到帧顺序的直接契约（[docs/thinking-interleave-report](../../../../docs/thinking-interleave-report.md)）
+    // 评审 T1：段顺序到帧顺序的直接契约（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     let sink = Arc::new(CaptureSink::default());
     let mut buf = crate::util::throttle::StreamBuffer {
         generation: 7,
@@ -1016,7 +1016,7 @@ fn assistant_assembly_interleaves_blocks_in_order() {
     assert_eq!(kinds, vec!["thinking", "text", "thinking", "text"]);
 }
 
-// ===== 会话级运行偏好（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)） =====
+// ===== 会话级运行偏好（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)） =====
 
 fn prefs_of(
     mode: crate::core::prefs::ApprovalMode,
@@ -1107,7 +1107,7 @@ async fn plan_mode_excludes_write_tools() {
 
 #[tokio::test]
 async fn compacting_guard_resets_flag_on_panic_unwind() {
-    // [docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md) 评审修复回归：压缩互斥 RAII——compact_history panic unwind 时
+    // [docs/tools-and-safety](../../../../docs/tools-and-safety.md) 评审修复回归：压缩互斥 RAII——compact_history panic unwind 时
     // Drop 仍复位 compacting，否则 start_chat 永远拒绝新 run（会话变砖，
     // 与已修复的 panic 死锁同类）
     let ws = tempfile::tempdir().unwrap();
@@ -1336,7 +1336,7 @@ async fn refresh_request_messages_rewrites_body_from_repaired_history() {
 }
 
 /// checkpoint 不把子代理 runtime 写进主索引/主历史：过程历史由 save_sub_history
-/// 边车接管（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)），绝不泄漏为 untitled 幽灵会话。
+/// 边车接管（[docs/subagents](../../../../docs/subagents.md)），绝不泄漏为 untitled 幽灵会话。
 #[tokio::test]
 async fn checkpoint_skips_subagent_runtime() {
     let roots = test_roots();
@@ -1415,7 +1415,7 @@ async fn checkpoint_persists_main_session() {
     assert!(rt.is_main_session);
 }
 
-// ---- 端到端：无工具调用回合的收尾判定（[docs/subagent-text-turn-premature-exit](../../../../docs/subagent-text-turn-premature-exit.md)）----
+// ---- 端到端：无工具调用回合的收尾判定（[docs/subagents](../../../../docs/subagents.md)）----
 
 /// 脚本化 SSE mock：按连接顺序逐个应答，并统计连接数（多回合端到端断言用）。
 /// 脚本用尽后重复最后一条，避免断言失败时后续连接悬挂。
@@ -1563,7 +1563,7 @@ async fn main_session_text_only_turn_ends_run() {
     );
 }
 
-/// 缺陷回归锚点（[docs/main-run-finish-with-pending-todos]）：主会话 + 计划仍有未完成项时，
+/// 缺陷回归锚点（[docs/runtime-and-scheduling]）：主会话 + 计划仍有未完成项时，
 /// 纯文本旁白不得让 run 静默成功收尾。
 ///
 /// 会话 f19c3890 实测（2026-10-09 23:48:20）：模型输出 50 字「找到插入点了。在
@@ -1732,7 +1732,7 @@ async fn stale_pending_todos_do_not_gate_plain_qa() {
     );
 }
 
-// ---- 文本形态 ask 兜底（[docs/text-form-ask-fallback]）----
+// ---- 文本形态 ask 兜底（[docs/chat-and-interface]）----
 
 /// 记录原始 `emit` 事件：`ask:opened` 这类工具事件不走 `channel_frame`，
 /// 既有 `CaptureSink` 只收 Frame，故另建一个记录型 sink。
@@ -2122,7 +2122,7 @@ async fn rejected_call_turn_injects_hint_and_continues() {
     assert!(!empty_assistant, "空 assistant 消息不应进入历史");
 }
 
-/// 缺陷回归锚点（[docs/rejected-call-silent-finish]）：主会话「正文非空 + 全部调用被拒」的
+/// 缺陷回归锚点（[docs/runtime-and-scheduling]）：主会话「正文非空 + 全部调用被拒」的
 /// 回合必须继续一步，不得静默收尾。会话 5100ea0c 实测：模型输出「方案已登记为 todos。
 /// 下面是完整方案（含分支名 …）」，同回合那个 8531 字符的 `ask` 参数不可解析被拒 → run
 /// 报成功结束，方案卡从未产出（用户视角＝「卡死、没有继续输出方案」）。
@@ -2271,7 +2271,7 @@ fn diagnose_unparsable_reports_length_and_edges() {
     );
 }
 
-// ---- 端到端：只读 run 读新文件不得被判空转（[docs/subagent-idle-watchdog-misfire]）----
+// ---- 端到端：只读 run 读新文件不得被判空转（[docs/subagents]）----
 
 /// openai_chat 协议的 `read` 工具调用 SSE 响应：args 用真实契约形态
 /// `{"files":[{"path":…}]}`（tools/read.rs 的 `Args`）。
@@ -2340,7 +2340,7 @@ async fn read_only_run_over_new_files_is_not_idle() {
     );
 }
 
-// ---- 生成耗时 / TTFT（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）----
+// ---- 生成耗时 / TTFT（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）----
 
 /// AC-1/AC-2：usage 帧的两个可选字段——旧载荷（四个 token 字段）反序列化不报错（None）；
 /// 新载荷序列化带两键，键名 `type`/`usage` 不变。

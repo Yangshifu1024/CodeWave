@@ -1,4 +1,4 @@
-//! Time-throttled buffer for high-frequency streaming output ([docs/p0-plan](../../../docs/p0-plan.md) §5.4: 64ms window).
+//! Time-throttled buffer for high-frequency streaming output ([docs/technical-design](../../../docs/technical-design.md): 64ms window).
 //! The run loop holds one StreamBuffer; a ticker task flushes it to the Channel every 64ms.
 //! Segment serialization: Text/Reasoning are recorded interleaved in arrival order (adjacent same-kind segments merged), flush output preserves order.
 

@@ -1,5 +1,5 @@
 // 额度段的纯格式化逻辑（无 React 依赖，单测友好）
-// （[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+// （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 import type { QuotaEntry, QuotaSnapshot } from "../../ipc/types";
 
 /** 风险分级：<5% 红、<20% 橙、其余中性（项目「色彩强度映射风险等级」约定） */

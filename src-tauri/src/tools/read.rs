@@ -3,7 +3,7 @@
 //!
 //! 二进制文件不进文本通道：Office / PDF 扩展名与「含 NUL 字节」的内容一律拒绝，
 //! 并点名该用哪个工具——否则模型拿到的是一堆替换符乱码，会据此编造结论。
-//! 文档读取见 [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)。
+//! 文档读取见 [docs/documents](../../../docs/documents.md)。
 
 use super::pathutil;
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
@@ -23,7 +23,7 @@ const IMAGE_EXTS: &[(&str, &str)] = &[
 const MAX_IMAGE_BYTES: usize = 3 * 1024 * 1024;
 /// 文本文件整读上限；超过则要求模型用 startLine/endLine 分段。
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
-/// 主会话单次读取的行数预算（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+/// 主会话单次读取的行数预算（[docs/subagents](../../../docs/subagents.md)）：
 /// 结构化读单次调用拉入主会话上下文的文本行数上限，与单文件默认窗口（2000 行）对齐——
 /// 超过即拒绝并指引「调研派 explore 子代理 / 编辑用窗口分段」。子代理与任务运行豁免
 /// （读代码是其本职）；图片不计行数（有独立 3MB 体积上限）。
@@ -304,7 +304,7 @@ impl Tool for ReadTool {
                 continue;
             }
 
-            // 二进制拦截（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）：
+            // 二进制拦截（[docs/documents](../../../docs/documents.md)）：
             // 先按扩展名点名工具，再用内容探测兜住「扩展名看不出是什么」的二进制文件。
             if let Some(hint) = binary_doc_hint(&resolved) {
                 return ToolOutcome::err(
@@ -351,7 +351,7 @@ impl Tool for ReadTool {
             };
             let (content, total) = format_lines(&text, start, end);
             let version = crate::util::crockford::version_token(&bytes);
-            // 主会话读取预算（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+            // 主会话读取预算（[docs/subagents](../../../docs/subagents.md)）：
             // 超限整调用拒绝（原子性，不部分返回）；终结式指引与 E_TOOL_BLOCKED 同风格
             if ctx.rt.is_main_session {
                 let end_clamped = end.min(total);

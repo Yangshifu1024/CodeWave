@@ -14,7 +14,7 @@ pub struct Args {
     /// G2 豁免：跳过分析声明，须有用户口令背书（要求最近一条用户消息命中口令表）
     #[serde(default)]
     pub(super) skip_analysis: Option<bool>,
-    /// 完整流水线批准门（[docs/standard-workflow](../../../../docs/standard-workflow.md)，原 arch 批准闸）：批准时把 ConfirmEach 会话切到 AutoEdit（Plan 档批准本就会切）。
+    /// 完整流水线批准门（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)，原 arch 批准闸）：批准时把 ConfirmEach 会话切到 AutoEdit（Plan 档批准本就会切）。
     /// 给完整流水线在常规档下绕开「开发子代理写审批不可达」的可行路径。
     /// 显式 rename：serde camelCase 会把 autoedit 段拼成 switchToAutoedit，与 schema key 不符。
     #[serde(default)]
@@ -60,7 +60,7 @@ pub struct Option2 {
     /// wire 值即 ApprovalMode 的 snake_case（"auto_edit" / "full_access" 等）；批准门据此把会话切到
     /// 用户所选档位，取代此前的子串猜测 + 硬编码 AutoEdit。
     /// wire 上为 `None` 时不出现 `mode` 键（`skip_serializing_if`）：前端声明是 `mode?: ApprovalMode`，
-    /// 带 `"mode": null` 会让 `mode !== undefined` 这类判定误判（[docs/mode-gate-and-subagent-sync]）。
+    /// 带 `"mode": null` 会让 `mode !== undefined` 这类判定误判（[docs/plan-and-approval]）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) mode: Option<crate::core::prefs::ApprovalMode>,
 }
@@ -182,7 +182,7 @@ impl Tool for AskTool {
         // 基线冻结 / [system] 注入全部被跳过（日志证据：approved=true switch=false）。
         // switch 判定改用 open 时刻的档位快照。
         let mode_at_open = ctx.approval_mode();
-        // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+        // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
         // 计划文件落盘泛化——所有 ask 都把真实方案文本存为计划文件；但「真实方案」缺位时
         // （显式 plan 为空 + 本轮正文也无法通过有效性判据）→ **不落盘也不渲染计划卡**，
         // 避免「空壳计划卡 / 3 行文件 viewer」的长期缺陷（用户实测：模型正文 ~6.7k 字，
@@ -200,20 +200,20 @@ impl Tool for AskTool {
             "questions": args.questions,
             // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
             "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
-            // [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败或无可用方案时为 None）
+            // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败或无可用方案时为 None）
             "plan_file": plan_file,
-            // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形标记（后端宽松检测 = 单一事实源）；
+            // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形标记（后端宽松检测 = 单一事实源）；
             // 前端据此渲染单选 + 批准项直提，不再猜测 id === "approve"
             //（此前 id 自拟会使面板回退为多选切换）
             "approval": approval_shape(&args.questions),
             "approve_id": approve_option_id(&args.questions),
         });
-        // [docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)：
+        // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
         // 真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」。
         // 仅在有可用方案时下传（None 不下传，避免历史事件载荷体增长）。
         if let Some(body) = usable.as_deref() {
             ask_opened["plan_body"] = json!(body);
-        } // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：由正文 XML 恢复的询问，把被剥离的
+        } // 文本形态 ask 兜底（[docs/chat-and-interface]）：由正文 XML 恢复的询问，把被剥离的
         // 原文一并下发，前端据此从当轮气泡文本里剔掉它（流式帧已下发，前端无法自行回收）。
         // 取走即清（take）：同一 run 内后续的真实 ask 不该再带这个字段。
         if let Some(block) = ctx.rt.text_ask_block.lock().unwrap().take() {
@@ -239,7 +239,7 @@ impl Tool for AskTool {
             return ToolOutcome::err("E_ASK_CANCELLED", "用户取消或未回答");
         };
 
-        // 忽略检测（[docs/ask-ignore-not-answered-fix](../../../../docs/ask-ignore-not-answered-fix.md)）：前端「忽略」= 清空末页直提空载荷
+        // 忽略检测（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：前端「忽略」= 清空末页直提空载荷
         //（所有 selections 空 + 所有 note 空）；产品语义是「未回答 / 不作答」。
         // 此前空载荷仍返回 ToolOutcome::ok（仅尾注「（未回答）」），模型收到成功形态的结果
         // 会误读为「用户已应答 / 默许」而继续推进（真实案例：批准形询问被忽略后模型直接开工）。
@@ -261,7 +261,7 @@ impl Tool for AskTool {
         // 组装模型可读的应答文本
         let mut lines = Vec::new();
         let mut approved = false;
-        // 预览选项 id 集合（[docs/preview-skill](../../../../docs/preview-skill.md)）：既用于「只看预览」判定，
+        // 预览选项 id 集合（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：既用于「只看预览」判定，
         // 也用于把预览项从批准候选里剔除（万一模型把「先看预览」的 label 写成含「执行方案」，is_approve_option 会命中）
         let preview_ids = preview_option_ids(&args.questions);
         for q in &args.questions {
@@ -274,7 +274,7 @@ impl Tool for AskTool {
                         .collect()
                 })
                 .unwrap_or_default();
-            // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准候选 id 集合（宽松 is_approve_option 匹配，覆盖
+            // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准候选 id 集合（宽松 is_approve_option 匹配，覆盖
             // label 合规的情形——此前 id 自拟且不含 approve/execute 子串会让计划批准静默失效）
             let approve_ids: std::collections::HashSet<&str> = q
                 .options
@@ -283,7 +283,7 @@ impl Tool for AskTool {
                 .map(|o| o.id.as_str())
                 .collect();
             // Plan 档协议：选中批准选项（或选项含 approve/execute 字样）即视为方案批准 → 切自动编辑档。
-            // 预览项 id 与 approve_ids 同口径剔除（[docs/preview-skill](../../../../docs/preview-skill.md)）：本通道按**选中项 id 的子串**
+            // 预览项 id 与 approve_ids 同口径剔除（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：本通道按**选中项 id 的子串**
             // 做宽松匹配，模型把「先看预览」的 id 自拟成含 approve 的形态（如 `preview_approve`）时，
             // 「选先看预览」会被算成批准——与 preview 语义（不批准 / 不切档 / 不冻结基线）直接冲突；
             // 前端的宽松匹配已剔除预览项，后端不剔除即「前端不切档、后端切档」的单边静默提权。
@@ -312,13 +312,13 @@ impl Tool for AskTool {
             lines.push(l);
         }
 
-        // 切换判定（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) + [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：Plan 档批准命中即切换（既有协议）；ConfirmEach
-        // 档看 arch 批准闸标记（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md)）或「任一有效应答」（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：至少一题 selections/note
+        // 切换判定（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) + [docs/plan-and-approval](../../../../docs/plan-and-approval.md) + [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：Plan 档批准命中即切换（既有协议）；ConfirmEach
+        // 档看 arch 批准闸标记（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）或「任一有效应答」（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)：至少一题 selections/note
         // 非空）；AutoEdit/FullAccess 无需切换。有效应答与批准命中（approved，匹配 execute/approve
         // 子串）是两个独立判定，分开持有以免批准协议被任意应答语义污染。
-        // 预览-only 排除（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门的「先看预览」是第三种应答——
+        // 预览-only 排除（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门的「先看预览」是第三种应答——
         // 既非批准也非有效应答，故两条切档通道都要排除。
-        // 批准闸形状收紧（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：单题 + 含 id="approve" 的**批准闸**上，
+        // 批准闸形状收紧（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：单题 + 含 id="approve" 的**批准闸**上，
         // 只有真选中批准项才动档位——用户在闸上选「补充意见」是「别开工，我要改方案」，
         // 既不该走完整路径，也不该走轻量切档（此前任一有效应答都会把档位抬到自动编辑档）。
         // 非闸形状的普通 ConfirmEach 询问保持既有语义（任一有效应答 = 放开）。
@@ -354,9 +354,9 @@ impl Tool for AskTool {
             ),
         );
 
-        // 完整切换路径（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) 协议 / [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) arch 闸）：G2/G3 门 → 冻结 todos 基线 →
+        // 完整切换路径（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) 协议 / [docs/plan-and-approval](../../../../docs/plan-and-approval.md) arch 闸）：G2/G3 门 → 冻结 todos 基线 →
         // 切档 → 注入「执行方案」→ 返回 plan_approved。
-        // 条件收紧（[docs/preview-skill](../../../../docs/preview-skill.md) §3.4）：ConfirmEach 档的 arch 闸标记**不再单独**开启完整路径——
+        // 条件收紧（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：ConfirmEach 档的 arch 闸标记**不再单独**开启完整路径——
         // 此前 arch_flag 本身即条件，于是「有效应答」也算批准：用户在完整流水线批准门选「补充意见」
         // 会收到「方案已批准，请立即执行」并冻结基线（协议语义被污染）。现在只有真的选中批准项才走完整路径；
         // 其余有效应答仍按 ConfirmEach 既有语义落到下面的轻量切档（不冻结基线、不注入、无 plan_approved）。
@@ -364,7 +364,7 @@ impl Tool for AskTool {
             && (matches!(mode_at_open, crate::core::prefs::ApprovalMode::Plan)
                 || (arch_flag && approved))
         {
-            // G2/G3 硬门（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：批准生效前校验；失败则批准不生效（不切档、不注入）。
+            // G2/G3 硬门（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准生效前校验；失败则批准不生效（不切档、不注入）。
             if let Some(err) = plan_approval_gate(
                 ctx,
                 args.lightweight.unwrap_or(false),
@@ -413,7 +413,7 @@ impl Tool for AskTool {
                 "plan_approved": true,
             }));
         }
-        // 轻量切换路径（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：ConfirmEach 普通有效应答 → 单步切档 + 审计日志；
+        // 轻量切换路径（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：ConfirmEach 普通有效应答 → 单步切档 + 审计日志；
         // 不过门、不冻结基线（approved_plan 留空 → batch.rs 的范围确认不触发）、不注入。
         if switch {
             ctx.core
@@ -447,7 +447,7 @@ pub(super) fn is_approve_class(o: &Option2) -> bool {
     o.mode.is_some()
 }
 
-/// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准协议选项匹配（宽松）。id 命中 approve/execute 子串
+/// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准协议选项匹配（宽松）。id 命中 approve/execute 子串
 ///（既有 approved_hit 语义），或 label 含协议规定的计划批准措辞——label 才是模型
 /// 实际对齐协议文本的字段；id 自拟时 label 通常仍合规（真实案例：协议 label
 /// 保留、id 自拟）。label 匹配用完整两词短语而非裸动词，
@@ -465,17 +465,17 @@ pub(super) fn is_approve_option(o: &Option2) -> bool {
         || label.contains("approve")
 }
 
-/// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形 ask（宽松；仅驱动前端渲染单选与批准项直提——无安全语义）：
+/// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形 ask（宽松；仅驱动前端渲染单选与批准项直提——无安全语义）：
 /// 单题 ∧ 任一选项命中批准协议。严格形态（arch_gate_shape）另有用途，
 /// 两者不得混同。
 pub(super) fn approval_shape(questions: &[Question]) -> bool {
     questions.len() == 1 && questions[0].options.iter().any(is_approve_option)
 }
 
-/// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：主批准选项的 id（前端直提检测用；无批准项时返回 None）。
+/// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：主批准选项的 id（前端直提检测用；无批准项时返回 None）。
 /// 选档确认后语义修正：不再是「首个」——推荐项优先，其次按声明顺序的首个批准项；无批准项时返回 None
 ///（前端回退到严格检查）。
-/// 预览项从候选中剔除（[docs/preview-skill](../../../../docs/preview-skill.md)）：它的 label 万一含「执行方案/批准方案」，
+/// 预览项从候选中剔除（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：它的 label 万一含「执行方案/批准方案」，
 /// 宽松匹配会命中并把它当批准项下发给前端——前端据此把「先看预览」判成批准并真改档位（后端却因 preview_only 不切），
 /// 用户可见结果就是单边静默提权。
 pub(super) fn approve_option_id(questions: &[Question]) -> Option<String> {
@@ -493,12 +493,12 @@ pub(super) fn approve_option_id(questions: &[Question]) -> Option<String> {
         .map(|o| o.id.clone())
 }
 
-/// 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门单题询问的第四选项 `id="preview"`，
+/// 预览选项（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门单题询问的第四选项 `id="preview"`，
 /// 语义是「先看方案预览」——既不是批准（`is_approve_option` 不匹配），也不是**有效应答**：
 /// ConfirmEach 档的切档判定含 valid_answer，不排除它就会让用户点「先看预览」被静默切到自动编辑档。
 /// 只在批准形询问里认（普通澄清询问里的同名选项不受影响）。
 /// 识别与批准侧同策略：id 优先（大小写不敏感），**模型自拟 id 时按 label 兜底**
-///（[docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md) 记过「id 自拟、label 守约」的真实案例；
+///（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) 记过「id 自拟、label 守约」的真实案例；
 /// 认不出预览项，它就会落回「有效应答」→ 批准门被静默切档）。
 pub(super) fn is_preview_option(o: &Option2) -> bool {
     if o.id.eq_ignore_ascii_case("preview") {
@@ -576,7 +576,7 @@ pub(super) fn mode_label(mode: crate::core::prefs::ApprovalMode) -> &'static str
     }
 }
 
-/// [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：把完整方案文本落盘为计划文件 `<workspace>/.codewave/tasks/plan-<UTC 时间戳>-<rand4>.md`。
+/// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：把完整方案文本落盘为计划文件 `<workspace>/.codewave/tasks/plan-<UTC 时间戳>-<rand4>.md`。
 /// 失败返回 None（前端计划卡优雅降级为只显示题干），不阻塞 ask 流程。
 pub(super) fn save_plan_file(ctx: &ToolCtx, plan_text: &str) -> Option<String> {
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S%.3f");
@@ -606,7 +606,7 @@ pub(super) fn save_plan_file(ctx: &ToolCtx, plan_text: &str) -> Option<String> {
     }
 }
 
-/// [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件归属登记——落盘成功后写进会话产物边车并标记
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：计划文件归属登记——落盘成功后写进会话产物边车并标记
 /// 种类为 `plan`（清理时随会话连带删除；右栏「文件」面板不展示计划文件）。三条纪律同 create/edit 工具：
 /// 路径归一（`canonical_best_effort`）、任务运行态跳过（无产物消费方，避免边车泄漏）、
 /// 登记失败只记告警（绝不阻塞 ask 流程）。归属会话用既有的 `root_session_id ?? id` 口诀（子代理归属主会话）。
@@ -632,8 +632,8 @@ fn register_plan_artifact(ctx: &ToolCtx, resolved: &std::path::Path) {
     }
 }
 
-/// 切换判定（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) + [docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：Plan 档仅批准命中才切（协议不变）；
-/// ConfirmEach 档看 arch 批准闸标记（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md)）或任一有效应答（[docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）；
+/// 切换判定（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) + [docs/plan-and-approval](../../../../docs/plan-and-approval.md) + [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：Plan 档仅批准命中才切（协议不变）；
+/// ConfirmEach 档看 arch 批准闸标记（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）或任一有效应答（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）；
 /// AutoEdit/FullAccess 本就放开，仅当用户显式选档（选中带 mode 的批准类选项）才切——跨档允许，
 /// 可从任意档位跳到用户所选档位（C5：confirm_each/plan 可一次跳两档到 full_access）。
 pub(super) fn wants_mode_switch(
@@ -653,7 +653,7 @@ pub(super) fn wants_mode_switch(
     }
 }
 
-/// [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：有效应答检查——至少一题 selections 非空或 note 非空（trim 后）。
+/// [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：有效应答检查——至少一题 selections 非空或 note 非空（trim 后）。
 /// 与批准命中（approved_hit，匹配 execute/approve 子串）相互独立；分开持有以免
 /// 批准协议被任意应答语义污染。
 pub(super) fn has_valid_answer(questions: &[Question], answer: &Value) -> bool {
@@ -667,7 +667,7 @@ pub(super) fn has_valid_answer(questions: &[Question], answer: &Value) -> bool {
     })
 }
 
-/// [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：计划文件正文 = 所有题干按顺序拼接（多题 ask 每题一段，空行分隔）。
+/// [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：计划文件正文 = 所有题干按顺序拼接（多题 ask 每题一段，空行分隔）。
 pub(super) fn plan_text(questions: &[Question]) -> String {
     questions
         .iter()
@@ -676,7 +676,7 @@ pub(super) fn plan_text(questions: &[Question]) -> String {
         .join("\n\n")
 }
 
-/// 计划文件正文源选择：[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)
+/// 计划文件正文源选择：[docs/plan-and-approval](../../../../docs/plan-and-approval.md)
 /// ① 显式 plan 字段（trim 后非空才采信，防纯空白占位）；
 /// ② 本轮 assistant 正文兑底——仅当正文通过有效性判据才采信（与题干归一化不等价、长度不短于题干、不含 `<ask>` 示例残留）；
 /// ③ 仍拿不到真方案 → `None`（**不落盘不显示计划卡**）。
@@ -702,7 +702,7 @@ pub(super) fn usable_plan_body(
     Some(candidate.to_owned())
 }
 
-/// 正文兑底有效性判据（[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)）：
+/// 正文兑底有效性判据（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：
 /// 三重过滤避免「空壳计划卡」——
 /// ① 归一化后与题干拼接**不相等**（防「闲聊/过程叙述 = 题干」场景）；
 /// ② 长度**不短于**题干拼接长度（防「正文就是题干复读」场景）；
@@ -724,7 +724,7 @@ pub(super) fn is_usable_turn_body(turn_text: &str, questions: &[Question]) -> bo
     true
 }
 
-/// 取当轮 assistant 正文（[docs/ask-plan-card-and-option-shape](../../../../docs/ask-plan-card-and-option-shape.md)）：
+/// 取当轮 assistant 正文（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：
 /// `core/agent/drive.rs` 在 `run_tool_batch` 之前把当轮 assistant 消息 push 进 history，
 /// 所以 ask 工具运行时 `rt.history` 尾部即当轮正文。按 `Content::Text` 过滤拼接。
 ///

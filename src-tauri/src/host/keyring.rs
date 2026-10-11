@@ -1,4 +1,4 @@
-//! keyring 迁移（[docs/p1-plan](../../../docs/p1-plan.md) §7.2）：service 名 `codewave.yangshifu.xyz`，account = provider.id（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md) 起 key 归属 provider）。
+//! keyring 迁移（[docs/technical-design](../../../docs/technical-design.md)）：service 名 `codewave.yangshifu.xyz`，account = provider.id（[docs/providers-and-network](../../../docs/providers-and-network.md) 起 key 归属 provider）。
 //! 明文 key 迁入系统 keyring，config 中以占位符替代；解析时按占位符回读。
 //! keyring 不可用（如 Linux 无 Secret Service）时回退明文并在日志中注明。
 
@@ -109,13 +109,13 @@ pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
 /// 为一次性调用（title / compact 等无池场景）取首个可用 key。
 /// 必须先过 resolve_keys 解析 keyring 占位符：直接对 config 原始 keys 做 filter 式挑选
 ///（provider::keys::pick_key）对 keyring 用户（keys == ["__keyring__"]）会得到 None，
-/// 未带认证的请求将 401——[docs/topbar-migration-and-git-identity](../../../docs/topbar-migration-and-git-identity.md)
+/// 未带认证的请求将 401——[docs/chat-and-interface](../../../docs/chat-and-interface.md)
 /// 缺陷的根因；title/compact 现统一走此入口。
 pub fn pick_resolved_key(model: &ModelConfig) -> Option<String> {
     resolve_keys(model).into_iter().find(|k| !k.is_empty())
 }
 
-/// provider 级回读（订阅额度用，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+/// provider 级回读（订阅额度用，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 /// account = `provider.id`（key 归属 provider），占位符回读逻辑与 `resolve_keys` 同源。
 ///
 /// 与 `resolve_keys` 的差异：**回读失败必须返回 Err**——额度行态要据此区分
@@ -148,7 +148,7 @@ mod tests {
     use crate::core::config::{ProviderConfig, ProviderModel};
 
     /// 涉及真实 keyring 的测试必须串行：keyring 是机器全局资源，
-    /// 并发写→回读存在可见性竞态（[docs/topbar-migration-and-git-identity](../../../docs/topbar-migration-and-git-identity.md) 批次实测：两个 migrate
+    /// 并发写→回读存在可见性竞态（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 批次实测：两个 migrate
     /// 测试并发时间歇性 assert contains 失败）
     static KEYRING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn pick_resolved_key_all_placeholder_without_keyring_yields_none() {
-        // 占位符形态 + 不存在的 keyring 账户：解析为空 → None（[docs/topbar-migration-and-git-identity](../../../docs/topbar-migration-and-git-identity.md) 根因锚点）
+        // 占位符形态 + 不存在的 keyring 账户：解析为空 → None（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 根因锚点）
         let placeholder = ModelConfig {
             keys: vec![KEYRING_PLACEHOLDER.into()],
             keyring_accounts: vec!["nonexistent-account-xyz".into()],

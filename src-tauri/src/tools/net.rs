@@ -37,7 +37,7 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// 按主机的最小间隔节流（[docs/p1-plan](../../../docs/p1-plan.md) §2.1：1s）。
+/// 按主机的最小间隔节流（[docs/technical-design](../../../docs/technical-design.md)：1s）。
 pub struct HostThrottle {
     /// 主机 → 上次请求时刻。
     last: Mutex<HashMap<String, Instant>>,

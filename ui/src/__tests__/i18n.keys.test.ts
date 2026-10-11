@@ -1,5 +1,5 @@
 // i18n 双语键集合守护：新增/删除键必须双侧同步
-//（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
 // 此前仓库无此守护，漏改另一语言不会红；本用例把「中英对称」变成硬约束。
 import { describe, it, expect } from "vitest";
 import zh from "../i18n/zh-CN";
@@ -75,7 +75,7 @@ describe("i18n 键集合契约", () => {
   it("批④ 删除的键在 zh-CN 与 en-US 双侧都不得复活", () => {
     const zhKeys = new Set(keyPaths(zh));
     const enKeys = new Set(keyPaths(en));
-    // 批④（[docs/settings-terminology](../../../docs/settings-terminology.md)）：同义键收敛到 common.*、
+    // 批④（[docs/settings-guide](../../../docs/settings-guide.md)）：同义键收敛到 common.*、
     // 借用键拆成 settings.*、about 段整体迁入 settings.about* —— 这些旧键不得再出现
     for (const gone of [
       "settings.remove",
@@ -125,7 +125,7 @@ describe("i18n 键集合契约", () => {
     }
   });
 
-  it("速率段与统计总览的新键双侧对偶（[docs/composer-token-rate]）", () => {
+  it("速率段与统计总览的新键双侧对偶（[docs/chat-and-interface]）", () => {
     const zhKeys = new Set(keyPaths(zh));
     const enKeys = new Set(keyPaths(en));
     for (const key of [
@@ -144,7 +144,7 @@ describe("i18n 键集合契约", () => {
     }
   });
 
-  it("会话保留期与清理的新键双侧对偶且数量写死（[docs/session-cleanup]）", () => {
+  it("会话保留期与清理的新键双侧对偶且数量写死（[docs/sessions-and-projects]）", () => {
     const zhKeys = new Set(keyPaths(zh));
     const enKeys = new Set(keyPaths(en));
     // `settings.cleanup*` 是本批新增的一族（选项 / 禁用原因 / 确认框 / 完成提示 / 上次清理回显）：

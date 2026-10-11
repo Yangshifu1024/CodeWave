@@ -1,4 +1,4 @@
-// AskPanel refactor ([docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)): approval three options (incl. "always allow this project"), resolve payload / keyboard navigation / plan card
+// AskPanel refactor ([docs/plan-and-approval](../../../docs/plan-and-approval.md)): approval three options (incl. "always allow this project"), resolve payload / keyboard navigation / plan card
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import "../i18n"; // i18n init (nothing triggers it when rendering the component directly; otherwise t() returns the raw key)
@@ -59,7 +59,7 @@ function btnByText(text: string): HTMLElement {
   return b as HTMLElement;
 }
 
-describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
+describe("AskPanel（docs/plan-and-approval）", () => {
   it("命令审批渲染三选项（允许/始终允许本项目/拒绝），点击回车送达 {approved, always} 载荷", async () => {
     seedAsk({ askId: "a1", kind: "approval", title: "高危命令确认", detail: "$ rm -rf x", allowAlways: true });
     render(<AskPanel />);
@@ -90,7 +90,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(payload.always).toBe(false);
   });
 
-  // [docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7.3：范围门与命令审批的按钮后果
+  // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：范围门与命令审批的按钮后果
   // 完全不同，共用一套文案会让用户误判实际行为（后端已把「允许」改成并入基线而非仅此一次）。
   it("范围门审批（approvalKind=scope）渲染范围门专属文案：允许=纳入范围、始终允许=本会话不再询问", () => {
     seedAsk({
@@ -349,7 +349,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     });
     render(<AskPanel />);
     fireEvent.click(screen.getByText(/^甲/)); // select option A on question 1 (answer must be kept)
-    // Pager arrow enters the last page (bypassing ignore, keeping q1's answer); [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) turned the pager into bare .pager-btn icons
+    // Pager arrow enters the last page (bypassing ignore, keeping q1's answer); [docs/chat-and-interface](../../../docs/chat-and-interface.md) turned the pager into bare .pager-btn icons
     const pagerBtns = document.querySelectorAll(".ask-pager .pager-btn");
     fireEvent.click(pagerBtns[pagerBtns.length - 1]);
     expect(screen.getByText("第二题")).toBeTruthy();
@@ -359,7 +359,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(payload.answers.q1.selections).toContain("a"); // other question's answer kept
   });
 
-  it("docs/notification-click-reveal：多题 ask（planFile 落盘）渲染计划卡片（planBody 驱动） + page 1 题干仍可见", async () => {
+  it("docs/chat-and-interface：多题 ask（planFile 落盘）渲染计划卡片（planBody 驱动） + page 1 题干仍可见", async () => {
     seedAsk({      askId: "a9", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-x.md",
       planBody: "## 完整方案\n1. 改 A\n2. 验证 B",
@@ -378,7 +378,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "read_workspace_file")).toBe(true));
   });
 
-  it("docs/notification-click-reveal：confirm_each 档有效应答提交 → 胶囊同步切 auto_edit", async () => {
+  it("docs/chat-and-interface：confirm_each 档有效应答提交 → 胶囊同步切 auto_edit", async () => {
     seedAsk(
       {
         askId: "a10", kind: "ask",
@@ -395,7 +395,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(prefsCall?.args?.prefs?.approval_mode).toBe("auto_edit");
   });
 
-  it("docs/notification-click-reveal：confirm_each 档空应答提交 → 不切档不调 set_session_prefs", async () => {
+  it("docs/chat-and-interface：confirm_each 档空应答提交 → 不切档不调 set_session_prefs", async () => {
     seedAsk(
       {
         askId: "a11", kind: "ask",
@@ -409,7 +409,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
   });
 
-  it("docs/notification-click-reveal：plan 档空应答不触发胶囊同步（协议不变）", async () => {
+  it("docs/chat-and-interface：plan 档空应答不触发胶囊同步（协议不变）", async () => {
     seedAsk({
       askId: "a12", kind: "ask",
       questions: [{ id: "q1", question: "选一个", options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }] }],
@@ -420,7 +420,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
   });
 
-  it("docs/notification-click-reveal：plan 档批准直提（执行方案）→ 胶囊同步切 auto_edit（planPath 分支）", async () => {
+  it("docs/chat-and-interface：plan 档批准直提（执行方案）→ 胶囊同步切 auto_edit（planPath 分支）", async () => {
     seedAsk({
       askId: "a13", kind: "ask",
       questions: [{ id: "q1", question: "选一个", options: [{ id: "approve", label: "执行方案" }, { id: "revise", label: "补充意见" }] }],
@@ -432,7 +432,7 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
     expect(prefsCall?.args?.prefs?.approval_mode).toBe("auto_edit");
   });
 
-  it("docs/notification-click-reveal：confirm_each + switchToAutoEdit 批准形 → 胶囊同步（flag 通道）", async () => {
+  it("docs/chat-and-interface：confirm_each + switchToAutoEdit 批准形 → 胶囊同步（flag 通道）", async () => {
     seedAsk(
       {
         askId: "a14", kind: "ask", switchToAutoEdit: true,
@@ -488,9 +488,9 @@ describe("AskPanel（docs/run-queue-and-ask-revamp）", () => {
   });
 });
 
-// ---------- [docs/ask-approval-shape-note-nav](../../../docs/ask-approval-shape-note-nav.md): approval-shape lenient detection + option visuals + note input in the keyboard ring ----------
+// ---------- [docs/plan-and-approval](../../../docs/plan-and-approval.md): approval-shape lenient detection + option visuals + note input in the keyboard ring ----------
 
-describe("AskPanel docs/ask-approval-shape-note-nav", () => {
+describe("AskPanel docs/plan-and-approval", () => {
   afterEach(() => {
     cleanup();
     calls.length = 0;
@@ -915,9 +915,9 @@ describe("AskPanel 多题提交分页", () => {
   });
 });
 
-// ---------- 批准门选档（[docs/mode-gate-and-subagent-sync]）：选项带 mode 即直提 + 胶囊按实际档位同步 ----------
+// ---------- 批准门选档（[docs/plan-and-approval]）：选项带 mode 即直提 + 胶囊按实际档位同步 ----------
 
-describe("AskPanel 批准门选档（[docs/mode-gate-and-subagent-sync]）", () => {
+describe("AskPanel 批准门选档（[docs/plan-and-approval]）", () => {
   afterEach(() => {
     cleanup();
     calls.length = 0;
@@ -1016,7 +1016,7 @@ describe("AskPanel 批准门选档（[docs/mode-gate-and-subagent-sync]）", () 
   });
 });
 
-// ---------- 档位已经是 auto_edit / full_access 时的胶囊同步（[docs/mode-gate-and-subagent-sync]） ----------
+// ---------- 档位已经是 auto_edit / full_access 时的胶囊同步（[docs/plan-and-approval]） ----------
 // 缺陷复现：后端 wants_mode_switch 对 AutoEdit / FullAccess 档也返回 mode_requested（会切档），
 // 但前端同步条件曾只看当前档是不是 plan / confirm_each——两条路径全假 → 不发 set_session_prefs，
 // 于是胶囊与后端档位分叉，之后任意一次 prefs 全量写入又把后端档位静默翻回去（无测试守护）。
@@ -1110,7 +1110,7 @@ describe("AskPanel 高档位下的胶囊同步", () => {
 // approve_full 的 id 含 "approve" 子串，会额外命中 submitWith 里的宽松兼容路径（/approve|执行方案/i），
 // 故必须钉住「档位取自所选选项声明的 mode，不被兼容路径改回 auto_edit」，以及 preview 第四选项的语义。
 
-describe("AskPanel 四选项批准门（[docs/mode-gate-and-subagent-sync] × [docs/preview-skill]）", () => {
+describe("AskPanel 四选项批准门（[docs/plan-and-approval] × [docs/plan-and-approval]）", () => {
   afterEach(() => {
     cleanup();
     calls.length = 0;
@@ -1324,7 +1324,7 @@ describe("AskPanel 四选项批准门（[docs/mode-gate-and-subagent-sync] × [d
 // ---------- 违约载荷：预览项被挂上 mode（协议外）——所有切档通道都必须与后端 !preview_only_answer 同口径 ----------
 // 协议规定预览项不带 mode（语义「先看预览」= 不批准、不切档）。模型偏离协议时，前端若只看 approvedMode /
 // approved 就会单边切档，而后端 switch = !preview_only_answer && … 根本不切 → 单边静默提权。
-describe("AskPanel 违约载荷：预览项挂 mode（[docs/preview-skill] × [docs/mode-gate-and-subagent-sync]）", () => {
+describe("AskPanel 违约载荷：预览项挂 mode（[docs/plan-and-approval] × [docs/plan-and-approval]）", () => {
   afterEach(() => {
     cleanup();
     calls.length = 0;
@@ -1403,7 +1403,7 @@ describe("AskPanel 违约载荷：预览项挂 mode（[docs/preview-skill] × [d
   });
 });
 
-// ---------- [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+// ---------- [docs/plan-and-approval](../../../docs/plan-and-approval.md)：
 // planBody 驱动卡片正文 + inferSingle 启发式推断（覆盖面：选项数 ≤ 4 且无 multi 关键词 → radio；
 // 选项数 / 题干 / 选项 label 同时往 multi 语义偏转才走 multi，以「尽量约束多选误达成单选」为安全默认）。
 
@@ -1540,7 +1540,7 @@ describe("AskPanel planCard 与互斥推断", () => {
 });
 
 
-// ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门「先看预览」→ 置位一次性信号
+// ---------- [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准门「先看预览」→ 置位一次性信号
 // 「本 run 第一张合格 widget 自动弹框」（widget 侧联动见 widget.preview.test.tsx）。
 // 信号层（run store 字段 + armWidgetAutoOpen / consumeWidgetAutoOpen）由并行任务包落地；
 // 本组用例走真 store，直接验「预览应答 → 置位」与「其余应答 → 不置位」这条边界。
@@ -1550,7 +1550,7 @@ function widgetAutoOpen() {
   return useRun.getState().st("s1").widgetAutoOpen;
 }
 
-describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/preview-skill]）", () => {
+describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/plan-and-approval]）", () => {
   afterEach(() => {
     cleanup();
     calls.length = 0;
@@ -1624,7 +1624,7 @@ describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/p
   });
 });
 
-// ---------- 选项排版：说明独占下一行 + 与标题左边界对齐（[docs/ask-option-desc-wrap]） ----------
+// ---------- 选项排版：说明独占下一行 + 与标题左边界对齐（[docs/chat-and-interface]） ----------
 // happy-dom 不做布局，「下一行 + 左边界对齐」无法直接量；只能钉住它的**结构前提**：
 // 说明与标题同处 .opt-body 列容器、且说明是标题行（.opt-head）的下一个兄弟——
 // 两者同列 + head 在前，即「独占下一行且左边界一致」。谁把 .desc 挪回 .ask-opt 平级就会红。

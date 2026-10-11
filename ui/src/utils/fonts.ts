@@ -1,4 +1,4 @@
-// 自定义字体偏好（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）：
+// 自定义字体偏好（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 双槽位——sans（界面）/ mono（代码与日志）；值为逗号分隔的已安装字体名，空 = 默认链。
 //
 // 持久化（2026-09-19 修正）：**真源在后端配置文件**（`config.ui.font_sans` / `font_mono`，经

@@ -1,4 +1,4 @@
-//! 会话历史里的图片外置存储（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+//! 会话历史里的图片外置存储（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
 //! 历史文件（gzip 后 8MB 上限）里只留 `image_blob` 引用，base64 原文落到
 //! `sessions/<owner>.imgblob/<blob>`。
 //!

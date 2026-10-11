@@ -1,4 +1,4 @@
-// 应用内自动更新的流程控制（tauri-plugin-updater，[docs/version-bump-and-release](../../../docs/version-bump-and-release.md)）：
+// 应用内自动更新的流程控制（tauri-plugin-updater，[docs/release](../../../docs/release.md)）：
 // 检查 → 发现新版本（弹窗展示发布说明）→ 下载安装（弹窗进度条）→ 重启进新版。
 //
 // 入口：
@@ -69,7 +69,7 @@ export async function checkForUpdate({ silent = false }: { silent?: boolean } = 
 
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
-    // 更新请求跟随网络代理设置（[docs/network-proxy-settings](../../../docs/network-proxy-settings.md)）：
+    // 更新请求跟随网络代理设置（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
     // 插件命令层 check 原生接受 proxy 且 download/install 复用同一 Update 上的代理；null（直连/无代理）时不传保持默认
     const proxy = await ipc.resolveProxy().catch(() => null);
     if (!fresh()) return;

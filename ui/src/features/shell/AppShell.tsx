@@ -42,7 +42,7 @@ import {
 } from "../../utils/layout";
 import { useTitlebarActivation } from "./useTitlebar";
 
-/** run 终态看门狗轮询间隔（[docs/run-terminal-event-fallback](../../../../docs/run-terminal-event-fallback.md)）：
+/** run 终态看门狗轮询间隔（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
  *  只在本地确有未收敛状态时才发 IPC，故正常运行时零开销；间隔大小只影响「真卡住」时的恢复延迟。 */
 const RUN_SETTLE_WATCHDOG_MS = 5000;
 
@@ -89,7 +89,7 @@ function SiderFooter() {
   const info = useGitInfo();
   const seed = info.email || info.name || "";
   const initial = seed ? [...seed][0]!.toUpperCase() : "?";
-  // [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)：默认生成态头像黑底白字；未配置身份保留灰色「?」作视觉区分
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：默认生成态头像黑底白字；未配置身份保留灰色「?」作视觉区分
   const bg = seed ? "#000" : "var(--ws-border)";
   return (
     <div className="sider-footer">
@@ -205,7 +205,7 @@ function ExitConfirm() {
   const { t } = useTranslation();
   const request = useUi((s) => s.exitRequest);
   // 设置页有未保存改动时，设置侧的三选弹框先接管（同一份文案/行为，第四条路径；处置完 save/discard 后
-  // 脏标记清零，本弹框自然接管运行中会话的确认）——[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)
+  // 脏标记清零，本弹框自然接管运行中会话的确认）——[docs/settings-guide](../../../../docs/settings-guide.md)
   const settingsDirty = useUi((s) => s.settingsDirty);
   const settingsOpen = useUi((s) => s.settingsOpen);
   const answer = (action: "wait" | "abort" | "cancel") => {
@@ -255,13 +255,13 @@ function ExitConfirm() {
  *  右键菜单抑制与全局快捷键（Esc 停止 / Cmd+W 关 Tab / Cmd+L 聚焦输入 / Cmd+←→ 切 Tab）。 */
 export default function AppShell() {
   const { t } = useTranslation();
-  // 自绘标题栏激活（[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)）：挂载即触发；mode/平台标记写入 <html data-*> 供 CSS 分支
+  // 自绘标题栏激活（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：挂载即触发；mode/平台标记写入 <html data-*> 供 CSS 分支
   useTitlebarActivation();
   // 启动静默检查更新（延迟 3s，可用 ws_auto_update=false 关闭；有更新才弹窗）
   useStartupUpdateCheck();
   const activeKey = useSessions((s) => s.activeKey);
   const explorerOpen = useSessions((s) => s.explorerOpen);
-  // 可拖拽栏宽（[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+  // 可拖拽栏宽（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
   // 显示宽度按当前窗口夹取（只夹显示、不改记忆值）；折叠态宽度仍为 0。
   const { nav: navWidth, rightBar: rightBarWidth, windowWidth } = useDisplayWidths();
   const rightBarOpen = useUi((s) => s.rightBarOpen);
@@ -314,7 +314,7 @@ export default function AppShell() {
       // 只急切加载活跃 Tab；其余保持骨架（loaded=false），首次激活时由 sessions.activate 惰性加载
       if (restoredKey) useSessions.getState().activate(restoredKey);
 
-      // 启动自动清理提示（会话保留期与清理，[docs/session-cleanup](../../../../docs/session-cleanup.md)）：
+      // 启动自动清理提示（会话保留期与清理，[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
       // 后端在应用启动时已按保存的保留期清理过一次，结果写在状态文件里；这里只读一次，不再触发任何清理。
       // 位置在 hydrate 之后（上面的顺序约束——绑定 → 配置 → 两份列表 → 恢复——一律不动）。
       // 去重与设置页共用 utils/cleanupNotice：用户在设置页看过这次结果后，下次启动不再为同一件事提醒
@@ -339,7 +339,7 @@ export default function AppShell() {
     };
   }, []);
 
-  // run 终态看门狗（[docs/run-terminal-event-fallback](../../../../docs/run-terminal-event-fallback.md)）：
+  // run 终态看门狗（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
   // run 的收尾状态此前**只有** `run:done` / `run:error` / `run:cancelled` 三个一次性事件一个入口，
   // 而挂在它们身上的 `settleRunningSubs` / `closeRunningTools` / ask 清理会随之一起失效——
   // 丢一帧即永久卡死（子代理卡转圈，或 ask 面板残留导致整个输入区不可用）。
@@ -377,7 +377,7 @@ export default function AppShell() {
 
   // macOS 应用菜单动作（macOS app-menu 批次）：后端把自定义菜单项（关于 / 设置 / 检查更新）
   // 经 menu:action 路由至此，三项均打开应用内界面：「关于」落到设置页第 8 页
-  // （批② 起不再有独立弹框，[docs/settings-ia](../../../../docs/settings-ia.md)）/ 设置页 / 更新检查弹窗。
+  // （批② 起不再有独立弹框，[docs/settings-guide](../../../../docs/settings-guide.md)）/ 设置页 / 更新检查弹窗。
   // 检查更新走共享流程 utils/updateCheck（check → 弹窗展示发布说明 → 下载安装 → 重启；
   // Windows/Linux 从设置页「关于」的手动检查按钮触发）。
   useEffect(() => {
@@ -426,8 +426,8 @@ export default function AppShell() {
       if (e.key === "Escape") {
         // 设置页 / 计划任务页打开时不在此处置：Esc 归该全屏页（先关页内浮层，否则走「返回工作区」拦截），
         // 事件目标可能是 body 而不在 .settings-shell / .tasks-shell 内，光靠下面的 closest 白名单会漏掉
-        // （[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)、
-        //  [docs/tasks-module-polish](../../../../docs/tasks-module-polish.md)）。
+        // （[docs/settings-guide](../../../../docs/settings-guide.md)、
+        //  [docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）。
         // 任何情况下都不得因全屏页而停止运行中会话。
         if (useUi.getState().settingsOpen || useUi.getState().tasksOpen || useUi.getState().dashboardOpen) return;
         // 弹窗/抽屉/浮层/输入框内的 Esc 交给组件库；勿误停运行（两个全屏页同列：页内也归自己处置）
@@ -468,9 +468,9 @@ export default function AppShell() {
         className="toolbar"
         style={{ background: "var(--ws-panel)", borderBottom: "1px solid var(--ws-border)" }}
       >
-        {/* 标题栏拖拽层（docs/custom-font-and-titlebar）：铺满顶栏底部；Tauri drag.js 只认目标自身标记，
+        {/* 标题栏拖拽层（docs/chat-and-interface）：铺满顶栏底部；Tauri drag.js 只认目标自身标记，
             内容以 z-1 悬于其上——空白处拖动窗口、按钮照常可用。
-            两段式内容（docs/titlebar-content-batch）已自带 drag-region 标记覆盖整个顶栏，本层只兜底
+            两段式内容（docs/chat-and-interface）已自带 drag-region 标记覆盖整个顶栏，本层只兜底
             drag.js 的行为缝隙（如段间瞬态接缝），不再承担主拖拽职责。 */}
         <div className="titlebar-drag-zone" data-tauri-drag-region />
         <TopBar />
@@ -478,8 +478,8 @@ export default function AppShell() {
 
       <Layout style={{ flex: 1, minHeight: 0, position: "relative" }}>
         {/* Sider 外壳两态恒保留：antd 以真实 Sider 子组件判定 has-sider 水平布局，
-            换成普通 div 会让内层 Layout 翻成垂直排布、内容区被压成 0（docs/sidebar-toggle-buttons 缺陷修复）。
-            docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
+            换成普通 div 会让内层 Layout 翻成垂直排布、内容区被压成 0（docs/chat-and-interface 缺陷修复）。
+            docs/chat-and-interface 窄轨退役：折叠宽 0 = 完全隐藏——antd 0.2s 缓动宽度，
             -zero-width 修饰类裁切子内容，内容恒挂载、折叠动画平滑 */}
         <Sider
           className={workspaceCovered ? "workspace-covered" : undefined}
@@ -490,7 +490,7 @@ export default function AppShell() {
             borderRight: explorerOpen ? "1px solid var(--ws-border)" : "1px solid transparent",
           }}
         >
-          {/* 左栏开合入口收口到标题栏 Logo（悬停同位交换箭头，docs/titlebar-logo-toggle）；侧栏内不再有开关按钮 */}
+          {/* 左栏开合入口收口到标题栏 Logo（悬停同位交换箭头，docs/chat-and-interface）；侧栏内不再有开关按钮 */}
           <div className="sider-body">
             <Button style={{ margin: "12px 12px 0", flex: "none" }} icon={<DashboardOutlined />}
               type={dashboardOpen ? "primary" : "default"} aria-pressed={dashboardOpen}
@@ -554,11 +554,11 @@ export default function AppShell() {
           />
         )}
 
-        {/* 设置全屏页（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)）：覆盖式贴在内层 Layout 上。
+        {/* 设置全屏页（[docs/settings-guide](../../../../docs/settings-guide.md)）：覆盖式贴在内层 Layout 上。
             工作区（Sider/Content/ChatMessages/Composer/RightBar）全程挂载，只是 .workspace-covered 隐藏可见性——
             绝不用 display:none（ResizeObserver 会测到 0 尺寸、滚动容器错乱，从而影响运行中任务）。 */}
         {settingsOpen && <SettingsPage />}
-        {/* 计划任务页（[docs/tasks-module-polish]）：与设置页同为覆盖式全屏页，工作区全程挂载不卸载。
+        {/* 计划任务页（[docs/runtime-and-scheduling]）：与设置页同为覆盖式全屏页，工作区全程挂载不卸载。
             必须挂在**内层 Layout**（position:relative）里——`.tasks-shell` 是 absolute inset:0，
             挂到外层会连自绘标题栏一起盖住（度量必须与设置页一致）。 */}
         {tasksOpen && <TasksPage />}
@@ -570,7 +570,7 @@ export default function AppShell() {
       {/* 退出拦截 / 关 Tab 二次确认：两者都挂在 store 请求位上，只在 AppShell 渲染这一处 */}
       <ExitConfirm />
       <CloseTabConfirm />
-      {/* docs/subagent-interaction-drawer：子代理过程抽屉（每 Tab 态；关闭不销毁，经 Portal 渲入 body） */}
+      {/* docs/subagents：子代理过程抽屉（每 Tab 态；关闭不销毁，经 Portal 渲入 body） */}
       <SubagentDrawer />
 
       <div className="notify-stack">

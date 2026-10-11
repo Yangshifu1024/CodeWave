@@ -1,4 +1,4 @@
-// 界面字体设置（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）：
+// 界面字体设置（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 提交不丢（回车 / 失焦 / 停手 / 卸载四处）+ 后端真源落盘 + 输入法组合态保护 + 未编辑不写存储。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";

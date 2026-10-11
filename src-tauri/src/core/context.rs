@@ -1,4 +1,4 @@
-//! 上下文管理（G10，[docs/p0-plan](../../../docs/p0-plan.md) §11）：分节 token 计账（30s 缓存）+ 自动压缩。
+//! 上下文管理（G10，[docs/technical-design](../../../docs/technical-design.md)）：分节 token 计账（30s 缓存）+ 自动压缩。
 //! 摘要请求走同一 Provider 层；摘要 prompt 结构为 CodeWave 原创五段式。
 
 use crate::core::agent::{AgentCore, SessionRuntime};
@@ -58,7 +58,7 @@ pub const SUMMARY_MAX_TOKENS: u32 = 8000;
 /// 压缩摘要请求默认超时秒数（可经 config.compact_timeout_seconds 覆盖，钳到 [30, 3600]）。
 pub const DEFAULT_SUMMARY_TIMEOUT_SECS: u64 = 180;
 
-/// 会话生效配置下的压缩超时（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)：长上下文慢 provider 时 180s 可能不够）。
+/// 会话生效配置下的压缩超时（[docs/tools-and-safety](../../../docs/tools-and-safety.md)：长上下文慢 provider 时 180s 可能不够）。
 fn summary_timeout(cfg: &crate::core::config::ConfigState) -> std::time::Duration {
     std::time::Duration::from_secs(cfg.compact_timeout_seconds.clamp(30, 3600))
 }
@@ -74,7 +74,7 @@ pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdow
         }
     }
     let cfg = core.cfg.read().unwrap().clone();
-    // 上下文窗口跟随会话生效模型（覆盖优先，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
+    // 上下文窗口跟随会话生效模型（覆盖优先，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
     let window = crate::core::prefs::effective_model(&cfg, &rt.prefs())
         .map(|m| m.context_window)
         .unwrap_or(128_000)
@@ -166,7 +166,7 @@ KEY_FILES: 关键文件，每行一个，格式为 `path - why`
 内容务必密集、只写事实。不要寒暄，不要 markdown 代码围栏。"#;
 
 /// 自动/手动压缩：结构化摘要整体替换历史；原历史归档到 tmp/compacted/。
-/// 返回压缩调用自身的 usage（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md) 计账：kind=compact；
+/// 返回压缩调用自身的 usage（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 计账：kind=compact；
 /// usage 缺失时以估算兜底）。
 pub async fn compact_history(
     core: &std::sync::Arc<AgentCore>,
@@ -177,7 +177,7 @@ pub async fn compact_history(
     // 目标模式已删除：预算/运行闸门不再按目标档约束。
     let _ = rt;
     let cfg = core.cfg.read().unwrap().clone();
-    // 压缩请求使用会话生效模型（覆盖优先，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）；
+    // 压缩请求使用会话生效模型（覆盖优先，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）；
     // 摘要输出上限压到 SUMMARY_MAX_TOKENS（兑现该常量的声明意图，此前只声明未接线）
     let mut model = crate::core::prefs::effective_model(&cfg, &rt.prefs()).ok_or("未配置模型")?;
     model.max_tokens = model.max_tokens.min(SUMMARY_MAX_TOKENS);
@@ -253,7 +253,7 @@ pub async fn compact_history(
         }
         out
     });
-    // key 解析必须走钥匙串占位符解析器（[docs/topbar-migration-and-git-identity](../../../docs/topbar-migration-and-git-identity.md)）：否则钥匙串
+    // key 解析必须走钥匙串占位符解析器（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：否则钥匙串
     // 用户（keys 含占位符）会拿到 None 并发出未鉴权请求（401）；
     // 解析为空则短路进既有的压缩失败路径
     let Some(key) = crate::host::keyring::pick_resolved_key(&model) else {
@@ -262,7 +262,7 @@ pub async fn compact_history(
     // 读锁 clone（std 锁不能跨 await）；save_config 热替换后此处取到新代理的 client
     let client = core.client.read().unwrap().clone();
     let fut = crate::provider::stream_model(&client, &model, Some(key), req, tx, cancel.clone());
-    // H2 修复：压缩响应可取消（cancel = 放弃本次压缩）；超时可配置（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）
+    // H2 修复：压缩响应可取消（cancel = 放弃本次压缩）；超时可配置（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）
     let usage = tokio::select! {
         _ = cancel.cancelled() => return Err("压缩已取消".into()),
         r = tokio::time::timeout(summary_timeout(&cfg), fut) => {
@@ -294,7 +294,7 @@ pub async fn compact_history(
     {
         new_history.push(last_user.clone());
     }
-    // 替换前的不可中断窗口（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // 替换前的不可中断窗口（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
     // 上面 `cancel.cancelled()` 只守住了**摘要请求**那一段；从摘要拿到到执行下面这行替换
     // 之间没有 await，故取消不会在此生效。但 steer 恰好落在这个窗口里是有后果的：
     // 注入消化（drive 步循环②）发生在压缩**之前**，用户刚说的话已经进了 history，
@@ -311,7 +311,7 @@ pub async fn compact_history(
     rt.last_input_tokens
         .store(0, std::sync::atomic::Ordering::SeqCst);
 
-    // 压缩调用自身的 token 计账（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)）：独立 kind=compact，不再凭空蒸发
+    // 压缩调用自身的 token 计账（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：独立 kind=compact，不再凭空蒸发
     core.stats.record(crate::core::stats::UsageRecord {
         session: rt.id.clone(),
         model_id: model.id.clone(),

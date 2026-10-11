@@ -1,4 +1,4 @@
-// 配置保存链路上的清理结果透传（[docs/session-cleanup](../../docs/session-cleanup.md) §3 第 12/16 条）：
+// 配置保存链路上的清理结果透传（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 12/16 条）：
 // 设置页要拿「本次清理删了几个会话」来弹确认框/报完成提示，所以 store 的 save 必须带 skipCleanup 参数
 // 并把后端返回的清理结果原样交回调用方——既不吞返回值，也不吞异常（保存没成功就不入 store）。
 // 惯例：唯一 invoke 入口 ui/src/ipc/client 必须 mock（不直接 mock @tauri-apps/api/core）。

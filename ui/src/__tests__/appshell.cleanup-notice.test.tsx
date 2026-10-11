@@ -1,4 +1,4 @@
-// AppShell 启动自动清理提示（会话保留期与清理 · [docs/session-cleanup](../../../docs/session-cleanup.md)）——
+// AppShell 启动自动清理提示（会话保留期与清理 · [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）——
 // 「启动时的那一次清理有删除就轻提示一次」这一跳的回归。
 //
 // 为什么必须有这条测试：清理的执行在后端，前端只有「读状态 → 判断要不要提示 → 提示」三行逻辑，

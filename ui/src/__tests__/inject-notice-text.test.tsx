@@ -1,4 +1,4 @@
-// run:inject 通知行显示注入正文（[docs/steer-run-inject](../../../docs/steer-run-inject.md)）：
+// run:inject 通知行显示注入正文（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
 // 载荷带 texts（用户从运行队列「↑ 立即」steer 进来的真实消息）时，通知行显示「注入 N 条消息：」并逐条渲染正文；
 // texts 缺省 / 为空 / 全空白（ask 方案批准注入、旧后端）时逐字回落旧的单行通知。
 //

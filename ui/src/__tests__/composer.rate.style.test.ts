@@ -1,4 +1,4 @@
-// 速率段样式契约（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：
+// 速率段样式契约（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 上下文/命中挪到进度圈 hover 的 Popover 后，.toolbar-info 只剩速率段；
 // 速率保持中性次级灰、不做分档着色；「在跑」点必须尊重 prefers-reduced-motion。
 // happy-dom 不做布局 → 断言源码 CSS（同 ask.style.test.ts）。

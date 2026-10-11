@@ -12,7 +12,7 @@ pub struct Args {
     items: Vec<String>,
 }
 
-/// 计划纪律硬门（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.1）：
+/// 计划纪律硬门（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
 /// 主会话 + 本 run 碰过计划 + 计划仍有未完成项 → 不得以 suggest 宣告完成。
 ///
 /// 为什么要 gate（与 `drive::text_turn_action` 的 `todos_pending` 同源、但走另一条路径）：
@@ -58,7 +58,7 @@ impl Tool for SuggestTool {
         "suggest"
     }
     fn description(&self) -> &'static str {
-        "向用户提供 1–4 条可点击的后续建议；完成工作后作为收尾动作调用，可与 read/grep/list_files 等只读工具同批（[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)，与 ask/wait 不同——这两个仍独占）。
+        "向用户提供 1–4 条可点击的后续建议；完成工作后作为收尾动作调用，可与 read/grep/list_files 等只读工具同批（[docs/tools-and-safety](../../../docs/tools-and-safety.md)，与 ask/wait 不同——这两个仍独占）。
 
 入参 `items` 是 **`string[]`**（1–4 条字符串，每条 ≤80 字符、不能为空）。
 

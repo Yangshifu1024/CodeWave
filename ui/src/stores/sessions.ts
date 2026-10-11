@@ -1,4 +1,4 @@
-// 会话与多 Tab 状态：会话依附于「项目」（单主目录，docs/12 语义）或作为临时会话免目录存在
+// 会话与多 Tab 状态：会话依附于「项目」（单主目录，docs/sessions-and-projects 语义）或作为临时会话免目录存在
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
 import type { ProjectEntry, SessionMeta, SessionPrefs } from "../ipc/types";
@@ -17,7 +17,7 @@ export interface Tab {
   title: string;
   projectId: string | null;
   createdAt: string; // 会话创建时间
-  /** 会话级运行参数（审批档/模型/力度，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）；前端为事实源，后端镜像 */
+  /** 会话级运行参数（审批档/模型/力度，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）；前端为事实源，后端镜像 */
   prefs: SessionPrefs;
   /** 骨架标记（会话保存与恢复优化 · 批1）：false = 仅骨架（重启恢复的非活跃 Tab，首次激活才拉消息）；
    *  缺省/true = 已加载（新建会话与从导航打开）——大量既有构造点无需改动，只有恢复路径显式写 false */
@@ -66,18 +66,18 @@ interface SessionsState {
   projectsLoadFailed: boolean;
   projects: ProjectEntry[];
   loading: boolean;
-  /** [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：会话结束未读点（用户离开时 run done/error 置位）。仅内存态，不持久化 */
+  /** [docs/chat-and-interface](../../../docs/chat-and-interface.md)：会话结束未读点（用户离开时 run done/error 置位）。仅内存态，不持久化 */
   unread: Record<string, boolean>;
   /** run.ts 的 handler 在运行结束时调用；幂等；活跃会话由 subscribe 层自动清除 */
   markUnread(sessionId: string): void;
   clearUnread(sessionId: string): void;
-  /** 左栏开合状态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
+  /** 左栏开合状态（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：localStorage 记忆，重启保留 */
   explorerOpen: boolean;
   setExplorerOpen(open: boolean): void;
   refresh(): Promise<void>;
   loadProjects(): Promise<void>;
   /** 重启恢复（会话保存与恢复优化 · 批1）：按 ui-state 重建 Tab 骨架；会话已删/项目已删的引用静默剔除。
-   *  「会话列表不可信」守卫（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 28 条）：
+   *  「会话列表不可信」守卫（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 28 条）：
    *  上一次 refresh 失败时跳过会话维度的剔除，不因一次 IPC 抖动清空工作现场。
    *  返回保留下来的 sessionId（顺序同 Tab 条），活跃 Tab 失效时回落邻位（同项目优先） */
   restoreTabs(input: {
@@ -101,7 +101,7 @@ interface SessionsState {
   /** 落实关 Tab 确认结果：discard = 丢弃未发送内容；keep = 搬进驻留表（重开该会话时回填） */
   resolveCloseTab(key: string, choice: "discard" | "keep"): void;
   removeSession(meta: SessionMeta): Promise<void>;
-  /** 应用清理结果（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 15 条）：把被清理掉的会话从前端
+  /** 应用清理结果（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 15 条）：把被清理掉的会话从前端
    *  现场收干净——丢弃驻留内容 → 清运行态 → 关 Tab（活跃 Tab 被关则回落）→ 刷新会话列表；
    *  返回被关闭的 Tab 数（设置页据此报「关闭 M 个标签页」） */
   applyCleanup(ids: string[]): number;
@@ -129,7 +129,7 @@ const prefsSeq = new Map<string, number>();
 
 /** 拉取会话内容并回填运行态（从导航打开与惰性激活共用的唯一加载路径）。
  *  抛出交给调用方浮出（H-4：loadSession 失败不得静默）。
- *  meta 可选（[docs/session-history-limits](../../../docs/session-history-limits.md)）：历史保存状态（history_status）挂在会话索引上，
+ *  meta 可选（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：历史保存状态（history_status）挂在会话索引上，
  *  重开/重启后仍可见——调用方没拿到 meta 时回退到本 store 的会话列表快照（不新增 IPC）。 */
 const tabLoads = new Map<string, Promise<void>>();
 const tabLoadEpochs = new Map<string, number>();
@@ -176,10 +176,10 @@ async function doLoadTabContent(tab: Tab, meta: SessionMeta | undefined, epoch: 
     // 两种形态任一存在即取（都缺 = 空 → 界面不渲染分隔线，也不报错）。
     boundaries: page.boundaries ?? page.paging?.boundaries,
   });
-  // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
+  // 回读会话级运行参数：同进程内关 Tab 再重开后与后端运行时对齐（漂移防护，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   void useSessions.getState().syncPrefs(tab.sessionId);
   // M4：同进程关 Tab 不打断后端运行——重开时与后端**双向**对账。
-  // [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：原先这里只置 true
+  // [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)：原先这里只置 true
   // （`if (running) markRunning(...)`），陈旧的 `running = true` 永远不会被纠正——注释自称「漂移防护」，
   // 却恰好漏掉本缺陷所属的「后端已停、前端还认为在跑」那个方向。
   await useRun.getState().reconcileRun(tab.sessionId);
@@ -235,7 +235,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
     const { sessions, projects, sessionsLoadFailed, projectsLoadFailed } = get();
     // 两份列表都可信才做失效引用剔除（会话维度、项目维度同一条件）：refresh / loadProjects 失败时，
     // 手里这份列表可能是旧的或压根没加载过，按「未知即已删」整表剔除会把用户的 Tab 全清掉。
-    // 会话列表守卫见 [docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 28 条；项目列表此前是
+    // 会话列表守卫见 [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 28 条；项目列表此前是
     // 失败置空数组（loadProjects 的 .catch(() => [])），一次 IPC 抖动会连项目 Tab 一起剔光，本次一并收口。
     // 列表真的为空（用户确实没有会话 / 项目）而两次加载都成功时，trusted 仍为 true，照旧剔除。
     const trusted = !sessionsLoadFailed && !projectsLoadFailed;
@@ -588,7 +588,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   },
 }));
 
-// ---------- 未读点清除（[docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)） ----------
+// ---------- 未读点清除（[docs/chat-and-interface](../../../docs/chat-and-interface.md)） ----------
 // 不变式：活跃会话永远无未读。activeKey 一变即清——
 // openSession/revealSession/cycleTab/closeTab 邻位切换全部收口于这一处，新增入口自动覆盖。
 useSessions.subscribe((state, prev) => {

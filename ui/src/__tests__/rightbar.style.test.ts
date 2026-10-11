@@ -1,4 +1,4 @@
-// 辅助信息可见性版式契约（[docs/ui-affordance-visibility-audit](../../../docs/ui-affordance-visibility-audit.md)）：
+// 辅助信息可见性版式契约（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // happy-dom 不做布局，故与 ask.style.test.ts / chat.style.test.ts 同路——直接断言源码 CSS。
 // 这里钉两类不变量：① 辅助信息不许被 auto margin 推到看不见处；② 颜色只走 --ws-* token，不硬编码色值。
 import { describe, it, expect } from "vitest";

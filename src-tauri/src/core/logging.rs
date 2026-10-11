@@ -1,4 +1,4 @@
-//! 全局诊断日志（[docs/session-logging-report](../../../docs/session-logging-report.md)）：tracing 初始化
+//! 全局诊断日志（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：tracing 初始化
 //! （reload 层支持级别热切换）+ 滚动日志保留期清理。
 //! 与 core/session_log.rs 的分工：本模块记简短全局诊断；会话级细粒度轨迹在 session_log。
 
@@ -120,7 +120,7 @@ fn dated_log_name(name: &str) -> Option<chrono::NaiveDate> {
     chrono::NaiveDate::parse_from_str(suffix, "%Y-%m-%d").ok()
 }
 
-// ---------- 日志读取（供 IPC，[docs/session-logging-report](../../../docs/session-logging-report.md)；host 层只转发） ----------
+// ---------- 日志读取（供 IPC，[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)；host 层只转发） ----------
 
 /// 日志文件列表项（RightBar 日志查看器的文件清单）。
 #[derive(serde::Serialize)]
@@ -319,7 +319,7 @@ mod tests {
         assert!(p("unrelated.txt").exists());
     }
 
-    /// [docs/session-logging-report](../../../docs/session-logging-report.md)：日志文件名白名单拒绝路径穿越与目录逃逸。
+    /// [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：日志文件名白名单拒绝路径穿越与目录逃逸。
     #[test]
     fn global_log_name_whitelist() {
         assert!(valid_global_log_name(LOG_BASE_NAME));

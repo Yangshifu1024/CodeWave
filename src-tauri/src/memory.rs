@@ -1,4 +1,4 @@
-//! 记忆系统（[docs/p1-plan](../../docs/p1-plan.md) §5.2）：~/.codewave/memories/*.md + frontmatter；
+//! 记忆系统（[docs/technical-design](../../docs/technical-design.md)）：~/.codewave/memories/*.md + frontmatter；
 //! 无专用工具——目录在写白名单内，模型直接经 create/edit 维护文件；索引注入系统提示词。
 
 use crate::skills::parse_skill_md;

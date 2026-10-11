@@ -1,4 +1,4 @@
-//! 文本形态 ask 的兜底恢复（[docs/text-form-ask-fallback]）。
+//! 文本形态 ask 的兜底恢复（[docs/chat-and-interface]）。
 //!
 //! 场景：BYOK 端点把工具调用当作**正文**透传——模型那一轮没有产出任何 `tool_use`，
 //! 正文末尾却漂着一段 `<ask>…</ask>`（实测会话 5da292d8：MiniMax 兼容端点漏出，

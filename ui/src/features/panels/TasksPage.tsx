@@ -1,4 +1,4 @@
-// 计划任务独立页（[docs/tasks-module-polish]）：与设置页同范式（绝对定位全屏覆盖 + 页内 Esc + 返回工作区），
+// 计划任务独立页（[docs/runtime-and-scheduling]）：与设置页同范式（绝对定位全屏覆盖 + 页内 Esc + 返回工作区），
 // 取代原 TaskCenterPanel 弹框；「计划」从手写表达式改成周期选择器（表达式由 schedulePreset 生成，仍留自定义入口）。
 //
 // 分工（本页只做渲染与交互）：

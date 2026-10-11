@@ -1,4 +1,4 @@
-// 栏宽分隔条（手写，零新依赖；[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+// 栏宽分隔条（手写，零新依赖；[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //
 // 交互：pointer 拖动（setPointerCapture，拖出元素仍持续跟手）+ 方向键 ±16px 微调 +
 // 双击复位该侧默认宽；拖动期间给 <html> 挂 `ws-resizing` 关掉宽度过渡（否则栏会拖影）。
@@ -22,7 +22,7 @@ interface Props {
   disabled?: boolean;
   /** 被全屏覆盖层盖住（设置页打开）：不可达——不进 Tab 序、对辅助技术隐藏。
    *  `.settings-shell` 的 z-index 只挡指针，挡不住键盘焦点，所以必须显式把它们踢出焦点环
-   *  （[docs/settings-fullscreen-shell]）。 */
+   *  （[docs/settings-guide](../../../../docs/settings-guide.md)）。 */
   covered?: boolean;
   onWidth: (width: number) => void;
   onReset: () => void;

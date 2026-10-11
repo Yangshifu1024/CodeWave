@@ -1,4 +1,4 @@
-//! 回合级重试策略（[docs/p0-plan](../../../docs/p0-plan.md) §4.5）：指数退避 500ms×2ⁿ 封顶 10s，最多重试 6 次；
+//! 回合级重试策略（[docs/technical-design](../../../docs/technical-design.md)）：指数退避 500ms×2ⁿ 封顶 10s，最多重试 6 次；
 //! Auth/Billing 立即失败；BadRequest 允许 sanitize 后免费重试一次（由 agent 主循环控制）。
 
 use std::time::Duration;
@@ -61,7 +61,7 @@ mod tests {
         ));
         assert!(should_retry(&ProviderError::RateLimited("x".into()), 0));
         // attempt 从 0 计已完成的重试次数：MAX_RETRIES-1 给到第 6 次（最后一次）重试，
-        // MAX_RETRIES 及以后拒绝（「最多重试 6 次」，[docs/p0-plan](../../../docs/p0-plan.md) §4.5）
+        // MAX_RETRIES 及以后拒绝（「最多重试 6 次」，[docs/technical-design](../../../docs/technical-design.md)）
         assert!(should_retry(
             &ProviderError::Server("x".into()),
             MAX_RETRIES - 1

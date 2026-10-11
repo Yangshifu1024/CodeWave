@@ -1,8 +1,8 @@
-//! OpenAI Responses 协议适配器（[docs/p1-plan](../../../docs/p1-plan.md) §3.3）：`POST {base}/responses`，stream:true。
+//! OpenAI Responses 协议适配器（[docs/technical-design](../../../docs/technical-design.md)）：`POST {base}/responses`，stream:true。
 //! 事件映射：output_text.delta→Text；reasoning_summary_text.delta→Reasoning；
 //! output_item.added(function_call)→ToolCallBegin；function_call_arguments.delta→ArgsDelta；
 //! completed/incomplete→usage（incomplete 且 reason=max_output_tokens → 截断尾注，
-//! [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)）。cache 路由：会话级稳定的 prompt_cache_key。
+//! [docs/providers-and-network](../../../docs/providers-and-network.md)）。cache 路由：会话级稳定的 prompt_cache_key。
 
 use super::dto::*;
 use super::sse::{SseEvent, SseParser};
@@ -207,7 +207,7 @@ pub fn handle_event(
             acc.usage.cache_read = u["input_tokens_details"]["cached_tokens"]
                 .as_u64()
                 .unwrap_or(0);
-            // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：输出超限截断 → 用户可见尾注（与 anthropic
+            // [docs/providers-and-network](../../../docs/providers-and-network.md)：输出超限截断 → 用户可见尾注（与 anthropic
             // 协议对齐）；其余 incomplete 原因保持无尾注（留扩展空间，不误报）
             if name == "response.incomplete"
                 && v["response"]["incomplete_details"]["reason"].as_str()
@@ -263,7 +263,7 @@ pub async fn stream(
     if let Some(k) = &key {
         request = request.header("Authorization", format!("Bearer {k}"));
     }
-    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/providers-and-network](../../../docs/providers-and-network.md)
     request = crate::provider::headers::apply_request_headers(
         request,
         &model.headers,
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn incomplete_max_output_tokens_notice() {
-        // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：response.incomplete（reason=max_output_tokens）必须产出用户可见
+        // [docs/providers-and-network](../../../docs/providers-and-network.md)：response.incomplete（reason=max_output_tokens）必须产出用户可见
         // 尾注（与 anthropic 协议对齐）；usage 照常记录
         let mut acc = OrAccum::default();
         let (cont, d) = feed(

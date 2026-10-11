@@ -1,5 +1,5 @@
 // 右栏信息面板的本地偏好（localStorage，**全局一份**，跨项目/会话共享）
-// （[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+// （[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
 //
 // 三项偏好都遵循「值非法/缺失 → 回默认」：技能/计划默认展开、额度家默认折叠、编辑器默认取
 // 后端候选表第一个检测到的（本模块只记用户手动改选过的那一个）。

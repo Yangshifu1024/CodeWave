@@ -1,5 +1,5 @@
 //! 内置工具层：所有工具的实现与注册。纯函数化、不依赖 tauri；
-//! 工具分级（ToolKind）与审批/fence 语义见 `tool.rs` 与 docs/33。
+//! 工具分级（ToolKind）与审批/fence 语义见 `tool.rs` 与 docs/tools-and-safety。
 pub mod ask;
 pub mod batch;
 pub mod batch_read;

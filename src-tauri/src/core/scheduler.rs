@@ -1,4 +1,4 @@
-//! 计划任务（[docs/p2-plan](../../../docs/p2-plan.md) §3）：cron/every/once 三种计划；进程内全局串行执行，
+//! 计划任务（[docs/technical-design](../../../docs/technical-design.md)）：cron/every/once 三种计划；进程内全局串行执行，
 //! 每次运行使用全新隔离上下文（复用主循环）。supervisor 每 15s tick 一次。
 
 use crate::core::agent::SessionRuntime;
@@ -167,7 +167,7 @@ fn corrected_cron_next<Z: TimeZone>(
 pub struct TaskTable {
     /// 任务表（id → 任务）
     pub tasks: Mutex<HashMap<String, ScheduledTask>>,
-    /// 全局串行执行（[docs/p2-plan](../../../docs/p2-plan.md) §3：同时至多 1 个任务运行）。
+    /// 全局串行执行（[docs/technical-design](../../../docs/technical-design.md)：同时至多 1 个任务运行）。
     /// 用 `Arc` 持有：`trigger_now` 要把 `OwnedMutexGuard` move 进 `tokio::spawn` 的
     /// 后台任务（裸 `MutexGuard` 借用 `AgentCore` 字段，无法跨 'static 任务）。
     pub exec_lock: Arc<Mutex<()>>,

@@ -1,4 +1,4 @@
-// Shared settings layout contract ([docs/settings-ui-unification](../../../docs/settings-ui-unification.md)).
+// Shared settings layout contract ([docs/settings-guide](../../../docs/settings-guide.md)).
 // Vitest does not load CSS, so assert the single shared source and its wiring directly.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";

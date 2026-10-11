@@ -1,7 +1,7 @@
 // ui-state：会话现场态的落盘与恢复（会话保存与恢复优化 · 批1）。
 // 磁盘文件 `~/.codewave/ui-state.json`（后端只校验顶层 schema === 1 与体积上限 ≤ 8MB，JSON 结构归前端所有）。
 //
-// 持久化边界（[docs/technical-design] 之外的批1 约定，见 plan.md §三）：
+// 持久化边界见 [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：
 //   进 ui-state：Tab 集合/顺序/活跃 Tab/活跃项目、窗口几何、滚动锚点、草稿、前端队列、
 //                会话树展开态与未读集合、面板级 UI 态（子代理抽屉/todos/suggestions）
 //   留在 localStorage：主题/语言/左右栏开合 —— 首屏同步可得，改走 IPC 会闪一帧；两类不双写
@@ -90,7 +90,7 @@ interface RetainedContent {
 interface ComposerDraftSnapshot {
   text: string;
   images: { id: string; name: string; mime: string; data: string }[];
-  /** 文件引用 chip（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）；旧快照可能缺字段 */
+  /** 文件引用 chip（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）；旧快照可能缺字段 */
   refs?: string[];
 }
 

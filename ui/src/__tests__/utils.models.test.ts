@@ -1,4 +1,4 @@
-// flattenModels / findModel: provider→model flattening consumed by the model menu and guards ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md), [docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// flattenModels / findModel: provider→model flattening consumed by the model menu and guards ([docs/providers-and-network](../../../docs/providers-and-network.md), [docs/development](../../../docs/development.md) coverage batch)
 import { describe, it, expect } from "vitest";
 import { cacheDenominator, cacheSemanticsOf, cacheSemanticsOfFormat, flattenModels, findModel } from "../utils/models";
 import type { ConfigState } from "../ipc/types";
@@ -71,7 +71,7 @@ describe("utils/models findModel", () => {
   });
 });
 
-// 兼容命中率分母的协议口径（[docs/prompt-caching-hardening](../../../docs/prompt-caching-hardening.md)）：
+// 兼容命中率分母的协议口径（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
 // 唯一事实源，Composer 工具条与统计弹窗共用
 function cfgSem(apiFormat: "anthropic_messages" | "openai_chat"): ConfigState {
   return {

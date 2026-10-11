@@ -1,4 +1,4 @@
-// render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）：
+// render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 卡片内不再内嵌渲染 → 头部「预览」入口 → 90vw × 85vh 弹框（复制源码 / 重新加载 / 浅深底色）；
 // 无 html（历史占位）时入口不出现、只给一行提示。i18n 文案全部走 t()，故先初始化 i18next。
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
@@ -167,7 +167,7 @@ describe("render_html 大弹框预览", () => {
   });
 });
 
-// ---------- [docs/preview-skill](../../../../docs/preview-skill.md)：批准门「先看预览」→ 本 run 第一张
+// ---------- [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准门「先看预览」→ 本 run 第一张
 // 合格 widget 卡片自动弹框（不必回聊天区点那个很小的头部「预览」按钮）。组件级、零 store：
 // store 侧只负责把一次性信号转成 callKey，这里只验「命中即弹 + 回抛消费」，不重复验 store。
 

@@ -8,7 +8,7 @@ import { renderMarkdown } from "../utils/markdown";
 
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
 
-describe("markdown 主题感（docs/markdown-style-refresh）", () => {
+describe("markdown 主题感（docs/chat-and-interface）", () => {
   it("hljs token 全部用 --ws-hl-* 主题感变量，取代硬编码 #hex", () => {
     // 共享组内任一 token 出现必须 var(--ws-hl-*)
     const tokenVars = ["--ws-hl-keyword", "--ws-hl-string", "--ws-hl-number", "--ws-hl-name", "--ws-hl-built", "--ws-hl-comment"];
@@ -30,7 +30,7 @@ describe("markdown 主题感（docs/markdown-style-refresh）", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+tr:hover\s+td\s*\{\s*background:\s*var\(--ws-bg-nav\)/);
   });
 
-  // [docs/plan-modal-table-scroll]：上条用例曾只守 CSS 文本、不断言 DOM，于是 `.table-wrap` 长期是个
+  // [docs/chat-and-interface]：上条用例曾只守 CSS 文本、不断言 DOM，于是 `.table-wrap` 长期是个
   // 零生产点的死规则（markdown-it 默认输出裸 <table>），宽表格被 overflow-x:hidden 静默裁掉。
   // 本条把契约补成「CSS + DOM 双守」：样式写了就必须真有这个包裹元素。
   it("渲染层真的产出 .table-wrap 包裹（CSS 死规则的解药）", () => {
@@ -47,7 +47,7 @@ describe("markdown 主题感（docs/markdown-style-refresh）", () => {
     expect(appCss).toMatch(/\.viewer-md\.md\s*\{[^}]*max-width:\s*100%/);
   });
 
-  // [docs/plan-modal-table-scroll]：mermaid / katex 那组规则此前全挂 `.assistant .md` 前缀，
+  // [docs/chat-and-interface]：mermaid / katex 那组规则此前全挂 `.assistant .md` 前缀，
   // 预览弹框换容器后整体失配（公式丢 pre-wrap 兜底、.katex-display 丢横向滚动、mermaid 丢底色）。
   // 本条钉住「它们也走共享组」，防下一个新增预览容器再次踩同一个坑。
   it("mermaid / katex 规则也走共享 :is() 组，不再只挂 .assistant 前缀", () => {
@@ -72,7 +72,7 @@ describe("markdown 主题感（docs/markdown-style-refresh）", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+h3\s*\{[^}]*font-size:\s*15px/);
   });
 
-  it("段落 line-height 1.7（[docs/markdown-style-refresh] 阅读感升级）", () => {
+  it("段落 line-height 1.7（[docs/chat-and-interface] 阅读感升级）", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+p\s*\{[^}]*line-height:\s*1\.7/);
   });
 

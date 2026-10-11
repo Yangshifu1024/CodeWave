@@ -1,8 +1,8 @@
-//! 批次执行策略（[docs/p0-plan](../../../docs/p0-plan.md) §6.1.1 / §6.3.3）：
+//! 批次执行策略（[docs/technical-design](../../../docs/technical-design.md)）：
 //! Interactive 工具按工具名分级独占 → 写冲突拒绝 → 文件写串行 / 其余并发上限 4 → panic 兜底。
 //! —— ask/wait 阻塞用户/阻塞 sleep，与并发工具语义冲突，仍整批 reject；
 //! —— suggest 仅「成功 + emit chip」，与并发工具无副作用，可与 read/grep/list_files 同批
-//!    （[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)）。同批含 ask/wait 与
+//!    （[docs/tools-and-safety](../../../docs/tools-and-safety.md)）。同批含 ask/wait 与
 //!    suggest 时仍归 ask/wait 路径（整批 reject），避免阻塞 + 收尾语义错乱。
 
 use crate::core::agent::{AgentCore, EventSink, NormalizedCall, SessionRuntime};
@@ -23,7 +23,7 @@ pub struct BatchOutcome {
     /// ask 批准形询问被批准时为 true（run 循环据此走批准后流程）。
     pub plan_approved: bool,
     /// 监督摘要：每个调用的（工具名, 失败码, args 哈希），供 drive 层重复操作检测
-    /// （[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）。
+    /// （[docs/subagents](../../../docs/subagents.md)）。
     pub call_summary: Vec<crate::core::agent::CallSig>,
 }
 
@@ -56,7 +56,7 @@ pub async fn execute_batch(
         c.index = i;
     }
 
-    // (1) Interactive 工具独占批次——按工具名分级（[docs/suggest-mixed-batch](../../../docs/suggest-mixed-batch.md)）：
+    // (1) Interactive 工具独占批次——按工具名分级（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
     //   - ask / wait：阻塞用户/阻塞 sleep，与并发工具语义冲突，整批 reject 并 return；
     //   - suggest：emit chip + 装入 suggest_items 即结束 run，无副作用——与非 Interactive
     //     工具同批时，仅 reject 非 suggest 调用，suggest 走 (3) 的 spawn 路径正常执行
@@ -566,10 +566,10 @@ async fn run_tool(
         call_key: format!("{batch_id}:{index}"),
         cancel,
     };
-    // ConfirmEach（先确认后变更）：FileWrite 工具执行前必经审批（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）。
+    // ConfirmEach（先确认后变更）：FileWrite 工具执行前必经审批（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
     let needs_write_approval = ctx.approval_mode() == crate::core::prefs::ApprovalMode::ConfirmEach
         && tool.kind() == ToolKind::FileWrite;
-    // G3 范围门（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）：批准后新增的计划外步骤，首次写入前弹范围确认。
+    // G3 范围门（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：批准后新增的计划外步骤，首次写入前弹范围确认。
     // 覆盖两条写通道（R2 评审修复）：FileWrite 工具；携带写目标的 command 工具。
     // 后者用专门的「写目标探针」策略（confirm_inside_writes=true），与执行档判定解耦：
     // 批准后会话已切 AutoEdit，其执行档 fence 会把范围内写重定向判为 Allow；若无探针，
@@ -634,7 +634,7 @@ async fn run_tool(
     if needs_write_approval || g3_gate(&ctx) {
         emit_tool_start(core, rt, call, batch_id, index, "waiting");
     }
-    // detail 优先用工具的语义化预览（edit/create 的变更 diff，[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 3）；
+    // detail 优先用工具的语义化预览（edit/create 的变更 diff，[docs/tools-and-safety](../../../docs/tools-and-safety.md) 工作项 3）；
     // 无预览能力的工具（如 delete）回退为入参 JSON 展示。
     if needs_write_approval {
         let detail = tool
@@ -834,7 +834,7 @@ fn model_content(
         .map(|t| t.kind())
         .unwrap_or(ToolKind::Meta);
     let mut text = crate::tools::compact::compact_for_model(kind, &call.name, out, vision);
-    // 工具结果原样备份（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    // 工具结果原样备份（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
     // 历史里只有这份模型侧文本，**解析不了就说明恢复端拿不回全量**（头尾截断、失败结果的 [error …] 前缀）
     // → 按 provider 侧 tool_use id 存一份整套 ToolOutcome，供前端恢复时按需回读。
     // 判定必须在追加 model hint 之前（否则任何带提醒的结果都会被误判）。
@@ -912,7 +912,7 @@ fn emit_result(
     duration_ms: u128,
 ) {
     let event = if out.ok { "tool:result" } else { "tool:error" };
-    // [docs/session-logging-report](../../../docs/session-logging-report.md) 会话日志：每个工具调用一行（覆盖策略拒绝 / 未知工具 / panic 兜底，全路径）
+    // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 会话日志：每个工具调用一行（覆盖策略拒绝 / 未知工具 / panic 兜底，全路径）
     session_log::info(
         rt,
         &format!(
@@ -985,7 +985,7 @@ fn canonical_arg_paths(workspace: &std::path::Path, args: &serde_json::Value) ->
 mod tests {
     use super::*;
 
-    /// 工具结果原样 sidecar 的**接线**回归（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    /// 工具结果原样 sidecar 的**接线**回归（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
     /// 只有「模型侧文本解析不了」的出参才落盘，且落在 `<data_dir>/sessions/<会话>.toolres/<call_id>.json`。
     /// 守的是批次层那个调用点本身——删掉它、写错 owner、去掉 task-runtime 判断都会转红。
     #[tokio::test]
@@ -1787,7 +1787,7 @@ mod tests {
 
     #[tokio::test]
     async fn confirm_each_blocks_file_write_without_approval() {
-        // [docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)：ConfirmEach 档下 FileWrite 工具执行前必经审批；预取消 token = 立即拒绝
+        // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：ConfirmEach 档下 FileWrite 工具执行前必经审批；预取消 token = 立即拒绝
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
@@ -1831,7 +1831,7 @@ mod tests {
         assert_eq!(std::fs::read(ws.path().join("f.txt")).unwrap(), b"hello");
     }
 
-    /// [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：ConfirmEach 下命中「始终允许本项目」白名单的命令免审批直接执行；
+    /// [docs/plan-and-approval](../../../docs/plan-and-approval.md)：ConfirmEach 下命中「始终允许本项目」白名单的命令免审批直接执行；
     /// 白名单之外的相似命令仍需审批（预取消 token = 立即拒绝）。
     #[tokio::test]
     async fn command_allowlist_skips_approval() {
@@ -1850,7 +1850,7 @@ mod tests {
             model_id: None,
             reasoning_effort: None,
         });
-        // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：白名单 key = cwd + \u{1} + 完整命令文本（cwd 是会话默认命令目录且随项目走）
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：白名单 key = cwd + \u{1} + 完整命令文本（cwd 是会话默认命令目录且随项目走）
         let allow_key = format!("{}\u{1}echo hello > out.txt", roots.workspace.display());
         core.cfg
             .write()
@@ -3193,7 +3193,7 @@ mod tests {
         );
     }
 
-    // ===== 方案 C：suggest 可与只读工具同批（[docs/suggest-mixed-batch]）=====
+    // ===== 方案 C：suggest 可与只读工具同批（[docs/tools-and-safety]）=====
 
     /// C1：suggest + read 同批 → read 被 E_BATCH_POLICY 拒绝，suggest 走原路径成功并装入 suggest_items。
     /// 守的是策略（1）的「suggest 单独放行 + 非 suggest 调用 reject」分流逻辑。

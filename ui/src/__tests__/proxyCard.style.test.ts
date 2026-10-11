@@ -1,4 +1,4 @@
-// 代理模式卡片样式契约（[docs/proxy-mode-title-invisible](../../docs/proxy-mode-title-invisible.md)）：
+// 代理模式卡片样式契约（[docs/settings-guide](../../../docs/settings-guide.md)）：
 // antd 6 在 `.ant-radio-group` 上设了 `font-size: 0`（消除 inline-block 之间的空白间隙），代理卡片整棵
 // 子树都挂在该容器内 —— 只要 `.proxy-mode-list` 不再还原字号，未显式声明 font-size 的
 // `.proxy-mode-title` 就会继承成 0 号字：DOM 里有文本（因此 `cardByTitle` 之类 DOM 断言全绿），

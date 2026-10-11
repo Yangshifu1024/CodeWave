@@ -13,7 +13,7 @@ export default function ThemeBridge() {
     const dark = isDarkBase(token.colorBgBase);
     s.setProperty("--ws-bg", token.colorBgLayout);
     s.setProperty("--ws-panel", token.colorBgContainer);
-    // 侧栏分色（[docs/rightbar-visual-batch](../../../docs/rightbar-visual-batch.md)）：左栏导航 #ececee、中右栏 #f8f8f8（仅亮色生效；暗色回退默认容器/布局色，与改动前观感一致）
+    // 侧栏分色（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：左栏导航 #ececee、中右栏 #f8f8f8（仅亮色生效；暗色回退默认容器/布局色，与改动前观感一致）
     s.setProperty("--ws-bg-nav", dark ? token.colorBgContainer : "#eef4f9");
     s.setProperty("--ws-bg-main", dark ? token.colorBgLayout : "#FFFFFF");
     s.setProperty("--ws-code-bg", token.colorFillQuaternary);
@@ -22,11 +22,11 @@ export default function ThemeBridge() {
     s.setProperty("--ws-text-1", token.colorText);
     s.setProperty("--ws-text-2", token.colorTextSecondary);
     s.setProperty("--ws-dim", token.colorTextTertiary);
-    // 基础字号（[docs/proxy-mode-title-invisible](../../../docs/proxy-mode-title-invisible.md)）：antd 6 给
+    // 基础字号（[docs/settings-guide](../../../docs/settings-guide.md)）：antd 6 给
     // `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 空白间隙），挂在其中且未显式声明
     // font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）。需要还原字号的容器统一取此变量。
     s.setProperty("--ws-font-size", `${token.fontSize}px`);
-    // 强调色取 colorPrimaryText（[docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)）：算法自适应的前景变体——亮色 = 近黑 primary 本身，
+    // 强调色取 colorPrimaryText（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：算法自适应的前景变体——亮色 = 近黑 primary 本身，
     // 暗色 = 提亮后的灰（colorPrimary #424242 作为文字/边框/流光在暗底上不可读）。
     // --ws-accent 的全部消费点都是前景用法（文字/图标/边框/流光/条形填充），没有任何一处拿它当背景画白字
     s.setProperty("--ws-accent", token.colorPrimaryText);
@@ -39,7 +39,7 @@ export default function ThemeBridge() {
     s.setProperty("--ws-diff-add-text", token.colorSuccessText);
     s.setProperty("--ws-diff-del-bg", token.colorErrorBg);
     s.setProperty("--ws-diff-del-text", token.colorErrorText);
-    // [docs/markdown-style-refresh] 主题感 hljs token 与 code-block 容器色：亮色继承 GitHub 浅色调色板
+    // [docs/chat-and-interface] 主题感 hljs token 与 code-block 容器色：亮色继承 GitHub 浅色调色板
     // （保留现观感），暗色按 GitHub Dark 标准色板。markdown.ts 不切换 github.css，css 用 var() 覆盖即可。
     s.setProperty("--ws-hl-keyword", dark ? "#ff7b72" : "#d73a49");
     s.setProperty("--ws-hl-string", dark ? "#a5d6ff" : "#032f62");

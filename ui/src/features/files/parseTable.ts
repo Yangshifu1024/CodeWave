@@ -1,4 +1,4 @@
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：表格预览的数据解析。
+// [docs/documents](../../../../docs/documents.md)：表格预览的数据解析。
 // 后端把表格区域渲染成制表符分隔的文本（见 src-tauri/src/tools/document/xlsx.rs 的 `render_tsv`），
 // 单元格里的制表符与换行已在那一步换成空格，所以按行按列切回来是无损的。
 

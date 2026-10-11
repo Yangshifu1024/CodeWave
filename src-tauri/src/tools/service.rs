@@ -301,7 +301,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         None => roots.workspace.clone(),
     };
 
-    // fence：后台服务走同一套安全检查（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 权限档：FullAccess 跳过确认，灾难级仍拦截）
+    // fence：后台服务走同一套安全检查（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 权限档：FullAccess 跳过确认，灾难级仍拦截）
     let mode = ctx.execution_approval_mode();
     let policy = ctx.fence_policy();
     match crate::safety::fence::check_command_policy(&command, &cwd, &roots, policy) {
@@ -319,7 +319,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
                     );
                 }
             } else {
-                // [docs/arithmetic-fixes-batch](../../../docs/arithmetic-fixes-batch.md)：灾难级确认永不搭自动确认超时
+                // [docs/testing](../../../docs/testing.md)：灾难级确认永不搭自动确认超时
                 let is_disaster = matches!(reason, ConfirmReason::Disaster(_));
                 let title = match reason {
                     ConfirmReason::HighRisk(w) => format!("后台服务高危命令确认：{w}"),
@@ -419,7 +419,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
             let tail = ticker_log.tail(2000);
             let running = !ticker_done.load(std::sync::atomic::Ordering::SeqCst);
             // 无条件写入（含空串）：服务无输出时 tail 恒为空，但「它还活着」本身就是
-            // wait 超时时该看到的证据，不能因为空而丢（[docs/wait-conditional-wait](../../docs/wait-conditional-wait.md)）。
+            // wait 超时时该看到的证据，不能因为空而丢（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）。
             ticker_core
                 .wait_targets
                 .update_text(&ticker_svc_id, tail.clone());

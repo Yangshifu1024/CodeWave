@@ -1,4 +1,4 @@
-//! 子进程输出清洗（[docs/command-output-ansi-sanitize-plan](../../../docs/command-output-ansi-sanitize-plan.md)）：
+//! 子进程输出清洗（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
 //!
 //! 1. **剥终端控制序列**：ECMA-48 的 CSI（`ESC [ … 终结字节`）、OSC（`ESC ] … BEL` 或 `ESC \`）、
 //!    两字符转义（`ESC` + 单字节）统统丢弃；裸 `\r`（行内重绘，如进度条）也丢弃，

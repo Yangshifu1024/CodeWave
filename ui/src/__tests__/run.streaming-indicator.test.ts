@@ -6,7 +6,7 @@
 // 修复：currentAssistantIm 新建前收尾遗留流式项（唯一守卫）+ 收尾三兄弟全量扫（兜底）。
 //
 // 本文件断言的是**状态**（streaming 项计数），不是 DOM：渲染层已从自绘方块字符换成 antd 加载图标
-// （[docs/chat-loading-indicator](../../../docs/chat-loading-indicator.md)，DOM 级断言见 chat.streaming-indicator.test.tsx），
+// （[docs/chat-and-interface](../../../docs/chat-and-interface.md)，DOM 级断言见 chat.streaming-indicator.test.tsx），
 // 计数不变量与渲染实现无关，照旧守住。
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFrameToTab, blank, currentAssistantIm } from "../stores/runFrames";

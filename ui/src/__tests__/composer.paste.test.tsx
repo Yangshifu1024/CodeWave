@@ -31,7 +31,7 @@ import { useRun } from "../stores/run";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 
-// Model entry under a provider ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md) nested providers structure)
+// Model entry under a provider ([docs/providers-and-network](../../../docs/providers-and-network.md) nested providers structure)
 const MODEL_BASE = {
   id: "m1", model: "test-model", max_tokens: 32768, context_window: 128000,
   reasoning_effort: null, vision: true, video: false,
@@ -160,7 +160,7 @@ describe("Composer 粘贴图片与 vision 软阻断", () => {
     expect(document.body.textContent ?? "").toContain("不支持图片");
   });
 
-  it("vision=true：不拦截，send 正常走且输入清空（docs/provider-management-refactor 起为硬布尔）", async () => {
+  it("vision=true：不拦截，send 正常走且输入清空（docs/providers-and-network 起为硬布尔）", async () => {
     seedEnv({ vision: true });
     mountComposer();
     const textarea = await pasteFile(new File(["x"], "a.png", { type: "image/png" }));

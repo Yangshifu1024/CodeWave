@@ -1,4 +1,4 @@
-// User message hover actions ([docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md) addendum): copy → clipboard; edit → ws:composer-fill backfills the Composer.
+// User message hover actions ([docs/chat-and-interface](../../../docs/chat-and-interface.md) addendum): copy → clipboard; edit → ws:composer-fill backfills the Composer.
 // Render ChatMessages directly + craft items via useRun setState (invoke returns [] everywhere).
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";

@@ -9,7 +9,7 @@ import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scroll
 import { renderCached, TimelineSegsView } from "../chat/segments";
 import { renderUserMarkdown } from "../../utils/markdown";
 
-/** 子代理过程抽屉（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）：右侧滑入、默认常显（首个子代理启动即弹出）。
+/** 子代理过程抽屉（[docs/subagents](../../../../docs/subagents.md)）：右侧滑入、默认常显（首个子代理启动即弹出）。
  *  关闭只置 open=false 不销毁——流式数据留存于 subStreams，可经聊天卡 / Composer 指示器重进；
  *  归档子代理（会话恢复 / 历史 run）由 run.openSubDrawer 按需拉取过程历史。 */
 export default function SubagentDrawer() {
@@ -21,23 +21,23 @@ export default function SubagentDrawer() {
   const stream = (subId && active.subStreams[subId]) || null;
   const running = sub?.status === "running";
   // 轻量贴底：内容增长即滚到底部；滚轮上滚 = 阅读意图，暂停跟随。
-  // 移植自 ChatMessages（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：程序化跳转声明豁免窗口 + **实际落点**，onScroll 吞掉
+  // 移植自 ChatMessages（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：程序化跳转声明豁免窗口 + **实际落点**，onScroll 吞掉
   // 自身触发的滚动事件，仅用户驱动滚动才重判钉住状态——否则触控板小幅上滚（<40px）
   // 会被重判为「在底部」，下一帧流式又把视图拽回底部。
   // 落点必须是 bottomScrollTarget（scrollTop 会被钳到 scrollHeight - clientHeight）：2026-09-23 与
-  // ChatMessages 同源修复，详见 [docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)。
+  // ChatMessages 同源修复，详见 [docs/chat-and-interface](../../../../docs/chat-and-interface.md)。
   const bodyRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const progUntil = useRef(0); // 程序化滚动事件的豁免窗口（ms 时间戳）
-  const progTarget = useRef(Infinity); // 最近一次程序化跳转的**实际落点**（豁免比对用，docs/thinking-scroll-fix §2.3）
+  const progTarget = useRef(Infinity); // 最近一次程序化跳转的**实际落点**（豁免比对用，docs/chat-and-interface）
   const prevSubId = useRef<string | null>(null);
   // 指派任务默认展开：任务全文一眼可见（此前默认折叠 + 后端 2000 字符有损截断，展开也看不到全文）。
   // 长任务会把过程流推向下方，需要时用标签行收起——折叠态保留单行 ellipsis 预览（hover 有完整 title）。
-  // [docs/subdrawer-scroll-hardening](../../../../docs/subdrawer-scroll-hardening.md) §6 的折叠能力保留，仅改默认态。
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的折叠能力保留，仅改默认态。
   // 切换子代理时重置回展开。
   const [taskCollapsed, setTaskCollapsed] = useState(false);
   const [, setTick] = useState(0);
-  // 内容签名对齐 ChatMessages 的跟随依赖（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：每段贡献 1（tool/sub）或自身
+  // 内容签名对齐 ChatMessages 的跟随依赖（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：每段贡献 1（tool/sub）或自身
   // 文本长度（text 与 thinking 一视同仁——thinking delta 合并进尾段而不增长 timeline，
   // 只数 timeline 长度会让纯思考流式期间跟随停摆）。
   const sig = stream
@@ -54,14 +54,14 @@ export default function SubagentDrawer() {
     el.scrollTop = el.scrollHeight;
   }, []);
   const suspendFollow = useCallback(() => {
-    // 展开/收起思考块或工具卡 = 阅读意图（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）：暂停跟随，
+    // 展开/收起思考块或工具卡 = 阅读意图（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：暂停跟随，
     // 避免刚展开的卡片被下一帧流式拽出视口。
     stick.current = false;
     progUntil.current = 0;
   }, []);
-  // 视口钳制兜底（[docs/subdrawer-scroll-hardening](../../../../docs/subdrawer-scroll-hardening.md)）：CSS 滚动链（wrapper > section > antd body > 本滚动容器）项目侧
+  // 视口钳制兜底（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：CSS 滚动链（wrapper > section > antd body > 本滚动容器）项目侧
   // 已全部钉死，但「抽屉随内容长高、什么都不滚」已复发两次
-  // （[docs/rightbar-visual-batch](../../../../docs/rightbar-visual-batch.md) 的 .rb-tabs，然后 e766796）。此钳制不信任任何祖先：以视口减头部为界约束滚动容器。
+  // （[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的 .rb-tabs，然后 e766796）。此钳制不信任任何祖先：以视口减头部为界约束滚动容器。
   // CSS 链健康时该值等于 flex 后高度（无操作）；上游任一层运行时失灵时它单独恢复滚动。
   const clampToViewport = useCallback(() => {
     const el = bodyRef.current;
@@ -96,7 +96,7 @@ export default function SubagentDrawer() {
   );
   useEffect(() => {
     if (prevSubId.current !== subId) {
-      // 切换子代理重置跟随（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.4 等价）：上一个子代理留下的暂停钉住
+      // 切换子代理重置跟随（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 等价）：上一个子代理留下的暂停钉住
       // 不能让新子代理的视图滞留在离底部的半路。
       prevSubId.current = subId;
       stick.current = true;
@@ -150,7 +150,7 @@ export default function SubagentDrawer() {
   }, [open, sig]);
 
   const role = sub?.name || sub?.role || "";
-  // 档位行（[docs/mode-gate-and-subagent-sync]）：sub:step 每步上报当前档位；归档 / 旧数据无该字段（undefined）→ 不渲染该行。
+  // 档位行（[docs/plan-and-approval]）：sub:step 每步上报当前档位；归档 / 旧数据无该字段（undefined）→ 不渲染该行。
   // 档位名复用 Composer 胶囊的键（同一档位两处必须同名）：写成字面键让守门② 的字面键闭包看得见（跨段借用已在 settings.registry.test.ts 登记）
   const modeLabels: Record<ApprovalMode, string> = {
     confirm_each: t("composer.modeConfirmEach"),
@@ -216,7 +216,7 @@ export default function SubagentDrawer() {
         onWheel={(e) => {
           if (e.deltaY < 0) {
             stick.current = false;
-            progUntil.current = 0; // 本手势的滚动事件归用户所有：重新进入贴底判定（docs/thinking-scroll-fix）
+            progUntil.current = 0; // 本手势的滚动事件归用户所有：重新进入贴底判定（docs/chat-and-interface）
           }
         }}
         onScroll={() => {
@@ -266,7 +266,7 @@ export default function SubagentDrawer() {
               // 归档分支（sub.report）保持不动：它本来就是后端剥离过的干净文本。
               stripReport
             />
-            {/* 等待指示（[docs/chat-loading-indicator]）：与聊天窗口同款（antd 加载图标 + 同一语义化类名），
+            {/* 等待指示（[docs/chat-and-interface]）：与聊天窗口同款（antd 加载图标 + 同一语义化类名），
                 位置仍在过程流的末尾，运行状态判定不变 */}
             {stream.status === "running" && (
               <span className="ws-streaming-indicator">

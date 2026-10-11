@@ -1,5 +1,5 @@
 //! document 工具组：Office 与 PDF 文件的读取、生成与保真修改
-//!（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）。
+//!（[docs/documents](../../../../docs/documents.md)）。
 //!
 //! 两条贯穿全组的设计约定：
 //!

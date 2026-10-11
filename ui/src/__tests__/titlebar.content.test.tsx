@@ -1,4 +1,4 @@
-// TopBar content contract ([docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md) two-segment; [docs/titlebar-logo-toggle](../../../docs/titlebar-logo-toggle.md) Logo toggles the left bar + history nav removed):
+// TopBar content contract ([docs/chat-and-interface](../../../docs/chat-and-interface.md) two-segment; [docs/chat-and-interface](../../../docs/chat-and-interface.md) Logo toggles the left bar + history nav removed):
 // render TopBar directly + craft data via store setState (invoke returns [] everywhere, covering unexpected calls during mount).
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent, act } from "@testing-library/react";
@@ -59,7 +59,7 @@ afterEach(() => {
   localStorage.removeItem("ws_explorer_open");
 });
 
-describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
+describe("顶栏两段式布局（docs/chat-and-interface）", () => {
   it.each([true, false])("进入运行总览显示页面标题，退出后恢复会话或空态（有会话=%s）", (hasTab) => {
     if (hasTab) {
       useSessions.setState({
@@ -97,7 +97,7 @@ describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
     expect(document.querySelectorAll(".tb-pill")).toHaveLength(0);
   });
 
-  it("左段宽度与左栏 Sider 对齐：展开 280 / 折叠 0 完全隐藏（docs/sidebar-collapse-animation-and-titlebar-blend 窄轨退役）；Logo 开关位于右段段首（docs/titlebar-logo-right-segment），仍是左栏开合入口", () => {
+  it("左段宽度与左栏 Sider 对齐：展开 280 / 折叠 0 完全隐藏（docs/chat-and-interface 窄轨退役）；Logo 开关位于右段段首（docs/chat-and-interface），仍是左栏开合入口", () => {
     const { rerender } = renderBar();
     const left = () => document.querySelector(".tb-left-seg") as HTMLElement;
     const toggle = () => document.querySelector(".tb-main-seg .tb-logo-toggle") as HTMLButtonElement;
@@ -105,13 +105,13 @@ describe("顶栏两段式布局（docs/titlebar-content-batch）", () => {
     expect(left().classList.contains("tb-left-closed")).toBe(false);
     expect(document.querySelector(".tb-main-seg")!.classList.contains("tb-main-cleared")).toBe(false);
     expect(toggle().getAttribute("aria-label")).toBe("折叠左侧栏");
-    // the [docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md) ←/→ session history nav was removed; the left segment is a pure background band ([docs/titlebar-logo-right-segment](../../../docs/titlebar-logo-right-segment.md))
+    // the [docs/chat-and-interface](../../../docs/chat-and-interface.md) ←/→ session history nav was removed; the left segment is a pure background band ([docs/chat-and-interface](../../../docs/chat-and-interface.md))
     expect(document.querySelector(".tb-nav")).toBeFalsy();
 
     useSessions.setState({ explorerOpen: false });
     rerender(<App><TopBar /></App>);
     expect(left().style.width).toBe(`${SIDER_W_CLOSED}px`);
-    // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md): collapsed decor classes flip on — background melts into the content color, traffic-light yield migrates to the right segment
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md): collapsed decor classes flip on — background melts into the content color, traffic-light yield migrates to the right segment
     expect(left().classList.contains("tb-left-closed")).toBe(true);
     expect(document.querySelector(".tb-main-seg")!.classList.contains("tb-main-cleared")).toBe(true);
     expect(toggle().getAttribute("aria-label")).toBe("展开左侧栏");

@@ -1,4 +1,4 @@
-# Dependabot（docs/oss-prep-batch）：GitHub 开源后启用依赖自动升级。
+# Dependabot（docs/development）：GitHub 开源后启用依赖自动升级。
 # pnpm workspace：根目录 pnpm-lock.yaml 管全部（root + ui），npm ecosystem 指向 / 即可覆盖。
 version: 2
 updates:

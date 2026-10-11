@@ -194,7 +194,7 @@ pub fn search_workspace_paths(
                 }
                 if multi {
                     // 多根（含已放行的额外根）给绝对路径才能唯一定位；额外根来自 canonicalize（Windows
-                    // 带 `\\?\` 前缀）→ 展示与引用前去掉（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）
+                    // 带 `\\?\` 前缀）→ 展示与引用前去掉（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
                     paths.push(crate::tools::pathutil::strip_verbatim_prefix(
                         &e.path().to_string_lossy(),
                     ));
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn fuzzy_multibyte_and_case_insensitive() {
-        // [docs/arithmetic-audit](../../../docs/arithmetic-audit.md)#1：多字节命中此前按 1 字节推进 pi，把 lp 切进字符中间 → panic
+        // [docs/testing](../../../docs/testing.md)#1：多字节命中此前按 1 字节推进 pi，把 lp 切进字符中间 → panic
         let paths = vec!["src/中文/笔记.md".to_string(), "src/lib/api.ts".to_string()];
         let r = fuzzy_filter(&paths, "中文", 5);
         assert_eq!(r.first().map(|s| s.as_str()), Some("src/中文/笔记.md"));

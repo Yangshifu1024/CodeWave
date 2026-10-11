@@ -1,4 +1,4 @@
-//! 会话保留期清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：按「最近活动时间」收敛本地会话数据。
+//! 会话保留期清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：按「最近活动时间」收敛本地会话数据。
 //!
 //! 判定基准 = `max(updated_at, last_opened_at)`，按**精确时长**（当前时间 − N×24 小时）比较绝对时刻——
 //! 索引里的时间戳可能混有不同时区偏移，绝不做字符串比较；任一时间戳缺失或无法解析的会话**不删**并记告警；
@@ -307,10 +307,10 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
         ok &= remove_dir_if_exists(&store.sub_image_blobs_dir(&meta.id, &sub));
     }
     ok &= remove_dir_if_exists(&store.sub_histories_dir(&meta.id));
-    // 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+    // 工具结果原样 sidecar（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     // 目录随会话级联删除（与子代理过程历史同范式：路径由编号拼出、不做登记边车）
     ok &= remove_dir_if_exists(&store.tool_results_dir(&meta.id));
-    // 图片 blob（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：同上
+    // 图片 blob（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：同上
     ok &= remove_dir_if_exists(&store.image_blobs_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
         ok &= remove_file_if_exists(&p);
@@ -466,8 +466,8 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
     out
 }
 
-// ---------- 旧格式历史清理（P5；[docs/session-cleanup](../../../../docs/session-cleanup.md) /
-// [docs/session-history-limits](../../../../docs/session-history-limits.md)） ----------
+// ---------- 旧格式历史清理（P5；[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) /
+// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 //
 // 新格式（`histories/<id>/` 段目录）落地后，旧格式单文件（`histories/<id>.json.gz`）仍在磁盘上：
 // 读兼容、**不自动删**（用户已拍板）。本节的入口就是设置页的「清理旧格式历史」——
@@ -1213,7 +1213,7 @@ mod tests {
         );
     }
 
-    /// 图片 blob 目录（[docs/session-history-limits](../../../../../docs/session-history-limits.md)）：
+    /// 图片 blob 目录（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     /// 会话自己的与子历史的（blob 归子历史自己）都随会话级联删除；会话不在索引里时
     /// `.imgblob` 目录会被索引外扫描认作残留（与 `.toolres` 同口径）。
     #[test]

@@ -1,9 +1,9 @@
-// RightBar Files tab ([docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)): count always visible / list rendering / click opens the viewer / deleted files greyed out and unclickable;
+// RightBar Files tab ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)): count always visible / list rendering / click opens the viewer / deleted files greyed out and unclickable;
 // plus the run store's writeTick write signal (incremented on create/edit success, not on failure or other tools)
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
-import "../i18n"; // RightBar mounted standalone must init i18next explicitly (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
+import "../i18n"; // RightBar mounted standalone must init i18next explicitly (collapse button aria-label goes through t(), docs/chat-and-interface)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
 import { useRun } from "../stores/run";
@@ -37,7 +37,7 @@ let fileMode: "fixture" | "defer" = "fixture";
 let filePayload: any = fixture;
 let fileResolvers: ((v: any) => void)[] = [];
 
-// [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：回退入口的备份清单（默认空 = 没备份）
+// [docs/documents](../../../docs/documents.md)：回退入口的备份清单（默认空 = 没备份）
 let backupsPayload: any[] = [];
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -89,7 +89,7 @@ afterEach(() => {
   fileResolvers = [];
   backupsPayload = [];
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
-  // Reset the right-sidebar toggle singleton ([docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)): prevent collapsed state leaking across cases
+  // Reset the right-sidebar toggle singleton ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): prevent collapsed state leaking across cases
   useUi.setState({ rightBarOpen: true });
   localStorage.removeItem("ws_right_bar_open");
   useRun.setState((s) => {

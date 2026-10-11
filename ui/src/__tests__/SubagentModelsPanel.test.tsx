@@ -1,4 +1,4 @@
-// 子代理模型覆盖面板测试（[docs/subagent-model-override](../../../docs/subagent-model-override.md)）：
+// 子代理模型覆盖面板测试（[docs/subagents](../../../docs/subagents.md)）：
 // 复合容器 = 8 角色 × 模型下拉。本文件以「纯组件」方式挂载 SubagentModelsPanel（不走 SettingsPage 整树）：
 // `shell.settings.test.tsx` 已示范 standalone + AntApp 包裹 + i18n 显式 import 的写法；
 // 本组件还要 mock list_agents（IPC 拉一次角色清单）与 ipc.saveConfig（覆盖式提交）。

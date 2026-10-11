@@ -1,4 +1,4 @@
-// TokenStatsModal 摘要行（[docs/arithmetic-fixes-batch](../../../docs/arithmetic-fixes-batch.md)）：
+// TokenStatsModal 摘要行（[docs/testing](../../../docs/testing.md)）：
 // 「最常用模型」必须展示用户配置的 wire 模型名（ProviderModel.model），而不是 by_model 的内部 model_id；
 // 已删/未知模型无显示名时回退截断 id，保证仍可辨认。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -27,7 +27,7 @@ import type { ConfigState, DailyStats, ProviderConfig } from "../ipc/types";
 
 const AGG = { input: 1000, output: 500, cache_read: 0, cache_write: 0, runs: 1 };
 
-/** 聚合记录的完整形态：四把耗时字段可选（旧记录没有）——[docs/composer-token-rate] */
+/** 聚合记录的完整形态：四把耗时字段可选（旧记录没有）——[docs/chat-and-interface] */
 type Agg = typeof AGG & { gen_ms?: number; ttft_ms?: number; ttft_count?: number; steps?: number };
 
 /** 单日统计：`by_model` 供「最常用模型」用，`by_kind` 供总览三项的同域聚合用（可分别指定；
@@ -130,7 +130,7 @@ describe("TokenStatsModal 摘要行", () => {
   });
 });
 
-// 总览三项（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：加权且**分子分母同域**——
+// 总览三项（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：加权且**分子分母同域**——
 // 只在带耗时数据的记录子集内聚合（否则「分子含全部 output、分母只含部分耗时」会算出虚高速率）。
 // 聚合域取 **by_kind**（来源桶）：by_model 把 sub/compact/title/task 与 main 混进同一个 model 桶，
 // 桶级 `gen_ms > 0` 过滤剔不掉桶内那部分不带计时的子集（见下一个用例）。

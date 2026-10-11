@@ -1,4 +1,4 @@
-// Composer 附件与文件引用（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构 + [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md) 扩展）。
+// Composer 附件与文件引用（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 重构 + [docs/documents](../../../../docs/documents.md) 扩展）。
 //
 // 两类东西，走两条完全不同的路：
 //
@@ -7,7 +7,7 @@
 // - **其他文件**：原地引用，不复制副本——不再往正文里写路径，而是记进草稿的 `refs`（输入框里以 chip 展示，
 //   发送前一刻才由 mergeRefs 合成 `@路径` 追加到正文末尾，模型需要时自己去读
 //   （文本用 read、Office/PDF 用 read_document）。这类文件不走体积校验：
-//   文件本身从不进对话，多大都不占上下文。见 [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)。
+//   文件本身从不进对话，多大都不占上下文。见 [docs/chat-and-interface](../../../../docs/chat-and-interface.md)。
 //
 // 附件列表本体存 run store 每 Tab 桶（TabRunState.draft.images，按 Tab 隔离）；
 // 本 hook 只持校验链与入口，列表经 opts 注入。

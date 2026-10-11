@@ -1,5 +1,5 @@
 // 后端事件 handler 工厂 —— 29 键事件面（契约测试锚点；键名不可增删）。
-// 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
+// 自 run.ts 拆出（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 重构）：每族是一个 (set, get) => handler-record 工厂；
 // run.ts 的 bindGlobalHandlers 保持唯一注册点并展开它们，
 // Object.keys(bindGlobalHandlers()) 必须与拆分前事件面逐字节一致。
 import type {
@@ -51,7 +51,7 @@ async function systemNotify(sessionId: string | null, title: string, body: strin
   }
 }
 
-/** [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：会话结束未读点。必须在 run:done/run:error 幂等守卫之前调用——
+/** [docs/chat-and-interface](../../../docs/chat-and-interface.md)：会话结束未读点。必须在 run:done/run:error 幂等守卫之前调用——
  *  已关闭 Tab（桶已删）收到的迟到结束事件也要标上，否则左栏行永远收不到「有新结果」信号 */
 function markUnreadIfAway(session: string | undefined) {
   if (!session) return;
@@ -59,7 +59,7 @@ function markUnreadIfAway(session: string | undefined) {
   if (s.activeKey !== session) s.markUnread(session);
 }
 
-/** 历史保存不干净的会话内提示（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+/** 历史保存不干净的会话内提示（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
  *  ① `run:done.history_save`（当次保存结果，仅当保存不干净时后端才带上）——干净返回 null，零打扰；
  *  ② `SessionMeta.history_status`（挂在索引上，重启后仍在）——恢复历史时用同一套文案，保证两处口径一致。
  *
@@ -105,7 +105,7 @@ export function historyStatusNotice(st?: HistoryStatus | null): string | null {
     : i18n.t("notice.historyDegraded", { images: st.stripped_images ?? 0, rounds: st.dropped_rounds ?? 0 });
 }
 
-/** 越限提示的同文案去重（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+/** 越限提示的同文案去重（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
  *  会话长期越限时，降级只裁落盘用的局部副本、内存历史不变 → 之后每次 run 收尾仍然降级，`run:done` 于是逐 run
  *  带着 `history_save` 来追加同文案 notice（`run_id` 幂等守卫只管同一 run 的迟到 done，跨 run 拦不住）。
  *  口径：**从转录末尾往前找最近一条 notice**，其文案与本次要插的完全相同时才跳过。
@@ -120,10 +120,10 @@ function hasTrailingNoticeText(items: readonly UiItem[], text: string): boolean 
   return false;
 }
 
-/** 子代理卡兜底收尾（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+/** 子代理卡兜底收尾（[docs/subagents](../../../docs/subagents.md)）：
  *  主 run 收尾时，仍停在 `running` 的子代理卡一律落定——`sub:done` / `sub:error` 是子代理卡**唯一**的
  *  收尾途径（主会话工具有 `closeRunningTools` 兜底，子代理侧此前没有），一旦那一帧丢了，卡片就永久转圈、
- *  composer 的运行中计数也永久不归零（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）。
+ *  composer 的运行中计数也永久不归零（[docs/subagents](../../../docs/subagents.md)）。
  *
  *  为什么可以在这里无条件收敛：主 run 收尾时，子代理要么已完成（终态事件先到，无影响）、要么已随主 run 级联
  *  取消（后端 `parent_cancel` 传递），不存在「仍在跑」的真子代理——故不会误杀。
@@ -141,7 +141,7 @@ function settleRunningSubs(t: TabRunState): void {
   }
 }
 
-/** run 终态的**共享收敛体**（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)）：
+/** run 终态的**共享收敛体**（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
  *  `run:done` / `run:error` / `run:cancelled` 三个 handler 与 run 终态看门狗共用同一套收敛动作。
  *
  *  为什么必须共用：这三件事原本就是同一套清理动作散在三处，而**它们本身全都由一次性终态事件驱动**
@@ -169,13 +169,13 @@ export function settleRun(t: TabRunState): void {
   closeStreamingAssistantItems(t);
   // 工具卡兜底：仍在途（running / waiting）的卡落定「已中断」——运行结束不会有结果事件了
   closeRunningTools(t);
-  // 子代理卡兜底（docs/subagent-terminal-event-loss）：sub:done 丢了就永久转圈
+  // 子代理卡兜底（docs/subagents）：sub:done 丢了就永久转圈
   settleRunningSubs(t);
   // ask / 审批面板兜底：此前只有 ask:closed 一个清理入口，丢帧即输入锁死
   if (t.ask) t.ask = null;
 }
 
-/** 本 Tab 是否仍有「未收敛」状态——run 终态看门狗的本地侧判据（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)）。
+/** 本 Tab 是否仍有「未收敛」状态——run 终态看门狗的本地侧判据（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）。
  *
  *  刻意**不只看 `t.running`**：`run:start` 丢失时 `t.running` 恒为 false，而 `sub:spawn` 建卡不检查它
  *  （`runHandlers.ts` 的 sub:spawn 只判 `if (!t) return`），此时子代理卡仍会是 running。
@@ -236,7 +236,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       if (p?.run_id && before?.lastSettledRunId === p.run_id) return;
       if (p?.run_id && before?.runId && p.run_id !== before.runId) return;
       if (!before?.running) {
-        // 幂等守卫照旧早退，但**早退不等于无事可做**（[docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md) 证据 5）：
+        // 幂等守卫照旧早退，但**早退不等于无事可做**（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md) 证据 5）：
         // `run:start` 丢失时 `t.running` 恒为 false，而 `sub:spawn` 建卡不检查它——
         // 原本这里直接 return 会让 settleRunningSubs / closeRunningTools / ask 清理**全部跳过**，
         // 子代理卡永久转圈。故早退前先收敛一次（仅在确有未收敛状态时动手，幂等无副作用）。
@@ -251,7 +251,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         }
         return;
       }
-      // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：按 run_id 对 suggest 的双 run:done 去重——done1 已同步出队并乐观把
+      // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：按 run_id 对 suggest 的双 run:done 去重——done1 已同步出队并乐观把
       // running 翻回 true（新运行），旧 `!running` 守卫对 done2 失效；放行两次会错误重置 running 并重复出队
       if (p?.run_id && before.lastDoneRunId === p.run_id) return;
       set((s) => {
@@ -259,16 +259,16 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t) return;
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.queueResumeAfterInjection = t.queue.some((q) => q.injecting);
-        // 文本形态 ask 的待剥状态只在本轮有效（[docs/text-form-ask-fallback]）：清空后下一轮的增量不再被剥
+        // 文本形态 ask 的待剥状态只在本轮有效（[docs/chat-and-interface]）：清空后下一轮的增量不再被剥
         t.textRecovered = null;
-        // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」信号同样只在本 run 内有效——
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：「先看预览」信号同样只在本 run 内有效——
         // 本轮没等到合格的 widget 就作废，不跨轮补弹（否则下一轮的第一张 widget 会莫名自己弹出来）
         t.widgetAutoOpen = null;
-        t.pendingItemId = null; // docs/run-queue-and-ask-revamp：自然完成清掉「立即运行」标记，防止后续手动停止时插队
-        // 收敛体与另两个 run 收尾 handler、以及 run 终态看门狗共用（docs/run-terminal-event-fallback）
+        t.pendingItemId = null; // docs/plan-and-approval：自然完成清掉「立即运行」标记，防止后续手动停止时插队
+        // 收敛体与另两个 run 收尾 handler、以及 run 终态看门狗共用（docs/runtime-and-scheduling）
         settleRun(t);
         if (p.suggestions) t.suggestions = p.suggestions;
-        // [docs/session-history-limits](../../../docs/session-history-limits.md)：历史保存不干净时向本会话转录补一条提示。
+        // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：历史保存不干净时向本会话转录补一条提示。
         // 载荷仅在「拒存 / 有损保存」时才带 history_save（干净路径零打扰）；保存结果由后端在 run 收尾检查点上报，
         // run_id 幂等守卫同上——两次 done 只提示一次。跨 run 的同文案去重见 hasTrailingNoticeText（最近一条 notice 同文案则不追加）。
         // 本 handler 其余语义一概不动。
@@ -285,12 +285,12 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         useUi.getState().notify(title, i18n.t("notice.taskDone"), p.session);
         void systemNotify(p.session, title, i18n.t("notice.taskDone"));
       }
-      // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：任务完成后依序运行下一条队列项
+      // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：任务完成后依序运行下一条队列项
       void get().runQueueNext(p.session);
     },
     "run:error": (p) => {
       if (deferPendingTerminal(set, get, "error", p)) return;
-      markUnreadIfAway(p?.session); // docs/ask-ink-accent-and-composer-cover：失败收尾同样算会话结束
+      markUnreadIfAway(p?.session); // docs/chat-and-interface：失败收尾同样算会话结束
       const before = get().tabs[p.session];
       if (p?.run_id && before?.lastSettledRunId === p.run_id) return;
       if (p?.run_id && before?.runId && p.run_id !== before.runId) return;
@@ -298,12 +298,12 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.queueResumeAfterInjection = false;
-        // [docs/preview-skill](../../../docs/preview-skill.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
-        t.pendingItemId = null; // docs/run-queue-and-ask-revamp：同 done，防止残留标记在后续手动停止时插队
-        // 收敛体同 run:done（docs/run-terminal-event-fallback）
+        t.pendingItemId = null; // docs/plan-and-approval：同 done，防止残留标记在后续手动停止时插队
+        // 收敛体同 run:done（docs/runtime-and-scheduling）
         settleRun(t);
-        // errorKind 携带后端 ProviderError 分类（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）：auth/billing 有设置快捷入口
+        // errorKind 携带后端 ProviderError 分类（[docs/providers-and-network](../../../docs/providers-and-network.md)）：auth/billing 有设置快捷入口
         t.items.push({ kind: "error", text: String(p?.error ?? i18n.t("notice.runFailed")), errorKind: p?.kind });
       });
     },
@@ -316,13 +316,13 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.queueResumeAfterInjection = false;
-        // [docs/preview-skill](../../../docs/preview-skill.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
-        // 收敛体同 run:done（docs/run-terminal-event-fallback）；必须在 push notice 之前，保证语义清晰
+        // 收敛体同 run:done（docs/runtime-and-scheduling）；必须在 push notice 之前，保证语义清晰
         settleRun(t);
         t.items.push({ kind: "notice", text: i18n.t("notice.cancelled") });
       });
-      // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：「↑ 立即」不再走打断路径
+      // [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)：「↑ 立即」不再走打断路径
       // （旧版在此检查 pendingItemId 并出队执行），故取消 = 纯停止，队列保持暂停待「继续执行」。
       // `TabRunState.pendingItemId` 字段保留但已无写入方（删除会波及约 20 个测试文件的状态桶）。
     },
@@ -330,7 +330,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       set((s) => {
         const t = s.tabs[p?.session];
         if (!t) return;
-        // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：drain_inject 把注入正文随 texts 带回，
+        // [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)：drain_inject 把注入正文随 texts 带回，
         // 有正文时用「注入 N 条消息：」的 notice + injectedTexts（由 ChatMessages 逐条渲染）；
         // texts 缺省/为空（ask 方案批准注入、旧后端）时完全回落原键 notice.injected，不带 injectedTexts。
         const texts = Array.isArray(p?.texts)
@@ -344,7 +344,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       });
     },
     "session:title": (p) => {
-      // 自动命名落地（[docs/session-auto-title](../../../docs/session-auto-title.md)）：同步会话列表 meta 与 Tab 标题（Tab 未开则等下次刷新）
+      // 自动命名落地（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：同步会话列表 meta 与 Tab 标题（Tab 未开则等下次刷新）
       useSessions.getState().applyTitle(p.session, String(p?.title ?? ""));
     },
     "run:retry": (p) => {
@@ -483,7 +483,7 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
   return {
     "ask:opened": (p: AskOpenedEvent) => {
       // M-1：不重建桶——避免无人能应答的幽灵审批。
-        // 文本形态 ask 兜底（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：后端剥的是**落盘历史**，
+        // 文本形态 ask 兜底（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：后端剥的是**落盘历史**，
         // 而这段协议原文早已随流式帧进了**当轮气泡**（帧已下发、无法回收）——这里补剥当轮气泡。
         // 剥离实现与后端 `text_ask::strip_block`（`replacen(block, "", 1)` + `trim_end()`）同口径，统一在
         // runFrames.stripRecoveredText / stripRecoveredInTab：找不到就什么也不做（跨段切分 / 已被裁剪 / 已剥过
@@ -494,7 +494,7 @@ export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => 
         // 纪律：这是**流式文本**的清理，绝不改 `t.ask` 内容、不给卡片加来源标注（产品决定：不标注，
         // 免得用户以为提问不可信）。
       hydrateAsk(set, p);
-      // [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：窗口失焦时系统通知（聚焦时不发，应用内 ask 窗口可见）；点击回跳走 [docs/notification-click-reveal](../../../docs/notification-click-reveal.md) 链路。
+      // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：窗口失焦时系统通知（聚焦时不发，应用内 ask 窗口可见）；点击回跳走 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 链路。
       // 仅在桶存在（有人能应答）时发送，与 M-1 守卫一致
       if (get().tabs[p.session] && !document.hasFocus()) {
         const sessions = useSessions.getState();
@@ -545,7 +545,7 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         }
         // 把子代理卡锚进当前流式项的 timeline（与工具卡同机制，按调用位置穿插）
         currentAssistantIm(t).timeline.push({ kind: "sub", subId: p.sub_id });
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：首个子代理启动自动打开过程抽屉（常显语义）；后续子代理不打断当前视图
+        // [docs/subagents](../../../docs/subagents.md)：首个子代理启动自动打开过程抽屉（常显语义）；后续子代理不打断当前视图
         const runningCount = t.subs.filter((x) => x.status === "running").length;
         if (runningCount === 1) t.subDrawer = { open: true, subId: p.sub_id };
       });
@@ -554,13 +554,13 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
       set((s) => {
         const sub = s.tabs[p.session]?.subs.find((x) => x.subId === p.sub_id);
         if (!sub) return;
-        // 已收尾的子代理不再接受进度采样（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+        // 已收尾的子代理不再接受进度采样（[docs/subagents](../../../docs/subagents.md)）：
         // 后端 `sub:done`（subagent.rs:569）先于 `progress.abort()`（:629）发射，中间隔着
         // save_sub_history + stats 记录；该窗口内到达的迟到 tick 会把 `sub.step` 覆写回轮询采样值，
         // 表现为「卡片已翻 ✓ 但步数还在跳」。守卫兼作子代理已收尾的语义边界。
         if (sub.status !== "running") return;
         sub.step = p.step ?? sub.step;
-        // 批准门选档（[docs/mode-gate-and-subagent-sync]）：子代理当前档位每步上报，过程抽屉显示档位行；
+        // 批准门选档（[docs/plan-and-approval]）：子代理当前档位每步上报，过程抽屉显示档位行；
         // 旧后端 / 归档回放不带该字段 → 保持原值（不写成 undefined，避免抽屉出现空档位）
         if (p.approval_mode) sub.approvalMode = p.approval_mode;
         if (p.tool) {

@@ -1,4 +1,4 @@
-// Composer 工具条速率段与统计面板总览三项的纯派生口径（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）。
+// Composer 工具条速率段与统计面板总览三项的纯派生口径（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 // 只做「数值 → 展示值」的换算，不依赖 React / store / i18n：工具条（`Composer.tsx`）与统计面板
 // （`features/panels/TokenStatsModal.tsx`）共用同一份实现——同一口径写两份必然漂移
 // （token 缩写 `M`/`k` 此前只存在于 modal，现在同样收敛到本文件）。

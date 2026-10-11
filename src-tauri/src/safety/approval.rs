@@ -1,5 +1,5 @@
-//! 审批确认门（决策 D4，[docs/p0-plan](../../../docs/p0-plan.md) §7.3）：复用 ask 通道、无限等待用户应答。
-//! [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：等待策略由 `auto_confirm` 决定——勾选后 5 分钟未响应
+//! 审批确认门（决策 D4，[docs/technical-design](../../../docs/technical-design.md)）：复用 ask 通道、无限等待用户应答。
+//! [docs/chat-and-interface](../../../docs/chat-and-interface.md)：等待策略由 `auto_confirm` 决定——勾选后 5 分钟未响应
 //! 自动确认推荐选项（允许）；不勾选则永不超时。run 取消（H2 修复）始终可打断，按拒绝处理。
 //! 子代理审批例外：事件挂主会话下发（方案 B，emit_session_of）+ 有界超时自动拒绝（方案 C，SUB_APPROVAL_TIMEOUT）。
 //!
@@ -15,7 +15,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：auto_confirm 勾选时，等待这么久未响应即自动确认推荐选项
+/// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：auto_confirm 勾选时，等待这么久未响应即自动确认推荐选项
 pub const AUTO_CONFIRM_AFTER: Duration = Duration::from_secs(300);
 
 /// 子代理审批的有界等待上限（方案 C 防御性兑底）：超时自动拒绝，杜绝「审批卡因任何
@@ -23,7 +23,7 @@ pub const AUTO_CONFIRM_AFTER: Duration = Duration::from_secs(300);
 /// ——灾难级限的是「绝不自动允许」，反向超时拒绝不在受限之列（fail-closed）。
 pub const SUB_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// 硬性策略（[docs/arithmetic-fixes-batch](../../../docs/arithmetic-fixes-batch.md)）：灾难级 Confirm 绝不搭乘 [docs/session-nav-row-states](../../../docs/session-nav-row-states.md) 的 auto_confirm
+/// 硬性策略（[docs/testing](../../../docs/testing.md)）：灾难级 Confirm 绝不搭乘 [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 的 auto_confirm
 /// 超时——auto_confirm 是「放手」便利性，不得延伸到不可逆的系统级命令（fence 在关审批时
 /// 对灾难级直接拦；开审批时必须用户亲自应答，与「硬 gate 不因 YOLO 放行」同理）。
 pub fn effective_auto_confirm(auto_confirm: bool, is_disaster: bool) -> bool {
@@ -35,7 +35,7 @@ pub fn effective_auto_confirm(auto_confirm: bool, is_disaster: bool) -> bool {
 /// 同一组「允许 / 始终允许 / 拒绝」在不同语义下后果完全不同：命令审批的「允许」是
 /// 只放行这一次，「始终允许」是后续相同命令不再询问；范围门（G3，计划外步骤）的
 /// 「允许」是把这些步骤纳入已批准范围，「始终允许」才是本会话后续新增都不再询问。
-/// 两者共用一套文案会让用户对实际行为产生误判（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7.3）。
+/// 两者共用一套文案会让用户对实际行为产生误判（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalKind {
     /// 单次操作审批（命令 / 文件写入 / 服务命令 / MCP 调用）：默认语义
@@ -65,7 +65,7 @@ pub struct ApprovalRequest {
     pub allow_always: bool,
     /// 审批语义类别（前端据此选文案）；默认 Once，向后兼容既有构造点
     pub kind: ApprovalKind,
-    /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：5 分钟未响应自动确认推荐选项（允许）；false 表示永不超时、无限等待
+    /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：5 分钟未响应自动确认推荐选项（允许）；false 表示永不超时、无限等待
     pub auto_confirm: bool,
 }
 
@@ -135,7 +135,7 @@ pub async fn confirm(
         }),
     );
     // H2 修复：等待审批期间 run 取消可打断（取消 = 拒绝），不再永久挂起
-    // [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：auto_confirm=false 永不超时；true 时超时自动确认推荐选项（允许，绝不做「始终允许」）
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：auto_confirm=false 永不超时；true 时超时自动确认推荐选项（允许，绝不做「始终允许」）
     // 子代理审批（方案 C）：恒有界等待，超时自动拒绝——审批门不得成为永久挂起点
     let mut auto_confirmed = false;
     let mut sub_timed_out = false;
@@ -275,7 +275,7 @@ mod tests {
         (task, ask_id)
     }
 
-    /// [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：confirm 解析前端载荷 {approved, always}；always 仅在 allow_always=true 时生效
+    /// [docs/plan-and-approval](../../../docs/plan-and-approval.md)：confirm 解析前端载荷 {approved, always}；always 仅在 allow_always=true 时生效
     ///（服务端钳制防客户端伪造）；allow_always=false 时 always 恒为 false。
     #[tokio::test]
     async fn confirm_parses_always_with_server_side_gate() {
@@ -310,7 +310,7 @@ mod tests {
         assert!(!out.approved && !out.always, "{out:?}");
     }
 
-    /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：勾选 auto_confirm——5 分钟未响应自动确认推荐选项（允许，绝不做「始终允许」）
+    /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：勾选 auto_confirm——5 分钟未响应自动确认推荐选项（允许，绝不做「始终允许」）
     #[tokio::test(start_paused = true)]
     async fn confirm_auto_confirms_recommended_after_timeout_when_enabled() {
         let (_ws, _dd, core, rt) = setup();
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：不勾选 auto_confirm——永不超时；虚拟时间推进远超 300s 仍 pending，应答后按应答返回
+    /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：不勾选 auto_confirm——永不超时；虚拟时间推进远超 300s 仍 pending，应答后按应答返回
     #[tokio::test(start_paused = true)]
     async fn confirm_waits_indefinitely_when_auto_confirm_disabled() {
         let (_ws, _dd, core, rt) = setup();
@@ -377,7 +377,7 @@ mod tests {
         );
     }
 
-    /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：auto_confirm 开启时，5 分钟窗口内到达的显式应答优先于之后的自动确认
+    /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：auto_confirm 开启时，5 分钟窗口内到达的显式应答优先于之后的自动确认
     ///（拒绝仍是拒绝）。
     #[tokio::test(start_paused = true)]
     async fn explicit_answer_before_timeout_wins_over_auto_confirm() {
@@ -399,7 +399,7 @@ mod tests {
         );
     }
 
-    /// [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：畸形应答载荷 fail closed（approved 兜底为 false）。
+    /// [docs/plan-and-approval](../../../docs/plan-and-approval.md)：畸形应答载荷 fail closed（approved 兜底为 false）。
     #[tokio::test]
     async fn malformed_answer_fails_closed() {
         let (_ws, _dd, core, rt) = setup();
@@ -491,7 +491,7 @@ mod tests {
         assert!(!out.approved && !out.always, "{out:?}");
     }
 
-    /// [docs/arithmetic-fixes-batch](../../../docs/arithmetic-fixes-batch.md)：auto-confirm 超时绝不适用于灾难级 Confirm——审批开启时
+    /// [docs/testing](../../../docs/testing.md)：auto-confirm 超时绝不适用于灾难级 Confirm——审批开启时
     /// `mkfs`/`dd of=/dev/` 即便勾了 auto_confirm 也要等用户亲自应答。
     #[test]
     fn effective_auto_confirm_never_applies_to_disaster() {

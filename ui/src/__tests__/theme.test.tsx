@@ -175,7 +175,7 @@ describe("设置 → 外观：主题选择即时生效", () => {
     await mountApp();
     // seed 配置后 store 直驱打开设置弹窗并落在「外观」页签（既有惯例，见 shell.settings.test；
     // SettingsPage 的 Tabs 依赖 draft=useSettings.config，未 seed 时仅渲染空页）
-    // 设置页全屏覆盖层已不再有 Modal 外壳（docs/settings-fullscreen-shell）：选择器锚 .settings-shell
+    // 设置页全屏覆盖层已不再有 Modal 外壳（docs/settings-guide）：选择器锚 .settings-shell
     useSettings.setState({ config: JSON.parse(JSON.stringify(fixtureConfig)), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "appearance" });
     const options = await waitFor(() => {

@@ -1,4 +1,4 @@
-// lineDiff / collapseDiff: lightweight LCS diff used by tool cards ([docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// lineDiff / collapseDiff: lightweight LCS diff used by tool cards ([docs/development](../../../docs/development.md) coverage batch)
 import { describe, it, expect } from "vitest";
 import { lineDiff, collapseDiff, type DiffLine } from "../utils/diff";
 

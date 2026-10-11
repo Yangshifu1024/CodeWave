@@ -2,7 +2,7 @@
    所有颜色一律走 --ws-* token（来源 = antd 主题，见 theme/bridge.tsx）。 */
 
 :root {
-  /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/arithmetic-audit](../../../docs/docs/arithmetic-audit.md)#13——此前两处各写字面量 50px） */
+  /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/testing](../../../docs/testing.md)#13——此前两处各写字面量 50px） */
   --ws-titlebar-h: 50px;
   /* 全局高亮色：所有 hover / active / 选中态统一走此色。
      从左栏背景 --ws-bg-nav 派生「深一点点」的色（与 --ws-text-1 混 12%）。
@@ -26,7 +26,7 @@ code { font-family: var(--ws-font-mono); }
   /* padding: 0 必须显式声明（评审 🔴1）：antd 6 Header 默认 padding: 0 50px；
      漏写会把内容盒横向内缩、左段脱离窗口左缘、两段分隔线错位 */
   padding: 0;
-  /* 两段式标题栏（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md)）：toolbar 自身零背景——背景与平台让位
+  /* 两段式标题栏（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：toolbar 自身零背景——背景与平台让位
      全部下沉到 .tb-left-seg / .tb-main-seg，左段分隔线才能与左栏面板连续 */
 }
 /* 顶栏内容浮于拖拽层之上：空白处落到拖拽层拖动窗口，按钮保持可点 */
@@ -42,14 +42,14 @@ code { font-family: var(--ws-font-mono); }
   transition: width 0.2s, background 0.2s, border-right-color 0.2s;
 }
 .tb-left-seg.tb-left-fullscreen { transition: none; }
-/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 折叠态：宽度内联置 0，本块只归零装饰并把背景融入
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md) 折叠态：宽度内联置 0，本块只归零装饰并把背景融入
    内容色（.tb-main-seg）——0.2s 折叠期间两段读作同一表面，不留残带 */
 .tb-left-seg.tb-left-closed {
   padding-left: 0;
   border-right-color: transparent;
   background: var(--ws-bg-main);
 }
-/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 评审 🟡1：下方平台/原生规则特异性更高（0,2,1），单靠 .tb-left-closed 压不住——
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md) 评审 🟡1：下方平台/原生规则特异性更高（0,2,1），单靠 .tb-left-closed 压不住——
    缺了这些覆盖，macOS 78px 让位（与原生 12px padding）会在折叠后残留幽灵带 */
 html[data-os="macos"] .tb-left-seg.tb-left-closed { padding-left: 0; min-width: 0; }
 html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0; }
@@ -57,14 +57,14 @@ html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0;
    （让位变量由插件测量注入；全屏/未注入时为 0 → 回退 10px 基础 padding） */
 .tb-main-seg {
   flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 8px;
-  /* 左 padding：标题与左段分隔线之间的呼吸空间（[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整） */
+  /* 左 padding：标题与左段分隔线之间的呼吸空间（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 追加调整） */
   padding-left: 12px;
   padding-right: max(10px, var(--tauri-plugin-decoration-right-clearance, 0px));
-  box-sizing: border-box; background: var(--ws-bg-main); overflow: hidden; /* [docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) 追加调整：右段与中右栏面板内容区同色（亮色 #f8f8f8） */
-  transition: padding 0.2s; /* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：左栏折叠时红绿灯让位在两段之间平滑迁移 */
+  box-sizing: border-box; background: var(--ws-bg-main); overflow: hidden; /* [docs/chat-and-interface](../../../docs/chat-and-interface.md) 追加调整：右段与中右栏面板内容区同色（亮色 #f8f8f8） */
+  transition: padding 0.2s; /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：左栏折叠时红绿灯让位在两段之间平滑迁移 */
 }
 .tb-logo { width: 24px; height: 24px; border-radius: 6px; flex: none; }
-/* Logo 开关入口（[docs/titlebar-logo-toggle](../../../docs/docs/titlebar-logo-toggle.md) 同位交换；自 [docs/macos-notify-use-default-dialog-fix](../../../docs/docs/macos-notify-use-default-dialog-fix.md) 起位于右段段首——左段是纯背景带）：
+/* Logo 开关入口（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 同位交换；自 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 起位于右段段首——左段是纯背景带）：
    悬停时 Logo 淡出、折叠/展开箭头叠加淡入，带背景悬停反馈；TopBar 按 explorerOpen 切换图标 */
 .tb-logo-toggle {
   position: relative; width: 24px; height: 24px; flex: none;
@@ -99,27 +99,27 @@ html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0;
 .tb-flex { flex: 1; align-self: stretch; }
 /* macOS 红绿灯 Overlay 展开时落在左段（灰）：左段内容右移让位
    （78px 下限，clearance 可能首帧未送达）；折叠时段宽为 0，让位迁移到
-   右段段首（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)，见下方 .tb-main-cleared） */
+   右段段首（[docs/chat-and-interface](../../../docs/chat-and-interface.md)，见下方 .tb-main-cleared） */
 html[data-os="macos"] .tb-left-seg {
   padding-left: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px));
   min-width: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px));
 }
-/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：折叠后左段宽 0 容不下红绿灯——让位迁移至右段
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：折叠后左段宽 0 容不下红绿灯——让位迁移至右段
    段首（padding-left 与折叠同步经 0.2s 缓动），保证红绿灯不压 Logo/标题 */
 html[data-os="macos"] .tb-main-seg.tb-main-cleared { padding-left: max(78px, var(--tauri-plugin-decoration-left-clearance, 0px)); }
 
 /* 原生回退：原生标题栏恢复，Overlay/控制条不存在，所有让位回退基础值（后写规则胜出）；
-   折叠 0 = 左段与 Sider 一起完全隐藏（[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)，窄轨退役——不再有方形空带） */
+   折叠 0 = 左段与 Sider 一起完全隐藏（[docs/chat-and-interface](../../../docs/chat-and-interface.md)，窄轨退役——不再有方形空带） */
 html[data-titlebar-mode="native"] .tb-left-seg { padding-left: 12px; min-width: 0; }
 html[data-titlebar-mode="native"] .tb-main-seg { padding-right: 10px; }
 html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 12px; }
 /* 通用弹性占位（ProvidersPanel/TaskCenterPanel/SettingsModal 内联布局使用；顶栏现用 .tb-flex） */
 .flex { flex: 1; }
 .dim { color: var(--ws-dim); }
-/* 通知堆栈悬挂在标题栏下方顶部居中（[docs/custom-font-and-titlebar](../../../docs/docs/custom-font-and-titlebar.md)）；max-width 防超长正文横贯窗口；z-index 须高于 antd Modal(1000)/message(1010)，否则弹框打开期间 toast 被遮罩盖住 */
+/* 通知堆栈悬挂在标题栏下方顶部居中（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）；max-width 防超长正文横贯窗口；z-index 须高于 antd Modal(1000)/message(1010)，否则弹框打开期间 toast 被遮罩盖住 */
 .notify-stack { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--ws-titlebar-h) + 10px); z-index: 3000; display: flex; flex-direction: column; gap: 8px; max-width: min(90vw, 480px); }
 /* ---------- ChatMessages ---------- */
-/* 聊天区布局：内容占中栏 70%，左右各留 15% 空白（[docs/chat-content-width]）。
+/* 聊天区布局：内容占中栏 70%，左右各留 15% 空白（[docs/chat-and-interface]）。
    padding 用百分比响应中栏宽度——窄窗（< ~320px）按内容/上下文需要仍可走 min() 兜底，但 antd Layout
    已保证中栏 ≥ 480px（utils/layout CHAT_W_MIN），实际场景不会触发极窄。 */
 .chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 15%; /* 不用 CSS smooth：流式期间程序化滚底不断被打断，滚动条会闪烁并反复隐藏 */ }
@@ -168,7 +168,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   max-width: 78%; background: var(--ws-user-bubble); color: var(--ws-text-1);
   padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
 }
-/* 用户气泡保守 markdown 子集（[docs/markdown-style-refresh]）：重置 white-space:pre-wrap 与 p 内外边距，
+/* 用户气泡保守 markdown 子集（[docs/chat-and-interface]）：重置 white-space:pre-wrap 与 p 内外边距，
    避免 markdown 元素双换行 / 列表错位；保留 padding / max-width 不动。 */
 .user-bubble.md { white-space: normal; }
 .user-bubble.md > p { margin: 0.35em 0; line-height: 1.6; }
@@ -209,10 +209,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .msg.user:hover .user-msg-actions { visibility: visible; opacity: 1; }
 .assistant { max-width: 100%; overflow: hidden; }
 .assistant .md { max-width: 860px; min-width: 0; overflow-x: hidden; }
-/* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡 + 更新弹窗发布说明 + 技能详情正文（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
-   inline code chip、表格等全部无样式；[docs/updater-notes-markdown-and-progress-throttle](../../../docs/docs/updater-notes-markdown-and-progress-throttle.md) 把更新弹窗的发布说明也并入本组；
+/* 共享 markdown 样式：聊天气泡 + AskPanel 计划卡 + 更新弹窗发布说明 + 技能详情正文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)——此前仅作用于 .assistant 之下，计划卡缺了前缀，
+   inline code chip、表格等全部无样式；[docs/release](../../../docs/release.md) 把更新弹窗的发布说明也并入本组；
    .skill-body.md = 技能详情弹框的 SKILL.md 正文，此前漏在本组外——正文段落无间距、代码块无 github 底色、Copy 按钮不显形、表格无边框；
-   .viewer-md.md = 文件预览弹框的 markdown/doc 正文，此前复用聊天区 .assistant 容器，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）。
+   .viewer-md.md = 文件预览弹框的 markdown/doc 正文，此前复用聊天区 .assistant 容器，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
    新增消费点一律往这里的 :is() 里加容器选择器，不要另抄一套排版。 */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) p { margin: 0.4em 0; }
 /* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
@@ -241,7 +241,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) code { font-family: var(--ws-font-mono); font-size: 12.5px; color: inherit; }
 /* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
-   与左侧导航同色，整体观感统一（[docs/ask-ink-accent-and-composer-cover]）。 */
+   与左侧导航同色，整体观感统一（[docs/chat-and-interface]）。 */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-comment { color: var(--ws-hl-comment); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-keyword { color: var(--ws-hl-keyword); }
@@ -251,14 +251,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-built_in { color: var(--ws-hl-built); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) table { border-collapse: collapse; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; border-radius: 6px; }
-/* wrapper 不再自带边框（[docs/plan-modal-table-scroll]）：它与内部 th/td 的 1px 边框同时存在会叠成双层网格。
+/* wrapper 不再自带边框（[docs/chat-and-interface]）：它与内部 th/td 的 1px 边框同时存在会叠成双层网格。
    max-width:100% 是滚动的关键——它把 wrapper 钉在容器宽度内，宽表格才会溢出成可滚动区。
    （min-width 对块级盒实际是 no-op，写着是为了与 .assistant/.md 的 min-width:0 惯例一致，兼作意图声明。） */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .table-wrap > table { width: 100%; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: 12.5px; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th { background: var(--ws-bg-nav); font-weight: 600; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) tr:hover td { background: var(--ws-bg-nav); }
-/* 标题：渐变 + 紧凑（[docs/markdown-style-refresh]） */
+/* 标题：渐变 + 紧凑（[docs/chat-and-interface]） */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.8em 0 0.3em; font-weight: 600; line-height: 1.4; color: var(--ws-text-1);
 }
@@ -296,7 +296,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) em { font-style: italic; }
 
 /* 文件预览弹框正文（.viewer-md.md）：不吃聊天区那套 860px 行长上限——预览本就靠滚动读，
-   行长约束是聊天排版的刻意约束，用在这里只会静默裁掉宽表格（[docs/plan-modal-table-scroll]）。
+   行长约束是聊天排版的刻意约束，用在这里只会静默裁掉宽表格（[docs/chat-and-interface]）。
    overflow-x 留 hidden 是与 .assistant .md 的既有行为对齐：宽内容由各自的 .table-wrap / pre 承接滚动，
    不滚整个正文。注意 .assistant .md 本就不匹配这个容器（无 .assistant 祖先），本规则是显式重声明，
    不依赖层叠覆盖。 */
@@ -317,7 +317,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   scrollbar-width: none;
 }
 .thinking-block .thinking-body::-webkit-scrollbar { display: none; }
-/* 思考头部：单行——标题 + 计时，随后走马灯通栏占满余宽（[docs/thinking-marquee-rewrite](../../../docs/docs/thinking-marquee-rewrite.md)）。
+/* 思考头部：单行——标题 + 计时，随后走马灯通栏占满余宽（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
    通栏展示最新一行思考：先从左缘进入，溢出后自右向左爬行
    （最新内容钉在右缘，tail-follow），流中出现新行才翻转上滚。 */
 .thinking-block .thinking-label { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; overflow: hidden; }
@@ -343,14 +343,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 @media (prefers-reduced-motion: reduce) {
   .thinking-block .thinking-roll.rolling { animation: none; }
   .thinking-block .thinking-roll-line { transition: none; }
-  /* 打字机逐字揭示（[docs/typewriter-stream](../../../docs/typewriter-stream.md)）：JS 侧 useTypewriter
+  /* 打字机逐字揭示（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：JS 侧 useTypewriter
      已按 prefers-reduced-motion 短路成整段直出（首帧即全文、不排 rAF），这里只是 belt-and-suspenders；
      刻意不加闪烁光标 —— .cursor 类名与 CSS cursor 属性同名冲突，是历史误伤点（见下方 .cursor 注释）。 */
   /* 流式等待指示（下方 .ws-streaming-indicator）在减弱动效偏好下停转：
      antd 图标的旋转只挂在 `.anticon-spin` 这一条规则上，作用域收在本类里关掉，不波及其他位置的加载图标。 */
   .ws-streaming-indicator .anticon-spin { animation: none; }
 }
-/* 流式等待指示（[docs/chat-loading-indicator](../../../docs/chat-loading-indicator.md)）：模型正在输出时，
+/* 流式等待指示（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：模型正在输出时，
    跟在末尾的行内加载图标（antd LoadingOutlined spin），替代原自绘方块字符 `▍` 与 `.cursor` 闪烁动画
    （`.cursor` 与 `@keyframes blink` 已随本次改动删除——别再加回来：cursor 与 CSS 的 cursor 属性同名，
    是键盘高亮类名历史误伤点，见 features/tools/AskPanel.tsx 的类名坑注释）。
@@ -367,7 +367,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   width: 1em; height: 1em; flex: none;
 }
 /* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
-   列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/tool-card-frame]）。
+   列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/chat-and-interface]）。
    容器与列表项交换色：色块是上下文（建议区）= 工具调用同款面板色；卡片是单项可点元素 = 左栏背景色（前景）。 */
 .chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-panel); }
 .chips-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ws-dim); margin-bottom: 8px; }
@@ -390,7 +390,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- Composer ---------- */
 .composer-wrap { position: relative; }
-/* 文件拖入提示条（[docs/office-and-pdf-support]）：只做视觉提示，接收拖放的是 Tauri 事件（见 ipc/dragdrop.ts）。
+/* 文件拖入提示条（[docs/documents]）：只做视觉提示，接收拖放的是 Tauri 事件（见 ipc/dragdrop.ts）。
    指针事件一律放行，否则提示条会挡住底下输入区的鼠标交互 */
 .composer-drop-hint {
   position: absolute; inset: 0; z-index: 20; pointer-events: none;
@@ -399,7 +399,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: color-mix(in srgb, var(--ws-panel) 80%, transparent);
   color: var(--ws-accent); font-size: 13px;
 }
-/* 菜单宽度上限（[docs/slash-skills-and-dollar-agents]）：Composer 以 ResizeObserver 实测输入卡片宽度
+/* 菜单宽度上限（[docs/mcp-and-skills]）：Composer 以 ResizeObserver 实测输入卡片宽度
    注入 maxWidth；此处的 calc 兜底保证首帧/测量失败时不撑出视口。left 对齐卡片左边缘（.composer 有 16px 外边距） */
 .menu { display: flex; flex-direction: column; gap: 2px; min-width: 260px; margin-left: 16px; max-width: calc(100vw - 40px); }
 /* 技能详情弹层（composer / 菜单点击项弹出）：正文区限高滚动，markdown 走 .md 渲染 */
@@ -421,9 +421,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .menu .menu-item > span { min-width: 0; }
 /* composer 与 ask-wrap 边距 = 中栏宽度的 15%（与 chat-messages padding 一致）——输入区与聊天内容区同一容器宽度 */
 .composer { display: flex; align-items: flex-end; gap: 10px; margin: 0 15% 6px; }
-/* 卡片式输入（[docs/composer-toolbar-batch-report](../../../docs/docs/composer-toolbar-batch-report.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
+/* 卡片式输入（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：圆角容器 + 占位在顶部 + 底部工具条 */
 .composer .composer-card {
-  position: relative; /* BorderBeam 层的定位上下文（[docs/antd6-upgrade-and-composer-border-beam](../../../docs/docs/antd6-upgrade-and-composer-border-beam.md)） */
+  position: relative; /* BorderBeam 层的定位上下文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)） */
   flex: 1; min-width: 0;
   border: 1px solid var(--ws-border); border-radius: 14px;
   background: var(--ws-panel);
@@ -432,12 +432,12 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
 }
 /* 输入框自身无边框（含 focus/hover 态）：浏览器 UA 的 focus outline 不受 antd borderless 管辖，
-   必须显式压制；聚焦反馈由流光边框承担（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)：原 :focus-within 强调色边框取消，
+   必须显式压制；聚焦反馈由流光边框承担（[docs/chat-and-interface](../../../docs/chat-and-interface.md)：原 :focus-within 强调色边框取消，
    流光仅在输入框聚焦或任务进行中时出现；BorderBeam 恒挂载、经 className 显隐） */
 /* 空闲流光的隐藏不用 display:none 而是 opacity：blur 在 mousedown 时触发，mousedown->click 窗口内的
    display 级 DOM 变化会让 WebKit（WKWebView）取消待处理的 click——侧栏会话行的首次点击曾被吞掉
    （需要点两次）。opacity+pointer-events 让 DOM 在 blur 前后保持稳定；
-   ::before 暂停动画实现空闲零绘制（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 时机语义不变）。 */
+   ::before 暂停动画实现空闲零绘制（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 时机语义不变）。 */
 .composer .composer-card .ant-border-beam.composer-beam-idle { opacity: 0; pointer-events: none; }
 .composer .composer-card .ant-border-beam.composer-beam-idle::before { animation-play-state: paused; }
 .composer .composer-input,
@@ -457,11 +457,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .attach-chip .attach-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); }
 .attach-chip .x { cursor: pointer; color: var(--ws-dim); font-size: 11px; }
 .attach-chip .x:hover { color: var(--ws-err); }
-/* 文件引用 chip（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：与图片 chip 同容器、同一套 .attach-chip 视觉，
+/* 文件引用 chip（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：与图片 chip 同容器、同一套 .attach-chip 视觉，
    只把缩略图换成文件类型图标；无新增色彩变量，图标色跟次级文字色 */
 .attach-chip.ref-chip .anticon { color: var(--ws-text-2); font-size: 14px; }
 .composer-toolbar { display: flex; align-items: center; padding: 2px 2px 2px 4px; }
-/* 工具条分级显示（[docs/composer-responsive-toolbar]）：基于 composer 卡片实测宽度（[data-narrow]）切三档。
+/* 工具条分级显示（[docs/chat-and-interface]）：基于 composer 卡片实测宽度（[data-narrow]）切三档。
    契约：[data-narrow="normal"] 全显；[data-narrow="medium"] 隐藏 model provider 段；
    [data-narrow="narrow"] 再隐藏权限档/力度的文字标签（保留图标）。
    **不折叠 .toolbar-info**：该块在上下文/命中段过
@@ -482,8 +482,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   margin: 0 2px 0 6px; font-size: 13px;
 }
-/* 权限胶囊不再按档染色：text + icon + chev 全部走中性墨色（[docs/ask-ink-accent-and-composer-cover] 的强调色契约）。
-   之前 confirm/auto/full 按档位分配绿/黄/红（[docs/composer-shift-tab-mode-cycle] §5 色彩强度映射风险等级），
+/* 权限胶囊不再按档染色：text + icon + chev 全部走中性墨色（[docs/chat-and-interface] 的强调色契约）。
+   之前 confirm/auto/full 按档位分配绿/黄/红（[docs/chat-and-interface] 色彩强度映射风险等级），
    与下拉菜单一起撤掉后，「当前档位徽标」仅起标识作用、不再承担风险等级提示。
    **selector 修正**（保留以备查阅）：Composer 的 mode 按钮用 children（不是 `icon` prop）传 modeIcons，
    antd Button 不会自动 wrap `.ant-btn-icon`——当时改选 `.anticon:first-of-type`（直接子元素的第一个 antd icon = mode 图标）。
@@ -497,7 +497,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    本轮把上下文/命中挪到进度圈 hover 的 Popover 里，.toolbar-info 只剩速率段；
    进度圈 + 压缩按钮挪到 .toolbar-right 原压缩按钮位（占据首位）。 */
 .composer-toolbar .toolbar-info { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0 4px; }
-/* 本轮生成速率段（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：
+/* 本轮生成速率段（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
    从原 .ctx-label 内提到 .toolbar-info 直接子级；色彩强度只映射风险等级 → 速率一律中性灰 */
 .composer-toolbar .toolbar-info .ctx-rate { color: var(--ws-dim); white-space: nowrap; font-size: 11.5px; }
 /* 「在跑」心跳点：极淡跳动，只表示「还在生成」，信息不依赖动效 */
@@ -600,7 +600,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .err-neutral { color: var(--ws-dim); opacity: 0.85; }
 .tool-card .warn { padding: 2px 10px 6px; color: var(--ws-warn); }
 
-/* ---------- render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）：
+/* ---------- render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
    卡片内不再内嵌渲染（那里只有浏览器 iframe 默认的 150px 高、宽度还被聊天列挤压），改由工具卡头部入口打开本弹框；
    弹框主体铺满（90vw × 85vh 里的可用区），iframe 占满剩余高度，滚动交给 iframe 自身；
    底色档只作用于承载画布（容器底色 + iframe 的 color-scheme），不改写模型给的 HTML ---------- */
@@ -613,9 +613,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .widget-preview-stage { flex: 1; min-height: 0; }
 .widget-preview-frame { display: block; width: 100%; height: 100%; border: 0; }
 
-/* ---------- AskPanel（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md) 卡片式 + 编号选项 + 键盘导航；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 降噪对齐：
+/* ---------- AskPanel（[docs/plan-and-approval](../../../docs/plan-and-approval.md) 卡片式 + 编号选项 + 键盘导航；[docs/chat-and-interface](../../../docs/chat-and-interface.md) 降噪对齐：
             描边中性标签 + 轻量分页器 + ghost 补充输入 + 胶囊按钮 + 题干层级） ---------- */
-.ask-wrap { margin: 0 15% 6px; } /* ask 激活时覆盖 Composer（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）成为唯一底部输入区，边距与 composer 对齐 */
+.ask-wrap { margin: 0 15% 6px; } /* ask 激活时覆盖 Composer（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）成为唯一底部输入区，边距与 composer 对齐 */
 .ask-card {
   border: 1px solid var(--ws-border); border-radius: 12px; background: var(--ws-panel);
   padding: 12px 14px; outline: none;
@@ -653,11 +653,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ask-opt {
   display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: 8px;
   cursor: pointer; font-size: 13px; min-width: 0;
-  /* [docs/ask-option-desc-wrap] 选项行首行盒高度显式声明：idx / 指示物 / 标签首行基线由此对齐，
+  /* [docs/chat-and-interface] 选项行首行盒高度显式声明：idx / 指示物 / 标签首行基线由此对齐，
      不依赖上游继承（.ask-card 若另有 line-height 会让首行错位）。标题行自身的基线对齐在 .opt-head 内做。 */
   line-height: 18px;
 }
-/* 关注中的选项行加左侧墨条（hover / 键盘高亮 / 已选中）——[docs/ask-option-desc-wrap]：
+/* 关注中的选项行加左侧墨条（hover / 键盘高亮 / 已选中）——[docs/chat-and-interface]：
    用 inset 阴影而非 border-left，不占布局宽度（各选项行内容左边界保持一致）、随 8px 圆角裁剪。
    静止态不加：推荐项的常显区分由 .rec-pill chip 承担，满屏墨条只是噪音。
    三条墨条声明并入各自的背景规则（每个选择器只留一条规则体，样式契约测试 ruleBody 取首个匹配）。 */
@@ -666,11 +666,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ask-opt.picked { background: rgba(127, 127, 127, 0.16); box-shadow: inset 2px 0 0 var(--ws-accent); }
 .ask-opt .idx { flex: none; width: 18px; color: var(--ws-dim); }
 .ask-opt .label { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
-/* 选项内容列容器（[docs/ask-option-desc-wrap]）：把「标题行」与「说明行」上下排布并左对齐——
+/* 选项内容列容器（[docs/chat-and-interface]）：把「标题行」与「说明行」上下排布并左对齐——
    .ask-opt 本身只是 [指示物 | 序号 | 列容器] 三段，换行与缩进对齐全部由这一层负责。 */
 .ask-opt .opt-body { flex: 1; flex-direction: column; min-width: 0; row-gap: 3px; }
 .ask-opt .opt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
-/* 选项说明：**独占标题下一行**并与标题左边界对齐（[docs/ask-option-desc-wrap](../../../docs/ask-option-desc-wrap.md)）。
+/* 选项说明：**独占标题下一行**并与标题左边界对齐（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
    此前是「同行优先」（flex: 1 1 240px + .ask-opt 的 flex-wrap: wrap）：描述挤在标签右侧剩余列宽里、
    被压成窄长条逐字折行。缩进对齐无法用纯 CSS 实现（第二行会左对齐到行内边距而非标签起点），
    故改为 JSX 加一层 .opt-body 列容器、描述作为块级兄弟落下——不限高、不限长、完整折行。 */
@@ -679,7 +679,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   color: var(--ws-dim); font-size: 12px; line-height: 1.5;
   white-space: normal; overflow-wrap: anywhere;
 }
-/* ---------- [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：选项前导指示物——多选=复选框 / 单选=单选框；视觉直接声明交互语义。
+/* ---------- [docs/plan-and-approval](../../../docs/plan-and-approval.md)：选项前导指示物——多选=复选框 / 单选=单选框；视觉直接声明交互语义。
    纯视觉零事件（整行可点）；picked = 墨色 accent 填充 + 反色对勾线 / 居中墨点，亮暗自适应 ---------- */
 .ask-opt .opt-box {
   /* 选项行变多行后按「垂直居中于整行」会把指示物压向说明行；改为对齐首行（margin-top 补足 14px 指示物
@@ -701,7 +701,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   content: ""; position: absolute; inset: 0; margin: auto; width: 6px; height: 6px;
   border-radius: 50%; background: var(--ws-accent);
 }
-/* 推荐标记：✓ 后缀退役（与对勾视觉混淆）→ chip（[docs/ask-option-desc-wrap]）。
+/* 推荐标记：✓ 后缀退役（与对勾视觉混淆）→ chip（[docs/chat-and-interface]）。
    原为 11px + --ws-dim 描边灰字，在 13px 标题旁几乎读不出是标签；改为 accent 同色系 chip 后一眼可辨。
    底色用 color-mix 半透明而非 accent 实心：--ws-accent 取自 antd colorPrimaryText（ui/src/theme/bridge.tsx），
    是**前景色**且暗色下为提亮灰，当底会翻成亮块、「反色字」在暗色下则是暗底暗字。
@@ -710,7 +710,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px;
   color: var(--ws-accent); background: color-mix(in srgb, var(--ws-accent) 16%, transparent);
 }
-/* 题干 = 卡片视觉入口：大一档字号 + medium 字重（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)；原 13px/400 与正文无层级） */
+/* 题干 = 卡片视觉入口：大一档字号 + medium 字重（[docs/chat-and-interface](../../../docs/chat-and-interface.md)；原 13px/400 与正文无层级） */
 .ask-card .q-text { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--ws-text-1); line-height: 1.55; }
 /* ghost 补充输入：常态只有一行占位（zcode「type your answer…」感）；聚焦时浮现强调色底线 */
 .ask-card .ask-note {
@@ -719,13 +719,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   transition: border-color 0.15s;
 }
 .ask-card .ask-note:focus { border-bottom-color: var(--ws-accent); }
-/* [docs/ask-approval-shape-note-nav](../../../docs/docs/ask-approval-shape-note-nav.md)：键盘导航末位高亮——补充输入在 kb 位显示底线（与 focus 同视觉，无需真聚焦） */
+/* [docs/plan-and-approval](../../../docs/plan-and-approval.md)：键盘导航末位高亮——补充输入在 kb 位显示底线（与 focus 同视觉，无需真聚焦） */
 .ask-card .ask-note.kb { border-bottom-color: var(--ws-accent); }
 .ask-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .ask-foot .hint { color: var(--ws-dim); font-size: 11px; flex: 1; min-width: 0; }
 .ask-foot .hint .switch-hint { color: var(--ws-warn); margin-right: 8px; }
 .ask-foot .foot-btns { display: inline-flex; gap: 8px; }
-/* 计划卡（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：完整方案 markdown + 复制 + 查看完整方案；[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md) 虚线改实线（降噪） */
+/* 计划卡（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：完整方案 markdown + 复制 + 查看完整方案；[docs/chat-and-interface](../../../docs/chat-and-interface.md) 虚线改实线（降噪） */
 .plan-card {
   border-bottom: 1px solid var(--ws-border); margin: -2px -14px 10px; padding: 10px 14px 12px;
 }
@@ -736,7 +736,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .plan-foot { display: flex; justify-content: center; margin-top: 8px; }
 
-/* ---------- 运行队列（[docs/run-queue-and-ask-revamp](../../../docs/docs/run-queue-and-ask-revamp.md)）：运行中提交的任务入队顺序执行 ----------
+/* ---------- 运行队列（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：运行中提交的任务入队顺序执行 ----------
    宽度与 composer 同步：左右边距与 .composer 的 0 15% 同公式（输入区与中栏同一容器宽度）。
    高度不在这里约束（手写 overfow-y 上面不出现 scrollbar），由 QueuePanel 内部 maxHeight 状态机管理。 */
 .queue-panel { margin: 0 15% 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -754,9 +754,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .queue-paused-hint { color: var(--ws-dim); font-size: 11.5px; }
 /* ---------- 上下文压缩按钮（原 ContextInfoBar 区块并入 Composer 工具条） ---------- */
 
-/* ---------- SubagentItemCard（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：单行可点击卡片；点击打开过程抽屉） ---------- */
+/* ---------- SubagentItemCard（[docs/subagents](../../../docs/subagents.md)：单行可点击卡片；点击打开过程抽屉） ---------- */
 .sub-card {
-  /* 宽度与 .tool-card 对齐（无 max-width，同随聊天栏撑满；[docs/subagent-interaction-drawer] 同源卡片视觉一致） */
+  /* 宽度与 .tool-card 对齐（无 max-width，同随聊天栏撑满；[docs/subagents] 同源卡片视觉一致） */
   margin: 6px 0; display: flex; align-items: center; gap: 6px; min-width: 0;
   padding: 6px 10px; border-radius: 10px; cursor: pointer; user-select: none;
   background: var(--ws-panel); border: 1px solid var(--ws-border);
@@ -795,7 +795,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   max-height: 160px; overflow-y: auto;
 }
 
-/* ---------- 子代理过程抽屉（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)：右侧滑出、常挂载、关闭不销毁） ---------- */
+/* ---------- 子代理过程抽屉（[docs/subagents](../../../docs/subagents.md)：右侧滑出、常挂载、关闭不销毁） ---------- */
 /* antd 6.6 DOM 契约（subagent.drawer.test.tsx 探明）：
    .ant-drawer-content-wrapper（absolute，宽度来自 `size`）> .ant-drawer-section.sub-drawer >
    .ant-drawer-header + .ant-drawer-body >（我们的 .sub-drawer-body）。不再有 .ant-drawer-content。
@@ -805,10 +805,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    section = 定高 flex 列（不滚动），header 恒不收缩，
    .ant-drawer-body = flex:1/min-height:0/display:flex + overflow:hidden（透明尺寸层；overflow:hidden
    维持「单一滚动容器」不变式——朴素的 display:block + flex:1 会让内层 flex:1/mh0 对着无界父级求解，
-   抽屉随内容长高、什么都不滚，即 [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 的 .rb-tabs 同类缺陷，
+   抽屉随内容长高、什么都不滚，即 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 的 .rb-tabs 同类缺陷，
    迟至 e766796 还复发过），我们的 .sub-drawer-body = 唯一滚动容器（flex:1 + min-height:0 +
    overflow-y:auto）。SubagentDrawer.tsx 另在运行时把滚动容器钳制到视口减头部，
-   作为不依赖链条的兜底（[docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md)）。 */
+   作为不依赖链条的兜底（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。 */
 .sub-drawer-root > .ant-drawer-content-wrapper { top: 0; bottom: 0; }
 .sub-drawer.ant-drawer-section {
   display: flex; flex-direction: column;
@@ -835,7 +835,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-weight: 400; font-size: 12px; color: var(--ws-text-2);
   overflow: hidden; text-overflow: ellipsis;
 }
-/* 档位行（[docs/mode-gate-and-subagent-sync]）：子代理当前权限档位与头部同行；标题（flex:1 / min-width:0）先收缩 */
+/* 档位行（[docs/plan-and-approval]）：子代理当前权限档位与头部同行；标题（flex:1 / min-width:0）先收缩 */
 .sub-drawer-mode { flex: none; font-size: 11px; font-weight: 400; color: var(--ws-text-2); white-space: nowrap; }
 .sub-drawer-mode .sub-drawer-mode-note { margin-inline-start: 4px; color: var(--ws-dim); }
 .sub-drawer-status { flex: none; margin-inline-end: 0; font-size: 11px; }
@@ -845,14 +845,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 16px;
   display: flex; flex-direction: column; gap: 4px;
 }
-/* [docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md) 第二轮，实机复现：有界 flex 列滚动容器会把子项压到「装得下」而不是溢出——
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md) 第二轮，实机复现：有界 flex 列滚动容器会把子项压到「装得下」而不是溢出——
    流式块（全局 `.assistant { overflow: hidden }`）自动最小尺寸为零，
    flex-shrink 把整条过程时间线压扁进剩余空间（滚动容器报告 scrollHeight ==
    clientHeight：无从滚动、滚轮失效、过程不可见）。子项保持自然高度；溢出只属于本容器。 */
 .sub-drawer-body > * { flex-shrink: 0; }
 .sub-drawer-body .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .sub-drawer-body .user-bubble { max-width: 92%; }
-/* 指派任务折叠（[docs/subdrawer-scroll-hardening](../../../docs/docs/subdrawer-scroll-hardening.md) §6）：标签行即开关（chevron 旋转），折叠态显示
+/* 指派任务折叠（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：标签行即开关（chevron 旋转），折叠态显示
    单行省略预览；任务是静态上下文，默认折叠、切换子代理时重置。 */
 .sub-drawer-task-toggle { cursor: pointer; user-select: none; align-items: center; gap: 5px; }
 .sub-drawer-task-toggle:hover { color: var(--ws-text-2); }
@@ -864,7 +864,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .sub-drawer-note { font-size: 11.5px; margin-top: 8px; }
 
-/* Composer 子代理运行指示器（[docs/subagent-interaction-drawer](../../../docs/docs/subagent-interaction-drawer.md)） */
+/* Composer 子代理运行指示器（[docs/subagents](../../../docs/subagents.md)） */
 .composer-toolbar .ant-btn-text.subs-indicator { color: var(--ws-accent); }
 .subs-menu-item { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; }
 .subs-menu-item .anticon { color: var(--ws-text-2); }
@@ -875,10 +875,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .subs-menu-st.st-error { color: var(--ws-err); }
 
 /* ---------- 左侧导航：项目/任务区 ---------- */
-/* 侧栏骨架（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md)）：导航占满面板（工作区文件面板已随 [docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除；顶部折叠按钮行
-   亦随 [docs/titlebar-logo-toggle](../../../docs/docs/titlebar-logo-toggle.md) 移除，开关入口收口到标题栏 Logo）。[docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：折叠宽 0 = 完全隐藏，
-   内容恒挂载、由 Sider 外壳裁切；[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) 的 48px 窄轨退役——
-   Sider 外壳仍须保留，因为 antd has-sider 只认真实 Sider 子组件（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) 缺陷修复） */
+/* 侧栏骨架（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：导航占满面板（工作区文件面板已随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 移除；顶部折叠按钮行
+   亦随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 移除，开关入口收口到标题栏 Logo）。[docs/chat-and-interface](../../../docs/chat-and-interface.md)：折叠宽 0 = 完全隐藏，
+   内容恒挂载、由 Sider 外壳裁切；[docs/chat-and-interface](../../../docs/chat-and-interface.md) 的 48px 窄轨退役——
+   Sider 外壳仍须保留，因为 antd has-sider 只认真实 Sider 子组件（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 缺陷修复） */
 .sider-body { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .sider-nav { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 8px; }
 .nav-section-title { font-size: 11px; color: var(--ws-dim); padding: 2px 4px 6px 8px; }
@@ -920,7 +920,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 12px; color: var(--ws-accent);
 }
-/* 未读点：会话结束且用户不在时接管运行槽位（[docs/ask-ink-accent-and-composer-cover](../../../docs/docs/ask-ink-accent-and-composer-cover.md)）；进入会话即清除 */
+/* 未读点：会话结束且用户不在时接管运行槽位（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）；进入会话即清除 */
 .session-nav-row .session-unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-accent); }
 /* 可收缩的 flex 项：Tag/时间恒定；空间不足时标题先截断，行内容绝不溢出（缺陷修复） */
 .session-nav-row .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -976,7 +976,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .sider-footer-ops { display: flex; align-items: center; flex: none; gap: 0; }
 .sider-footer-ops .ant-btn-text { color: var(--ws-text-2); }
 .sider-footer-ops .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
-/* 折叠窄轨的底部回退（.sider-rail-foot）已随 [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 窄轨退役一并移除 */
+/* 折叠窄轨的底部回退（.sider-rail-foot）已随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 窄轨退役一并移除 */
 
 /* ---------- 右侧栏「变更」页签（GitDiffModal 面板化） ---------- */
 .rb-changes { height: 100%; display: flex; flex-direction: column; min-height: 0; }
@@ -988,7 +988,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 窄右栏内的 diff 代码块：字号与 padding 略降（原弹框 860px → 右栏 468px、现 328px） */
 .rb-changes .code-block { font-size: 11px; padding: 8px 10px; }
 
-/* ---------- 左侧文件树（已随 [docs/workspace-explorer-removal-and-chat-scrollbar](../../../docs/docs/workspace-explorer-removal-and-chat-scrollbar.md) 移除工作区文件面板） ---------- */
+/* ---------- 左侧文件树（已随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 移除工作区文件面板） ---------- */
 
 /* ---------- GitDiffModal ---------- */
 .gitdiff .file { margin-bottom: 14px; }
@@ -1001,7 +1001,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .session-row .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-row .sub { font-size: 11.5px; color: var(--ws-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- 计划任务页（TasksPage，[docs/tasks-module-polish]） ---------- */
+/* ---------- 计划任务页（TasksPage，[docs/runtime-and-scheduling]） ---------- */
 /* 覆盖层：与 .settings-shell 同度量（绝对定位贴在内层 Layout 上，盖住工作区但不卸载它）；
    z-index 20 = 高于分隔条（6），antd 下拉/弹窗层仍在覆盖层之上；颜色全部走 --ws-* token。
    行向排布：左栏 .tasks-nav + 内容列 .tasks-body（与设置页同版式）。 */
@@ -1103,7 +1103,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    整行 dim 会让面板最该被读到的数字与次要说明同色（版式审计）。 */
 .stats-summary { margin-top: 10px; font-size: 12px; color: var(--ws-text-2); }
 
-/* ---------- 设置全屏页（SettingsPage，[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)） ---------- */
+/* ---------- 设置全屏页（SettingsPage，[docs/settings-guide](../../../docs/settings-guide.md)） ---------- */
 /* 覆盖层：绝对定位贴在内层 Layout（position:relative）上，盖住工作区但不卸载它。
    z-index 20 = 高于分隔条（6）/下拉（10xx 是 antd 层，Modal 仍在覆盖层之上）；
    尺寸全部走 --ws-* token，不硬编码颜色。 */
@@ -1119,7 +1119,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: var(--ws-bg-nav); overflow-y: auto; overflow-x: hidden;
 }
 .settings-nav-head { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; padding: 2px 2px 8px; }
-/* 自建导航（批② 替掉 antd Tabs，[docs/settings-ia](../../../docs/settings-ia.md)）：组标题 + 页行两列式，
+/* 自建导航（批② 替掉 antd Tabs，[docs/settings-guide](../../../docs/settings-guide.md)）：组标题 + 页行两列式，
    行高 28px、选中态仅换背景（复用工作区左栏度量；强调色只用于脏圆点这类前景用法） */
 .settings-nav-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* 组标题与工作区左栏 .nav-section-title 同度量（11px dim） */
@@ -1135,7 +1135,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 导航项图标：Outlined 线性图标——**不设 color**，跟随 .settings-nav-label 的文本色（无彩色约定） */
 .settings-nav-icon { font-size: 16px; flex: none; }
 
-/* ---------- 设置页批③：搜索 + 3 档控件宽度（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ----------
+/* ---------- 设置页批③：搜索 + 3 档控件宽度（[docs/settings-guide](../../../docs/settings-guide.md)） ----------
    2026-09 移除「显示进阶项」开关后，进阶折叠相关 CSS 与导出（.settings-advanced-toggle /
    .settings-advanced-label / .settings-advanced-hidden）一并清除，所有项默认全部可见。 */
 /* 控件宽度三档（窄 180 / 中 240 / 宽 360）：都带 max-width:100% —— 窄窗下宽档被 max-width 兜住
@@ -1177,7 +1177,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 设置项锚点包裹层（data-setting-id 挂在这里）：供搜索命中定位与临时高亮 */
 .setting-anchor { min-width: 0; }
-/* 供应商编辑器的模型列表错误行（[docs/provider-form-rules-tightened]）：走风险色 token，
+/* 供应商编辑器的模型列表错误行（[docs/providers-and-network]）：走风险色 token，
    不再内联硬编码 #ff4d4f —— 硬编码色不跟主题走，暗色下对比不足 */
 .provider-models-error { color: var(--ws-err); font-size: 12px; margin-bottom: 8px; }
 /* 搜索命中临时高亮（约 1.5s 后由 JS 摘掉；墨色描边 + 浅底，不用彩色 accent） */
@@ -1204,7 +1204,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    **只承担居中职责，不携带视觉外壳**——section 级别的卡片样式由 .settings-section-card 工具类承担，
    page renderer 按需对分组显式加 className（参考图：每组相关设置项共用一张圆角浅灰卡片）。 */
 .settings-pane-inner { box-sizing: border-box; width: 50%; max-width: 100%; margin: 0 auto; }
-/* Section 卡片工具类（参考 IDE 设置页视觉，[docs/settings-fullscreen-shell]）：一组相关设置项共享
+/* Section 卡片工具类（参考 IDE 设置页视觉，[docs/settings-guide](../../../docs/settings-guide.md)）：一组相关设置项共享
    一个圆角浅灰容器，section 标题（如"浅色主题"）与单卡片组留在卡片外。颜色与左导航同色
    （--ws-bg-nav，亮色 #eef4f9 / 暗色 antd 容器色），统一观感。 */
 .settings-section-card {
@@ -1263,7 +1263,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .hint { color: var(--ws-dim); font-size: 12px; }
 /* 外观页签字体预览：各自跟随界面字体 / 等宽字体设置行。
    预览块在 section 卡片内用主背景色 --ws-bg-main 与卡片底色形成对比，
-   避免 dashed 边框在浅灰底上"飘"看不见边界（[docs/settings-fullscreen-shell]） */
+   避免 dashed 边框在浅灰底上"飘"看不见边界（[docs/settings-guide](../../../docs/settings-guide.md)） */
 .font-preview-row {
   padding: 6px 10px; border: 1px dashed var(--ws-border); border-radius: 8px;
   background: var(--ws-bg-main);
@@ -1281,7 +1281,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: var(--ws-panel);
 }
 .updater-notes-title { font-size: 11.5px; color: var(--ws-dim); margin-bottom: 4px; }
-/* 发布说明按 markdown 渲染（[docs/updater-notes-markdown-and-progress-throttle](../../../docs/updater-notes-markdown-and-progress-throttle.md)）：
+/* 发布说明按 markdown 渲染（[docs/release](../../../docs/release.md)）：
    容器带 .md，p/代码/表格等走上方共享样式组；这里只管本弹窗特有的排版——限高可滚、不撑破 440px 弹窗，
    并把标题字号收敛到弹窗量级（共享组没有标题规则，不改共享组是为了不影响聊天区与计划卡的既有观感）。
    不再用 white-space: pre-line：块级元素自带换行，留着会与块标签间的换行叠加出多余空行。 */
@@ -1310,12 +1310,12 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- 常驻右侧栏 ---------- */
 .right-bar {
-  width: var(--rb-width, 328px); flex: none; height: 100%; overflow-x: hidden; overflow-y: hidden; /* 宽度由用户拖拽决定（内联 CSS 变量，默认 328px；可拖拽栏宽 [docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）；x 裁切：展开动画期间的超宽内容不得触发横向滚动条；y 不整列滚动（缺陷修复：滚动下沉到各页签内部容器） */
-  border-left: 1px solid var(--ws-border); background: var(--ws-bg-main); /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：右栏与中栏同色 */
+  width: var(--rb-width, 328px); flex: none; height: 100%; overflow-x: hidden; overflow-y: hidden; /* 宽度由用户拖拽决定（内联 CSS 变量，默认 328px；可拖拽栏宽 [docs/chat-and-interface](../../../docs/chat-and-interface.md)）；x 裁切：展开动画期间的超宽内容不得触发横向滚动条；y 不整列滚动（缺陷修复：滚动下沉到各页签内部容器） */
+  border-left: 1px solid var(--ws-border); background: var(--ws-bg-main); /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：右栏与中栏同色 */
   padding: 12px 14px; font-size: 12px; display: flex; flex-direction: column; gap: 14px;
-  transition: all 0.2s; /* 折叠宽度过渡（[docs/sidebar-toggle-buttons](../../../docs/docs/sidebar-toggle-buttons.md) §8）：与 antd Sider motionDurationMid 同节奏 */
+  transition: all 0.2s; /* 折叠宽度过渡（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：与 antd Sider motionDurationMid 同节奏 */
 }
-/* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md) 折叠态：面板保持挂载、裁切式收零（width/padding/border 全部经 0.2s 缓动；[docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md)
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md) 折叠态：面板保持挂载、裁切式收零（width/padding/border 全部经 0.2s 缓动；[docs/chat-and-interface](../../../docs/chat-and-interface.md)
    的隐藏即卸载行为废止）。内层经 .rb-tabs 保持 300px 下限，动画期间内容绝不重排——
    收缩的外壳只是裁掉它；visibility 在动画结束后才翻转，折叠中途无闪烁。 */
 .right-bar.right-bar-closed {
@@ -1324,13 +1324,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .rb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .rb-cell { min-width: 0; }
-.rb-label { font-size: 11px; color: var(--ws-dim); margin-bottom: 4px; } /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：去 letter-spacing + 提到 11px，中文标签不再显松散 */
-/* 行级取值统一两档（[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 排版 + [docs/titlebar-content-batch](../../../docs/docs/titlebar-content-batch.md) §6）：标签 11px dim、取值行 12px text-2；加粗分支行已移除（rb-value 退役） */
+.rb-label { font-size: 11px; color: var(--ws-dim); margin-bottom: 4px; } /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：去 letter-spacing + 提到 11px，中文标签不再显松散 */
+/* 行级取值统一两档（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 排版 + [docs/chat-and-interface](../../../docs/chat-and-interface.md)）：标签 11px dim、取值行 12px text-2；加粗分支行已移除（rb-value 退役） */
 .rb-dim { color: var(--ws-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-mono { font-family: var(--ws-font-mono); }
 .rb-section { border-top: 1px dashed var(--ws-border); padding-top: 10px; }
 .rb-path {
-  /* [docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)：路径改走 sans 槽——mono 字族无中文字形，含中文目录的路径曾逐字回退成乱排混排；字号与正文统一 12px */
+  /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：路径改走 sans 槽——mono 字族无中文字形，含中文目录的路径曾逐字回退成乱排混排；字号与正文统一 12px */
   font-size: 12px; color: var(--ws-text-2);
   word-break: break-all; margin-bottom: 4px;
 }
@@ -1357,7 +1357,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-skill-line.rb-skill-clickable:hover { background: var(--ws-highlight); }
 .rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-skill-origin { padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: 11px; color: var(--ws-dim); }
-/* [docs/session-logging-report](../../../docs/docs/session-logging-report.md)：右栏运行日志 */
+/* [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：右栏运行日志 */
 .rb-log-head { cursor: pointer; user-select: none; }
 .rb-log-tools { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
 .rb-log {
@@ -1369,14 +1369,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-log .warn { color: var(--ws-warn); }
 .rb-log .err { color: var(--ws-err); }
 .rb-log-error { color: var(--ws-err); white-space: normal; }
-/* [docs/session-artifacts-and-files-tab](../../../docs/docs/session-artifacts-and-files-tab.md)：右栏 Tabs 四页签（信息/日志/文件/变更，[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md) 调序）；高度链一直贯通到面板，
+/* [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：右栏 Tabs 四页签（信息/日志/文件/变更，[docs/chat-and-interface](../../../docs/chat-and-interface.md) 调序）；高度链一直贯通到面板，
    让日志/文件列表占满右栏剩余高度（信息页内容溢出时由 body-holder 滚动）。
    缺陷修复（antd6）：自 @rc-component/tabs 起内容 DOM 为 body-holder > body > content（面板）；
    旧名 content-holder/content（容器）/tabpane 已不存在——高度链必须瞄准新名，否则 .rb-log
    无高度约束、永不滚动，溢出被 .right-bar 的 overflow:hidden 裁掉 */
-/* 根高度约束不可移除（10f11fc 回归教训，[docs/rightbar-visual-batch](../../../docs/docs/rightbar-visual-batch.md)）：缺了它 Tabs 根会被内容撑高（列 flex
+/* 根高度约束不可移除（10f11fc 回归教训，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：缺了它 Tabs 根会被内容撑高（列 flex
    min-height:auto 拒绝收缩），body-holder 的 overflow-y:auto 永不触发，整条链没有滚动条 */
-.rb-tabs { flex: 1; min-height: 0; min-width: 300px; /* [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/docs/sidebar-collapse-animation-and-titlebar-blend.md)：面板裁切折叠期间的下限——外壳收缩时内容绝不重排 */ }
+.rb-tabs { flex: 1; min-height: 0; min-width: 300px; /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：面板裁切折叠期间的下限——外壳收缩时内容绝不重排 */ }
 .rb-tabs > .ant-tabs-nav { margin-bottom: 10px; flex: none; }
 .rb-tabs > .ant-tabs-nav .ant-tabs-tab { padding: 5px 2px; font-size: 12px; }
 .rb-tabs > .ant-tabs-nav .ant-tabs-extra-content { margin-right: 8px; }
@@ -1384,7 +1384,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-tabs > .ant-tabs-body-holder > .ant-tabs-body { height: 100%; }
 .rb-tabs > .ant-tabs-body-holder .ant-tabs-content { height: 100%; }
 .rb-log-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-/* [docs/session-artifacts-and-files-tab](../../../docs/docs/session-artifacts-and-files-tab.md)：文件页签（会话产物列表），同样占满剩余高度 */
+/* [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：文件页签（会话产物列表），同样占满剩余高度 */
 .rb-files { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .rb-files-tools { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; flex: none; }
 .rb-files-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
@@ -1396,13 +1396,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-file-icon { flex: none; display: inline-flex; }
 .rb-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-file-meta { flex: none; font-size: 10.5px; color: var(--ws-dim); }
-/* 回退按钮（[docs/office-and-pdf-support]）：平时不占视线，悬停该行时才出现 */
+/* 回退按钮（[docs/documents]）：平时不占视线，悬停该行时才出现 */
 .rb-file-btn { flex: none; opacity: 0; transition: opacity 0.12s; }
 .rb-file:hover .rb-file-btn { opacity: 1; }
 .rb-file-btn:focus-visible { opacity: 1; }
 .rb-file-gone { opacity: 0.45; cursor: default; }
 
-/* ---------- 栏宽分隔条（可拖拽栏宽，[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)） ---------- */
+/* ---------- 栏宽分隔条（可拖拽栏宽，[docs/chat-and-interface](../../../docs/chat-and-interface.md)） ---------- */
 /* 绝对定位在栏边界上（父 Layout position:relative），命中区 6px 居中跨越边界；折叠态不渲染 */
 .rb-resize-handle {
   position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px; z-index: 6;
@@ -1514,7 +1514,7 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 .rb-quota-updated { font-size: 11px; white-space: nowrap; }
 
 /* ---------- mermaid / katex（B4） ---------- */
-/* [docs/plan-modal-table-scroll](../../docs/plan-modal-table-scroll.md)]：此前这组规则全部挂在 `.assistant .md`
+/* [docs/chat-and-interface](../../../docs/chat-and-interface.md)]：此前这组规则全部挂在 `.assistant .md`
    前缀下，导致预览弹框一旦换容器（非 .assistant）就整体失配——公式丢 pre-wrap 兜底、.katex-display 丢
    横向滚动、mermaid 丢底色。改走共享 :is() 组，与 markdown 排版规则同源（消费点集合同一条，见上方注释）。 */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-diagram {

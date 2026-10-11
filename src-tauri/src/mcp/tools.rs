@@ -97,7 +97,7 @@ pub(crate) fn parse_function(function: &str) -> Option<(String, String)> {
     Some((server.to_string(), tool.to_string()))
 }
 
-/// Schema normalization: fills in type:object / required:[] / additionalProperties:false ([docs/p1-plan](../../../docs/p1-plan.md) §4.2).
+/// Schema normalization: fills in type:object / required:[] / additionalProperties:false ([docs/technical-design](../../../docs/technical-design.md)).
 pub fn normalize_schema(obj: &serde_json::Map<String, Value>) -> String {
     let mut v = Value::Object(obj.clone());
     if v.get("type").is_none() {

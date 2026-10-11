@@ -105,7 +105,7 @@ async function openSettings() {
   await waitFor(() => expect(screen.getByText("Shell")).toBeTruthy());
 }
 
-/** 工作区与智能体页上唯一的 Select 就是 Shell（界面语言已随批② 归「界面」页：[docs/settings-ia](../../../docs/settings-ia.md)） */
+/** 工作区与智能体页上唯一的 Select 就是 Shell（界面语言已随批② 归「界面」页：[docs/settings-guide](../../../docs/settings-guide.md)） */
 function shellSelect(): HTMLElement {
   return document.querySelectorAll(".settings-shell .ant-select")[0] as HTMLElement;
 }

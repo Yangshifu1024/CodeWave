@@ -1,5 +1,5 @@
 //! 外部打开器：在文件管理器中打开目录 / 在编辑器中打开目录
-//! （[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//! （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //!
 //! 分层：探测与进程启动都在 core（不依赖 tauri），host 命令只做校验 + 转调。
 //! 设计要点：**探测与启动分离**——所有探测函数接收注入的基目录与存在性谓词，

@@ -23,7 +23,7 @@ pub struct ProjectEntry {
     pub data_dir: Option<String>,
     /// 创建时间（RFC3339）
     pub created_at: String,
-    /// 已允许访问的外部目录（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）：
+    /// 已允许访问的外部目录（[docs/documents](../../../docs/documents.md)）：
     /// 用户把项目目录外的文件拖进来时选「始终允许这个目录」后记在这里，以后不再询问。
     /// 子目录一并放行；目录移动或改名后按路径匹配自然失效。
     #[serde(default)]
@@ -171,7 +171,7 @@ fn project_file(dir: &Path) -> PathBuf {
 }
 
 /// id 白名单：非空、不含路径分隔符与点、首尾无空白（防目录穿越）。
-/// 会话保留期清理删文件前也走这一条（[docs/session-cleanup](../../../docs/session-cleanup.md)：
+/// 会话保留期清理删文件前也走这一条（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：
 /// 会话编号同样要拿去拼 `histories/<id>.json.gz` 等路径）。
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && !id.contains(['/', '\\', '.']) && id == id.trim()

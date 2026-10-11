@@ -34,7 +34,7 @@ export function stripReportMarkers(text: string): string {
   return text.replace(/<\/?report>/g, "").trim();
 }
 
-// ---------- 打字机逐字揭示（[docs/typewriter-stream](../../../../docs/typewriter-stream.md)） ----------
+// ---------- 打字机逐字揭示（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)） ----------
 //
 // 助手回复在流式输出时逐字铺开，接近 ChatGPT / Codex 的观感。四条硬约束：
 // 1) 揭示游标只放组件局部 state，**绝不写 store** —— ChatMessages.tsx 的 contentLen 依赖 text
@@ -221,7 +221,7 @@ function useTypewriter(
 }
 
 
-// 思考标题右侧占满余下头部空间的通栏走马灯（[docs/thinking-marquee-rewrite](../../../../docs/thinking-marquee-rewrite.md)）：显示思考文本的最新一行。
+// 思考标题右侧占满余下头部空间的通栏走马灯（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：显示思考文本的最新一行。
 // 一行先锚定在左缘；溢出通栏后自右向左爬行、最新内容钉在右缘（tail-follow）；只有流真正
 // 换到新的一行（来了 "\n"）才翻转上滚——原行内增长绝不重触发滚动。
 const MARQUEE_DWELL_MS = 700; // 一行在左缘静置片刻后才开始爬行
@@ -370,7 +370,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   );
 });
 
-/** timeline 段渲染（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md) 自 ChatMessages 抽取共享）：思考折叠面板 / 工具卡 /
+/** timeline 段渲染（[docs/subagents](../../../../docs/subagents.md) 自 ChatMessages 抽取共享）：思考折叠面板 / 工具卡 /
  *  子代理卡 / markdown 正文；主聊天与子代理过程抽屉共用同一视觉。 */
 export function TimelineSegsView({
   timeline,
@@ -388,7 +388,7 @@ export function TimelineSegsView({
   /** 是否剥离 `<report>` 协议标记（仅子代理过程流抽屉开启，见 stripReportMarkers）。
    *  默认 false：主聊天正文引用该标记是合法内容，不可全局剥离。 */
   stripReport?: boolean;
-  /** 自动弹预览信号（[docs/preview-skill](../../../../docs/preview-skill.md)）：命中的 widget 工具卡落地即弹框。
+  /** 自动弹预览信号（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：命中的 widget 工具卡落地即弹框。
    *  刻意不设默认值：子代理过程抽屉 `SubagentDrawer` 调本组件时不传这两项 → 抽屉内的 widget 不会自动弹框
    *  （抽屉本身已在展示子代理的完整过程，再叠一个自动弹框只会糊住抽屉内容），这是有意为之。 */
   autoOpenCallKey?: string | null;

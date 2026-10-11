@@ -1,4 +1,4 @@
-// Unit tests for the pure frame reducers ([docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) refactor): the run.ts reduction pipeline
+// Unit tests for the pure frame reducers ([docs/tools-and-safety](../../../docs/tools-and-safety.md) refactor): the run.ts reduction pipeline
 // (applyFrameToTab / applyFrameToSub / messagesToSubStream) without React or store setup.
 import { describe, expect, it } from "vitest";
 import {

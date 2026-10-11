@@ -1,9 +1,9 @@
-// RightBar 信息页技能段（[docs/slash-skills-and-dollar-agents](../../../docs/slash-skills-and-dollar-agents.md)）：
+// RightBar 信息页技能段（[docs/mcp-and-skills](../../../docs/mcp-and-skills.md)）：
 // 列表渲染（后端分桶排序原样展示）+ 点击技能行弹详情（get_skill 正文渲染）
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
+import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/chat-and-interface)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
 

@@ -1,4 +1,4 @@
-// Tool card header summary ([docs/tool-card-multi-file-summary](../../../docs/tool-card-multi-file-summary.md)): read/batch_read/edit batch args list all file names (basename, no path)
+// Tool card header summary ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): read/batch_read/edit batch args list all file names (basename, no path)
 // outcome takes priority (still lists when oversized argsPreview was replaced by the truncation marker); falls back to args while running; single-path tools keep the full path
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";

@@ -1,6 +1,6 @@
-// 设置页「关于」页（[docs/settings-ia](../../../../docs/settings-ia.md)）：
+// 设置页「关于」页（[docs/settings-guide](../../../../docs/settings-guide.md)）：
 // 原「关于」弹框（AboutModal，批② 退役）的内容整体迁入全屏设置页第 8 页。
-// 批④（[docs/settings-terminology](../../../../docs/settings-terminology.md)）做两件事：
+// 批④（[docs/settings-guide](../../../../docs/settings-guide.md)）做两件事：
 //   1. 版式对齐（仅本页页内）：说明位一律走 Form.Item 的 extra（不再依赖悬停 tooltip），
 //      只读身份与入口（版本 / 数据目录 / 日志目录 / 代码仓库 / 开源许可证）各自成「标签行 + 说明 + 行内控件」；
 //   2. 补两个入口：打开日志目录（复用 ipc.openLogsDir，右栏「日志」Tab 的入口保留）
@@ -32,7 +32,7 @@ const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
 
 /** 关于页：应用身份（logo / 名称 / 简介）+ 只读身份与入口（版本 / 数据目录 / 日志目录 / 代码仓库 / 许可证）
  *  + 自动更新开关与手动检查更新。「检查更新」是 Windows/Linux 的唯一更新入口
- * （macOS 另有应用菜单项，[docs/version-bump-and-release](../../../../docs/version-bump-and-release.md)）。 */
+ * （macOS 另有应用菜单项，[docs/release](../../../../docs/release.md)）。 */
 export function AboutSettings() {
   const { t } = useTranslation();
   const [version, setVersion] = useState<string | null>(null);

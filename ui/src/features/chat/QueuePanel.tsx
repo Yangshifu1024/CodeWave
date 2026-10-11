@@ -1,4 +1,4 @@
-// [docs/steer-run-inject](../../../../docs/steer-run-inject.md)：运行队列面板——立即注入当前 run，确认期间占用条目；
+// [docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)：运行队列面板——立即注入当前 run，确认期间占用条目；
 // 出错/取消后队列暂停但保留，「继续」恢复执行。
 // 拖拽排序（缺陷修复：此前把手纯装饰）：原生 HTML5 DnD——仅按住把手才可拖动，
 // 悬停目标高亮，落点把被拖条目移动到目标位置（store.reorderQueue）。
@@ -97,7 +97,7 @@ export default function QueuePanel() {
             </Tooltip>
           ) : null}
           <span className="queue-ops">
-            {/* [docs/steer-run-inject](../../../../docs/steer-run-inject.md) AC-9：inject 通道只收纯文本。
+            {/* [docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md) AC-9：inject 通道只收纯文本。
                 带图项在运行中点「立即」无法 steer（runNow 会直接 return）——按 review 🟡-2
                 显式禁用，否则用户只能靠悬停 tooltip 才知道点了没用 */}
             {(() => {

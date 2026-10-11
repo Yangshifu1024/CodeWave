@@ -7,7 +7,7 @@ repository = "https://github.com/Yangshifu1024/CodeWave"
 authors = ["Yangzhenbiao"]
 edition = "2024"
 rust-version = "1.98"
-# 多 bin 目标历史上用于承载假 LSP server；LSP 机制已随 post-write-check 删除（[docs/post-write-check-plan]），
+# 多 bin 目标历史上用于承载假 LSP server；LSP 机制已随 post-write-check 删除（[docs/tools-and-safety](../docs/tools-and-safety.md)），
 # 现仅剩主程序，保留 default-run 以免未来新增 bin 时 `cargo run` 歧义。
 default-run = "codewave"
 
@@ -26,7 +26,7 @@ tauri-plugin-single-instance = "2"
 # tauri-plugin-clipboard-manager：仓内不使用（剪贴板走浏览器 Clipboard API / @tauri-apps/api 路径，无需 Rust 插件），声明不注册会导致虚警与无用 API 面。现不在此声明。
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
-# Custom title bar (docs/23): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay
+# Custom title bar (docs/chat-and-interface): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay
 tauri-plugin-decoration = "3"
 
 # async / serialization
@@ -65,14 +65,14 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "7"
 sha2 = "0.11"
 base64 = "0.23"
-# 文本编码探测（[docs/office-and-pdf-support](../../docs/office-and-pdf-support.md)）：导出成 csv 的表格
+# 文本编码探测（[docs/documents](../docs/documents.md)）：导出成 csv 的表格
 # 常见 GBK，按 UTF-8 硬读会得到一片乱码。这个包同时在依赖树里（间接依赖已存在），不新增下载量。
 encoding_rs = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
-# Enabled in P1 (docs/03: introduced in P0 without being called); keyring 3.x with per-platform features
+# Enabled in P1 (docs/technical-design: introduced in P0 without being called); keyring 3.x with per-platform features
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dom_smoothie = "0.18.0"
-# tokio-cron-scheduler 已移除（[docs/tasks-module-polish]）：调度器自始就走自写的 tick + cron crate
+# tokio-cron-scheduler 已移除（[docs/runtime-and-scheduling]）：调度器自始就走自写的 tick + cron crate
 # （core/scheduler.rs 的 ScheduleKind），该依赖从未被引用，白担一份构建与供应链成本。
 rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client", "client-side-sse", "transport-streamable-http-client-reqwest"] }
 # MCP 子进程的进程树回收（Job Object / 进程组）：rmcp 的 transport-child-process 已以默认特性引入
@@ -80,7 +80,7 @@ rmcp = { version = "3.1.4", default-features = false, features = ["client", "tra
 process-wrap = "10"
 cron = "0.17.0"
 
-# Office 文档支持（docs/office-and-pdf-support）：
+# Office 文档支持（docs/documents）：
 # - umya-spreadsheet：读写 .xlsx / .xlsm（样式、公式、多工作表）
 # - docx-rs：生成 .docx（读取走自研解包，见 tools/document 模块）
 # - zip + quick-xml：保真修改的基础设施（解开压缩包 → 只替换目标内部文件 → 其余原样搬运重打包），
@@ -97,7 +97,7 @@ pdf-extract = "0.12"
 [dev-dependencies]
 tempfile = "3"
 chrono-tz = "0.10.4" # 固定时区测试 cron 跨 DST 回拨的两个 01:30
-# docs/43: tokio::test(start_paused) virtual clock (test-util feature enabled for test builds only)
+# docs/testing: tokio::test(start_paused) virtual clock (test-util feature enabled for test builds only)
 tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(unix)'.dependencies]

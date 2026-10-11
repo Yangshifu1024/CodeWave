@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
-import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
+import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/chat-and-interface)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
 

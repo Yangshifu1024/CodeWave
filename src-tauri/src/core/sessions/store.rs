@@ -222,7 +222,7 @@ pub struct SessionMeta {
     /// 列表排序与行内时间仍用 updated_at（点开会话不会被顶到列表最前）。
     #[serde(default)]
     pub last_opened_at: Option<String>,
-    /// 上次历史保存状态（None = 干净；[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+    /// 上次历史保存状态（None = 干净；[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
     /// 由 `save_history` 显式裁决、`set_history_status` 独占维护；检查点（`upsert_meta`）
     /// 沿用索引现值，绝不误清。serde default 向前兼容（旧索引无此字段）
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,7 +247,7 @@ pub struct SessionIndex {
     pub sessions: Vec<SessionMeta>,
 }
 
-/// 会话产物登记（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：create/edit 工具成功写入文件的归属清单
+/// 会话产物登记（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：create/edit 工具成功写入文件的归属清单
 /// （逻辑所有权；文件留在原地）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionArtifact {
@@ -263,7 +263,7 @@ pub struct SessionArtifact {
     pub last_at: String,
     /// 累计写入次数
     pub count: u32,
-    /// 产物种类（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：普通产物只登记不删，
+    /// 产物种类（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：普通产物只登记不删，
     /// 计划文件（ask 落盘的中间产物）随会话一并清理且不进右栏「文件」列表；
     /// serde default 向前兼容（旧边车无此字段 → `file`）
     #[serde(default)]
@@ -305,7 +305,7 @@ impl Default for SessionIndex {
 pub struct SessionStore {
     /// 数据根目录（~/.codewave 或测试临时目录）
     root: PathBuf,
-    /// 历史保存互斥（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+    /// 历史保存互斥（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     /// 串行化「外置 blob 写（快照）→ 写历史文件 → `upsert_meta` → `set_history_status` → `image_blobs::gc`」
     /// 整段临界区。
     ///
@@ -327,7 +327,7 @@ pub struct SessionStore {
     watermarks: std::sync::Mutex<std::collections::HashMap<PathBuf, segments::SaveState>>,
     /// M8：索引读-改-写互斥（并发 checkpoint/delete/rename 不得丢条目）
     index_lock: std::sync::Mutex<()>,
-    /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：产物边车读-改-写互斥（并发工具写不得丢条目）
+    /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：产物边车读-改-写互斥（并发工具写不得丢条目）
     artifacts_lock: std::sync::Mutex<()>,
     /// 进程内「运行中」会话 id 集合：索引 `running` 字段的唯一事实源。
     /// 新建会话首次 run 尚未检查点时索引里没有条目，标记先记在这里，待其首次 upsert 时带上
@@ -451,7 +451,7 @@ impl SessionStore {
     /// ③ `sessions/index.json.corrupt` 存在——索引曾损坏且尚未复原。此时 `load_index()`
     /// 会返回**空索引**，而空索引与「用户真的没有会话」在返回值上无法区分——按空索引去清
     /// 「索引外残留」会把全部历史文件当孤儿删掉，所以清理路径必须先问这个方法
-    ///（[docs/session-cleanup](../../../../docs/session-cleanup.md)：宁可不删也不误删）。
+    ///（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：宁可不删也不误删）。
     ///
     /// 为什么 ③ 必须单独成立：真实启动序列里，损坏索引被 `load_index()` 改名成 `.corrupt` 之后，
     /// 紧接着的既有写路径（启动清扫 `purge_non_session_entries()` 走 `mutate_index`）**必定**把
@@ -520,12 +520,12 @@ impl SessionStore {
                 .unwrap_or_else(|| meta.created_at.clone());
             let running = existing.map(|s| s.running).unwrap_or(is_running);
             let interrupted = existing.and_then(|s| s.interrupted.clone());
-            // [docs/session-cleanup](../../../../docs/session-cleanup.md)：检查点不得抹掉已落盘的「最近打开时间」
+            // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：检查点不得抹掉已落盘的「最近打开时间」
             //（与 created_at 同一处理：既有条目沿用索引现值，新条目取传入值）
             let last_opened_at = existing
                 .and_then(|s| s.last_opened_at.clone())
                 .or_else(|| meta.last_opened_at.clone());
-            // [docs/session-history-limits](../../../../docs/session-history-limits.md)：
+            // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：
             // 历史保存状态同属易失标记，由 set_history_status 专管——检查点不得把它抹掉
             let history_status = existing.and_then(|s| s.history_status.clone());
             idx.sessions.retain(|s| s.id != meta.id);
@@ -613,7 +613,7 @@ impl SessionStore {
         Ok(found)
     }
 
-    /// 写「上次历史保存状态」（None = 干净；[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+    /// 写「上次历史保存状态」（None = 干净；[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
     ///
     /// 持 `index_lock`（与 `mark_*` / `clear_interrupted` 同范式），**只改既有条目**：
     /// 索引里没有这个会话就什么都不做（不凭空造条目）。由 `save_history` 显式调用。
@@ -784,7 +784,7 @@ impl SessionStore {
         let _ = std::fs::remove_file(self.artifacts_path(id));
         let _ = std::fs::remove_file(self.todos_path(id));
         let _ = std::fs::remove_file(self.prefs_path(id));
-        // 子代理过程历史目录级联清理（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）
+        // 子代理过程历史目录级联清理（[docs/subagents](../../../../docs/subagents.md)）
         // 及其图片 blob（blob 归子历史自己，不在父会话的 blob 目录里）——
         // 子历史目录列必须**先**读，下一步就把该目录整个删了
         for sub in self.sub_history_ids(id) {
@@ -810,7 +810,7 @@ impl SessionStore {
     /// 只保留一级**剥图**作旧数据兜底：本次要落盘的内容明文超 [`MAX_HISTORY_BYTES`]
     /// 且历史里还有内联大图时先剥图（`sanitize_keep_thinking` 只剥图片、**保留思考**——
     /// 思考是 OpenAI 兼容 thinking 上游回传 `reasoning_content` 的唯一数据源，剥掉会让该会话
-    /// 重启后多轮必然 400 且不可自愈，见 [docs/reasoning-content-passthrough]），
+    /// 重启后多轮必然 400 且不可自愈，见 [docs/providers-and-network]），
     /// 但**不再因为体积而拒存**。
     ///
     /// 顺序纪律：**历史写盘成功之后**才做索引两步与 blob GC；`upsert_meta` /
@@ -1131,7 +1131,7 @@ impl SessionStore {
     ///（对拍用例守护）。
     ///
     /// 容错：半行丢弃、非法行跳过、坏段跳过（各记 warn），**绝不因容错而报「历史损坏」**；
-    /// blob 缺失仍只降级为占位文本（[docs/session-restore-fidelity]）。
+    /// blob 缺失仍只降级为占位文本（[docs/sessions-and-projects]）。
     pub fn load_history_full(&self, id: &str) -> anyhow::Result<HistoryLoad> {
         let dir = self.history_dir(id);
         if self.reads_new_format(id) {
@@ -1177,7 +1177,7 @@ impl SessionStore {
             bytes: raw.len() as u64,
         })
     }
-    // ---------- 子代理过程历史（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)） ----------
+    // ---------- 子代理过程历史（[docs/subagents](../../../../docs/subagents.md)） ----------
     //
     // 与主历史（save_history）的区别：不 upsert 会话索引（子代理不是会话，不得出现在
     // list_sessions）；目录按父会话分桶，随父会话级联删除。
@@ -1325,7 +1325,7 @@ impl SessionStore {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
 
-    // ---------- 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)） ----------
+    // ---------- 工具结果原样 sidecar（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 
     /// 工具结果 sidecar 目录：sessions/<owner>.toolres/。
     /// 与子代理历史同范式（`histories/subs/<parent>/`）：路径由编号拼出、随会话级联删除，
@@ -1334,7 +1334,7 @@ impl SessionStore {
         self.sessions_dir().join(format!("{owner}.toolres"))
     }
 
-    // ---------- 图片 blob（[docs/session-history-limits](../../../../docs/session-history-limits.md)） ----------
+    // ---------- 图片 blob（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 
     /// 图片 blob 目录：sessions/<owner>.imgblob/。
     /// 与工具结果 sidecar 同范式：路径由编号拼出、随会话级联删除（cleanup 与 remove 两条
@@ -1352,20 +1352,20 @@ impl SessionStore {
         self.image_blobs_dir(&sub_blob_owner(parent, sub))
     }
 
-    // ---------- 会话产物登记边车（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)） ----------
+    // ---------- 会话产物登记边车（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 
     /// 产物边车文件路径：sessions/<id>.artifacts.json（清理按同一路径删除）。
     pub(crate) fn artifacts_path(&self, id: &str) -> PathBuf {
         self.sessions_dir().join(format!("{id}.artifacts.json"))
     }
 
-    /// 登记一次写入（普通产物；[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：
+    /// 登记一次写入（普通产物；[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     /// 按路径去重/合并（首记 create/edit；重复则累加 count 并刷新 last_*）。
     pub fn append_artifact(&self, id: &str, path: &str, op: ArtifactOp) -> anyhow::Result<()> {
         self.append_artifact_kind(id, path, op, ArtifactKind::File)
     }
 
-    /// 带种类的登记入口（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：计划文件传 `ArtifactKind::Plan`。
+    /// 带种类的登记入口（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：计划文件传 `ArtifactKind::Plan`。
     /// 合并时 `Plan` 是粘性的（已有 Plan 条目不会被普通产物的登记降级为 `file`）。
     pub fn append_artifact_kind(
         &self,
@@ -1408,7 +1408,7 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
-    /// 读**普通产物**列表：右栏「文件」面板的数据源（计划文件不进该列表，[docs/session-cleanup](../../../../docs/session-cleanup.md)）。
+    /// 读**普通产物**列表：右栏「文件」面板的数据源（计划文件不进该列表，[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
     pub fn load_file_artifacts(&self, id: &str) -> Vec<SessionArtifact> {
         self.load_artifacts(id)
             .into_iter()
@@ -1416,7 +1416,7 @@ impl SessionStore {
             .collect()
     }
 
-    // ---------- 会话保留期清理的存储侧支持（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+    // ---------- 会话保留期清理的存储侧支持（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 
     /// 进程内运行中会话 id 的快照（清理跳过用；索引标记另由 `SessionMeta::running` 给出）。
     pub fn running_in_memory(&self) -> std::collections::HashSet<String> {
@@ -1443,7 +1443,7 @@ impl SessionStore {
         Ok(hit)
     }
 
-    /// 批量删除索引行（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3-17）：整批只写**一次**索引，
+    /// 批量删除索引行（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)-17）：整批只写**一次**索引，
     /// 返回真正被移除的 id（索引中没有的不计入）；同时把 id 从内存运行集合中移除，
     /// 否则迟到的检查点会带着 `running` 把索引行“复活”。
     ///

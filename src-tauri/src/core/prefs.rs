@@ -1,10 +1,10 @@
-//! 会话级运行偏好（Composer 工具条批次，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）：审批档位 + 会话模型 + 思考力度。
+//! 会话级运行偏好（Composer 工具条批次，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：审批档位 + 会话模型 + 思考力度。
 //! 会话权限档位重启后回落全局默认（目标档活动标记例外）；模型与思考力度另存边车。
 
 use crate::core::config::ConfigState;
 use serde::{Deserialize, Serialize};
 
-/// 四档审批模式（Composer 下拉，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 安全语义表）。
+/// 四档审批模式（Composer 下拉，[docs/chat-and-interface](../../../docs/chat-and-interface.md) 安全语义表）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -13,7 +13,7 @@ pub enum ApprovalMode {
     ConfirmEach,
     /// 自动编辑：工作区内写入直通，fence 高危命令仍需确认
     AutoEdit,
-    /// 计划模式（默认档，[docs/thinking-scroll-fix](../../../docs/thinking-scroll-fix.md)）：只调研与出方案，不做修改；方案获批后再执行。
+    /// 计划模式（默认档，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：只调研与出方案，不做修改；方案获批后再执行。
     #[default]
     Plan,
     /// 完全放行：跳过审批弹窗与 fence 确认；灾难级命令仍被直接拦截
@@ -21,7 +21,7 @@ pub enum ApprovalMode {
 }
 
 impl ApprovalMode {
-    /// 全局 approval.enabled → 新会话初始档位（默认 = Plan，[docs/thinking-scroll-fix](../../../docs/thinking-scroll-fix.md)；
+    /// 全局 approval.enabled → 新会话初始档位（默认 = Plan，[docs/chat-and-interface](../../../docs/chat-and-interface.md)；
     /// enabled=false ≈ 跳过确认，同样映射为 FullAccess）。
     pub fn from_global(enabled: bool) -> Self {
         if enabled {
@@ -130,7 +130,7 @@ pub struct ImageIn {
 }
 
 /// 生效模型解析：会话覆盖优先；悬空/未设置回落全局 active。
-/// 返回摊平形态（provider + model，[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）；调用方可持有返回值。
+/// 返回摊平形态（provider + model，[docs/providers-and-network](../../../docs/providers-and-network.md)）；调用方可持有返回值。
 pub fn effective_model(
     cfg: &ConfigState,
     prefs: &SessionPrefs,

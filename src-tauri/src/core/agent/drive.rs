@@ -91,14 +91,14 @@ pub struct DriveParams {
     /// 无工具调用的回合即视为本 run 完成（主会话语义）。
     /// `false` = 子代理 / 任务运行：纯文本回合不再无条件收尾——须带 `<report>` 标记，
     /// 否则注入提示后续跑（上限 `MAX_TEXT_TURNS`），绝不把过程旁白当成最终汇报
-    ///（[docs/subagent-text-turn-premature-exit]）。
+    ///（[docs/subagents]）。
     pub finish_on_text: bool,
     /// 主会话 run：每步按当前偏好重算计划限制（ask 批准切档后立即生效）
     pub main_session: bool,
     /// 父 run 取消令牌（子代理派发时传入）：提供时本 run 的取消令牌由其 child_token 派生，
-    /// 主会话停止即级联中止子代理的 LLM 流与审批等待（[docs/subagent-file-isolation]）
+    /// 主会话停止即级联中止子代理的 LLM 流与审批等待（[docs/subagents]）
     pub parent_cancel: Option<CancellationToken>,
-    /// 空转看门狗策略（[docs/subagent-idle-watchdog-misfire]）：默认 `Stop`（8 步纠偏 /
+    /// 空转看门狗策略（[docs/subagents]）：默认 `Stop`（8 步纠偏 /
     /// 14 步终止）；只读角色子代理由 `subagent` 工具置 `NudgeOnly`（空转层 16 步纠偏一次、
     /// 不硬终止——失败重复层与步数/汇报门不受本字段影响，照常终止）。
     pub idle_policy: IdlePolicy,
@@ -145,7 +145,7 @@ pub async fn run_chat(
         .store(false, Ordering::SeqCst);
     // plan 软提醒（batch::maybe_emit_plan_hint）每 run 至多一次：run 起点同模式复位
     rt.plan_hint_emitted.store(false, Ordering::SeqCst);
-    // 「本 run 碰过计划」标记同位复位（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+    // 「本 run 碰过计划」标记同位复位（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
     // 计划未收尾的收尾门只看本标记，避免上个 run 的陈旧计划劫持本 run 的普通提问
     rt.plan_called_this_run.store(false, Ordering::SeqCst);
 
@@ -166,7 +166,7 @@ pub async fn run_chat(
     }
 
     // 首条消息判定：装载磁盘历史后仍为空 = 本会话首条消息，用于触发自动命名
-    // （[docs/session-auto-title](../../../../docs/session-auto-title.md)）
+    // （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）
     let history_was_empty = rt.history.lock().unwrap().is_empty();
     let first_user_text = if history_was_empty {
         user.content.iter().find_map(|c| match c {
@@ -217,7 +217,7 @@ pub async fn run_chat(
         );
     }
 
-    // 自动命名（[docs/session-auto-title](../../../../docs/session-auto-title.md)）：首条含文本消息 → 并行生成精炼标题，
+    // 自动命名（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：首条含文本消息 → 并行生成精炼标题，
     // 不阻塞本 run；失败静默保留 10 字符兜底
     if let Some(text) = first_user_text.filter(|t| !t.trim().is_empty()) {
         let fallback = lock_ok(&rt.title).clone();
@@ -229,7 +229,7 @@ pub async fn run_chat(
     }
 
     // 审批档位 → 主会话驱动参数（Plan：排除写工具与 MCP，提示模型先出方案，
-    // [docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+    // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     let params = main_drive_params(&rt.prefs());
     // panic 兜底（G-panic）：drive 逃逸的 panic 被路由进常规错误路径——
     // catch 层在收尾前拦截，下方 running 复位 / 检查点 / run:error 照常执行，
@@ -263,7 +263,7 @@ pub async fn run_chat(
                     run_started.elapsed().as_secs()
                 ),
             );
-            // 唯一的 run:done，在 running 复位之后发（[docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md) 队列回归：前端
+            // 唯一的 run:done，在 running 复位之后发（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) 队列回归：前端
             // 以此出队）；建议项（如有）并入 payload，取代此前 drive_agent 内部提前
             // 发的 done
             let mut terminal = RunTerminal::new(&run_id, RunTerminalKind::Done);
@@ -306,14 +306,14 @@ pub async fn run_chat(
                     "session": rt.id,
                     "run_id": run_id,
                     "error": e.to_string(),
-                    // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：结构化类别（前端据 kind 把鉴权/计费问题引导到供应商设置）
+                    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：结构化类别（前端据 kind 把鉴权/计费问题引导到供应商设置）
                     "kind": e.kind_tag(),
                 }),
             );
         }
     }
 
-    // 统计落盘（P2-H）：归属会话生效模型（覆盖优先，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+    // 统计落盘（P2-H）：归属会话生效模型（覆盖优先，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     if run_usage.input + run_usage.output > 0 {
         let model_id = {
             let cfg = core.cfg.read().unwrap();
@@ -383,8 +383,8 @@ pub const WRITE_TOOLS: &[&str] = &[
     "edit_document",
 ];
 
-/// 主会话 DriveParams：按会话审批档位追加排除项与提示文本（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）。
-/// Plan 档收紧（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）：排除写工具 / 后台服务 / 任务运行 + MCP；
+/// 主会话 DriveParams：按会话审批档位追加排除项与提示文本（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
+/// Plan 档收紧（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：排除写工具 / 后台服务 / 任务运行 + MCP；
 /// shell 保留但受只读 fence 白名单约束（plan_readonly，白名单外一律确认）；
 /// 子代理继承同样语义。
 /// 主会话 run 每步按当前偏好重算限制（ask 批准切档后立即生效）；
@@ -414,7 +414,7 @@ pub(super) fn apply_plan_mode(params: &mut DriveParams, prefs: &crate::core::pre
     );
     params.exclude_mcp = true;
     params.system_extra =
-        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-mode-workflow），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：批准门为 ask 单题并携带 switchToAutoEdit=true，提供两个批准类选项——「以自动编辑档执行」（id=approve，切自动编辑档，recommended）与「以完全访问档执行」（id=approve_full，切完全访问档）：批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（mode=\"auto_edit\" / mode=\"full_access\"，缺省回落 auto_edit）——不声明就会回落自动编辑档，用户选「完全访问执行」会被静默降级；系统按用户所选档位切档并指示你立即执行；有意见则选「补充意见」（id=revise）——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问；要看效果则选「先看预览」（id=preview，不带 mode）：先加载 preview 技能渲染方案预览，再重发同一询问——看预览不是批准、不算有效应答，不切档也不计入修订轮次，绝不静默批准。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
+        "\n<plan-mode>计划模式：只读调研，不执行任何修改。文件写入、后台服务与计划任务工具不可用，MCP 工具不可用；shell 仅放行只读命令白名单（ls/cd/head/grep/git log、gh pr view/gh run view 等；gh 按子命令放行——gh pr merge、gh release edit、gh api -X POST、gh secret set 这类远端写会被拦，其余命令会被直接拦截，不会弹确认——请把需要执行的命令纳入方案，经批准后运行）；子代理同样仅限只读。严格按阶段流程推进（docs/plan-and-approval），不得跳步：\nP0 接到请求先声明分类（需求/缺陷/问答/混合）与一句话依据；问答类直接回答，不进流程。\nP1 有关键歧义先澄清，无歧义则声明假设继续。\nP2 需求类调用 product-manager 子代理产出结构化需求分析（用户故事/AC/边界/非目标/开放问题）；缺陷类调用 tester 产出复现步骤/根因/影响面/修复建议与回归要点；开放问题回流澄清（≤2 轮）。分析不设用户确认门，产出后直接进入 P3。\nP3 基于分析编写技术方案（文件级改动点/风险/回滚；git 仓库内拟定分支名 <type>/<slug>，slug ≤24 字符、基线当前 HEAD，非 git 仓库注明跳过），用 plan 工具登记 todos（必须包含验证项），然后用 ask 工具询问用户（题干与 plan 文本列明分支名；批准 = 预授权创建并切换分支）：批准门为 ask 单题并携带 switchToAutoEdit=true，提供两个批准类选项——「以自动编辑档执行」（id=approve，切自动编辑档，recommended）与「以完全访问档执行」（id=approve_full，切完全访问档）：批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（mode=\"auto_edit\" / mode=\"full_access\"，缺省回落 auto_edit）——不声明就会回落自动编辑档，用户选「完全访问执行」会被静默降级；系统按用户所选档位切档并指示你立即执行；有意见则选「补充意见」（id=revise）——修订时逐条回应（采纳/不采纳+理由），基于上一版做增量更新，不重做分析；同一方案 3 轮未收敛则把争议点拆成多个选项逐项询问；要看效果则选「先看预览」（id=preview，不带 mode）：先加载 preview 技能渲染方案预览，再重发同一询问——看预览不是批准、不算有效应答，不切档也不计入修订轮次，绝不静默批准。禁止未经 P2 分析、或 todos 缺失/含验证项时就发起询问。\n轻量路径：改动预计 ≤2 文件、无删除、无新依赖、无跨层改动时，P2 可用内置简析替代子代理调用（在回复中明示「轻量路径」）；批准询问不可省略。用户明确说「直接改/不用分析」时同样跳过 P2，但仍需登记 todos 并经批准。\n批准后：git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并说明；失败如实报告请用户处理）再动工；严格按已确认 todos 顺序执行，超范围写操作先询问；多文件/跨层变更完成后调用 code-reviewer 审查（🔴 必须修复），最后汇报变更摘要、验证结果与本轮偏差记录。</plan-mode>"
             .into();
 }
 
@@ -563,7 +563,7 @@ pub(super) fn budget_notice_step(max_steps: usize) -> usize {
 }
 
 /// 最终汇报标记：非主会话 run（子代理 / 任务运行）的纯文本回合只有在带此标记时才
-/// 视为按约定收尾（[docs/subagent-text-turn-premature-exit]）。
+/// 视为按约定收尾（[docs/subagents]）。
 pub(super) const REPORT_TAG: &str = "<report>";
 /// `REPORT_TAG` 的闭合标记。
 pub(super) const REPORT_TAG_END: &str = "</report>";
@@ -583,7 +583,7 @@ fn continue_notice() -> String {
 /// `<continue-notice>` 注入文案变体（主会话 + 计划未收尾）：点名未完成待办，给出显式
 /// 逃生口（`plan` 更新计划），并**点名连续空转的代价**。
 ///
-/// 为什么要变体而不在变异体后继续追加（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）：
+/// 为什么要变体而不在变异体后继续追加（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
 /// `rt.todos` 跨 run 持久化且 run 开头从磁盘装载（`run_chat` 装载段），「上个 run 留下的半成品计划」
 /// 也会命中续跑门。复用子代理那句「全部完成时以 <report> 包裹」等于把模型推向一个它无法自行验证的
 /// 断言；点名待办 + 指明 `plan` 出口，模型才有办法自己解开（调用 plan 把不相关项标 completed 或删掉）。
@@ -618,7 +618,7 @@ fn tool_args_rejected_notice(n: usize) -> String {
 
 /// 被拒调用（参数 JSON 不可修复）的诊断行：工具名 + 参数长度 + 首尾摘要 + serde 错误原文。
 ///
-/// 为什么需要（[docs/rejected-call-silent-finish]）：被拒调用的 args 既不进历史也不上 wire，
+/// 为什么需要（[docs/runtime-and-scheduling]）：被拒调用的 args 既不进历史也不上 wire，
 /// 会话日志此前只有「工具名 + 长度」，事后无法回答「这段 JSON 为什么不可解析」——
 /// 8531 字符的 `ask` 参数即因此成为永久悬案（模型侧与用户侧都拿不到方案全文）。
 fn log_rejected_calls(
@@ -660,11 +660,11 @@ pub(super) enum TextTurnAction {
 ///    拒绝提示已注入历史，必须让模型看到后修正重发；上限由 `text_turn_limit` 兜底，
 ///    不无限续跑。**必须先于 `finish_on_text` 判定**：主会话「正文非空 + 全部调用被拒」
 ///    此前直接 `Finish`，run 静默成功、提示永不被模型看到、方案从未产出
-///    （[docs/rejected-call-silent-finish]：会话 5100ea0c 的 8531 字符 `ask`）。
+///    （[docs/runtime-and-scheduling]：会话 5100ea0c 的 8531 字符 `ask`）。
 /// 2. 文本含 `<report>` 标记 → `Finish`：**显式汇报优先于一切**（含steer）——
 ///    模型主动声明「我说完了」是硬信号，steer 不得推翻它，否则会对着一份已完成汇报
 ///    强启新一轮，既烧 token 又可能触发对已完成任务的重复工具调用。
-/// 3. **`steer_continue`（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）**：
+/// 3. **`steer_continue`（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）**：
 ///    本步消化过用户 steer 注入 → 强制再走一轮。**必须先于 `finish_on_text`**：
 ///    主会话 `finish_on_text` 恒为 true，否则 steer 消息进了历史却被模型用旧上下文
 ///    答完退出——用户看到的是 steer 没生效（AC-4/AC-5）。
@@ -675,7 +675,7 @@ pub(super) enum TextTurnAction {
 /// 4. `finish_on_text`（主会话）→ 计划未收尾时 `Continue`，否则 `Finish`：
 ///    「无工具调用 = 回答完毕」对**无计划**的普通问答语义不变；但计划仍有未完成项时，
 ///    一句「我接下来要改 X」这类旁白收尾会让 run 带着半成品计划静默成功
-///    （[docs/main-run-finish-with-pending-todos]：会话 f19c3890 的 50 字旁白）。
+///    （[docs/runtime-and-scheduling]：会话 f19c3890 的 50 字旁白）。
 ///    连续纯文本达 `MAX_TEXT_TURNS` 仍不收敛则**回落 `Finish`**（不 `StopWithLimit`）：
 ///    主会话的「显式失败」= 对一次普通提问弹 `run:error`，比多几轮对话更糟；
 ///    计划表在右栏可见，信息不丢。
@@ -704,7 +704,7 @@ pub(super) fn text_turn_action(
         return TextTurnAction::Finish;
     }
     // ③ steer 强制续跑：用户刚提交的话必须被模型看到（AC-4/AC-5）。一次性上限在此生效。
-    // **仍受 `MAX_TEXT_TURNS` 硬上限约束**（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // **仍受 `MAX_TEXT_TURNS` 硬上限约束**（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
     // 连续各轮注入时不得越过连续纯文本防线——否则用户能靠反复点「立即」把 run 无限续命。
     // 达上限回落 `Finish`（不是 StopWithLimit）：主会话的显式失败 = 对一次提问弹 run:error，
     // 比安静收尾更糟；未消化的注入消息会在**收尾前复查**里被接管（drive_agent 的 pre-finish drain）。
@@ -816,7 +816,7 @@ pub async fn drive_agent(
     //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
     *rt.system_frozen.lock().unwrap() = None;
     *rt.cache_gen_anchor.lock().unwrap() = None;
-    // 文本形态 ask 的待剥标注同样只在一个 run 内有效（[docs/text-form-ask-fallback]）：
+    // 文本形态 ask 的待剥标注同样只在一个 run 内有效（[docs/chat-and-interface]）：
     // 正常路径由 AskTool 打开卡片时 take 走；但若兜底命中后该调用没走到工具（例如用户在
     // 批次执行前停止），残留会成为下一轮**真实** ask 的过期标注——这里兜底清一次。
     *rt.text_ask_block.lock().unwrap() = None;
@@ -827,7 +827,7 @@ pub async fn drive_agent(
     };
     *rt.active_cancel.lock().unwrap() = Some(run_token.clone());
     // 非主 runtime（子代理/任务运行）：文件写认领随 drive 生命周期——
-    // 正常结束与 panic unwind 都经 Drop 释放（[docs/subagent-file-isolation]）
+    // 正常结束与 panic unwind 都经 Drop 释放（[docs/subagents]）
     let _claims = (!params.main_session).then(|| crate::tools::claims::ReleaseGuard::arm(&rt.id));
 
     // 64ms 流式刷新 ticker（无通道注册时帧被静默丢弃）
@@ -848,11 +848,11 @@ pub async fn drive_agent(
     let mut sanitized_once = false;
     let mut attempt: u32 = 0;
     let mut run_usage = crate::provider::RunUsage::default();
-    // steer 强制续跑标记（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+    // steer 强制续跑标记（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
     // 消化注入后置位，被纯文本收尾路径消费一次。**一次性**——防止模型反复纯文本
     // 与用户注入形成活锁（活锁判据：无界增长 / 永不终止的 run）。
     let mut force_continue = false;
-    // 本 run 的生成耗时/TTFT 观测每 run 复位（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+    // 本 run 的生成耗时/TTFT 观测每 run 复位（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
     // 子代理/任务运行也复位各自的 runtime，不会跨 run 累积。
     *rt.run_timing.lock().unwrap() = crate::core::stats::UsageTiming::default();
     let mut final_text = String::new();
@@ -863,19 +863,19 @@ pub async fn drive_agent(
     // 自动压缩失败冷却：连续失败 ≥2 次后本次 run 内不再尝试，
     // 阈值持续超限时每步不再各堵一个完整超时。
     let mut compact_fail_streak: u32 = 0;
-    // 运行监督（[docs/subagent-file-isolation]）：重复失败/重复调用先纠偏、不收敛则终止；
+    // 运行监督（[docs/subagents]）：重复失败/重复调用先纠偏、不收敛则终止；
     // 另有空转看门狗（feed_batch）检测零进展只读循环——策略由 params.idle_policy 决定
-    //（[docs/subagent-idle-watchdog-misfire]：只读 run 的空转层只纠偏不终止；失败重复层
+    //（[docs/subagents]：只读 run 的空转层只纠偏不终止；失败重复层
     // 与步数/汇报门不受 policy 影响，照常终止）
     let mut supervision = SupervisionState::with_idle_policy(params.idle_policy);
     // 连续「无工具调用回合」计数（有工具调用或压缩成功时复位）：
     // 用于 <continue-notice> 续跑与 MAX_TEXT_TURNS 显式失败门
-    //（[docs/subagent-text-turn-premature-exit]）。非主会话达上限 → StopWithLimit；
+    //（[docs/subagents]）。非主会话达上限 → StopWithLimit；
     // 主会话（finish_on_text=true）另有计划维度，见 text_turn_action。
     // 注意复位点在本文件「有工具调用的回合」末尾，纯文本回合走 continue 'steps 跳过它——
     // 故主会话连续纯文本时计数为 0→1→2→3，第 4 个才吃到回落 Finish。
     let mut text_turns: u32 = 0;
-    // 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：每 run 至多一次——既救
+    // 文本形态 ask 兜底（[docs/chat-and-interface]）：每 run 至多一次——既救
     // 「端点偶发漏 tool_use」，也不给提示注入留反复重试的窗口。
     let mut text_ask_used = false;
 
@@ -891,7 +891,7 @@ pub async fn drive_agent(
             break 'steps;
         }
 
-        // ② 消化注入队列（主会话题义，[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）
+        // ② 消化注入队列（主会话题义，[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）
         // steer 语义：中途提交的消息并入当前 run，不结束 run、不打断子代理
         // （与 Codex CLI `InputQueueActivity::Steer` / opencode `ensureRunning` 同构）。
         //
@@ -912,7 +912,7 @@ pub async fn drive_agent(
             );
         }
         // ③④ 实时上下文计账（主会话）+ 阈值自动压缩
-        // （失败冷却 + 压缩互斥 + 进度事件，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）
+        // （失败冷却 + 压缩互斥 + 进度事件，[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）
         step_auto_compact(
             core,
             rt,
@@ -940,7 +940,7 @@ pub async fn drive_agent(
         // ⑥ 强制汇报轮：最后一步
         // 成对标签（与 <budget-notice> / <continue-notice> 等同口径）：前端 buildTranscript 的
         // isInternalHint 按「整条恰好是成对标签」判定并渲染为 notice——缺闭合标签会漏判，
-        // 恢复后仍以 user 气泡展示 XML 原文（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.4）。
+        // 恢复后仍以 user 气泡展示 XML 原文（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）。
         if params.force_report && step == params.max_steps.saturating_sub(1) {
             rt.history.lock().unwrap().push(Message::user_text(
                 "<final-report>已到达步数上限。停止调用工具，立即输出最终汇报：已完成、未完成、结论。</final-report>",
@@ -957,7 +957,7 @@ pub async fn drive_agent(
         };
         rt.stream.reset();
 
-        // [docs/session-logging-report](../../../../docs/session-logging-report.md) 会话级细粒度日志：verbose 记录完整请求（key 已脱敏）；
+        // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 会话级细粒度日志：verbose 记录完整请求（key 已脱敏）；
         // 每轮结果（成功/重试/失败）各占一行
         let verbose = session_log::verbose_enabled(&core.cfg.read().unwrap());
         if verbose {
@@ -1029,7 +1029,7 @@ pub async fn drive_agent(
             .join(",");
         let raw_text_chars = assembled_text_chars(&assembled);
 
-        // ⑧’ 文本形态 ask 兜底（[docs/text-form-ask-fallback]）：BYOK 端点偶发把工具调用
+        // ⑧’ 文本形态 ask 兜底（[docs/chat-and-interface]）：BYOK 端点偶发把工具调用
         // 当正文透传（本回合无 tool_use，正文末尾漂着 `<ask>…</ask>` 原文）。此前这段协议
         // 原文只被当普通 Markdown 渲染——问题不弹卡、也不留痕，用户只看到裸 XML。
         // 条件门：仅主会话 + ask 确实在工具集里（覆盖目标档执行期与子代理）+ 本回合无调用
@@ -1090,7 +1090,7 @@ pub async fn drive_agent(
         let (assistant_msg, calls, synth_results) = build_assistant_message(&assembled);
         let joined = assembled.joined_text();
         // steer 强制续跑标记**每步恰好消费一次**，与本步是否发起工具调用**解耦**
-        // （[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+        // （[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
         //
         // 消费点必须在**此处**（run_llm_turn 之后、判定之前）而不能放在下面的
         // `calls.is_empty()` 分支内——若放在那里，模型消化 steer 后发起工具调用时
@@ -1110,7 +1110,7 @@ pub async fn drive_agent(
             // 分支一：调用被拒（参数 JSON 不可修复）——必须让模型知道发生了什么。
             // 盲重试（原语义）会让它重复同一个坏参数：拒绝原因对它不可见；且被拒调用
             // 没有 tool_use 块，孤立 tool_result 对 API 非法，故以 user 角色提示反馈
-            //（[docs/subagent-text-turn-premature-exit]）。
+            //（[docs/subagents]）。
             if !synth_results.is_empty() {
                 session_log::warn(
                     rt,
@@ -1191,11 +1191,11 @@ pub async fn drive_agent(
             }
             // 被拒调用（参数 JSON 不可修复）：提示已注入历史，绝不能就此收尾——此前这里的
             // `text_turn_action(…, finish_on_text = true)` 直接 Finish，run 报成功而拒绝提示
-            // 永不被模型看到（[docs/rejected-call-silent-finish]）。
+            // 永不被模型看到（[docs/runtime-and-scheduling]）。
             let rejected = !synth_results.is_empty();
             // 计划快照与判定同帧读取（锁序：只取 clone 后立即释放，不跨 await 持锁）
             let todos_snapshot = rt.todos.lock().unwrap().clone();
-            // 陈旧计划豁免（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+            // 陈旧计划豁免（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
             // rt.todos 跳 run 持久化，但生产路径唯一写者是 plan 工具，故「本 run 碰过计划」
             // 能区分本 run 的计划与上个 run 的遗留。没碰过计划就不拦——否则用户在留有半成品
             // 计划的会话里问一句无关的普通问题，会被劫持成最多 3 轮工具循环。
@@ -1236,7 +1236,7 @@ pub async fn drive_agent(
                         );
                         continue 'steps;
                     }
-                    // steer 续跑（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+                    // steer 续跑（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
                     // **不得**叠加 <continue-notice>。该文案「你没有发起工具调用」对 steer 场景
                     // 完全不实——模型确实刚回答完用户，只是用户中途提交了新消息要求它再走一轮。
                     if steer_continue {
@@ -1248,7 +1248,7 @@ pub async fn drive_agent(
                         );
                         continue 'steps;
                     }
-                    // 主会话 + 计划未收尾：点名未完成项并给出 plan 出口（[docs/main-run-finish-with-pending-todos]）。
+                    // 主会话 + 计划未收尾：点名未完成项并给出 plan 出口（[docs/runtime-and-scheduling]）。
                     // 非主会话走原句（含 <report> 引导，两者语义不同不得混用）。
                     //
                     // 注：主会话在此可达**仅限 todos_pending**（无计划的普通问答仍由
@@ -1283,7 +1283,7 @@ pub async fn drive_agent(
                 }
                 TextTurnAction::StopWithLimit => {
                     // 文案按成因分流：同一句「只输出文字」用在被拒场景会把排查方向带偏
-                    //（[docs/rejected-call-silent-finish] 的 8531 字符 ask 即属被拒成因）。
+                    //（[docs/runtime-and-scheduling] 的 8531 字符 ask 即属被拒成因）。
                     let msg = if rejected {
                         format!(
                             "连续 {} 步未发起任何有效工具调用（调用参数反复不可解析），本 run 终止；\
@@ -1317,7 +1317,7 @@ pub async fn drive_agent(
         let idle_digest = batch_digest(&calls);
 
         // 混合批次（部分调用被拒 + 部分被执行）取证：被拒调用没有 tool_use 块，它那条合成
-        // ToolResult 会在出网前被 repair 当孤儿结果删除（[docs/empty-assistant-and-request-rebuild-fix]
+        // ToolResult 会在出网前被 repair 当孤儿结果删除（[docs/providers-and-network]
         // §7 已登记）——模型看不到拒绝原因，会话日志是唯一留痕点，而此前该路径连日志都没有
         //（code-review 2026-09-16 🟡：三个被拒分支中只有另两处调了 log_rejected_calls）。
         if !synth_results.is_empty() {
@@ -1339,7 +1339,7 @@ pub async fn drive_agent(
         if let Some(items) = batch_suggest {
             suggest_out = Some(items);
         }
-        // 监督裁决（[docs/subagent-file-isolation]）：纠偏消息进历史（主会话可见、
+        // 监督裁决（[docs/subagents]）：纠偏消息进历史（主会话可见、
         // 子代理经 sub:step 采样）；硬介入 → 以监督错误终止本 run（历史已含本批结果，
         // 不留悬空 tool_use）
         let mut escalated: Option<String> = None;
@@ -1434,7 +1434,7 @@ pub async fn drive_agent(
 /// `Rejected`→`Demanded` 方向误判只退化为今日行为——多一次 400 重试；反向误判会短暂把会话锁在
 /// 「剥思考」态（要求回传的端点每轮 400），由 [`update_reasoning_sticky`] 的 `Demanded` 复位自愈）。
 ///
-/// 为什么需要区分（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// 为什么需要区分（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 /// 同为 400，「不认这个字段」与「必须回传这个字段」的修复方向恰好相反——前者要丢掉思考，
 /// 后者丢掉思考只会越修越坏（把思考抹了下次还是同一条 400）。
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1465,7 +1465,7 @@ pub(super) fn classify_reasoning_400(msg: &str) -> Reasoning400 {
     }
 }
 
-/// 依 400 分类更新会话级粘性标记，返回是否发生变化（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）。
+/// 依 400 分类更新会话级粘性标记，返回是否发生变化（[docs/providers-and-network](../../../../docs/providers-and-network.md)）。
 /// `Rejected` → 置位（此后本会话出网副本不再回传思考）；`Demanded` → **复位**（自愈阀：标记可能是误判或来自切换前的端点，
 /// 继续剥思考只会让「要求回传」的端点每轮都 400）；`Unrelated` → 不变。
 /// 用 swap 一次完成「读取旧值 + 写入新值」，返回值即状态是否翻转（并发调用下不会重复报告）。
@@ -1482,7 +1482,7 @@ pub(super) fn update_reasoning_sticky(rt: &SessionRuntime, verdict: Reasoning400
 /// 成功即复位（M3），`*sanitized_once` 在 BadRequest 时做一次性历史 sanitize/repair（M2）。
 /// BadRequest 分支内还会把 400 文案经 [`classify_reasoning_400`] 分类，并交由
 /// [`update_reasoning_sticky`] 更新会话级粘性标记 `rt.reasoning_rejected`
-/// （[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+/// （[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 /// `Rejected` 置位（此后出网副本不再回传思考，由 `stream::messages_for_request` 消费）；
 /// `Demanded` **复位**（自愈阀：误判或切端点后不至于把思考永久剥掉）；`Unrelated` 不变。
 /// 历史修复：`Demanded` 用 [`repair::sanitize_keep_thinking`]（只剥图、保思考），
@@ -1514,13 +1514,13 @@ async fn run_llm_turn(
             .clamp(5, 3600),
     );
     loop {
-        // 本**尝试**的计时起点（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+        // 本**尝试**的计时起点（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
         // 必须在环内——环外的 `step_started` 含上一步的退避等待，拿它当 duration 会把重试等待算进去。
         let attempt_started = std::time::Instant::now();
         let (tx, rx) = mpsc::channel::<crate::provider::StreamDelta>(1024);
         let collector = tokio::spawn(collect_deltas(rx, rt.stream.clone(), attempt_started));
         // 多 key 池：每次尝试挑一把 key（鉴权/瞬时失败冷却并 failover）；
-        // 冷却按 provider 粒度共享（[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）
+        // 冷却按 provider 粒度共享（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
         let resolved_keys = crate::host::keyring::resolve_keys(model);
         let (key_idx, key) = core
             .key_pool
@@ -1666,7 +1666,7 @@ async fn run_llm_turn(
                 let _ = collector.await;
                 if e.is_bad_request() && !*sanitized_once {
                     *sanitized_once = true;
-                    // 400 语义分类（每次请求都能自愈的关键，[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+                    // 400 语义分类（每次请求都能自愈的关键，[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
                     // 「拒收 reasoning_content」的端点每次回传都会 400，故置会话级粘性标记让
                     // 后续出网副本不再回传思考（本 run 后续 step 与新 run 均生效）；
                     // 「要求回传」的端点绝不能置位（置位会让它彻底失效），修复也必须保思考。
@@ -1797,7 +1797,7 @@ async fn step_auto_compact(
         serde_json::json!({ "session": rt.id, "breakdown": bd }),
     );
 
-    // ④ 阈值自动压缩（失败冷却 + 压缩互斥 + 进度事件，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）
+    // ④ 阈值自动压缩（失败冷却 + 压缩互斥 + 进度事件，[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）
     let threshold = core.cfg.read().unwrap().compact_threshold.clamp(0.05, 0.95) as f64;
     // 判定同时看两路：本地估算（bd.ratio）与上游回报的真实输入占比。只看估算会漏掉
     // 「估算少算数倍」的内容（图片 base64 实测：估算 0.57 / 真实 0.99），压缩于是全程不触发，
@@ -1829,7 +1829,7 @@ async fn step_auto_compact(
             serde_json::json!({ "session": rt.id, "tokens_before": bd.total_tokens, "messages": messages, "timeout_ms": timeout_secs * 1000 }),
         );
         // RAII 槽位：compact_history panic unwind 时 Drop 仍会复位 compacting；
-        // 否则 start_chat 永远拒绝新 run（会话变砖，[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md) 评审修复）
+        // 否则 start_chat 永远拒绝新 run（会话变砖，[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 评审修复）
         let compact_result = match CompactingGuard::acquire(rt) {
             Some(_compact_guard) => context::compact_history(core, rt, false, run_token).await,
             _ => {
@@ -1918,7 +1918,7 @@ async fn run_tool_batch(
     // 主会话：计划经 ask 批准 → 切档已发生（ask 工具内部）；注入执行指令。
     // 下一步的 ⑦ 会重算 system prompt 与工具集，解除计划限制。
     // 文案按**实际落到的档位**渲染（B4）：批准门可能切到自动编辑档，也可能切到完全访问档
-    //（[docs/mode-gate-and-subagent-sync]），写死「自动编辑模式」会与事实不符。
+    //（[docs/plan-and-approval]），写死「自动编辑模式」会与事实不符。
     if batch_out.plan_approved && params.emit_events {
         rt.history.lock().unwrap().push(
             Message::user_text(format!(
@@ -1942,18 +1942,18 @@ async fn run_tool_batch(
         return (None, true, batch_out.call_summary);
     }
 
-    // suggest 执行成功 → run 收尾（[docs/p1-plan](../../../../docs/p1-plan.md) §2.5）。此处不发 run:done：
+    // suggest 执行成功 → run 收尾（[docs/technical-design](../../../../docs/technical-design.md)）。此处不发 run:done：
     // 本函数返回后 run_chat 还要复位 running（提前发 done 会让前端出队后 startChat
     // 撞上未复位窗口，报「该会话已有运行中的任务」并丢弃队列项）——建议经
     // 返回值交给 run_chat 并入唯一一次 done。
     //
-    // ⚠️ 依赖（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.1）：
+    // ⚠️ 依赖（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
     // 「计划未收尾时不得静默成功收尾」的门在 `tools::suggest::plan_pending_blocks_suggest`
     // （主会话 + 本 run 碰过计划 + has_pending → 返回 E_PLAN_PENDING），故到这里的
     // `suggest_items` 必定为 None、batch_done 不会被置位。**勿在本处新增旁路**（例如
     // 「主会话一律忽略 suggest」或「有 suggestions 就收尾」），否则未完成计划可被绕开。
     //
-    // suggest 可与 read/grep/list_files 等非 Interactive 工具同批（[docs/suggest-mixed-batch](../../../../docs/suggest-mixed-batch.md)）：
+    // suggest 可与 read/grep/list_files 等非 Interactive 工具同批（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：
     // 批次策略（1）已为 suggest 单独放行，suggest 仍走原 SuggestTool::run，§8.1 plan 门先于 emit 判定，
     // 因此 `BatchOutcome.suggest_items` 的填充时机与语义与此前完全一致——本处的「勿新增旁路」注释天然兼容。
     if let Some(items) = batch_out.suggest_items {
@@ -1962,7 +1962,7 @@ async fn run_tool_batch(
     (None, false, batch_out.call_summary)
 }
 
-/// 任务运行执行（[docs/p2-plan](../../../../docs/p2-plan.md) §3）：隔离上下文 + 30 步预算 + 无 MCP。
+/// 任务运行执行（[docs/technical-design](../../../../docs/technical-design.md)）：隔离上下文 + 30 步预算 + 无 MCP。
 /// 档位由 `core::scheduler` 在创建 runtime 时显式置 FullAccess（无人值守需写文件与执行命令，
 /// 且审批弹窗无人应答）；本参数集保持冻结，不参与每步重算。
 /// 返回（结果，usage）——usage 由调用方记入统计（L10）与任务日志（B7）。
@@ -2014,7 +2014,7 @@ pub async fn run_task_agent(
 
 /// 按尝试次数取退避间隔并休眠（attempt 从 1 起，与 retry 层约定一致）。
 ///
-/// 遇取消**立即**返回，不等满退避间隔（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）：
+/// 遇取消**立即**返回，不等满退避间隔（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
 /// 此前是裸 `tokio::time::sleep`，退避期间取消不生效——累计 7 次 × 10s 意味着用户点了停止
 /// 最多要等 10s 才有反应，而 `run_llm_turn` 的取消分支正是靠退避结束后进入的
 /// `attempt_token` 派发才生效。返回 false = 被取消，调用方应当直接收尾。
@@ -2040,7 +2040,7 @@ fn batch_digest(calls: &[NormalizedCall]) -> BatchDigest {
             //——`tools/read.rs` 的 `Args.files` 即 schema 的 `required: ["files"]`，而
             //`tools/batch_read.rs` 直接复用 `ReadTool.schema()`（两者入参逐字相同）。
             //
-            // 历史缺陷（本批修复，[docs/subagent-idle-watchdog-misfire]）：此两分支曾按工具名把入参键
+            // 历史缺陷（本批修复，[docs/subagents]）：此两分支曾按工具名把入参键
             // **写反**——`read` 分支取顶层 `args["path"]`（对真实契约恒为 `None`）而 `batch_read` 分支
             // 取 `files` 数组。于是 `read_paths` 对真实 read 调用**恒空**，`feed_batch` 的进展信号 2
             //（首次读新文件）从未生效：只读 run 每步只读都被计为空转，第 14 步被
@@ -2408,7 +2408,7 @@ mod tests {
         assert_eq!(v["bytes"], serde_json::json!(0));
     }
 
-    // ---- 空转看门狗的批次摘要（[docs/subagent-idle-watchdog-misfire]）----
+    // ---- 空转看门狗的批次摘要（[docs/subagents]）----
 
     /// `read` 的 wire 契约是 `{"files":[{"path":…}]}`（tools/read.rs 的 `Args::files` 即 schema
     /// 的 `required: ["files"]`）——批次摘要必须从中收集路径。
@@ -2486,7 +2486,7 @@ mod tests {
         }
     }
 
-    // ---- run:inject 载荷回带注入正文（[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）----
+    // ---- run:inject 载荷回带注入正文（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）----
 
     /// 记录原始 `emit` 事件（`drain_inject` 的 `run:inject` 不走 `channel_frame`）。
     #[derive(Default)]
@@ -2731,8 +2731,8 @@ pub(super) async fn checkpoint(
         return None;
     }
     // 非主会话（子代理 sub_* / 任务运行 task_*）绝不落主索引与主历史：子代理过程历史
-    // 由 save_sub_history 边车接管（subagent 工具收尾时落盘，[docs/subagent-interaction-drawer]
-    // （../../../docs/subagent-interaction-drawer.md）），任务运行无持久化语义——否则内部运行
+    // 由 save_sub_history 边车接管（subagent 工具收尾时落盘，[docs/subagents]
+    // （../../../docs/subagents.md）），任务运行无持久化语义——否则内部运行
     // 会以 untitled 幽灵会话形态泄漏进会话列表
     if !rt.is_main_session {
         return None;

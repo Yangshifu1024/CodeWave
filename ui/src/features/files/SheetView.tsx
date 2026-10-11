@@ -1,4 +1,4 @@
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：表格预览视图。
+// [docs/documents](../../../../docs/documents.md)：表格预览视图。
 // 行窗口化（虚拟滚动）是手写的最小实现——仓库没有虚拟滚动依赖，也不为一个弹窗引入；
 // 文案由调用方 FileViewerModal 按当前语言组装后传入，本组件只管渲染与交互。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";

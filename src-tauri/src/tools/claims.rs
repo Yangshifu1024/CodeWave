@@ -1,4 +1,4 @@
-//! 进程级文件写认领表（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+//! 进程级文件写认领表（[docs/subagents](../../../docs/subagents.md)）：
 //! 非主 runtime（子代理/任务运行）经结构化写工具（create/edit/delete）写文件前必须认领目标路径；
 //! 兄弟 runtime 写已认领路径（相同或祖先关系）被 E_FILE_CLAIMED 拒绝并指引「跳过 + 上报未完成」，
 //! 杜绝并行子代理交叉编辑同一文件引发的版本冲突乒乓。主会话豁免——跨任务包共享的文件

@@ -1,4 +1,4 @@
-// 左栏任务区（[docs/tasks-module-polish]）· 守门用例：
+// 左栏任务区（[docs/runtime-and-scheduling]）· 守门用例：
 //   ① 列表来自 stores/tasks 单一数据源（组件不自己 invoke、不留第二份状态）；
 //   ② 状态点只区分「失败 = 红」与「其余 = 中性」（与任务页共用 statusKind，禁各写一份）；
 //   ③ tooltip 补回颜色之外的信息：本地化状态文案（不再裸显 ok/error）+ 下次触发 + 上次摘要；

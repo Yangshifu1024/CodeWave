@@ -1,4 +1,4 @@
-// Composer 文件引用的「文本 ↔ chip」双向工具（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)）。
+// Composer 文件引用的「文本 ↔ chip」双向工具（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //
 // 为什么需要它：引用曾经就是**正文文本**（选完附件往输入框追加一行 `@路径`），
 // 于是项目外的长绝对路径把正文挤走、Windows 上还会带 canonicalize 的 `\\?\` 前缀。

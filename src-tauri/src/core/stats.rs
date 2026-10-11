@@ -1,4 +1,4 @@
-//! token 统计（[docs/p2-plan](../../../docs/p2-plan.md) §4）：异步有界队列（2048；满则丢弃并计数）→ 按天落盘
+//! token 统计（[docs/technical-design](../../../docs/technical-design.md)）：异步有界队列（2048；满则丢弃并计数）→ 按天落盘
 //! stats/YYYY-MM-DD.json；保留 90 天；查询侧读时聚合。
 
 use crate::util::atomic::atomic_write;
@@ -18,7 +18,7 @@ pub const FLUSH_RECORDS: usize = 512;
 /// 统计文件保留天数。
 pub const RETAIN_DAYS: i64 = 90;
 
-/// 用量来源（L10：主会话/子代理/任务分账可见；[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md) 增 compact；[docs/session-auto-title](../../../docs/session-auto-title.md) 增 title）。
+/// 用量来源（L10：主会话/子代理/任务分账可见；[docs/tools-and-safety](../../../docs/tools-and-safety.md) 增 compact；[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 增 title）。
 pub const KIND_MAIN: &str = "main";
 /// 子代理来源。
 pub const KIND_SUB: &str = "sub";
@@ -52,7 +52,7 @@ pub struct UsageRecord {
     pub kind: String,
 }
 
-/// 一次「LLM step 生成耗时」观测汇总（usage 帧与统计落盘共用，[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+/// 一次「LLM step 生成耗时」观测汇总（usage 帧与统计落盘共用，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
 /// 口径：只含**成功那次尝试**的窗口（失败尝试与退避不计）；TTFT 取首个任意类型增量（含思考）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsageTiming {
@@ -188,7 +188,7 @@ impl StatsCollector {
         self.record_timed(r, UsageTiming::default());
     }
 
-    /// 同 `record`，并带上本 run 的生成耗时/TTFT 观测（主会话 LLM 步，[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+    /// 同 `record`，并带上本 run 的生成耗时/TTFT 观测（主会话 LLM 步，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
     pub fn record_timed(&self, r: UsageRecord, t: UsageTiming) {
         let Some(tx) = self.ensure_writer() else {
             return;
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(days[0].by_kind[KIND_SUB].gen_ms, 0);
     }
 
-    /// 计时口径（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：耗时缺失或 0 → 整步不计；
+    /// 计时口径（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：耗时缺失或 0 → 整步不计；
     /// 有 TTFT 才计入 TTFT（分母 ttft_count 同步）。
     #[test]
     fn usage_timing_add_step_semantics() {
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(days[0].by_model["m1"].gen_ms, 200);
     }
 
-    /// [docs/arithmetic-audit](../../../docs/arithmetic-audit.md)#2：by_workspace 合并必须像 by_model/by_kind 一样带齐五个字段
+    /// [docs/testing](../../../docs/testing.md)#2：by_workspace 合并必须像 by_model/by_kind 一样带齐五个字段
     /// （曾是潜伏缺陷：同日二次冲刷时 cache_read/cache_write 被丢掉）。
     #[test]
     fn flush_should_merge_by_workspace_cache_fields() {

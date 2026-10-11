@@ -63,7 +63,7 @@ impl Tool for DeleteTool {
                 format!("拒绝删除危险路径：{}", args.path),
             );
         }
-        // 严格文件隔离（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+        // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 删除前认领目标（目录认领经祖先匹配覆盖其下文件）；兄弟已认领则拒绝
         if !ctx.rt.is_main_session
             && let Err(conflicts) =
@@ -74,7 +74,7 @@ impl Tool for DeleteTool {
                 crate::tools::claims::denial_message(&conflicts),
             );
         }
-        // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：与 edit/create 的写路径互斥；
+        // 进程级写互斥（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 工作项 2）：与 edit/create 的写路径互斥；
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行删除
         let _guard = match crate::tools::writelock::acquire_all(
             std::slice::from_ref(&resolved),

@@ -1,4 +1,4 @@
-// 自定义 overlay 滚动条（[docs/chat-scrollbar-overlay]）：仿 MiniMax Code / Slack / Discord 范式。
+// 自定义 overlay 滚动条（[docs/chat-and-interface]）：仿 MiniMax Code / Slack / Discord 范式。
 // native 滚动条全部隐藏（系统设置「始终显示滚动条」会画出带箭头的 native widget，CSS 改不掉——见 app.css 对应章节）。
 // 本组件监听容器的 scroll 事件，按 scrollTop / scrollHeight 比例渲染细 thumb：
 //   - 滚动时显色

@@ -1,4 +1,4 @@
-// 清理提示的去重记录（[docs/session-cleanup](../../docs/session-cleanup.md) §3 第 14 条）。
+// 清理提示的去重记录（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 14 条）。
 //
 // 为什么单独一个工具：后端「上次清理记录」只有一份，而前端有两个地方会把它展示给用户——
 //   ① 启动轻提示（features/shell/AppShell.tsx）：启动时后端已按保留期清理过一次，确有删除就提醒一句；

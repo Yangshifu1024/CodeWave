@@ -1,5 +1,5 @@
-// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：会话产物查看弹窗——markdown 渲染（mermaid/katex 升级）/ 图片 base64 预览 / 代码高亮
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：扩展名分派扩到表格（.xlsx/.xlsm/.csv/.tsv）、Word（.docx）与 PDF（.pdf）
+// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：会话产物查看弹窗——markdown 渲染（mermaid/katex 升级）/ 图片 base64 预览 / 代码高亮
+// [docs/documents](../../../../docs/documents.md)：扩展名分派扩到表格（.xlsx/.xlsm/.csv/.tsv）、Word（.docx）与 PDF（.pdf）
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Image, Modal, Spin } from "antd";
 import { useTranslation } from "react-i18next";
@@ -21,7 +21,7 @@ const SHEET_EXTS = new Set(["xlsx", "xlsm"]);
 const TEXT_TABLE_EXTS = new Set(["csv", "tsv"]);
 const DOC_EXTS = new Set(["docx"]);
 
-/** 弹窗宽度（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：响应式而非固定 px。
+/** 弹窗宽度（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：响应式而非固定 px。
  *  此前是 760 / 1100 定值——大屏偏小、窄窗靠 antd 的 maxWidth 钳制。min(…, 94vw) 两头兼顾，
  *  表格类留最宽（列多），正文类次之。导出是为了让测试直接断言契约：happy-dom 的 CSS 校验器
  *  不认 min() 这类函数值，DOM 上的 inline width 会被丢弃，按像素断言不可靠。 */
@@ -83,7 +83,7 @@ type ViewerState =
   | { phase: "doc"; text: string; truncated: boolean }
   | { phase: "pdf"; scanned: boolean };
 
-/** 文本编码提示（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+/** 文本编码提示（[docs/documents](../../../../docs/documents.md)）：
  *  非 UTF-8 时说清楚内容是怎么解出来的——使用者看到乱码才能知道下一步该干什么。 */
 function EncodingNote({ encoding }: { encoding: string }) {
   const { t } = useTranslation();
@@ -110,7 +110,7 @@ export default function FileViewerModal({
   onClose,
 }: {
   sessionId: string | null;
-  /** 要查看的文件路径（null = 关闭）；自 [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md) 起接受任意路径，不再要求 SessionFileEntry */
+  /** 要查看的文件路径（null = 关闭）；自 [docs/plan-and-approval](../../../../docs/plan-and-approval.md) 起接受任意路径，不再要求 SessionFileEntry */
   path: string | null;
   onClose: () => void;
 }) {
@@ -244,7 +244,7 @@ export default function FileViewerModal({
       open={!!target}
       onCancel={onClose}
       footer={null}
-      // 响应式宽度（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：此前 760/1100 是
+      // 响应式宽度（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：此前 760/1100 是
       // 固定 px，大屏下偏小、窄窗下靠 antd 的 maxWidth 钳制；min(…, 94vw) 两头兼顾。antd 6 的 width
       // 支持 string（见 antd/es/modal/interface.d.ts），vw 在窄窗兜底不溢出窗口。
       width={wide ? VIEWER_WIDTH_TABLE : VIEWER_WIDTH_TEXT}
@@ -306,7 +306,7 @@ export default function FileViewerModal({
             {st.truncated ? ` · ${t("files.docTruncated")}` : ""}
           </div>
           {/* .viewer-md.md = 预览专用容器（此前复用聊天区 .assistant，被 860px 行长上限 +
-              overflow-x:hidden 裁掉宽表格；见 [docs/plan-modal-table-scroll] 与 app.css 共享组注释） */}
+              overflow-x:hidden 裁掉宽表格；见 [docs/chat-and-interface] 与 app.css 共享组注释） */}
           <div className="viewer-md md">
             <div ref={bodyRef} className="md" dangerouslySetInnerHTML={{ __html: html }} />
           </div>

@@ -9,7 +9,7 @@ import { cacheDenominator, cacheSemanticsOfFormat, type CacheSemantics } from ".
 import { avgStepMs, formatInt as fmt, formatMs, formatRate, tokPerSec } from "../chat/composerMetrics";
 
 /**
- * 计费语义（[docs/prompt-caching-hardening]）：anthropic_messages 的 usage.input 不含缓存部分
+ * 计费语义（[docs/providers-and-network]）：anthropic_messages 的 usage.input 不含缓存部分
  * （真输入 = input + cache_read + cache_write）；openai_chat / openai_responses 的 input 已包含
  * cached_tokens（cache_read 是 input 的子集）。两套口径下「总量 / 命中率」公式不同，必须按协议区分。
  *
@@ -132,7 +132,7 @@ export default function TokenStatsModal() {
       .join(" · ");
   })();
 
-  // 总览三项的加权聚合（[docs/composer-token-rate]）：**分子分母同域**——只在带耗时数据的记录子集内聚合。
+  // 总览三项的加权聚合（[docs/chat-and-interface]）：**分子分母同域**——只在带耗时数据的记录子集内聚合。
   // 聚合桶必须取 `by_kind` 而**不是** `by_model`：`by_model` 只按 model 分桶、不含来源维度，子代理（sub）、
   // 上下文压缩（compact）、自动命名（title）、计划任务（task）的记录与主会话落进**同一个 model 桶**——
   // 它们的 output 在桶里、却因这些路径走 `record` 不带计时而 `gen_ms` 为 0，桶级 `gen_ms > 0` 过滤

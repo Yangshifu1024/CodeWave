@@ -1,5 +1,5 @@
 // run store 的纯帧 reducer —— 无 zustand/store 依赖，可独立单测。
-// 自 run.ts 拆出（[docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构）：帧到达顺序 = timeline 顺序；所有函数就地变异
+// 自 run.ts 拆出（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 重构）：帧到达顺序 = timeline 顺序；所有函数就地变异
 // 传入的 immer 草稿且无返回值（工厂 helper 除外）。
 import type { Frame, Message } from "../ipc/types";
 import { cacheDenominator, type CacheSemantics } from "../utils/models";
@@ -101,7 +101,7 @@ export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", 
   );
 }
 
-/** 剥一次「文本形态 ask」的协议原文（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：
+/** 剥一次「文本形态 ask」的协议原文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
  *  与后端 `text_ask::strip_block`（`replacen(block, "", 1)` + `trim_end()`）逐字同口径——
  *  ①只删**第一处**命中（JS 的 `String.replace(string, ...)` 本身就是首处替换）；②只裁剥离后残留的**尾部**空白；
  *  ③找不到（跨段切分 / 已被裁剪 / 已经剥过）就原样返回、绝不抛错。
@@ -227,7 +227,7 @@ export function closeRunningTools(t: TabRunState, subId?: string) {
   for (const st of Object.values(t.subStreams)) settleRunningTools(st.toolsMap);
 }
 
-/** 「是否仍有在途工具卡」的**只读**判据（[docs/run-terminal-event-fallback](../../docs/run-terminal-event-fallback.md)）：
+/** 「是否仍有在途工具卡」的**只读**判据（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
  * run 终态看门狗用它决定本地还有没有未收敛状态。
  *
  * **必须与 {@link settleRunningTools} 同判据（running / waiting）、与 {@link closeRunningTools} 无 subId
@@ -243,10 +243,10 @@ export function hasRunningTools(t: TabRunState): boolean {
 }
 
 /** 将一个 Channel 帧归一到 Tab 状态（就地变异草稿；帧到达顺序 = timeline 顺序）。
- *  导出以便测试驱动真实帧序列（[docs/thinking-interleave-report](../../../docs/thinking-interleave-report.md) 契约：delta_text / delta_thinking / tool_progress）。 */
+ *  导出以便测试驱动真实帧序列（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 契约：delta_text / delta_thinking / tool_progress）。 */
 export function applyFrameToTab(t: TabRunState, frame: Frame) {
   if (frame.type === "sub") {
-    // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理信封帧路由进独立消息流（不走主流水线；流自身按 status 丢弃收尾后的迟到帧）
+    // [docs/subagents](../../../docs/subagents.md)：子代理信封帧路由进独立消息流（不走主流水线；流自身按 status 丢弃收尾后的迟到帧）
     applyFrameToSub(t, frame.sub_id, frame.frame);
     return;
   }
@@ -262,7 +262,7 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     t.streamGen = frame.gen;
     // 帧到达顺序 = 展示顺序：text/thinking 按到达顺序追加进 timeline
     appendDelta(currentAssistantIm(t).timeline, frame.type === "delta_text" ? "text" : "thinking", frame.text || "");
-    // 文本形态 ask 兜底（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：被恢复的协议原文
+    // 文本形态 ask 兜底（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：被恢复的协议原文
     // 常在本帧才补齐（64ms 节流把块切到两帧），故每帧文本落库后都补剥一次（幂等；待剥字符串见 TabRunState.textRecovered）
     if (frame.type === "delta_text") stripRecoveredInTab(t);
   } else if (frame.type === "tool_progress") {
@@ -279,7 +279,7 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
 /** usage 帧载荷（ipc/types.ts 的 Frame usage 形状：snake_case，与后端 dto 一致）。
  *  `duration_ms` = 该 LLM step **成功尝试**的生成耗时（请求发出 → 流失结束，不含失败尝试与退避）；
  *  `ttft_ms` = 首个任意类型增量（text 或 thinking）延迟。两字段缺省/为 null = 该步无数据
- *  （旧后端），按「无数据」处理：不累加、不计步、不显示（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。 */
+ *  （旧后端），按「无数据」处理：不累加、不计步、不显示（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。 */
 export interface UsageFramePayload {
   input?: number;
   output?: number;
@@ -300,7 +300,7 @@ export function applyUsageFrame(t: TabRunState, u: UsageFramePayload | undefined
   applyRunMetricsFrame(t, u);
 }
 
-/** 本轮计数累加（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：与上面会话级 `usage` 平行。
+/** 本轮计数累加（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：与上面会话级 `usage` 平行。
  *  三条纪律：
  *  - **只有「该步被计入」的帧才进分子**：`duration_ms` 缺失 / null / 0 / 负值 → 整帧不计（`output` 也不累加），
  *    与后端 `UsageTiming::add_step`（`src-tauri/src/core/stats.rs`：耗时缺失或 0 → 整步不计）逐字同口径——
@@ -357,7 +357,7 @@ export function hitRateTier(rate: number): HitTier {
   return "danger";
 }
 
-/** 子代理帧归一（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：镜像主流水线——delta 追加 timeline，tool_progress 落工具锚点。
+/** 子代理帧归一（[docs/subagents](../../../docs/subagents.md)）：镜像主流水线——delta 追加 timeline，tool_progress 落工具锚点。
  *  流不存在时惰性创建（channel 帧与 sub:spawn 事件走不同路径，无到达顺序保证）。 */
 export function applyFrameToSub(t: TabRunState, subId: string, frame: Frame) {
   let st = t.subStreams[subId];
@@ -422,7 +422,7 @@ export function safeArgsPreview(args: any): string | undefined {
   }
 }
 
-/** 历史 Message[] → 子代理过程流（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）：assistant 的 text/thinking 按序进 timeline，
+/** 历史 Message[] → 子代理过程流（[docs/subagents](../../../docs/subagents.md)）：assistant 的 text/thinking 按序进 timeline，
  *  tool_use 落工具卡锚点并回填配对的 tool_result；user 任务消息不进流（抽屉头部单独展示 sub.task）。
  *  settleRunning=true（流所属会话已结束）时，缺配对结果的调用落定「已中断」（与 settleRunningTools 同形）；
  *  默认 false 保持既有行为（留 running，等实时事件回填）。 */
