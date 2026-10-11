@@ -18,7 +18,7 @@ docs/ 目录约定：平铺结构，**文档文件名不带编号**（用英文�
 - **git 写操作默认由用户执行**：commit / push / merge / branch / stash 等 AI 不主动碰；用户明确要求或授权时可执行（范围以当次授权为准）。例外：用户批准计划 = 预授权创建并切换计划所示分支（标准工作流 S5/S6、plan 档 P3，[docs/plan-branch-proposal.md](./docs/plan-branch-proposal.md)）；commit / push / merge 仍由用户执行
 - **数据与密钥落位**：全局数据（配置、会话、日志）在 `~/.codewave`，项目托管数据在 `<主目录>/.codewave/`；API key 入系统钥匙串，配置文件不落明文
 - **纯 Rust 后端，零框架耦合**：`core/` 不依赖 tauri；只有 `lib.rs` 与 `host/` 允许 `use tauri::*`；IPC 命令只做校验 + 转调 core
-- **数据目录 `.codewave`**：路径约定随 2026-09-13 品牌改名定稿（原 `.wavestudio`，无自动迁移），勿再建议改名
+- **数据目录 `.codewave`**：全局与项目托管数据共用此目录名，勿再建议改名
 - **项目 = 名称 + 单一主目录**；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/oss-prep-batch](./docs/oss-prep-batch.md)：legacy 目录回退已移除）；`ProjectEntry.allowed_dirs`（serde default）记用户「始终允许」的项目外目录，会话创建/恢复时并入 `extra_roots`
 - **文件入口统一为「原地引用」**：附件按钮与拖入窗口拿到的都是**真实路径**，非图片文件记进草稿 `refs` 并以 **chip** 展示（输入框里不出现路径），发送前一刻才合成 `@路径` 追加正文末尾（不复制副本、不占上下文；[docs/composer-file-ref-chips](./docs/composer-file-ref-chips.md)）；图片因要上 wire 才读成 base64；网页内 `<input type=file>` 拿不到路径，故附件按钮走原生选择框（[docs/office-and-pdf-support](./docs/office-and-pdf-support.md)）
 - **会话语义**：项目会话（必须选项目，快照固化主目录）或临时会话（免目录，工作区 = 全局数据目录，写入仍走 fence 审批）；命令 cwd = 项目数据目录下的 temps/（临时会话 = 全局数据目录）

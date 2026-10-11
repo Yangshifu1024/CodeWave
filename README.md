@@ -32,14 +32,6 @@ CodeWave 跑在你的本机（Windows / macOS / Linux）。打开一个项目目
 
 > 更新器已启用，签名更新包与版本信息由已发布的 GitHub Release 提供；也可从 Releases 页面手动下载安装包。
 
-### 从旧版 WaveStudio 升级（0.2.0 前品牌版本）
-
-应用已由 WaveStudio 改名 CodeWave，数据标识随之更换且**不做自动迁移**：
-
-1. 全局数据目录 `~/.wavestudio` 需手动改名为 `~/.codewave`（保留会话/配置/技能）；各项目主目录下的 `.wavestudio/` 同理整体改名
-2. 系统钥匙串服务名已更换（`studio.gitwave.work` → `codewave.yangshifu.xyz`），已存的 API Key 需在设置中重新录入
-3. 项目指令文件 `WAVESTUDIO.md` 改名 `CODEWAVE.md`（旧文件名仍兼容读取）
-
 ## 从源码构建
 
 前置依赖：
