@@ -11,9 +11,6 @@
   ; IconUri 必须是真实图片文件（toast 平台不解析 exe 内嵌图标，写 exe 会渲染为空）；
   ; 128x128.png 经 bundle.resources 随安装落盘（tauri.conf.json → bundle.resources）
   WriteRegStr HKCU "Software\Classes\AppUserModelId\xyz.yangshifu.codewave" "IconUri" "$INSTDIR\icons\128x128.png"
-  ; 品牌改名兜底：清理改名前旧 bundle id 的 AUMID 键（2026-09-13 前版本所写），
-  ; 避免升级后通知归属残留指向旧标识
-  DeleteRegKey /ifempty HKCU "Software\Classes\AppUserModelId\work.gitwave.studio"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

@@ -808,10 +808,7 @@ mod tests {
             "---\nname: common\ndescription: project ver\n---\nproject",
         )
         .unwrap();
-        // 已移除的旧路径：工作区 .wavestudio/skills（改名前旧托管名，仍不得扫描）与裸 skills/ 不再扫描
-        let legacy = ws.path().join(".wavestudio/skills/legacy-ws");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("SKILL.md"), "# legacy-ws").unwrap();
+        // 工作区裸 skills/ 不在技能扫描范围内
         let bare = ws.path().join("skills/legacy-bare");
         std::fs::create_dir_all(&bare).unwrap();
         std::fs::write(bare.join("SKILL.md"), "# legacy-bare").unwrap();
@@ -826,10 +823,6 @@ mod tests {
             map.get("agent-only").unwrap().meta.description,
             "agents ver",
             ".agents/skills 应被扫描"
-        );
-        assert!(
-            !map.contains_key("legacy-ws"),
-            "workspace/.wavestudio/skills 旧托管名已移除"
         );
         assert!(!map.contains_key("legacy-bare"), "裸 skills/ 已移除");
         assert!(map.contains_key("repo-index")); // 内置

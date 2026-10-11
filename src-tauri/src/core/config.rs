@@ -11,9 +11,6 @@ use std::path::PathBuf;
 /// 受管数据目录名：全局数据根 `~/.codewave` 与各项目主目录下 `<主目录>/.codewave` 共用此名。
 pub const MANAGED_DIR_NAME: &str = ".codewave";
 
-/// 改名前的旧受管目录名（仅用于手工迁移场景的识别与兼容测试，运行时不再读写）。
-pub const LEGACY_MANAGED_DIR_NAME: &str = ".wavestudio";
-
 /// 全局数据目录（`~/.codewave`）。
 pub fn data_dir() -> PathBuf {
     dirs::home_dir()
