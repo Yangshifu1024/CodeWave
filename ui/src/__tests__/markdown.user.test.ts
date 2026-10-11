@@ -1,4 +1,4 @@
-// 用户气泡保守 markdown 子集（[docs/markdown-style-refresh]）：白名单 + 关闭 math / mermaid / target。
+// 用户气泡保守 markdown 子集（[docs/chat-and-interface]）：白名单 + 关闭 math / mermaid / target。
 import { describe, it, expect } from "vitest";
 import { renderMarkdown, renderUserMarkdown } from "../utils/markdown";
 

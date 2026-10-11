@@ -116,7 +116,7 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
             if text.is_empty() && tool_uses.is_empty() {
                 return;
             }
-            // reasoning_content 回传（缺陷修复，[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)）：
+            // reasoning_content 回传（缺陷修复，[docs/providers-and-network](../../../docs/providers-and-network.md)）：
             // OpenAI 兼容的 thinking 上游（如经中转的 DeepSeek 系模型）要求多轮对话中历史
             // assistant 消息把该轮产生的思维链原样带回，缺失会 400（The reasoning_content in
             // the thinking mode must be passed back to the API）。按内容块到达顺序收集非空
@@ -271,7 +271,7 @@ pub fn handle_chunk(
         } else if fr == "stop" {
             acc.finished = true;
         } else if fr == "length" {
-            // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：输出超限截断 → 用户可见尾注
+            // [docs/providers-and-network](../../../docs/providers-and-network.md)：输出超限截断 → 用户可见尾注
             //（与 anthropic 协议对齐），不再无声地按正常结束收场
             deltas.push(StreamDelta::Text {
                 text: MAX_TOKENS_NOTICE.into(),
@@ -306,7 +306,7 @@ pub async fn stream(
     if let Some(k) = &key {
         request = request.header("Authorization", format!("Bearer {k}"));
     }
-    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)
+    // 自定义请求头在协议/鉴权头之后应用（保留名被忽略，UA 可覆盖），[docs/providers-and-network](../../../docs/providers-and-network.md)
     request = crate::provider::headers::apply_request_headers(
         request,
         &model.headers,
@@ -359,7 +359,7 @@ pub async fn stream(
         }
     }
 
-    // 流中断语义（[docs/p0-plan](../../../docs/p0-plan.md) §4.5）：EOF 却未收到 finish_reason/[DONE] → 可重试的截断错误
+    // 流中断语义（[docs/technical-design](../../../docs/technical-design.md)）：EOF 却未收到 finish_reason/[DONE] → 可重试的截断错误
     if !acc.finished {
         return Err(ProviderError::Network(
             "SSE 流被截断（未收到完成标志）".into(),
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn request_level_effort_with_max_downgrade() {
-        // [docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)：请求级 effort 覆盖；Max 非本协议标准枚举 → 降级为 high
+        // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：请求级 effort 覆盖；Max 非本协议标准枚举 → 降级为 high
         let mut req = test_request();
         req.reasoning_effort = Some(crate::core::prefs::EffortLevel::Max);
         assert_eq!(build_body(&req)["reasoning_effort"], "high");
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn finish_reason_length_truncation_notice() {
-        // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：finish_reason="length" 必须产出用户可见尾注
+        // [docs/providers-and-network](../../../docs/providers-and-network.md)：finish_reason="length" 必须产出用户可见尾注
         //（与 anthropic 协议对齐）并把累积器标记为已结束
         let mut acc = OcAccum::default();
         let (cont, d1) = feed(
@@ -762,7 +762,7 @@ mod tests {
 
     #[test]
     fn length_mid_tool_call_notice_and_args_intact() {
-        // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md) 评审跟进："length" 落在工具调用中途时，尾注必须以 Text 注入
+        // [docs/providers-and-network](../../../docs/providers-and-network.md) 评审跟进："length" 落在工具调用中途时，尾注必须以 Text 注入
         // 且不动已收集的工具帧——装配层在流结束后从 Begin/ArgsDelta 重组工具调用
         //（ToolCallEnd 在彼处是空操作），截断入参的抢救路径因此保持可用。
         let mut acc = OcAccum::default();
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(acc.tool_ids.get(&0), Some(&("c1".into(), "read".into())));
     }
 
-    // 缺陷修复（[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)）：
+    // 缺陷修复（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
     // 历史 assistant 消息里的思考块必须以 reasoning_content 原样回传，否则 OpenAI 兼容的
     // thinking 上游返回 400；同一消息的 content / tool_calls 输出保持原样。
     #[test]

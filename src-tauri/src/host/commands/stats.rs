@@ -10,7 +10,7 @@ pub async fn get_token_breakdown(
     Ok(crate::core::context::breakdown(&core, &rt).await)
 }
 
-// ---------- MCP（[docs/p1-plan](../../../../docs/p1-plan.md) §4.1）----------
+// ---------- MCP（[docs/technical-design](../../../../docs/technical-design.md)）----------
 
 /// 按天聚合的 token 用量统计（默认近 30 天）。
 #[tauri::command]

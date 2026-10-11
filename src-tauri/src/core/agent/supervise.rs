@@ -1,4 +1,4 @@
-//! 运行监督（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+//! 运行监督（[docs/subagents](../../../../docs/subagents.md)）：
 //! drive_agent 每步批次后把调用摘要喂给 SupervisionState——失败重复按双层签名判定：
 //! 完全相同调用（工具+args 哈希）反复失败（真卡死）3 次纠偏、5 次终止；同工具同失败码
 //! 任意参数连环失败（烧穿）放宽到 6 次纠偏、10 次终止（照顾 command 跑测试等每轮
@@ -8,7 +8,7 @@
 //! 失败/重复签名均捕捉不到）8 步纠偏、14 步终止；同文件分段连读 10 次专用纠偏。
 //! 只读 run（`IdlePolicy::NudgeOnly`，如 explore/reviewer/code-reviewer 子代理）在**空转层**放宽到
 //! READONLY_IDLE_NUDGE_AT 步纠偏、只纠偏不终止——只读调研天然是「大段只读步骤 + 偶尔产出」，
-//! 该层的预算天花板交给 max_steps（[docs/subagent-idle-watchdog-misfire]）。
+//! 该层的预算天花板交给 max_steps（[docs/subagents]）。
 //! 注意 NudgeOnly 只守卫空转层：失败重复层（精确 3/5、宽松 6/10）、max_steps 与 MAX_TEXT_TURNS
 //! 强制汇报门对只读 run 照常生效，仍会终止本 run。
 //! 主会话/子代理/任务运行三路统一生效（共用 drive_agent），不加新事件键——纠偏消息进历史。
@@ -112,7 +112,7 @@ pub struct SupervisionState {
 }
 
 impl SupervisionState {
-    /// 按策略构造（[docs/subagent-idle-watchdog-misfire]）：只读 run 传 `NudgeOnly`；
+    /// 按策略构造（[docs/subagents]）：只读 run 传 `NudgeOnly`；
     /// 其余场景保持 `Default`（= `Stop`），行为逐字不变。
     pub fn with_idle_policy(policy: IdlePolicy) -> Self {
         Self {
@@ -228,7 +228,7 @@ impl SupervisionState {
             }
         }
         self.idle_streak += 1;
-        // 只读 run 的空转层只纠偏不终止（[docs/subagent-idle-watchdog-misfire]）：该层预算
+        // 只读 run 的空转层只纠偏不终止（[docs/subagents]）：该层预算
         // 天花板是 max_steps，不是「看起来像在空转」——硬终止对它属系统性误伤。
         // 失败重复层与步数/汇报门不在本守卫范围，照常终止。
         let stopping = self.policy == IdlePolicy::Stop;
@@ -570,7 +570,7 @@ mod tests {
         ));
     }
 
-    // ===== 只读 run 策略（IdlePolicy::NudgeOnly，[docs/subagent-idle-watchdog-misfire]）=====
+    // ===== 只读 run 策略（IdlePolicy::NudgeOnly，[docs/subagents]）=====
 
     #[test]
     fn readonly_policy_never_escalates() {

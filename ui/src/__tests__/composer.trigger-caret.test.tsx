@@ -1,4 +1,4 @@
-// 触发符**光标感知**判定（[docs/composer-trigger-caret](../../../docs/composer-trigger-caret.md)）：
+// 触发符**光标感知**判定（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 改造前三个触发符都锚定「整段文本的末尾」且不读光标——正文里已有内容时，在中间或开头打触发符拉不起菜单。
 // 现在只看光标前的片段：`@` 在正文任意位置可用（行首/空白后），`/`、`$` 限消息开头（模型侧点名写死「以 … 开头」）。
 // 断言都经由真实 Composer 渲染（happy-dom 在 fireEvent.change 时会像浏览器一样把光标置到文末，

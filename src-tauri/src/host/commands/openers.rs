@@ -1,6 +1,6 @@
 //! 打开器 IPC：文件管理器（`open_dir` 在 system.rs，行为已切到 core::openers）与编辑器。
 //! 命令只做参数校验 + 转调 core，业务逻辑全在 `core::openers`
-//! （[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//! （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 
 use super::system::validate_open_dir;
 use crate::core::openers::{self, EditorInfo};

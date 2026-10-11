@@ -83,7 +83,7 @@ impl ToolOutcome {
     }
 }
 
-/// 工具执行上下文：由编排层注入；工具实现禁止触碰 tauri（分层约束，见 docs/02）。
+/// 工具执行上下文：由编排层注入；工具实现禁止触碰 tauri（分层约束，见 docs/technical-design）。
 pub struct ToolCtx {
     /// 全局 agent 核心：配置、审批门、provider 等共享资源
     pub core: std::sync::Arc<crate::core::agent::AgentCore>,
@@ -137,7 +137,7 @@ impl ToolCtx {
             .confirm_outside_create
     }
 
-    /// 当前会话的审批档位（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）。
+    /// 当前会话的审批档位（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
     pub fn approval_mode(&self) -> crate::core::prefs::ApprovalMode {
         self.rt.prefs.lock().unwrap().approval_mode
     }
@@ -181,7 +181,7 @@ pub trait Tool: Send + Sync {
     }
 }
 
-/// 收集入参中 schema 未定义的顶层未知字段（宽松解码的 warnings 部分，[docs/p0-plan](../../../docs/p0-plan.md) §6.3.5）。
+/// 收集入参中 schema 未定义的顶层未知字段（宽松解码的 warnings 部分，[docs/technical-design](../../../docs/technical-design.md)）。
 pub fn collect_unknown_fields(args: &Value, schema: &str) -> Vec<String> {
     let (Some(obj), Ok(schema_v)) = (args.as_object(), serde_json::from_str::<Value>(schema))
     else {

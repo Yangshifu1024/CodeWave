@@ -1,4 +1,4 @@
-//! 写入后检查命令（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+//! 写入后检查命令（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
 //! 取代 LSP 写后语义校验。create / edit 成功后执行用户配置的一条命令（如
 //! `npx eslint {file}`），在会话工作区根目录运行，把输出尾部整理成 `check` 结构
 //! 放进工具结果的 `outcome.data`——**这是缺陷 B 的修复要点**：结论必须走 `data`

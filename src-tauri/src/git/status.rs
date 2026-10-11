@@ -75,7 +75,7 @@ pub fn status(workspace: &Path) -> anyhow::Result<Option<StatusInfo>> {
     }))
 }
 
-// ---------- P1：diff / 最近 log（[docs/p1-plan](../../../docs/p1-plan.md) §6.4） ----------
+// ---------- P1：diff / 最近 log（[docs/technical-design](../../../docs/technical-design.md)） ----------
 
 /// 单文件 diff 摘要：状态 + 增删行数 + 完整 patch 文本。
 #[derive(Debug, Clone, Serialize)]

@@ -9,7 +9,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 
 /// 会话 → 前端流式 channel（start_chat 时注册）；subs 记录子代理 → 父会话绑定
-///（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理 spawn 时注册，其帧包 Frame::Sub 借父 channel 下发）。
+///（[docs/subagents](../../../docs/subagents.md)：子代理 spawn 时注册，其帧包 Frame::Sub 借父 channel 下发）。
 #[derive(Default)]
 pub struct ChannelRegistry {
     /// 会话 id → 已注册的前端 channel
@@ -66,7 +66,7 @@ impl EventSink for TauriSink {
     }
 
     /// 低频事件：emit 到 labeled "main" 窗口（29 键事件面，契约由前端测试守护）。
-    /// 发射失败必须可见（[docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)）：
+    /// 发射失败必须可见（[docs/subagents](../../../docs/subagents.md)）：
     /// 此前 `let _ =` 把 Result 整个吞掉，`sub:done` 这类**一生只发一次**的终态事件一旦丢帧，
     /// 前端子代理卡会永久停在「运行中」（只有 `sub:step` 这种高频事件丢几帧无感，掩盖了故障）。
     /// `emit_to` 走本地 IPC、失败率极低，但一旦失败就是静默永久卡死 —— 故此处记 warn 不静默。

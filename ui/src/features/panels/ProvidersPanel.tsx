@@ -1,4 +1,4 @@
-// 供应商管理面板（[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）：管理对象从模型改为供应商——端点 + 协议 + key 池 + 自有模型列表。
+// 供应商管理面板（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：管理对象从模型改为供应商——端点 + 协议 + key 池 + 自有模型列表。
 // 模型定义完全以用户输入为准（无内置目录）；「添加模型」弹窗覆盖上下文窗口 / 最大输出 / 输入输出类型。
 // 注意：子组件必须定义在顶层（定义在组件内部会每次渲染重建组件类型，输入框每敲一键就失焦）。
 import { useState } from "react";
@@ -44,7 +44,7 @@ function providerModelDefaults(): ProviderModel {
   return {
     id: crypto.randomUUID(),
     model: "",
-    // [docs/max-tokens-truncation-fix](../../../../docs/max-tokens-truncation-fix.md)：与后端 ModelConfig/ProviderModel 默认值对齐（32k；8k 会过早截断长回复）
+    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：与后端 ModelConfig/ProviderModel 默认值对齐（32k；8k 会过早截断长回复）
     max_tokens: 32768,
     context_window: 128000,
     reasoning_effort: null,
@@ -57,11 +57,11 @@ function firstModelId(providers: ProviderConfig[]): string | null {
   return providers.flatMap((p) => p.models)[0]?.id ?? null;
 }
 
-/** 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：返回结构化问题项；措辞由调用方 i18n 化。
+/** 供应商字段校验（[docs/providers-and-network](../../../../docs/providers-and-network.md)/29）：返回结构化问题项；措辞由调用方 i18n 化。
  *  API 格式是带默认值的 Select，结构上恒满足必填（仅保留 required 标记与位置上移）。 */
 export type ProviderFieldIssue = { field: "name" | "base_url" | "keys" | "models" | "headers"; kind: "required" | "url" | "header" };
 
-/** 自定义请求头保留名（小写，与后端 `RESERVED_REQUEST_HEADERS` 一致，[docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)）：不允许被覆盖。 */
+/** 自定义请求头保留名（小写，与后端 `RESERVED_REQUEST_HEADERS` 一致，[docs/providers-and-network](../../../../docs/providers-and-network.md)）：不允许被覆盖。 */
 const RESERVED_HEADER_NAMES = new Set(["content-type", "authorization", "x-api-key", "anthropic-version", "host", "content-length"]);
 /** RFC 7230 token 允许集（与后端 `is_http_token` 对齐）。 */
 const HTTP_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -90,7 +90,7 @@ export function validateProvider(p: ProviderConfig): ProviderFieldIssue[] {
   const url = p.base_url.trim();
   if (!url) issues.push({ field: "base_url", kind: "required" });
   else if (!/^https?:\/\/[^\s/]+/i.test(url)) issues.push({ field: "base_url", kind: "url" });
-  // 掩码行（*** 开头）视为已配置（[docs/provider-form-rules-tightened](../../../../docs/provider-form-rules-tightened.md)：API Key 必填）
+  // 掩码行（*** 开头）视为已配置（[docs/providers-and-network](../../../../docs/providers-and-network.md)：API Key 必填）
   if (!p.keys.some((k) => k.trim() !== "")) issues.push({ field: "keys", kind: "required" });
   if (p.models.length === 0) issues.push({ field: "models", kind: "required" });
   if (!validateHeaders(p.headers ?? [])) issues.push({ field: "headers", kind: "header" });
@@ -224,9 +224,9 @@ function ModelListSection(props: {
   );
 }
 
-/** 供应商字段区（新增/编辑共用，[docs/provider-form-rules-tightened](../../../../docs/provider-form-rules-tightened.md) 顺序）：名称 / API 格式 / Base URL / API Key + 内嵌模型列表。
+/** 供应商字段区（新增/编辑共用，[docs/providers-and-network](../../../../docs/providers-and-network.md) 顺序）：名称 / API 格式 / Base URL / API Key + 内嵌模型列表。
  *  API 格式位于名称之下——先定协议再同步默认端点；errors 携带已 i18n 化的字段错误文本
- *  （undefined = 不显示），渲染为 Form.Item 红字（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）。 */
+ *  （undefined = 不显示），渲染为 Form.Item 红字（[docs/providers-and-network](../../../../docs/providers-and-network.md)）。 */
 function ProviderFields(props: {
   value: ProviderConfig;
   onPatch: (patch: Partial<ProviderConfig>) => void;
@@ -366,7 +366,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   const [addForm, setAddForm] = useState<ProviderConfig>(blankProvider);
   // 编辑也先在弹框内暂存；完成时才写入页面草稿，取消时直接丢弃。
   const [editForm, setEditForm] = useState<ProviderConfig | null>(null);
-  // 字段校验展示时机（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)：字段变更后或点击提交才出红字；打开即红太吵）
+  // 字段校验展示时机（[docs/providers-and-network](../../../../docs/providers-and-network.md)：字段变更后或点击提交才出红字；打开即红太吵）
   const [touched, setTouched] = useState<{ name?: boolean; base_url?: boolean; keys?: boolean }>({});
   const [submitTried, setSubmitTried] = useState(false);
   // 模型步骤与供应商表单复用同一弹框；target 区分新增表单和既有供应商。

@@ -1,4 +1,4 @@
-//! scheduled_task 工具（[docs/p2-plan](../../../docs/p2-plan.md) §3.1）：create / list / delete 三种操作。
+//! scheduled_task 工具（[docs/technical-design](../../../docs/technical-design.md)）：create / list / delete 三种操作。
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn schedule_grammar_boundaries() {
-        // every：零 / 负数 / 超上限的间隔拒绝；大但在上限内接受（30 天上限，[docs/arithmetic-audit](../../../docs/arithmetic-audit.md)#4）
+        // every：零 / 负数 / 超上限的间隔拒绝；大但在上限内接受（30 天上限，[docs/testing](../../../docs/testing.md)#4）
         assert!(parse_schedule("every:0 m").is_err());
         assert!(parse_schedule("every:-1 m").is_err());
         assert!(parse_schedule("every:30 d").is_ok());

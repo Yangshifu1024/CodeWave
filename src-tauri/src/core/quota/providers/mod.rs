@@ -1,5 +1,5 @@
 //! 各厂商额度适配器：协议与解析差异不出本模块
-//! （[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//! （[docs/chat-and-interface](../../../../../docs/chat-and-interface.md)）。
 //!
 //! 每个适配器拆成「取数（`fetch`）+ 纯解析（`parse_*`）」两半：解析收 serde_json 值与
 //! 注入的 `now`，因此单测不需要网络、也不需要时钟。

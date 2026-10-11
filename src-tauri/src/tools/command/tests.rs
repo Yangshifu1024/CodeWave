@@ -405,7 +405,7 @@ async fn full_output_true_small_output_no_spill() {
     assert!(s.contains("\n100"));
 }
 
-// ===== 权限档消费点（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）：预取消 token = 审批立即拒绝，不等 120s =====
+// ===== 权限档消费点（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：预取消 token = 审批立即拒绝，不等 120s =====
 
 fn test_ctx(
     core: std::sync::Arc<crate::core::agent::AgentCore>,

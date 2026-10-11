@@ -1,5 +1,5 @@
-// Composer @ 提及 / / 技能 / $ 子代理建议菜单（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构；
-// 触发判定由「整段末尾锚定」改为「光标前片段」见 [docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)）：
+// Composer @ 提及 / / 技能 / $ 子代理建议菜单（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 重构；
+// 触发判定由「整段末尾锚定」改为「光标前片段」见 [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
 // 提及两级检索（会话根目录置顶，其次工作区路径搜索）、技能过滤与子代理角色过滤，
 // 各带乱序守卫（mentionSeq/skillSeq/agentSeq），只有最新一次查询的结果会落地。
 import { useRef, useState } from "react";
@@ -11,19 +11,19 @@ import { useSessions } from "../../stores/sessions";
  *  提供刷新（含乱序守卫）与选中回填（替换输入框中的 @…/…/$… 前缀片段）。 */
 export function useComposerMentions(opts: {
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
-  /** 选中「文件」时的引用入列（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：
+  /** 选中「文件」时的引用入列（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)：
    *  文件以 chip 展示，不再把路径写进正文；目录仍写文本以便继续拼路径） */
   addFileRef: (path: string) => void;
   /** 回填：把「光标处那段触发片段」替换成传入文本（只动光标前那段，光标之后一字不改）——
-   *  实现在 Composer（那里才有真正的光标位置），见 [docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md) */
+   *  实现在 Composer（那里才有真正的光标位置），见 [docs/chat-and-interface](../../../../docs/chat-and-interface.md) */
   replaceFragment: (insert: string) => void;
 }) {
   const { setActiveIndex, addFileRef, replaceFragment } = opts;
   // 两级提及：@ 先列出项目目录（置顶），继续输入再匹配具体文件
   const [mentionResults, setMentionResults] = useState<{ label: string; path: string; isDir: boolean }[]>([]);
   const mentionSeq = useRef(0);
-  // / 技能候选（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)；
-  // 触发符自 $ 改为 /，[docs/slash-skills-and-dollar-agents](../../../../docs/slash-skills-and-dollar-agents.md)）
+  // / 技能候选（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)；
+  // 触发符自 $ 改为 /，[docs/mcp-and-skills](../../../../docs/mcp-and-skills.md)）
   const [skillResults, setSkillResults] = useState<SkillMeta[]>([]);
   const skillSeq = useRef(0);
   // $ 内置子代理候选（list_agents IPC，后端注册表剔除内部 title 角色）
@@ -81,7 +81,7 @@ export function useComposerMentions(opts: {
 
   // 选中提及项：目录回填 `@目录/ `（继续拼路径的字面输入）；文件改以引用 chip 呈现——
   // 把正在输入的 `@片段` 从正文抹掉并可入 refs。两种都只替换「光标处那段片段」（replaceFragment），
-  // 光标之后的正文一字不动（[docs/composer-trigger-caret]）
+  // 光标之后的正文一字不动（[docs/chat-and-interface]）
   function pickMention(item: { path: string; isDir: boolean }) {
     if (item.isDir) replaceFragment(`@${item.path}/ `);
     else {

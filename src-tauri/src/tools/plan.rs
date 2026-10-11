@@ -75,7 +75,7 @@ pub fn validate_todos(todos: &[Todo]) -> Result<(), String> {
 /// 非空且全 `Completed` = 已收尾，其余 = 未完成。
 ///
 /// 消费方：`core::agent::drive::text_turn_action` 的主会话分支
-/// （[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md)）
+/// （[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）
 /// ——计划未收尾时，「只输出文字、无工具调用」的回合不得被当成「回答完毕」而静默收尾
 /// （会话 f19c3890 的 50 字旁白即此形态）。
 pub fn has_pending(todos: &[Todo]) -> bool {
@@ -163,7 +163,7 @@ impl Tool for PlanTool {
                 }
                 // 与范围询问共用单飞锁，防止应答期间替换计划后被旧应答误放行。
                 let scope_guard = ctx.rt.scope_gate_lock.lock().await;
-                // G3（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）：存在批准后基线时，全量替换按标题集合 diff。
+                // G3（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：存在批准后基线时，全量替换按标题集合 diff。
                 // 判定口径走 classify_new_todos 而非裸 diff：批准时登记的是「文件级改动点」，S6 执行时又要求把
                 // 范围切成人名任务包并补验证项，写法必然被改写（`包 A（backend-dev）：新增 core/x.rs` vs
                 // `新增 core/x.rs + 单测`）。这类「细化 / 改写」不再算计划外步骤，只有真新增才置范围扩张标记。
@@ -209,7 +209,7 @@ impl Tool for PlanTool {
                 }
                 *ctx.rt.todos.lock().unwrap() = todos.clone();
                 drop(scope_guard);
-                // 本 run 真的改过计划（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+                // 本 run 真的改过计划（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
                 // 计划未收尾的收尾门只看本标记，否则上个 run 的陈旧计划会劫持本 run 的普通提问。
                 // 置位点在写入成功之后——被档位排除/参数非法的调用并未改变计划。
                 ctx.rt

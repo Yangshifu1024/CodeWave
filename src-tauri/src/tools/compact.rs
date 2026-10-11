@@ -1,4 +1,4 @@
-//! 双通道结果：模型侧瘦身（[docs/p0-plan](../../../docs/p0-plan.md) §6.2）。read 不压缩（保留行号）；其余头尾截断。
+//! 双通道结果：模型侧瘦身（[docs/technical-design](../../../docs/technical-design.md)）。read 不压缩（保留行号）；其余头尾截断。
 //!
 //! 图片例外（会话 6bca80f4 反复被上游 400 的根因）：read 读到图片时 `outcome.data` 里带
 //! `data_url`（整段 base64；实测 944KB 截图 → 1,259,669 字符）。模型侧此前直接照搬这份 data，

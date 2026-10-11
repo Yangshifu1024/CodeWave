@@ -1,6 +1,6 @@
-//! 配置与数据目录（G2，[docs/p0-plan](../../../docs/p0-plan.md) §3）。
+//! 配置与数据目录（G2，[docs/technical-design](../../../docs/technical-design.md)）。
 //! 所有字段 #[serde(default)]：旧 config.json 缺失的字段透明取默认。
-//! Schema v2（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：模型归属供应商（providers 嵌套 models）。
+//! Schema v2（[docs/providers-and-network](../../../docs/providers-and-network.md)）：模型归属供应商（providers 嵌套 models）。
 
 use crate::util::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ impl Default for ModelConfig {
             base_url: String::new(),
             keys: Vec::new(),
             model: String::new(),
-            // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：8k 会过早截断长回复（仅 Max thinking 预算就吃掉 ~6.5k）；新模型默认 32k
+            // [docs/providers-and-network](../../../docs/providers-and-network.md)：8k 会过早截断长回复（仅 Max thinking 预算就吃掉 ~6.5k）；新模型默认 32k
             max_tokens: 32768,
             context_window: 128_000,
             reasoning_effort: None,
@@ -111,7 +111,7 @@ impl Default for ModelConfig {
     }
 }
 
-/// 供应商下的模型条目（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：wire id 即显示名；窗口 / 输出上限 /
+/// 供应商下的模型条目（[docs/providers-and-network](../../../docs/providers-and-network.md)）：wire id 即显示名；窗口 / 输出上限 /
 /// 输入类型全部来自用户输入。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -147,7 +147,7 @@ impl Default for ProviderModel {
     }
 }
 
-/// 供应商级自定义请求头条目（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：随该供应商所有
+/// 供应商级自定义请求头条目（[docs/providers-and-network](../../../docs/providers-and-network.md)）：随该供应商所有
 /// LLM 请求发送。`value` 支持 `${session_id}` 占位符（请求时替换为会话 uuid）；
 /// 明文存储于 config.json（勿放长期密钥，日志与会话 verbose 记录均脱敏）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -159,7 +159,7 @@ pub struct HeaderPair {
     pub value: String,
 }
 
-/// 模型供应商（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：端点 + 协议 + key 池 + 自有模型列表；一切来自
+/// 模型供应商（[docs/providers-and-network](../../../docs/providers-and-network.md)）：端点 + 协议 + key 池 + 自有模型列表；一切来自
 /// 用户输入（无内置目录）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -194,7 +194,7 @@ impl Default for ProviderConfig {
     }
 }
 
-/// 不允许被自定义请求头覆盖的保留名（小写；[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：
+/// 不允许被自定义请求头覆盖的保留名（小写；[docs/providers-and-network](../../../docs/providers-and-network.md)）：
 /// 协议必需或影响传输安全。`user-agent` 不在此列——自定义 UA 允许覆盖默认值。
 pub const RESERVED_REQUEST_HEADERS: &[&str] = &[
     "content-type",
@@ -306,10 +306,10 @@ pub struct ApprovalSettings {
     pub confirm_outside_create: bool,
     /// git push 需确认
     pub confirm_git_push: bool,
-    /// [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)：勾选后审批 5 分钟无应答自动确认推荐选项（仅 allow，绝不「始终允许」）；
+    /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：勾选后审批 5 分钟无应答自动确认推荐选项（仅 allow，绝不「始终允许」）；
     /// 不勾选则审批永不超时、无限等待用户
     pub auto_confirm: bool,
-    /// 审批「始终允许（本项目）」写入的命令白名单（trim 后整条全文匹配；[docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)）
+    /// 审批「始终允许（本项目）」写入的命令白名单（trim 后整条全文匹配；[docs/plan-and-approval](../../../docs/plan-and-approval.md)）
     pub command_allowlist: Vec<String>,
 }
 
@@ -325,7 +325,7 @@ impl Default for ApprovalSettings {
     }
 }
 
-/// 写入后检查命令（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+/// 写入后检查命令（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
 /// 取代 LSP 写后语义校验——create / edit 成功后执行用户配置的一条检查命令（如
 /// `npx eslint {file}`），在项目根目录运行，输出尾部随工具结果交给模型。
 /// 默认关闭且命令留空（零配置体验让位于显式配置；aider `--lint-cmd` 思路）。
@@ -359,7 +359,7 @@ impl Default for PostWriteCheckSettings {
 pub struct UiPrefs {
     /// 界面基础字号
     pub font_size: f32,
-    /// 主题 accent（历史遗留键；现行强调色为墨色，见 docs/43）
+    /// 主题 accent（历史遗留键；现行强调色为墨色，见 docs/chat-and-interface）
     pub accent: String,
     /// 界面语言（zh-CN 等）
     pub language: String,
@@ -370,7 +370,7 @@ pub struct UiPrefs {
     pub ai_language: Option<String>,
     /// 界面字体（逗号分隔的已安装字体名，空 = 默认链）。
     ///
-    /// 真源在后端配置文件（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）：
+    /// 真源在后端配置文件（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
     /// 2026-09-19 之前只存 WebView 的 localStorage，实测出现过「输了界面字体却从来没写进去」；
     /// 现改为「配置为真源 + localStorage 当首帧缓存」（防闪变），对照逻辑在前端 `utils/fonts.ts`。
     /// 该字段由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
@@ -402,7 +402,7 @@ pub struct NetworkConfig {
     pub allow_private_network: bool,
 }
 
-/// 日志设置（[docs/session-logging-report](../../../docs/session-logging-report.md)）：全局级别可热切换 + 会话级 verbose 模式。
+/// 日志设置（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：全局级别可热切换 + 会话级 verbose 模式。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LogConfig {
@@ -429,7 +429,7 @@ pub struct ShellConfig {
     pub selection: Option<String>,
 }
 
-/// 会话保留期设置（[docs/session-cleanup](../../../docs/session-cleanup.md)）：超过保留期且不在运行中的会话
+/// 会话保留期设置（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：超过保留期且不在运行中的会话
 /// 会被清理（历史 / 边车 / 会话日志 / 计划文件）。默认不清理——删除不可恢复，默认值必须保守。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -454,15 +454,15 @@ pub struct ConfigState {
     pub network: NetworkConfig,
     /// 自动压缩阈值（占窗口比例）
     pub compact_threshold: f32,
-    /// 压缩摘要请求超时秒数（[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)，钳到 [30, 3600]；serde default 保旧配置兼容）
+    /// 压缩摘要请求超时秒数（[docs/tools-and-safety](../../../docs/tools-and-safety.md)，钳到 [30, 3600]；serde default 保旧配置兼容）
     pub compact_timeout_seconds: u64,
     /// LLM 流停滞判定阈值秒数（窗口内无任何 delta 即视为停滞：取消本次尝试并按可重试
-    /// 错误退避重试，[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)；
+    /// 错误退避重试，[docs/subagents](../../../docs/subagents.md)；
     /// 钳到 [5, 3600]；serde default 保旧配置兼容；本地大上下文模型预首 token 慢可调大）
     pub stall_timeout_seconds: u64,
     /// 审批设置
     pub approval: ApprovalSettings,
-    /// 写入后检查命令设置（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）
+    /// 写入后检查命令设置（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）
     pub post_write_check: PostWriteCheckSettings,
     /// 界面偏好
     pub ui: UiPrefs,
@@ -472,9 +472,9 @@ pub struct ConfigState {
     pub disabled_skills: Vec<String>,
     /// 日志设置
     pub log: LogConfig,
-    /// shell 选择设置（[docs/shell-selection](../../../docs/shell-selection.md)）
+    /// shell 选择设置（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）
     pub shell: ShellConfig,
-    /// 会话保留期设置（[docs/session-cleanup](../../../docs/session-cleanup.md)）
+    /// 会话保留期设置（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）
     pub sessions: SessionSettings,
     /// 内置子代理按角色模型覆盖：key = role（kebab-case，与 agents::DELEGABLE_ROLES 对齐），
     /// value = Some(model_id) 显式覆盖 / None 跟随父会话。
@@ -581,7 +581,7 @@ impl ConfigState {
             .find(|p| p.models.iter().any(|m| m.id == model_id))
     }
 
-    /// 配置脱敏：key 只保留末 4 字符与存在性；明文绝不出境（[docs/p0-plan](../../../docs/p0-plan.md) §3.3）。
+    /// 配置脱敏：key 只保留末 4 字符与存在性；明文绝不出境（[docs/technical-design](../../../docs/technical-design.md)）。
     pub fn sanitized(&self) -> ConfigState {
         let mut c = self.clone();
         for p in &mut c.providers {
@@ -710,7 +710,7 @@ mod tests {
         let parsed: ConfigState = serde_json::from_str(old).unwrap();
         assert_eq!(parsed.compact_threshold, 0.6);
         assert!(parsed.approval.enabled);
-        // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：旧 approval 段缺 command_allowlist → serde 默认空列表
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：旧 approval 段缺 command_allowlist → serde 默认空列表
         let legacy_approval: ApprovalSettings = serde_json::from_str(
             r#"{"enabled":true,"confirm_outside_create":false,"confirm_git_push":true}"#,
         )
@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(null_sel.shell.selection, None);
     }
 
-    /// 会话保留期（[docs/session-cleanup](../../../docs/session-cleanup.md)）：默认不清理；
+    /// 会话保留期（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：默认不清理；
     /// 旧配置缺 `sessions` 键可读；显式值 roundtrip 且 wire 形态为 `sessions.retention_days`。
     #[test]
     fn session_settings_default_and_legacy_compat() {
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(m.provider_id, "p1");
         assert_eq!(m.keyring_accounts, vec!["p1".to_string()]);
         assert_eq!(m.reasoning_effort.as_deref(), Some("high"));
-        // 自定义请求头随 provider 摊平到运行时视图（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）
+        // 自定义请求头随 provider 摊平到运行时视图（[docs/providers-and-network](../../../docs/providers-and-network.md)）
         assert_eq!(m.headers.len(), 1);
         assert_eq!(m.headers[0].name, "x-opencode-session");
         assert_eq!(m.headers[0].value, "${session_id}");
@@ -858,7 +858,7 @@ mod tests {
         assert!(cfg.active_model().is_none());
     }
 
-    /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：旧 config.json 无 `headers` 字段时透明取空（serde default 前向兼容）。
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：旧 config.json 无 `headers` 字段时透明取空（serde default 前向兼容）。
     #[test]
     fn provider_headers_default_when_absent() {
         let json = r#"{
@@ -876,7 +876,7 @@ mod tests {
         assert!(cfg.find_model("m1").unwrap().headers.is_empty());
     }
 
-    /// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：自定义头校验规则（空名/非法名/保留名/重名/换行/值仅可见 ASCII）。
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：自定义头校验规则（空名/非法名/保留名/重名/换行/值仅可见 ASCII）。
     /// validate_request_headers_rules 后面补子代理模型覆盖两测试
     #[test]
     fn ensure_subagent_models_fills_missing_keys() {

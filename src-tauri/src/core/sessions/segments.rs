@@ -6,7 +6,7 @@
 //!
 //! 布局：`histories/<id>/0001.jsonl`、`0002.jsonl`…（4 位零填充，序号从 1 起），**明文不压缩**——
 //! `grep`/`tail`/手工截断的排障价值是本批收益之一
-//!（[docs/session-history-limits](../../../../docs/session-history-limits.md)）。
+//!（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
 //!
 //! 每个段文件：
 //! - 首行 = **头记录** `{"kind":"header","schema":1,"session":"<id>","seq":N,"base":bool,"at":…}`

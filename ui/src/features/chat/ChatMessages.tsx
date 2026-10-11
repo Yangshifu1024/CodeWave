@@ -36,7 +36,7 @@ import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
 import ChatScrollbar from "./ChatScrollbar";
 
-// 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/titlebar-content-batch](../../../../docs/titlebar-content-batch.md) 缺陷修复）
+// 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 缺陷修复）
 function ts(iso: string | undefined): string {
   if (!iso) return "";
   const t = Date.parse(iso);
@@ -142,7 +142,7 @@ const AssistantMessage = memo(function AssistantMessage({
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
   onUserToggle?: () => void;
-  /** 自动弹预览信号（[docs/preview-skill](../../../../docs/preview-skill.md)）：透传到工具卡，命中即弹框 */
+  /** 自动弹预览信号（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：透传到工具卡，命中即弹框 */
   autoOpenCallKey?: string | null;
   /** 卡片已消费该信号后回抛（清 store，保证一次性、不重放） */
   onConsumeAutoOpen?: (callKey: string) => void;
@@ -153,7 +153,7 @@ const AssistantMessage = memo(function AssistantMessage({
         <span>CodeWave</span>
         <span className="ts">{ts(item.createdAt)}</span>
       </div>
-      {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagent-interaction-drawer 抽取至 segments.tsx） */}
+      {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagents 抽取至 segments.tsx） */}
       <TimelineSegsView
         timeline={item.timeline}
         toolsMap={item.toolsMap}
@@ -162,7 +162,7 @@ const AssistantMessage = memo(function AssistantMessage({
         autoOpenCallKey={autoOpenCallKey}
         onConsumeAutoOpen={onConsumeAutoOpen}
       />
-      {/* 等待指示（[docs/chat-loading-indicator](../../../../docs/chat-loading-indicator.md)）：antd 加载图标，
+      {/* 等待指示（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：antd 加载图标，
           样式类承载颜色/字号（theme/app.css 的 .ws-streaming-indicator）；位置仍在末尾、状态判定不变 */}
       {streaming && (
         <span className="ws-streaming-indicator">
@@ -193,14 +193,14 @@ const CompactionDivider = memo(function CompactionDivider({ seq, source }: { seq
 /** 瞬时跳底的豁免窗口：只需覆盖本次 scroll 事件的派发（事件在下一帧才到） */
 const PROG_SCROLL_MS = 150;
 /** 平滑跳底的豁免窗口：要盖住整段动画。浏览器平滑滚动时长随距离增长，这里取经验上限，
- *  由 [docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md) 的手动清单第 3 项校准 */
+ *  由 [docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的手动清单第 3 项校准 */
 const SMOOTH_SCROLL_MS = 700;
 
 /** 聊天消息区：单实例随 activeKey 换数据不重挂；维护「贴底跟随 / 用户接管」滚动模型——
  *  贴底时内容增长自动下滚；滚轮上滚或展开卡片即阅读意图暂停跟随；恢复仅限滚回底部或
  *  「回到底部」按钮。程序化滚动用豁免窗口 + **落点比对**（bottomScrollTarget / isSelfScroll）：
  *  瞬时跳底只豁免落点，平滑动画才用 from→target 区间，防止自家跳转被误判为用户滚动
- *  （[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)、[docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)）。 */
+ *  （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)、[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。 */
 export default function ChatMessages() {
   const { t } = useTranslation();
   const active = useActiveRun();
@@ -213,7 +213,7 @@ export default function ChatMessages() {
   // 这里不再持有 isScrolling/scrollIdleTimer。
   const progScroll = useRef(0); // 程序化滚动的豁免窗口：窗口内自家触发的滚动事件不参与贴底判定
   const progFrom = useRef(0); // 发起程序化滚动时的 scrollTop（豁免区间的下端）
-  const progTarget = useRef(Infinity); // 程序化滚动的落点 scrollTop（豁免区间的上端，docs/thinking-scroll-fix §2.3）
+  const progTarget = useRef(Infinity); // 程序化滚动的落点 scrollTop（豁免区间的上端，docs/chat-and-interface）
   // ---------- 滚动锚点：记录 → 落盘 → 还原 ----------
   // 记录：onScroll → recordAnchor → uiState.scheduleAnchor（200ms 节流）→ captureAnchor(容器) → setScrollAnchor → 落盘防抖
   // 还原：activeKey 变化 → getScrollAnchor(会话) → restoreAnchor(容器, 锚点)（无锚/贴底 ⇒ scrollTop = scrollHeight；
@@ -243,7 +243,7 @@ export default function ChatMessages() {
   /** 程序化跳底：全部「我们自己滚到底」的唯一入口（激活贴底 / 内容增长跟随 / 「回到底部」按钮）。
    *  一并登记豁免窗口与跟随态 —— 少了豁免，这次跳底产生的 scroll 事件会被 onScroll 按几何判定：
    *  流式下内容往往在事件派发前又长了一截，当场判成「用户滚走了」，跟随被关掉且不再自愈
-   *  （[docs/chat-autoscroll-regression-fix](../../../../docs/chat-autoscroll-regression-fix.md)）。
+   *  （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
    *  el 允许为 null（容器尚未挂载时仍要维持跟随态）。 */
   const jumpToBottom = useCallback(
     (el: HTMLElement | null, smooth = false) => {
@@ -291,7 +291,7 @@ export default function ChatMessages() {
 
   // 2.9：发送消息后强制滚到底部（items 增长且最后一条是新的用户消息）
   const activeKey = useSessions((s) => s.activeKey);
-  // ---------- 自动弹预览（[docs/preview-skill](../../../../docs/preview-skill.md)） ----------
+  // ---------- 自动弹预览（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)） ----------
   // 批准门选「先看预览」→ AskPanel 置位一次性信号；run store 在本 run 第一张合格 widget 落地时
   // 把它转成目标 callKey，这里只负责透传给工具卡（卡片自己判有没有 html、弹不改它的本地 state）。
   const autoOpenCallKey = active.widgetAutoOpen?.callKey ?? null;
@@ -321,7 +321,7 @@ export default function ChatMessages() {
 
   // 切 Tab / 首次激活：按 ui-state 的滚动锚点还原 —— 取代原先的「无条件贴底硬重置」。
   // ChatMessages 是单实例随 activeKey 换数据不重挂，贴底/跟随态必须在本轮 commit 里重定（否则跨 Tab 残留），
-  // 同时恢复到上次离开时的阅读位置（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.4）。
+  // 同时恢复到上次离开时的阅读位置（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
   // 声明在跟随 effect 之前，保证同一次 commit 内先落位，跟随 effect 才不会把视口拽回底部。
   useEffect(() => {
     progScroll.current = 0;
@@ -407,7 +407,7 @@ export default function ChatMessages() {
     const el = scroller.current;
     if (!el) return;
     // 用户暂停跟随（滚轮上滚/卡片展开）= 阅读意图，优先于几何判断：
-    // 旧的几何 nearBottom<80 重接管会把刚暂停的跟随立即撤销（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。
+    // 旧的几何 nearBottom<80 重接管会把刚暂停的跟随立即撤销（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
     // 几何恢复只保留两条路：onScroll nearBottom<40 与「回到底部」按钮。
     if (!stickBottom.current) return;
     // 先同步贴底：跟随不能押在图表升级的 promise 上（升级链路一旦 reject，视图就再也跟不上）
@@ -432,7 +432,7 @@ export default function ChatMessages() {
   // 用户滚动 -> 更新贴底态（离底 >40px 记为离开）。程序化豁免窗口用落点比对：
   // 瞬时跳底只豁免「落点 ±BOTTOM_EPS」这一点，平滑动画才用 [from, target] 区间（动画期间位置逐帧移动）。
   // 越过区间即用户接管滚动（拖滚动条 / 键盘 PageUp 不产生 wheel 事件，走此路径暂停跟随，
-  // [docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md) §2.3）。
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
   // 不做「落点是否到底」检查：流式期间渲染与滚动交错使几何读数漂移，会把正常跟随误判为用户滚动。
   const onScroll = () => {
     const el = scroller.current;
@@ -449,7 +449,7 @@ export default function ChatMessages() {
     // 滚动条显隐交给 ChatScrollbar 子组件监听同一个 scroll 事件，这里不再维护
   };
 
-  // 滚轮上滚 = 阅读意图：立即暂停跟随并清空程序化滚动豁免窗口（[docs/thinking-scroll-fix](../../../../docs/thinking-scroll-fix.md)）。
+  // 滚轮上滚 = 阅读意图：立即暂停跟随并清空程序化滚动豁免窗口（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
   // 缺陷背景：流式期间跟随 effect 每帧续 150ms 豁免，高频思考 delta 下窗口永续，
   // 用户上滚产生的滚动事件全被豁免吞掉 -> stickBottom 恒 true、视图被拽住无法上滚。
   // 挂在滚动容器根上：任意元素的上滚 wheel 都会冒泡至此，思考块（展开与否）与流式体一并覆盖。
@@ -540,7 +540,7 @@ export default function ChatMessages() {
       return <SubagentItemCard key={itemKey} subId={item.subId} />;
     }
     if (item.kind === "notice") {
-      // 注入通知带正文（steer 通道：run:inject 载荷含 texts，[docs/steer-run-inject](../../../../docs/steer-run-inject.md)）。
+      // 注入通知带正文（steer 通道：run:inject 载荷含 texts，[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）。
       // 防御性过滤：正常路径后端已滤掉空串；万一整组为空则**退回无正文形态**——不渲染空正文行、也不挂 Tooltip
       //（否则悬停会弹出一个空白浮层）。此时逐字等价于旧的单行 notice，是回归基线。
       const injected = (item.injectedTexts ?? []).filter((s) => s.trim() !== "");
@@ -571,7 +571,7 @@ export default function ChatMessages() {
     if (item.kind === "error") {
       // 错误行不打锚点标：antd Alert 的 props 类型不透传 data-*（AlertProps 无 HTMLAttributes 兜底），
       // collectNodes 会自然跳过它并把锚点落到上一条已标注消息上 —— 位置仍然正确。
-      // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：鉴权/计费失败指向 provider 设置而非死胡同报错；
+      // [docs/providers-and-network](../../../../docs/providers-and-network.md)：鉴权/计费失败指向 provider 设置而非死胡同报错；
       // 修复回路 = 指引 + 一次点击，绝不自动弹模态框
       const hintKey =
         item.errorKind === "auth" ? "notice.authErrorHint"

@@ -13,7 +13,7 @@ function fmtTokens(n: number): string {
  *
  *  白名单写法（`ended === "budget" || ended === "no_report"`）会在后端新增枚举值时静默漏判——新增的
  *  `partial`（跑满预算才交汇报）就是这样一度落回绿勾，把半成品当成做完展示。
- *  [docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) */
+ *  [docs/subagents](../../../../docs/subagents.md) */
 function isEarlyEnded(sub: SubView): boolean {
   return sub.status === "done" && sub.ended != null && sub.ended !== "report";
 }
@@ -32,7 +32,7 @@ function endedWarnLabel(ended: SubView["ended"]): string {
 }
 
 // 单个子代理卡片：从 timeline 锚点渲染（与工具卡同机制，在调用点穿插）。
-// [docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)：单行化「子智能体 <名称> · <任务>」；点击打开过程抽屉
+// [docs/subagents](../../../../docs/subagents.md)：单行化「子智能体 <名称> · <任务>」；点击打开过程抽屉
 // （运行中 = 实时消息流；已结束 = 归档回放，跨 run 保留，不再被下一次 send 清空）。
 /** 子代理聊天卡：展示名称/任务/步骤/token 进度，点击或回车打开子代理过程抽屉；
  *  运行中时右侧有停止按钮（单独停止该子代理，不打开抽屉）。 */

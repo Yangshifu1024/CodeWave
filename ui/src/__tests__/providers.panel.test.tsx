@@ -1,4 +1,4 @@
-// ProvidersPanel interaction tests ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md)): full add-provider flow + active_model_id fallback when deleting models/providers.
+// ProvidersPanel interaction tests ([docs/providers-and-network](../../../docs/providers-and-network.md)): full add-provider flow + active_model_id fallback when deleting models/providers.
 // Panel mounted standalone (no AppShell): the draft mirrors SettingsPage's patchDraft merge semantics with local useState.
 import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
@@ -83,7 +83,7 @@ describe("ProvidersPanel 供应商管理", () => {
     // Empty list state → enter the add form
     expect(document.body.textContent ?? "").toContain("还没有供应商");
     fireEvent.click(buttonByText("添加供应商"));
-    // Fill provider fields ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md): API Key required; API format moved up, right under the name)
+    // Fill provider fields ([docs/providers-and-network](../../../docs/providers-and-network.md): API Key required; API format moved up, right under the name)
     fireEvent.change(inputByPlaceholder("如：智谱 GLM"), { target: { value: "智谱 GLM" } });
     // keys 的提示已改成常驻 extra（不再用 placeholder 承载「掩码」说明），故按字段容器定位 textarea
     const keysBox = Array.from(document.querySelectorAll(".ant-form-item")).find((x) =>
@@ -91,12 +91,12 @@ describe("ProvidersPanel 供应商管理", () => {
     );
     fireEvent.change(keysBox!.querySelector("textarea") as HTMLTextAreaElement, { target: { value: "sk-test-1" } });
     fireEvent.change(inputByPlaceholder("https://api.example.com/v1"), { target: { value: "https://open.bigmodel.cn/api/paas/v4" } });
-    // Field order: name → API format → Base URL ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
+    // Field order: name → API format → Base URL ([docs/providers-and-network](../../../docs/providers-and-network.md))
     const labels = Array.from(document.querySelectorAll(".ant-form-item-label")).map((x) => (x.textContent ?? "").trim());
     const idx = (s: string) => labels.findIndex((x) => x.includes(s));
     expect(idx("API 格式")).toBeGreaterThan(idx("名称"));
     expect(idx("Base URL")).toBeGreaterThan(idx("API 格式"));
-    // Submit validation: submitting with no models → model list error and nothing enters the draft ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
+    // Submit validation: submitting with no models → model list error and nothing enters the draft ([docs/providers-and-network](../../../docs/providers-and-network.md))
     fireEvent.click(providerModalPrimary());
     await new Promise((r) => setTimeout(r, 60));
     expect(document.querySelector(".provider-models-error")?.textContent).toContain("必填");
@@ -138,12 +138,12 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(p.models).toHaveLength(1);
     expect(p.models[0].model).toBe("glm-4.7");
     expect(p.models[0].vision).toBe(true);
-    // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md): new model default max_tokens 32768
+    // [docs/providers-and-network](../../../docs/providers-and-network.md): new model default max_tokens 32768
     expect(p.models[0].max_tokens).toBe(32768);
     expect(latest!.active_model_id).toBe(p.models[0].id);
   });
 
-  it("新增校验（docs/provider-form-validation/29）：空字段提交亮必填红字，非法 URL 有格式提示，缺 key/模型均不入 draft", async () => {
+  it("新增校验（docs/providers-and-network）：空字段提交亮必填红字，非法 URL 有格式提示，缺 key/模型均不入 draft", async () => {
     render(<Harness initial={makeConfig([], null)} />);
     fireEvent.click(buttonByText("添加供应商"));
     // Submit the empty form directly → required errors for name/Base URL/API Key
@@ -156,7 +156,7 @@ describe("ProvidersPanel 供应商管理", () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("http(s)://");
     expect(latest!.providers).toHaveLength(0);
-    // Valid name/URL but no key and no models → submit still blocked: errors on both API Key and the model list ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
+    // Valid name/URL but no key and no models → submit still blocked: errors on both API Key and the model list ([docs/providers-and-network](../../../docs/providers-and-network.md))
     fireEvent.change(inputByPlaceholder("如：智谱 GLM"), { target: { value: "X" } });
     fireEvent.change(inputByPlaceholder("https://api.example.com/v1"), { target: { value: "https://api.example.com/v1" } });
     fireEvent.click(providerModalPrimary());
@@ -171,7 +171,7 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(latest!.providers).toHaveLength(0);
   });
 
-  it("编辑校验（docs/provider-form-validation/29）：清空名称/API Key 实时红字；删空模型列表红字", async () => {
+  it("编辑校验（docs/providers-and-network）：清空名称/API Key 实时红字；删空模型列表红字", async () => {
     const provider: ProviderConfig = {
       id: "p1", name: "P1", api_format: "openai_chat",
       base_url: "https://a.example/v1", keys: ["***abcd"],
@@ -187,11 +187,11 @@ describe("ProvidersPanel 供应商管理", () => {
     fireEvent.change(screen.getByDisplayValue("P1") as HTMLInputElement, { target: { value: "" } });
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("必填");
-    // Clear the API Key (masked row) → required error ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
+    // Clear the API Key (masked row) → required error ([docs/providers-and-network](../../../docs/providers-and-network.md))
     fireEvent.change(screen.getByDisplayValue("***abcd") as HTMLTextAreaElement, { target: { value: "" } });
     await new Promise((r) => setTimeout(r, 60));
     expect(document.querySelectorAll(".ant-form-item-explain-error").length).toBeGreaterThanOrEqual(2);
-    // Delete the only model → model list error ([docs/provider-form-rules-tightened](../../../docs/provider-form-rules-tightened.md))
+    // Delete the only model → model list error ([docs/providers-and-network](../../../docs/providers-and-network.md))
     const del = document.querySelector(".settings-collection-row button.ant-btn-dangerous") as HTMLButtonElement;
     await confirmPopconfirm(del);
     expect(document.querySelector(".provider-models-error")?.textContent).toContain("必填");
@@ -217,7 +217,7 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(latest!.providers[0].name).toBe("P1");
   });
 
-  it("模型内嵌编辑校验（docs/provider-form-validation）：空 wire id 点保存 → 必填红字且供应商弹框不关", async () => {
+  it("模型内嵌编辑校验（docs/providers-and-network）：空 wire id 点保存 → 必填红字且供应商弹框不关", async () => {
     render(<Harness initial={makeConfig([], null)} />);
     fireEvent.click(buttonByText("添加供应商"));
     fireEvent.click(buttonByText("添加模型"));
@@ -230,13 +230,13 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(document.body.textContent ?? "").toContain("必填");
   });
 
-  it("添加模型表单默认值与字段说明（docs/max-tokens-truncation-fix）：max_tokens 默认 32k + 两字段 help 澄清文案", async () => {
+  it("添加模型表单默认值与字段说明（docs/providers-and-network）：max_tokens 默认 32k + 两字段 help 澄清文案", async () => {
     render(<Harness initial={makeConfig([], null)} />);
     fireEvent.click(buttonByText("添加供应商"));
     await new Promise((r) => setTimeout(r, 60));
     fireEvent.click(buttonByText("添加模型"));
     await new Promise((r) => setTimeout(r, 80));
-    // [docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md): new-model default max output tokens is 32768 (8k truncates long agent replies too early)
+    // [docs/providers-and-network](../../../docs/providers-and-network.md): new-model default max output tokens is 32768 (8k truncates long agent replies too early)
     const modal = document.querySelector(".ant-modal");
     const numInputs = Array.from(modal?.querySelectorAll("input.ant-input-number-input") ?? []) as HTMLInputElement[];
     expect(numInputs.some((i) => i.value === "32768")).toBe(true);
@@ -289,7 +289,7 @@ describe("ProvidersPanel 供应商管理", () => {
     expect(latest!.active_model_id).toBeNull();
   });
 
-  it("自定义请求头（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：编辑既有头、添加行入 draft、保留名实时红字拦截", async () => {
+  it("自定义请求头（[docs/providers-and-network](../../../docs/providers-and-network.md)）：编辑既有头、添加行入 draft、保留名实时红字拦截", async () => {
     const provider: ProviderConfig = {
       id: "p1", name: "P1", api_format: "openai_chat",
       base_url: "https://a.example/v1", keys: ["sk-x"],
@@ -322,7 +322,7 @@ describe("ProvidersPanel 供应商管理", () => {
   });
 });
 
-describe("validateProvider 自定义请求头校验（docs/provider-custom-headers）", () => {
+describe("validateProvider 自定义请求头校验（docs/providers-and-network）", () => {
   function makeProvider(headers: { name: string; value: string }[]): ProviderConfig {
     return {
       id: "p1", name: "P1", api_format: "openai_chat",

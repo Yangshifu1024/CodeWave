@@ -57,7 +57,7 @@ impl Tool for CreateTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
-        // 严格文件隔离（[docs/subagent-file-isolation](../../../docs/subagent-file-isolation.md)）：
+        // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 写前认领目标；兄弟任务已认领则拒绝并指引跳过上报
         if !ctx.rt.is_main_session
             && let Err(conflicts) =
@@ -68,7 +68,7 @@ impl Tool for CreateTool {
                 crate::tools::claims::denial_message(&conflicts),
             );
         }
-        // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：
+        // 进程级写互斥（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 工作项 2）：
         // E_EXISTS 检查与写入共享同一把锁，防止跨 runtime 的并发 create/edit 交错；
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行写入
         let _guard = match crate::tools::writelock::acquire_all(
@@ -93,14 +93,14 @@ impl Tool for CreateTool {
         {
             return ToolOutcome::err("E_IO", format!("创建目录失败：{e}"));
         }
-        // 写入后检查（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：结论进
+        // 写入后检查（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：结论进
         // `outcome.data.check`（模型侧读 data，读得到；warnings 只达前端）。写后构造目标即可，
         // 不再需要写前基线 / 差集 / 就绪判据。
         let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
         let target = super::validation::WriteTarget::new(resolved.clone(), args.path.clone());
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
-                // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：产物登记（子代理归属主会话；路径规范化，
+                // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：产物登记（子代理归属主会话；路径规范化，
                 // 同一文件的相对/绝对两种写法仍去重为一条；task runtime 跳过——该场景产物无消费方，避免边车泄漏；
                 // 登记失败仅记日志，不影响工具结果）
                 if !ctx.rt.is_task_runtime {
@@ -190,7 +190,7 @@ mod tests {
             .await;
         assert!(out.ok, "{out:?}");
         assert_eq!(std::fs::read(ws.path().join("a/b/c.txt")).unwrap(), b"hi");
-        // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：创建成功即登记（绝对路径，count=1）
+        // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：创建成功即登记（绝对路径，count=1）
         {
             let items = core.store.load_artifacts("t");
             assert_eq!(items.len(), 1);
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(out.error.unwrap().code, "E_ARGS");
     }
 
-    /// 写入后检查的接线（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+    /// 写入后检查的接线（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
     /// 结论必须进 `outcome.data.check`（模型读 data；读 warnings 的旧机制是缺陷 B 的根因），
     /// 跳过必须如实带原因、绝不渲染成「通过」。
     #[tokio::test]
@@ -355,7 +355,7 @@ mod tests {
     }
 
     /// 配置了检查命令时：命令输出进 `outcome.data.check`，且模型侧文本含该结论
-    /// （[docs/post-write-check-plan](../../../docs/post-write-check-plan.md) 缺陷 B 的回归防线）。
+    /// （[docs/tools-and-safety](../../../docs/tools-and-safety.md) 缺陷 B 的回归防线）。
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_configured_command_reaches_data_and_model() {

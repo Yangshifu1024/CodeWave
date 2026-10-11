@@ -1,5 +1,5 @@
 //! 订阅额度 IPC：只做校验 + 转调，业务逻辑在 `core::quota`
-//! （[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//! （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 
 use super::util::{Core, err};
 use crate::core::quota::{self, QuotaSnapshot};

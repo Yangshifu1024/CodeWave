@@ -129,7 +129,7 @@ export function isAtBottom(g: AnchorGeometry): boolean {
  *  差值恒等于 clientHeight（几百像素），远超过 40px 容差 —— 豁免判定永远不成立，
  *  于是每一次程序化跳底产生的 scroll 事件都会被当成「用户滚走了」。
  *  在流式场景下内容往往在事件派发前又长了一截，几何判定当场得出「未贴底」⇒ 跟随被关掉且不再自愈
- *  （[docs/chat-autoscroll-regression-fix](./chat-autoscroll-regression-fix.md)）。 */
+ *  （[docs/chat-and-interface](./chat-autoscroll-regression-fix.md)）。 */
 export function bottomScrollTarget(g: { scrollHeight: number; clientHeight: number }): number {
   return Math.max(0, g.scrollHeight - g.clientHeight);
 }

@@ -1,17 +1,17 @@
 // 键盘高亮类名是 "kb"（绝不能用 "cursor"：app.css 曾有个全局 `.cursor`——流式等待指示的闪烁动画，
 // 类名相撞会让高亮行永远闪烁，用户报的「执行计划按钮行闪烁」正是这个）。
-// `.cursor` 与 `@keyframes blink` 已随 [docs/chat-loading-indicator](../../../../docs/chat-loading-indicator.md)
+// `.cursor` 与 `@keyframes blink` 已随 [docs/chat-and-interface](../../../../docs/chat-and-interface.md)
 // 删除（等待指示改为语义化的 `.ws-streaming-indicator` + antd 加载图标）。
 // **别再新建任何叫 cursor 的类**：它与 CSS 的 cursor 属性同名，是历史误伤高发点。
-// [docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md)：询问窗口重构——卡片布局 + 编号选项 + 键盘导航（Tab/方向键移动、数字快选、Enter 确认）。
+// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：询问窗口重构——卡片布局 + 编号选项 + 键盘导航（Tab/方向键移动、数字快选、Enter 确认）。
 // 审批形态：需要权限 + 命令块 + 允许 / 始终允许本项目 / 拒绝 三选项；
 // 询问形态：分页多题作答 + 补充说明 + 忽略/提交；计划批准形态额外渲染「方案」卡
 // （完整方案 markdown + 复制 + 查看完整方案 -> FileViewerModal 打开后端落盘的计划文件）。
-// [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：批准形渲染（后端判定的单选 + 直提）、复选/单选指示物、
+// [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形渲染（后端判定的单选 + 直提）、复选/单选指示物、
 // 补充说明输入纳入键盘导航环。
 // 单题形态：模型声明的 `single: true`（非批准题）渲染为替换单选（选了替换、重选清空）；
 // 应答协议（selections 数组）不变。
-// [docs/mode-gate-and-subagent-sync]：批准门选档确认——选项可携带 `mode`（选中后要切到的权限档位）：
+// [docs/plan-and-approval]：批准门选档确认——选项可携带 `mode`（选中后要切到的权限档位）：
 // 带 mode 的选项一律直提（两个档位选项都可直提），提交后按**实际选中的档位**同步胶囊（不再硬编码 auto_edit）；
 // 胶囊同步与后端 wants_mode_switch 同源：只要本次应答带 mode 就同步——**不再看当前档位**
 // （历史上只在 plan / confirm_each 两条路径同步，档位已是 auto_edit / full_access 时后端会切档而前端不跟，
@@ -57,9 +57,9 @@ export default function AskPanel() {
   const [cursor, setCursor] = useState(0); // 键盘高亮（审批：选中项；询问：当前页，末槽 = 补充输入）
   const [page, setPage] = useState(0); // 询问多题分页
   const [planOpen, setPlanOpen] = useState(false);
-  const noteRef = useRef<any>(null); // docs/ask-approval-shape-note-nav：导航环末槽聚焦补充输入
+  const noteRef = useRef<any>(null); // docs/plan-and-approval：导航环末槽聚焦补充输入
   const sessionId = useSessions((s) => s.activeKey);
-  // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：当前会话审批档（ConfirmEach 在 ask 卡上显示切档提示）
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：当前会话审批档（ConfirmEach 在 ask 卡上显示切档提示）
   const tabMode = useSessions((s) => s.tabs.find((x) => x.key === s.activeKey)?.prefs.approval_mode);
   const askId = ask?.askId;
   const questions = useMemo<AskQuestionPayload[]>(() => ask?.questions ?? [], [ask?.questions]);
@@ -87,7 +87,7 @@ export default function AskPanel() {
 
   // ---------- 审批：三选项 + 单选高亮（hooks 必须在提前 return 之前跑完） ----------
   const approvalOptions = useMemo(() => {
-    // [docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7.3：同一组按钮在
+    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：同一组按钮在
     // 范围门语义下后果完全不同——「允许」是把计划外步骤纳入已批准范围（而非只放行这一次），
     // 「始终允许」才是本会话后续新增都不再询问。共用一套文案会让用户误判实际行为。
     const isScope = ask?.approvalKind === "scope";
@@ -118,7 +118,7 @@ export default function AskPanel() {
   if (!ask) return null;
 
   const isApproval = ask.kind === "approval";
-  // [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+  // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
   // 真实方案的唯一来源是 `ask.planBody`（后端按 skip_serializing_if 下发，只有落盘成功才给）；
   // `planFile` 单独管「查看完整方案 → 打开后端落盘的文件」。没有 planBody 即视为「无真实方案」——
   // 历史兼容：`planFile` 存在但 `planBody` 为空（旧后端遗留）同样不渲染计划卡。
@@ -130,7 +130,7 @@ export default function AskPanel() {
     void useRun.getState().resolveAsk(ask!.askId, { approved: option.approved, always: option.always });
   }
 
-  // [docs/mode-gate-and-subagent-sync]：带 mode 的选项 = 批准类选项——即便后端未下发 approval 标记也按批准形渲染
+  // [docs/plan-and-approval]：带 mode 的选项 = 批准类选项——即便后端未下发 approval 标记也按批准形渲染
   // （防契约漏字段导致点选不直提）。
   const approvalShape =
     ask.approval === true ||
@@ -145,7 +145,7 @@ export default function AskPanel() {
   const approveId = ask.approveId ?? null;
   const approveOptionId =
     approveId ?? ((questions[0]?.options ?? []).find((o) => o.id === "approve")?.id ?? null);
-  // 预览选项（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准门的第四选项，语义是「先看预览」——
+  // 预览选项（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门的第四选项，语义是「先看预览」——
   // 既不是批准、也不算有效应答（后端 preview_only 同样排除），故既不触发切档，也不能被当成批准项。
   // 只在批准形询问里认（与后端 preview_option_ids 同口径；普通澄清询问里的同名选项不受影响）
   const previewOptionId = approvalShape
@@ -159,7 +159,7 @@ export default function AskPanel() {
     : null;
 
   /** 选项说明行：后端下发的 description 优先；完全访问档**恒定**追加兜底风险说明
-   *  （[docs/mode-gate-and-subagent-sync]：选它会跳过所有审批弹窗，必须就地说明代价）。
+   *  （[docs/plan-and-approval]：选它会跳过所有审批弹窗，必须就地说明代价）。
    *  兜底文案与后端 description 并存而非互相覆盖——否则模型自带一句轻描淡写的 description
    *  就能把风险提示顶掉（提示注入式淡化），兜底也就失去意义。 */
   function optionDesc(opt: AskOptionPayload): string {
@@ -179,7 +179,7 @@ export default function AskPanel() {
         return { ...prev, [qid]: [optId] };
       }
       const q = questions.find((x) => x.id === qid);
-      // [docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)：
+      // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
       // 形态优先级与渲染分支保持同口径——批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底。
       // 「渲染成 radio 但 toggle 是 multi」会出现「看着只能选一个、点两下又选了两个」的反直觉情况，故此处
       // 必须复用 `inferSingle` 才能与选项框视觉一致；不允许渲染 / 行为分裂。
@@ -244,9 +244,9 @@ export default function AskPanel() {
     let approved = false;
     /** 批准类选项的目标档位（结构化路径）；null = 旧形态无 mode → 胶囊同步回落 auto_edit */
     let approvedMode: ApprovalMode | null = null;
-    // [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)：有效应答（≥1 题 selections 非空或有说明）与后端 has_valid_answer 对齐
+    // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：有效应答（≥1 题 selections 非空或有说明）与后端 has_valid_answer 对齐
     let anyAnswer = false;
-    // 预览-only（[docs/preview-skill](../../../../docs/preview-skill.md)）：批准形询问里选中的项全是预览项、
+    // 预览-only（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准形询问里选中的项全是预览项、
     // → 不算有效应答（与后端 preview_only 判定对齐；补充说明不算表态）。不排除它，ConfirmEach 档会因
     // 「有效应答 / arch 闸标记」把会话静默切到自动编辑档并按方案开工
     let allPreview = approvalShape && previewOptionId != null;
@@ -257,7 +257,7 @@ export default function AskPanel() {
       answers[q.id] = { selections: sel, note };
       if (previewOptionId != null && sel.includes(previewOptionId)) sawPreview = true;
       if (sel.some((s) => s !== previewOptionId)) allPreview = false;
-      // 结构化判定（[docs/mode-gate-and-subagent-sync]）：选中带 mode 的选项即批准，并记下要切到的档位
+      // 结构化判定（[docs/plan-and-approval]）：选中带 mode 的选项即批准，并记下要切到的档位
       for (const s of sel) {
         const mode = modeById.get(s);
         if (mode) {
@@ -266,8 +266,8 @@ export default function AskPanel() {
         }
       }
       // Plan 档协议：选中批准选项即在本地把胶囊同步为批准档位（后端在 ask 工具内切档）
-      // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：兼容路径——批准命中后端下发的 approve_id；保留字面 / 正则兜底（旧载荷无 mode / 无 id 情形）
-      // **预览项先剔除**（[docs/preview-skill](../../../../docs/preview-skill.md)）：模型把预览项 id 自拟成含 approve / 执行方案
+      // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：兼容路径——批准命中后端下发的 approve_id；保留字面 / 正则兜底（旧载荷无 mode / 无 id 情形）
+      // **预览项先剔除**（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：模型把预览项 id 自拟成含 approve / 执行方案
       // 字样（真实形态：id=preview_approve、label 守约「先看预览」，previewOptionId 的 label 兜底认得出它）时，
       // 宽松匹配会拿它的 id 当批准命中 → approved=true → planPath / switchToAutoEdit 通道把胶囊单边切到自动编辑档，
       // 而后端 approved_hit 已剔除 preview_ids、preview_only 也不切档 → 用户可见结果就是**单边静默提权**。
@@ -292,7 +292,7 @@ export default function AskPanel() {
     await useRun.getState().resolveAsk(ask!.askId, { answers });
     // 非渲染路径禁止 hooks（缺陷修复：submit 内调 useActiveTab 抛「Invalid hook call」，
     // 提交按钮看似失效）-> 改用 getState() 命令式读取
-    // 同步条件（[docs/arch-orchestrator](../../../../docs/arch-orchestrator.md) R1 + [docs/notification-click-reveal](../../../../docs/notification-click-reveal.md)）：后端即将切档时本地同步胶囊，使胶囊/前端状态/后端
+    // 同步条件（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) R1 + [docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：后端即将切档时本地同步胶囊，使胶囊/前端状态/后端
     // 三方一致；否则后续全量 updatePrefs 覆盖会把后端的 AutoEdit 静默翻回——
 
     // 「只看预览」不算切档依据——补充说明不算表态，只看选中的项；后端 preview_only 同样封掉两条通道：
@@ -315,14 +315,14 @@ export default function AskPanel() {
       const planPath = approved && !previewOnly && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
       const lightPath =
         tab?.prefs.approval_mode === "confirm_each" && answerEffective && (!gateShape || approved);
-      // [docs/mode-gate-and-subagent-sync]：结构化路径（选中的选项带 mode）优先且不看当前档位；
+      // [docs/plan-and-approval]：结构化路径（选中的选项带 mode）优先且不看当前档位；
       // 旧形态（无 mode）走既有回落：仅 plan / confirm_each 两条路径同步，档位回落 auto_edit
       const modePath = approvedMode != null && !previewOnly;
       if (tab && (modePath || planPath || lightPath)) {
         void updatePrefs(tab.key, { approval_mode: approvedMode ?? "auto_edit" });
       }
     }
-    // 批准门「先看预览」（[docs/preview-skill](../../../../docs/preview-skill.md)）：本次应答是「要看预览」，
+    // 批准门「先看预览」（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：本次应答是「要看预览」，
     // 置位一次性信号 → run store 在本 run 第一张合格 widget 落地时把它转成目标 callKey，
     // 卡片据此自动弹预览弹框（用户不必回聊天区找那个很小的「预览」按钮）。
     // 必须放在上面的切档闸门之外：previewOnly 会让 approved / answerEffective 同时为假，
@@ -339,7 +339,7 @@ export default function AskPanel() {
     const clearedSel = { ...selected, [cur.id]: [] };
     const clearedNotes = { ...notes, [cur.id]: "" };
     if (page < questions.length - 1) {
-      // 非末页（[docs/run-queue-and-ask-revamp](../../../../docs/run-queue-and-ask-revamp.md) 语义）：清空当前题应答并翻页；不 resolve
+      // 非末页（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) 语义）：清空当前题应答并翻页；不 resolve
       setSelected(clearedSel);
       setNotes(clearedNotes);
       setPage(page + 1);
@@ -397,7 +397,7 @@ export default function AskPanel() {
     if (isFormTarget(e)) return;
     const opts = cur?.options ?? [];
     if (!cur) return;
-    // [docs/ask-approval-shape-note-nav](../../../../docs/ask-approval-shape-note-nav.md)：导航环包含补充输入（末槽 = opts.length）；无选项题的环只有输入框
+    // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：导航环包含补充输入（末槽 = opts.length）；无选项题的环只有输入框
     const ringLen = opts.length + 1;
     if (e.key === "ArrowDown" || e.key === "Tab") {
       // 末槽（补充输入）按 Tab：放行自然焦点进入输入框（onFocus 同步导航槽）——
@@ -439,7 +439,7 @@ export default function AskPanel() {
   return (
     <div className="ask-wrap">
       <div className="ask-card" tabIndex={0} onKeyDown={isApproval ? onKeyApproval : onKeyAsk}>
-        {/* 计划卡（docs/run-queue-and-ask-revamp/35）：所有 ask 均展示（后端一律落盘计划文件）；完整方案 + 复制 + 查看完整方案 */}
+        {/* 计划卡（docs/plan-and-approval）：所有 ask 均展示（后端一律落盘计划文件）；完整方案 + 复制 + 查看完整方案 */}
         {isPlan && (
           <div className="plan-card">
             <div className="plan-head">
@@ -466,7 +466,7 @@ export default function AskPanel() {
         )}
 
         <div className="ask-head">
-          {/* docs/ask-ink-accent-and-composer-cover：标签去掉 antd preset 色（processing/warning）——元数据降噪，描边 pill 样式由 .ask-tag 接管；
+          {/* docs/chat-and-interface：标签去掉 antd preset 色（processing/warning）——元数据降噪，描边 pill 样式由 .ask-tag 接管；
               审批保留描边橙语义（色彩强度映射风险：无色=默认、橙=需注意、红=危险） */}
           <Tag className={`ask-tag${isApproval ? " warn" : ""}`}>
             {isApproval ? t("ask.approval") : t("ask.title")}
@@ -509,10 +509,10 @@ export default function AskPanel() {
                   aria-checked={cursor === i}
                   onClick={() => { setCursor(i); answer(o); }}
                 >
-                  {/* docs/ask-approval-shape-note-nav：单选指示物（选中跟随高亮——此形态点击即应答，高亮 = 待确认项） */}
+                  {/* docs/plan-and-approval：单选指示物（选中跟随高亮——此形态点击即应答，高亮 = 待确认项） */}
                   <span className={`opt-box radio${cursor === i ? " checked" : ""}`} aria-hidden />
                   <span className="idx">{i + 1}.</span>
-                  {/* [docs/ask-option-desc-wrap] 选项内容列容器：标题行与其下的说明上下排布、两者左边界对齐。
+                  {/* [docs/chat-and-interface] 选项内容列容器：标题行与其下的说明上下排布、两者左边界对齐。
                       纯 CSS 无法把第二行缩进到标签起点，故必须有这么一层列容器（.opt-body）。 */}
                   <div className="opt-body">
                     <div className="opt-head">
@@ -544,7 +544,7 @@ export default function AskPanel() {
               <div className="ask-options">
                 {options.map((opt, i) => {
                   const on = sel.includes(opt.id);
-                  // 形态优先级（[docs/ask-plan-card-and-option-shape](../../../docs/ask-plan-card-and-option-shape.md)）：
+                  // 形态优先级（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：
                   // 批准 > 显式 single=true > 显式 single=false > 启发式 > 多选兑底。
                   // cur.single === false 时严格多选（用户明确取消互斥）；
                   // cur.single === true 时严格 radio；未声明时按启发式兑底。
@@ -560,15 +560,15 @@ export default function AskPanel() {
                       aria-checked={on}
                       onClick={() => { setCursor(i); pickAndSubmitIfApprove(cur.id, opt.id); }}
                     >
-                      {/* docs/ask-approval-shape-note-nav：多选 = 复选框 / 单选 = 单选框——视觉声明选择语义 */}
+                      {/* docs/plan-and-approval：多选 = 复选框 / 单选 = 单选框——视觉声明选择语义 */}
                       <span className={`opt-box ${approvalShape || singleQ ? "radio" : "check"}${on ? " checked" : ""}`} aria-hidden />
                       <span className="idx">{i + 1}.</span>
-                      {/* [docs/ask-option-desc-wrap] 选项内容列容器：标题行（标签 + 推荐 chip）与说明行上下排布，
+                      {/* [docs/chat-and-interface] 选项内容列容器：标题行（标签 + 推荐 chip）与说明行上下排布，
                           说明左边界对齐标签起点。opt-box / idx 仍是 .ask-opt 的直系子元素（整行可点靠冒泡）。 */}
                       <div className="opt-body">
                         <div className="opt-head">
                           <span className="label">{opt.label}</span>
-                          {/* docs/ask-approval-shape-note-nav：推荐从 ✓ 后缀改为 chip——✓ 与复选框视觉相撞 */}
+                          {/* docs/plan-and-approval：推荐从 ✓ 后缀改为 chip——✓ 与复选框视觉相撞 */}
                           {opt.recommended && <span className="rec-pill">{t("ask.recommended")}</span>}
                         </div>
                         {/* 选项说明行：后端 description 优先；完全访问档恒定追加兜底风险说明（见 optionDesc） */}
@@ -588,7 +588,7 @@ export default function AskPanel() {
                   value={notes[cur.id] ?? ""}
                   placeholder={t("ask.note")}
                   onChange={(e) => setNotes((prev) => ({ ...prev, [cur.id]: e.target.value }))}
-                  onFocus={() => setCursor(options.length)} // 聚焦即同步导航槽（鼠标/Tab，docs/ask-approval-shape-note-nav）
+                  onFocus={() => setCursor(options.length)} // 聚焦即同步导航槽（鼠标/Tab，docs/plan-and-approval）
                   /* 输入框内回车 = 下一题 / 提交（缺陷修复：此前 isFormTarget 早退把所有按键放行，
                      在补充说明里敲回车无任何反应；Shift+回车 / IME 组合期放行，见 enterCommits） */
                   onKeyDown={(e) => { if (enterCommits(e)) commitAsk(); }}
@@ -598,9 +598,9 @@ export default function AskPanel() {
             )}
             <div className="ask-foot">
               <span className="hint">
-                {/* docs/notification-click-reveal：ConfirmEach 在提交时切档；明示提示防止静默提权 */}
+                {/* docs/chat-and-interface：ConfirmEach 在提交时切档；明示提示防止静默提权 */}
                 {tabMode === "confirm_each" && <span className="switch-hint">⚠ {t("ask.switchHint")}</span>}
-                {/* docs/ask-approval-shape-note-nav：hint 按形态切换（批准「Enter 确认」/ 多选「Enter 或空格切换」）；
+                {/* docs/plan-and-approval：hint 按形态切换（批准「Enter 确认」/ 多选「Enter 或空格切换」）；
                     单题（互斥）形态有独立提示——选择即替换、重选即清空 */}
                 <span>ⓘ {approvalShape ? t("ask.keyHint") : cur?.single ? t("ask.keyHintSingle") : t("ask.keyHintMulti")}</span>
               </span>

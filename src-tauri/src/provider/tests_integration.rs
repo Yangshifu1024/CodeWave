@@ -375,7 +375,7 @@ fn assert_custom_header_wire(head: &str, session: &str, auth_line: &str) {
     );
 }
 
-/// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：自定义请求头真实上线——UA 可覆盖、
+/// [docs/providers-and-network](../../../docs/providers-and-network.md)：自定义请求头真实上线——UA 可覆盖、
 /// `${session_id}` 完成替换、保留名（Authorization）不被覆盖。
 #[tokio::test]
 async fn custom_headers_sent_on_wire() {
@@ -430,7 +430,7 @@ async fn custom_headers_sent_on_wire() {
     );
 }
 
-/// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：AnthropicMessages 协议同样应用自定义头，
+/// [docs/providers-and-network](../../../docs/providers-and-network.md)：AnthropicMessages 协议同样应用自定义头，
 /// 保留名（`x-api-key` / `Authorization`）与适配器 `anthropic-version` 均不被自定义值覆盖。
 #[tokio::test]
 async fn custom_headers_sent_on_wire_anthropic() {
@@ -516,7 +516,7 @@ async fn custom_headers_sent_on_wire_anthropic() {
     );
 }
 
-/// [docs/provider-custom-headers](../../../docs/provider-custom-headers.md)：OpenAiResponses 协议同样应用自定义头，
+/// [docs/providers-and-network](../../../docs/providers-and-network.md)：OpenAiResponses 协议同样应用自定义头，
 /// 保留名（`Authorization`）不被自定义值覆盖。
 #[tokio::test]
 async fn custom_headers_sent_on_wire_responses() {
@@ -575,7 +575,7 @@ async fn custom_headers_sent_on_wire_responses() {
     );
 }
 
-/// 缺陷守护（不联网，历史 → 请求体整条链路）：[docs/reasoning-content-passthrough](../../../docs/reasoning-content-passthrough.md)
+/// 缺陷守护（不联网，历史 → 请求体整条链路）：[docs/providers-and-network](../../../docs/providers-and-network.md)
 /// 要求 OpenAI 兼容的 thinking 上游在多轮对话里回传历史 assistant 消息的 `reasoning_content`（缺失 400）。
 /// 本用例串起「内部历史 → `build_body` wire 体」：带思考块的 assistant 条目必须带该键且值等于思考文本，
 /// 同时 content / tool_calls 不受影响；无思考块的 assistant 条目不得多出该键。

@@ -1,8 +1,8 @@
 // 设置页「界面」页（批② 8 页重划后的 appearance）：界面语言（即时生效）+ 主题三档
 // （跟随系统/亮色/暗色，即选即生效）+ 自定义字体双槽
-// （[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)，Enter/失焦提交）。
+// （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)，Enter/失焦提交）。
 // 三组偏好均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮；
-// 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-ia](../../../../docs/settings-ia.md)）。
+// 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-guide](../../../../docs/settings-guide.md)）。
 import { useEffect, useRef, useState } from "react";
 import { Button, Input, Radio, Select } from "antd";
 import { UndoOutlined } from "@ant-design/icons";
@@ -76,7 +76,7 @@ export function AppearanceSettings({ draft, patchDraft }: {
           </div>
         </SettingsFormItem>
       </SettingsSection>
-      {/* 字体组：sans / mono 双槽 + 预览合成一张 section 卡片（[docs/settings-fullscreen-shell]，
+      {/* 字体组：sans / mono 双槽 + 预览合成一张 section 卡片（[docs/settings-guide](../../../../docs/settings-guide.md)，
           与参考图「浅色主题」组的圆角浅灰容器同构）。Form 上下文由外层 Form 提供。 */}
       <SettingsSection title={t("settings.fontGroup")}>
         <FontSettings />

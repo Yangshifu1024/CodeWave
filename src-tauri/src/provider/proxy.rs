@@ -1,4 +1,4 @@
-//! 代理感知的 HTTP client（[docs/p0-plan](../../../docs/p0-plan.md) §4.6）。
+//! 代理感知的 HTTP client（[docs/technical-design](../../../docs/technical-design.md)）。
 //! 优先级：手动配置 > 系统代理（macOS scutil / Windows 注册表 / Linux 环境变量）> 直连。
 //! 手动模式 fail-closed：配了手动代理就用它，不做探测回退。
 //!
@@ -28,7 +28,7 @@ pub fn build_client_with(
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-/// 把 config 的代理决议套到 builder 上（[docs/network-proxy-settings](../../../docs/network-proxy-settings.md)）：
+/// 把 config 的代理决议套到 builder 上（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
 /// - `proxy = null`（从未配置）→ 原样返回，保持 reqwest 默认（跟随系统）——存量用户零变化；
 /// - 解析为 None（显式无代理 / 系统未开代理）→ 显式 `no_proxy`（屏蔽 reqwest 默认 system-proxy 自动探测，保证真直连）；
 /// - 解析为 Some(url) → 显式 `Proxy::all`（显式代理会关闭 reqwest 默认系统探测），并固定 loopback 直连例外。

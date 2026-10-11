@@ -1,4 +1,4 @@
-// 流式等待指示的 DOM 契约（[docs/chat-loading-indicator](../../../docs/chat-loading-indicator.md)）：
+// 流式等待指示的 DOM 契约（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 //  ① 聊天消息在「正在输出」时渲染 antd 加载图标（.anticon-loading），且旧的自绘方块字符类名 .cursor 已彻底不存在；
 //  ② 子代理过程抽屉的运行中流同样渲染加载图标（两处共用同一个语义化类名 .ws-streaming-indicator）；
 //  ③ 非输出状态（streaming 为假 / 子代理非 running）不渲染该指示。
@@ -92,7 +92,7 @@ afterEach(() => {
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
 });
 
-describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-loading-indicator）", () => {
+describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-and-interface）", () => {
   it("正在输出：末条助手消息渲染 .anticon-loading，且旧类名 .cursor 已不存在", () => {
     seedChat(true);
     render(<ChatMessages />);
@@ -123,7 +123,7 @@ describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-loading-in
   });
 });
 
-describe("子代理过程抽屉：同一套等待指示（docs/chat-loading-indicator）", () => {
+describe("子代理过程抽屉：同一套等待指示（docs/chat-and-interface）", () => {
   it("流运行中：过程流末尾渲染 .anticon-loading", () => {
     seedDrawer("running");
     render(

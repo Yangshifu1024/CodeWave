@@ -48,7 +48,7 @@ function createMd() {
     tokens[idx].attrSet("rel", "noopener");
     return defLink ? defLink(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
   };
-  // 表格包一层 .table-wrap（[docs/plan-modal-table-scroll](../../../docs/plan-modal-table-scroll.md)）：
+  // 表格包一层 .table-wrap（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
   // app.css 里的 `.table-wrap { overflow-x: auto }` 此前是死 CSS——本文件没有任何规则产出这个类，
   // 于是宽表格在窄容器里被 `overflow-x: hidden` 静默裁掉且无法横向滚动（markdown-it 默认只 push
   // table_open/table_close，renderToken 输出裸 <table>）。这里补上唯一的生产点。
@@ -196,7 +196,7 @@ export function renderMarkdown(src: string, diagramPending?: string): string {
 
 
 /**
- * 用户气泡的 markdown 渲染（[docs/markdown-style-refresh]）：保守子集。
+ * 用户气泡的 markdown 渲染（[docs/chat-and-interface]）：保守子集。
  *
  * 关键约束：
  * - 不渲染 math（既无 ws-math 占位，也无 katex 升级——用户消息不进入图表/公式管道）

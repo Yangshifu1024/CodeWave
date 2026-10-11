@@ -112,4 +112,4 @@ pub async fn git_user_info(
     Ok(GitUserInfo { name, email })
 }
 
-// ---------- Skills（[docs/p1-plan](../../../../docs/p1-plan.md) §5.1）----------
+// ---------- Skills（[docs/technical-design](../../../../docs/technical-design.md)）----------

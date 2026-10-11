@@ -1,4 +1,4 @@
-//! 订阅额度域（[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+//! 订阅额度域（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //!
 //! **数据源 = CodeWave 自己的供应商配置**（`config.providers`）：逐家按 `base_url` 主机名
 //! 匹配适配器（`providers/`），密钥经 host 层 keyring 解析；不再读 opencode 的配置与

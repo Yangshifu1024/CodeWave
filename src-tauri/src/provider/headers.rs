@@ -1,4 +1,4 @@
-//! 供应商级自定义请求头应用（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：
+//! 供应商级自定义请求头应用（[docs/providers-and-network](../../../docs/providers-and-network.md)）：
 //! 三个协议适配器在设好 `Content-Type` / 鉴权头后统一调用，为请求附加默认 UA 与用户配置头。
 //!
 //! 语义：
@@ -13,7 +13,7 @@ use crate::util::USER_AGENT;
 use reqwest::RequestBuilder;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT as UA_HEADER};
 
-/// `${session_id}` 占位符字面量（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）。
+/// `${session_id}` 占位符字面量（[docs/providers-and-network](../../../docs/providers-and-network.md)）。
 const SESSION_PLACEHOLDER: &str = "${session_id}";
 
 /// 把默认 UA + 供应商自定义头合并进请求。保留名被忽略；`${session_id}` 完成替换。

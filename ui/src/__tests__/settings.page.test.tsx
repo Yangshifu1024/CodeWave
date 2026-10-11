@@ -1,5 +1,5 @@
-// 设置全屏页容器契约（[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md) /
-// 10 页（8 页重划 + MCP / 技能拆页）与注册表 [docs/settings-ia](../../../docs/settings-ia.md)）：
+// 设置全屏页容器契约（[docs/settings-guide](../../../docs/settings-guide.md) /
+// 10 页（8 页重划 + MCP / 技能拆页）与注册表 [docs/settings-guide](../../../docs/settings-guide.md)）：
 // 覆盖式全屏页必须**不影响正在运行的会话**——工作区全程挂载、只藏可见性、Esc 绝不停运行、
 // 离开前有未保存改动时四条路径（切页 / 返回工作区 / 页内 Esc / 关窗退出）共用同一份三选拦截。
 // 批② 起左导航自建（三组 10 页，替掉 antd Tabs），因此本文件同时守护：页名与页序、逐页脏点、
@@ -1500,7 +1500,7 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     await mountWithSession();
     await openSettings();
 
-    // 例外分三类，均已在 [docs/settings-search-and-advanced] §1.6 登记：
+    // 例外分三类，均已在 [docs/settings-guide](../../../docs/settings-guide.md) 登记：
     //  ① 注册表项**当前视图没有锚点**：`active_model_id` 的「当前」标记只在「编辑供应商」视图的模型列表里
     //    （列表视图无此节点）→ 搜索命中该项时退化为「切页 + 高亮页体容器」；
     //  ② **动态行级锚点**（`providers.<uuid>`）：供应商行不在注册表里（数量与 id 随配置变），
@@ -1609,7 +1609,7 @@ describe("设置页：外部命中动态行级锚点（settingsHit）", () => {
   });
 });
 
-// ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 12/13/25/26/27 条） ----------
+// ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 12/13/25/26/27 条） ----------
 // 两条清理路径（手动「立即清理」与保存时自动清理）都必须：只认已保存的保留期、删前有预览与确认、
 // 删后用返回的 id 收尾 Tab（关闭数回显在提示里）、并刷新「上次清理」只读行。
 describe("设置页：会话保留期与清理", () => {

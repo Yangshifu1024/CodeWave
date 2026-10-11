@@ -1,8 +1,8 @@
-// 注意：部分字段/方法为 P1/P2 预留接口（[docs/p1-plan](../../docs/p1-plan.md)、05）；P0 期间允许 dead_code。
+// 注意：部分字段/方法为 P1/P2 预留接口（[docs/technical-design](../../docs/technical-design.md)、05）；P0 期间允许 dead_code。
 #![allow(dead_code)]
 
 // CodeWave 后端装配（G1-G10）：插件注册、状态管理、命令注册。
-// 分层规则（[docs/technical-design](../../docs/technical-design.md) §2.2）：仅本文件与 host/ 模块允许 use tauri::*。
+// 分层规则（[docs/technical-design](../../docs/technical-design.md)）：仅本文件与 host/ 模块允许 use tauri::*。
 
 pub mod agents;
 mod core;
@@ -83,7 +83,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // 自绘标题栏（[docs/custom-font-and-titlebar](../../docs/custom-font-and-titlebar.md)）：必须在任何 webview 创建之前注册
+        // 自绘标题栏（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：必须在任何 webview 创建之前注册
         .plugin(tauri_plugin_decoration::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             use tauri::Manager;
@@ -97,7 +97,7 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let mut cfg = ConfigState::load();
-            // keyring 迁移（[docs/p1-plan](../../docs/p1-plan.md) §7.2）：明文 key 迁入系统钥匙串；失败保留明文
+            // keyring 迁移（[docs/technical-design](../../docs/technical-design.md)）：明文 key 迁入系统钥匙串；失败保留明文
             let (changed, warn) = host::keyring::migrate(&mut cfg);
             if let Some(w) = warn {
                 tracing::warn!("keyring 迁移未完成：{w}");
@@ -105,12 +105,12 @@ pub fn run() {
             if changed {
                 let _ = cfg.save();
             }
-            // 日志级别跟随 config（RUST_LOG 环境变量在场时优先）+ 过期滚动日志清理（[docs/session-logging-report](../../docs/session-logging-report.md)）
+            // 日志级别跟随 config（RUST_LOG 环境变量在场时优先）+ 过期滚动日志清理（[docs/sessions-and-projects](../../docs/sessions-and-projects.md)）
             core::logging::apply_config_level(&cfg.log.level);
             core::logging::prune_expired_logs();
             let client = provider::proxy::build_client(&cfg);
             let data_dir = crate::core::config::data_dir();
-            // quota.json 启动期自愈（[docs/quota-from-provider-config](../../docs/quota-from-provider-config.md)）：
+            // quota.json 启动期自愈（[docs/providers-and-network](../../docs/providers-and-network.md)）：
             // 与登录清理 / 幽灵会话清扫同类的一次性维护，同步跑即可（单文件、个位数条目、微秒级，
             // 无需 spawn_blocking）；放在启动期而非额度刷新时，是因为此时没有并发刷新，
             // 能与 state::commit 共用同一把进程内互斥而不抢锁。产物 `quota.json.corrupt` 可被覆盖、
@@ -129,7 +129,7 @@ pub fn run() {
             if let Err(e) = core::sessions::interrupt::create_marker(&data_dir) {
                 tracing::warn!("运行标记写入失败（本次崩溃检测退化）：{e}");
             }
-            // 会话保留期清理（[docs/session-cleanup](../../docs/session-cleanup.md)）：保留期为「不清理」时什么都不做。
+            // 会话保留期清理（[docs/sessions-and-projects](../../docs/sessions-and-projects.md)）：保留期为「不清理」时什么都不做。
             // 先**同步**挑候选（只读索引——避免前端恢复 Tab 先刷新「最近打开时间」导致结果随机），
             // 再用 tauri::async_runtime 异步执行删除：绝不阻塞启动，失败只记告警。
             // 档位只认白名单（1/3/7/14/30）：手改配置写进去的怪值一律不清理（resolve_retention 已记 warn）。
@@ -230,7 +230,7 @@ pub fn run() {
             // 窗口几何恢复：必须在前端 activate_and_show（reveal）之前完成，避免可见后跳变
             apply_saved_window_geometry(&win, &data_dir);
             let app_handle = app.handle().clone();
-            // 自绘标题栏显示窗口看门狗（[docs/custom-font-and-titlebar](../../docs/custom-font-and-titlebar.md) 评审 Y1）：窗口以 visible:false 起动，依赖
+            // 自绘标题栏显示窗口看门狗（[docs/chat-and-interface](../../docs/chat-and-interface.md) 评审 Y1）：窗口以 visible:false 起动，依赖
             // activate_and_show 在前端挂载后显示；若前端 JS 启动失败（dev 编译报错等）
             // invoke 永不触发 → 5 秒仍不可见则强制显示（原生装饰回退路径仍可用）
             let watchdog_win = win.clone();
@@ -258,7 +258,7 @@ pub fn run() {
             //（只 build 不安装不会挂载任何东西——默认菜单仍在，
             // 这正是第一版只显示默认 About/Services/Hide/Quit 的原因）。
             // 三个条目全部为自定义项，经 menu:action 路由到 webview，
-            // 因此「关于」打开的是应用内设置页的「关于」分页（批② 起：原独立 AboutModal 已退役，见 docs/settings-ia.md），而非原生面板。AboutMetadata 保留备用。
+            // 因此「关于」打开的是应用内设置页的「关于」分页（批② 起：原独立 AboutModal 已退役，见 docs/settings-guide.md），而非原生面板。AboutMetadata 保留备用。
             // Edit 预定义条目保住 webview 文本快捷键（macOS 上的复制/粘贴/全选）。
             // SubmenuBuilder.text() 无法附加快捷键（tauri 内部写死 None），快捷键条目改用 MenuItemBuilder。
             #[cfg(target_os = "macos")]

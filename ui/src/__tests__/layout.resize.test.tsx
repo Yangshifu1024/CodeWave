@@ -1,4 +1,4 @@
-// 可拖拽栏宽（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+// 可拖拽栏宽（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 纯函数夹取（只夹显示、保留记忆值）+ 分隔条交互（pointer 拖动 / 方向键 / 双击复位）。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";

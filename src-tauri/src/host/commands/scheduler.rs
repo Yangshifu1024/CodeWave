@@ -31,7 +31,7 @@ pub async fn list_services(core: Core<'_>) -> Result<Vec<serde_json::Value>, Str
         .collect())
 }
 
-// ---------- git diff/log（[docs/p1-plan](../../../../docs/p1-plan.md) §6.4）----------
+// ---------- git diff/log（[docs/technical-design](../../../../docs/technical-design.md)）----------
 
 /// 列出计划任务（含下次运行时间与最近状态）。
 #[tauri::command]

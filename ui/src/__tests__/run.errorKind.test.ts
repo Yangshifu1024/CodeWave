@@ -1,4 +1,4 @@
-// run:error errorKind passthrough ([docs/auth-error-guidance](../../../docs/auth-error-guidance.md)): the backend ProviderError category lands on the error item
+// run:error errorKind passthrough ([docs/providers-and-network](../../../docs/providers-and-network.md)): the backend ProviderError category lands on the error item
 // and drives the auth/billing "open model settings" guidance; old payloads without kind stay undefined.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useRun } from "../stores/run";
@@ -30,7 +30,7 @@ function handlers() {
   return useRun.getState().bindGlobalHandlers();
 }
 
-describe("run:error errorKind (docs/auth-error-guidance)", () => {
+describe("run:error errorKind (docs/providers-and-network)", () => {
   beforeEach(seed);
 
   it("carries the payload kind onto the error item", () => {

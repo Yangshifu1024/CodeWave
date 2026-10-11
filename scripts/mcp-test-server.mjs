@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 真实 MCP 验证服务器（docs/10 §A3）：官方 @modelcontextprotocol/sdk 实现。
+// 真实 MCP 验证服务器（docs/mcp-and-skills）：官方 @modelcontextprotocol/sdk 实现。
 // 双模式：
 //   stdio（默认）：node scripts/mcp-test-server.mjs
 //   streamable-http：node scripts/mcp-test-server.mjs --http <port>

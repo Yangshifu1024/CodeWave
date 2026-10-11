@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-//! 本地伪造更新源（端到端验证 updater 链路用，[docs/version-bump-and-release](../docs/version-bump-and-release.md) §4）。
+//! 本地伪造更新源（端到端验证 updater 链路用，[docs/release](../docs/release.md)）。
 //! 扫描 tauri 产物目录里的安装包 + .sig 签名对，生成 latest.json（版本号可指定为高于
 //! 当前安装版的假版本）并在 8080 端口提供下载；配合「临时把 endpoints 指向
 //! http://127.0.0.1:8080/latest.json 后重打包」的本地模拟流程使用。

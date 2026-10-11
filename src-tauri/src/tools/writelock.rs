@@ -1,4 +1,4 @@
-//! 进程级文件写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）：当对同一文件的并发写来自不同
+//! 进程级文件写互斥（[docs/tools-and-safety](../../../docs/tools-and-safety.md) 工作项 2）：当对同一文件的并发写来自不同
 //! runtime（并行子代理 / 定时任务 / 多会话）时，把「读 → 试运行 → 写」整段串行化，消除试运行与写入之间
 //! 文件被改动的 TOCTOU，以及「后写覆盖先写」。批次层的每-runtime `file_ops` 只覆盖会话内顺序，与本模块
 //! 是正交的两层。锁按规范路径排序去重后获取（防死锁）；

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 
-/// [docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)：按 provider 侧 tool_use id
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：按 provider 侧 tool_use id
 /// 批量回读「工具结果原样 sidecar」——历史里那份模型侧文本被截断时，前端据此把卡片补回完整内容
 /// （大 html、grep 大量命中、网页正文、文档读取、edit 列表、ask 载荷、子代理汇报）。
 /// 缺失 / 非法键 / 超限的条目静默跳过：返回的就是实际有的那些，前端无需区分「无备份」与「读失败」。
@@ -87,7 +87,7 @@ pub async fn create_session(
         }
         let pd = crate::core::projects::project_data_dir(&core.data_dir, &project);
         crate::core::projects::save_project(&core.data_dir, &project).map_err(err)?; // 顺带确保子目录存在
-        // [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目设置里已允许的外部目录
+        // [docs/documents](../../../../docs/documents.md)：项目设置里已允许的外部目录
         // 直接作为额外根带动（只放行仍然存在的目录；目录被删掉就把这条丢掉，不让它一直躺在设置里）
         let allowed: Vec<String> = project
             .allowed_dirs
@@ -201,7 +201,7 @@ pub async fn load_session(
 ) -> Result<LoadSessionPayload, String> {
     // 有界取数：运行上下文（wire）与旧格式那份整份历史都从这一处出
     let (wire, legacy) = load_for_open(&core.store, &session_id).map_err(err)?;
-    // [docs/session-cleanup](../../../../docs/session-cleanup.md)：打开即刷新「最近打开时间」（10 分钟节流，
+    // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：打开即刷新「最近打开时间」（10 分钟节流，
     // 避免每次打开都重写整份索引；失败只记告警，绝不影响打开会话）
     if let Err(e) = core
         .store
@@ -216,7 +216,7 @@ pub async fn load_session(
             if roots.is_empty() {
                 roots = vec![workspace.clone()];
             }
-            // [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目设置里已允许的外部目录
+            // [docs/documents](../../../../docs/documents.md)：项目设置里已允许的外部目录
             // 在重开会话时重新带上（meta 快照可能还是放行之前写的），否则用户会莫名其妙再被问一次
             if let Some(pid) = meta.project_id.as_deref()
                 && let Some(entry) = crate::core::projects::find(&core.data_dir, pid)
@@ -244,7 +244,7 @@ pub async fn load_session(
         *rt.history.lock().unwrap() = wire;
     }
     // 标题回填：重开的旧会话运行时 title 为空；不回填会让 start_chat 的
-    // 10 字符启发式覆盖已有标题并经 checkpoint 持久化（[docs/session-auto-title](../../../../docs/session-auto-title.md)）
+    // 10 字符启发式覆盖已有标题并经 checkpoint 持久化（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）
     {
         let mut t = rt.title.lock().unwrap();
         if t.is_empty() {
@@ -395,7 +395,7 @@ pub async fn load_session_earlier(
     Ok(earlier_page(&core.store, &session_id, before_seq))
 }
 
-/// 读取子代理过程历史（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）：会话恢复后，过程抽屉按需重建完整消息流。
+/// 读取子代理过程历史（[docs/subagents](../../../../docs/subagents.md)）：会话恢复后，过程抽屉按需重建完整消息流。
 /// 旧会话 / 无落盘时返回空数组（前端降级为任务 + 最终汇报展示）。
 #[tauri::command]
 pub async fn load_subagent_history(
@@ -417,7 +417,7 @@ pub async fn delete_session(core: Core<'_>, session_id: String) -> Result<(), St
     {
         return Err("会话正在运行，请先停止再删除".into());
     }
-    // H5 同根因（[docs/session-auto-title](../../../../docs/session-auto-title.md) 评审修复）：run 已结束但自动命名后台任务（最长 20s）可能仍在途；
+    // H5 同根因（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 评审修复）：run 已结束但自动命名后台任务（最长 20s）可能仍在途；
     // 标 zombie 让迟到的 session_log 写入 / 统计记账无法复活已删除会话
     if let Some(rt) = core.session(&session_id) {
         rt.zombie.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -633,7 +633,7 @@ pub async fn resolve_ask(
 pub async fn compact_session(core: Core<'_>, session_id: String) -> Result<(), String> {
     let rt = core.session(&session_id).ok_or("会话不存在")?;
     use std::sync::atomic::Ordering;
-    // TOCTOU 修复（[docs/tool-optimizations-port](../../../../docs/tool-optimizations-port.md)）：先原子占据槽位再复查 running——原
+    // TOCTOU 修复（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：先原子占据槽位再复查 running——原
     // check-then-act 实现会在检查后让 start_chat 插入，压缩整体替换历史时
     // 丢掉并发写入的新消息。
     // 槽位为 RAII guard：compact_history panic 展开时 Drop 仍会复位 compacting（评审修复）。
@@ -691,9 +691,9 @@ pub async fn stop_subagent(
     }
 }
 
-// ---------- Run 日志（[docs/session-logging-report](../../../../docs/session-logging-report.md)；校验与读取在 core/logging，host 只转调）----------
+// ---------- Run 日志（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)；校验与读取在 core/logging，host 只转调）----------
 
-// ---------- 会话保留期清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)）----------
+// ---------- 会话保留期清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）----------
 
 /// 预览清理：返回将删除的会话条数与前几条标题，外加索引外残留项数（保存前的确认框内容）。
 /// `days` 缺省时用已保存的保留期；保留期为「不清理」时报错（前端按钮同样禁用）。
@@ -735,7 +735,7 @@ pub async fn get_cleanup_status(
     Ok(crate::core::sessions::cleanup::read_status(&core.data_dir))
 }
 
-// ---------- 「清理旧格式历史」（P5；[docs/session-cleanup](../../../../docs/session-cleanup.md)）----------
+// ---------- 「清理旧格式历史」（P5；[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）----------
 // 命令层只做转调：扫描 / 判定 / 删除全在 `core::sessions::cleanup`（纯函数化、有单测）。
 
 /// 预览「清理旧格式历史」：可回收的会话数 / 字节数 + **必须保留**的会话数（只读，不删任何文件）。

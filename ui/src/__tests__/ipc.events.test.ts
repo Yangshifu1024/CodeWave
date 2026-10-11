@@ -1,4 +1,4 @@
-// bindEvents: handler-keys → tauri listen registration, payload passthrough ([docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// bindEvents: handler-keys → tauri listen registration, payload passthrough ([docs/development](../../../docs/development.md) coverage batch)
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const registered: { name: string; handler: (e: { payload: any }) => void }[] = [];

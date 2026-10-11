@@ -1,4 +1,4 @@
-// Run queue ([docs/steer-run-inject](../../../docs/steer-run-inject.md)): submit while running enqueues (with attachments) / run:done auto-dequeues / error pauses /
+// Run queue ([docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)): submit while running enqueues (with attachments) / run:done auto-dequeues / error pauses /
 // "Run now" steers into the running run (no cancel_run, no interrupt) / edit backfills the draft
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -298,7 +298,7 @@ describe("运行队列", () => {
   });
 });
 
-describe("run:done 双发去重（docs/run-queue-and-ask-revamp 回归）", () => {
+describe("run:done 双发去重（docs/plan-and-approval 回归）", () => {
   it("suggest 双发 done 时队列只出队一次，running 不被二次复位", async () => {
     seed();
     await useRun.getState().send("任务B");

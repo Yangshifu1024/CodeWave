@@ -1,4 +1,4 @@
-//! 文档类命令（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：预览取数 + 修改回退。
+//! 文档类命令（[docs/documents](../../../../docs/documents.md)）：预览取数 + 修改回退。
 //!
 //! **预览**：界面不走「读文本文件」那条通道——Office 与 PDF 是二进制，走那条路只能拿到乱码。
 //!

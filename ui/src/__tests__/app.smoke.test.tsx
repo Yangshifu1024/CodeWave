@@ -126,7 +126,7 @@ import { useRun } from "../stores/run";
 
 async function mountApp() {
   const utils = render(<App />);
-  // Left nav always shows the "Projects" heading (the four topbar buttons moved out: settings/stats/tasks entries live in the bottom-left footer, batches after [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md))
+  // Left nav always shows the "Projects" heading (the four topbar buttons moved out: settings/stats/tasks entries live in the bottom-left footer, batches after [docs/sessions-and-projects](../../../docs/sessions-and-projects.md))
   await waitFor(
     () => expect(document.body.textContent ?? "").toContain("项目"),
     { timeout: 5000 },
@@ -147,7 +147,7 @@ async function clickButton(text: string) {
 }
 
 function clickTab(label: string) {
-  // 批② 起设置页左导航自建（替掉 antd Tabs）：[docs/settings-ia](../../../docs/settings-ia.md)
+  // 批② 起设置页左导航自建（替掉 antd Tabs）：[docs/settings-guide](../../../docs/settings-guide.md)
   const tabs = Array.from(document.querySelectorAll('[data-testid="settings-page"] .settings-nav-item'));
   const tab = tabs.find((x) => x.textContent?.trim() === label);
   if (!tab) throw new Error(`找不到设置页导航项：${label}`);
@@ -168,11 +168,11 @@ afterEach(() => {
   cleanup();
   // zustand stores are module-level singletons: reset panel toggles so modals do not leak across cases
   useUi.setState({ settingsOpen: false, tasksOpen: false, statsOpen: false, rightBarOpen: true, rbTab: "info" });
-  // Reset sidebar toggles + localStorage memory ([docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md))
+  // Reset sidebar toggles + localStorage memory ([docs/chat-and-interface](../../../docs/chat-and-interface.md))
   useSessions.setState({ explorerOpen: true });
   localStorage.removeItem("ws_explorer_open");
   localStorage.removeItem("ws_right_bar_open");
-  // Clear run state (incl. ask) between cases: since [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) an active ask covers the Composer; leftovers would hide the input from later cases
+  // Clear run state (incl. ask) between cases: since [docs/chat-and-interface](../../../docs/chat-and-interface.md) an active ask covers the Composer; leftovers would hide the input from later cases
   useRun.setState((s) => { s.tabs = {}; s.drafts = {}; });
   // Mock capture state also resets per case: polluting the directory-select/project-save mock with the previous case's state breaks ordering assertions
   selectDirState.value = "/tmp/ws";
@@ -186,9 +186,9 @@ describe("App 渲染冒烟", () => {
     // The four topbar buttons moved out (changes → RightBar tab; tasks/stats/settings → bottom-left footer); the topbar must no longer contain "Settings"
     expect(document.querySelector(".toolbar")?.textContent ?? "").not.toContain("设置");
     expect(document.querySelector(".toolbar")?.textContent ?? "").not.toContain("统计");
-    // Topbar tab strip removed ([docs/session-nav-new-top](../../../docs/session-nav-new-top.md)): session switching/closing consolidated into the left nav + shortcuts
+    // Topbar tab strip removed ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)): session switching/closing consolidated into the left nav + shortcuts
     expect(document.querySelector(".tab-strip")).toBeFalsy();
-    // Left nav sections (the "Files" button was removed, [docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)/30)
+    // Left nav sections (the "Files" button was removed, [docs/chat-and-interface](../../../docs/chat-and-interface.md)/30)
     for (const label of ["项目", "任务"]) {
       expect(text).toContain(label);
     }
@@ -197,18 +197,18 @@ describe("App 渲染冒烟", () => {
     for (const label of ["任务", "统计", "设置"]) {
       expect(document.querySelector(`.sider-footer button[aria-label="${label}"]`)).toBeTruthy();
     }
-    // RightBar four tabs (reordered in [docs/rightbar-visual-batch](../../../docs/rightbar-visual-batch.md)): Info first and default; Changes (migrated from the old topbar entry) moved last
+    // RightBar four tabs (reordered in [docs/chat-and-interface](../../../docs/chat-and-interface.md)): Info first and default; Changes (migrated from the old topbar entry) moved last
     const rbTabs = Array.from(document.querySelectorAll(".rb-tabs .ant-tabs-tab")).map((x) => x.textContent?.trim());
     expect(rbTabs[0]).toBe("信息");
     for (const label of ["日志", "文件", "变更"]) {
       expect(rbTabs).toContain(label);
     }
-    // Custom titlebar ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)): the drag layer covers the topbar with a drag-region marker; once active, html is marked custom
+    // Custom titlebar ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): the drag layer covers the topbar with a drag-region marker; once active, html is marked custom
     const dragZone = document.querySelector(".titlebar-drag-zone") as HTMLElement;
     expect(dragZone).toBeTruthy();
     expect(dragZone.hasAttribute("data-tauri-drag-region")).toBe(true);
     await waitFor(() => expect(document.documentElement.dataset.titlebarMode).toBe("custom"));
-    // Topbar no longer shows the model name (consolidated into the Composer toolbar model menu tooltip, [docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md))
+    // Topbar no longer shows the model name (consolidated into the Composer toolbar model menu tooltip, [docs/plan-and-approval](../../../docs/plan-and-approval.md))
     expect(text).not.toContain("test-model");
     // Empty state with no session: guide block renders, Composer hidden（引导按钮文案=临时会话，i18n app.emptyNewChat）
     expect(document.querySelector(".chat-empty-guide")).toBeTruthy();
@@ -298,12 +298,12 @@ describe("App 渲染冒烟", () => {
         (x.textContent ?? "").trim(),
       ),
     ).toEqual(["外观与模型", "安全与能力", "诊断与其他"]);
-    // 设置页使用共享的左右分栏表单与公共视觉层（[docs/settings-ui-unification](../../../docs/settings-ui-unification.md)）
+    // 设置页使用共享的左右分栏表单与公共视觉层（[docs/settings-guide](../../../docs/settings-guide.md)）
     expect(document.querySelector(".settings-theme-root")).toBeTruthy();
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeTruthy();
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeFalsy();
 
-    // 落地页「界面」：主题预览卡、界面语言 Select + 字体双槽与预览（[docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)）
+    // 落地页「界面」：主题预览卡、界面语言 Select + 字体双槽与预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent ?? "").toContain("界面字体");
     expect(document.body.textContent ?? "").toContain("等宽字体");
@@ -312,7 +312,7 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
     expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
 
-    // 模型与供应商页（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md)）：列表 + 编辑表单字段 + AI 回复语言
+    // 模型与供应商页（[docs/providers-and-network](../../../docs/providers-and-network.md)）：列表 + 编辑表单字段 + AI 回复语言
     await clickTab("模型与供应商");
     const providerTexts = document.body.textContent ?? "";
     expect(providerTexts).toContain("Test Provider"); // provider list row
@@ -325,7 +325,7 @@ describe("App 渲染冒烟", () => {
       .toBe("test-model");
     expect(providerTexts).not.toContain("1 个模型");
     expect(providerTexts).toContain("AI 语言");        // 从旧「通用」页迁入
-    // Catalog fill removed ([docs/provider-management-refactor](../../../docs/provider-management-refactor.md): user input is the single source of truth)
+    // Catalog fill removed ([docs/providers-and-network](../../../docs/providers-and-network.md): user input is the single source of truth)
     expect(providerTexts).not.toContain("从目录填充");
     // Enter edit: form fields render
     await clickButton("编辑");
@@ -343,7 +343,7 @@ describe("App 渲染冒烟", () => {
     expect(document.body.textContent ?? "").toContain("允许访问内网地址");
     expect(document.querySelectorAll(".proxy-mode-card").length).toBe(3);
 
-    // 安全与审批页：审批开关 + [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md) 自动确认选项
+    // 安全与审批页：审批开关 + [docs/chat-and-interface](../../../docs/chat-and-interface.md) 自动确认选项
     await clickTab("安全与审批");
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-switch').length).toBeGreaterThanOrEqual(4);
     expect(document.body.textContent ?? "").toContain("5 分钟后自动确认推荐选项");
@@ -380,14 +380,14 @@ describe("App 渲染冒烟", () => {
     expect(document.body.textContent ?? "").toContain("启动时自动检查更新");
   });
 
-  it("设置保存（docs/provider-form-validation）：成功不关闭页面；无效供应商阻止保存并跳转供应商页", async () => {
+  it("设置保存（docs/providers-and-network）：成功不关闭页面；无效供应商阻止保存并跳转供应商页", async () => {
     await mountApp();
     await clickIconBtn("设置");
     // Valid config: save succeeds → toast only, the page stays open (the user decides when to close)
     await clickButton("保存");
     await waitFor(() => expect(document.body.textContent ?? "").toContain("已保存"));
     expect(useUi.getState().settingsOpen).toBe(true);
-    // 全屏设置页常驻 DOM（不再是 Modal 外壳）：docs/settings-fullscreen-shell
+    // 全屏设置页常驻 DOM（不再是 Modal 外壳）：docs/settings-guide
     expect(document.querySelector("[data-testid='settings-page']")).toBeTruthy();
     // Edit provider: clear Base URL → live required error → save blocked + error + stays on the Providers page
     await clickTab("模型与供应商");
@@ -407,7 +407,7 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector('[data-testid="settings-page"] .settings-nav-item-active')?.textContent ?? "").toContain("模型与供应商");
   });
 
-  it("自绘标题栏：后端返回 native 时 html 标记 native（回退布局分支，docs/custom-font-and-titlebar）", async () => {
+  it("自绘标题栏：后端返回 native 时 html 标记 native（回退布局分支，docs/chat-and-interface）", async () => {
     titlebarState.result = "native";
     try {
       await mountApp();
@@ -426,27 +426,27 @@ describe("App 渲染冒烟", () => {
     expect(document.body.textContent).toContain("还没有任务");
   });
 
-  it("侧栏折叠（docs/sidebar-toggle-buttons + docs/titlebar-logo-toggle 开合入口收口到标题栏 Logo；docs/sidebar-collapse-animation-and-titlebar-blend 左栏折叠 0 宽完全隐藏 + 右栏裁切折叠动画）：仅顶栏按钮开合，localStorage 记忆", async () => {
+  it("侧栏折叠（docs/chat-and-interface + docs/chat-and-interface 开合入口收口到标题栏 Logo；docs/chat-and-interface 左栏折叠 0 宽完全隐藏 + 右栏裁切折叠动画）：仅顶栏按钮开合，localStorage 记忆", async () => {
     await mountApp();
     // Both sidebars present by default
     expect(document.querySelector(".project-nav")).toBeTruthy();
     expect(document.querySelector(".right-bar")).toBeTruthy();
-    // Right sidebar toggle lives in the topbar button (tab-row button removed, [docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md) follow-up)
+    // Right sidebar toggle lives in the topbar button (tab-row button removed, [docs/chat-and-interface](../../../docs/chat-and-interface.md) follow-up)
     expect(document.querySelector('.tb-main-seg button[aria-label="折叠右侧栏"]')).toBeTruthy();
-    // Left sidebar toggle lives in the titlebar logo ([docs/titlebar-logo-toggle](../../../docs/titlebar-logo-toggle.md); right-segment head since [docs/titlebar-logo-right-segment](../../../docs/titlebar-logo-right-segment.md)): arrows swap on hover, click toggles
+    // Left sidebar toggle lives in the titlebar logo ([docs/chat-and-interface](../../../docs/chat-and-interface.md); right-segment head since [docs/chat-and-interface](../../../docs/chat-and-interface.md)): arrows swap on hover, click toggles
     fireEvent.click(document.querySelector('.tb-main-seg button[aria-label="折叠左侧栏"]')!);
     await waitFor(() => {
-      // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md): collapsed width 0 = fully hidden; the nav stays mounted (clipped by the Sider shell) and the rail is retired
+      // [docs/chat-and-interface](../../../docs/chat-and-interface.md): collapsed width 0 = fully hidden; the nav stays mounted (clipped by the Sider shell) and the rail is retired
       expect(document.querySelector(".project-nav")).toBeTruthy();
       expect(document.querySelector(".sider-rail")).toBeFalsy();
       expect(document.querySelector(".tb-left-closed")).toBeTruthy();
       expect(document.querySelector(".tb-main-cleared")).toBeTruthy();
     });
     expect(localStorage.getItem("ws_explorer_open")).toBe("0");
-    // Regression ([docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md) fix): collapsed state must keep the Sider shell — has-sider only counts real Sider children;
+    // Regression ([docs/chat-and-interface](../../../docs/chat-and-interface.md) fix): collapsed state must keep the Sider shell — has-sider only counts real Sider children;
     // swapping in a plain div flips the inner Layout to vertical and squeezes Content to 0 height (right sidebar "fully collapsed")
     expect(document.querySelector(".ant-layout-has-sider")).toBeTruthy();
-    // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md): collapsed width is 0 (narrow rail retired) — the Sider fully disappears with a 0.2s width ease.
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md): collapsed width is 0 (narrow rail retired) — the Sider fully disappears with a 0.2s width ease.
     // Review 🟡2: match the actual width declaration, not a loose substring ("280px" also contains "0px")
     const siderStyle = (document.querySelector(".ant-layout-sider") as HTMLElement).getAttribute("style") ?? "";
     expect(siderStyle).toMatch(/width:\s*0px/);
@@ -458,7 +458,7 @@ describe("App 渲染冒烟", () => {
       expect(document.querySelector(".tb-main-cleared")).toBeFalsy();
     });
     expect(localStorage.getItem("ws_explorer_open")).toBe("1");
-    // Right sidebar collapse: stays mounted ([docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md)), shell class flips to the clip-collapsed state
+    // Right sidebar collapse: stays mounted ([docs/chat-and-interface](../../../docs/chat-and-interface.md)), shell class flips to the clip-collapsed state
     fireEvent.click(document.querySelector('button[aria-label="折叠右侧栏"]')!);
     await waitFor(() => {
       expect(document.querySelector(".right-bar-closed")).toBeTruthy();
@@ -469,7 +469,7 @@ describe("App 渲染冒烟", () => {
     // Toggle icon swaps with state (缺陷修复：图标此前固定 PicRightOutlined 不随状态变化)——折叠态 MenuUnfold（展开方向），展开态 MenuFold（收起方向）
     const collapsedIcon = document.querySelector('button[aria-label="展开右侧栏"] svg');
     expect(collapsedIcon?.getAttribute("data-icon")).toBe("menu-unfold");
-    // Topbar toggle button (the only open/close entry, [docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md)) → restored
+    // Topbar toggle button (the only open/close entry, [docs/chat-and-interface](../../../docs/chat-and-interface.md)) → restored
     fireEvent.click(document.querySelector('button[aria-label="展开右侧栏"]')!);
     await waitFor(() => expect(document.querySelector(".right-bar-closed")).toBeFalsy());
     expect(localStorage.getItem("ws_right_bar_open")).toBe("1");
@@ -694,7 +694,7 @@ describe("App 渲染冒烟", () => {
     for (const el of document.querySelectorAll<HTMLElement>(".rb-resize-handle")) expect(el.tabIndex).toBe(-1);
 
     // 左栏：返回工作区 / 标题 / 新建都在 .tasks-nav 内，原顶部操作条（.tasks-actions）已不存在 ——
-    // 全屏页左栏与设置页左栏同宽同色（docs/tasks-module-polish §1；工作区左栏另有一套夹取规则，不保证等宽）
+    // 全屏页左栏与设置页左栏同宽同色（docs/runtime-and-scheduling；工作区左栏另有一套夹取规则，不保证等宽）
     const nav = document.querySelector(".tasks-nav") as HTMLElement | null;
     expect(nav).toBeTruthy();
     expect(nav!.querySelector(".tasks-nav-head button")?.textContent?.replace(/\s/g, "")).toContain("返回工作区");
@@ -850,7 +850,7 @@ describe("App 渲染冒烟", () => {
     }
   });});
 
-describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
+describe("Composer 工具条（docs/chat-and-interface）", () => {
   const DEFAULT_PREFS: import("../ipc/types").SessionPrefs = {
     approval_mode: "auto_edit", model_id: null, reasoning_effort: null,
   };
@@ -882,7 +882,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(toolbar).toBeTruthy();
     const text = toolbar?.textContent ?? "";
     expect(text).toContain("自动编辑"); // current permission mode
-    expect(text).toContain("test-model"); // model wire id always visible (docs/provider-management-refactor: wire id is the display name)
+    expect(text).toContain("test-model"); // model wire id always visible (docs/providers-and-network: wire id is the display name)
     expect(text).toContain("Test Provider / test-model"); // 模型区新增供应商名（providerName / model）
     expect(text).toContain("默认"); // default effort tier
     // 进度圈替换原压缩按钮位：含 ctx-progress-wrap 与 .ant-progress（dashboard 半弧）
@@ -900,9 +900,9 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     expect(send).toBeTruthy();
     expect(send.disabled).toBe(true); // disabled on empty text
     expect(document.querySelector(".composer-card")).toBeTruthy();
-    // Multiple border beams ([docs/antd6-upgrade-and-composer-border-beam](../../../docs/antd6-upgrade-and-composer-border-beam.md)): 3 BorderBeams spread evenly along the input card border
+    // Multiple border beams ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): 3 BorderBeams spread evenly along the input card border
     expect(document.querySelectorAll(".composer-card .ant-border-beam").length).toBe(3);
-    // Beam timing narrowed ([docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)): idle/unfocused beams carry composer-beam-idle; shown on focus, restored on blur.
+    // Beam timing narrowed ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): idle/unfocused beams carry composer-beam-idle; shown on focus, restored on blur.
     // Hidden visually (opacity+pointer-events), NOT display:none: a display swap on blur (mousedown) cancels the pending
     // click in WKWebView and swallowed the first click on sidebar rows (assertions count the class, agnostic to hiding).
     const idleBeams = () => document.querySelectorAll(".composer-card .ant-border-beam.composer-beam-idle").length;
@@ -1057,15 +1057,15 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     ) as HTMLElement;
     fireEvent.click(item);
     await waitFor(() => expect((document.querySelector(".composer-toolbar")?.textContent ?? "")).toContain("完全访问"));
-    // Switch toast ([docs/session-pref-switch-toast](../../../docs/session-pref-switch-toast.md))
+    // Switch toast ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md))
     await waitFor(() => expect(document.body.textContent).toContain("已切换权限模式：完全访问"));
-    // Red highlight class (full access = danger tier, [docs/composer-shift-tab-mode-cycle](../../../docs/composer-shift-tab-mode-cycle.md))
+    // Red highlight class (full access = danger tier, [docs/chat-and-interface](../../../docs/chat-and-interface.md))
     expect(document.querySelector(".composer-toolbar .approval-full")).toBeTruthy();
     // Pill icon switches with the mode (regression: SafetyOutlined was once hardcoded so the icon never changed)
     expect(document.querySelector(".composer-toolbar .approval-full .anticon-safety-certificate")).toBeTruthy();
   });
 
-  it("Shift+Tab：输入框内循环切换权限四档（docs/composer-shift-tab-mode-cycle）", async () => {
+  it("Shift+Tab：输入框内循环切换权限四档（docs/chat-and-interface）", async () => {
     seedTab();
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
@@ -1088,14 +1088,14 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
   it("模型菜单：图标入口 + 供应商分组 + 视觉标签 + 管理供应商入口 + 切换镜像 prefs", async () => {
     seedTab();
     await mountApp();
-    // Model button is now an icon ([docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md)): locate by aria-label
+    // Model button is now an icon ([docs/plan-and-approval](../../../docs/plan-and-approval.md)): locate by aria-label
     const modelBtn = document.querySelector('.composer-toolbar button[aria-label="模型"]') as HTMLButtonElement;
     expect(modelBtn).toBeTruthy();
     expect(modelBtn.title).toContain("test-model"); // tooltip keeps full model info (provider · wire id)
     fireEvent.click(modelBtn);
     await new Promise((r) => setTimeout(r, 120));
     const menu = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu");
-    expect(menu?.textContent).toContain("Test Provider"); // group header = provider name (docs/provider-management-refactor)
+    expect(menu?.textContent).toContain("Test Provider"); // group header = provider name (docs/providers-and-network)
     expect(menu?.textContent).toContain("管理供应商");
     expect(menu?.textContent).toContain("视觉"); // vision model badge
     // Switch to the only model → set_session_prefs mirror
@@ -1107,7 +1107,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await waitFor(() =>
       expect(useSessions.getState().tabs.find((x) => x.key === "s1")?.prefs.model_id).not.toBe(before),
     );
-    // Switch toast ([docs/session-pref-switch-toast](../../../docs/session-pref-switch-toast.md))
+    // Switch toast ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md))
     await waitFor(() => expect(document.body.textContent).toContain("已切换模型：test-model"));
   });
 
@@ -1148,7 +1148,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
       };
     });
     await waitFor(() => expect(document.querySelector(".ask-card")).toBeTruthy());
-    // [docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md): while ask is active the ask card covers the entire input area and the Composer itself does not render (zcode-style single bottom input)
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md): while ask is active the ask card covers the entire input area and the Composer itself does not render (zcode-style single bottom input)
     expect(document.querySelector(".composer-card")).toBeNull();
     resolveAskLog.length = 0; // clear leftovers from earlier cases
     // Requirements batch: clicking the approve option submits directly (no second submit button); pill sync still happens on approval
@@ -1197,7 +1197,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await waitFor(() => expect(document.activeElement).toBe(textarea));
   });
 
-  it("思考流式期间向上滚动：跟随立即暂停且不被拽回（docs/thinking-scroll-fix）", async () => {
+  it("思考流式期间向上滚动：跟随立即暂停且不被拽回（docs/chat-and-interface）", async () => {
     seedTab();
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
@@ -1246,7 +1246,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await waitFor(() => expect(screen.queryByLabelText("滚动到底部")).toBeFalsy());
   });
 
-  it("思考跑马灯（docs/thinking-marquee-rewrite）：全宽 band 展示最新行，换行后上翻到新行", async () => {
+  it("思考跑马灯（docs/chat-and-interface）：全宽 band 展示最新行，换行后上翻到新行", async () => {
     seedTab();
     await mountApp();
     const textarea = screen.getByPlaceholderText(/CodeWave/) as HTMLTextAreaElement;
@@ -1275,7 +1275,7 @@ describe("Composer 工具条（docs/composer-toolbar-batch-report）", () => {
     await waitFor(() =>
       expect(document.querySelector(".thinking-marquee .thinking-roll-line.in")?.textContent).toContain("第一行思考内容"),
     );
-    // In-place growth of the same line swaps the text without a roll-up ([docs/thinking-marquee-rewrite](../../../docs/thinking-marquee-rewrite.md) revision)
+    // In-place growth of the same line swaps the text without a roll-up ([docs/chat-and-interface](../../../docs/chat-and-interface.md) revision)
     useRun.setState((s) => {
       const t = s.tabs["s1"]!;
       applyFrameToTab(t, { type: "delta_thinking", gen: 0, text: "继续补充同一段内容。" } as any);

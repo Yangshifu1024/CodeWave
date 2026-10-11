@@ -1,4 +1,4 @@
-// 右栏「在编辑器中打开」按钮（[docs/rightbar-info-refactor-and-subscription-quota](../../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+// 右栏「在编辑器中打开」按钮（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //
 // 按钮形态：通用编辑器图标 (CodeOutlined) + 右侧 caret（CaretDownOutlined）。
 // 始终不展示当前选中编辑器名称——按钮文本恒为通用图标，点击才展开 Dropdown 列出候选。

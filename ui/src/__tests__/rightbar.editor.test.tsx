@@ -1,4 +1,4 @@
-// 「在编辑器中打开」按钮（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+// 「在编辑器中打开」按钮（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 按钮恒显示通用编辑器图标（CodeOutlined）+ caret（CaretDownOutlined），不展示当前选中编辑器名称；
 // 点击展开 Dropdown 列出候选编辑器，单击即用该编辑器打开当前目录并记忆为新默认；
 // 一个编辑器都没检测到则不渲染控件（文件管理器按钮仍在）。

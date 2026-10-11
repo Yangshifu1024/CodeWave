@@ -1,4 +1,4 @@
-//! Token estimation: chars/4 + 10% headroom ([docs/p0-plan](../../../docs/p0-plan.md) §11).
+//! Token estimation: chars/4 + 10% headroom ([docs/technical-design](../../../docs/technical-design.md)).
 //! Provider usage reports are used only for display calibration, not in the estimate itself (P0 simplification).
 
 pub fn est_tokens_text(s: &str) -> u64 {
@@ -104,7 +104,7 @@ mod tests {
     }
 
     // 思考块计入预算：reasoning_content 回传依赖历史里保留的 Thinking 块
-    // ([docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md))，
+    // ([docs/providers-and-network](../../../docs/providers-and-network.md))，
     // 若预算不计入它，压缩/裁剪会低估真实占用而超窗；这里钉死 Thinking 分支非零贡献。
     #[test]
     fn message_estimates_include_thinking() {

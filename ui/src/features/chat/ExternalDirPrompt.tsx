@@ -1,4 +1,4 @@
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目目录外文件的放行确认。
+// [docs/documents](../../../../docs/documents.md)：项目目录外文件的放行确认。
 //
 // 三个选项而不是两个：「取消」与「仅此一次」是两件事（前者不读这个文件，后者读但下次还问）。
 // antd 的确认弹框只有确定/取消两个按钮，所以这里自己搭一个三按钮弹框。

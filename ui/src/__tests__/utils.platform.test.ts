@@ -1,4 +1,4 @@
-// isMacOS: UA-based platform detection driving <html data-os="macos"> CSS branches ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md), [docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// isMacOS: UA-based platform detection driving <html data-os="macos"> CSS branches ([docs/chat-and-interface](../../../docs/chat-and-interface.md), [docs/development](../../../docs/development.md) coverage batch)
 import { describe, it, expect, afterEach } from "vitest";
 import { isMacOS } from "../utils/platform";
 

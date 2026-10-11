@@ -1,4 +1,4 @@
-// 文本形态 ask 兜底的前端补剥（[docs/text-form-ask-fallback](../../../docs/text-form-ask-fallback.md)）：
+// 文本形态 ask 兜底的前端补剥（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 某 BYOK 端点偶发把 ask 工具调用**当正文 XML 透传**（本回合无 tool_use，正文末尾漂着完整的 `<ask>…</ask>`）。
 // 后端把它恢复成等价 ask 调用（走既有 AskTool 通道）并在**落盘历史**里剥掉那段块；但流式帧早已把这段
 // 协议原文送进**当轮气泡**且无法回收 → 后端在 `ask:opened` 里带上 `text_recovered`（被剥离的原文），

@@ -1,4 +1,4 @@
-// Session auto-naming ([docs/session-auto-title](../../../docs/session-auto-title.md)): session:title event → applyTitle syncs the session list meta and open Tab titles
+// Session auto-naming ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)): session:title event → applyTitle syncs the session list meta and open Tab titles
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";

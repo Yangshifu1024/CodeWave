@@ -223,7 +223,7 @@ describe("Composer 历史消息召回（↑↓）", () => {
   });
 
   it("H14 召回带引用的历史消息：@路径 抽成引用 chip，退出浏览态还原原草稿的 chip", async () => {
-    // [docs/composer-file-ref-chips]：历史消息正文里的引用回填前先抽成 chip（往返无损）
+    // [docs/chat-and-interface]：历史消息正文里的引用回填前先抽成 chip（往返无损）
     seedEnv([
       { kind: "user", text: "看一下 @report.xlsx" },
       { kind: "user", text: "装 @types/node 那个" },

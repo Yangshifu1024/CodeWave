@@ -1,4 +1,4 @@
-// 触发符光标感知判定（[docs/composer-trigger-caret](../../../docs/composer-trigger-caret.md)）：
+// 触发符光标感知判定（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 「正文里已有内容时拉不起菜单」的根因是判定锚定整段末尾且不读光标——这里守护新口径：
 // `/`、`$` 限消息开头（模型侧「以 … 开头」契约），`@` 放宽到行首/空白后（正文任意位置）。
 import { describe, it, expect } from "vitest";

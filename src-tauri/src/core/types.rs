@@ -1,4 +1,4 @@
-//! 核心消息表示（协议无关中间表示，[docs/technical-design](../../../docs/technical-design.md) §4.2.1）。
+//! 核心消息表示（协议无关中间表示，[docs/technical-design](../../../docs/technical-design.md)）。
 //! 序列化字节稳定要求：字段顺序由 struct 定义固定，列表显式排序。
 
 use serde::{Deserialize, Serialize};

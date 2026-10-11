@@ -1,7 +1,7 @@
 // 额度行集合的纯逻辑（无 React、无 i18n：**文案映射一律留在 QuotaSection 里**，
 // 这样本文件不进 features 的「文件 → i18n 段」白名单，见 ui/src/__tests__/settings.registry.test.ts）。
 //
-// 行集合 = CodeWave 供应商配置（[docs/quota-from-provider-config](../../../docs/quota-from-provider-config.md)）：
+// 行集合 = CodeWave 供应商配置（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
 // 后端按「可查询类在前 + 配置顺序、unsupported 殿后」排好序，前端不再重排序，只做展示层加工
 // （标题消歧 / unsupported 折叠判定 / 窗口状态归一 / 相对时间分级）。
 import type { QuotaSnapshot } from "../../ipc/types";

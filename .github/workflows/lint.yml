@@ -1,4 +1,4 @@
-# CodeWave Lint（docs/oss-prep-batch；2026-09-19 补前端 eslint）
+# CodeWave Lint（docs/development；2026-09-19 补前端 eslint）
 # 门槛状态：
 # - cargo fmt --check：已全仓清零（2026-09-19 本地重排 106 个文件）→ 硬门槛
 # - cargo clippy --all-targets：生产代码（cargo clippy --lib）已零告警；tests/ 与 #[cfg(test)] 里的存量告警

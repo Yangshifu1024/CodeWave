@@ -1,4 +1,4 @@
-// [docs/html-preview-modal](../../../../docs/html-preview-modal.md)：render_html 产物的大弹框预览。
+// [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：render_html 产物的大弹框预览。
 // 卡片内不再内嵌渲染（那里高度退化为浏览器 iframe 默认的 150px、宽度还被常驻右栏挤压），
 // 改由工具卡头部入口打开本弹框：90vw × 85vh 铺满 + 复制源码 / 重新加载 / 浅色·深色画布底色。
 // 底色档只作用于承载画布（容器底色 + iframe 的 color-scheme），绝不改写 srcDoc——

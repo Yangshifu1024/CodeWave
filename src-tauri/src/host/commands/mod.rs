@@ -1,4 +1,4 @@
-//! 全部 IPC 命令（[docs/technical-design](../../../../docs/technical-design.md) §5.1 的 P0 清单）。只做参数校验 + 转调 core，不放业务逻辑。
+//! 全部 IPC 命令（[docs/technical-design](../../../../docs/technical-design.md) 的 IPC 边界）。只做参数校验 + 转调 core，不放业务逻辑。
 //! 各领域子模块持有命令 fn；本枢纽 re-export 它们，使 lib.rs `generate_handler!` 注册的
 //! `host::commands::xxx` 路径保持稳定。
 

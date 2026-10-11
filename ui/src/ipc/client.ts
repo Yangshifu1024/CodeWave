@@ -28,7 +28,7 @@ export const ipc = {
   // 当前配置解析出的代理 URL（null = 直连）：检查更新传参与设置页系统代理回显共用
   resolveProxy: () => invoke<string | null>("resolve_proxy"),
 
-  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../docs/session-cleanup.md)）----------
+  // ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）----------
   // 三个命令都是会话数据的批量删除路径，调用方必须显式面对返回值（删了几条）
   /** 预览：按给定保留期返回将删的会话条数与前几条标题（确认框文案数据源；days = null 时不会有候选） */
   previewSessionCleanup: (days: number | null) => invoke<CleanupPreview>("preview_session_cleanup", { days }),
@@ -65,7 +65,7 @@ export const ipc = {
    *  **不报错**（界面只需知道「没有更早内容了」，不当失败处理）。 */
   loadSessionEarlier: (sessionId: string, beforeSeq: number) =>
     invoke<EarlierPage>("load_session_earlier", { sessionId, beforeSeq }),
-  // [docs/titlebar-logo-toggle](../../../docs/titlebar-logo-toggle.md)：子智能体过程历史（会话恢复后由过程抽屉按需重建消息流；未落盘时返回空）
+  // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：子智能体过程历史（会话恢复后由过程抽屉按需重建消息流；未落盘时返回空）
   loadSubagentHistory: (sessionId: string, subId: string) =>
     invoke<Message[]>("load_subagent_history", { sessionId, subId }),
   deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
@@ -96,7 +96,7 @@ export const ipc = {
   readWorkspaceFile: (sessionId: string, path: string) =>
     invoke<{ path: string; size: number; encoding: string; content: string }>("read_workspace_file", { sessionId, path }),
 
-  // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：四个文件入口
+  // [docs/documents](../../../docs/documents.md)：四个文件入口
   /** 原生文件选择框（任意文件）；返回绝对路径列表 */
   selectDocumentFiles: () => invoke<string[]>("select_document_files"),
   /** 判定路径是否在会话可访问范围内（在外时给出所在目录与拿给模型的引用写法） */
@@ -106,13 +106,13 @@ export const ipc = {
   allowExternalDir: (sessionId: string, dir: string, persist: boolean) =>
     invoke<string[]>("allow_external_dir", { sessionId, dir, persist }),
 
-  // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：会话产物
+  // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：会话产物
   listSessionFiles: (sessionId: string) =>
     invoke<SessionFileEntry[]>("list_session_files", { sessionId }),
   readWorkspaceFileBase64: (sessionId: string, path: string) =>
     invoke<{ path: string; size: number; content: string }>("read_workspace_file_base64", { sessionId, path }),
 
-  // [docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)：工具结果原样 sidecar 批量回读。
+  // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：工具结果原样 sidecar 批量回读。
   // 只应针对「历史里那份模型侧文本解析失败」的调用发起（那些才可能被瘦身/截断）；
   // 缺失 / 非法键 / 超限的条目不会出现在返回里，故前端无需区分「无备份」与「读失败」。
   loadToolOutcomes: (sessionId: string, callIds: string[]) =>
@@ -121,7 +121,7 @@ export const ipc = {
       callIds,
     }),
 
-  // [docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)：文档预览取数
+  // [docs/documents](../../../docs/documents.md)：文档预览取数
   /** 表格 / 文档 / PDF 的结构化预览数据（与 read_document 工具同一条解析路径；失败时 reject 的错误文本形如 "E_XXX: 说明"） */
   previewDocument: (
     sessionId: string,
@@ -161,7 +161,7 @@ export const ipc = {
     invoke<{ name: string | null; email: string | null }>("git_user_info", { sessionId }),
   getTokenBreakdown: (sessionId: string) => invoke<any>("get_token_breakdown", { sessionId }),
 
-  // ---------- MCP（[docs/mcp-module-rebuild](../../../docs/mcp-module-rebuild.md)）----------
+  // ---------- MCP（[docs/mcp-and-skills](../../../docs/mcp-and-skills.md)）----------
   // 作用域化命令：scope 为 "global" | "project"；项目级需要 sessionId（用于定位项目目录）
   mcpListConfig: (scope: McpScope, sessionId?: string) =>
     invoke<McpConfigDoc>("mcp_list_config", { scope, sessionId: sessionId ?? null }),
@@ -220,7 +220,7 @@ export const ipc = {
    */
   listServices: () => invoke<ServiceInfo[]>("list_services"),
 
-  // 运行日志（[docs/session-logging-report](../../../docs/session-logging-report.md)）
+  // 运行日志（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）
   listLogFiles: () => invoke<LogFileEntry[]>("list_log_files"),
   readLogFile: (name: string, tailLines?: number) =>
     invoke<LogFileContent>("read_log_file", { name, tailLines }),
@@ -242,7 +242,7 @@ export const ipc = {
   // 右侧栏信息页签：在系统文件管理器中打开任意目录（项目主目录 / 临时会话工作区）
   openDir: (path: string) => invoke<void>("open_dir", { path }),
 
-  // 编辑器探测与打开（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）
+  // 编辑器探测与打开（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   listEditors: () => invoke<EditorInfo[]>("list_editors"),
   openInEditor: (editorId: string, path: string) => invoke<void>("open_in_editor", { editorId, path }),
 
@@ -268,7 +268,7 @@ export const ipc = {
   clearSessionInterrupt: (sessionId: string) =>
     invoke<void>("clear_session_interrupt", { sessionId }),
 
-  // ---------- 界面字体（[docs/custom-font-and-titlebar]）----------
+  // ---------- 界面字体（[docs/chat-and-interface]）----------
   /** 字体偏好落盘（真源在配置文件的 ui.font_sans / ui.font_mono；只写这两个字段） */
   setFontPrefs: (sans: string, mono: string) => invoke<void>("set_font_prefs", { sans, mono }),
 };

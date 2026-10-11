@@ -72,10 +72,10 @@ fn detect_eol(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
-// ===== 两级低风险模糊匹配（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 1）=====
+// ===== 两级低风险模糊匹配（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 工作项 1）=====
 // 仅当 oldText 精确命中 0 处时逐级尝试（由严到松：缩进平移归一 → 行首尾空白归一），
 // 唯一命中才替换并附警告；多命中报错；零命中落给 lineRange 兜底 / 报错。
-// 不做 Levenshtein / 转义归一等激进策略（[docs/builtin-tools-source-comparison](../../../../docs/builtin-tools-source-comparison.md) §15 不移植清单：错配风险 +
+// 不做 Levenshtein / 转义归一等激进策略（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 不移植清单：错配风险 +
 // 与 version token「模型必须给准」的理念冲突）。所有匹配都在 LF 归一后的文本上进行。
 
 /// 计算文本中非空行的最小前导空白宽度（按字符计）。
@@ -366,7 +366,7 @@ impl Tool for EditTool {
             }
         }
 
-        // 严格文件隔离（[docs/subagent-file-isolation](../../../../docs/subagent-file-isolation.md)）：
+        // 严格文件隔离（[docs/subagents](../../../../docs/subagents.md)）：
         // 非主 runtime 编辑前认领全部目标；任一文件被兄弟任务认领则整体拒绝（多文件编辑不部分应用）
         if !ctx.rt.is_main_session
             && let Err(conflicts) = crate::tools::claims::claim(&ctx.rt.id, &resolved)
@@ -377,7 +377,7 @@ impl Tool for EditTool {
             );
         }
 
-        // 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2，跨 runtime）：按规范序加锁防死锁；
+        // 进程级写互斥（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 工作项 2，跨 runtime）：按规范序加锁防死锁；
         // 锁内完成 读 → version 预检 → 试运行 → 备份 → 写入 → 回滚 全链路，消除试运行之后、
         // 写入之前文件被并发修改的 TOCTOU。同批次同路径写入已被批次层 E_WRITE_BATCH_CONFLICT 拒绝。
         // 等锁期间监听取消（批次取消盲区修复），取消则不执行编辑。
@@ -460,7 +460,7 @@ impl Tool for EditTool {
             prepared.push((resolved.clone(), out_text.into_bytes()));
         }
 
-        // 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：目标在写入**之后**构造，
+        // 写入后检查（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：目标在写入**之后**构造，
         // 不再需要写前基线 / 差集 / 就绪判据（命令本就懂工程上下文）。
         let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
         let targets: Vec<validation::WriteTarget> = args
@@ -506,7 +506,7 @@ impl Tool for EditTool {
         for (_, b) in &backups {
             let _ = std::fs::remove_file(b);
         }
-        // [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：产物登记（子代理归属主会话；路径规范化，
+        // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：产物登记（子代理归属主会话；路径规范化，
         // 同一文件的相对/绝对两种写法仍去重为一条；task runtime 跳过——该场景产物无消费方，
         // 避免边车泄漏；登记失败仅记日志，不影响工具结果）
         if !ctx.rt.is_task_runtime {
@@ -528,7 +528,7 @@ impl Tool for EditTool {
                 }
             }
         }
-        // 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：结论进 `outcome.data.checks`
+        // 写入后检查（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：结论进 `outcome.data.checks`
         // （模型侧读 data；warnings 只达前端是缺陷 B 的根因）。命令含 `{file}` 时逐文件成条，
         // 不含时整调用一条（path=null）——绝不因为批里某个文件跑过就给整批打「通过」。
         let checks = validation::run(ctx, &settings, &targets).await;

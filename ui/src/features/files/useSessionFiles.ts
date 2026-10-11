@@ -1,4 +1,4 @@
-// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：会话产物列表数据源——后端登记边车是唯一事实源；
+// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：会话产物列表数据源——后端登记边车是唯一事实源；
 // writeTick（create/edit 成功信号）触发防抖刷新，页签未激活时计数也能保持新鲜
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ipc } from "../../ipc/client";

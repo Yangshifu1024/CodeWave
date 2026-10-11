@@ -1,9 +1,9 @@
 //! 内置子代理角色注册表：`subagent` 工具匹配到角色时，把完整角色定义注入子代理的
 //! system_extra，使 role 从「自由字符串」升级为有专业人设与输出契约的权威角色
-//!（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）。
+//!（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
 //! arch 编排者不入此表——子代理不能再派生子代理；编排剧本已内置为标准工作流常驻提示
-//!（core/prompt.rs 的 WORKFLOW_SECTION，[docs/standard-workflow](../../../docs/standard-workflow.md)）。
-//! 例外：title 角色仅供 core/title.rs 的一次性 LLM 调用消费（会话自动命名，[docs/session-auto-title](../../../docs/session-auto-title.md)），
+//!（core/prompt.rs 的 WORKFLOW_SECTION，[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
+//! 例外：title 角色仅供 core/title.rs 的一次性 LLM 调用消费（会话自动命名，[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)），
 //! 不在 subagent 工具的角色枚举内，主代理不得委派给它。
 
 /// 一个内置子代理角色的完整定义（纯数据，不依赖 tauri）。
@@ -14,7 +14,7 @@ pub struct AgentDef {
     pub description: &'static str,
     /// 完整角色定义（以 <agent-definition> 注入，叠加在 <subagent-discipline> 之上生效）
     pub body: &'static str,
-    /// 只读角色（[docs/subagent-idle-watchdog-misfire]）：同一标记驱动两件事——
+    /// 只读角色（[docs/subagents]）：同一标记驱动两件事——
     /// ① subagent 工具为其强制排除写工具（edit/create/delete），让「只读」从角色自律变强制；
     /// ② 空转看门狗对它只纠偏、不硬终止（只读调研天然是「大段只读步骤 + 偶尔产出」）。
     /// 选中标准：该角色正文已声明「不修改文件」。
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn readonly_roles_are_exactly_the_three_analysis_roles() {
-        // 只读角色集合是刻意选择的（[docs/subagent-idle-watchdog-misfire]）：三个角色正文
+        // 只读角色集合是刻意选择的（[docs/subagents]）：三个角色正文
         // 均已声明「不修改文件」；dev 三兄弟 / tester / product-manager / title 不得入选
         //（tester 正文明确要跑测试命令，product-manager 正文无写权限表述）。
         let mut got: Vec<&str> = builtin()

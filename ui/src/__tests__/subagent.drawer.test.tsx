@@ -1,4 +1,4 @@
-// Subagent interaction batch ([docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)) component-level tests: chat card single-row clickable / process drawer render and close-without-destroy / Composer run indicator.
+// Subagent interaction batch ([docs/subagents](../../../docs/subagents.md)) component-level tests: chat card single-row clickable / process drawer render and close-without-destroy / Composer run indicator.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -71,7 +71,7 @@ afterEach(() => {
   useRun.setState({ tabs: {}, drafts: {} });
 });
 
-describe("SubagentItemCard（docs/subagent-interaction-drawer）", () => {
+describe("SubagentItemCard（docs/subagents）", () => {
   it("单行渲染「子智能体 <名称> · <任务>」与状态徽标，点击打开过程抽屉", () => {
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: false, subId: null });
     render(<SubagentItemCard subId="sub_1" />);
@@ -94,7 +94,7 @@ describe("SubagentItemCard（docs/subagent-interaction-drawer）", () => {
   });
 });
 
-describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
+describe("SubagentDrawer（docs/subagents）", () => {
   it("总览开启时不弹后台子代理过程抽屉，返回后过程数据仍可用", () => {
     useUi.setState({ dashboardOpen: true });
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
@@ -137,7 +137,7 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
     expect(t.subStreams.sub_1.timeline).toHaveLength(1);
   });
 
-  it("分配的任务默认展开显示全文，点击标签可收起为单行预览再展开（docs/subdrawer-scroll-hardening §6）", () => {
+  it("分配的任务默认展开显示全文，点击标签可收起为单行预览再展开（docs/chat-and-interface）", () => {
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
     render(
       <AntApp>
@@ -189,7 +189,7 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
   });
 
   it("程序化跳底后的自家 scroll 事件不得被误判为用户接管（内容在事件派发前又长了一截）", async () => {
-    // 与 ChatMessages 同源的回归（[docs/chat-autoscroll-regression-fix](../../../docs/chat-autoscroll-regression-fix.md)）：
+    // 与 ChatMessages 同源的回归（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
     // 豁免目标若取未钳的 scrollHeight，与真实落点的差值恒等于 clientHeight ⇒ 豁免永不成立，
     // 自家跳转被判成用户滚动、跟随被关掉且不自愈。happy-dom 无布局，必须自建钳位几何桩才能测出这条缺陷。
     seedTab("s1", [subView()], { sub_1: subStream() }, { open: true, subId: "sub_1" });
@@ -269,7 +269,7 @@ describe("SubagentDrawer（docs/subagent-interaction-drawer）", () => {
   });
 });
 
-describe("Composer 子代理运行指示器（docs/subagent-interaction-drawer）", () => {
+describe("Composer 子代理运行指示器（docs/subagents）", () => {
   function seedComposerEnv(subs: SubView[]) {
     useSettings.setState({
       config: {
@@ -342,7 +342,7 @@ describe("Composer 子代理运行指示器（docs/subagent-interaction-drawer�
   });
 });
 
-// ---------- 停止按钮（[docs/subagent-file-isolation]）：运行中右侧单独停止，主代理收到 E_SUBAGENT_STOPPED 询问是否重派 ----------
+// ---------- 停止按钮（[docs/subagents]）：运行中右侧单独停止，主代理收到 E_SUBAGENT_STOPPED 询问是否重派 ----------
 
 describe("SubagentItemCard 停止按钮", () => {
   afterEach(() => {

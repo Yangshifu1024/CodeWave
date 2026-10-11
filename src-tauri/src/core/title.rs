@@ -1,4 +1,4 @@
-//! 会话自动命名（[docs/session-auto-title](../../../docs/session-auto-title.md)）：新会话首条用户消息之后，一次性后台 LLM 调用
+//! 会话自动命名（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：新会话首条用户消息之后，一次性后台 LLM 调用
 //! 生成 ≤20 字的精炼标题。
 //! 人设来自 agents::TITLE_BODY（title 子代理角色，绝不经 subagent 工具委派）；
 //! 调用模式与 context::compact_history 同构：零工具、独立 cancel token、超时兜底。
@@ -76,7 +76,7 @@ pub async fn generate_and_apply(
     }
     let started = std::time::Instant::now();
     let cfg = core.cfg.read().unwrap().clone();
-    // 与压缩一致：命名请求使用会话生效模型（覆盖优先，[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md)）
+    // 与压缩一致：命名请求使用会话生效模型（覆盖优先，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
     let Some(model) = crate::core::prefs::effective_model(&cfg, &rt.prefs()) else {
         return;
     };
@@ -105,7 +105,7 @@ pub async fn generate_and_apply(
         }
         out
     });
-    // key 解析必须走钥匙串占位符解析器（[docs/topbar-migration-and-git-identity](../../../docs/topbar-migration-and-git-identity.md)）：钥匙串用户的
+    // key 解析必须走钥匙串占位符解析器（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：钥匙串用户的
     // 配置 keys 原样是 ["__keyring__"]，朴素的 filter 挑选会得到 None，
     // 发出未鉴权请求（静默 401 失败）
     let Some(key) = crate::host::keyring::pick_resolved_key(&model) else {
@@ -164,7 +164,7 @@ pub async fn generate_and_apply(
     {
         tracing::warn!("自动命名索引更新失败：{e}");
     }
-    // 计账（kind=title，[docs/tool-optimizations-port](../../../docs/tool-optimizations-port.md)：消耗不得凭空消失；usage 缺失时估算）
+    // 计账（kind=title，[docs/tools-and-safety](../../../docs/tools-and-safety.md)：消耗不得凭空消失；usage 缺失时估算）
     let usage = if usage.input + usage.output == 0 {
         crate::provider::RunUsage {
             input: crate::util::token_est::est_tokens_text(&clipped),

@@ -1,4 +1,4 @@
-// 右栏信息页结构变更（[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）：
+// 右栏信息页结构变更（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // ① 数据目录行移除；② 「会话」段（开始时间）移除；③ 技能/当前计划可折叠且折叠态记得住。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";

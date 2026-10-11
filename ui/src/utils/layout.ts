@@ -1,5 +1,5 @@
 // 布局宽度常量与「只夹显示、保留记忆值」的纯函数
-// （[docs/rightbar-info-refactor-and-subscription-quota](../../../docs/rightbar-info-refactor-and-subscription-quota.md)）。
+// （[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
 //
 // 约定：左右栏宽度由用户拖拽决定并存 localStorage（全局一份）；窗口变窄放不下时**只夹显示**，
 // 不改写记忆值——窗口变宽后回到用户拖出的宽度。所有宽度都是逻辑像素（与 CSS px 同义）。

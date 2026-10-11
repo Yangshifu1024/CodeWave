@@ -1,4 +1,4 @@
-//! subagent 工具（[docs/p2-plan](../../../docs/p2-plan.md) §2）：必填 maxSteps 预算与角色；独立 runtime +
+//! subagent 工具（[docs/technical-design](../../../docs/technical-design.md)）：必填 maxSteps 预算与角色；独立 runtime +
 //! drive_agent 复用（排除集 + 低预算提示 + 强制汇报）；全局并发 4。
 
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
@@ -18,7 +18,7 @@ pub const MAX_CONCURRENT: usize = 4;
 
 /// 子代理收尾形态：稳定字符串，进 `ended` 字段（事件载荷 / 工具出参 / 会话日志）。
 ///
-/// 四象限判据由 [`ended_of`] 单点决定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+/// 四象限判据由 [`ended_of`] 单点决定（[docs/subagents](../../../docs/subagents.md)）：
 ///
 /// | 跑满预算 | 带 `<report>` | ended | 语义 |
 /// |---|---|---|---|
@@ -76,7 +76,7 @@ impl SubEnded {
     }
 }
 
-/// 子代理收尾形态判定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+/// 子代理收尾形态判定（[docs/subagents](../../../docs/subagents.md)）。
 ///
 /// 抽成纯函数而非内联三元：四象限是**跨模块契约**（事件载荷 + 前端徽标 + 分析闸），
 /// 内联写法难以写单测，而本判定此前零 Rust 覆盖——正是「半成品伪装成成功」
@@ -217,7 +217,7 @@ pub(crate) fn build_system_extra(
     let display_role = def.map(|d| d.name).unwrap_or(role);
     // 只读角色（explore/reviewer/code-reviewer）补一句可执行约束：写工具已在工具层被排除
     //（见 readonly_extra_excludes），这里让子代理知道自己写不了文件，把发现写进汇报，
-    // 免得它反复试探被拒而白烧步数（[docs/subagent-idle-watchdog-misfire]）。
+    // 免得它反复试探被拒而白烧步数（[docs/subagents]）。
     // FullAccess 档例外（B3）：写工具不再被排除，提示改为授权说明。
     let readonly_notice = if def.is_some_and(|d| d.readonly) {
         if mode == ApprovalMode::FullAccess {
@@ -229,7 +229,7 @@ pub(crate) fn build_system_extra(
         ""
     };
     let mut s = format!(
-        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论），且最终汇报必须用 <report>…</report> 包裹——过程旁白（如「接下来我来改 X」）不会被当作汇报；只输出文字而不发起工具调用的回合会被视为未完成并提示你继续（[docs/subagent-text-turn-premature-exit]）。写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。{}</subagent-discipline>",
+        "\n<subagent-discipline>你是子代理（角色：{}）。纪律：不得向用户提问（无 ask 工具）；不得派生子代理；不得写全局记忆；步数预算 {} 步，耗尽前必须输出最终汇报（已完成/未完成/结论），且最终汇报必须用 <report>…</report> 包裹——过程旁白（如「接下来我来改 X」）不会被当作汇报；只输出文字而不发起工具调用的回合会被视为未完成并提示你继续（[docs/subagents]）。写操作遇 E_FILE_CLAIMED = 文件已被兄弟任务认领（严格文件隔离）：不得重试或等待，剔除该文件并在汇报「未完成」中列明，由主代理统一处理。{}</subagent-discipline>",
         display_role, max_steps, readonly_notice
     );
     if let Some(d) = def {
@@ -280,7 +280,7 @@ fn is_readonly_role(role: &str) -> bool {
     crate::agents::find(role).is_some_and(|d| d.readonly)
 }
 
-/// 空转看门狗策略（[docs/subagent-idle-watchdog-misfire]）：只读角色 → `NudgeOnly`
+/// 空转看门狗策略（[docs/subagents]）：只读角色 → `NudgeOnly`
 ///（空转层 16 步纠偏一次、不硬终止——只读调研天然是「大段只读步骤 + 偶尔产出」；
 /// 失败重复层与步数/汇报门不受影响，照常终止）；
 /// 其余（含未命中角色、空串、归一后未命中者）→ `Stop`（8 步纠偏 / 14 步终止，语义不变）。
@@ -305,7 +305,7 @@ fn readonly_extra_excludes(role: &str, mode: ApprovalMode) -> Vec<&'static str> 
     }
 }
 
-/// 子代理角色策略装配（[docs/subagent-idle-watchdog-misfire]）：一步到位置 `idle_policy`
+/// 子代理角色策略装配（[docs/subagents]）：一步到位置 `idle_policy`
 /// 并追加只读写工具排除（按档位：FullAccess 下不排除，B3）——独立成函数以让调用点可被单测断言
 ///（后人重排参数构造时不致静默回归）。
 /// 对已有排除项去重，重复调用幂等（与父档位合并集同存一份，重复项本就无害）。
@@ -374,7 +374,7 @@ impl Tool for SubagentTool {
                 "task 与 role 均不能为空。此错误不计失败：请修正参数后立即重发。",
             );
         }
-        // title 是内部自动命名角色（[docs/session-auto-title](../../../docs/session-auto-title.md)）：注册表中存在但不可被主代理委派，
+        // title 是内部自动命名角色（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：注册表中存在但不可被主代理委派，
         // 把 agents/mod.rs 头注释中的软约定变成硬约束
         if crate::agents::find(&args.role).map(|d| d.name) == Some("title") {
             return ToolOutcome::err(
@@ -382,7 +382,7 @@ impl Tool for SubagentTool {
                 "title 为内部角色（会话自动命名），不可经 subagent 委派",
             );
         }
-        // 注册表命中 → 注入完整角色定义（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）；未命中保持自由字符串旧行为
+        // 注册表命中 → 注入完整角色定义（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）；未命中保持自由字符串旧行为
         let agent_def = crate::agents::find(&args.role);
         // 父档位快照（spawn 时）：基座按它构造，之后每步由 drive 层按**实时**父档重建（B1）
         let parent_prefs = ctx.rt.prefs();
@@ -415,10 +415,10 @@ impl Tool for SubagentTool {
                     "name": agent_def.map(|d| d.name), "task": args.task.clone(),
                     "description": description, "max_steps": max_steps }),
         );
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理绑定父会话通道——子代理流式帧经 TauriSink 包装为
+        // [docs/subagents](../../../docs/subagents.md)：子代理绑定父会话通道——子代理流式帧经 TauriSink 包装为
         // Frame::Sub 信封借父通道下发；前端按 sub_id 路由到过程抽屉自己的消息流
         ctx.core.sink.bind_sub_channel(&ctx.rt.id, &sub_id);
-        // [docs/session-logging-report](../../../docs/session-logging-report.md) 会话日志：spawn 记入父会话日志；子代理自身的 LLM/工具轨迹落子日志文件
+        // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 会话日志：spawn 记入父会话日志；子代理自身的 LLM/工具轨迹落子日志文件
         crate::core::session_log::info(
             &ctx.rt,
             &format!(
@@ -498,7 +498,7 @@ impl Tool for SubagentTool {
         // 子代理不再冻结在 spawn 时的档位上。
         let mut base = sub_base(&args.role, max_steps, agent_def, parent_prefs.approval_mode);
         base.root_session_id = sub_rt.root_session_id.clone();
-        // 权限继承（[docs/composer-toolbar-batch-report](../../../docs/composer-toolbar-batch-report.md) 收紧）：子代理权限 ⊆ 父会话权限。
+        // 权限继承（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 收紧）：子代理权限 ⊆ 父会话权限。
         // 父 Plan 档的写排除 / MCP 排除 / plan 档提示由 subagent_drive_params 从基座合并进子参数，
         // 堵住「借子代理绕过 plan 档」的洞；只读角色的策略（含 FullAccess 下解锁写工具，B3）
         // 同样在其中按档位置位。spawn 与每步重算共用这一条装配路径，两处不会漂移。
@@ -508,10 +508,10 @@ impl Tool for SubagentTool {
         params.emit_events = false;
         params.force_report = true;
         // 子代理：纯文本回合不等于完成（防止过程旁白被当成最终汇报提前退出，
-        // [docs/subagent-text-turn-premature-exit]）
+        // [docs/subagents]）
         params.finish_on_text = false;
         // 取消级联：主会话停止（cancel_run）→ 父令牌取消 → 本子代理 child_token 取消，
-        // LLM 流与审批等待随之中止（[docs/subagent-file-isolation]）
+        // LLM 流与审批等待随之中止（[docs/subagents]）
         params.parent_cancel = Some(ctx.cancel.clone());
         // 档位重算基座：drive 层每步据此按父档重建（None = 不重算）
         params.sub_base = Some(base);
@@ -565,7 +565,7 @@ impl Tool for SubagentTool {
         let (result, usage, _) =
             crate::core::agent::drive_agent(&core, &sub_rt, params, &run_id).await;
 
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理完整执行历史落盘（ok/err 两路在此覆盖；panic 路由 SubCleanupGuard 兜底），
+        // [docs/subagents](../../../docs/subagents.md)：子代理完整执行历史落盘（ok/err 两路在此覆盖；panic 路由 SubCleanupGuard 兜底），
         // 过程抽屉在会话恢复后可重建完整消息流
         {
             let h = sub_rt.history.lock().unwrap();
@@ -613,9 +613,9 @@ impl Tool for SubagentTool {
         let outcome = match result {
             Ok(report) => {
                 // <report> 标记只用于收尾判定（drive 层 text_turn_action），不进入汇报正文
-                //（[docs/subagent-text-turn-premature-exit]）
+                //（[docs/subagents]）
                 let (clean_report, tagged) = crate::core::agent::split_report(&report);
-                // 收尾形态：四象限单点判定（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+                // 收尾形态：四象限单点判定（[docs/subagents](../../../docs/subagents.md)）。
                 // 关键修复——`Partial`（撞顶才交汇报）原先与 `Report` 同判 `report`，
                 // 让主代理无从判断子代理是否被砍断，只能读报告正文推断缺口再派（成本付两遍）。
                 let steps_used = sub_rt.step_count.load(std::sync::atomic::Ordering::SeqCst);
@@ -630,11 +630,11 @@ impl Tool for SubagentTool {
                         crate::core::session_log::trunc(&clean_report, 400)
                     ),
                 );
-                // G2（[docs/plan-mode-workflow](../../../docs/plan-mode-workflow.md) §7）+ arch 批准闸（[docs/arch-orchestrator](../../../docs/arch-orchestrator.md)）：pm/tester 分析子代理成功返回 → 置分析产物标记。
+                // G2（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）+ arch 批准闸（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：pm/tester 分析子代理成功返回 → 置分析产物标记。
                 // 跨档置位：标记只在批准执行点（ask 批准闸）消费，其余档位置位无副作用；
                 // arch 流程在 ConfirmEach 档发起批准同样依赖该标记。
                 //
-                // **必须按 `is_delivered()` 过滤**（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+                // **必须按 `is_delivered()` 过滤**（[docs/subagents](../../../docs/subagents.md)）：
                 // `Partial` 是撞顶逼出来的半成品分析，`Budget`/`NoReport` 更是压根没交分析。
                 // 旧判据只看「结果是否 Ok」，半成品 pm/tester 报告照样置位 → plan 档在分析
                 // 不完整的情况下放行批准闸（跨机制静默提权路径，且此前无任何测试覆盖）。
@@ -670,11 +670,11 @@ impl Tool for SubagentTool {
                 cleanup.final_text = Some(crate::core::session_log::trunc(&clean_report, 2000));
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
-                    // 供会话恢复关联过程历史文件（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
+                    // 供会话恢复关联过程历史文件（[docs/subagents](../../../docs/subagents.md)）
                     json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps,
                             "steps_used": steps_used, "ended": ended_str, "report": clean_report,
                             // tokens 同层输出：恢复路径回填卡片 token 数的唯一来源
-                            //（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md) §4）
+                            //（[docs/subagents](../../../docs/subagents.md)）
                             "tokens": usage.input + usage.output }),
                 )
             }
@@ -750,7 +750,7 @@ impl Drop for SubCleanupGuard {
             .wait_targets
             .finish(&self.sub_id, self.final_state, report, None);
         self.core.subs.remove(&self.sub_id);
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md) 配对注销：防止 subs 注册表无限增长（内存泄漏 + 向陈旧 sub_id 误投递一段窗口）。
+        // [docs/subagents](../../../docs/subagents.md) 配对注销：防止 subs 注册表无限增长（内存泄漏 + 向陈旧 sub_id 误投递一段窗口）。
         // NoopSink（测试）默认无操作；无通道时零副作用。
         self.core.sink.unbind_sub_channel(&self.sub_id);
         if self.armed {
@@ -760,7 +760,7 @@ impl Drop for SubCleanupGuard {
                 "sub:error",
                 json!({ "session": self.session, "run_id": self.parent_run_id, "sub_id": self.sub_id, "error": "子代理内部异常终止", "steps_used": self.sub_rt.step_count.load(Ordering::SeqCst) }),
             );
-            // panic 路同样尽力落盘已产生的过程历史（[docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)）
+            // panic 路同样尽力落盘已产生的过程历史（[docs/subagents](../../../docs/subagents.md)）
             let h = crate::core::agent::lock_ok(&self.sub_rt.history);
             match self
                 .core
@@ -811,7 +811,7 @@ mod tests {
         assert_eq!(MAX_CONCURRENT, 4);
     }
 
-    /// 四象限判据的完整矩阵（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+    /// 四象限判据的完整矩阵（[docs/subagents](../../../docs/subagents.md)）。
     ///
     /// `Partial` 是本轮新增分支，也是旧判据的漏网之鱼：撞顶 + 交汇报原先被判 `report`
     /// （= 真做完），前端显绿勾、主代理以为拿到了成果。

@@ -1,5 +1,5 @@
-// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：文件页签内容——单列表全量展示（图标区分类型），点击弹窗查看
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：被本应用改过的文档可从这里「回退」到改动前的版本
+// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：文件页签内容——单列表全量展示（图标区分类型），点击弹窗查看
+// [docs/documents](../../../../docs/documents.md)：被本应用改过的文档可从这里「回退」到改动前的版本
 import { useState } from "react";
 import { Alert, App, Button, Modal, Radio, Tooltip } from "antd";
 import {

@@ -1,8 +1,8 @@
-// RightBar log tab ([docs/session-logging-report](../../../docs/session-logging-report.md) → [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md) switched to three Tabs):
+// RightBar log tab ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md) → [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) switched to three Tabs):
 // zero IPC when inactive / loads content when active / stale-response guard after session switch
 import { it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/sidebar-toggle-buttons)
+import "../i18n"; // mounting RightBar directly requires explicit i18next init (collapse button aria-label goes through t(), docs/chat-and-interface)
 import RightBar from "../features/shell/RightBar";
 import { useSessions } from "../stores/sessions";
 

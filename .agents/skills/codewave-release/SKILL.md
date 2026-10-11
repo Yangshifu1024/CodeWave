@@ -7,7 +7,7 @@ description: Cut a CodeWave release — run the full gate, bump the version ever
 
 A release is: bump the version everywhere → commit on `main` → push main → push a `v*` tag. The tag push is what triggers `.github/workflows/release.yml`: it creates a **draft** Release, then three platform jobs (macOS / Linux / Windows) build via tauri-action and upload installers to it. Nothing auto-publishes — after CI finishes, a human reviews the assets and clicks **Publish** on the draft.
 
-Pushing a new tag cancels an in-flight older release (workflow concurrency). The updater signing key (`TAURI_SIGNING_PRIVATE_KEY`, no password) is configured as a repo secret and the public key lives in `tauri.conf.json` — every release uploads signed updater artifacts (`*.sig` + `latest.json`), so **publishing a release makes it the live update source** for all installed apps. macOS code-signing/notarization is **configured for this repo** (6 `APPLE_*` secrets since 2026-09-14; `APPLE_API_KEY_P8` carries the `AuthKey_*.p8` body and the workflow writes it to `AuthKey.p8` with an absolute `APPLE_API_KEY_PATH`): the bundler signs, notarizes and staples `.app`, then the「Notarize and staple dmg」step notarizes the dmg and re-uploads it. Emptying any of those secrets degrades gracefully to unsigned artifacts (first open needs right-click approval) — **never claim a release is unsigned without checking the macOS job log** (see `docs/macos-signing-and-notarization.md`).
+Concurrency is grouped by workflow and `github.ref`: a rerun for the same tag can cancel its in-flight run; a different tag does not cancel an older tag's release. The updater signing key (`TAURI_SIGNING_PRIVATE_KEY`, no password) is configured as a repo secret and the public key lives in `tauri.conf.json` — every release uploads signed updater artifacts (`*.sig` + `latest.json`), so **publishing a release makes it the live update source** for all installed apps. macOS code-signing/notarization is **configured for this repo** (6 `APPLE_*` secrets since 2026-09-14; `APPLE_API_KEY_P8` carries the `AuthKey_*.p8` body and the workflow writes it to `AuthKey.p8` with an absolute `APPLE_API_KEY_PATH`): the bundler signs, notarizes and staples `.app`, then the「Notarize and staple dmg」step notarizes the dmg and re-uploads it. Only an entirely unconfigured signing setup is the unsigned fallback. Nonempty secrets are exported independently; partial configuration can fail (in particular, `APPLE_API_KEY` without a valid `APPLE_API_KEY_P8` fails before bundling) — **never claim a release is unsigned without checking the macOS job log** (see `docs/release.md`).
 
 **This skill always stops before pushing.** The tag push ships the release and is effectively irreversible (artifacts are published, the version is consumed). Follow AGENTS.md: never push `main` or a tag without the user's explicit yes, even if every check is green.
 
@@ -28,7 +28,7 @@ Run these before touching any file; a red tree never gets bumped.
 1. `git status --porcelain` — must be empty. The bump rewrites 5 files; committing on a dirty tree mixes unrelated changes into the release commit.
 2. `git branch --show-current` must be `main`, then `git pull --ff-only` — releases are always cut from an up-to-date main (GitHub Flow).
 3. 全量本地门禁，一条命令（镜像 CI 的两个 workflow，含 fmt/clippy/eslint/前后端测试/构建/脚本测试/锁定文件）：
-   - `pnpm prepr`（等价 CI 全部检查；硬步骤失败即停并列出失败项，见 [docs/pre-pr-local-gate](../docs/pre-pr-local-gate.md)）
+   - `pnpm prepr`（等价 CI 全部检查；硬步骤失败即停并列出失败项，见 [docs/testing](../../../docs/testing.md)）
    - 只想快跑核心门禁时可 `pnpm prepr --only=rust-test,ui-test,ui-build`（发版前建议跑全量）
 
 On failure: stop, show the failing output, and let the user decide what to fix. Do not bump.
@@ -58,7 +58,7 @@ Show the user, concretely:
 - The version and the commits going out since the previous tag (or since the fork point for the first release)
 - What release CI will build once the tag lands: a **draft** Release + Windows / macOS / Linux installers via tauri-action, plus signed updater artifacts (`*.sig` + `latest.json` — publishing the draft makes this version the live update source); macOS installers are signed + notarized + stapled (assert this only after seeing it in the job log — quoting the generic "unsigned" fallback without checking has misled the user before)
 - That the draft must be **published manually** after CI finishes — CI never releases on its own
-- That pushing this tag cancels any in-flight older release
+- That concurrency cancellation applies to the same tag ref, not to releases for different tags
 
 Then ask, and wait: "Push main + tag vX.Y.Z now?" A yes to the summary is consent to push; silence or anything ambiguous is not.
 

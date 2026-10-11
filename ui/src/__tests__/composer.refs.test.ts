@@ -1,4 +1,4 @@
-// Composer 引用「文本 ↔ chip」工具（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：
+// Composer 引用「文本 ↔ chip」工具（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 判定启发式（宁可漏判不误判）+ 往返无损（split → merge 对引用在末尾的文本逐字节还原）。
 import { describe, it, expect } from "vitest";
 import { addRefs, isRefToken, mergeRefs, recoverRefs, splitRefs } from "../features/chat/composerRefs";

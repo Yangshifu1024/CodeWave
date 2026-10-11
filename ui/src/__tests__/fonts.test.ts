@@ -1,4 +1,4 @@
-// Custom font preferences ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md)): sanitize / override building / localStorage round-trip / <html> application
+// Custom font preferences ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): sanitize / override building / localStorage round-trip / <html> application
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   applyInitialFonts, buildFontOverride, previewFontFamily, readStoredFonts, reconcileFontsFromConfig,

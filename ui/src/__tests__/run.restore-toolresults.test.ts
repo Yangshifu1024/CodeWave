@@ -1,4 +1,4 @@
-// 会话恢复保真（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）：
+// 会话恢复保真（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
 // ① 历史里那份模型侧文本被截断时，按 provider 侧 tool_use id 从后端 sidecar 批量回填完整出参；
 // ② 「无结果 / 被中断」的调用按 E_INTERRUPTED 呈现（不再谎报「已使用」）；
 // ③ 子代理卡（report 被父历史截断）与子代理过程抽屉内的工具卡走同一条回填通路。

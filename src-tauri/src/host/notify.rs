@@ -2,7 +2,7 @@
 //!（action 支持仅限移动端），因此本模块按平台直驱原生通知并注册回调——点击后向主窗口
 //! emit `notify:activate`（payload { session_id }），前端据此 reveal 对应会话。
 //!
-//! 分层：host 层允许 use tauri::*（[docs/technical-design](../../../docs/technical-design.md) §2.2）；core 不感知通知。
+//! 分层：host 层允许 use tauri::*（[docs/technical-design](../../../docs/technical-design.md)）；core 不感知通知。
 
 use serde::Serialize;
 
@@ -59,7 +59,7 @@ fn native_notify(
 ) -> Result<(), String> {
     use tauri::Emitter;
 
-    // AUMID 策略（通知缺陷修复，[docs/windows-toast-aumid](../../../docs/windows-toast-aumid.md)）：
+    // AUMID 策略（通知缺陷修复，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
     // toast 的图标/标题归属与点击激活都跟随 AUMID 属主——此前借用 POWERSHELL_APP_ID，通知显示为
     // PowerShell 图标/标题，且点击激活被 PowerShell 抢走（进程内 on_activated 不触发，回跳失效）。
     // AUMID 注册在**安装时**由 NSIS 钩子完成（windows/installer-hooks.nsh 写
@@ -119,7 +119,7 @@ mod tests {
 
     /// 手动探针（真实 toast + 点击回调检测，人工配合）：
     ///   cargo test --lib probe_own_aumid_toast -- --ignored --nocapture
-    /// 前置：AUMID 已注册（安装版自动；dev 手动 `reg add`，命令见 docs/windows-toast-aumid.md）。
+    /// 前置：AUMID 已注册（安装版自动；dev 手动 `reg add`，命令见 docs/chat-and-interface.md）。
     /// 弹出后 **180 秒内点击通知本体**——回调触发则打印「点击回调已触发」并判定通过；
     /// 超时未点击失败（仅表示未点，不代表链路坏）。
     #[test]
@@ -127,7 +127,7 @@ mod tests {
     fn probe_own_aumid_toast() {
         assert!(
             super::aumid_registered("xyz.yangshifu.codewave"),
-            "AUMID 未注册：先执行 docs/windows-toast-aumid.md 中的 reg add 命令或走安装器"
+            "AUMID 未注册：先执行 docs/chat-and-interface.md 中的 reg add 命令或走安装器"
         );
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         tauri_winrt_notification::Toast::new("xyz.yangshifu.codewave")
@@ -160,10 +160,10 @@ fn native_notify(
     let title = title.to_string();
     let body = body.to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        // [docs/macos-notify-use-default-dialog-fix](../../../docs/macos-notify-use-default-dialog-fix.md)：在首次 send_notification 前消费 crate 内部 `Once`。
+        // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：在首次 send_notification 前消费 crate 内部 `Once`。
         // 否则 mac-notification-sys 会经 AppleScript `get id of application "use_default"`
         //（写死的假应用名）解析投递应用，macOS 在首次发送通知时给用户弹
-        // 「Choose Application」系统模态框（如 ask:opened 失焦通知，[docs/session-nav-row-states](../../../docs/session-nav-row-states.md)）。
+        // 「Choose Application」系统模态框（如 ask:opened 失焦通知，[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）。
         // 设置自己的 bundle id（打包版）——即使设置失败（dev 未注册 bundle）——都会把 Once
         // 标记为已完成，`use_default` 查询从此不再运行。错误有意忽略：
         // 投递仍经库内 Finder 兜底工作。
@@ -210,7 +210,7 @@ fn native_notify(
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    // [docs/macos-notify-use-default-dialog-fix](../../../docs/macos-notify-use-default-dialog-fix.md) 探针：首次通知绝不能弹系统「Choose Application
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md) 探针：首次通知绝不能弹系统「Choose Application
     // (Where is use_default?)」对话框。库经 AppleScript `get id of application "use_default"`
     // 解析投递应用——除非先调用 set_application；我们在 native_notify 里每次发送前
     // 设置自己的 bundle id。手动验证探针：
@@ -228,7 +228,7 @@ mod tests {
         let resp = mac_notification_sys::send_notification(
             "CodeWave",
             None,
-            "docs/macos-notify-use-default-dialog-fix probe: this notification must not trigger the Choose Application dialog",
+            "docs/chat-and-interface probe: this notification must not trigger the Choose Application dialog",
             None,
         )
         .expect("send_notification failed");

@@ -1,4 +1,4 @@
-//! 写入后检查编排（[docs/post-write-check-plan](../../../docs/post-write-check-plan.md)）：
+//! 写入后检查编排（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
 //! create / edit 成功后执行用户配置的检查命令，结论写进工具结果的 `outcome.data`
 //! （`check` / `checks` 字段）——**必须走 `data` 通道**，只达前端的 `warnings` 模型读不到
 //! （这是旧 LSP 机制的根本缺陷 B）。

@@ -1,4 +1,4 @@
-//! 多 key 池与 failover（[docs/p1-plan](../../../docs/p1-plan.md) §3.2）：
+//! 多 key 池与 failover（[docs/technical-design](../../../docs/technical-design.md)）：
 //! 认证失败冷却 30min；瞬时失败冷却 10s×2^(n-1)、封顶 30min；整池冷却时取最早恢复者。
 
 use super::dto::ProviderError;
@@ -27,7 +27,7 @@ struct KeyHealth {
 /// key 池：按 pool_key 分组的健康表，负责多 key 择优与失败冷却。
 #[derive(Default)]
 pub struct KeyPool {
-    // pool_key（[docs/provider-management-refactor](../../../docs/provider-management-refactor.md) 起为 provider id）→ 与 keys 平行的健康表；同 provider 的模型共享冷却
+    // pool_key（[docs/providers-and-network](../../../docs/providers-and-network.md) 起为 provider id）→ 与 keys 平行的健康表；同 provider 的模型共享冷却
     health: Mutex<HashMap<String, Vec<KeyHealth>>>,
 }
 
@@ -115,7 +115,7 @@ impl KeyPool {
             .unwrap_or_default()
     }
 
-    /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：清空全部冷却状态（配置保存后调用），
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：清空全部冷却状态（配置保存后调用），
     /// 让修好的 key 下次尝试即生效，而不是被残留的认证冷却跳过。
     pub fn reset_all(&self) {
         self.health.lock().unwrap().clear();
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(i, 1, "应选冷却更短的 b");
     }
 
-    /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：reset_all（配置保存）清空所有冷却，重新回到首个可用 key。
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：reset_all（配置保存）清空所有冷却，重新回到首个可用 key。
     #[test]
     fn reset_all_clears_cooldowns() {
         let pool = KeyPool::default();

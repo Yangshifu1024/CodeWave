@@ -1,4 +1,4 @@
-# CodeWave Release（docs/oss-prep-batch：pnpm workspace + Tauri v2）
+# CodeWave Release（docs/development：pnpm workspace + Tauri v2）
 # tag（v*）推送 → 创建 draft Release → 三平台 tauri-action 构建并上传产物 → 人工检查后手动发布。
 # 触发约定：从 main 打 v* tag（workflow 语法无法限定 tag 所在分支，靠操作纪律）。
 # draft 语义：tauri-action 只上传产物与更新器文件，绝不自动发布——人工核对资产/说明后点 Publish。
@@ -10,7 +10,7 @@
 # 签名 secrets：TAURI_SIGNING_PRIVATE_KEY 已配置（无密码密钥，密码 secret 留空），updater
 # 产物（*.sig + latest.json）随 release 上传；macOS 公证 APPLE_*（6 个）已配置（2026-09-14 起）：
 # bundler 签名并公证 .app，dmg 由后续「Notarize and staple dmg」步骤补公证；全部 APPLE_* 未
-# 设置时仍出未签名 .app/.dmg（docs/version-bump-and-release：自动更新链路说明）。
+# 设置时仍出未签名 .app/.dmg（docs/release：自动更新链路说明）。
 name: release
 
 on:
@@ -147,7 +147,7 @@ jobs:
           done
           # tauri-action 不负责写 .p8 文件（源码无此逻辑），必须在此落盘；
           # APPLE_API_KEY_PATH 必须绝对路径：bundler 在临时目录调用 notarytool，
-          # 相对路径报 The file couldn't be opened（GitWave v0.3.0 实测，docs/macos-signing-and-notarization）
+          # 相对路径报 The file couldn't be opened（GitWave v0.3.0 实测，docs/release）
           if [ -n "$APPLE_API_KEY" ]; then
             printf '%s\n' "$APPLE_API_KEY_P8" > AuthKey.p8
             grep -q '^-----BEGIN PRIVATE KEY-----$' AuthKey.p8 || {
@@ -169,7 +169,7 @@ jobs:
           releaseBody: ${{ needs.prepare-release.outputs.release_notes }}
 
       # bundler 只公证并 staple .app，对 dmg 仅 codesign 签名 → Gatekeeper 判
-      # rejected / Unnotarized Developer ID（v0.3.4 实测，docs/macos-signing-and-notarization）。
+      # rejected / Unnotarized Developer ID（v0.3.4 实测，docs/release）。
       # 此处下载 dmg 补公证 + staple 后 --clobber 回传；未配置公证凭据时跳过
       - name: Notarize and staple dmg
         if: runner.os == 'macOS'

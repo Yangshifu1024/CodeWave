@@ -1,4 +1,4 @@
-// 自绘标题栏激活（[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)）：
+// 自绘标题栏激活（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
 // 窗口以 visible:false 起动，前端挂载后调 activate_and_show——
 // 成功 → "custom"（插件注入 Windows/Linux HTML 控制按钮，macOS 红绿灯 Overlay）；
 // 失败 → "native"（后端已回退原生标题栏并显示窗口，顶栏让位 padding 随之撤销）。

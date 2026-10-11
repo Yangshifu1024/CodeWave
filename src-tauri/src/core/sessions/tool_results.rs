@@ -1,4 +1,4 @@
-//! 工具结果原样 sidecar（[docs/session-restore-fidelity](../../../../docs/session-restore-fidelity.md)）：
+//! 工具结果原样 sidecar（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
 //! 会话历史里存的是 `compact_for_model` 的**模型侧瘦身文本**（通用分支 HEAD 4KB + TAIL 8KB 头尾截断），
 //! 恢复时前端 `JSON.parse` 失败 → 工具卡退化成 `{restored:true}` 占位——大 html（render_html）、
 //! grep 大量命中、网页正文、文档读取、edit 列表、ask 载荷、子代理汇报都受影响。

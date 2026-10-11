@@ -1,4 +1,4 @@
-// 文件引用入口（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：
+// 文件引用入口（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 附件按钮选文件 → 非图片进草稿 refs 并以 chip 展示（正文里不再出现路径）；图片走附件通道；
 // 项目外路径先弹放行确认框；发送前一刻才把引用合成 `@路径` 追加到正文末尾。
 // Composer 独立挂载（不依赖 AppShell），与 composer.paste 同一套环境种子。

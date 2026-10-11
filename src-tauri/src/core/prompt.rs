@@ -1,4 +1,4 @@
-//! 六层 system prompt 组装（[docs/technical-design](../../../docs/technical-design.md) §4.7）。全部文案为 CodeWave 原创撰写；
+//! 六层 system prompt 组装（[docs/technical-design](../../../docs/technical-design.md)）。全部文案为 CodeWave 原创撰写；
 //! 层序与分隔符固定 → 前缀字节稳定（缓存优先）。
 
 use crate::core::config::{ConfigState, MANAGED_DIR_NAME};
@@ -54,12 +54,12 @@ const CORE_PROMPT: &str = r#"你是 CodeWave，一个运行在用户本机、为
 </safety-boundary>
 "#;
 
-/// 标准工作流（原 $arch 技能内置化，[docs/standard-workflow](../../../docs/standard-workflow.md)）：
+/// 标准工作流（原 $arch 技能内置化，[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：
 /// 实现类请求分档推进；完整流水线 S1-S9 + 尽量并行。常驻第 1 层，预算 ≤2000 字（首版 1510；
 /// 1744：文件隔离硬约束 / E_SUBAGENT_STOPPED·E_ARGS·E_FILE_CLAIMED 重试语义三条机制
 /// 入 S6 后调高预算并压缩既有表述吸收部分增量；2000：分支拟定/批准预授权/S6 建分支条款
-/// 入 S4/S5/S6 与纪律（[docs/plan-branch-proposal](../../../docs/plan-branch-proposal.md)）；2100：S5 批准门改多选项显式选档
-///（两个带 mode 的批准类选项）+ 第四选项「先看预览」（[docs/preview-skill](../../../docs/preview-skill.md)）的选项与语义
+/// 入 S4/S5/S6 与纪律（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）；2100：S5 批准门改多选项显式选档
+///（两个带 mode 的批准类选项）+ 第四选项「先看预览」（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）的选项与语义
 /// 入 S5，压缩既有表述吸收增量；测试断言防后续膨胀；本轮预算不变（2090），仅按
 /// 会话实测调子代理步数（S6 开发三角色 60→90、S7 reviewer 40→45）+ S6 加「每包一个域」切包纪律，
 /// 靠压缩冗余措辞 38 字抵消新增）。
@@ -107,7 +107,7 @@ pub fn assemble(
     out.push_str("<system-prompt priority=\"core\">\n");
     out.push_str(CORE_PROMPT);
     out.push_str(&platform_section(workspace, shell_desc, extra_roots_note));
-    // 标准工作流（原 arch 技能内置化，[docs/standard-workflow](../../../docs/standard-workflow.md)）：
+    // 标准工作流（原 arch 技能内置化，[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：
     // 常驻第 1 层；编译期常量保证前缀字节稳定（缓存优先）。
     out.push_str(WORKFLOW_SECTION);
     // 配置的回复语言（设置 → 通用 → AI 语言）：非空时以显式指令覆盖

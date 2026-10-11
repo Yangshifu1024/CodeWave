@@ -1,6 +1,6 @@
 // 每个 Tab 隔离的运行态：转录、流式、工具卡、ask/审批、计划、子代理、上下文分布
 // immer 中间件：高频流式更新走结构共享（路径级拷贝）；组件只对订阅到的 TabRunState 引用反应
-// [docs/fence-hardening-and-powershell-ast](../../../docs/fence-hardening-and-powershell-ast.md) 重构：纯帧 reducer 收敛于 runFrames.ts，后端事件 handler 工厂在 runHandlers.ts，
+// [docs/tools-and-safety](../../../docs/tools-and-safety.md) 重构：纯帧 reducer 收敛于 runFrames.ts，后端事件 handler 工厂在 runHandlers.ts，
 // 共享类型在 run.types.ts（下方 re-export，消费方 import 路径保持 "./run" 不变）。
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
@@ -77,26 +77,26 @@ export interface RunStore {
   stopSubagent(sessionId: string | null, subId: string): Promise<void>;
   resolveAsk(askId: string, value: any): Promise<void>;
   restoreAsk(payload: AskOpenedEvent): void;
-  /** [docs/preview-skill](../../../docs/preview-skill.md)：置位「先看预览」信号——批准门选 preview 时由 AskPanel 调用。
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：置位「先看预览」信号——批准门选 preview 时由 AskPanel 调用。
    *  previewOnly 语义，**与切档无关**（预览项不带 mode，故不构成批准、不切档）；桶不存在则不新建（纯 UI 信号不凭空造桶）。 */
   armWidgetAutoOpen(sessionId: string): void;
-  /** [docs/preview-skill](../../../docs/preview-skill.md)：消费信号——UI 弹完预览后按 callKey 消费；
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：消费信号——UI 弹完预览后按 callKey 消费；
    *  callKey 不匹配则什么都不做（防「A 卡的信号被 B 卡消费」），命中才清空，故可重渲染时幂等重入。 */
   consumeWidgetAutoOpen(sessionId: string, callKey: string): void;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复） */
   runQueueNext(sessionId: string): Promise<void>;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：队列项立即运行（运行中 = 先打断当前运行） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：队列项立即运行（运行中 = 先打断当前运行） */
   runNow(sessionId: string, id: string): Promise<void>;
   removeQueueItem(sessionId: string, id: string): void;
   /** 需求批次：运行队列拖拽排序——把 fromId 项移动到 toId 项当前位置 */
   reorderQueue(sessionId: string, fromId: string, toId: string): void;
-  /** [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：取出队列项文本回填输入框（编辑） */
+  /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：取出队列项文本回填输入框（编辑） */
   editQueueItem(sessionId: string, id: string): void;
   consumeDraftFromQueue(sessionId?: string): void;
   /** Composer 草稿读写（平行分桶；缺省写当前活跃 Tab，异步回填路径传显式 sessionId 防切 tab 竞态；与 useState 同形支持 updater） */
   setDraftText(v: string | ((prev: string) => string), sessionId?: string): void;
   setDraftImages(v: PendingImage[] | ((prev: PendingImage[]) => PendingImage[]), sessionId?: string): void;
-  /** 文件引用草稿（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：与文本/图片同桶、同隔离 */
+  /** 文件引用草稿（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：与文本/图片同桶、同隔离 */
   setDraftRefs(v: string[] | ((prev: string[]) => string[]), sessionId?: string): void;
   /** 发送接受后清空对应 Tab 草稿（文本 + 附件一并）；缺省为当前活跃 Tab */
   clearDraft(sessionId?: string): void;
@@ -104,7 +104,7 @@ export interface RunStore {
   /** 工具开始（tool:start）：建/翻工具卡（waiting → running）；运行已结束的迟到开始事件一律丢弃 */
   onToolStart(sessionId: string, p: ToolStartEvent): void;
   /** 恢复会话转录（首屏）。meta 可选：
-   *  - `history_status`（[docs/session-history-limits](../../../docs/session-history-limits.md)）：带值时在重建结果末尾补一条
+   *  - `history_status`（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：带值时在重建结果末尾补一条
    *    历史状态提示（重启后仍可见的落点）；P4 的体积状态（`warned` / `fused`）走同一条链路，
    *    文案由 historyStatusNotice 统一分派；
    *  - `paging`（批2 P3）：首屏分页信息——带上即建立分页游标（可显示「加载更早的」），
@@ -115,9 +115,9 @@ export interface RunStore {
   loadEarlier(sessionId?: string | null): Promise<void>;
   /** 收起更早的（批2 P3 AC-15 内存有界）：丢掉前翻加载的旧段，回到首屏那一段 */
   collapseEarlier(sessionId?: string | null): void;
-  /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
+  /** [docs/subagents](../../../docs/subagents.md)：打开子代理过程抽屉（归档子代理按需拉取过程历史重建消息流） */
   openSubDrawer(sessionId: string | null, subId: string): Promise<void>;
-  /** [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)：run 终态对账（**双向**）。
+  /** [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)：run 终态对账（**双向**）。
    *  后端 `session_run_snapshot` 在同一锁内读取 running / run_id / 最近终态。
    *  本地 epoch 屏蔽旧响应与启动窗口；同 run_id 的正常 done 才自动续队，取消/失败保持暂停。 */
   reconcileRun(sessionId: string): Promise<void>;
@@ -171,7 +171,7 @@ function demoteRestoredServiceState(set: RestoreSet, sessionId: string): void {
 /** `load_tool_outcomes` 的行形态（与 ipc/client.ts 的返回类型一致） */
 type ToolOutcomeRow = { call_id: string; outcome: any; duration_ms?: number | null };
 
-/** 「历史里那份模型侧文本取不回出参」的调用 id（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）。
+/** 「历史里那份模型侧文本取不回出参」的调用 id（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）。
  *  判据与 restoredToolData 同源：文本在、却解析不出 JSON 对象（被头尾截断 / `[error E_XXX: …]` 前缀 / 其它非 JSON）——
  *  这类调用在后端可能留有原样 sidecar（`tools/batch.rs` 的 should_persist 用同一判据）。
  *  跳过 `[interrupted]`（后端 repair 补的中断文本，从未落盘）与整条结果缺失的调用；去重保序。 */
@@ -210,7 +210,7 @@ function applyToolOutcomes(map: Record<string, any>, rows: ToolOutcomeRow[]): vo
   }
 }
 
-/** 合法的 `ended` 线协议值集合（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）。
+/** 合法的 `ended` 线协议值集合（[docs/subagents](../../../docs/subagents.md)）。
  *  恢复路径读到的是**任意历史 JSON**，白名单校验后筛不到就当缺省（绿勾）——不得用 `as` 强转放行未知值。 */
 const SUB_ENDED_VALUES = new Set(["report", "partial", "budget", "no_report"]);
 
@@ -318,7 +318,7 @@ function mergeBoundaries(prev: HistoryBoundary[] | undefined, next: HistoryBound
 }
 
 /**
- * 内部提示标签（[docs/main-run-finish-with-pending-todos](../../../docs/main-run-finish-with-pending-todos.md) §8.4）：
+ * 内部提示标签（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）：
  * 后端以 **user 消息**形式注入历史（必须进——要出网给模型看），但它们是给模型看的内部指令，
  * 重开历史时以 user 气泡原样展示 XML 标签既难看又让人误以为是自己发的。
  *
@@ -381,9 +381,9 @@ interface BuildResult {
  *  且分页前插不会改动任何已有键（[AC-14]，数组下标做不到）。 */
 function buildTranscript(msgs: Message[], seq: number): BuildResult {
   const out: UiItem[] = [];
-  // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：tool_use_id → 结果（从子代理 outcome 解析 sub_id/report）
+  // [docs/subagents](../../../docs/subagents.md)：tool_use_id → 结果（从子代理 outcome 解析 sub_id/report）
   const toolResults = scanToolResults(msgs);
-  // [docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)：历史里存的是**模型侧瘦身文本**，
+  // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：历史里存的是**模型侧瘦身文本**，
   // 超阈值会被头尾截断 → 下面 restoredToolData 会退化成 {restored:true} 占位。
   // 这类调用在后端有「原样 sidecar」（按 provider 侧 tool_use id）：恢复末尾由 lossyToolKeys 统一收集、
   // 一次 IPC 批量补回完整出参（缺失就保持占位，卡片文案已覆盖）。子代理卡与过程抽屉走同一条通路。
@@ -420,7 +420,7 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
           const callKey = (c as any).id as string;
           const args: any = (c as any).args ?? {};
           if ((c as any).name === "subagent") {
-            // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：subagent 调用 → 子代理卡片锚点（替代通用工具卡）；归档卡可点击回看完整过程
+            // [docs/subagents](../../../docs/subagents.md)：subagent 调用 → 子代理卡片锚点（替代通用工具卡）；归档卡可点击回看完整过程
             let subId: string | null = null;
             let report: string | undefined;
             let endedData: any;
@@ -428,7 +428,7 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
               const d = JSON.parse(toolResults[callKey]?.content ?? "");
               if (d && typeof d.sub_id === "string") subId = d.sub_id;
               if (d && typeof d.report === "string") report = d.report;
-              // 收尾形态与真实步数一并从出参取（[docs/subagent-budget-and-ended](../../../docs/subagent-budget-and-ended.md)）：
+              // 收尾形态与真实步数一并从出参取（[docs/subagents](../../../docs/subagents.md)）：
               // 不取则重开历史会话时所有子代理卡恒显绿勾（撞顶 / 提前退出都看不出来）；合法值校验在 applyRestoredEnded。
               endedData = d;
             } catch {
@@ -463,7 +463,7 @@ function buildTranscript(msgs: Message[], seq: number): BuildResult {
             const data = stored ? restoredToolData(stored.content) : { restored: true };
             // 「无结果 / 被中断」（后端 repair 补的 [interrupted] 文本，或整条结果缺失）与子代理流的
             // 「已中断」语义对齐——此前一律按「已使用」呈现，与事实不符
-            //（[docs/tool-call-card-live-key](../../../docs/tool-call-card-live-key.md) 的既有遗留）。
+            //（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 的既有遗留）。
             // 注意不能用 is_error 当判据：它同样覆盖真实失败（E_EXIT_CODE 等），那些要走下面的错误码还原。
             const interrupted =
               !stored || stored.content.trimStart().startsWith("[interrupted]");
@@ -558,7 +558,7 @@ export const useRun = create<RunStore>()(
     },
 
     // 返回消息是否被接受（M-2：无会话/失败时返回 false，由调用方决定是否清空输入框；
-    // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：运行中提交 = 入队；targetKey 让队列出队可以定向回源会话）
+    // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：运行中提交 = 入队；targetKey 让队列出队可以定向回源会话）
     async send(text, images, targetKey) {
       const sessions = useSessions.getState();
       text = text.trim();
@@ -572,7 +572,7 @@ export const useRun = create<RunStore>()(
         return false;
       }
       const sessionId = targetKey ?? useSessions.getState().activeKey!;
-      // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：运行中提交 → 入队（文本 + 附件原样保存；出队后走完整 send 管线）
+      // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：运行中提交 → 入队（文本 + 附件原样保存；出队后走完整 send 管线）
       if (cur?.running) {
         set((s) => {
           const t = s.tabs[curKey];
@@ -604,11 +604,11 @@ export const useRun = create<RunStore>()(
         t.running = true;
         t.queueResumeAfterInjection = false;
         t.suggestions = [];
-        // 本轮计数归零（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：
+        // 本轮计数归零（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
         // 会话级 usage 跨 run 累加（命中率需要），而「本轮速率 / 本轮工具等待」必须从零重建，
         // 否则数字跨轮累积失真；归零后尚未收到 usage 帧（genMs = 0）→ 速率段隐藏，即「新 run 覆盖」。
         t.runMetrics = { output: 0, genMs: 0, steps: 0, ttftMs: null, toolMs: 0 };
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理卡片与消息流保持归档（跨运行可回看），不再随新运行重置
+        // [docs/subagents](../../../docs/subagents.md)：子代理卡片与消息流保持归档（跨运行可回看），不再随新运行重置
       });
       const channel = new Channel<any>();
       channel.onmessage = (frame) => {
@@ -670,7 +670,7 @@ export const useRun = create<RunStore>()(
       await ipc.resolveAsk(sessionId, askId, value);
     },
 
-    // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」置位——整体替换（不带旧 callKey）：
+    // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：「先看预览」置位——整体替换（不带旧 callKey）：
     // 新的置位意味着用户又点了一次预览，之前锁定的卡不该再被弹。
     // 桶不存在直接返回（M-1 同款守卫）：这是纯 UI 信号，凭空建桶会让已关 Tab 复活。
     armWidgetAutoOpen(sessionId) {
@@ -691,7 +691,7 @@ export const useRun = create<RunStore>()(
       });
     },
 
-    // [docs/run-queue-and-ask-revamp](../../../docs/run-queue-and-ask-revamp.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复）
+    // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：出队并运行下一条（run:done 后自动调用；error/cancelled 的暂停态由「继续」恢复）
     async runQueueNext(sessionId) {
       const t = get().tabs[sessionId];
       if (!t || t.running) return;
@@ -711,7 +711,7 @@ export const useRun = create<RunStore>()(
       await get().send(next.text, next.images, sessionId);
     },
 
-    // [docs/steer-run-inject](../../../docs/steer-run-inject.md)：立即运行 = **steer**（中途注入，不结束当前 run）
+    // [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)：立即运行 = **steer**（中途注入，不结束当前 run）
     //
     // 语义变更（与旧实现相反）：旧版是「打断当前运行并立即执行该条」（cancel_run 级联停子代理），
     // 新版是「把该项提到队首并把内容 steer 进正在跑的 run」——不结束 run、不打断子代理
@@ -850,13 +850,13 @@ export const useRun = create<RunStore>()(
       if (p.tool === "service") touchServiceRevision(p.outcome?.data?.id);
       set((s) => {
         const t = s.tabs[sessionId];
-        // [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：子代理内部的工具结果（session = sub_id，无对应 Tab）→ 路由进所属会话的子代理流
+        // [docs/subagents](../../../docs/subagents.md)：子代理内部的工具结果（session = sub_id，无对应 Tab）→ 路由进所属会话的子代理流
         if (!t) {
           const owner = Object.values(s.tabs).find((tb) => tb.subStreams[sessionId]);
           const st = owner?.subStreams[sessionId];
           if (!owner || !st) return;
           if (ok && (p.tool === "create" || p.tool === "edit")) {
-            owner.writeTick += 1; // 子代理的文件写同样记在主会话名下（docs/session-artifacts-and-files-tab 语义）
+            owner.writeTick += 1; // 子代理的文件写同样记在主会话名下（docs/sessions-and-projects 语义）
           }
           const tool = ensureToolAnchorIm(st, p.call_key);
           tool.tool = p.tool;
@@ -865,7 +865,7 @@ export const useRun = create<RunStore>()(
           tool.argsPreview = p.args_preview;
           tool.durationMs = p.duration_ms;
           // 注意：**不**把子代理内部工具耗时累加进 owner.runMetrics.toolMs
-          // （[docs/composer-token-rate](../../../docs/composer-token-rate.md)）。
+          // （[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
           // 主管道的 `subagent` 工具卡已把整个子代理运行的时长计过一次，再叠加内部工具即双计；
           // 且工具条「工具等待」只反映主会话自己等过的工具。
           // 结果落定：清掉流式期间的进度尾部。结果卡自带完整输出且只在 running 时展示尾部，
@@ -873,11 +873,11 @@ export const useRun = create<RunStore>()(
           tool.progressTail = "";
           return;
         }
-        // [docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md)：每次成功文件写递增信号；文件页签据此去抖拉取最新登记
+        // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：每次成功文件写递增信号；文件页签据此去抖拉取最新登记
         if (ok && (p.tool === "create" || p.tool === "edit")) {
           t.writeTick += 1;
         }
-        // [docs/preview-skill](../../../docs/preview-skill.md)：「先看预览」信号锁定到本 run 第一张合格的 widget。
+        // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：「先看预览」信号锁定到本 run 第一张合格的 widget。
         // 四条同时满足才置位（任一不满足则完全不碰信号——失败 / 别的工具 / 空 html 都在本 run 内继续等下一张）：
         //   ① 本轮确实成功（tool:error 的 render_html 没有可弹的东西）；
         //   ② 是主会话的 render_html 工具（子代理的渲染结果走上面的 subStreams 早退分支，不得打断用户的视图）；
@@ -905,13 +905,13 @@ export const useRun = create<RunStore>()(
         tool.outcome = p.outcome as any;
         tool.argsPreview = p.args_preview;
         tool.durationMs = p.duration_ms;
-        // 本轮工具等待累加（[docs/composer-token-rate](../../../docs/composer-token-rate.md)）：只算**本轮**已落定的工具卡——
+        // 本轮工具等待累加（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：只算**本轮**已落定的工具卡——
         // 历史（会话恢复）的工具卡由 restoreFromMessages 直接构造、不经本路径，故天然不计入（AC-11）。
         // 不惰性新建 runMetrics：无本轮计数时凭空造桶会让「无数据」变成「有数据但为 0」。
         if (t.runMetrics) t.runMetrics.toolMs += p.duration_ms ?? 0;
         // 同上：落定即清进度尾部（主会话与子代理流两处同步）
         tool.progressTail = "";
-        // [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)：子代理终态**二道兜底**。
+        // [docs/subagents](../../../docs/subagents.md)：子代理终态**二道兜底**。
         // 本块位于主会话分支——子代理内部的工具结果已在上面的 !t 早退分支返回，故只认主会话自己的 subagent 调用。
         //
         // 为什么需要第二道：`sub:done` / `sub:error` 是子代理卡唯一的收尾途径（主会话工具有 closeRunningTools
@@ -934,7 +934,7 @@ export const useRun = create<RunStore>()(
               sub.status = "done";
               // ended 回填：保留后端送来的**任意字符串**，只在非字符串时落 no_report。
               // 刻意不做枚举白名单过滤——白名单写法会在后端扩展 ended 时把新值静默漏判成
-              // no_report（docs/subagent-budget-and-ended.md 就 `partial` 明确警告过这一点：
+              // no_report（docs/subagents.md 就 `partial` 明确警告过这一点：
               // 「后端新增枚举时静默漏判、落回绿勾，即本 bug 在新值上重现」）。
               // 这里先用 typeof 守住运行时形状，再按当前分支的 SubView["ended"] 收窄写入；
               // PR #126（ended 扩四值加 partial）合入后 partial 无需改动即被正确保留。
@@ -991,7 +991,7 @@ export const useRun = create<RunStore>()(
         t.boundaries = meta?.boundaries ?? [];
         // 首屏是**唯一**建立分页游标的地方（前翻只推进游标）；没有 paging（旧后端 / 未分页）⇒ null
         t.paging = meta?.paging ? toPaging(meta.paging, built.items.length > 0 ? 1 : 0) : null;
-        // [docs/session-history-limits](../../../docs/session-history-limits.md)：索引上的历史保存状态（重启后仍在）→ 转录末尾补一条提示。
+        // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：索引上的历史保存状态（重启后仍在）→ 转录末尾补一条提示。
         // 与历史重建同批写入（不额外触发一次渲染）；后端下一次干净保存后 status 会清空，
         // 但**已经 push 进转录的这条 notice 不会撒回**——要它消失得重开该会话（本次设计如此：
         // 不做「已读」交互、不加本地持久化，只要状态还在就每次打开都显示）。
@@ -1007,7 +1007,7 @@ export const useRun = create<RunStore>()(
         }
       });
 
-      // 完整出参回填（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）：
+      // 完整出参回填（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
       // 只对「历史文本解析失败」的调用发起一次批量 IPC（lossyToolKeys 与 restoredToolData 同判据）；
       // 子代理卡顺带把合成 key 改名成真实 sub_id 并补回被截断的 report。
       backfillToolOutcomes(set, sessionId, lossyToolKeys(msgs), undefined, built.subByKey);
@@ -1107,7 +1107,7 @@ export const useRun = create<RunStore>()(
         t.paging = { ...p, loadedFromSeq: p.firstLoadedSeq, hasMore: true, loadedPages: 1, loading: false, failed: false };
       });
     },
-    /** [docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)：打开子代理过程抽屉。归档子代理（会话恢复 / 旧运行）首次打开时按需
+    /** [docs/subagents](../../../docs/subagents.md)：打开子代理过程抽屉。归档子代理（会话恢复 / 旧运行）首次打开时按需
      *  拉取过程历史重建消息流；运行中子代理直接显示实时流。 */
     async openSubDrawer(sessionId, subId) {
       const sid = sessionId ?? useSessions.getState().activeKey;
@@ -1146,7 +1146,7 @@ export const useRun = create<RunStore>()(
       }
     },
 
-    /** run 终态对账（双向）——见 RunStore 接口处注释与 [docs/run-terminal-event-fallback](../../../docs/run-terminal-event-fallback.md)。
+    /** run 终态对账（双向）——见 RunStore 接口处注释与 [docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)。
      *
      *  本地侧判据 `hasUnsettledRunState` 刻意**不只看 `t.running`**：`run:start` 丢失时它恒为 false，
      *  而 `sub:spawn` 建卡不检查它，此时子代理卡仍是 running（证据 5）。

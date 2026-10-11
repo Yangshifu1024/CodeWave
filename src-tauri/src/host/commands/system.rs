@@ -15,7 +15,7 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
-// ---------- 自绘标题栏（tauri-plugin-decoration v3，[docs/custom-font-and-titlebar](../../../../docs/custom-font-and-titlebar.md)）----------
+// ---------- 自绘标题栏（tauri-plugin-decoration v3，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）----------
 
 /// 激活失败兜底：恢复原生装饰并 reveal 窗口。窗口以 visible:false 起动，
 /// 任何代码路径最终都必须 reveal。

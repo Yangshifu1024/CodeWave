@@ -1,4 +1,4 @@
-//! 手写增量 SSE 解析器（零第三方依赖、纯函数可测，[docs/p0-plan](../../../docs/p0-plan.md) §4 实施时定稿）。
+//! 手写增量 SSE 解析器（零第三方依赖、纯函数可测，[docs/technical-design](../../../docs/technical-design.md) 实施时定稿）。
 //! 处理 `event:` / `data:` / 注释行 / CRLF；空行标志事件结束；流结束时冲刷未下发事件。
 
 /// 单个 SSE event：`event` 字段可缺省（None = 纯 data 事件），多行 data 以 '\n' 连接。

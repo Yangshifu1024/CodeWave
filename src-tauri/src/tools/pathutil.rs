@@ -1,4 +1,4 @@
-//! 路径边界的唯一事实源（[docs/p0-plan](../../../docs/p0-plan.md) §7.1）。
+//! 路径边界的唯一事实源（[docs/technical-design](../../../docs/technical-design.md)）。
 //! 所有文件类工具与 fence 检查必须经由本模块，禁止散落实现。
 
 use std::path::{Component, Path, PathBuf};
@@ -116,7 +116,7 @@ fn inside_any(cand: &Path, roots: &[PathBuf]) -> bool {
 
 /// 去掉 Windows `canonicalize` 产生的 verbatim 前缀：`\\?\C:\x` → `C:\x`、`\\?\UNC\srv\share` → `\\srv\share`。
 ///
-/// **只用于展示与「交给模型的引用写法」**（[docs/composer-file-ref-chips](../../../docs/composer-file-ref-chips.md)）：
+/// **只用于展示与「交给模型的引用写法」**（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 /// 边界比较、extra 根存储等内部形态一律保持 canonical（见 `safety/fence/check.rs` 的命名空间注释），
 /// 否则包含性判断会失真。去前缀后的路径在 Windows 上仍可被 `read`/`write` 接受——
 /// `resolve_read/resolve_write` 会先 `canonical_best_effort` 再比根，又回到同一命名空间。

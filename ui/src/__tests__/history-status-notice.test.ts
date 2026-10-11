@@ -1,8 +1,8 @@
-// 历史未完整保存的会话内提示（[docs/session-history-limits](../../../docs/session-history-limits.md)）：
+// 历史未完整保存的会话内提示（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
 //   ① `run:done` 载荷的可选字段 `history_save`（后端**仅当保存不干净时**才带上）→ 转录补一条 notice；
 //   ② `SessionMeta.history_status`（挂在会话索引上，重启后仍在）→ 恢复历史时补同一条 notice。
 // 口径：干净路径零打扰；只要状态在就每次打开都显示（不做「已读」交互、不加本地持久化）。
-// P4（[docs/session-history-limits](../../../docs/session-history-limits.md)）：体积软告警 `warned` / 硬熔断 `fused`
+// P4（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：体积软告警 `warned` / 硬熔断 `fused`
 // 走**同一条**链路（`run:done.history_save` 当场 + `SessionMeta.history_status` 重启后），文案各自独立。
 // 惯例：唯一 invoke 入口 ui/src/ipc/client 必须 mock（不直接 mock @tauri-apps/api/core）；
 // zustand store 是模块级单例，逐用例重建态桶（踩坑清单）。

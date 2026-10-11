@@ -1,4 +1,4 @@
-// 清理相关的 IPC 封装契约（[docs/session-cleanup](../../docs/session-cleanup.md) §6）：
+// 清理相关的 IPC 封装契约（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
 // 命令名与参数键名必须与后端逐字一致（一个字符改动就是运行时「命令找不到」），
 // 返回值原样透传（设置页据此弹确认框/报完成提示），saveConfig 的 skipCleanup 默认为 false。
 // 这一层测的就是 client.ts 自己，所以只能 mock 底层的 @tauri-apps/api/core（唯一 invoke 实现）。

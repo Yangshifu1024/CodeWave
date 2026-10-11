@@ -1,4 +1,4 @@
-// UI store: panel toggles, right bar persistence, notification stack lifecycle ([docs/oss-prep-batch](../../../docs/oss-prep-batch.md) coverage batch)
+// UI store: panel toggles, right bar persistence, notification stack lifecycle ([docs/development](../../../docs/development.md) coverage batch)
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useUi } from "../stores/ui";
 import { DEFAULT_PAGE } from "../features/panels/settingsRegistry";
@@ -52,7 +52,7 @@ describe("stores/ui", () => {
     expect(useUi.getState().rbTab).toBe("changes");
   });
 
-  it("showSettings：带页跳到该页，无参保持当前页不重置（docs/settings-fullscreen-shell）", () => {
+  it("showSettings：带页跳到该页，无参保持当前页不重置（docs/settings-guide）", () => {
     // 带参深链：错误卡「打开模型设置」→ providers、macOS 菜单「关于」→ about 靠它落地（auth-error-guidance）
     useUi.setState({ settingsTab: "appearance", settingsOpen: false });
     useUi.getState().showSettings("providers");

@@ -1,4 +1,4 @@
-// 打字机逐字揭示（[docs/typewriter-stream](../../docs/typewriter-stream.md)）
+// 打字机逐字揭示（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
 //
 // 测试策略（据 tester 实测）：happy-dom 下 vi.useFakeTimers() 驱动不了 requestAnimationFrame
 // （happy-dom 模块加载时把 globalThis.setImmediate 绑定快照进内部 TIMER，假计时器换晚了；

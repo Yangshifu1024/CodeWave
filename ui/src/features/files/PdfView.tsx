@@ -1,4 +1,4 @@
-// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：PDF 视图。
+// [docs/documents](../../../../docs/documents.md)：PDF 视图。
 // 用 pdfjs-dist 在网页里渲染；字节走 read_file_chunk 分片取（大文件不能一次性塞进一条 IPC 消息）。
 // pdfjs 与它的 worker 都走动态 import：不打开 PDF 就不加载这份几百 KB 的解析器。
 import { useEffect, useRef, useState } from "react";

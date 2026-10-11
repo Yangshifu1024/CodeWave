@@ -1,4 +1,4 @@
-// Chat area scrollbar style contract ([docs/chat-scrollbar-overlay]):
+// Chat area scrollbar style contract ([docs/chat-and-interface]):
 // native 滚动条全部隐藏（Windows「始终显示滚动条」系统设置下 native widget 会画带箭头的滚动条，CSS 改不掉——见 app.css 对应章节），
 // 改用 ChatScrollbar React 组件（仿 MiniMax Code / Slack / Discord overlay 范式）按 scroll 位置渲染细 thumb，滚动时显、停 1s 后隐。
 // Asserts the raw source via node fs (same approach as titlebar.style.test.ts).
@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../theme/app.css"), "utf8");
 
-describe("聊天区滚动条契约（docs/chat-scrollbar-overlay：自定义 overlay 替代 native）", () => {
+describe("聊天区滚动条契约（docs/chat-and-interface：自定义 overlay 替代 native）", () => {
   it(".chat-messages native 滚动条全隐藏（避免系统「始终显示滚动条」画 native widget 带箭头）", () => {
     // Firefox scrollbar-width 关闭
     expect(appCss).toMatch(/\.chat-messages\s*\{[^}]*scrollbar-width:\s*none/);
@@ -37,7 +37,7 @@ describe("聊天区滚动条契约（docs/chat-scrollbar-overlay：自定义 ove
   });
 });
 
-describe("用户消息悬停操作样式契约（docs/titlebar-content-batch 追加）", () => {
+describe("用户消息悬停操作样式契约（docs/chat-and-interface 追加）", () => {
   it(".user-msg-actions 默认隐藏（visibility 兜底防透明误点），悬停消息行浮现", () => {
     expect(appCss).toMatch(/\.user-msg-actions\s*\{[^}]*visibility:\s*hidden[^}]*opacity:\s*0/);
     expect(appCss).toMatch(/\.msg\.user:hover \.user-msg-actions\s*\{[^}]*visibility:\s*visible[^}]*opacity:\s*1/);

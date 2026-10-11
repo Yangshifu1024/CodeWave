@@ -1,4 +1,4 @@
-// 速率与耗时的展示口径（[docs/composer-token-rate](../../docs/composer-token-rate.md)）：
+// 速率与耗时的展示口径（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 工具条速率段与统计面板总览三项共用同一份纯函数——位数自适应、工具等待与速率解耦、
 // 「无数据」一律 null（绝不返回 0 / NaN / Infinity，显示端据此隐藏）。
 import { describe, it, expect } from "vitest";

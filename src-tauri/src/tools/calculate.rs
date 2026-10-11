@@ -1,4 +1,4 @@
-//! calculate 工具：手写递归下降数学求值器（[docs/p1-plan](../../../docs/p1-plan.md) §2.8）。
+//! calculate 工具：手写递归下降数学求值器（[docs/technical-design](../../../docs/technical-design.md)）。
 //! 文法：expr(加减) → term(乘除模) → factor(^ 右结合) → unary(−) → atom。
 //! 永不 eval；除零 / 溢出 / NaN 均产生干净错误。
 

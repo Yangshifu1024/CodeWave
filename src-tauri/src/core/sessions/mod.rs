@@ -1,4 +1,4 @@
-//! 会话持久化（[docs/p0-plan](../../../../docs/p0-plan.md) §8）：纯文件，不引入数据库。
+//! 会话持久化（[docs/technical-design](../../../../docs/technical-design.md)）：纯文件，不引入数据库。
 //! 保存 = sanitize → repair → **分段 append-only JSONL**（不 trim、不整份改写）；
 //! 加载 = 段回放 → repair → trim（wire 侧裁剪与落盘解耦）。
 
@@ -7,7 +7,7 @@ pub mod interrupt;
 pub mod repair;
 // 工具结果原样 sidecar（历史里只有模型侧瘦身文本，恢复需要完整出参）
 pub mod tool_results;
-// 图片外置存储与历史落盘 DTO（[docs/session-history-limits](../../../../docs/session-history-limits.md)）：
+// 图片外置存储与历史落盘 DTO（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
 // 历史文件里只留 blob 引用，base64 原文落到 `sessions/<owner>.imgblob/`
 pub(crate) mod image_blobs;
 pub(crate) mod persist;

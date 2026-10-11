@@ -1,5 +1,5 @@
 //! 可等待目标登记表：`wait` 工具条件等待（`until`）的后端数据面
-//! （[docs/wait-conditional-wait](../../../docs/wait-conditional-wait.md)）。
+//! （[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）。
 //!
 //! 背景：任何后台对象（service / 子代理 / 计划任务 …）都可以被 `wait` 的 `until` 等待
 //! 「完成」。仓库既有表不足以直接支撑轮询：

@@ -154,7 +154,7 @@ describe("Composer 草稿按 Tab 隔离", () => {
     expect(document.querySelector(".attach-chip")).toBeTruthy();
   });
 
-  it("D2b 引用 chip 随同一草稿桶隔离：s1 挂引用 → s2 无 chip → 切回恢复（[docs/composer-file-ref-chips]）", () => {
+  it("D2b 引用 chip 随同一草稿桶隔离：s1 挂引用 → s2 无 chip → 切回恢复（[docs/chat-and-interface]）", () => {
     seedTwoTabs();
     mountComposer();
     act(() => {

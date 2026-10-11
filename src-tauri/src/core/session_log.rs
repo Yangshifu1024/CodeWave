@@ -1,4 +1,4 @@
-//! 会话级细粒度日志（黑匣子，[docs/session-logging-report](../../../docs/session-logging-report.md)）：一会话一文件，不受全局日志级别过滤，恒开启。
+//! 会话级细粒度日志（黑匣子，[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：一会话一文件，不受全局日志级别过滤，恒开启。
 //! 落点遵循 W5 路由：项目会话与子代理（继承父会话 project_dir）= 项目托管目录 logs/<session-id>.log；
 //! 临时/自由会话 = 全局数据目录 logs/<session-id>.log。
 //! zombie 会话一律跳过（H5：迟到写入不得复活已删除会话的日志）。

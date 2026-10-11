@@ -1,4 +1,4 @@
-// Titlebar style contract ([docs/custom-font-and-titlebar](../../../docs/custom-font-and-titlebar.md) review R1): .titlebar-drag-zone is absolute inset:0,
+// Titlebar style contract ([docs/chat-and-interface](../../../docs/chat-and-interface.md) review R1): .titlebar-drag-zone is absolute inset:0,
 // it needs a positioned ancestor (.toolbar position:relative); otherwise the containing block falls back to the initial containing block = the whole viewport,
 // and the transparent drag layer would cover the middle and lower areas. vitest does not load CSS (css:false — even ?raw returns an empty string),
 // so node fs is used to read the source directly for style contract assertions.
@@ -20,7 +20,7 @@ describe("自绘标题栏样式契约", () => {
     expect(appCss).toMatch(/\.toolbar\s*\{[^}]*position:\s*relative/);
   });
 
-  it(".toolbar 必须显式 padding:0——压掉 antd 6 Header 默认 0 50px（docs/titlebar-content-batch 审查 🔴1）", () => {
+  it(".toolbar 必须显式 padding:0——压掉 antd 6 Header 默认 0 50px（docs/chat-and-interface 审查 🔴1）", () => {
     expect(appCss).toMatch(/\.toolbar\s*\{[^}]*padding:\s*0\s*;/);
   });
 
@@ -32,8 +32,8 @@ describe("自绘标题栏样式契约", () => {
     expect(appCss).toMatch(/\.toolbar > \*\s*\{[^}]*z-index:\s*1/);
   });
 
-  it("native 回退与 macOS 分支规则存在且顺序在基础规则之后（后写胜出，docs/titlebar-content-batch 迁移到段容器）", () => {
-    // Two-segment titlebar ([docs/titlebar-content-batch](../../../docs/titlebar-content-batch.md)): macOS traffic-light clearance / native fallback rules target .tb-left-seg / .tb-main-seg
+  it("native 回退与 macOS 分支规则存在且顺序在基础规则之后（后写胜出，docs/chat-and-interface 迁移到段容器）", () => {
+    // Two-segment titlebar ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): macOS traffic-light clearance / native fallback rules target .tb-left-seg / .tb-main-seg
     const nativeLeftAt = appCss.indexOf('html[data-titlebar-mode="native"] .tb-left-seg');
     const macosLeftAt = appCss.indexOf('html[data-os="macos"] .tb-left-seg');
     const baseLeftAt = appCss.indexOf(".tb-left-seg {");
@@ -44,22 +44,22 @@ describe("自绘标题栏样式契约", () => {
     expect(appCss).toContain('html[data-titlebar-mode="native"] .tb-main-seg');
   });
 
-  it("两段背景契约：左段带过渡与右缘分隔线，右段弹性占满且不外溢；折叠态装饰归零与让位类（docs/sidebar-collapse-animation-and-titlebar-blend）", () => {
+  it("两段背景契约：左段带过渡与右缘分隔线，右段弹性占满且不外溢；折叠态装饰归零与让位类（docs/chat-and-interface）", () => {
     expect(appCss).toMatch(/\.tb-left-seg\s*\{[^}]*transition:\s*width\s+0\.2s/);
     expect(appCss).toMatch(/\.tb-left-seg\s*\{[^}]*border-right:\s*1px\s+solid\s+var\(--ws-border\)/);
     expect(appCss).toMatch(/\.tb-main-seg\s*\{[^}]*flex:\s*1[^}]*min-width:\s*0/);
-    // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md): collapsed decor rules exist for every platform/native branch (review 🟡1: the platform rules carry a
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md): collapsed decor rules exist for every platform/native branch (review 🟡1: the platform rules carry a
     // higher specificity than .tb-left-closed alone, so each branch needs its own zeroing override)
     expect(appCss).toMatch(/\.tb-left-seg\.tb-left-closed\s*\{[^}]*padding-left:\s*0[^}]*border-right-color:\s*transparent[^}]*background:\s*var\(--ws-bg-main\)/);
     expect(appCss).toMatch(/html\[data-os="macos"\] \.tb-left-seg\.tb-left-closed\s*\{[^}]*padding-left:\s*0[^}]*min-width:\s*0/);
     expect(appCss).toMatch(/html\[data-titlebar-mode="native"\] \.tb-left-seg\.tb-left-closed\s*\{[^}]*padding-left:\s*0/);
     expect(appCss).toMatch(/\.tb-main-seg\s*\{[^}]*transition:\s*padding\s+0\.2s/);
-    // [docs/sidebar-collapse-animation-and-titlebar-blend](../../../docs/sidebar-collapse-animation-and-titlebar-blend.md) traffic-light yield migration: collapsed right segment pads 78px on macOS, native fallback reverts to 12px
+    // [docs/chat-and-interface](../../../docs/chat-and-interface.md) traffic-light yield migration: collapsed right segment pads 78px on macOS, native fallback reverts to 12px
     expect(appCss).toMatch(/html\[data-os="macos"\] \.tb-main-seg\.tb-main-cleared\s*\{[^}]*padding-left:\s*max\(78px/);
     expect(appCss).toMatch(/html\[data-titlebar-mode="native"\] \.tb-main-seg\.tb-main-cleared\s*\{[^}]*padding-left:\s*12px/);
   });
 
-  it("Logo 开合入口（docs/titlebar-logo-toggle）：悬停 Logo 淡出、箭头覆盖浮现（同位交换）", () => {
+  it("Logo 开合入口（docs/chat-and-interface）：悬停 Logo 淡出、箭头覆盖浮现（同位交换）", () => {
     expect(appCss).toMatch(/\.tb-logo-toggle\s*\{[^}]*position:\s*relative[^}]*cursor:\s*pointer/);
     expect(appCss).toMatch(/\.tb-logo-toggle:hover \.tb-logo\s*\{[^}]*opacity:\s*0/);
     expect(appCss).toMatch(/\.tb-logo-toggle:hover \.tb-logo-swap\s*\{[^}]*opacity:\s*1/);

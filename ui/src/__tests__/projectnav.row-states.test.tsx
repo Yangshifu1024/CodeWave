@@ -1,7 +1,7 @@
-// Left nav session row states batch ([docs/ask-ink-accent-and-composer-cover](../../../docs/ask-ink-accent-and-composer-cover.md)):
+// Left nav session row states batch ([docs/chat-and-interface](../../../docs/chat-and-interface.md)):
 // 1) While awaiting confirmation (askPending), inline rename/delete buttons do not render (same slot as the "awaiting confirmation" badge, they would overlap)
 // 2) Unread dot on session end — run done/error marks the session when the user is not viewing it (incl. late events after the tab closed); entering the session clears it
-// 3) ask:opened sends a system notification on window blur (notify_system, click-to-reveal via [docs/notification-click-reveal](../../../docs/notification-click-reveal.md))
+// 3) ask:opened sends a system notification on window blur (notify_system, click-to-reveal via [docs/chat-and-interface](../../../docs/chat-and-interface.md))
 // vitest loads no CSS: render the component directly + seed data via useSessions/useRun setState; events injected by calling bindGlobalHandlers() handlers directly
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, act, waitFor } from "@testing-library/react";
@@ -76,7 +76,7 @@ afterEach(() => {
   vi.mocked(invoke).mockClear();
 });
 
-describe("等待确认行：重命名/删除按钮与「等待确认」徽标互斥（docs/ask-ink-accent-and-composer-cover）", () => {
+describe("等待确认行：重命名/删除按钮与「等待确认」徽标互斥（docs/chat-and-interface）", () => {
   it("ask 存在 → 无 .row-actions、有「等待确认」徽标；ask 关闭 → 按钮恢复", () => {
     renderNav({ tabs: [tab({ sessionId: "s1", title: "提问中会话" })], activeKey: "s1" });
     useRun.getState().initTab("s1");
@@ -116,7 +116,7 @@ describe("等待确认行：重命名/删除按钮与「等待确认」徽标互
   });
 });
 
-describe("会话结束未读点（docs/ask-ink-accent-and-composer-cover）", () => {
+describe("会话结束未读点（docs/chat-and-interface）", () => {
   it("run:done 时用户不在该会话 → 标记未读；活跃会话 → 不标", () => {
     renderNav({
       tabs: [tab({ sessionId: "s1", title: "甲" }), tab({ sessionId: "s2", title: "乙" })],
@@ -171,7 +171,7 @@ describe("会话结束未读点（docs/ask-ink-accent-and-composer-cover）", ()
   });
 });
 
-describe("ask:opened 失焦系统通知（docs/ask-ink-accent-and-composer-cover）", () => {
+describe("ask:opened 失焦系统通知（docs/chat-and-interface）", () => {
   it("窗口失焦时发出 notify_system（含 sessionId），聚焦时不发", async () => {
     const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     renderNav({ tabs: [tab({ sessionId: "s1", title: "确认会话" })], activeKey: "s2" });

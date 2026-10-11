@@ -64,7 +64,7 @@ export const useTasks = create<TasksState>((set, get) => ({
   applyFired(p) {
     const id = p?.id;
     if (!id || get().runningIds.includes(id)) return;
-    // 只置运行标记：提示已由用户拍板静默（[docs/tasks-module-polish]）
+    // 只置运行标记：提示已由用户拍板静默（[docs/runtime-and-scheduling]）
     set((s) => ({ runningIds: [...s.runningIds, id] }));
   },
 

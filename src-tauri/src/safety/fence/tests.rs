@@ -173,7 +173,7 @@ fn t15_powershell_remove_item_blocked_via_fallback() {
     assert!(matches!(v, Verdict::Block { .. }), "got {v:?}");
 }
 
-// ===== H3-H6 对抗用例（[docs/code-review-findings](../../../../docs/code-review-findings.md) 评审修复）=====
+// ===== H3-H6 对抗用例（[docs/testing](../../../../docs/testing.md) 评审修复）=====
 
 #[test]
 fn adv_sudo_prefix_blocked() {
@@ -328,7 +328,7 @@ fn approval_disabled_blocks_high_risk() {
     assert_eq!(v, Verdict::Allow);
 }
 
-// ===== 权限档 FencePolicy（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）=====
+// ===== 权限档 FencePolicy（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）=====
 
 fn run_policy(
     cmd: &str,
@@ -427,7 +427,7 @@ fn disaster_split_from_high_risk() {
     ));
 }
 
-// ===== Plan 档只读白名单（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 收紧）=====
+// ===== Plan 档只读白名单（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 收紧）=====
 
 fn plan_policy() -> FencePolicy {
     FencePolicy {
@@ -458,7 +458,7 @@ fn plan_readonly_whitelist_passes() {
 fn plan_readonly_nonwhitelist_blocks() {
     let (ws, _o, roots) = fixture();
     let p = plan_policy();
-    // G5（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：白名单外一律 Block（绝不 Confirm——plan 只读承诺不能被一次误点确认绕过）
+    // G5（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：白名单外一律 Block（绝不 Confirm——plan 只读承诺不能被一次误点确认绕过）
     assert!(matches!(
         run_policy("npm install", &ws, &roots, p),
         Verdict::Block { .. }
@@ -575,7 +575,7 @@ fn plan_readonly_block_message_guides() {
     }
 }
 
-// ===== plan 档 gh 子命令白名单（远端写不在 L1-L3 覆盖范围，[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）=====
+// ===== plan 档 gh 子命令白名单（远端写不在 L1-L3 覆盖范围，[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）=====
 
 #[test]
 fn plan_readonly_gh_readonly_forms_pass() {
@@ -798,7 +798,7 @@ fn plan_readonly_block_message_excerpts_long_command() {
     }
 }
 
-// ===== PowerShell 只读白名单（[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)：Windows 回退 shell）=====
+// ===== PowerShell 只读白名单（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)：Windows 回退 shell）=====
 
 #[test]
 fn plan_readonly_powershell_pipe_passes() {
@@ -855,9 +855,9 @@ fn plan_readonly_powershell_writes_still_blocked() {
     ));
 }
 
-// ===== [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：反混淆 / 字面量掩码 / force-with-lease / PowerShell AST =====
+// ===== [docs/testing](../../../../docs/testing.md)：反混淆 / 字面量掩码 / force-with-lease / PowerShell AST =====
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：带引号的命令名按运行时命令归类（`r"m"` 按 `rm` 执行）
+/// [docs/testing](../../../../docs/testing.md)：带引号的命令名按运行时命令归类（`r"m"` 按 `rm` 执行）
 #[test]
 fn t16_deobf_quoted_name_blocked() {
     let (ws, _o, roots) = fixture();
@@ -867,7 +867,7 @@ fn t16_deobf_quoted_name_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：单引号 raw_string 名字同样归类（或降级给回退扫描）
+/// [docs/testing](../../../../docs/testing.md)：单引号 raw_string 名字同样归类（或降级给回退扫描）
 #[test]
 fn t17_deobf_raw_string_name_blocked() {
     let (ws, _o, roots) = fixture();
@@ -877,7 +877,7 @@ fn t17_deobf_raw_string_name_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：`${IFS}` 展开在运行时切出真实 argv
+/// [docs/testing](../../../../docs/testing.md)：`${IFS}` 展开在运行时切出真实 argv
 #[test]
 fn t18_deobf_ifs_expansion_blocked() {
     let (ws, _o, roots) = fixture();
@@ -887,7 +887,7 @@ fn t18_deobf_ifs_expansion_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：`--force-with-lease` 是安全强制变体——不再误报
+/// [docs/testing](../../../../docs/testing.md)：`--force-with-lease` 是安全强制变体——不再误报
 #[test]
 fn t19_force_with_lease_allowed() {
     let (ws, _o, roots) = fixture();
@@ -897,7 +897,7 @@ fn t19_force_with_lease_allowed() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：裸 `-f` 仍算强制推送
+/// [docs/testing](../../../../docs/testing.md)：裸 `-f` 仍算强制推送
 #[test]
 fn t20_force_short_flag_confirm() {
     let (ws, _o, roots) = fixture();
@@ -907,7 +907,7 @@ fn t20_force_short_flag_confirm() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：字符串字面量数据不得触发 L3（带引号的 "git push --force" 只是提交说明）
+/// [docs/testing](../../../../docs/testing.md)：字符串字面量数据不得触发 L3（带引号的 "git push --force" 只是提交说明）
 #[test]
 fn t21_l3_string_content_masked() {
     let (ws, _o, roots) = fixture();
@@ -921,7 +921,7 @@ fn t21_l3_string_content_masked() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：内嵌命令替换的字符串保持不掩码——其内容确实会执行
+/// [docs/testing](../../../../docs/testing.md)：内嵌命令替换的字符串保持不掩码——其内容确实会执行
 #[test]
 fn t22_string_with_cmd_subst_still_scanned() {
     let (ws, _o, roots) = fixture();
@@ -931,7 +931,7 @@ fn t22_string_with_cmd_subst_still_scanned() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：PowerShell 下载-执行模式（iwr | iex）
+/// [docs/testing](../../../../docs/testing.md)：PowerShell 下载-执行模式（iwr | iex）
 #[test]
 fn t23_iwr_pipe_iex_confirm() {
     let (ws, _o, roots) = fixture();
@@ -941,7 +941,7 @@ fn t23_iwr_pipe_iex_confirm() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：PowerShell AST 路径——PS 独有语法内的重定向目标照查
+/// [docs/testing](../../../../docs/testing.md)：PowerShell AST 路径——PS 独有语法内的重定向目标照查
 #[test]
 fn t24_ps_redirect_outside_confirm() {
     let (ws, _o, roots) = fixture();
@@ -952,7 +952,7 @@ fn t24_ps_redirect_outside_confirm() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：脚本块内的 PowerShell 删除 cmdlet 被拦（AST 或回退网）
+/// [docs/testing](../../../../docs/testing.md)：脚本块内的 PowerShell 删除 cmdlet 被拦（AST 或回退网）
 #[test]
 fn t25_ps_remove_item_in_script_block_blocked() {
     let (ws, _o, roots) = fixture();
@@ -962,7 +962,7 @@ fn t25_ps_remove_item_in_script_block_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：参数式写盘 cmdlet（`out-file`）的首参数现已纳入判定
+/// [docs/testing](../../../../docs/testing.md)：参数式写盘 cmdlet（`out-file`）的首参数现已纳入判定
 #[test]
 fn t26_ps_out_file_outside_confirm() {
     let (ws, _o, roots) = fixture();
@@ -973,7 +973,7 @@ fn t26_ps_out_file_outside_confirm() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：mkdir 加入写语义判定表——roots 外建目录照判
+/// [docs/testing](../../../../docs/testing.md)：mkdir 加入写语义判定表——roots 外建目录照判
 #[test]
 fn t27_mkdir_outside_confirm() {
     let (ws, _o, roots) = fixture();
@@ -984,14 +984,14 @@ fn t27_mkdir_outside_confirm() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：工作区内 mkdir 保持放行
+/// [docs/testing](../../../../docs/testing.md)：工作区内 mkdir 保持放行
 #[test]
 fn t28_mkdir_inside_allowed() {
     let (ws, _o, roots) = fixture();
     assert_eq!(run("mkdir build", &ws, &roots), Verdict::Allow);
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-1）：带引号的命令名进入按名的灾难表——
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-1）：带引号的命令名进入按名的灾难表——
 /// 掩码 L3 文本扫描看不到它们
 #[test]
 fn t31_quoted_shutdown_disaster() {
@@ -1002,7 +1002,7 @@ fn t31_quoted_shutdown_disaster() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-1）：带引号的重定向目标在遍历中保持灾难级
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-1）：带引号的重定向目标在遍历中保持灾难级
 ///（`> "/etc/newfile"` 在掩码文本中被抹白，按去引号形态判定）
 #[test]
 fn t32_quoted_etc_redirect_disaster() {
@@ -1013,7 +1013,7 @@ fn t32_quoted_etc_redirect_disaster() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-1）：带引号的下载 + 解释器名经 AST 遍历标记关联
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-1）：带引号的下载 + 解释器名经 AST 遍历标记关联
 #[test]
 fn t38_quoted_curl_pipe_sh_confirm() {
     let (ws, _o, roots) = fixture();
@@ -1023,7 +1023,7 @@ fn t38_quoted_curl_pipe_sh_confirm() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-4）：PS 调用操作符形态保持 L1 覆盖
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-4）：PS 调用操作符形态保持 L1 覆盖
 #[test]
 fn t33_ps_invocation_operator_rm_blocked() {
     let (ws, _o, roots) = fixture();
@@ -1033,7 +1033,7 @@ fn t33_ps_invocation_operator_rm_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🟡-1）：`powershell -Command` 递归在 bash 解析路径上触发
+/// [docs/testing](../../../../docs/testing.md)（评审 🟡-1）：`powershell -Command` 递归在 bash 解析路径上触发
 #[test]
 fn t34_powershell_command_recursion_blocked() {
     let (ws, _o, roots) = fixture();
@@ -1043,7 +1043,7 @@ fn t34_powershell_command_recursion_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-4）：PS 独有语法内混淆的删除名即使由 PS AST
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-4）：PS 独有语法内混淆的删除名即使由 PS AST
 /// 路径接管，也会被词法 L1 网抓住
 #[test]
 fn t36_ps_obfuscated_delete_net_blocked() {
@@ -1054,7 +1054,7 @@ fn t36_ps_obfuscated_delete_net_blocked() {
     ));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：两套语法都解析失败 → 词法回退仍反混淆 L1 token
+/// [docs/testing](../../../../docs/testing.md)：两套语法都解析失败 → 词法回退仍反混淆 L1 token
 #[test]
 fn t37_fallback_deobf_blocked() {
     let (ws, _o, roots) = fixture();
@@ -1147,7 +1147,7 @@ fn t45_git_reset_approval_disabled_blocked() {
     assert!(matches!(v, Verdict::Block { .. }));
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-3，有意语义）：不存在的 `../` 目标是普通
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-3，有意语义）：不存在的 `../` 目标是普通
 /// outside-create（Confirm；仅已存在时 Block——见 t04）。旧 Block 是
 /// 祖先循环误报的产物，并非设计边界。
 #[test]
@@ -1160,7 +1160,7 @@ fn t30_parent_traverse_new_outside_confirm() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🟡-2）：WRITE_FIRST 逐个非 flag 参数判定，带值的命名
+/// [docs/testing](../../../../docs/testing.md)（评审 🟡-2）：WRITE_FIRST 逐个非 flag 参数判定，带值的命名
 /// flag 无法藏住真正的 `-Path` 目标
 #[test]
 fn t35_new_item_named_path_outside_confirm() {
@@ -1172,7 +1172,7 @@ fn t35_new_item_named_path_outside_confirm() {
     );
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审 🔴-2）：Windows 上 junction 逃逸保持被拦——词法包含性
+/// [docs/testing](../../../../docs/testing.md)（评审 🔴-2）：Windows 上 junction 逃逸保持被拦——词法包含性
 /// 检查必须运行在规范化（原样）命名空间里
 #[cfg(windows)]
 #[test]

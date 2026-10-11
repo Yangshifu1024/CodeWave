@@ -24,7 +24,7 @@ import { useRun } from "../../stores/run";
 import { useUi } from "../../stores/ui";
 import { statusKind, statusLabel, useTasks } from "../../stores/tasks";
 
-/** 任务行 tooltip：状态 / 下次触发 / 上次摘要——颜色之外的信息补回（[docs/tasks-module-polish]） */
+/** 任务行 tooltip：状态 / 下次触发 / 上次摘要——颜色之外的信息补回（[docs/runtime-and-scheduling]） */
 function taskTip(task: ScheduledTask, t: (k: string, o?: Record<string, unknown>) => string, running: boolean): string {
   const next = task.next_run
     ? fmtRunTime(task.next_run)
@@ -489,7 +489,7 @@ function SessionRow({
   const { t } = useTranslation();
   const running = useRun((s) => !!s.tabs[meta.id]?.running);
   const askPending = useRun((s) => !!s.tabs[meta.id]?.ask);
-  // [docs/ask-ink-accent-and-composer-cover](../../../../docs/ask-ink-accent-and-composer-cover.md)：会话结束未读点（run done/error 且用户不在时置位；进入时由 store 订阅清除）
+  // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：会话结束未读点（run done/error 且用户不在时置位；进入时由 store 订阅清除）
   const unread = useSessions((s) => !!s.unread[meta.id]);
   const { message } = App.useApp();
   // 复制会话 ID：右键菜单入口，写剪贴板后轻反馈（与 ChatMessages doCopy 同模式）
@@ -554,7 +554,7 @@ function SessionRow({
         </Tag>
       )}
       <span className="session-time">{relTime(meta.updated_at)}</span>
-      {/* 等待确认期间行操作不可用：按钮悬停层与徽标同槽位、会相互叠压（docs/ask-ink-accent-and-composer-cover） */}
+      {/* 等待确认期间行操作不可用：按钮悬停层与徽标同槽位、会相互叠压（docs/chat-and-interface） */}
       {!askPending && (
         <span className="row-actions" onClick={(e) => e.stopPropagation()}>
           <Button className="row-action" type="text" size="small" title={t("sessions.rename")} icon={<EditOutlined />} onClick={onRename} />

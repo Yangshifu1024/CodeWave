@@ -43,7 +43,7 @@ pub async fn get_config(core: Core<'_>) -> Result<ConfigState, String> {
 
 /// 保存配置：掩码回填 → 落盘 → keyring 迁移 → 日志级别热切换 → 冷却清零。
 /// 会话保留期变化且未跳过时，保存后再跑一次会话清理并把结果回传
-///（[docs/session-cleanup](../../../../docs/session-cleanup.md)：前端先预览/确认，取消时传 skip_cleanup = true）。
+///（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：前端先预览/确认，取消时传 skip_cleanup = true）。
 /// 返回 `None` = 本次没有触发清理（保留期未变 / 明确跳过 / 新保留期为「不清理」）。
 #[tauri::command]
 pub async fn save_config(
@@ -52,7 +52,7 @@ pub async fn save_config(
     skip_cleanup: Option<bool>,
 ) -> Result<Option<crate::core::sessions::CleanupOutcome>, String> {
     let mut updated = config;
-    // [docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)：落盘前校验自定义请求头（头名合法/非保留/不重复、值无换行）
+    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：落盘前校验自定义请求头（头名合法/非保留/不重复、值无换行）
     for p in &updated.providers {
         crate::core::config::validate_request_headers(&p.headers)
             .map_err(|e| format!("供应商「{}」：{e}", p.name))?;
@@ -68,7 +68,7 @@ pub async fn save_config(
         skip_cleanup,
     );
     updated.save().map_err(err)?;
-    // 明文 key 保存时直接迁入 keyring（不留明文窗口，[docs/provider-management-refactor](../../../../docs/provider-management-refactor.md)）；失败保留明文并告警
+    // 配置先保存再迁入 keyring（迁移成功后以占位符重存，[docs/providers-and-network](../../../../docs/providers-and-network.md)）；失败保留明文并告警
     let (changed, warn) = crate::host::keyring::migrate(&mut updated);
     if let Some(w) = warn {
         tracing::warn!("keyring 迁移未完成：{w}");
@@ -76,13 +76,13 @@ pub async fn save_config(
     if changed {
         updated.save().map_err(err)?;
     }
-    // [docs/session-logging-report](../../../../docs/session-logging-report.md)：日志级别热切换（无条件调用更便宜且自愈漂移；RUST_LOG 覆盖时为 no-op）
+    // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：日志级别热切换（无条件调用更便宜且自愈漂移；RUST_LOG 覆盖时为 no-op）
     crate::core::logging::apply_config_level(&updated.log.level);
     // 代理热生效：无条件重建共享 client（顺带完成 System 模式重探测；与日志级别同一「便宜且自愈」思路，
-    // [docs/network-proxy-settings](../../../../docs/network-proxy-settings.md)）。运行中请求持旧 client clone 不受影响
+    // [docs/providers-and-network](../../../../docs/providers-and-network.md)）。运行中请求持旧 client clone 不受影响
     *core.client.write().unwrap() = crate::provider::proxy::build_client(&updated);
     *core.cfg.write().unwrap() = updated;
-    // [docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)：保存的 key 下次尝试即生效——残留的认证/瞬时冷却不得在用户修好配置后
+    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：保存的 key 下次尝试即生效——残留的认证/瞬时冷却不得在用户修好配置后
     // 仍然 failover 到其他 key
     core.key_pool.reset_all();
     let Some(days) = cleanup_days else {
@@ -107,7 +107,7 @@ pub async fn save_config(
 }
 
 /// 保存配置后是否需要执行清理：保留期**确实变化**、未明确跳过、且新保留期是合法档位时
-/// 返回要用的天数（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/27 条）。
+/// 返回要用的天数（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 12/27 条）。
 /// 0 与其他白名单之外的怪值一律不触发（手上改配置/旧值都不该删数据）。
 /// 抽成纯函数是为了让判断本身可单测（命令体需要 Tauri State，测不到）。
 fn cleanup_due(
@@ -163,7 +163,7 @@ fn apply_page_save_shape(updated: &mut ConfigState, current: &ConfigState) {
 }
 
 /// 当前配置解析出的代理 URL（None = 直连）：设置页「系统代理」回显与前端更新检查传参共用
-/// （tauri-plugin-updater 的 check 命令原生接受 proxy，[docs/network-proxy-settings](../../../../docs/network-proxy-settings.md)）。
+/// （tauri-plugin-updater 的 check 命令原生接受 proxy，[docs/providers-and-network](../../../../docs/providers-and-network.md)）。
 /// proxy = null（从未配置）时返回系统探测结果——null 的实际出网行为就是跟随系统，回显与更新传参同口径。
 #[tauri::command]
 pub async fn resolve_proxy(core: Core<'_>) -> Result<Option<String>, String> {
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(cfg.ui.font_mono, "");
     }
 
-    /// [docs/session-cleanup](../../../../docs/session-cleanup.md)：保留期变化时触发清理；
+    /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：保留期变化时触发清理；
     /// 未变化 / 跳过 / 改成「不清理」/ 非法天数都不触发。
     #[test]
     fn cleanup_due_only_when_retention_changes() {

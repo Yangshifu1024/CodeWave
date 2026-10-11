@@ -1,11 +1,11 @@
-// 设置页（全屏覆盖式，[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md) /
-// 10 页 [docs/settings-ia](../../../../docs/settings-ia.md)）：绝对定位贴在内层 Layout 上的全屏页；
+// 设置页（全屏覆盖式，[docs/settings-guide](../../../../docs/settings-guide.md) /
+// 10 页 [docs/settings-guide](../../../../docs/settings-guide.md)）：绝对定位贴在内层 Layout 上的全屏页；
 // 10 个分区按左导航三组铺开，draft/save 全量提交语义不变。
 // 本文件承担四件事：
 //   1. 容器：左导航列（返回工作区 + 运行中指示 + 三组 10 页自建导航）+ 右内容列（操作条 + 页体）；
 //   2. 逐页脏标记（draft 与已保存配置的差集，字段归属由注册表 PAGE_FIELDS 驱动，即时生效项不打点）；
 //   3. 离开拦截（切页 / 返回 / 页内 Esc / 关窗退出四条路径共用同一份三选弹框）；
-//   4. 搜索与进阶折叠（批③，[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)）：
+//   4. 搜索与进阶折叠（批③，[docs/settings-guide](../../../../docs/settings-guide.md)）：
 //      搜索命中结果**替掉**左导航（两套列表不同时存在，方向键不串味），进阶项按页级开关行内过滤
 //      （只加类、零 DOM 搬迁），控件宽度统一走 .w-narrow / .w-mid / .w-wide 三档。
 // 页面 JSX 手写（不做数据驱动渲染）：注册表只提供页序、页名、分组与字段归属。
@@ -90,7 +90,7 @@ const PAGE_ICON: Record<PageKey, ComponentType<{ className?: string }>> = {
 };
 
 /**
- * 会话保留期档位（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 1 条）：`null` = 不清理，
+ * 会话保留期档位（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 1 条）：`null` = 不清理，
  * 其余为天数。固定档位、不做自定义天数输入；本数组就是下拉的选项源。
  */
 const RETENTION_OPTIONS: (number | null)[] = [null, 1, 3, 7, 14, 30];
@@ -111,7 +111,7 @@ function formatCleanupTime(raw: string): string {
 /**
  * 预览里「这次会动到的东西」总数 = 会话数 + 索引外残留文件数。
  * 两者都为 0 才算没事可做（不弹确认框、不执行）：只看会话数会让「只有残留文件」的清理被静默跳过——
- * 预览口径与执行口径必须一致（[docs/session-cleanup](../../../../docs/session-cleanup.md) §4）。
+ * 预览口径与执行口径必须一致（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）。
  */
 function cleanupPendingCount(preview: CleanupPreview): number {
   // 字段缺省兜底：老后端没有 orphan_count 时按 0 算，不因一个缺失字段让确认框永远弹不出来
@@ -148,7 +148,7 @@ function drill(node: unknown, path: string): unknown {
 
 /**
  * 单个字段路径的脏比较片段。缺省折叠与后端 serde default 对齐（不折缺省时，「点开又改回原样」会永远显示未保存）：
- *  - network.proxy：null 等价于 ProxyConfig::default()（mode = system，[docs/network-proxy-settings]）——
+ *  - network.proxy：null 等价于 ProxyConfig::default()（mode = system，[docs/providers-and-network]）——
  *    否则打开设置后点一下本来就处于选中态的「系统代理」卡片就凭空染脏（字段路径按页面语义命名，指向 config.proxy）；
  *  - shell.selection / ui.ai_language：undefined 折 null（后端 serde default 语义）。
  */
@@ -227,13 +227,13 @@ function overlayOpen(): boolean {
  *
  * 0 高度锚点的典型：`approval.command_allowlist` 的锚点容器常驻，但其内 `<SettingsFormItem>` 只在白名单
  * 非空时才渲染（默认空）——只说「锚点存在」不够：`scrollIntoView` 与 1px 高亮双双落空，
- * 用户观感是「搜了没反应」。退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6。
+ * 用户观感是「搜了没反应」。退化清单见 [docs/settings-guide](../../../../docs/settings-guide.md)。
  *
  * 判定用 `offsetHeight` 与 `getClientRects()` 的**与**：无布局引擎的测试环境里 offsetHeight 恒为 0，
  * 单看它会把全部节点都判成退化（真实浏览器里 0 高度节点才两个条件同时成立）。
  *
  * 锚点 id 有两类来源，本函数一视同仁（都是属性选择器的精确值）：注册表项 id（搜索命中）与
- * **动态行级锚点** `providers.<uuid>`（外部跳转，[docs/settings-search-and-advanced] §1.6 例外）。
+ * **动态行级锚点** `providers.<uuid>`（外部跳转，[docs/settings-guide](../../../../docs/settings-guide.md) 例外）。
  * 后者与三个供应商视图根节点共用的 `providers` 不会互撞：属性选择器是等值匹配，不是前缀匹配。
  */
 function hitTargetOf(root: HTMLElement, id: string): HTMLElement | null {
@@ -293,8 +293,8 @@ function SettingsPageController() {
   // 技能区异步操作 loading：reloadSkills 全局、删除按行（Popconfirm 确认按钮 loading）
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
-  // 受控页：上收到 useUi（[docs/auth-error-guidance](../../../../docs/auth-error-guidance.md)），外部可指定页打开设置页；
-  // 下方保存校验跳页也走同一 store 状态（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）
+  // 受控页：上收到 useUi（[docs/providers-and-network](../../../../docs/providers-and-network.md)），外部可指定页打开设置页；
+  // 下方保存校验跳页也走同一 store 状态（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
   const tab = normalizePageKey(useUi((s) => s.settingsTab));
   const setTab = (next: PageKey) => useUi.getState().setSettingsTab(next);
   /**
@@ -333,7 +333,7 @@ function SettingsPageController() {
   const [shells, setShells] = useState<ShellInfo[] | null>(null);
   // 系统代理探测回显（resolve_proxy 命令）：undefined = 未拉取，null = 未检测到
   const [sysProxy, setSysProxy] = useState<string | null | undefined>(undefined);
-  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+  // ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
   /** 上次清理记录（null = 未取到：只读行回退「还没有清理记录」）；进入设置页拉一次、每次清理后刷新 */
   const [cleanupStatus, setCleanupStatus] = useState<CleanupStatus | null>(null);
   /** 「立即清理」执行中：按钮转圈 + 防重复点击 */
@@ -342,7 +342,7 @@ function SettingsPageController() {
    * 「这次确认的清理还会删掉几个索引外的残留数据文件」（预览口径：确认框里写的就是它）。
    * 用 ref 而不是 state：这个数只在报完成提示时被读一次，不参与渲染，也不该让页面重渲染。
    * 确认框与完成提示必须是同一个数——用户在确认框里看到「另有 3 个残留数据文件」并点了「清理」，
-   * 完成提示却少这一句，就会以为那几个文件没删（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 26 条）。
+   * 完成提示却少这一句，就会以为那几个文件没删（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 26 条）。
    * 正常路径都是一次确认紧接一次完成提示；读取时顺手清零，避免陈旧值粘到下一条无关的完成提示上。
    */
   const confirmedOrphansRef = useRef(0);
@@ -351,7 +351,7 @@ function SettingsPageController() {
   /** 旧格式历史的预览 / 执行共用的进行中标记：按钮转圈 + 防重复点击 */
   const [legacyBusy, setLegacyBusy] = useState(false);
 
-  // ---------- 批③ 搜索与进阶折叠（[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md)） ----------
+  // ---------- 批③ 搜索与进阶折叠（[docs/settings-guide](../../../../docs/settings-guide.md)） ----------
   /** 搜索查询串。trim 后非空即「搜索态」：结果列表替掉左导航 tablist（两套列表不同时存在） */
   const [query, setQuery] = useState("");
   /** 结果列表高亮项下标；-1 = 无默认选中（多项命中不自动跳转、不默认选中） */
@@ -362,7 +362,7 @@ function SettingsPageController() {
    * 待定位的**动态行级锚点**（**外部跳转**专用，如额度灰行给的 `providers.<uuid>`）。
    * 与 `pendingHit` 分开一条轻量通道：这类锚点来自动态条目（供应商行），**不在注册表里**，
    * 伪造成 `SettingItem` 就等于顺手伪造 labelKey/page —— 那正是本通道要绕开的
-   * （[docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6）。
+   * （[docs/settings-guide](../../../../docs/settings-guide.md)）。
    */
   const [pendingAnchorId, setPendingAnchorId] = useState<string | null>(null);
   /** 本轮要滚动 + 临时高亮的目标（带 nonce：同一目标连点两次也要重新定位）。
@@ -457,7 +457,7 @@ function SettingsPageController() {
 
   /**
    * 展示即算「用户已经看过这次清理的结果」：写下与启动轻提示共用的去重记录
-   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 14 条——两处说的是后端同一条记录）。
+   * （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 14 条——两处说的是后端同一条记录）。
    * 所以设置页一打开就读到状态、或本页执行完清理刷新出状态，下次启动都不再为同一件事提醒。
    * 设置页只在打开时才挂载（AppShell 里 `{settingsOpen && <SettingsPage />}`），因此不会误呑启动提示。
    */
@@ -517,7 +517,7 @@ function SettingsPageController() {
     }
   }
 
-  // ---------- 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)） ----------
+  // ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
 
   /** 保留期下拉的草稿写入（"never" = 不清理 → null）；走页级保存，不是即时生效项。
    *  展开原有 sessions 段：后端将来往这一段加字段时，不会因改一次下拉就把别的字段抹掉 */
@@ -536,7 +536,7 @@ function SettingsPageController() {
 
   /**
    * 清理确认框内容（删除条数 + 前几条会话标题）：手动「立即清理」与「保存前确认」两条路径
-   * 共用同一份版式，避免两处各写一套说法（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/26 条）。
+   * 共用同一份版式，避免两处各写一套说法（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 12/26 条）。
    * 两种情形分开写：有会话要删时说的是「删 N 个会话（不可恢复）」+ 前几条标题；
    * **只有残留文件**时（会话一条不删，要删的是索引外的历史 / 边车文件）另给一条说明——
    * 那些会话早就不在列表里，写「删 N 个会话」用户认不出是谁，也不符合实际；
@@ -601,7 +601,7 @@ function SettingsPageController() {
   /**
    * 清理失败的警示（手动与保存两条路径共用）：后端 `failed > 0` = 有会话没删干净（索引写失败 / 文件删不掉）。
    * 不报出来时用户只看到「已清理 0 个会话，关闭 0 个标签页」，会以为什么都没发生
-   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 14 条）。
+   * （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 14 条）。
    */
   function warnCleanupFailed(outcome: CleanupOutcome) {
     const failed = outcome.failed ?? 0;
@@ -623,7 +623,7 @@ function SettingsPageController() {
   /**
    * 手动「立即清理」：用**已保存**的保留期预览（不是草稿值）→ 确实有事可做（会话数 + 索引外残留文件数
    * 之和 > 0）才弹确认框，两者都是 0 则给一条轻提示、不打断 → 执行 → 报结果
-   * （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 13/25/26 条）。
+   * （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 13/25/26 条）。
    */
   async function runCleanupNow() {
     if (cleaning || cleanupBlock !== null || savedRetention === null) return;
@@ -779,7 +779,7 @@ function SettingsPageController() {
   }
 
   /**
-   * 保存前的清理确认（[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/27 条）：
+   * 保存前的清理确认（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 12/27 条）：
    * 只在「保留期相对已保存值发生了变化」且新值不是「不清理」时才问，且预览里确实有事可做
    * （会话数 + 索引外残留文件数之和 > 0；只有残留文件时同样要问）才弹框。
    * 返回 true = 本次跳过清理（取消按钮已写明：配置照常保存，下次启动仍按新保留期清理）。
@@ -819,7 +819,7 @@ function SettingsPageController() {
         return false;
       }
     }
-    // 供应商字段校验（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)/29）：无效时逐项报错、跳转供应商页、不落盘
+    // 供应商字段校验（[docs/providers-and-network](../../../../docs/providers-and-network.md)/29）：无效时逐项报错、跳转供应商页、不落盘
     const problems: string[] = [];
     for (const p of draft.providers) {
       for (const issue of validateProvider(p)) {
@@ -847,7 +847,7 @@ function SettingsPageController() {
     // 编辑期间保留空行（否则回车补一个 key 会被打断）；仅在保存时过滤空行（掩码/占位行保留，后端负责解掩码）
     draft.providers.forEach((p) => {
       p.keys = p.keys.map((s) => s.trim()).filter((s) => s !== "");
-      // 自定义请求头：trim 头名，丢弃整行全空的行（[docs/provider-custom-headers](../../../../docs/provider-custom-headers.md)）
+      // 自定义请求头：trim 头名，丢弃整行全空的行（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
       p.headers = (p.headers ?? [])
         .map((h) => ({ name: h.name.trim(), value: h.value.trim() }))
         .filter((h) => h.name !== "");
@@ -864,7 +864,7 @@ function SettingsPageController() {
       // 保留期有变化且新值非「不清理」时先弹确认框（取消 = 本次跳过清理，配置照常落盘）
       const skipCleanup = await confirmSaveCleanup();
       const outcome = await useSettings.getState().save(draft, skipCleanup ? { skipCleanup: true } : undefined);
-      // 保存成功不关闭页面（[docs/provider-form-validation](../../../../docs/provider-form-validation.md)）：仅提示；何时关闭由用户决定
+      // 保存成功不关闭页面（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：仅提示；何时关闭由用户决定
       message.success(t("common.saved"));
       if (skipCleanup) message.info(t("settings.cleanupSavedSkipped"));
       if (outcome) {
@@ -1181,7 +1181,7 @@ function SettingsPageController() {
     patchDraft({ proxy: { mode, url: draft?.proxy?.url ?? "" } });
   }
 
-  // ---------- 逐页脏标记与离开拦截（[docs/settings-fullscreen-shell](../../../../docs/settings-fullscreen-shell.md)） ----------
+  // ---------- 逐页脏标记与离开拦截（[docs/settings-guide](../../../../docs/settings-guide.md)） ----------
   const config = useSettings((s) => s.config);
   // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集，挂在拥有它的 mcp 页
   // （MCP 配置拆成独立页后脏点必须跟着页走：挂在 tools 页会出现「改了 MCP、脏点却亮在写入后检查页」）
@@ -1372,7 +1372,7 @@ function SettingsPageController() {
   }, [pendingAnchorId, draft, tab]);
 
   // 段二：节点已渲染（页体 + 临时展开都就位）→ 滚动到该项并加临时高亮类，约 1.5s 后摘掉。
-  // 锚点缺失 / 0 高度锚点时退化为高亮页体容器（退化清单见 [docs/settings-search-and-advanced](../../../../docs/settings-search-and-advanced.md) §1.6）。
+  // 锚点缺失 / 0 高度锚点时退化为高亮页体容器（退化清单见 [docs/settings-guide](../../../../docs/settings-guide.md)）。
   // 外部跳转给的动态行级锚点（`providers.<uuid>`）走的是同一个 hitTargetOf：它按属性选择器精确匹配，
   // 天然不会误命中三个视图根节点的 `providers`。
   useEffect(() => {
@@ -1455,7 +1455,7 @@ function SettingsPageController() {
       body: draft && (
         <SettingsForm>
           {/* 代理模式组：模式三选一卡片 + 手动地址（同一项的子字段），合成一张 section 卡片
-              （[docs/settings-fullscreen-shell]，[docs/network-proxy-settings]） */}
+              （[docs/settings-guide](../../../../docs/settings-guide.md)，[docs/providers-and-network]） */}
           <div className="settings-section-card">
             <SettingsFormItem label={t("settings.proxyMode")} className="settings-row-proxy-mode">
               {/* 锚点挂在模式卡片区（network.proxy 的主控件；代理地址是同一项的子字段，只在自定义模式出现） */}
@@ -1542,7 +1542,7 @@ function SettingsPageController() {
               <Switch checked={draft.approval.confirm_git_push} onChange={(v) => patchDraft({ approval: { ...draft.approval, confirm_git_push: v } })} />
             </div>
           </SettingsFormItem>
-          {/* docs/ask-ink-accent-and-composer-cover：审批等待策略——勾选后 5 分钟无应答自动确认推荐选项（allowed），不勾 = 永不超时 */}
+          {/* docs/chat-and-interface：审批等待策略——勾选后 5 分钟无应答自动确认推荐选项（allowed），不勾 = 永不超时 */}
           <SettingsFormItem label={t("settings.autoConfirm")} extra={t("settings.autoConfirmHint")}>
             <div className="setting-anchor" data-setting-id="approval.auto_confirm">
               <Switch checked={draft.approval.auto_confirm} onChange={(v) => patchDraft({ approval: { ...draft.approval, auto_confirm: v } })} />
@@ -1678,7 +1678,7 @@ function SettingsPageController() {
     {
       key: "mcp",
       labelKey: PAGE_LABEL_KEY.mcp,
-      // MCP 页（[docs/settings-ia](../../../../docs/settings-ia.md)）：服务器状态卡片与配置编辑弹框。
+      // MCP 页（[docs/settings-guide](../../../../docs/settings-guide.md)）：服务器状态卡片与配置编辑弹框。
       // 状态段的数据源是既有的 mcp_status 命令 + mcp:status 事件（此前只写不读）；配置段不在 config 内
       // （独立 mcp.json），保存按钮走 mcp_save_config（页级「保存」不覆盖它）。
       body: draft && (
@@ -1958,7 +1958,7 @@ function SettingsPageController() {
       body: draft && (
         <SettingsForm className="settings-agent-form">
           {/* 「Shell 与提示词」组：shell 选择器 + 自定义提示词合成一张 section 卡片
-              （[docs/settings-fullscreen-shell]） */}
+              （[docs/settings-guide](../../../../docs/settings-guide.md)） */}
           <SettingsSection title={t("settings.agentShellSection")}>
             <SettingsFormItem label={t("settings.shell")} extra={t("settings.shellHint")}>
               <div className="settings-field-stack">
@@ -2026,7 +2026,7 @@ function SettingsPageController() {
               </div>
             </SettingsFormItem>
           </SettingsSection>
-          {/* 「压缩」组：压缩阈值 + 压缩超时（[docs/context-compaction]，[docs/settings-fullscreen-shell]） */}
+          {/* 「压缩」组：压缩阈值 + 压缩超时（[docs/providers-and-network]，[docs/settings-guide](../../../../docs/settings-guide.md)） */}
           <SettingsSection title={t("settings.agentCompactionSection")}>
             <SettingsFormItem label={t("settings.compactThreshold")}>
               {/* Slider 与百分比共用右侧控件列。 */}
@@ -2054,7 +2054,7 @@ function SettingsPageController() {
               </div>
             </SettingsFormItem>
           </SettingsSection>
-          {/* 「会话清理」组：保留期 + 立即清理 + 清理状态（[docs/session-cleanup]）。
+          {/* 「会话清理」组：保留期 + 立即清理 + 清理状态（[docs/sessions-and-projects]）。
               下拉走页级保存（不是即时生效项）；动作按钮与只读状态行都不落盘（app.* 无配置字段） */}
           <SettingsSection title={t("settings.agentCleanupSection")}>
             <SettingsFormItem label={t("settings.sessionRetention")} extra={t("settings.sessionRetentionHint")}>
@@ -2328,9 +2328,9 @@ function SettingsPageController() {
             aria-labelledby={`settings-tab-${tab}`}
           >
             {/* 中间内容居中容器：占右栏 50%、左右各 25% 留白，由 .settings-pane-inner 承担；
-                外层 .settings-pane-body 只负责保底宽与横滚兜底（[docs/settings-fullscreen-shell]） */}
+                外层 .settings-pane-body 只负责保底宽与横滚兜底（[docs/settings-guide](../../../../docs/settings-guide.md)） */}
             <div className="settings-pane-inner">
-              {/* 2026-09 移除「显示进阶项」开关，所有项默认全部可见（[docs/settings-search-and-advanced] §2） */}
+              {/* 2026-09 移除「显示进阶项」开关，所有项默认全部可见（[docs/settings-guide](../../../../docs/settings-guide.md)） */}
               {activePage ? activePage.body : null}
             </div>
           </div>

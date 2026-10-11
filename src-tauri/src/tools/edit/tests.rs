@@ -1,7 +1,7 @@
 use super::*;
 use crate::tools::{Tool, ToolCtx};
 
-/// [docs/arithmetic-audit](../../../../docs/arithmetic-audit.md)#9：min_indent 必须按字符计数（与 strip_indent 的 chars().skip(n) 口径一致）——
+/// [docs/testing](../../../../docs/testing.md)#9：min_indent 必须按字符计数（与 strip_indent 的 chars().skip(n) 口径一致）——
 /// 按字节统计会把 U+00A0 等多字节空白过度剥除伤及内容。
 #[test]
 fn indent_units_chars_consistent_for_multibyte_space() {
@@ -10,7 +10,7 @@ fn indent_units_chars_consistent_for_multibyte_space() {
     assert_eq!(stripped, "hello\nworld");
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：编辑成功即登记产物（Edit op）；子代理 runtime 归属主会话。
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：编辑成功即登记产物（Edit op）；子代理 runtime 归属主会话。
 #[tokio::test]
 async fn edit_registers_artifact_with_root_owner() {
     let ws = tempfile::tempdir().unwrap();
@@ -58,7 +58,7 @@ async fn edit_registers_artifact_with_root_owner() {
     assert_eq!(items[0].count, 2);
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：task runtime（is_task_runtime）跳过产物登记，无边车泄漏。
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：task runtime（is_task_runtime）跳过产物登记，无边车泄漏。
 #[tokio::test]
 async fn task_runtime_skips_artifact_registration() {
     let ws = tempfile::tempdir().unwrap();
@@ -189,7 +189,7 @@ async fn full_edit_flow_with_rollback() {
     assert_eq!(out.error.unwrap().code, "E_VERSION_STALE");
 }
 
-// ===== EOL 归一 + 两级模糊匹配 + 杂项检查（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 1）=====
+// ===== EOL 归一 + 两级模糊匹配 + 杂项检查（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 工作项 1）=====
 
 fn test_ctx(
     core: std::sync::Arc<crate::core::agent::AgentCore>,
@@ -338,7 +338,7 @@ async fn fuzzy_match_warning_surfaces_in_outcome() {
     assert!(after.contains("b();"), "{after}");
 }
 
-// ===== 审批 diff 预览（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 3）=====
+// ===== 审批 diff 预览（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 工作项 3）=====
 
 #[test]
 fn approval_detail_renders_unified_diff() {
@@ -387,7 +387,7 @@ fn approval_detail_none_when_apply_fails() {
     assert!(edit_approval_detail(&roots, &files2).is_none());
 }
 
-// ===== 进程级写互斥（[docs/tools-optimization-and-gap-fill-plan](../../../../docs/tools-optimization-and-gap-fill-plan.md) 工作项 2）=====
+// ===== 进程级写互斥（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 工作项 2）=====
 
 /// 两个 runtime（主 + 子代理）并发编辑同一文件的不同片段：锁内重读保证两处变更都落地。
 /// 若无进程级锁：双方基于同一初始内容试运行，后写覆盖先写，丢失一处变更。
@@ -563,7 +563,7 @@ async fn files_as_object_salvaged_and_applied() {
     );
 }
 
-/// 写入后检查（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：edit 把逐文件结论放进
+/// 写入后检查（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：edit 把逐文件结论放进
 /// `outcome.data.checks`——模型侧经 compact 从 data 生成（缺陷 B 的回归防线），不再走 warnings。
 #[cfg(unix)]
 #[tokio::test]

@@ -1,4 +1,4 @@
-// Error card guidance ([docs/auth-error-guidance](../../../docs/auth-error-guidance.md)): auth/billing error items render the "open model settings" shortcut that
+// Error card guidance ([docs/providers-and-network](../../../docs/providers-and-network.md)): auth/billing error items render the "open model settings" shortcut that
 // opens the settings modal on the providers tab; other errors stay button-free dead ends.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
@@ -30,7 +30,7 @@ function seedWithItem(item: { kind: "error"; text: string; errorKind?: string })
   });
 }
 
-describe("error card auth/billing guidance (docs/auth-error-guidance)", () => {
+describe("error card auth/billing guidance (docs/providers-and-network)", () => {
   beforeEach(() => {
     useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
   });

@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// 协议分发入口：按 `ModelConfig.api_format` 路由到对应协议适配器（trait 语义见
-/// [docs/technical-design](../../../docs/technical-design.md) §4.2.2，P0 以函数分派实现、接口语义不变）。
+/// [docs/technical-design](../../../docs/technical-design.md)，P0 以函数分派实现、接口语义不变）。
 /// 这里也是 provider 层的统一观测点：重试决策由上层 agent 主循环负责，
 /// 故本层 Err 统一记 warn（可能瞬时），最终失败才由主循环记 error。
 pub async fn stream_model(

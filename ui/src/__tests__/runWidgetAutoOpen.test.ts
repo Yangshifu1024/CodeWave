@@ -1,4 +1,4 @@
-// 「先看预览」后的 widget 自动弹框信号（[docs/preview-skill](../../../docs/preview-skill.md)）的信号层：
+// 「先看预览」后的 widget 自动弹框信号（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）的信号层：
 // 置位（armWidgetAutoOpen）/ 锁定（onToolResult 的主会话 render_html 判定）/ 消费（consumeWidgetAutoOpen）/ 收尾清空。
 //
 // 断言的是 **store 状态**，不碰渲染（UI 消费链由 AskPanel / ToolCallCard 侧的测试覆盖）：

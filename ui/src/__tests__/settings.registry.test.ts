@@ -1,4 +1,4 @@
-// 设置项注册表契约（8 页重划 / 注册表 [docs/settings-ia](../../../docs/settings-ia.md)）：
+// 设置项注册表契约（8 页重划 / 注册表 [docs/settings-guide](../../../docs/settings-guide.md)）：
 // 手法同 titlebar.style.test.ts —— node fs 直读源码做「引用闭包」断言，其余断言直接校验注册表数据。
 //   1. 引用闭包：`ui/src/features/panels/*.tsx`（扫描目录，非硬编码文件表）里的 t("settings.X") /
 //      t('settings.X') / t(`settings.X`) 必须在注册表（项 / 分组 / 页名）内或显式豁免；
@@ -40,7 +40,7 @@ import {
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * `t(...)` 调用点三分类（批④ 返工的「变量键名」补丁，口径见 [docs/settings-terminology](../../../docs/settings-terminology.md) §5 守门用例 ②）：
+ * `t(...)` 调用点三分类（批④ 返工的「变量键名」补丁，口径见 [docs/settings-guide](../../../docs/settings-guide.md) 的引用闭包约束）：
  * - `literal` —— `t("seg.key")`：首个非空字符是引号且引号内是完整键（闭包正则的直接目标）；
  * - `inline`  —— `t(cond ? "a.b" : "c.d")`：首个字符不是引号，但参数区里有字面键（键纳入守护）；
  * - `dynamic` —— `t(key)` / `t(LANG_LABEL_KEY[lang])`：键名由变量拼出，正则看不见 → 必须显式登记。
@@ -292,7 +292,7 @@ describe("设置项注册表：页字段归属（脏标记数据源）", () => {
   });
 });
 
-// ---------- 批③：宽度档 / 搜索 / 进阶折叠（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md)） ----------
+// ---------- 批③：宽度档 / 搜索 / 进阶折叠（[docs/settings-guide](../../../docs/settings-guide.md)） ----------
 
 /** 用 zh-CN 的实值模拟 i18n 的 t（键存在性由上面的用例守护，这里只取样值） */
 function zhT(key: string): string {
@@ -379,7 +379,7 @@ describe("宽度档：app.css 类与页体（批③）", () => {
 // ---------- 动态行级锚点（额度灰行「去设置」） ----------
 /**
  * 供应商行是**动态条目**（数量与 id 随配置变），不在注册表里 → 它的锚点走独立命名空间
- * `providers.<uuid>`（例外与来源见 [docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md) §1.6）。
+ * `providers.<uuid>`（例外与来源见 [docs/settings-guide](../../../docs/settings-guide.md)）。
  * 这里钉三件事：模板串写法、命名空间不与注册表 id 重叠、settingsHit 只有一个消费方。
  */
 describe("锚点契约：动态行级锚点命名空间", () => {
@@ -465,7 +465,7 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
 // SETTINGS_ADVANCED_PREF_KEY 一并清除；原 describe("进阶项派生（批③）") 4 个 it 整体删除。
 // 注册表 SETTINGS_ITEMS 上的 `advanced: true` 标记保留为无害冗余，不影响行为。
 
-// ---------- 批④：术语与 i18n 键统一（[docs/settings-terminology](../../../docs/settings-terminology.md)） ----------
+// ---------- 批④：术语与 i18n 键统一（[docs/settings-guide](../../../docs/settings-guide.md)） ----------
 
 /**
  * 本目录里**不是设置页页体**的独立面板（各有自己的键段，与设置无关）。
@@ -521,7 +521,7 @@ describe("设置项注册表：panels 不得借他段键（批④）", () => {
   });
 });
 
-// ---------- 批④ 返工：守门② 扩到 features 全目录 + 变量键名（[docs/settings-terminology](../../../docs/settings-terminology.md) §5） ----------
+// ---------- 批④ 返工：守门② 扩到 features 全目录 + 变量键名（[docs/settings-guide](../../../docs/settings-guide.md)） ----------
 
 /** `features/` 根（守门② 的覆盖面从 `panels/` 扩到 `features/**`） */
 const FEATURES_DIR = join(SRC, "features");
@@ -604,7 +604,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
-  "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/html-preview-modal](../../../docs/html-preview-modal.md)）
+  "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
 };
 
@@ -629,7 +629,7 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
     "dashboard.": "运行总览覆盖工作区时，顶栏复用 dashboard.title，与页面标题及导航入口保持一致",
   },
   "subagent/SubagentDrawer.tsx": {
-    "composer.": "抽屉头部档位行（[docs/mode-gate-and-subagent-sync]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",
+    "composer.": "抽屉头部档位行（[docs/plan-and-approval]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",
   },
   "quota/QuotaSection.tsx": {
     "rightbar.": "额度段是本目录独立的组件（quota/）但渲染在右栏信息页里，文案沿用右栏段 rightbar.*",
@@ -777,7 +777,7 @@ describe("术语一致性：写后检查（post-write-check）", () => {
   it("已同步的文档与新术语对齐（命名现状的文档整篇不得留旧写法）", () => {
     const docsDir = join(SRC, "..", "..", "docs");
     // 命名现状的文档：含 AGENTS.md 列为必读的技术基准 technical-design.md
-    for (const doc of ["settings-ia.md", "settings-terminology.md", "technical-design.md"]) {
+    for (const doc of ["settings-guide.md", "technical-design.md"]) {
       const text = readFileSync(join(docsDir, doc), "utf8");
       expect(text, `${doc} 仍写「写入后语法校验」`).not.toContain("写入后语法校验");
       expect(text, `${doc} 没有出现新术语「写入后检查」`).toContain("写入后检查");
@@ -785,7 +785,7 @@ describe("术语一致性：写后检查（post-write-check）", () => {
   });
 });
 
-// ---------- 会话保留期与清理的登记（[docs/session-cleanup](../../../docs/session-cleanup.md) §3 第 18/22 条） ----------
+// ---------- 会话保留期与清理的登记（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 18/22 条） ----------
 
 /**
  * 清理界面的从属文案键（页内的说明 / 选项 / 提示 / 确认框；**不是**可配置项，故不进 SETTINGS_ITEMS，
@@ -816,7 +816,7 @@ const CLEANUP_SHELL_KEYS = [
   "cleanupDoneOrphans", // → 同一情形的完成提示后缀
 ];
 
-describe("设置项注册表：会话保留期与清理的登记（[docs/session-cleanup]）", () => {
+describe("设置项注册表：会话保留期与清理的登记（[docs/sessions-and-projects]）", () => {
   it("保留期是 agent 页的页级保存字段：登记项 + 进 PAGE_FIELDS + narrow 档 + 不进即时生效清单", () => {
     const item = SETTINGS_ITEMS.find((i) => i.id === "sessions.retention_days");
     expect(item, "注册表缺 sessions.retention_days").toBeTruthy();

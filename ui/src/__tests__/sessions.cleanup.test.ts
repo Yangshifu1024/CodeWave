@@ -1,4 +1,4 @@
-// 会话保留期与清理 · 前端状态层（[docs/session-cleanup](../../docs/session-cleanup.md) §3 第 15/28 条）：
+// 会话保留期与清理 · 前端状态层（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 第 15/28 条）：
 //   一、applyCleanup 的清理链路与顺序纪律（丢弃驻留内容 → 清运行态 → 关 Tab → 刷新列表，返回关掉几个 Tab）
 //   二、restoreTabs 的「列表不可信」守卫（refresh 失败时不剔除快照 Tab；列表确实为空时照旧剔除）
 //   三、refresh 的失败语义（不置空列表、只标记不可信、不抛错）

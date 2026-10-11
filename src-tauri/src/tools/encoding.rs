@@ -1,4 +1,4 @@
-//! 文本编码探测（[docs/office-and-pdf-support](../../../docs/office-and-pdf-support.md)）。
+//! 文本编码探测（[docs/documents](../../../docs/documents.md)）。
 //!
 //! 为什么要做：导出成 `csv` / `tsv` 的表格在国内环境里很常见是 GBK 编码，按 UTF-8 硬读
 //! 只会得到一片替换符乱码——而乱码比报错更糟，模型会拿它当真去分析。

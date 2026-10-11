@@ -1,4 +1,4 @@
-//! provider 层协议无关 DTO（[docs/technical-design](../../../docs/technical-design.md) §4.2.1）。
+//! provider 层协议无关 DTO（[docs/technical-design](../../../docs/technical-design.md)）。
 
 use crate::core::config::ModelConfig;
 use crate::core::types::Message;
@@ -16,7 +16,7 @@ pub struct ToolDef {
 }
 
 /// 输出超出 max_tokens 被截断时注入回复流尾部的统一提示
-/// （[docs/max-tokens-truncation-fix](../../../docs/max-tokens-truncation-fix.md)：三协议共用同一常量，防止文案漂移）。
+/// （[docs/providers-and-network](../../../docs/providers-and-network.md)：三协议共用同一常量，防止文案漂移）。
 pub const MAX_TOKENS_NOTICE: &str = "\n[注意：回复因 max_tokens 被截断]";
 
 /// 一次 LLM 流式请求的完整入参。
@@ -40,7 +40,7 @@ pub struct StreamRequest {
     pub cache_gen_index: Option<usize>,
     /// 请求级 reasoning effort（会话级覆盖 → 模型配置，None = 不发送；协议差异由各适配器处理）
     pub reasoning_effort: Option<crate::core::prefs::EffortLevel>,
-    /// 会话 uuid（用于自定义请求头值中 `${session_id}` 占位符替换；[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）
+    /// 会话 uuid（用于自定义请求头值中 `${session_id}` 占位符替换；[docs/providers-and-network](../../../docs/providers-and-network.md)）
     pub session_id: Option<String>,
 }
 
@@ -55,12 +55,12 @@ impl StreamRequest {
         }
     }
 
-    /// 供会话日志使用的脱敏序列化（[docs/session-logging-report](../../../docs/session-logging-report.md)）：所有 key 替换为 `***`，保证明文 key 不落盘
+    /// 供会话日志使用的脱敏序列化（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：所有 key 替换为 `***`，保证明文 key 不落盘
     /// （AGENTS.md 约束「API key 不落明文」；日志可导出排障、无保留期清理）。
     pub fn redacted_json(&self) -> String {
         let mut model = self.model.clone();
         model.keys = model.keys.iter().map(|_| "***".to_string()).collect();
-        // 自定义请求头值可能含 token（[docs/provider-custom-headers](../../../docs/provider-custom-headers.md)）：与 key 同等脱敏，仅保留头名
+        // 自定义请求头值可能含 token（[docs/providers-and-network](../../../docs/providers-and-network.md)）：与 key 同等脱敏，仅保留头名
         for h in &mut model.headers {
             h.value = "***".to_string();
         }
@@ -145,7 +145,7 @@ impl std::ops::Add for RunUsage {
 
 impl RunUsage {
     /// 本请求的「真实输入量」：自动压缩的 Reported 路据此判定
-    /// （[docs/composer-toolbar-context-hit-rate](../../../docs/composer-toolbar-context-hit-rate.md)）。
+    /// （[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
     ///
     /// 口径按协议分叉：Anthropic 的 `input_tokens` **不含**缓存读写（真输入 = input +
     /// cache_read + cache_write）；OpenAI 两协议的 `prompt_tokens` / `input_tokens` 已含缓存部分。
@@ -216,7 +216,7 @@ impl ProviderError {
         matches!(self, ProviderError::BadRequest { .. })
     }
 
-    /// run:error 事件载荷用的稳定分类标签（[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；与 serde 变体标签一一对应。
+    /// run:error 事件载荷用的稳定分类标签（[docs/providers-and-network](../../../docs/providers-and-network.md)）；与 serde 变体标签一一对应。
     pub fn kind_tag(&self) -> &'static str {
         match self {
             ProviderError::Auth(_) => "auth",
@@ -237,7 +237,7 @@ impl ProviderError {
     pub fn from_status(status: reqwest::StatusCode, body: &str) -> Self {
         let snippet: String = body.chars().take(500).collect();
         let code = status.as_u16();
-        // [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：优先取供应商自带 error.message
+        // [docs/providers-and-network](../../../docs/providers-and-network.md)：优先取供应商自带 error.message
         //（可读的一行原因，如智谱 type 1001），其余形态保留原始 JSON 片段。
         let detail = match api_error_message(body) {
             Some(m) => format!("{m} (HTTP {code})"),
@@ -260,7 +260,7 @@ impl ProviderError {
     }
 }
 
-/// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：从错误 body 提取供应商自带的 `error.message`
+/// [docs/providers-and-network](../../../docs/providers-and-network.md)：从错误 body 提取供应商自带的 `error.message`
 ///（`{"error":{"message":"..."}}` 形态，OpenAI 兼容与 Anthropic 皆同）；形态不符或 message 为空返回 None。
 fn api_error_message(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
@@ -381,7 +381,7 @@ mod tests {
         ));
     }
 
-    /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：body 带供应商自带 error.message 时替换原始 JSON 片段
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：body 带供应商自带 error.message 时替换原始 JSON 片段
     ///（智谱 type-1001 形态：用户看到可读原因 + 状态码）。
     #[test]
     fn from_status_extracts_api_error_message() {
@@ -405,7 +405,7 @@ mod tests {
         assert!(fallback.to_string().contains("{\"error\""), "{fallback}");
     }
 
-    /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：非 JSON body（网关/HTML 页面）原样回退到原始片段。
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：非 JSON body（网关/HTML 页面）原样回退到原始片段。
     #[test]
     fn from_status_keeps_snippet_for_non_json_body() {
         let err = ProviderError::from_status(
@@ -439,7 +439,7 @@ mod tests {
         assert!(blank.to_string().contains("响应内容为空"), "{blank}");
     }
 
-    /// [docs/auth-error-guidance](../../../docs/auth-error-guidance.md)：run:error 载荷的分类标签与 serde 变体标签一一对应。
+    /// [docs/providers-and-network](../../../docs/providers-and-network.md)：run:error 载荷的分类标签与 serde 变体标签一一对应。
     #[test]
     fn kind_tags_are_stable() {
         assert_eq!(ProviderError::Auth("x".into()).kind_tag(), "auth");
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(ProviderError::Cancelled.kind_tag(), "cancelled");
     }
 
-    /// [docs/session-logging-report](../../../docs/session-logging-report.md) 回归：verbose 会话日志中的完整请求文本必须脱敏——明文 key 绝不能落盘。
+    /// [docs/sessions-and-projects](../../../docs/sessions-and-projects.md) 回归：verbose 会话日志中的完整请求文本必须脱敏——明文 key 绝不能落盘。
     #[test]
     fn redacted_json_masks_keys() {
         let model = crate::core::config::ModelConfig {

@@ -75,7 +75,7 @@ pub async fn read_workspace_file(
         ));
     }
     let bytes = std::fs::read(&resolved).map_err(err)?;
-    // 编码探测（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）：
+    // 编码探测（[docs/documents](../../../../docs/documents.md)）：
     // 导出成 csv 的表格在国内环境里常见 GBK，按 UTF-8 硬读只会得到一片乱码。
     // 实际用的编码一并返回，界面能如实告知使用者。「unknown」表示没认出来。
     let decoded = crate::tools::encoding::decode_text(&bytes);
@@ -102,7 +102,7 @@ pub async fn save_workspace_file(
     crate::util::atomic::atomic_write(&resolved, content.as_bytes()).map_err(err)
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：本会话的产物清单（create/edit 边车登记 + 存在性/大小 stat），按 last_at 倒序。
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：本会话的产物清单（create/edit 边车登记 + 存在性/大小 stat），按 last_at 倒序。
 #[tauri::command]
 pub async fn list_session_files(
     core: Core<'_>,
@@ -118,7 +118,7 @@ fn session_files_payload(
     store: &crate::core::sessions::SessionStore,
     owner: &str,
 ) -> Vec<serde_json::Value> {
-    // [docs/session-cleanup](../../../../docs/session-cleanup.md)：计划文件不进右栏「文件」列表（数据源过滤）
+    // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：计划文件不进右栏「文件」列表（数据源过滤）
     let mut items = store.load_file_artifacts(owner);
     items.sort_by(|a, b| b.last_at.cmp(&a.last_at));
     items
@@ -141,7 +141,7 @@ fn session_files_payload(
         .collect()
 }
 
-/// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：二进制文件读取（base64，供图片预览）；根校验与文本预览同一体积上限。
+/// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：二进制文件读取（base64，供图片预览）；根校验与文本预览同一体积上限。
 #[tauri::command]
 pub async fn read_workspace_file_base64(
     core: Core<'_>,
@@ -231,7 +231,7 @@ pub async fn list_workspace_dir(
     Ok(serde_json::json!({ "entries": entries, "roots": roots_json }))
 }
 
-// ---------- 文件引用与项目外放行（[docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)）----------
+// ---------- 文件引用与项目外放行（[docs/documents](../../../../docs/documents.md)）----------
 
 /// 原生文件选择框：返回绝对路径列表（取消为空）。
 ///
@@ -274,7 +274,7 @@ pub async fn check_external_path(
 ///
 /// `ref` 是拿给模型的引用写法：在项目主目录内就给相对路径（提示词与 @ 提及都用相对路径），
 /// 其余情况给绝对路径（额外根已放行时绝对路径可直接读）。
-/// `dir` 与 `ref` 两个出口都去掉 Windows verbatim 前缀（[docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)）：
+/// `dir` 与 `ref` 两个出口都去掉 Windows verbatim 前缀（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
 /// `\\?\C:\...` 既难看又会让界面 chip 的悬停提示与送给模型的引用带上噪声；
 /// `inside` 判定与内部存储仍用 canonical 形态（去前缀只动呈现）。
 fn external_path_payload(
@@ -413,7 +413,7 @@ mod tests {
         );
     }
 
-    /// [docs/office-and-pdf-support](../../../../docs/office-and-pdf-support.md)：项目外路径判定——根内的文件判「在内」，
+    /// [docs/documents](../../../../docs/documents.md)：项目外路径判定——根内的文件判「在内」，
     /// 根外给出所在目录（放行的是目录），供前端弹确认框。
     #[test]
     fn external_path_payload_marks_inside_and_outside() {
@@ -521,7 +521,7 @@ mod tests {
         assert!(persist_allowed_dir(dd.path(), "nope", "/tmp").is_ok());
     }
 
-    /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：产物清单体——按 last_at 倒序 + stat 补 exists/size；缺失文件 exists=false。
+    /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：产物清单体——按 last_at 倒序 + stat 补 exists/size；缺失文件 exists=false。
     #[test]
     fn session_files_payload_sorts_and_stats() {
         let dir = tempfile::tempdir().unwrap();
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(payload[0]["first_op"], serde_json::json!("create"));
     }
 
-    /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：base64 读取——roots 外拒绝、内容编码正确、二进制安全。
+    /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：base64 读取——roots 外拒绝、内容编码正确、二进制安全。
     #[test]
     fn read_file_base64_bounds_and_encoding() {
         let ws = tempfile::tempdir().unwrap();

@@ -1,6 +1,6 @@
 //! fence 判定核心：三级分析 L1 删除黑名单 → L2 AST 写目标 → L3 高危模式，外加 plan 档只读白名单（L0）。
 //! shell 可切换（cmd/fish/WSL）加固：cmd/fish 危险命令词表（名字级 + 清空写短语）与 wsl 内层命令串递归检查。
-//! 加固批次 [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：命令名反混淆（`r"m"`、`${IFS}`）、
+//! 加固批次 [docs/testing](../../../../docs/testing.md)：命令名反混淆（`r"m"`、`${IFS}`）、
 //! `--force-with-lease` 不再误报、PowerShell AST 遍历。
 
 use crate::tools::pathutil::{self, WriteRoots};
@@ -67,7 +67,7 @@ const WRITE_LAST: &[&str] = &[
     "chown",
     "chgrp",
 ];
-/// PowerShell 参数式写盘 cmdlet（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：AST 化后可见，此前不可见，[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)）。
+/// PowerShell 参数式写盘 cmdlet（[docs/testing](../../../../docs/testing.md)：AST 化后可见，此前不可见，[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）。
 /// 每个非 flag 参数都按写目标判定——带值的命名 flag（如
 /// `-ItemType file`）可能贡献一个无害的根内额外目标（Allow/InsideWrite），但真正的
 /// `-Path`/位置参数目标绝不会漏判。宁可过度拦截。
@@ -78,7 +78,7 @@ const WRITE_FIRST: &[&str] = &[
     "out-file",
     "tee-object",
 ];
-/// 下载工具（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：按名字做「下载-执行」关联——掩码 L3 文本扫描
+/// 下载工具（[docs/testing](../../../../docs/testing.md)：按名字做「下载-执行」关联——掩码 L3 文本扫描
 /// 看不到带引号的命令名，如 `"curl" x | sh`）。
 const DOWNLOAD_CMDS: &[&str] = &[
     "curl",
@@ -148,7 +148,7 @@ const WSL_HOSTS: &[&str] = &["wsl", "wsl.exe"];
 /// 结构，内层危险命令对名字级判定表不可见，需提取重判（judge_cmd_host）。
 const CMD_HOSTS: &[&str] = &["cmd", "cmd.exe"];
 
-/// fence 策略（权限档 → 判定参数，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）。
+/// fence 策略（权限档 → 判定参数，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 #[derive(Debug, Clone, Copy)]
 pub struct FencePolicy {
     /// false = 高危/无法判定的 Confirm 退化为 Block（现行「审批关闭」语义）
@@ -214,7 +214,7 @@ const PLAN_READONLY_CMDS: &[&str] = &[
     "blame",
     // gh：命令名入列后**仍须过子命令白名单**（gh_plan_readonly_allowed）——
     // 远端写（pr merge / release edit --draft=false / api -X POST / secret set）不在 L1-L3 覆盖范围，
-    // 整命令放行等于让 plan 档能合 PR、发版、改 secret（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）
+    // 整命令放行等于让 plan 档能合 PR、发版、改 secret（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）
     "gh",
     // 文本处理（管道内只读；出现重定向时由 L2 拦截）
     "echo",
@@ -280,7 +280,7 @@ const PLAN_READONLY_CMDS: &[&str] = &[
     // plan 档只读承诺不破。cpio 不入白名单（plan 档由 L0 拦，属预期）。
     "tar",
     "unzip",
-    // ===== PowerShell 只读 cmdlet / 别名（[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)：Windows 回退 shell 的原生只读管道） =====
+    // ===== PowerShell 只读 cmdlet / 别名（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)：Windows 回退 shell 的原生只读管道） =====
     // 目录/文件/系统信息：枚举/读取/定位/存在性/元数据——纯读
     "get-childitem",
     "get-content",
@@ -644,7 +644,7 @@ fn check_command_depth(
     policy: FencePolicy,
     depth: u8,
 ) -> Verdict {
-    // G5（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：plan_readonly 下任何 Confirm 一律转 Block（E_PLAN_READONLY）。
+    // G5（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：plan_readonly 下任何 Confirm 一律转 Block（E_PLAN_READONLY）。
     // 理由：plan 档的只读承诺不能被一次误点确认绕过；重定向引导语 = 把命令写进方案、批准后执行。
     // 覆盖面：白名单外命令、灾难/高危命令、白名单命令带写重定向（InsideWrite）——一切本需确认的路径。
     let verdict = check_command_inner(cmd, cwd, roots, policy, depth);
@@ -688,7 +688,7 @@ fn check_command_inner(
             "命令不在只读白名单内（ls/cd/head/grep/git log/gh pr view 等只读命令）",
         ));
     }
-    // 解析链（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：bash 语法 → PowerShell 语法（Windows 回退 shell，[docs/fence-plan-readonly-powershell](../../../../docs/fence-plan-readonly-powershell.md)）
+    // 解析链（[docs/testing](../../../../docs/testing.md)）：bash 语法 → PowerShell 语法（Windows 回退 shell，[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）
     // → 词法回退。bash ERROR树先改投 PowerShell 语法再降级，原生 PS 语法
     //（`if ($x) { … }`、脚本块）因此进入 AST 可见范围。
     let tree = parse_grammar(cmd, tree_sitter_bash::LANGUAGE.into())
@@ -747,7 +747,7 @@ fn check_command_inner(
     match grammar {
         Grammar::Bash => walk(root, &mut ctx),
         Grammar::PowerShell => {
-            // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：PS 语法命令保留词法 L1 网——旧的 fallback 扫描有这层，
+            // [docs/testing](../../../../docs/testing.md)：PS 语法命令保留词法 L1 网——旧的 fallback 扫描有这层，
             // 而 AST 遍历只能看到 command_name 位置的删除命令名（`iex "rm $f"`
             // 把 `rm` 藏在字符串里，语法不会作为命令下钻）。
             if let Some(tok) = l1_token_scan(cmd) {
@@ -786,7 +786,7 @@ fn check_command_inner(
             walk_ps(root, &mut ctx);
         }
     }
-    // 按名字做「下载-执行」关联（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：带引号的下载/解释器名
+    // 按名字做「下载-执行」关联（[docs/testing](../../../../docs/testing.md)）：带引号的下载/解释器名
     //（`"curl" x | sh`）对掩码 L3 文本扫描不可见，但作为 AST 命令存在。
     if ctx.saw_download && ctx.saw_interp {
         ctx.escalate(high_risk_verdict(ctx.policy, "下载脚本直接执行"));
@@ -794,7 +794,7 @@ fn check_command_inner(
     ctx.verdict.unwrap_or(Verdict::Allow)
 }
 
-/// 灾难级结论（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 策略分叉）：审批开启时 Confirm，关闭时硬 Block。
+/// 灾难级结论（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 策略分叉）：审批开启时 Confirm，关闭时硬 Block。
 fn disaster_verdict(policy: FencePolicy, why: &'static str) -> Verdict {
     if policy.approval_enabled {
         Verdict::Confirm(ConfirmReason::Disaster(why))
@@ -806,7 +806,7 @@ fn disaster_verdict(policy: FencePolicy, why: &'static str) -> Verdict {
     }
 }
 
-/// 高危结论（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 策略分叉）：审批开启时 Confirm，关闭时硬 Block。
+/// 高危结论（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 策略分叉）：审批开启时 Confirm，关闭时硬 Block。
 fn high_risk_verdict(policy: FencePolicy, why: &'static str) -> Verdict {
     if policy.approval_enabled {
         Verdict::Confirm(ConfirmReason::HighRisk(why))
@@ -818,7 +818,7 @@ fn high_risk_verdict(policy: FencePolicy, why: &'static str) -> Verdict {
     }
 }
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md) 解析链中解析成功者对应的 shell 语法。
+/// [docs/testing](../../../../docs/testing.md) 解析链中解析成功者对应的 shell 语法。
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Grammar {
     /// POSIX bash 语法（tree-sitter-bash）
@@ -895,7 +895,7 @@ struct FenceCtx<'a> {
     depth: u8,
     /// 已累计的最高优先级结论
     verdict: Option<Verdict>,
-    /// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：按名字的下载-执行关联标记（AST 遍历置位，遍历后统一判定）
+    /// [docs/testing](../../../../docs/testing.md)：按名字的下载-执行关联标记（AST 遍历置位，遍历后统一判定）
     saw_download: bool,
     /// 是否出现过解释器命令（与 saw_download 配对触发升级）
     saw_interp: bool,
@@ -941,7 +941,7 @@ fn walk(node: tree_sitter::Node, ctx: &mut FenceCtx) {
                     && target.chars().all(|c| c.is_ascii_digit())
                     && node_text.contains('&');
                 if !is_fd_dup {
-                    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：去引号目标的灾难级——带引号的目标（`> "/etc/x"`）
+                    // [docs/testing](../../../../docs/testing.md)：去引号目标的灾难级——带引号的目标（`> "/etc/x"`）
                     // 在掩码 L3 文本里被抹白，这里按反混淆形态判定。
                     let dequoted = target.trim_matches('"').trim_matches('\'');
                     if dequoted.starts_with("/etc/") {
@@ -963,13 +963,13 @@ fn walk(node: tree_sitter::Node, ctx: &mut FenceCtx) {
 /// 透传前缀命令：剥离后按真实命令重判（H5）。
 const TRANSPARENT: &[&str] = &["sudo", "env", "nohup", "nice", "timeout", "command", "time"];
 
-/// [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：把 `${IFS}`/`$IFS` 展开为词分隔符。近似性说明：此模型假设「IFS 保持默认值」；
+/// [docs/testing](../../../../docs/testing.md)：把 `${IFS}`/`$IFS` 展开为词分隔符。近似性说明：此模型假设「IFS 保持默认值」；
 /// 运行时被 unset 的 IFS 会把 `r${IFS}m` 变成 `rm`，文本展开捕捉不到——业界文本防御共有的已知残留。
 fn expand_ifs(lower: &str) -> String {
     lower.replace("${ifs}", " ").replace("$ifs", " ")
 }
 
-/// 反混淆命令名 token（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：展开 `${IFS}`/`$IFS`（运行时词分隔符），
+/// 反混淆命令名 token（[docs/testing](../../../../docs/testing.md)）：展开 `${IFS}`/`$IFS`（运行时词分隔符），
 /// 剥掉引号与反斜杠转义——`r"m"`、`'rm'`、`\rm`、`rm${IFS}` 一律归类为
 /// `rm`。返回展开后的首个空白分隔 token（IFS 切出的名字片段只保留第一段：L1 按名判定，
 /// 危险首 token 照样拦；无害首 token 在 AST 层面本就没有那些参数，无损失）。
@@ -986,7 +986,7 @@ fn deobfuscate_name(tok: &str) -> String {
 }
 
 /// 词法 L1 兜底网：反混淆后逐 token 扫删除命令名。fallback_scan 与 PowerShell AST
-/// 路径共用（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：PS 遍历只能看到 command_name 位置的名字，
+/// 路径共用（[docs/testing](../../../../docs/testing.md)：PS 遍历只能看到 command_name 位置的名字，
 /// 解析成功的 PS 命令因此保持回退扫描的覆盖面）。
 fn l1_token_scan(cmd: &str) -> Option<String> {
     let lower = expand_ifs(&cmd.to_ascii_lowercase());
@@ -1036,7 +1036,7 @@ fn handle_command(node: tree_sitter::Node, ctx: &mut FenceCtx) {
         v
     };
 
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：关联标记必须在这里也置位——sh 家族命令在下走到
+    // [docs/testing](../../../../docs/testing.md)：关联标记必须在这里也置位——sh 家族命令在下走到
     // eval_command_with 之前就短路返回（裸 `| sh` 不带 -c）。与覆盖透传剥离后
     // 名字的 eval_command_with 置位幂等（sudo curl …）。
     if DOWNLOAD_CMDS.contains(&name.as_str()) {
@@ -1047,7 +1047,7 @@ fn handle_command(node: tree_sitter::Node, ctx: &mut FenceCtx) {
     }
 
     // H5 修复：sh -c 'rm …' → 递归检查内层命令（深度上限 2；内层保持现行「视为审批开启」语义）。
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：powershell/pwsh 加入家族——`powershell -Command '…'` 会被解析成普通 bash
+    // [docs/testing](../../../../docs/testing.md)：powershell/pwsh 加入家族——`powershell -Command '…'` 会被解析成普通 bash
     // 单词，没有这一步嵌套的 PS 脚本永远不会被重判。
     if matches!(
         name.as_str(),
@@ -1122,7 +1122,7 @@ fn handle_command(node: tree_sitter::Node, ctx: &mut FenceCtx) {
     eval_command_with(&name, &args, Some(node), name_node, ctx);
 }
 
-/// tree-sitter-powershell 遍历（[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：PowerShell 语法无字段——命令名是
+/// tree-sitter-powershell 遍历（[docs/testing](../../../../docs/testing.md)）：PowerShell 语法无字段——命令名是
 /// `command_name` 子节点，重定向目标在 `redirections → redirection →
 /// redirected_file_name`（合并重定向 `2>&1`/`*>&1` 无文件目标子节点，天然跳过）。
 /// 脚本块 / 循环 / 条件分支与其他节点一样下钻。
@@ -1138,7 +1138,7 @@ fn walk_ps(node: tree_sitter::Node, ctx: &mut FenceCtx) {
                 .find(|c| c.kind() == "redirected_file_name");
             if let Some(dest) = dest {
                 let target = dest.utf8_text(ctx.src).unwrap_or("");
-                // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：去引号目标的灾难级（bash file_redirect 检查的镜像）
+                // [docs/testing](../../../../docs/testing.md)：去引号目标的灾难级（bash file_redirect 检查的镜像）
                 let dequoted = target.trim_matches('"').trim_matches('\'');
                 if dequoted.starts_with("/etc/") {
                     ctx.escalate(disaster_verdict(ctx.policy, "写入 /etc"));
@@ -1160,7 +1160,7 @@ fn walk_ps(node: tree_sitter::Node, ctx: &mut FenceCtx) {
 fn handle_command_ps(node: tree_sitter::Node, ctx: &mut FenceCtx) {
     let mut cursor = node.walk();
     let name_node = node.children(&mut cursor).find(|c| {
-        // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：`& 'rm' x` 的名字包在 `command_name_expr` 里，普通调用在
+        // [docs/testing](../../../../docs/testing.md)：`& 'rm' x` 的名字包在 `command_name_expr` 里，普通调用在
         // `command_name`——两者都算。
         matches!(c.kind(), "command_name" | "command_name_expr")
     });
@@ -1465,7 +1465,7 @@ fn eval_command_with(
     _name_node: Option<tree_sitter::Node>,
     ctx: &mut FenceCtx,
 ) {
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：按名的下载/解释器关联置位（见 check_command_inner 尾部）
+    // [docs/testing](../../../../docs/testing.md)：按名的下载/解释器关联置位（见 check_command_inner 尾部）
     if DOWNLOAD_CMDS.contains(&name) {
         ctx.saw_download = true;
     }
@@ -1544,7 +1544,7 @@ fn eval_command_with(
         ));
         return;
     }
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：按名的灾难/高危类——disaster_match/high_risk_match 的镜像，
+    // [docs/testing](../../../../docs/testing.md)：按名的灾难/高危类——disaster_match/high_risk_match 的镜像，
     // 以反混淆后的 AST 名字为键，因为掩码 L3 文本扫描看不到带引号的
     // 命令名（`"shutdown" -h now`、`"mkfs.ext4" /dev/sda1`）。
     // shell 可切换（cmd/fish/WSL）加固：cmd 破坏性系统命令与 fish 持久化/执行入口，
@@ -1686,7 +1686,7 @@ fn eval_command_with(
             ctx.escalate(v);
         }
     } else if WRITE_FIRST.contains(&name) {
-        // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审）：逐个非 flag 参数判定——带值的命名 flag（`-ItemType
+        // [docs/testing](../../../../docs/testing.md)（评审）：逐个非 flag 参数判定——带值的命名 flag（`-ItemType
         // file`）会贡献一个无害的根内候选，但真正的 `-Path`/位置参数目标
         // 绝不会漏判。宁可过度拦截。
         for a in args.iter() {
@@ -1775,14 +1775,14 @@ pub fn check_write_target(
     let path = if expanded.is_absolute() {
         expanded
     } else {
-        // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)（评审）：在规范化的 cwd 上 join，让词法包含性检查与规范化 roots
+        // [docs/testing](../../../../docs/testing.md)（评审）：在规范化的 cwd 上 join，让词法包含性检查与规范化 roots
         // 处于同一命名空间（Windows 的 `\\?\` 原样、macOS 的 /var→/private/var 符号链接
         // 已解析）——否则 `starts_with` 永不匹配，下方整套逃逸网沦为死代码。
         pathutil::canonical_best_effort(cwd).join(expanded)
     };
     let roots_canon = roots.canonical_roots();
     let exists = path.symlink_metadata().is_ok();
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：先按词法判定越界。显式 `..` 穿越离开 roots 是普通路径语义——
+    // [docs/testing](../../../../docs/testing.md)：先按词法判定越界。显式 `..` 穿越离开 roots 是普通路径语义——
     // 旧的祖先逐级规范化循环对一切 `../` 相对目标都会误报，
     // 因为祖先遍历必然途经根本身。
     let lex = lexical_normalize(&path);
@@ -1807,7 +1807,7 @@ pub fn check_write_target(
                 message: format!("写目标经符号链接逃逸出工作区：{}", link.display()),
             };
         }
-        // ConfirmEach/Plan：根内写同样需要确认（[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md) 语义表）
+        // ConfirmEach/Plan：根内写同样需要确认（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 语义表）
         if policy.confirm_inside_writes {
             return Verdict::Confirm(ConfirmReason::InsideWrite(t.to_string()));
         }
@@ -1878,7 +1878,7 @@ fn intermediate_symlink_escape(lex: &Path, roots: &[PathBuf]) -> Option<PathBuf>
 /// cmd 清空写短语（type nul > x / more +0 > x 的截断写语义）→ cmd 危险命令词表
 /// → fish 持久化/执行入口 → 既有灾难/高危模式。只增不删。
 fn fallback_scan(cmd: &str) -> Verdict {
-    // [docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：与 AST 路径同一套反混淆（共享 l1_token_scan）。
+    // [docs/testing](../../../../docs/testing.md)：与 AST 路径同一套反混淆（共享 l1_token_scan）。
     if let Some(tok) = l1_token_scan(cmd) {
         return Verdict::Block {
             code: "E_COMMAND_BLOCKED".into(),
@@ -2188,7 +2188,7 @@ fn high_risk_match(cmd: &str) -> Option<&'static str> {
     let pipes_to_shell = ["| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh"]
         .iter()
         .any(|p| lower.contains(p));
-    // PowerShell 下载-执行（`iwr … | iex`，[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)）：短别名按 token 比对，
+    // PowerShell 下载-执行（`iwr … | iex`，[docs/testing](../../../../docs/testing.md)）：短别名按 token 比对，
     // 子串无法搭载在路径上；管道解释器一侧仍按子串比对。
     let pipes_to_iex = ["| iex", "|iex", "| invoke-expression", "|invoke-expression"]
         .iter()
@@ -2208,7 +2208,7 @@ fn high_risk_match(cmd: &str) -> Option<&'static str> {
         return Some("下载脚本直接执行");
     }
     if lower.contains("git push") {
-        // `--force-with-lease` 是安全的强制变体（远端有新提交时失败）——[docs/arithmetic-fixes-batch](../../../../docs/arithmetic-fixes-batch.md)：
+        // `--force-with-lease` 是安全的强制变体（远端有新提交时失败）——[docs/testing](../../../../docs/testing.md)：
         // 只有裸 `--force` / `-f` / `--force=…` 算强制推送。
         let forced = tokens
             .iter()

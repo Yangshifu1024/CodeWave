@@ -1,5 +1,5 @@
 //! Optimistic concurrency tokens for the edit tool: first 6 chars of a SHA-256 digest in Crockford Base32
-//! (ambiguous characters I L O U excluded, consistent with [docs/p0-plan](../../../docs/p0-plan.md) §6.3).
+//! (ambiguous characters I L O U excluded, consistent with [docs/technical-design](../../../docs/technical-design.md)).
 
 use sha2::{Digest, Sha256};
 

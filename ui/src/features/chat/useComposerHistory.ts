@@ -1,7 +1,7 @@
-// Composer ↑↓ 历史消息召回（[docs/fence-hardening-and-powershell-ast](../../../../docs/fence-hardening-and-powershell-ast.md) 重构）：对当前会话的用户条目做浏览态
+// Composer ↑↓ 历史消息召回（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 重构）：对当前会话的用户条目做浏览态
 // （时间升序；↑ 翻向更旧、↓ 翻向更新），进入浏览态拍草稿快照、退出时还原，
 // 图片还原走共享附件兜底（上限 4 张 / 20MB）。
-// [docs/composer-file-ref-chips](../../../../docs/composer-file-ref-chips.md)：历史消息正文里的 `@路径` 回填前先经 recoverRefs
+// [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：历史消息正文里的 `@路径` 回填前先经 recoverRefs
 // 抽成引用 chip（带回往门禁：只有能逐字节还原原文的形态才解析），避免召回后又在输入框里看到整条长路径。
 import { useEffect, useRef, useState } from "react";
 import { useRun } from "../../stores/run";
@@ -18,7 +18,7 @@ export function useComposerHistory(opts: {
   setRefs: React.Dispatch<React.SetStateAction<string[]>>;
   recalledImages: (imgs: { mediaType: string; data: string }[]) => PendingImage[];
   /** 文本被本 hook 直接覆盖后的通知（新长度）：Composer 据此作废触发片段并收敛光标
-   *  （[docs/composer-trigger-caret](../../../../docs/composer-trigger-caret.md)：这类改写不过 onChange） */
+   *  （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)：这类改写不过 onChange） */
   onTextReplaced?: (len: number) => void;
 }) {
   const { tabKey, setText, setImages, setRefs, recalledImages, onTextReplaced } = opts;

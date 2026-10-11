@@ -1,4 +1,4 @@
-// 设置项注册表（[docs/settings-ia](../../../../docs/settings-ia.md)）：页集合 / 导航分组 / 页名键 /
+// 设置项注册表（[docs/settings-guide](../../../../docs/settings-guide.md)）：页集合 / 导航分组 / 页名键 /
 // 旧页 key 别名 / 设置项清单 / 页字段归属，全部集中在本模块。
 //
 // 设计要点：
@@ -137,7 +137,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "approval.command_allowlist", labelKey: "settings.cmdAllowlist", page: "security", advanced: true, keywords: ["allowlist", "白名单", "允许", "命令"] },
 
   // ---------- 写入后检查与校验（原「工具与集成」页：MCP / 技能已拆成独立页） ----------
-  // 写入后检查命令（[docs/post-write-check-plan](../../../../docs/post-write-check-plan.md)）：取代 LSP 写后语义校验
+  // 写入后检查命令（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：取代 LSP 写后语义校验
   { id: "post_write_check.enabled", labelKey: "settings.postWriteEnabled", page: "tools", group: "settings.postWriteCheck", keywords: ["post", "write", "check", "lint", "写入后检查", "检查", "校验"] },
   { id: "post_write_check.command", labelKey: "settings.postWriteCommand", page: "tools", group: "settings.postWriteCheck", keywords: ["command", "命令", "lint", "eslint", "tsc", "ruff", "cargo", "{file}", "写入后检查", "检查命令"] },
   { id: "post_write_check.timeout_seconds", labelKey: "settings.postWriteTimeout", page: "tools", group: "settings.postWriteCheck", width: "narrow", advanced: true, keywords: ["timeout", "超时", "秒"] },
@@ -157,7 +157,7 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "custom_prompt", labelKey: "settings.customPrompt", page: "agent", keywords: ["prompt", "system prompt", "提示词", "系统提示词", "自定义"] },
   { id: "compact_threshold", labelKey: "settings.compactThreshold", page: "agent", keywords: ["compact", "压缩", "自动压缩", "阈值", "上下文"] },
   { id: "compact_timeout_seconds", labelKey: "settings.compactTimeout", page: "agent", width: "narrow", keywords: ["compact", "压缩", "超时"] },
-  // 会话保留期与清理（[docs/session-cleanup](../../../../docs/session-cleanup.md)）：下拉是**页级保存**字段；
+  // 会话保留期与清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：下拉是**页级保存**字段；
   // 后面的只读状态行与动作按钮用 `app.*` 前缀（无落盘字段，不进 PAGE_FIELDS，只提供搜索 / 锚点）
   { id: "sessions.retention_days", labelKey: "settings.sessionRetention", page: "agent", width: "narrow", keywords: ["session", "retention", "cleanup", "会话保留期", "保留期", "清理", "自动清理", "删除会话"] },
   { id: "app.cleanup_now", labelKey: "settings.cleanupNow", page: "agent", keywords: ["cleanup", "清理", "立即清理", "clean up now", "删除会话"] },
@@ -298,7 +298,7 @@ export type SettingFieldPath =
  */
 export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
   // 界面页：主题与双字体槽是 localStorage 偏好、界面语言是即时生效项 ——
-  // 本页没有可保存的改动，故**永不亮脏点**（有意为之，见 docs/settings-ia.md）。
+  // 本页没有可保存的改动，故**永不亮脏点**（有意为之，见 docs/settings-guide.md）。
   appearance: ["ui.theme", "ui.font_sans", "ui.font_mono", "ui.language"],
   providers: ["providers", "active_model_id", "ui.ai_language", "subagentModels"],
   network: ["network.proxy", "network.allow_private_network"],
@@ -337,7 +337,7 @@ export const PAGE_FIELD_EXCEPTIONS: string[] = [];
  * 新增设置项必须登记，只新增文案必须在此显式分类（并说明为何不属可配置项）。
  */
 export const SHELL_SETTING_KEYS: string[] = [
-  // —— 子代理按角色模型覆盖（[docs/subagent-model-override]）：设置项 "subagentModels" 已登记；
+  // —— 子代理按角色模型覆盖（[docs/subagents]）：设置项 "subagentModels" 已登记；
   //    以下四项为复合容器 SubagentModelsPanel 的从属文案（顶部提示 / 占位档 / 只读角标 / 保存失败）。 ——
   "subagentModelsHint",
   "subagentInherit",
@@ -346,7 +346,7 @@ export const SHELL_SETTING_KEYS: string[] = [
 
   // —— 页壳与离开拦截：全屏页容器自身的文案，与任何设置项无关 ——
   // 保存 / 已保存 / 取消 / 删除已收进 `common` 段（批④；common.* 不是 settings.*，
-  // 不进本清单也不进注册表，见 docs/settings-terminology.md）
+  // 不进本清单也不进注册表，见 docs/settings-guide.md）
   "title", // 设置页标题 / 全屏 dialog 的 aria-label
   "cancelHint", // 取消按钮 Tooltip（→ 对应按钮文案 = common.cancel）
   "dirtyHint", // 脏圆点 Tooltip
@@ -559,7 +559,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "shellNoPath", // → 无固定可执行文件路径的占位文案
 
   // —— 会话保留期与清理的从属文案（项已登记：sessions.retention_days / app.cleanup_now / app.cleanup_status）
-  //    （[docs/session-cleanup](../../../../docs/session-cleanup.md) §3 第 12/25/26/27 条） ——
+  //    （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 12/25/26/27 条） ——
   "sessionRetentionHint", // → sessions.retention_days 的说明
   "cleanupAction", // → 手动清理行的标题，动作仍由 app.cleanup_now 登记
   "cleanupNever", // → sessions.retention_days 选项：不清理（= null）

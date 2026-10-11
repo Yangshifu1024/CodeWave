@@ -1,4 +1,4 @@
-// AskPanel 选项描述排版契约（[docs/ask-option-desc-wrap](../../../docs/ask-option-desc-wrap.md)）：
+// AskPanel 选项描述排版契约（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // 描述必须是**完整折行**显示——用户反馈「选项说明只显示半句，看不到选它会怎样」。
 // happy-dom 不做布局，故与 chat.style.test.ts / titlebar.style.test.ts 同路：直接断言源码 CSS。
 import { describe, it, expect } from "vitest";

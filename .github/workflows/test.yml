@@ -2,7 +2,7 @@
 # 触发语义：push main（合并后验证）/ pull_request（PR 检查）；push 其他分支不跑。
 # 构建产物归 release（tag v*）——前端 vite build / tsc 类型检查也随之移交 tag 时点。
 # 三平台跑 cargo test：Windows 验证 git2/libgit2 构建链（G8）；前端 vitest 三平台全量。
-# tauri CLI 从仓库根运行（root package.json + pnpm workspace，见 docs/p0-implementation-report 布局说明）。
+# tauri CLI 从仓库根运行（root package.json + pnpm workspace，见 docs/technical-design 布局说明）。
 # 注：MCP 真实 server 测试（mcp::tests::real_*）依赖 node，setup-node 已满足。
 name: test
 
@@ -15,7 +15,7 @@ on:
       - "**.md"
   pull_request:
 
-# docs/oss-prep-batch：同分支新提交取消在途旧跑
+# docs/development：同分支新提交取消在途旧跑
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

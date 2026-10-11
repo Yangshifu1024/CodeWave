@@ -22,7 +22,7 @@ CodeWave 把数据、API Key、会话记录都放在用户本机。涉及以下�
 
 ## 安全设计速览
 
-- API Key 全部经 `host/keyring.rs` 存入系统钥匙串，config.json 中仅存占位符
+- API Key 由 `host/keyring.rs::migrate` 迁入系统钥匙串，成功后以占位符替换。**现存限制**：`host/commands/project.rs::save_config` 先保存配置、再迁移；钥匙串不可用时仍保留明文并记录警告。因此配置文件应按含凭据的敏感文件保护，备份、日志采集或分享前须移除密钥。这是实现现状，不是“密钥绝不落盘”的保证
 - 文件写操作经 `tools/pathutil.rs` 的 `safe_join` / `resolve_write` 边界校验（拒 `..` 逃逸与绝对路径注入）
 - 命令执行先过三层静态围栏（`safety/fence`：删除黑名单 → AST 写目标分析 → 高危模式审批）
 - 写类工具按会话权限档位（plan / confirm_each / auto_edit / full_access）走审批门

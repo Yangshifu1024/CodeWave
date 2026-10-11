@@ -1,4 +1,4 @@
-//! MCP 客户端管理（[docs/p1-plan](../../../docs/p1-plan.md) §4）：官方 rmcp SDK。
+//! MCP 客户端管理（[docs/technical-design](../../../docs/technical-design.md)）：官方 rmcp SDK。
 //! 传输层：stdio（子进程，**进程树由 Job Object / 进程组回收**）与 streamable-http。
 //! 函数名映射 `mcp__<server>__<tool>`；全部工具（内置 + MCP）按名排序，保持请求字节稳定。
 //!

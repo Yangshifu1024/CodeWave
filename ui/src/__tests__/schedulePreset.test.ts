@@ -1,4 +1,4 @@
-// 周期选择器 ↔ 计划表达式（[docs/tasks-module-polish]）：文法镜像的纯函数守门。
+// 周期选择器 ↔ 计划表达式（[docs/runtime-and-scheduling]）：文法镜像的纯函数守门。
 // 后端 `parse_schedule` 只认三种形态：`cron:<5 字段>`（内部前置补秒位）/ `every:<n> <unit>`（**空白是文法的一部分**）
 // / `once:<RFC3339>`。本文件把「六种 preset ↔ 表达式」的往返与「认不出 → custom」钉死。
 import { describe, it, expect } from "vitest";

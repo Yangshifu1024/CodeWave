@@ -62,7 +62,7 @@ pub enum Frame {
         name: String,
     },
     /// 本轮 LLM 用量（可选耗时字段：仅本 step **成功那次尝试**的窗口；缺省 = 无数据，
-    /// 前端不累加不显示，旧后端/旧读者不受影响，[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）
+    /// 前端不累加不显示，旧后端/旧读者不受影响，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     Usage {
         input: u64,
         output: u64,
@@ -76,7 +76,7 @@ pub enum Frame {
         ttft_ms: Option<u64>,
     },
     /// 子代理帧信封：子代理的流式帧借父会话通道下发；前端按 sub_id 路由进该子代理自己的
-    /// 消息流（[docs/subagent-interaction-drawer](../../../../docs/subagent-interaction-drawer.md)）。
+    /// 消息流（[docs/subagents](../../../../docs/subagents.md)）。
     /// 仅 host 层在子通道上发送时包装。
     Sub { sub_id: String, frame: Box<Frame> },
 }
@@ -181,7 +181,7 @@ pub struct SessionRuntime {
     pub sem_tools: Arc<Semaphore>,
     /// 待应答的 ask/审批 waiter：ask_id → 应答通道
     pub asks: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
-    /// 文本形态 ask 兜底恢复的原始块（[docs/text-form-ask-fallback]）：drive 兜底时写入，
+    /// 文本形态 ask 兜底恢复的原始块（[docs/chat-and-interface]）：drive 兜底时写入，
     /// AskTool 打开询问卡时**取走**（take）并随 `ask:opened` 的 `text_recovered` 下发——
     /// 流式帧已把这段协议原文送到前端且无法回收，前端据此从当轮气泡里剔掉它。
     /// 每 run 至多一处（兜底本身每 run 一次）。
@@ -197,7 +197,7 @@ pub struct SessionRuntime {
     /// 本 run 是否已注入计划瞬态快照（每 run 复位）
     pub injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool,
     /// 上游拒收回传 `reasoning_content`（not accepted / unrecognized field）的会话级粘性标记：
-    /// 命中一次后本会话出网副本不再回传思考（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）。
+    /// 命中一次后本会话出网副本不再回传思考（[docs/providers-and-network](../../../../docs/providers-and-network.md)）。
     /// 与 `sanitize`（一次性历史修复）不同，这是「该端点不认该字段」的学习结果，跨 step / 跨 run 保持；
     /// 收到 `Demanded` 分类时由 `drive::update_reasoning_sticky` 复位（自愈阀，防误判 / 切端点后永久剥思考）。
     /// 子代理 runtime 由 `new_sub` 继承父会话当前值（同一进程内同一 provider 的端点特性一致）。
@@ -206,7 +206,7 @@ pub struct SessionRuntime {
     pub plan_hint_emitted: std::sync::atomic::AtomicBool,
     /// 本 run 是否**成功调用过 plan 工具**（即真的改过计划；run_chat 起点复位）
     ///
-    /// 存在的意义（[docs/main-run-finish-with-pending-todos](../../../../docs/main-run-finish-with-pending-todos.md) §8.2）：
+    /// 存在的意义（[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）：
     /// `rt.todos` 跨 run 持久化且 run 开头从磁盘装载，而生产路径里唯一写者是 plan 工具——
     /// 故本标记能唯一区分「本 run 的计划」与「上个 run 留下的陈旧计划」。计划未收尾的收尾门
     /// （`text_turn_action` 的 `todos_pending` 与 suggest 的 `E_PLAN_PENDING`）**只看本标记**：
@@ -217,11 +217,11 @@ pub struct SessionRuntime {
     pub plan_called_this_run: std::sync::atomic::AtomicBool,
     /// 会话已删除（评审 H5）：置位后迟到的 run 收尾不得再检查点/写日志复活幽灵会话
     pub zombie: AtomicBool,
-    /// 会话级运行偏好（审批档位 / 模型 / 思考力度；内存态，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+    /// 会话级运行偏好（审批档位 / 模型 / 思考力度；内存态，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     pub prefs: Mutex<crate::core::prefs::SessionPrefs>,
     /// 主会话偏好的状态过渡与边车持久化共用此锁，防旧模型迁移覆盖并发切档。
     pub prefs_persist_lock: Mutex<()>,
-    /// G2（[docs/plan-mode-workflow](../../../../docs/plan-mode-workflow.md) §7）：plan 档分析产物标志——pm/tester 子代理成功返回时置位。
+    /// G2（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：plan 档分析产物标志——pm/tester 子代理成功返回时置位。
     /// 内存态：重启丢失 = 退化为无门禁语义，无安全回退（只读由 G5 独立保证）。
     pub analysis_done: std::sync::atomic::AtomicBool,
     /// G2：因缺分析产物被拒的审批 ask 次数（会话累计；≥2 次后错误文案升级）
@@ -237,13 +237,13 @@ pub struct SessionRuntime {
     /// G3 范围确认的单飞锁：同批并发写的多个写工具只弹一张确认卡
     /// （command 工具是 ReadOnly、走并发闸，逐 call 求值会重复弹窗）。
     pub scope_gate_lock: tokio::sync::Mutex<()>,
-    /// 产物归属（[docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)）：子代理 runtime 指向主会话 id，写操作登记到主会话名下；
+    /// 产物归属（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：子代理 runtime 指向主会话 id，写操作登记到主会话名下；
     /// 主会话 / 任务运行 = None
     pub root_session_id: Option<String>,
     /// 子代理出生时冻结的根 run 身份；其自己的 RunSnapshot 不代表所属主 run。
     /// 嵌套子代理继续继承同一根身份，审批事件不能按父会话当前 run 回查。
     pub root_run_id: Option<String>,
-    /// [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：任务运行的隔离 runtime（无产物消费方；跳过登记避免边车泄漏）
+    /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：任务运行的隔离 runtime（无产物消费方；跳过登记避免边车泄漏）
     pub is_task_runtime: bool,
     /// 是否主会话 runtime（真正的用户会话）：子代理/任务运行为 false——checkpoint
     /// 据此早退，绝不把内部运行 upsert 进主索引（untitled 幽灵会话缺陷修复）。
@@ -262,7 +262,7 @@ pub struct SessionRuntime {
     /// Anthropic 历史代际断点锚点（req.messages 下标；滞回前移，见 prompt-caching-hardening 批次），
     /// drive_agent 每个 run 清空
     pub cache_gen_anchor: Mutex<Option<usize>>,
-    /// 本 run 的生成耗时/TTFT 观测（[docs/composer-token-rate](../../../../docs/composer-token-rate.md)）：
+    /// 本 run 的生成耗时/TTFT 观测（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
     /// drive_agent 每 run 复位、run_llm_turn 每个成功 step 累积；run 收尾时随 usage 记录落盘。
     /// 走 runtime 同通道回传（`drive_agent` 返回签名不变，子代理/测试的 3 元组解构不受影响）。
     pub run_timing: Mutex<crate::core::stats::UsageTiming>,
@@ -462,13 +462,13 @@ impl SessionRuntime {
                 .root_run_id
                 .clone()
                 .or_else(|| parent.run_snapshot().run_id);
-            // 继承父会话的粘性剥思考标记（[docs/reasoning-content-passthrough](../../../../docs/reasoning-content-passthrough.md)）：
+            // 继承父会话的粘性剥思考标记（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
             // 同一进程内同一 provider 的端点特性一致，子代理不必在首个请求上再撞一次 400。
             // 继承的是「当前值」：父此后由 400 分类自愈（`Demanded` 复位）时已存在的子 runtime 不跟随
             // ——下一条 400 会让子自己重新分类（对称自愈，无需父子间反向回写）。
             r.reasoning_rejected =
                 AtomicBool::new(parent.reasoning_rejected.load(Ordering::SeqCst));
-            // [docs/session-artifacts-and-files-tab](../../../../docs/session-artifacts-and-files-tab.md)：子代理写登记归属主会话（父本身也是子代理时取其归属，
+            // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：子代理写登记归属主会话（父本身也是子代理时取其归属，
             // 防嵌套链条断裂）
             r.root_session_id = Some(
                 parent
@@ -477,7 +477,7 @@ impl SessionRuntime {
                     .unwrap_or_else(|| parent.id.clone()),
             );
         }
-        // 继承 extra roots 与会话偏好（审批档位 / 模型 / 力度对子代理语义相同，[docs/composer-toolbar-batch-report](../../../../docs/composer-toolbar-batch-report.md)）
+        // 继承 extra roots 与会话偏好（审批档位 / 模型 / 力度对子代理语义相同，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
         *rt.extra_roots.lock().unwrap() = parent.extra_roots.lock().unwrap().clone();
         *rt.prefs.lock().unwrap() = parent.prefs.lock().unwrap().clone();
         rt
@@ -554,7 +554,7 @@ pub struct AgentCore {
     /// 可等待目标登记表（`wait` 工具 `until` 条件等待的数据面）。
     /// 独立于 services/subs/tasks 三张表：子代理完成即从 subs 移除、service 自然退出不移除、
     /// 计划任务无 running 中间态——反查既有表都分不清「已完成」与「不存在」。
-    /// （[docs/wait-conditional-wait](../../../docs/wait-conditional-wait.md)）
+    /// （[docs/runtime-and-scheduling](../../../../docs/runtime-and-scheduling.md)）
     pub wait_targets: crate::core::wait_targets::WaitTargets,
 }
 

@@ -3,7 +3,7 @@ import { applyFrameToTab } from "../stores/runFrames";
 import { useRun, type TimelineSeg } from "../stores/run";
 import type { ToolView } from "../stores/run.types";
 
-// Interleaving order contract ([docs/thinking-interleave-report](../../../docs/thinking-interleave-report.md)): frame arrival order = timeline display order; history restore is isomorphic; retry leaves no residue.
+// Interleaving order contract ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): frame arrival order = timeline display order; history restore is isomorphic; retry leaves no residue.
 // applyFrameToTab is the real reducer shared by send()'s onmessage and the tests.
 
 function tabOf(session: string) {
@@ -127,7 +127,7 @@ describe("思考与工具穿插顺序", () => {
     const a = tabOf(session).items.find((i) => i.kind === "assistant") as any;
     expect(a.toolsMap["call-1"].tool).toBe("read");
     // 该 fixture 里这条 tool_use 没有任何配对结果（真实历史由后端 repair 保证配对）：
-    // 现在按「已中断」呈现，与子代理流一致（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）
+    // 现在按「已中断」呈现，与子代理流一致（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）
     expect(a.toolsMap["call-1"].status).toBe("error");
     expect(a.toolsMap["call-1"].outcome.error.code).toBe("E_INTERRUPTED");
   });
@@ -184,7 +184,7 @@ describe("思考与工具穿插顺序", () => {
       },
     ] as any);
     // 失败结果（is_error: true）现在还原为真实错误卡：从模型侧 `[error E_XXX: …]` 文本里取回错误码，
-    // 而不是留一个「已使用 + 空数据」的假象（[docs/session-restore-fidelity](../../../docs/session-restore-fidelity.md)）
+    // 而不是留一个「已使用 + 空数据」的假象（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）
     const errCard = toolCardsOf(session, "call-err")[0]!;
     expect(errCard.status).toBe("error");
     expect((errCard.outcome as any)?.error?.code).toBe("E_EXIT_CODE");

@@ -1,4 +1,4 @@
-// Subagent interaction batch ([docs/subagent-interaction-drawer](../../../docs/subagent-interaction-drawer.md)) store-level tests:
+// Subagent interaction batch ([docs/subagents](../../../docs/subagents.md)) store-level tests:
 // envelope frame routing / first subagent auto-opens the drawer / archive preserved across runs / subagent tool result backfill / restore recognition and process history rebuild.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFrameToTab } from "../stores/runFrames";
@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../ipc/client", () => ({
   ipc: {
     startChat: vi.fn(async () => "run-1"),
-    // 恢复路径的完整出参回填（[docs/session-restore-fidelity]）：默认可空，具体用例用 mockResolvedValueOnce 注入
+    // 恢复路径的完整出参回填（[docs/sessions-and-projects]）：默认可空，具体用例用 mockResolvedValueOnce 注入
     loadToolOutcomes: vi.fn(async (): Promise<any[]> => []),
     loadSubagentHistory: vi.fn(async (_sid: string, subId: string) =>
       subId === "sub_9"
@@ -62,7 +62,7 @@ function tabOf(session: string) {
   return useRun.getState().tabs[session]!;
 }
 
-describe("子代理交互（docs/subagent-interaction-drawer）", () => {
+describe("子代理交互（docs/subagents）", () => {
   const session = "s-sub";
 
   beforeEach(() => {
@@ -165,7 +165,7 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     // 结果落定：进度尾部一并清掉（与主会话同步）
     expect(st.toolsMap["b1:0"]).toMatchObject({ tool: "grep", status: "ok", progressTail: "" });
 
-    // subagent file writes also bump the main session writeTick ([docs/session-artifacts-and-files-tab](../../../docs/session-artifacts-and-files-tab.md) attribution semantics)
+    // subagent file writes also bump the main session writeTick ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md) attribution semantics)
     const before = tabOf(session).writeTick;
     h["tool:result"]({ session: "sub_1", call_key: "b1:1", tool: "edit", args_preview: "{}", outcome: { ok: true, data: {} }, duration_ms: 3 });
     expect(tabOf(session).writeTick).toBe(before + 1);
@@ -409,7 +409,7 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     expect((mainTl[1] as any).text).toBe("主流");
   });
 
-  // ===== [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md) =====
+  // ===== [docs/subagents](../../../docs/subagents.md) =====
   // 子代理终态事件一旦丢失，卡片永久转圈且 composer 计数不归零。本组钉死兜底与次生修复。
 
   describe("子代理卡收尾兜底（subagent-terminal-event-loss）", () => {
@@ -491,7 +491,7 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     });
   });
 
-  // ===== [docs/subagent-terminal-event-loss](../../../docs/subagent-terminal-event-loss.md)：tool:result 二道兜底 =====
+  // ===== [docs/subagents](../../../docs/subagents.md)：tool:result 二道兜底 =====
   // run 收尾兜底只在主 run 结束时收敛；「子代理早已返回、主 run 还在跑」的那段窗口里卡片照样一直转圈
   // （单个 run 实测可达数分钟）。tool:result 与 sub:done 出自同一个 task 的相邻位置，是现存第二可靠的收尾信号。
 
@@ -568,7 +568,7 @@ describe("子代理交互（docs/subagent-interaction-drawer）", () => {
     });
 
     // 钉死「ended 不按枚举白名单过滤」：白名单写法在后端扩展 ended 时会把新值静默漏判成
-    // no_report —— docs/subagent-budget-and-ended.md 就 `partial` 明确警告过这一点。
+    // no_report —— docs/subagents.md 就 `partial` 明确警告过这一点。
     // 本分支的 SubView["ended"] 仍是三值（PR #126 未合），partial 走 as-any 载荷进，
     // 断言的是**运行时行为**：值原样保留，不被改写。
     it("ended 原样保留后端送来的值，不按枚举白名单过滤（后端新增 ended 时不静默漏判）", () => {

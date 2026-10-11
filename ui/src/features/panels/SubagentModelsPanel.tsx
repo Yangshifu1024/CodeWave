@@ -1,4 +1,4 @@
-// 子代理模型覆盖（[docs/subagent-model-override](../../../docs/subagent-model-override.md)）：
+// 子代理模型覆盖（[docs/subagents](../../../../docs/subagents.md)）：
 // 模型与供应商页一段独立的 `8 角色 × 模型下拉`复合容器——每个内置子代理角色（subagent 工具可委派集，
 // 后端 agents::DELEGABLE_ROLES 顺序，剔除内部 title）可单独指定模型，未指定 = 跟随父会话活跃模型。
 // 容器层只关心 UI 与 IPC 协调；持久化经 useSettings.save（settings store）做整份 ConfigState 覆盖式提交。
@@ -30,7 +30,7 @@ const READONLY_ROLES = new Set(["explore", "reviewer", "code-reviewer"]);
 const INHERIT_SENTINEL = "__subagent_inherit__";
 
 /**
- * 子代理模型覆盖段：单一 SettingFieldPath = "subagentModels"（[docs/settings-search-and-advanced](../../../docs/settings-search-and-advanced.md) §1.1）——
+ * 子代理模型覆盖段：单一 SettingFieldPath = "subagentModels"（[docs/settings-guide](../../../../docs/settings-guide.md)）——
  * 容器根挂该 id 锚点；搜索命中、临时高亮、走页体级 data-setting-id 唯一性守卫。
  * 8 角色行 = `useMemo` 在 `flat` 变化时重排，**不在 useState/useEffect 里建模派生值**（rendering purity）。
  */

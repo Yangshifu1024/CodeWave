@@ -3,7 +3,7 @@ import { create } from "zustand";
 import type { McpStatusPayload } from "../ipc/types";
 import { clampNavWidth, clampRightBarWidth, NAV_W_DEFAULT, RB_W_DEFAULT } from "../utils/layout";
 // 设置页页 key 归一（旧页 key 别名 / 非法值回退）与默认页都住在注册表里（纯数据模块，无 React/store 依赖，
-// 所以 store 反向引用它不构成循环：[docs/settings-ia](../../../docs/settings-ia.md)）
+// 所以 store 反向引用它不构成循环：[docs/settings-guide](../../../docs/settings-guide.md)）
 import { DEFAULT_PAGE, normalizePageKey, type PageKey } from "../features/panels/settingsRegistry";
 // 树展开/折叠态的落盘链路（uiState → ipc.setUiState）。本文件与 utils/uiState 互为引用（那边要读 useUi），
 // 但双方都只在函数体内取用对方的绑定，模块顶层互不触达，ESM 活绑定足以支撑这个环。
@@ -35,8 +35,8 @@ interface UiState {
   theme: ThemePref;
   settingsOpen: boolean;
   /** 设置页当前页（8 页重划后的 PageKey；提升进 store 以便外部调用方（认证错误引导等）指定页打开
-   *  （[docs/auth-error-guidance](../../../docs/auth-error-guidance.md)）；深链语义见 showSettings
-   *  （[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md) / [docs/settings-ia](../../../docs/settings-ia.md)） */
+   *  （[docs/providers-and-network](../../../docs/providers-and-network.md)）；深链语义见 showSettings
+   *  （[docs/settings-guide](../../../docs/settings-guide.md) / [docs/settings-guide](../../../docs/settings-guide.md)） */
   settingsTab: PageKey;
   /** 设置页「外部命中」请求：除了切页，还要滚动定位到某个锚点（如额度灰行的 `providers.<uuid>`）。
    *  nonce 保证向同一锚点连点两次也能重新定位（SettingsPage 消费后自己丢弃） */
@@ -76,7 +76,7 @@ interface UiState {
   setTreeGroupFolded(key: string, next?: boolean): void;
   /** 折叠/展开左栏「项目」区 */
   setTreeCollapsed(collapsed: boolean): void;
-  /** 右栏开合持久态（[docs/sidebar-toggle-buttons](../../../docs/sidebar-toggle-buttons.md)）：localStorage 记忆，重启保留 */
+  /** 右栏开合持久态（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：localStorage 记忆，重启保留 */
   rightBarOpen: boolean;
   setRightBarOpen(open: boolean): void;
   /** 左栏宽度（可拖拽，localStorage 全局记忆；显示时按窗口宽度夹取，见 utils/layout） */
@@ -93,7 +93,7 @@ interface UiState {
   /** 打开设置页。
    *  - 带页：跳到该页（错误卡「打开模型设置」→ providers，macOS 菜单「关于」→ about；
    *    旧页 key（general / mcp / skills 等）经 LEGACY_PAGE_ALIASES 归一，未知值回默认页）
-   *  - 不带页：保持当前页不重置（**有意变更**：[docs/settings-fullscreen-shell](../../../docs/settings-fullscreen-shell.md)；
+   *  - 不带页：保持当前页不重置（**有意变更**：[docs/settings-guide](../../../docs/settings-guide.md)；
    *    旧实现是「无参一律回 general」。设置从弹窗改为常驻全屏页后，重复点入口/菜单项不应把用户甩回第一页）
    *  两条路径在存在未保存改动时的拦截由 SettingsPage 承担（本动作只动开关与页 key） */
   showSettings(tab?: string): void;
