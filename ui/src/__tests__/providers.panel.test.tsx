@@ -6,7 +6,7 @@ import { useState } from "react";
 import AntApp from "antd/es/app";
 import "../i18n"; // Component mounted standalone must init i18next explicitly (no global entry outside App.tsx)
 import ProvidersPanel, { validateProvider } from "../features/panels/ProvidersPanel";
-import type { ConfigState, ProviderConfig } from "../ipc/types";
+import type { ConfigState, CredentialEdit, ProviderConfig } from "../ipc/types";
 
 function makeConfig(providers: ProviderConfig[], active_model_id: string | null): ConfigState {
   return {
@@ -27,13 +27,16 @@ function makeConfig(providers: ProviderConfig[], active_model_id: string | null)
 }
 
 let latest: ConfigState | null = null;
+let latestEdits: Record<string, CredentialEdit> = {};
 
 function Harness({ initial }: { initial: ConfigState }) {
   const [d, setD] = useState<ConfigState>(() => JSON.parse(JSON.stringify(initial)));
+  const [edits, setEdits] = useState<Record<string, CredentialEdit>>({});
+  latestEdits = edits;
   latest = d;
   return (
     <AntApp>
-      <ProvidersPanel draft={d} patchDraft={(p) => setD((prev) => ({ ...prev, ...p }))} />
+      <ProvidersPanel credentialEdits={edits} patchCredentialEdit={(id, edit) => setEdits((previous) => ({ ...previous, [id]: edit }))} draft={d} patchDraft={(p) => setD((prev) => ({ ...prev, ...p }))} />
     </AntApp>
   );
 }
@@ -141,6 +144,8 @@ describe("ProvidersPanel 供应商管理", () => {
     // [docs/providers-and-network](../../../docs/providers-and-network.md): new model default max_tokens 32768
     expect(p.models[0].max_tokens).toBe(32768);
     expect(latest!.active_model_id).toBe(p.models[0].id);
+    expect(p.keys).toEqual([]);
+    expect(latestEdits[p.id]).toEqual({ kind: "replace", new_keys: ["sk-test-1"] });
   });
 
   it("新增校验（docs/providers-and-network）：空字段提交亮必填红字，非法 URL 有格式提示，缺 key/模型均不入 draft", async () => {
@@ -187,8 +192,9 @@ describe("ProvidersPanel 供应商管理", () => {
     fireEvent.change(screen.getByDisplayValue("P1") as HTMLInputElement, { target: { value: "" } });
     await new Promise((r) => setTimeout(r, 60));
     expect(document.body.textContent ?? "").toContain("必填");
-    // Clear the API Key (masked row) → required error ([docs/providers-and-network](../../../docs/providers-and-network.md))
-    fireEvent.change(screen.getByDisplayValue("***abcd") as HTMLTextAreaElement, { target: { value: "" } });
+    // Replacing requires new input; stored masks are never editable secrets.
+    expect(screen.queryByDisplayValue("***abcd")).toBeNull();
+    fireEvent.click(screen.getByLabelText("替换全部密钥"));
     await new Promise((r) => setTimeout(r, 60));
     expect(document.querySelectorAll(".ant-form-item-explain-error").length).toBeGreaterThanOrEqual(2);
     // Delete the only model → model list error ([docs/providers-and-network](../../../docs/providers-and-network.md))
@@ -352,5 +358,62 @@ describe("validateProvider 自定义请求头校验（docs/providers-and-network
   it("既有合法行（含 ${session_id} 模板）→ 不标记 headers 问题", () => {
     const issues = validateProvider(makeProvider([{ name: "x-opencode-session", value: "${session_id}" }]));
     expect(issues.some((i) => i.field === "headers")).toBe(false);
+  });
+});
+
+describe("explicit credential intent", () => {
+  function provider(): ProviderConfig {
+    return { id: "stored", name: "Stored provider", api_format: "openai_chat", base_url: "https://example.com/v1",
+      keys: ["***same", "***same"], credential_ref: "generation-old", credential_count: 2, headers: [],
+      models: [{ id: "model", model: "model", max_tokens: 8192, context_window: 128000, reasoning_effort: null, vision: false, video: false }] };
+  }
+
+  it("shows configured count, never puts masked keys in an editable control, and records append separately", async () => {
+    render(<Harness initial={makeConfig([provider()], "model")} />);
+    fireEvent.click(buttonByText("编辑"));
+    expect(document.body.textContent).toContain("已配置 2 把密钥");
+    expect(screen.queryByDisplayValue("***same")).toBeNull();
+    expect(screen.queryByLabelText("新密钥（每行一把）")).toBeNull();
+    fireEvent.click(screen.getByLabelText("追加密钥"));
+    fireEvent.change(screen.getByLabelText("新密钥（每行一把）"), { target: { value: " new-C \nnew-D\n" } });
+    fireEvent.click(providerModalPrimary());
+    expect(latestEdits.stored).toEqual({ kind: "append", new_keys: ["new-C", "new-D"] });
+    expect(latest!.providers[0].keys).toEqual(["***same", "***same"]);
+    expect(JSON.stringify(latest)).not.toContain("new-C");
+  });
+
+  it("replace is explicit and explains that it replaces the whole stored pool", async () => {
+    render(<Harness initial={makeConfig([provider()], "model")} />);
+    fireEvent.click(buttonByText("编辑"));
+    fireEvent.click(screen.getByLabelText("替换全部密钥"));
+    expect(document.body.textContent).toContain("替换该供应商的全部已存密钥");
+    fireEvent.change(screen.getByLabelText("新密钥（每行一把）"), { target: { value: "new-C" } });
+    fireEvent.click(providerModalPrimary());
+    expect(latestEdits.stored).toEqual({ kind: "replace", new_keys: ["new-C"] });
+  });
+
+  it("cancel discards only the modal changes and never publishes new credentials", async () => {
+    render(<Harness initial={makeConfig([provider()], "model")} />);
+    fireEvent.click(buttonByText("编辑"));
+    fireEvent.click(screen.getByLabelText("追加密钥"));
+    fireEvent.change(screen.getByLabelText("新密钥（每行一把）"), { target: { value: "discard-me" } });
+    fireEvent.click(buttonByText("取消"));
+    expect(latestEdits).toEqual({});
+    expect(latest!.providers[0]).toEqual(provider());
+    fireEvent.click(buttonByText("编辑"));
+    expect(screen.queryByDisplayValue("discard-me")).toBeNull();
+  });
+
+  it("reopening restores an unsubmitted append intent, and keep explicitly drops it", async () => {
+    render(<Harness initial={makeConfig([provider()], "model")} />);
+    fireEvent.click(buttonByText("编辑"));
+    fireEvent.click(screen.getByLabelText("追加密钥"));
+    fireEvent.change(screen.getByLabelText("新密钥（每行一把）"), { target: { value: "retry-me" } });
+    fireEvent.click(providerModalPrimary());
+    fireEvent.click(buttonByText("编辑"));
+    expect((screen.getByLabelText("新密钥（每行一把）") as HTMLTextAreaElement).value).toBe("retry-me");
+    fireEvent.click(screen.getByLabelText("保留已存密钥"));
+    fireEvent.click(providerModalPrimary());
+    expect(latestEdits.stored).toEqual({ kind: "keep" });
   });
 });

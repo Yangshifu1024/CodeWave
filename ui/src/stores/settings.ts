@@ -1,9 +1,11 @@
 // 配置状态（设置中心的镜像）
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
-import type { CleanupOutcome, ConfigState, FlatModel } from "../ipc/types";
+import type { ConfigSaveResult, ConfigSnapshot, ConfigState, ConfigVersion, CredentialEdit, FlatModel } from "../ipc/types";
 import { DEFAULT_POST_WRITE_CHECK } from "../ipc/types";
 import { findModel } from "../utils/models";
+import { useUi } from "./ui";
+import { i18n } from "../i18n";
 import { reconcileFontsFromConfig } from "../utils/fonts";
 
 // IPC 不可用（如纯浏览器调试）时回退默认配置，保证 UI 仍可渲染
@@ -29,41 +31,157 @@ const DEFAULT_CONFIG: ConfigState = {
   subagent_models: {},
 };
 
-/** 设置 store 契约：加载 / 保存全局配置 */
-interface SettingsState {
-  config: ConfigState | null;
-  /** 是否已完成首次加载 */
-  loaded: boolean;
-  load(): Promise<void>;
-  /** 保存整份配置。opts.skipCleanup = 本次跳过清理（保留期照常落盘）。
-   *  返回本次清理结果（保留期未变或本次跳过时为 null）——调用方用它报「删了 N 个会话」；
-   *  返回值与异常都不得在此层被吞掉。 */
-  save(next: ConfigState, opts?: { skipCleanup?: boolean }): Promise<CleanupOutcome | null>;
+export function configErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error) return String(error.message);
+  return String(error);
 }
 
-export const useSettings = create<SettingsState>((set) => ({
+interface SaveOptions {
+  skipCleanup?: boolean;
+  expectedVersion?: ConfigVersion;
+  credentialEdits?: Record<string, CredentialEdit>;
+  operationId?: string;
+}
+
+/** Only backend receipts are authoritative. Drafts never become saved state. */
+interface SettingsState {
+  config: ConfigState | null;
+  snapshot: ConfigSnapshot | null;
+  loaded: boolean;
+  rolePending: Record<string, boolean>;
+  roleErrors: Record<string, string | undefined>;
+  roleRetry: Record<string, string | null | undefined>;
+  load(): Promise<boolean>;
+  adoptSnapshot(snapshot: ConfigSnapshot): boolean;
+  save(next: ConfigState, opts?: SaveOptions): Promise<ConfigSaveResult>;
+  setSubagentModel(role: string, modelId: string | null): Promise<void>;
+}
+
+let loadRequest = 0;
+const notifiedWarnings = new Set<string>();
+
+// Only these backend rejections prove that this attempt did not commit. Unknown
+// errors, including OperationUnknown/OperationUncertain, retain the operation ID.
+const PRECOMMIT_REJECTION_CODES = new Set([
+  "ConfigConflict", "ConfigUnreadable", "ConfigWriteFailed", "CredentialConflict",
+  "CredentialIntentRequired", "CredentialReadFailed", "CredentialVerificationFailed",
+  "CredentialWriteFailed", "InvalidConfiguration", "InvalidCredential", "InvalidCredentialIntent",
+  "InvalidCredentialReference", "InvalidHeaders", "InvalidModel", "InvalidOperation", "InvalidProvider",
+  "InvalidRole", "JournalUnreadable", "JournalWriteFailed", "ModelNotFound", "RecoveryQueueFull",
+  "UnsafeCredentialStorage", "KeyringUnavailable",
+]);
+
+export function isDefiniteConfigRejection(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error &&
+    typeof error.code === "string" && PRECOMMIT_REJECTION_CODES.has(error.code);
+}
+
+/** A lost or uncertain response may follow a commit; reconcile before retry. */
+export async function reconcileConfigOperation(operationId: string, error: unknown): Promise<ConfigSaveResult> {
+  if (isDefiniteConfigRejection(error)) throw error;
+  try {
+    return await ipc.getConfigOperation(operationId);
+  } catch {
+    throw error;
+  }
+}
+
+export const useSettings = create<SettingsState>((set, get) => ({
   config: null,
+  snapshot: null,
   loaded: false,
+  rolePending: {},
+  roleErrors: {},
+  roleRetry: {},
+  adoptSnapshot(snapshot) {
+    const current = get().snapshot;
+    // Only load() can introduce a boot ID. A late save from a closed backend
+    // must never replace the newly loaded generation.
+    if (!current || current.version.boot_id !== snapshot.version.boot_id ||
+        current.version.sequence > snapshot.version.sequence) return false;
+    set({ config: snapshot.config, snapshot });
+    return true;
+  },
   async load() {
-    const config = await ipc.getConfig().catch(() => DEFAULT_CONFIG);
-    set({ config, loaded: true });
-    // 字体真源在后端配置：配置到手后与 localStorage 缓存对账（后端优先；
-    // 老版本只把字体存在 localStorage 的用户，这里会把缓存值自动迁移回后端，
-    // 见 utils/fonts.ts::reconcileFontsFromConfig）
+    const request = ++loadRequest;
+    let snapshot: ConfigSnapshot;
+    try {
+      snapshot = await ipc.getConfig();
+    } catch {
+      if (request === loadRequest) set((state) => ({ config: state.config ?? DEFAULT_CONFIG, loaded: true }));
+      return false;
+    }
+    if (request !== loadRequest) return false;
+    const previous = get().snapshot;
+    if (previous && previous.version.boot_id === snapshot.version.boot_id &&
+        previous.version.sequence > snapshot.version.sequence) return false;
+    set({ config: snapshot.config, snapshot, loaded: true,
+      ...(previous?.version.boot_id !== snapshot.version.boot_id
+        ? { rolePending: {}, roleErrors: {}, roleRetry: {} } : {}),
+    });
+    for (const warning of snapshot.warnings) {
+      const key = `${snapshot.version.boot_id}:${warning}`;
+      if (!notifiedWarnings.has(key)) {
+        notifiedWarnings.add(key);
+        useUi.getState().notify(i18n.t("settings.title"), warning);
+      }
+    }
     const { prefs, migrate } = reconcileFontsFromConfig({
-      sans: config.ui.font_sans,
-      mono: config.ui.font_mono,
+      sans: snapshot.config.ui.font_sans,
+      mono: snapshot.config.ui.font_mono,
     });
     if (migrate) {
-      void ipc.setFontPrefs(prefs.sans, prefs.mono).catch(() => null);
+      void ipc.setFontPrefs(prefs.sans, prefs.mono, crypto.randomUUID())
+        .then((result) => { get().adoptSnapshot(result); }).catch(() => null);
     }
+    return true;
   },
   async save(next, opts) {
-    // 清理结果必须原样交给调用方（设置页要拿它报「已清理 N 个会话」）；失败时异常照旧浮出：
-    // 保存没成功就不入 store，保持界面上仍显旧配置，由调用方决定怎么提示
-    const outcome = await ipc.saveConfig(next, opts);
-    set({ config: next });
-    return outcome;
+    const snapshot = get().snapshot;
+    const expectedVersion = opts?.expectedVersion ?? (snapshot && {
+      boot_id: snapshot.version.boot_id, sequence: snapshot.page_version,
+    });
+    if (!expectedVersion) throw new Error("Configuration must be loaded before saving.");
+    const operationId = opts?.operationId ?? crypto.randomUUID();
+    const result = await ipc.saveConfig(next, {
+      expectedVersion, operationId, credentialEdits: opts?.credentialEdits ?? {},
+      skipCleanup: opts?.skipCleanup ?? false,
+    }).catch((error: unknown) => reconcileConfigOperation(operationId, error));
+    get().adoptSnapshot(result);
+    return result;
+  },
+  async setSubagentModel(role, modelId) {
+    const state = get();
+    if (state.rolePending[role]) return;
+    const snapshot = state.snapshot;
+    if (!snapshot) throw new Error("Configuration must be loaded before saving.");
+    const bootId = snapshot.version.boot_id;
+    set({
+      rolePending: { ...state.rolePending, [role]: true },
+      roleErrors: { ...state.roleErrors, [role]: undefined },
+      roleRetry: { ...state.roleRetry, [role]: modelId },
+    });
+    const operationId = crypto.randomUUID();
+    try {
+      const result = await ipc.setSubagentModel(role, modelId, {
+        boot_id: bootId, sequence: snapshot.role_versions[role] ?? 0,
+      }, operationId).catch((error: unknown) => reconcileConfigOperation(operationId, error));
+      get().adoptSnapshot(result);
+      if (get().snapshot?.version.boot_id === bootId) {
+        set((current) => ({ roleRetry: { ...current.roleRetry, [role]: undefined } }));
+      }
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      if (/conflict|model/i.test(code)) await get().load();
+      if (get().snapshot?.version.boot_id === bootId) {
+        set((current) => ({ roleErrors: { ...current.roleErrors, [role]: configErrorMessage(error) } }));
+      }
+      throw error;
+    } finally {
+      if (get().snapshot?.version.boot_id === bootId) {
+        set((current) => ({ rolePending: { ...current.rolePending, [role]: false } }));
+      }
+    }
   },
 }));
 

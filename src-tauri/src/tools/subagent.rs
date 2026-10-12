@@ -474,12 +474,7 @@ impl Tool for SubagentTool {
         // find() 内部走同一归一，HashMap 键与 DELEGABLE_ROLES 都是 kebab-case，双重归一是安全的。
         {
             let role_key = crate::agents::normalize_role(&args.role);
-            // 写锁预填未设键（最短临界区，释放后再取读锁调用纯函数）。
-            ctx.core
-                .cfg
-                .write()
-                .unwrap()
-                .ensure_subagent_models(crate::agents::DELEGABLE_ROLES);
+            // Missing roles inherit naturally; runtime reads never mutate persisted configuration.
             // 读锁读出 effective_subagent_model（纯函数，不嵌套持锁）。
             let resolved = {
                 let cfg = ctx.core.cfg.read().unwrap();

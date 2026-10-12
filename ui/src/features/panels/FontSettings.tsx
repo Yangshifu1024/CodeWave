@@ -10,6 +10,8 @@ import { useTranslation } from "react-i18next";
 import { SettingsForm, SettingsFormItem, SettingsSection } from "./settings/SettingsTheme";
 import type { ConfigState } from "../../ipc/types";
 import { ipc } from "../../ipc/client";
+import { i18n } from "../../i18n";
+import { configErrorMessage, reconcileConfigOperation, useSettings } from "../../stores/settings";
 import { useUi, type ThemePref } from "../../stores/ui";
 import {
   commitFontSlot, DEFAULT_FONT_LEADS, previewFontFamily, readStoredFonts, sanitizeFontList,
@@ -88,13 +90,28 @@ export function AppearanceSettings({ draft, patchDraft }: {
 /** 输入停止多久后自动提交（敲完就走也不丢；回车/失焦立即提交） */
 const COMMIT_IDLE_MS = 600;
 
-/** 后端真源落盘（失败不打断使用：字体已在本地生效，下次提交会再试） */
-async function persistFontPrefsToBackend(prefs: FontPreferences): Promise<void> {
-  try {
-    await ipc.setFontPrefs(prefs.sans, prefs.mono);
-  } catch (e) {
-    console.warn("字体偏好落盘失败（本地已生效）", e);
-  }
+// Serialize both slots together: each request contains the whole font pair.
+// This prevents an earlier slow request from overwriting a later edit.
+let fontPersistQueue: Promise<void> = Promise.resolve();
+
+/** Local font preview remains immediate; the receipt updates saved config only. */
+function persistFontPrefsToBackend(prefs: FontPreferences): Promise<"saved" | "failed" | "blocked"> {
+  const operationId = crypto.randomUUID();
+  const attempt = fontPersistQueue.then(async () => {
+    try {
+      const result = await ipc.setFontPrefs(prefs.sans, prefs.mono, operationId)
+        .catch((error: unknown) => reconcileConfigOperation(operationId, error));
+      useSettings.getState().adoptSnapshot(result);
+      return "saved" as const;
+    } catch (error) {
+      useUi.getState().notify(i18n.t("settings.title"),
+        `${i18n.t("settings.fontSaveFailed")} ${configErrorMessage(error)}`);
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      return code === "OperationHistoryFull" || code === "ConfigUnreadable" ? "blocked" as const : "failed" as const;
+    }
+  });
+  fontPersistQueue = attempt.then(() => undefined);
+  return attempt;
 }
 
 /** 单个字体槽输入项：回车 / 失焦 / 停手 / 卸载四处都提交，值有变化才落盘，附一键恢复默认按钮。
@@ -114,6 +131,19 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => readStoredFonts()[slot]);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const saveGeneration = useRef(0);
+
+  function savePair(prefs: FontPreferences) {
+    const generation = ++saveGeneration.current;
+    setRetrying(true);
+    void persistFontPrefsToBackend(prefs).then((saved) => {
+      if (generation !== saveGeneration.current) return;
+      setSaveFailed(saved === "failed");
+      setRetrying(false);
+    });
+  }
   /** 用户是否真的改过输入框：**没改过的空提交一律不写**（否则一次误触发就把已有偏好抹掉） */
   const edited = useRef(false);
   /** 输入法组合态：组合期间不提交（半成品不该落盘） */
@@ -142,7 +172,7 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
     edited.current = false;
     const next = commitFontSlot(slot, candidate);
     if (syncInput) setDraft(next[slot]);
-    void persistFontPrefsToBackend(next);
+    savePair(next);
     onApplied();
     return true;
   }
@@ -203,6 +233,11 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
             />
           }
         />
+        {saveFailed && <Button size="small" loading={retrying}
+          onClick={() => savePair(readStoredFonts())}
+          aria-label={`${t("common.retry")}・${label}`}>
+          {t("common.retry")}
+        </Button>}
         <div className="font-preview-row" style={{ fontFamily: previewFontFamily(appliedFont, slot) }}>
           {PREVIEW_SAMPLE}
         </div>

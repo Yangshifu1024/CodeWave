@@ -46,7 +46,10 @@ export interface ProviderConfig {
   name: string;
   api_format: ApiFormat;
   base_url: string;
+  /** Read-only credential status; never submit new secrets through this field. */
   keys: string[];
+  credential_ref?: string | null;
+  credential_count?: number | null;
   models: ProviderModel[];
   /** 供应商级自定义请求头（[docs/providers-and-network](../../../docs/providers-and-network.md)）：值支持 ${session_id} 占位符；明文存储 */
   headers: HeaderPair[];
@@ -112,6 +115,7 @@ export interface LogConfig { level: string; session_verbose: boolean }
 export interface ConfigState {
   /** schema 版本（v2 = providers 嵌套 models，见 [docs/providers-and-network](../../../docs/providers-and-network.md)） */
   schema_version: number;
+  last_operation_id?: string | null;
   providers: ProviderConfig[];
   /** 活跃模型（指向摊平后的模型条目 id，null = 未配置） */
   active_model_id: string | null;
@@ -139,6 +143,30 @@ export interface ConfigState {
   /** 内置子代理按角色的模型覆盖（key = role 名 kebab-case 如 "explore"；value = wire id 或 null=跟随父会话）。
    *  与全局 active_model_id 完全独立。缺失 = 全部跟随父会话；老 config 自动按空对象读入。 */
   subagent_models?: Record<string, string | null>;
+}
+
+/** Runtime generation and domain revision; a new backend boot invalidates old writers. */
+export interface ConfigVersion { boot_id: string; sequence: number }
+export interface ConfigSnapshot {
+  config: ConfigState;
+  version: ConfigVersion;
+  page_version: number;
+  role_versions: Record<string, number>;
+  warnings: string[];
+}
+export interface ConfigSaveResult extends ConfigSnapshot {
+  cleanup: CleanupOutcome | null;
+  replayed: boolean;
+}
+export type CredentialEdit =
+  | { kind: "keep" }
+  | { kind: "append" | "replace"; new_keys: string[] }
+  | { kind: "clear" };
+export interface ConfigSaveOptions {
+  expectedVersion: ConfigVersion;
+  operationId: string;
+  credentialEdits: Record<string, CredentialEdit>;
+  skipCleanup?: boolean;
 }
 
 /** [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：运行日志读取契约（全局滚动日志 / 会话日志） */
@@ -533,11 +561,17 @@ export interface Todo { title: string; status: "pending" | "in_progress" | "comp
 
 /** 计划任务的一次执行记录（任务内嵌最近 20 条，新的在前） */
 export interface TaskRun {
+  run_id?: string | null;
   at: string;
   status: string;
   summary: string;
   source: string;
   out_tokens: number;
+}
+
+export interface TaskDiagnostics {
+  state: "loading" | "ready" | "degraded";
+  issues: { kind: string; path: string; project_id: string | null; task_id: string | null; message: string }[];
 }
 
 /** 计划任务登记与最近一次执行状态 */
@@ -550,6 +584,8 @@ export interface ScheduledTask {
   enabled: boolean;
   /** 最近执行记录（后端只留最近 20 条，新的在前） */
   runs: TaskRun[];
+  active_run?: { run_id: string; source: string; scheduled_for: string | null; started_at: string } | null;
+  persistence_error?: string | null;
 }
 
 /** 按维度聚合的 token 用量。四把耗时字段可选（serde default）：
@@ -704,6 +740,10 @@ export interface McpErrorPayload {
 
 /** 单 server 连接状态（`mcp_status` 命令与 `mcp:status` 事件共用） */
 export interface McpStatusPayload {
+  generation?: number;
+  config_revision?: number;
+  policy_revision?: number;
+  tool_schema_revision?: number;
   name: string;
   scope: McpScope;
   state: McpState;
@@ -757,6 +797,7 @@ export interface McpConfigIssue {
 
 /** 某作用域的配置文档 */
 export interface McpConfigDoc {
+  version: string;
   scope: McpScope;
   /** 该作用域 mcp.json 的绝对路径 */
   path: string;
@@ -771,6 +812,9 @@ export interface McpConfigDoc {
 
 /** 保存结果（`saved: false` 表示有 error 级问题、未落盘） */
 export interface McpSaveResult {
+  version: string;
+  apply_revision: number;
+  affected_servers: string[];
   saved: boolean;
   issues: McpConfigIssue[];
 }

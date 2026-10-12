@@ -12,7 +12,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
-  App, Button, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
+  Alert, App, Button, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
   Tabs,
 } from "antd";
 import {
@@ -22,8 +22,9 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
+import { mcpStatusEventRevision } from "../../utils/mcpStatusRevision";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, LegacyCleanupPreview, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, ConfigVersion, CredentialEdit, LegacyCleanupPreview, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
 import { originLabel } from "../../utils/skills";
@@ -31,7 +32,8 @@ import { fullscreenNavWidth } from "../../utils/layout";
 import { respondExitRequest } from "../../utils/uiState";
 import { useActiveId, useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
-import { useSettings } from "../../stores/settings";
+import { configErrorMessage, isDefiniteConfigRejection, useSettings } from "../../stores/settings";
+import { rebaseSubmittedDraft } from "../../utils/configDraft";
 import { useUi } from "../../stores/ui";
 import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { SettingsForm, SettingsFormItem, SettingsSection, SettingsThemeProvider, SettingsThemeScope } from "./settings/SettingsTheme";
@@ -44,6 +46,8 @@ import {
   normalizeMcpDoc,
   parseMcpDoc,
   serializeMcpDoc,
+  serializeMcpServer,
+  mcpDraftIdentity,
   type McpDraftDoc,
   type McpKeyValueRow,
   type McpServerDraft,
@@ -153,6 +157,7 @@ function drill(node: unknown, path: string): unknown {
  *  - shell.selection / ui.ai_language：undefined 折 null（后端 serde default 语义）。
  */
 function fieldSlice(c: ConfigState, path: SettingFieldPath): unknown {
+  if (path === "subagentModels") return c.subagent_models ?? {};
   if (path === "network.proxy") return c.proxy ?? { mode: "system", url: "" };
   if (path === "ui.ai_language") return c.ui.ai_language ?? null;
   if (path === "shell.selection") return c.shell?.selection ?? null;
@@ -287,6 +292,14 @@ function SettingsPageController() {
   const { windowWidth } = useDisplayWidths();
 
   const [draft, setDraft] = useState<ConfigState | null>(null);
+  const [baseline, setBaseline] = useState<ConfigState | null>(null);
+  const [configConflict, setConfigConflict] = useState(false);
+  const [configRecoveryBlock, setConfigRecoveryBlock] = useState<string | null>(null);
+  const [credentialEdits, setCredentialEdits] = useState<Record<string, CredentialEdit>>({});
+  const pageVersionRef = useRef<ConfigVersion | undefined>(undefined);
+  const draftGeneration = useRef(0);
+  const saveInFlight = useRef(false);
+  const saveAttempt = useRef<{ payload: string; operationId: string } | null>(null);
   const [showAllCommands, setShowAllCommands] = useState(false);
   const [saving, setSaving] = useState(false);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
@@ -307,6 +320,41 @@ function SettingsPageController() {
   const [mcpDoc, setMcpDoc] = useState<McpDraftDoc | null>(null);
   const mcpEntries: McpEntry[] | null = mcpDoc ? mcpDoc.servers : null;
   const [mcpRaw, setMcpRaw] = useState("");
+  const [mcpVersion, setMcpVersion] = useState("");
+  const mcpIdentity = useRef(0);
+  const mcpPendingIdentity = useRef<number | null>(null);
+  const [mcpTesting, setMcpTesting] = useState(false);
+  const [mcpSaving, setMcpSaving] = useState(false);
+  function invalidateMcpProbe() {
+    mcpIdentity.current += 1;
+    mcpPendingIdentity.current = null;
+    setMcpTesting(false);
+    setMcpTests({});
+  }
+  const mcpSession = useRef(sessionId);
+  useEffect(() => {
+    if (mcpSession.current !== sessionId) {
+      mcpSession.current = sessionId;
+      invalidateMcpProbe();
+      setMcpEditing(false);
+      setMcpScope("global");
+      setMcpDoc(null);
+      setMcpRaw("");
+      setMcpOriginal("");
+      setMcpVersion("");
+      setMcpEffective([]);
+      setMcpPath("");
+      setMcpProjectPath(null);
+      void loadMcp("global");
+      const identity = mcpIdentity.current;
+      void ipc.mcpListConfig("project", sessionId ?? undefined).then((doc) => {
+        if (identity === mcpIdentity.current) setMcpProjectPath(doc?.path ?? null);
+      }).catch(() => {});
+    }
+    return () => { mcpIdentity.current += 1; };
+    // The session identity invalidates all editor/probe work, including unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   /** 打开时的 MCP 文本基线（已归一化），用于逐页脏判定与「放弃改动」回退 */
   const [mcpOriginal, setMcpOriginal] = useState("");
   /** 保存前的结构校验问题（后端与运行时同一套规则；error 级会阻止落盘） */
@@ -325,7 +373,9 @@ function SettingsPageController() {
   /** 合并后的生效条目（状态表的来源列 / 「项目覆盖全局」标注数据源） */
   const [mcpEffective, setMcpEffective] = useState<McpServerView[]>([]);
   /** MCP 运行时状态（useUi.mcpStatus：mcp:status 事件 upsert；打开设置页与进入 MCP 页各重读一次） */
-  const mcpStatus = useUi((s) => s.mcpStatus);
+  const storedMcpStatus = useUi((s) => s.mcpStatus);
+  const mcpStatusOwner = useUi((s) => s.mcpStatusSessionId);
+  const mcpStatus = useMemo(() => mcpStatusOwner === sessionId ? storedMcpStatus : [], [mcpStatusOwner, sessionId, storedMcpStatus]);
   /** 状态刷新中：按钮转圈 + 防重复点击（只重读状态，不触发连接 / 重连） */
   const [mcpRefreshing, setMcpRefreshing] = useState(false);
   const mcpActionPending = useUi((state) => state.mcpActionPending);
@@ -433,15 +483,18 @@ function SettingsPageController() {
       const cloned: ConfigState = JSON.parse(JSON.stringify(config));
       cloned.ui.language = useUi.getState().language;
       setDraft(cloned);
+      setBaseline(cloned);
+      const snapshot = useSettings.getState().snapshot;
+      pageVersionRef.current = snapshot ? { boot_id: snapshot.version.boot_id, sequence: snapshot.page_version } : undefined;
       await loadMcp("global");
       // 项目层是否可用：探测一次（不可用则该作用域在切换器里禁用并给提示）
       const proj = await ipc.mcpListConfig("project", sessionId ?? undefined).catch(() => null);
-      setMcpProjectPath(proj?.path ?? null);
+      if (useSessions.getState().activeKey === sessionId) setMcpProjectPath(proj?.path ?? null);
       setSkills(await ipc.listSkills(sessionId).catch(() => []));
       const snapshotRequest = ++latestMcpSnapshotRequest;
       const st = await readMcpStatus();
       if (snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === sessionId) {
-        useUi.setState({ mcpStatus: st ?? [] });
+        if (st) applyMcpSnapshot(st);
       }
       // shell 探测失败不阻塞面板：仅回退「自动」选项 + 失败提示
       setShells(await ipc.listAvailableShells().catch(() => null));
@@ -466,10 +519,16 @@ function SettingsPageController() {
   }, [cleanupStatus?.last_run_at]);
 
   function patchDraft(patch: Partial<ConfigState>) {
+    draftGeneration.current += 1;
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
   }
 
   /** post_write_check 段局部更新（写入后检查命令；缺字段时以 DEFAULT_POST_WRITE_CHECK 为基准） */
+  function patchCredentialEdit(providerId: string, edit: CredentialEdit) {
+    draftGeneration.current += 1;
+    setCredentialEdits((previous) => ({ ...previous, [providerId]: edit }));
+  }
+
   function patchPostWrite(patch: Partial<PostWriteCheckSettings>) {
     if (!draft) return;
     patchDraft({
@@ -482,7 +541,7 @@ function SettingsPageController() {
     if (!draft) return;
     const disabledSkills = draft.disabled_skills.filter((s) => s !== name);
     if (disabled) disabledSkills.push(name);
-    setDraft({ ...draft, disabled_skills: disabledSkills });
+    patchDraft({ disabled_skills: disabledSkills });
   }
 
   /** 重新加载技能：后端清空索引缓存重扫（绕过 10s TTL），新放入/修改的技能立即可见。 */
@@ -508,7 +567,7 @@ function SettingsPageController() {
       setSkills((prev) => prev.filter((s) => s.name !== name));
       // 顺带清理 draft.disabled_skills 残留名，避免脏名随下次保存持久化
       if (draft?.disabled_skills.includes(name)) {
-        setDraft({ ...draft, disabled_skills: draft.disabled_skills.filter((s) => s !== name) });
+        patchDraft({ disabled_skills: draft.disabled_skills.filter((s) => s !== name) });
       }
     } catch (e) {
       message.error(`${t("settings.deleteSkillFailed")}\n${String(e).replace(/^Error[:\s]*/i, "")}`);
@@ -806,11 +865,21 @@ function SettingsPageController() {
 
   /** 保存（全量提交语义不变）。返回是否真的落盘：离开拦截靠它判断能否执行「保存并离开」 */
   async function save(): Promise<boolean> {
-    if (!draft) return false;
+    if (!draft || saveInFlight.current || configRecoveryBlock) return false;
+    if (!pageVersionRef.current) {
+      setConfigConflict(true);
+      message.error(t("settings.configConflict"));
+      return false;
+    }
+    const submittedGeneration = draftGeneration.current;
+    const submittedDraft = structuredClone(draft);
+    const submittedEdits = Object.fromEntries(Object.entries(credentialEdits)
+      .filter(([providerId]) => submittedDraft.providers.some((provider) => provider.id === providerId)));
+    const next = structuredClone(submittedDraft);
     // 代理地址校验（网络页）：仅自定义模式且非空时校验前缀白名单，非法跳页不落盘
-    if (draft.proxy?.mode === "manual") {
-      draft.proxy.url = draft.proxy.url.trim();
-      if (draft.proxy.url !== "" && !PROXY_URL_RE.test(draft.proxy.url)) {
+    if (next.proxy?.mode === "manual") {
+      next.proxy.url = next.proxy.url.trim();
+      if (next.proxy.url !== "" && !PROXY_URL_RE.test(next.proxy.url)) {
         message.error(t("settings.proxyUrlInvalid"));
         setTab("network");
         // 校验失败 = 本次离开动作没执行 → 命中的定位一并作废（同「留在原地」：
@@ -821,8 +890,8 @@ function SettingsPageController() {
     }
     // 供应商字段校验（[docs/providers-and-network](../../../../docs/providers-and-network.md)/29）：无效时逐项报错、跳转供应商页、不落盘
     const problems: string[] = [];
-    for (const p of draft.providers) {
-      for (const issue of validateProvider(p)) {
+    for (const p of next.providers) {
+      for (const issue of validateProvider(p, submittedEdits[p.id])) {
         const fieldLabel =
           issue.field === "name" ? t("settings.providerName")
           : issue.field === "base_url" ? t("settings.baseUrl")
@@ -839,31 +908,50 @@ function SettingsPageController() {
       setPendingHit(null); // 同上：报错跳页不是「离开」，定位作废
       return false;
     }
-    const first = draft.providers.flatMap((p) => p.models)[0];
+    const first = next.providers.flatMap((p) => p.models)[0];
     // 活跃模型兜底：未设置取第一个模型；悬空（模型已删除）回退第一个
-    if (!draft.active_model_id || !draft.providers.some((p) => p.models.some((m) => m.id === draft.active_model_id))) {
-      draft.active_model_id = first?.id ?? null;
+    if (!next.active_model_id || !next.providers.some((p) => p.models.some((m) => m.id === next.active_model_id))) {
+      next.active_model_id = first?.id ?? null;
     }
-    // 编辑期间保留空行（否则回车补一个 key 会被打断）；仅在保存时过滤空行（掩码/占位行保留，后端负责解掩码）
-    draft.providers.forEach((p) => {
-      p.keys = p.keys.map((s) => s.trim()).filter((s) => s !== "");
+    // Credentials are read-only metadata here; new values travel only in credentialEdits.
+    next.providers.forEach((p) => {
       // 自定义请求头：trim 头名，丢弃整行全空的行（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
       p.headers = (p.headers ?? [])
         .map((h) => ({ name: h.name.trim(), value: h.value.trim() }))
         .filter((h) => h.name !== "");
     });
     // 写入后检查命令落盘前归一化：命令 trim（空命令与关闭等价，后端也会按空命令跳过）
-    if (draft.post_write_check) {
-      draft.post_write_check = {
-        ...draft.post_write_check,
-        command: draft.post_write_check.command.trim(),
+    if (next.post_write_check) {
+      next.post_write_check = {
+        ...next.post_write_check,
+        command: next.post_write_check.command.trim(),
       };
     }
+    saveInFlight.current = true;
     setSaving(true);
     try {
       // 保留期有变化且新值非「不清理」时先弹确认框（取消 = 本次跳过清理，配置照常落盘）
       const skipCleanup = await confirmSaveCleanup();
-      const outcome = await useSettings.getState().save(draft, skipCleanup ? { skipCleanup: true } : undefined);
+      const payload = JSON.stringify({ next, submittedEdits, expectedVersion: pageVersionRef.current, skipCleanup });
+      if (saveAttempt.current?.payload !== payload) saveAttempt.current = { payload, operationId: crypto.randomUUID() };
+      const result = await useSettings.getState().save(next, {
+        skipCleanup, expectedVersion: pageVersionRef.current,
+        operationId: saveAttempt.current.operationId, credentialEdits: submittedEdits,
+      });
+      if (useSettings.getState().snapshot?.version.boot_id !== result.version.boot_id) {
+        setConfigConflict(true);
+        message.error(t("settings.configConflict"));
+        return false;
+      }
+      pageVersionRef.current = { boot_id: result.version.boot_id, sequence: result.page_version };
+      setBaseline(result.config);
+      setDraft((current) => current && rebaseSubmittedDraft(submittedDraft, current, result.config));
+      setCredentialEdits((current) => Object.fromEntries(Object.entries(current).filter(([id, edit]) =>
+        JSON.stringify(edit) !== JSON.stringify(submittedEdits[id]))));
+      saveAttempt.current = null;
+      setConfigConflict(false);
+      const outcome = result.cleanup;
+      for (const warning of result.warnings) message.warning(warning);
       // 保存成功不关闭页面（[docs/providers-and-network](../../../../docs/providers-and-network.md)）：仅提示；何时关闭由用户决定
       message.success(t("common.saved"));
       if (skipCleanup) message.info(t("settings.cleanupSavedSkipped"));
@@ -879,14 +967,23 @@ function SettingsPageController() {
         }
       }
       // 系统代理模式：保存即触发后端重探测（save_config 热重建 client），刷新回显
-      if ((draft.proxy?.mode ?? "system") === "system") {
+      if ((next.proxy?.mode ?? "system") === "system") {
         void ipc.resolveProxy().then(setSysProxy).catch(() => null);
       }
-      return true;
+      return draftGeneration.current === submittedGeneration;
     } catch (e) {
-      message.error(String(e));
+      const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+      // Failed preparation can leave a non-replayable journal entry. A definite
+      // pre-commit rejection needs a fresh operation; ambiguous outcomes must
+      // keep their identity so a retry cannot duplicate the committed effects.
+      if (isDefiniteConfigRejection(e)) saveAttempt.current = null;
+      if (code === "OperationHistoryFull" || code === "ConfigUnreadable") {
+        setConfigRecoveryBlock(configErrorMessage(e));
+      } else if (/conflict/i.test(code) || !isDefiniteConfigRejection(e)) setConfigConflict(true);
+      message.error(/conflict/i.test(code) ? t("settings.configConflict") : configErrorMessage(e));
       return false;
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   }
@@ -895,14 +992,19 @@ function SettingsPageController() {
     try {
       // 结构化模式：草稿 -> JSON（无损，含未识别键）；兜底模式：原文本原样保存
       const json = replacementDoc ? serializeMcpDoc(replacementDoc) : mcpDoc ? serializeMcpDoc(mcpDoc) : mcpRaw;
-      const res = await ipc.mcpSaveConfig(mcpScope, json, sessionId ?? undefined);
+      const identity = mcpIdentity.current;
+      if (mcpSaving) return;
+      setMcpSaving(true);
+      const res = await ipc.mcpSaveConfig(mcpScope, json, mcpVersion, sessionId ?? undefined);
+      if (identity !== mcpIdentity.current) return;
       setMcpIssues(res.issues);
       // 有 error 级问题时后端**不落盘**：不能报成功，也不能把基线前移
       if (!res.saved) {
         message.error(t("settings.mcpSaveBlocked"));
         return;
       }
-      message.success(t("common.saved"));
+      message.success(t("settings.mcpSavedApplying", { n: res.affected_servers?.length ?? 0 }));
+      setMcpVersion(res.version);
       const normalized = normalizeMcpDoc(json);
       setMcpRaw(normalized);
       setMcpOriginal(normalized);
@@ -910,22 +1012,22 @@ function SettingsPageController() {
       setMcpEditing(false);
       setMcpEditorIndex(null);
       setMcpCreating(false);
-      // 保存后自动重连（后端只重载受影响的连接，其它会话不受牵连）
+      // 保存只接纳应用计划；此处只刷新状态，不重复建连。
       if (sessionId) {
-        await ipc.mcpConnect(sessionId).catch(() => null);
         const snapshotRequest = ++latestMcpSnapshotRequest;
         const st = await readMcpStatus();
         if (st && snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === sessionId) {
-          useUi.setState({ mcpStatus: st });
+          applyMcpSnapshot(st);
         }
       }
     } catch (e) {
-      message.error(String(e));
-    }
+      message.error(e instanceof Error && e.message.startsWith("settings.mcp") ? t(e.message) : String(e));
+    } finally { setMcpSaving(false); }
   }
 
   /** 改草稿里某个 server（表格字段的增删改都经这里落到草稿）。 */
   function patchMcpServer(idx: number, apply: (e: McpServerDraft) => McpServerDraft) {
+    invalidateMcpProbe();
     setMcpDoc((prev) =>
       prev ? { ...prev, servers: prev.servers.map((e, i) => (i === idx ? apply(e) : e)) } : prev,
     );
@@ -968,6 +1070,7 @@ function SettingsPageController() {
     patchMcpServer(idx, (s) => withKv(s, field, s[field].filter((_, j) => j !== ri)));
 
   function patchMcpEntry(idx: number, patch: Partial<McpEntry>) {
+    invalidateMcpProbe();
     setMcpDoc((prev) =>
       prev
         ? { ...prev, servers: prev.servers.map((e, i) => (i === idx ? { ...e, ...patch } : e)) }
@@ -989,6 +1092,7 @@ function SettingsPageController() {
   }
 
   function openMcpCreate() {
+    invalidateMcpProbe();
     if (!mcpDoc) {
       setMcpEditorIndex(null);
       setMcpCreating(false);
@@ -1002,6 +1106,7 @@ function SettingsPageController() {
   }
 
   function openMcpEdit(name: string) {
+    invalidateMcpProbe();
     const index = mcpEntries?.findIndex((entry) => entry.name.trim() === name) ?? -1;
     if (index < 0) return;
     setMcpEditorIndex(index);
@@ -1010,6 +1115,7 @@ function SettingsPageController() {
   }
 
   function cancelMcpEditor() {
+    invalidateMcpProbe();
     setMcpDoc(parseMcpDoc(mcpOriginal));
     setMcpRaw(mcpOriginal);
     setMcpEditing(false);
@@ -1024,6 +1130,8 @@ function SettingsPageController() {
    * 保存时也原样直存，避免拿空配置覆盖用户文件。回归用例：settings.mcp.test.tsx。
    */
   async function loadMcp(scope: McpScope) {
+    invalidateMcpProbe();
+    const identity = mcpIdentity.current;
     let doc: Awaited<ReturnType<typeof ipc.mcpListConfig>>;
     try {
       doc = await ipc.mcpListConfig(scope, sessionId ?? undefined);
@@ -1031,10 +1139,12 @@ function SettingsPageController() {
       message.error(String(e));
       return;
     }
+    if (identity !== mcpIdentity.current) return;
+    setMcpVersion(doc?.version ?? "");
     const raw = doc?.json ?? "";
     const parsed = parseMcpDoc(raw);
     // 基线用归一化后的文本：否则「结构化条目重序列化与原文格式差异」会被误判成脏改动
-    const normalized = parsed ? serializeMcpDoc(parsed) : raw;
+    const normalized = normalizeMcpDoc(raw);
     setMcpScope(scope);
     setMcpEditing(parsed === null && raw.trim().length > 0);
     setMcpEditorIndex(null);
@@ -1070,7 +1180,7 @@ function SettingsPageController() {
         const snapshotRequest = ++latestMcpSnapshotRequest;
         const st = await readMcpStatus();
         if (st && snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === activeSessionId) {
-          useUi.setState({ mcpStatus: st });
+          applyMcpSnapshot(st);
         }
       } finally {
         useUi.setState((state) => {
@@ -1083,21 +1193,29 @@ function SettingsPageController() {
   }
 
   /** 临时测试连接：起 → tools/list → 立即回收，不改动正式连接状态 */
-  async function testMcpServer(name: string) {
-    const res = await ipc
-      .mcpTest(mcpScope, name, sessionId ?? undefined)
-      .catch(() => null);
-    setMcpTests((prev) => ({
-      ...prev,
-      [name]: res?.ok
+  async function testMcpServer(index: number) {
+    const identity = mcpIdentity.current;
+    if (mcpPendingIdentity.current === identity) return;
+    try {
+      if (!mcpDoc) return;
+      serializeMcpDoc(mcpDoc); // Reject duplicate names and invalid rows before starting any process.
+      const entry = mcpDoc.servers[index];
+      const name = entry.name.trim();
+      const config = serializeMcpServer(entry);
+      mcpPendingIdentity.current = identity;
+      setMcpTesting(true);
+      setMcpTests({});
+      const res = await ipc.mcpTest(mcpScope, name, config, sessionId ?? undefined);
+      if (identity !== mcpIdentity.current || mcpPendingIdentity.current !== identity) return;
+      setMcpTests({ [name]: res.ok
         ? { ok: true, text: t("settings.mcpTestOk", { n: res.tools }) }
-        : {
-            ok: false,
-            text: t("settings.mcpTestFail", {
-              message: res?.error?.message ?? t("settings.mcpTestNoReply"),
-            }),
-          },
-    }));
+        : { ok: false, text: t("settings.mcpTestFail", { message: res.error?.message ?? t("settings.mcpTestNoReply") }) } });
+    } catch (error) {
+      if (identity !== mcpIdentity.current) return;
+      message.error(error instanceof Error && error.message.startsWith("settings.mcp") ? t(error.message) : String(error));
+    } finally {
+      if (identity === mcpIdentity.current) { mcpPendingIdentity.current = null; setMcpTesting(false); }
+    }
   }
 
   /**
@@ -1107,10 +1225,23 @@ function SettingsPageController() {
    * 而不是留旧值——否则上一个会话的「已连接」会串到当前界面。
    * 返回 `null` = 读失败（调用方保留旧值，避免把 IPC 抖动伪装成「都没连上」）。
    */
-  async function readMcpStatus(): Promise<McpStatusPayload[] | null> {
-    if (!sessionId) return [];
-    const snap = await ipc.mcpSnapshot(sessionId).catch(() => null);
-    return snap ? snap.servers : null;
+  function applyMcpSnapshot(snapshot: { servers: McpStatusPayload[]; eventRevision: number; sessionId: string | null }) {
+    // Recheck at the actual write boundary, including events between nested await continuations.
+    if (snapshot.eventRevision === mcpStatusEventRevision() && snapshot.sessionId === useSessions.getState().activeKey) {
+      useUi.setState({ mcpStatus: snapshot.servers, mcpStatusSessionId: snapshot.sessionId });
+    }
+  }
+
+  async function readMcpStatus(): Promise<{ servers: McpStatusPayload[]; eventRevision: number; sessionId: string | null } | null> {
+    if (!sessionId) return { servers: [], eventRevision: mcpStatusEventRevision(), sessionId: null };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const eventRevision = mcpStatusEventRevision();
+      const snap: Awaited<ReturnType<typeof ipc.mcpSnapshot>> | null = await ipc.mcpSnapshot(sessionId).catch(() => null);
+      if (!snap || snap.session !== sessionId) return null;
+      if (eventRevision === mcpStatusEventRevision()) return { servers: snap.servers, eventRevision, sessionId };
+      // A live status event overtook this snapshot. Re-read once, preserving the live state meanwhile.
+    }
+    return null;
   }
 
   /** 刷新 MCP 状态：只重读状态（不会重连）——手动动作越少越好，避免用户误以为刷新 = 重连 */
@@ -1122,7 +1253,7 @@ function SettingsPageController() {
       // 而「未连接」在本页是**正常态**文案（见状态表下方的说明），误导性最强
       const st = await readMcpStatus();
       if (snapshotRequest !== latestMcpSnapshotRequest || useSessions.getState().activeKey !== sessionId) return;
-      if (st) useUi.setState({ mcpStatus: st });
+      if (st) applyMcpSnapshot(st);
       else message.error(t("settings.mcpStatusRefreshFailed"));
     } finally {
       setMcpRefreshing(false);
@@ -1183,18 +1314,20 @@ function SettingsPageController() {
 
   // ---------- 逐页脏标记与离开拦截（[docs/settings-guide](../../../../docs/settings-guide.md)） ----------
   const config = useSettings((s) => s.config);
+  const configWarnings = useSettings((s) => s.snapshot?.warnings);
   // MCP 不在 config 内（独立 mcp.json）：脏判定 = 当前文本与打开时基线的差集，挂在拥有它的 mcp 页
   // （MCP 配置拆成独立页后脏点必须跟着页走：挂在 tools 页会出现「改了 MCP、脏点却亮在写入后检查页」）
-  const mcpSerialized = mcpDoc ? serializeMcpDoc(mcpDoc) : mcpRaw;
+  const mcpSerialized = mcpDoc ? mcpDraftIdentity(mcpDoc) : mcpRaw;
   const mcpDirty = mcpSerialized !== mcpOriginal;
   const dirtyMap = useMemo(() => {
     const out = {} as Record<PageKey, boolean>;
     for (const page of PAGE_ORDER) {
-      const configDirty = !!draft && !!config && !sameSlice(pageSlice(draft, page), pageSlice(config, page));
-      out[page] = configDirty || (page === "mcp" && mcpDirty);
+      const configDirty = !!draft && !!baseline && !sameSlice(pageSlice(draft, page), pageSlice(baseline, page));
+      out[page] = configDirty || (page === "providers" && Object.entries(credentialEdits).some(([id, edit]) =>
+        edit.kind !== "keep" && draft?.providers.some((provider) => provider.id === id))) || (page === "mcp" && mcpDirty);
     }
     return out;
-  }, [draft, config, mcpDirty]);
+  }, [draft, baseline, credentialEdits, mcpDirty]);
   const anyDirty = PAGE_ORDER.some((k) => dirtyMap[k]);
 
   // 保留期两态：draft = 下拉草稿值；config = 已保存值 —— 立即清理按钮与保存前确认都只认**已保存**值
@@ -1231,11 +1364,32 @@ function SettingsPageController() {
 
   /** 放弃全部未保存改动：draft 与 MCP 都回到打开时的基线 */
   function discardDraft() {
-    if (config) setDraft(JSON.parse(JSON.stringify(config)));
+    if (config) {
+      setDraft(structuredClone(config));
+      setBaseline(config);
+      const snapshot = useSettings.getState().snapshot;
+      pageVersionRef.current = snapshot ? { boot_id: snapshot.version.boot_id, sequence: snapshot.page_version } : undefined;
+    }
+    draftGeneration.current += 1;
+    setCredentialEdits({});
+    saveAttempt.current = null;
+    setConfigConflict(false);
     const parsed = parseMcpDoc(mcpOriginal);
     // 同加载路径：解析失败要回到文本兜底模式（而不是空结构化列表）
     setMcpDoc(parsed);
     setMcpRaw(parsed ? serializeMcpDoc(parsed) : mcpOriginal);
+  }
+
+  async function reviewLatestConfig() {
+    if (!await useSettings.getState().load()) return;
+    const latest = useSettings.getState().snapshot;
+    if (!latest) return;
+    setDraft((current) => current && baseline ? rebaseSubmittedDraft(baseline, current, latest.config) : latest.config);
+    setBaseline(latest.config);
+    pageVersionRef.current = { boot_id: latest.version.boot_id, sequence: latest.page_version };
+    saveAttempt.current = null;
+    setConfigConflict(false);
+    message.info(t("settings.configReviewDraft"));
   }
 
   /** 顶部「取消」= 放弃全部未保存改动并返回工作区（不再二次确认） */
@@ -1437,7 +1591,7 @@ function SettingsPageController() {
               </SettingsFormItem>
             </SettingsSection>
           </SettingsForm>
-          <ProvidersPanel draft={draft} patchDraft={patchDraft} />
+          <ProvidersPanel draft={draft} patchDraft={patchDraft} credentialEdits={credentialEdits} patchCredentialEdit={patchCredentialEdit} />
           {/* 子代理角色按角色覆盖的模型——读 useSettings.store，独立 save；
               容器根自身带 data-setting-id 锚点（SettingFieldPath = "subagentModels"）。
               与 ProvidersPanel 平级，不嵌进 provider 卡片（覆盖的是角色而非某家供应商）。 */}
@@ -1723,6 +1877,7 @@ function SettingsPageController() {
             onOk={() => void saveMcp()}
             cancelText={t("common.cancel")}
             okText={t("settings.mcpSave")}
+            confirmLoading={mcpSaving}
             footer={(_originNode, { OkBtn, CancelBtn }) => <div className="mcp-editor-footer">
               {!mcpCreating && mcpEntries !== null && mcpEditorIndex !== null && (
                 <Popconfirm
@@ -1749,10 +1904,11 @@ function SettingsPageController() {
             // 兜底模式：原 JSON 无法解析时的保命通道；直接保存避免丢失
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
               <div className="hint">{t("settings.mcpRawHint")}</div>
-              <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => setMcpRaw(e.target.value)} />
+              <TextArea rows={14} value={mcpRaw} spellCheck={false} className="mcp-json" onChange={(e) => { invalidateMcpProbe(); setMcpRaw(e.target.value); }} />
             </div>
           ) : (
             <div className="mcp-pane setting-anchor" data-setting-id="mcp.servers">
+              <div className="hint">{t("settings.mcpProbeWarning")}</div>
               {mcpEntries.map((e, idx) => idx === mcpEditorIndex && (
                 <div className="mcp-entry" key={idx}>
                   <section className="mcp-editor-section">
@@ -1783,7 +1939,7 @@ function SettingsPageController() {
                   <section className="mcp-editor-section">
                     <div className="mcp-editor-section-head">
                       <h3 className="mcp-editor-section-title">{t("settings.mcpConnectionSection")}</h3>
-                      <Button disabled={!e.name.trim()} onClick={() => void testMcpServer(e.name.trim())}>{t("settings.mcpTest")}</Button>
+                      <Button loading={mcpTesting} disabled={!e.name.trim()} onClick={() => void testMcpServer(idx)}>{t("settings.mcpTest")}</Button>
                     </div>
                   {draftTransport(e) === "stdio" ? (
                     <>
@@ -2305,6 +2461,10 @@ function SettingsPageController() {
       </nav>
 
       <div className="settings-content">
+        {configWarnings?.map((warning, index) => <Alert key={`${index}:${warning}`} type="warning" title={warning} />)}
+        {configRecoveryBlock && <Alert type="error" title={configRecoveryBlock} showIcon />}
+        {configConflict && !configRecoveryBlock && <Alert type="warning" title={t("settings.configConflict")}
+          action={<Button onClick={() => void reviewLatestConfig()}>{t("settings.configReloadDraft")}</Button>} />}
         <div className="settings-actions">
           <span className="settings-actions-title">
             {activePage ? t(activePage.labelKey) : t("settings.title")}
@@ -2314,7 +2474,7 @@ function SettingsPageController() {
             <Tooltip title={t("settings.cancelHint")}>
               <Button onClick={cancelAll}>{t("common.cancel")}</Button>
             </Tooltip>
-            <Button type="primary" loading={saving} onClick={() => void save()}>
+            <Button type="primary" loading={saving} disabled={!!configRecoveryBlock} onClick={() => void save()}>
               {t("common.save")}
             </Button>
           </div>
