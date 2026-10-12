@@ -18,6 +18,7 @@ import { ipc } from "../ipc/client";
 import { DEFAULT_PREFS } from "../ipc/types";
 import type { SessionPrefs, Todo } from "../ipc/types";
 import { useRun } from "../stores/run";
+import { newDraftIdentity } from "../stores/runDrafts";
 import type { PendingImage, QueueItem } from "../stores/run.types";
 import { useSessions } from "../stores/sessions";
 import { useUi } from "../stores/ui";
@@ -586,6 +587,12 @@ export function applyRetainedContent(sessionId: string): void {
         : [];
       useRun.setState((s) => {
         s.drafts[sessionId] = { text: kept.draft!.text, images, refs };
+        // A restored snapshot is a new draft instance even if an empty tab skeleton
+        // already existed. Never accept imports started before restoration.
+        s.draftIdentities[sessionId] = newDraftIdentity();
+        for (const [id, snapshot] of Object.entries(s.draftSends)) {
+          if (snapshot.sessionId === sessionId) delete s.draftSends[id];
+        }
       });
     }
   }

@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ActivitySnapshot, AskOpenedEvent, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -20,11 +20,13 @@ export const ipc = {
   deleteProject: (projectId: string) =>
     invoke<{ deleted_sessions: number }>("delete_project", { projectId }),
 
-  getConfig: () => invoke<ConfigState>("get_config"),
-  /** 保存整份配置。opts.skipCleanup = 本次跳过「按新保留期清理」这一步（用户在确认框里选了「暂不清理」）；
-   *  返回本次清理结果（被删会话 id 列表 + 成败条数），保留期未变或本次跳过时为 null —— 调用方必须拿到返回值。 */
-  saveConfig: (config: ConfigState, opts?: { skipCleanup?: boolean }) =>
-    invoke<CleanupOutcome | null>("save_config", { config, skipCleanup: opts?.skipCleanup ?? false }),
+  getConfig: () => invoke<ConfigSnapshot>("get_config"),
+  saveConfig: (config: ConfigState, opts: ConfigSaveOptions) =>
+    invoke<ConfigSaveResult>("save_config", { config, ...opts, skipCleanup: opts.skipCleanup ?? false }),
+  getConfigOperation: (operationId: string) =>
+    invoke<ConfigSaveResult>("get_config_operation", { operationId }),
+  setSubagentModel: (role: string, modelId: string | null, expectedVersion: ConfigVersion, operationId: string) =>
+    invoke<ConfigSaveResult>("set_subagent_model", { role, modelId, expectedVersion, operationId }),
   // 当前配置解析出的代理 URL（null = 直连）：检查更新传参与设置页系统代理回显共用
   resolveProxy: () => invoke<string | null>("resolve_proxy"),
 
@@ -146,7 +148,7 @@ export const ipc = {
     invoke<DocumentBackupEntry[]>("list_document_backups", { sessionId, path }),
   /** 把某一份备份还原回原文件位置；回退前会把当前内容也备份一份（回退本身能再撒回） */
   restoreDocumentBackup: (sessionId: string, path: string, backupPath: string) =>
-    invoke<{ path: string; restoredFrom: string; currentBackup: string | null; size: number }>(
+    invoke<{ path: string; restoredFrom: string; currentBackup: string | null; backupStatus?: "saved" | "not_needed_missing_target"; size: number; warnings?: string[] }>(
       "restore_document_backup",
       { sessionId, path, backupPath },
     ),
@@ -166,8 +168,8 @@ export const ipc = {
   mcpListConfig: (scope: McpScope, sessionId?: string) =>
     invoke<McpConfigDoc>("mcp_list_config", { scope, sessionId: sessionId ?? null }),
   /** 保存某作用域配置。有 error 级 issue 时**不落盘**，返回值 `saved: false` + issues */
-  mcpSaveConfig: (scope: McpScope, json: string, sessionId?: string) =>
-    invoke<McpSaveResult>("mcp_save_config", { scope, json, sessionId: sessionId ?? null }),
+  mcpSaveConfig: (scope: McpScope, json: string, expectedVersion: string, sessionId?: string) =>
+    invoke<McpSaveResult>("mcp_save_config", { scope, json, expectedVersion, sessionId: sessionId ?? null }),
   /** 建连（并行、立即返回；状态走 mcp:status 事件）。names 省略 = 整个可见集 */
   mcpConnect: (sessionId: string, names?: string[]) =>
     invoke<void>("mcp_connect", { sessionId, names: names ?? null }),
@@ -178,8 +180,8 @@ export const ipc = {
   mcpReconnect: (sessionId: string, name: string) =>
     invoke<void>("mcp_reconnect", { sessionId, name }),
   /** 临时测试连接：起 → tools/list → 立即回收，**不并入连接池、不改正式状态** */
-  mcpTest: (scope: McpScope, name: string, sessionId?: string) =>
-    invoke<McpTestResult>("mcp_test", { scope, name, sessionId: sessionId ?? null }),
+  mcpTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
+    invoke<McpTestResult>("mcp_test", { scope, name, config, sessionId: sessionId ?? null }),
   /** 某会话的状态快照（断开 / 淘汰 / 批量停止后拉全量） */
   mcpSnapshot: (sessionId: string) => invoke<McpSnapshot>("mcp_snapshot", { sessionId }),
 
@@ -197,6 +199,7 @@ export const ipc = {
   listAgents: () => invoke<AgentMeta[]>("list_agents"),
 
   // P2：计划任务 / 统计
+  listScheduledTaskDiagnostics: () => invoke<import("./types").TaskDiagnostics>("list_scheduled_task_diagnostics"),
   listScheduledTasks: (sessionId: string) => invoke<ScheduledTask[]>("list_scheduled_tasks", { sessionId }),
   createScheduledTask: (sessionId: string, name: string, instruction: string, schedule: string) =>
     invoke<ScheduledTask>("create_scheduled_task", { sessionId, name, instruction, schedule }),
@@ -270,5 +273,6 @@ export const ipc = {
 
   // ---------- 界面字体（[docs/chat-and-interface]）----------
   /** 字体偏好落盘（真源在配置文件的 ui.font_sans / ui.font_mono；只写这两个字段） */
-  setFontPrefs: (sans: string, mono: string) => invoke<void>("set_font_prefs", { sans, mono }),
+  setFontPrefs: (sans: string, mono: string, operationId?: string) =>
+    invoke<ConfigSaveResult>("set_font_prefs", { sans, mono, operationId }),
 };

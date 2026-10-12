@@ -39,6 +39,8 @@ let fileResolvers: ((v: any) => void)[] = [];
 
 // [docs/documents](../../../docs/documents.md)：回退入口的备份清单（默认空 = 没备份）
 let backupsPayload: any[] = [];
+let restoreError: string | null = null;
+let restoreWarnings: string[] = [];
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: any) => {
@@ -49,7 +51,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
     if (cmd === "list_document_backups") return backupsPayload;
     if (cmd === "restore_document_backup") {
-      return { path: args?.path ?? "", restoredFrom: args?.backupPath ?? "", currentBackup: null, size: 9 };
+      if (restoreError) throw new Error(restoreError);
+      return { warnings: restoreWarnings, path: args?.path ?? "", restoredFrom: args?.backupPath ?? "", currentBackup: null, size: 9 };
     }
     if (cmd === "read_workspace_file") return { path: args?.path ?? "", size: 12, content: "# Hello" };
     if (cmd === "read_workspace_file_base64") return { path: args?.path ?? "", size: 4, content: "aGk=" };
@@ -88,6 +91,8 @@ afterEach(() => {
   filePayload = fixture;
   fileResolvers = [];
   backupsPayload = [];
+  restoreError = null;
+  restoreWarnings = [];
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   // Reset the right-sidebar toggle singleton ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): prevent collapsed state leaking across cases
   useUi.setState({ rightBarOpen: true });
@@ -258,12 +263,55 @@ describe("文档回退入口", () => {
     expect(document.querySelector(".rb-file-btn")).toBeNull();
   });
 
-  it("已删除的文档行不显示回退按钮（没东西可回退）", async () => {
+  it("已删除的文档仍可从备份安全恢复", async () => {
     backupsPayload = [{ path: "/data/tmp/document-backup/x.bak", at: "2026-09-20T02:00:00Z", size: 10 }];
     await openPanel([{ ...xlsx, exists: false }]);
     await screen.findByText("预算表.xlsx");
-    expect(document.querySelector(".rb-file-btn")).toBeNull();
+    fireEvent.click(document.querySelector(".rb-file-btn") as HTMLElement);
+    await waitFor(() => expect(document.querySelectorAll(".ant-radio-wrapper").length).toBe(1));
+    const ok = Array.from(document.querySelectorAll(".ant-modal-footer button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === "回退",
+    ) as HTMLElement;
+    fireEvent.click(ok);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "restore_document_backup")).toBe(true));
+    expect(calls.some((c) => c.cmd.startsWith("read_workspace_file"))).toBe(false);
   });
+
+  it.each(["E_BACKUP_FAILED", "E_SOURCE_READ", "E_FILE_BUSY", "E_DOCUMENT_CHANGED", "E_IO"])(
+    "%s 失败保留弹框，不显示成功或刷新文件列表", async (code) => {
+      backupsPayload = [{ path: "/data/tmp/document-backup/old.xlsx.bak", at: "2026-09-20T02:00:00Z", size: 10 }];
+      restoreError = `${code}: target unchanged`;
+      await openPanel([xlsx]);
+      await screen.findByText("预算表.xlsx");
+      fireEvent.click(document.querySelector(".rb-file-btn") as HTMLElement);
+      await waitFor(() => expect(document.querySelectorAll(".ant-radio-wrapper").length).toBe(1));
+      const ok = Array.from(document.querySelectorAll(".ant-modal-footer button")).find(
+        (b) => (b.textContent ?? "").replace(/\s/g, "") === "回退",
+      ) as HTMLElement;
+      const before = calls.filter((c) => c.cmd === "list_session_files").length;
+      fireEvent.click(ok);
+      await waitFor(() => expect(document.body.textContent).toContain(code));
+      expect(calls.filter((c) => c.cmd === "list_session_files").length).toBe(before);
+      expect(document.body.textContent).not.toContain("已回退：");
+      expect(document.querySelector(".ant-modal")).toBeTruthy();
+    },
+  );
+
+  it("已提交但备份清理失败时同时显示成功与准确告警", async () => {
+    backupsPayload = [{ path: "/data/tmp/document-backup/old.xlsx.bak", at: "2026-09-20T02:00:00Z", size: 10 }];
+    restoreWarnings = ["Committed; backup cleanup failed"];
+    await openPanel([xlsx]);
+    await screen.findByText("预算表.xlsx");
+    fireEvent.click(document.querySelector(".rb-file-btn") as HTMLElement);
+    await waitFor(() => expect(document.querySelectorAll(".ant-radio-wrapper").length).toBe(1));
+    const ok = Array.from(document.querySelectorAll(".ant-modal-footer button")).find(
+      (b) => (b.textContent ?? "").replace(/\s/g, "") === "回退",
+    ) as HTMLElement;
+    fireEvent.click(ok);
+    await waitFor(() => expect(document.body.textContent).toContain("Committed; backup cleanup failed"));
+    expect(document.body.textContent).toContain("已回退：");
+  });
+
 });
 
 describe("writeTick 写入信号", () => {

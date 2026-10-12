@@ -100,7 +100,8 @@ export default function FilesPanel({
     if (!sessionId || !restore?.picked) return;
     setBusy(true);
     try {
-      await ipc.restoreDocumentBackup(sessionId, restore.path, restore.picked);
+      const receipt = await ipc.restoreDocumentBackup(sessionId, restore.path, restore.picked);
+      for (const warning of receipt.warnings ?? []) message.warning(warning);
       message.success(t("files.restoreDone", { name: baseName(restore.path) }));
       setRestore(null);
       // 回退会改文件的体积与修改时间：刷新一次列表（stat 是后端现算的）
@@ -125,7 +126,7 @@ export default function FilesPanel({
       ) : (
         <div className="rb-files-list">
           {files.map((f) => {
-            const canRestore = f.exists && RESTORABLE_EXTS.has(extOf(f.path));
+            const canRestore = RESTORABLE_EXTS.has(extOf(f.path));
             const label = (
               <div
                 className={`rb-file ${f.exists ? "" : "rb-file-gone"}`}

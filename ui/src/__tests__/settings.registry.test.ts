@@ -647,6 +647,8 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(statusKey(item.status, item.ended)": "近期结果状态使用同一枚举映射，取消与失败优先于收尾形态",
   },
   "panels/SettingsPage.tsx": {
+    "t(e.message)": "MCP serializer validation uses the bounded settings.mcp validation key family",
+    "t(error.message)": "MCP draft probes surface the same serializer validation keys",
     "t(item.labelKey)": "搜索命中行的项名由注册表 labelKey 派生",
     "t(PAGE_LABEL_KEY[item.page])": "搜索命中行的所属页名由注册表页名键派生",
     "t(group.titleKey)": "左导航组标题由 PAGE_GROUPS.titleKey 派生",
@@ -931,5 +933,12 @@ describe("设置项注册表：旧格式历史清理的登记", () => {
     expect(matchSettings("旧格式历史", zhT).map((i) => i.id)).toContain("app.legacy_history_status");
     expect(matchSettings("回收", zhT).map((i) => i.id)).toContain("app.legacy_history_cleanup");
     expect(matchSettings("legacy history", enT).map((i) => i.id)).toContain("app.legacy_history_cleanup");
+  });
+});
+
+describe("instant role ownership", () => {
+  it("classifies subagent model selection as an instant field rather than page-save data", () => {
+    expect(INSTANT_APPLY_FIELD_IDS).toContain("subagentModels");
+    expect(PAGE_FIELDS.providers).toContain("subagentModels");
   });
 });

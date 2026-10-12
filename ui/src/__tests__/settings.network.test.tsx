@@ -1,7 +1,8 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // Network settings tests: proxy mode radio cards (none/system/manual), custom URL validation,
 // system-proxy echo. Same standalone-mount pattern as shell.settings.test.tsx.
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：否则 App.useApp() message 是空壳
 import "../i18n"; // Component mounted standalone must init i18next explicitly
 import SettingsPage from "../features/panels/SettingsPage";
@@ -33,8 +34,8 @@ let savedConfigs: ConfigState[] = [];
 
 async function baseInvoke(cmd: string, _args?: any) {
   switch (cmd) {
-    case "get_config": return makeConfig();
-    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return null;
+    case "get_config": return configSnapshot(makeConfig());
+    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return configSaved(_args?.config);
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
     case "list_skills": return [];
@@ -61,9 +62,13 @@ beforeAll(() => {
 
 afterEach(async () => {
   cleanup();
+  // antd Form schedules a 10 ms validation debounce through useDelayState.
+  // It does not cancel that timeout on unmount; drain it while happy-dom's
+  // window still exists, rather than letting it escape after file teardown.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
   (await invokeMock()).mockImplementation(baseInvoke);
   useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   savedConfigs = [];
 });
 
@@ -83,7 +88,7 @@ async function clickSaveAndSettle() {
 }
 
 async function openNetworkTab(config: ConfigState = makeConfig()) {
-  useSettings.setState({ config, loaded: true });
+  useSettings.setState({ config, snapshot: configSnapshot(config), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "network" });
   render(
     <AntApp>

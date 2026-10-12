@@ -10,10 +10,12 @@ export type ExternalDirDecision = "once" | "always" | "cancel";
 
 export default function ExternalDirPrompt({
   dir,
+  sessionTitle,
   onDecide,
 }: {
   /** 要放行的目录（绝对路径） */
   dir: string | null;
+  sessionTitle?: string;
   onDecide: (choice: ExternalDirDecision) => void;
 }) {
   const { t } = useTranslation();
@@ -34,6 +36,7 @@ export default function ExternalDirPrompt({
         </Button>,
       ]}
     >
+      {sessionTitle && <p>{t("composer.allowDirSession", { session: sessionTitle })}</p>}
       <p>{t("composer.allowDirDesc", { path: dir ?? "" })}</p>
       <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
         {t("composer.allowDirAlwaysNote")}

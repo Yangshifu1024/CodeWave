@@ -32,7 +32,7 @@ const listCall = { sessionId: "" };
 
 beforeEach(() => {
   invokeMock.mockReset().mockResolvedValue([]);
-  useTasks.setState({ items: [], loading: false, error: null, runningIds: [] });
+  useTasks.setState({ items: [], loading: false, error: null, runningIds: [], runningRuns: {}, terminalRuns: [], deletedIds: [], diagnostics: null });
 });
 
 describe("tasks store · load", () => {
@@ -145,4 +145,179 @@ describe("statusKind 判定表", () => {
     expect(statusKind(null)).toBe("none");
     expect(statusKind(undefined)).toBe("none");
   });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function active(run_id: string) {
+  return { run_id, source: "manual", started_at: "2026-10-01T00:00:00Z", scheduled_for: null };
+}
+
+describe("task lifecycle reconciliation", () => {
+  it("rejects non-array data without erasing known tasks", async () => {
+    const keep = task({ id: "keep" }); useTasks.setState({ items: [keep] });
+    invokeMock.mockResolvedValueOnce({ tasks: [] });
+    await useTasks.getState().load();
+    expect(useTasks.getState().items).toEqual([keep]);
+    expect(useTasks.getState().error).toContain("Invalid scheduled task list");
+  });
+
+  it("rejects a list that arrived after a newer edit or delete", async () => {
+    for (const operation of ["edit", "delete"]) {
+      const response = deferred<ScheduledTask[]>();
+      invokeMock.mockReturnValueOnce(response.promise);
+      useTasks.setState({ items: [task({ id: "t", name: "old" })] });
+      const loading = useTasks.getState().load();
+      if (operation === "edit") useTasks.getState().upsertLocal(task({ id: "t", name: "new" }));
+      else useTasks.getState().removeLocal("t");
+      response.resolve([task({ id: "t", name: "old" })]); await loading;
+      expect(useTasks.getState().items.map((t) => t.name)).toEqual(operation === "edit" ? ["new"] : []);
+    }
+  });
+
+  it("the latest request wins even if older requests resolve later", async () => {
+    const first = deferred<ScheduledTask[]>(); const second = deferred<ScheduledTask[]>();
+    invokeMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const a = useTasks.getState().load(); const b = useTasks.getState().load();
+    second.resolve([task({ id: "new" })]); await b;
+    first.resolve([task({ id: "old" })]); await a;
+    expect(useTasks.getState().items.map((t) => t.id)).toEqual(["new"]);
+  });
+
+  it("authoritative snapshots recover missing fired and done events", async () => {
+    invokeMock.mockResolvedValueOnce([task({ id: "t", active_run: active("run1") })]);
+    await useTasks.getState().load();
+    expect(useTasks.getState().runningIds).toEqual(["t"]);
+    expect(useTasks.getState().runningRuns.t).toBe("run1");
+    invokeMock.mockResolvedValueOnce([task({ id: "t", active_run: null, last_status: "ok" })]);
+    await useTasks.getState().load();
+    expect(useTasks.getState().runningIds).toEqual([]);
+  });
+
+  it("old or identity-less done events cannot settle a newer active instance", () => {
+    useTasks.setState({ items: [task({ id: "t", active_run: active("new") })], runningIds: ["t"], runningRuns: { t: "new" } });
+    useTasks.getState().applyDone({ id: "t", run_id: "old", status: "error" });
+    useTasks.getState().applyDone({ id: "t", status: "ok" });
+    expect(useTasks.getState().runningIds).toEqual(["t"]);
+    expect(useTasks.getState().items[0].last_status).toBeNull();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("a fired event invalidates an older empty snapshot", async () => {
+    const response = deferred<ScheduledTask[]>(); invokeMock.mockReturnValueOnce(response.promise);
+    const loading = useTasks.getState().load();
+    useTasks.getState().applyFired({ id: "t", run_id: "new" });
+    response.resolve([]); await loading;
+    expect(useTasks.getState().runningIds).toEqual(["t"]);
+  });
+
+  it("completed-instance fired events cannot resurrect that instance", () => {
+    const run = { run_id: "old", at: "", status: "ok", summary: "", source: "schedule", out_tokens: 0 };
+    useTasks.setState({ items: [task({ id: "t", runs: [run] })] });
+    useTasks.getState().applyFired({ id: "t", run_id: "old" });
+    expect(useTasks.getState().runningIds).toEqual([]);
+  });
+
+  it("retains recovery diagnostics and unsaved results", async () => {
+    const diagnostics = { state: "degraded", issues: [{ kind: "task_json", path: "/project/tasks/t.json", project_id: "p", task_id: "t", message: "Invalid JSON" }] };
+    invokeMock.mockResolvedValueOnce(diagnostics);
+    await useTasks.getState().loadDiagnostics();
+    expect(useTasks.getState().diagnostics).toEqual(diagnostics);
+    invokeMock.mockResolvedValueOnce([task({ id: "t", last_status: "ok", persistence_error: "Disk full" })]);
+    await useTasks.getState().load();
+    expect(useTasks.getState().items[0].persistence_error).toBe("Disk full");
+  });
+});
+
+
+it("done tombstones a run before its deferred history reload, so late fired cannot revive it", async () => {
+  const response = deferred<ScheduledTask[]>(); invokeMock.mockReturnValueOnce(response.promise);
+  useTasks.setState({ items: [task({ id: "t", active_run: active("finished") })], runningIds: ["t"], runningRuns: { t: "finished" } });
+  useTasks.getState().applyDone({ id: "t", run_id: "finished", status: "ok" });
+  useTasks.getState().applyFired({ id: "t", run_id: "finished" });
+  expect(useTasks.getState().runningIds).toEqual([]);
+  response.resolve([task({ id: "t", active_run: null, last_status: "ok" })]);
+  await response.promise; await Promise.resolve();
+  expect(useTasks.getState().runningIds).toEqual([]);
+  expect(useTasks.getState().loading).toBe(false);
+});
+
+it("deleted tasks reject delayed fired and done until explicitly re-created", () => {
+  useTasks.setState({ items: [task({ id: "t", active_run: active("removed") })], runningIds: ["t"], runningRuns: { t: "removed" } });
+  useTasks.getState().removeLocal("t");
+  useTasks.getState().applyFired({ id: "t", run_id: "removed" });
+  useTasks.getState().applyDone({ id: "t", run_id: "removed", status: "ok" });
+  expect(useTasks.getState().items).toEqual([]); expect(useTasks.getState().runningIds).toEqual([]);
+  expect(invokeMock).not.toHaveBeenCalled();
+  useTasks.getState().upsertLocal(task({ id: "t" }));
+  useTasks.getState().applyFired({ id: "t", run_id: "fresh" });
+  expect(useTasks.getState().runningRuns.t).toBe("fresh");
+});
+
+
+it("editing one task preserves another task's event-backed running identity before its snapshot arrives", () => {
+  useTasks.setState({ items: [task({ id: "a", active_run: null }), task({ id: "b", active_run: null })] });
+  useTasks.getState().applyFired({ id: "a", run_id: "run1" });
+  useTasks.getState().upsertLocal(task({ id: "b", name: "edited", active_run: null }));
+  expect(useTasks.getState().runningIds).toEqual(["a"]);
+  expect(useTasks.getState().runningRuns).toEqual({ a: "run1" });
+  expect(useTasks.getState().items.find((item) => item.id === "b")?.name).toBe("edited");
+  // The target's own projection can still be updated without disturbing A.
+  useTasks.getState().upsertLocal(task({ id: "b", active_run: active("run2") }));
+  expect(useTasks.getState().runningRuns).toEqual({ a: "run1", b: "run2" });
+  useTasks.getState().upsertLocal(task({ id: "b", active_run: null }));
+  expect(useTasks.getState().runningRuns).toEqual({ a: "run1" });
+});
+
+
+it("a deferred inactive mutation response cannot clear a run fired after that command started", async () => {
+  const mutation = deferred<ScheduledTask>();
+  const snapshot = deferred<ScheduledTask[]>(); invokeMock.mockReturnValueOnce(snapshot.promise);
+  useTasks.setState({ items: [task({ id: "a", active_run: null })] });
+  const requestRevision = useTasks.getState().captureRevision();
+  const applying = mutation.promise.then((saved) => useTasks.getState().upsertLocal(saved, requestRevision));
+  useTasks.getState().applyFired({ id: "a", run_id: "run1" });
+  mutation.resolve(task({ id: "a", name: "edited", active_run: null })); await applying;
+  expect(useTasks.getState().runningRuns).toEqual({ a: "run1" });
+  expect(useTasks.getState().runningIds).toEqual(["a"]);
+  expect(useTasks.getState().items[0].name).toBe("edited");
+  expect(invokeMock).toHaveBeenCalledWith("list_scheduled_tasks", listCall);
+  snapshot.resolve([task({ id: "a", name: "edited", active_run: active("run1") })]); await snapshot.promise; await Promise.resolve();
+  expect(useTasks.getState().items[0].active_run?.run_id).toBe("run1");
+});
+
+it("a deferred old-run mutation response cannot replace a newer fired run or revive an old snapshot", async () => {
+  const oldSnapshot = deferred<ScheduledTask[]>(); const freshSnapshot = deferred<ScheduledTask[]>();
+  invokeMock.mockReturnValueOnce(oldSnapshot.promise).mockReturnValueOnce(freshSnapshot.promise);
+  useTasks.setState({ items: [task({ id: "a", active_run: active("old") })], runningIds: ["a"], runningRuns: { a: "old" } });
+  const requestRevision = useTasks.getState().captureRevision();
+  useTasks.getState().applyDone({ id: "a", run_id: "old", status: "ok" });
+  useTasks.getState().applyFired({ id: "a", run_id: "new" });
+  useTasks.getState().upsertLocal(task({ id: "a", name: "edited", active_run: active("old") }), requestRevision);
+  expect(useTasks.getState().runningRuns).toEqual({ a: "new" });
+  expect(useTasks.getState().items[0].name).toBe("edited");
+  expect(useTasks.getState().items[0].active_run).toBeNull();
+  oldSnapshot.resolve([task({ id: "a", active_run: active("old") })]); await oldSnapshot.promise; await Promise.resolve();
+  expect(useTasks.getState().runningRuns).toEqual({ a: "new" });
+  freshSnapshot.resolve([task({ id: "a", name: "edited", active_run: active("new") })]); await freshSnapshot.promise; await Promise.resolve();
+  expect(useTasks.getState().runningRuns).toEqual({ a: "new" });
+});
+
+
+it("a newer authoritative active snapshot also invalidates a delayed mutation lifecycle", async () => {
+  useTasks.setState({ items: [task({ id: "a", active_run: null })] });
+  const requestRevision = useTasks.getState().captureRevision();
+  invokeMock.mockResolvedValueOnce([task({ id: "a", active_run: active("fresh") })]);
+  await useTasks.getState().load();
+  const refreshed = deferred<ScheduledTask[]>(); invokeMock.mockReturnValueOnce(refreshed.promise);
+  useTasks.getState().upsertLocal(task({ id: "a", name: "edited", active_run: null }), requestRevision);
+  expect(useTasks.getState().runningRuns).toEqual({ a: "fresh" });
+  expect(useTasks.getState().items[0].active_run?.run_id).toBe("fresh");
+  refreshed.resolve([task({ id: "a", name: "edited", active_run: active("fresh") })]);
+  await refreshed.promise; await Promise.resolve();
 });

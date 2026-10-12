@@ -66,15 +66,21 @@ edit_document 对修改公式走[保守求值器](../src-tauri/src/tools/documen
 
 ## 5. 备份与回退
 
-[backup.rs](../src-tauri/src/tools/document/backup.rs) 按源文件分组保留最近五份，文件名纳秒时间戳并处理占名冲突；普通 edit 的临时事务备份成功即删，**不能替代 Office 持久备份**。右栏文件条目可以列出备份时间/体积，用户确认后原子还原到目标位置；备份必须来自受限备份目录，不能把还原 IPC 变成任意路径复制通道。
+[transaction.rs](../src-tauri/src/tools/document/transaction.rs) 是 Word、xlsx/xlsm 修改和用户还原共用的失败关闭事务。顺序是「写根校验 → 非主 runtime 认领 → canonical 路径锁 → 锁内路径/类型重验 → 最多 50 MiB 源快照 → 保真重打包 → 完整持久备份 → 源摘要复验 → 原子替换」。审批预览不持锁；真正执行从快照重新计算，不能用审批时的旧读取结果覆盖新内容。
 
-维护目标仍是“修改/还原之前保存当前版本，使操作可再撤回”，但要如实说明实现：
+- 读取原件/快照失败为 `E_SOURCE_READ`；备份失败为 `E_BACKUP_FAILED`，均不覆盖目标。备份完整写入、flush、sync、长度与 SHA-256 校验通过后，以排他发布生成非空凭据；半成品只留在本次拥有的临时文件中，失败自动清理。
+- 成功编辑 `backup` 必为已验证的可读路径，并返回 `backupStatus: "saved"`；失败原因通过 ToolOutcome.error 进入模型可见文本。提交失败保留完整备份，只在再次读回验证目标仍等于原件时才说「目标未修改」。文件已经提交而产物登记失败时，仅记录登记告警，不假报写入失败、不自动重放。
+- 同一份源快照用于解析、重打包和备份；提交前若目标内容/路径变化，返回 `E_DOCUMENT_CHANGED`（越界仍为 `E_PATH_OUTSIDE`），要求重新读取。锁等待和提交前响应取消；同步提交开始后按实际结果报告，不会「已经改完却只报取消」。
+- [backup.rs](../src-tauri/src/tools/document/backup.rs) 的目录实际为 `rt.data_dir/tmp/document-backup`，按目标路径分组，**不是 session id 隔离目录**。新文件名带纳秒时间、UUID 和完整路径摘要；旧的短摘要 `.bak` 文件继续可列出/还原。普通 edit 的临时备份成功即删，不能代替此持久版本库。
+- 每个目标正常保留最近五份。清理只在目标提交成功后、同一写锁内执行；本次凭据和本次还原所选版本受到保护。清理失败保留多余版本，回执 warnings 如实说明，不回滚已经成功的文件写入。
+- 还原先验证备份位于受限目录、是普通文件且属于目标的备份列表，再锁内读入所选内容。已有目标成功还原必带非空 `currentBackup`，可再还原这份凭据撤销操作。只有准确的 NotFound 才允许恢复缺失目标，使用原子 no-clobber 创建并返回 `backupStatus: "not_needed_missing_target"`、`currentBackup: null`；其它读错误不会伪装成不存在。并发新建返回 `E_EXISTS`，不覆盖新文件。
+- 还原使用独立的 **2 秒**锁等待上限，忙时返回可重试 `E_FILE_BUSY`，不受某次模型 run 的取消令牌影响。write_document 同样锁内检查目标存在性、以 no-clobber 发布；两个创建者只能有一个成功。
 
-- **当前 edit_document 的 Word 与表格两条路径，读取原件或 backup::save 失败时会只记 warn/返回空 backup，仍继续原子覆盖。** 因此现在不能承诺“改之前一定成功备份”。
-- [restore_from_backup](../src-tauri/src/host/commands/preview.rs) 保存当前版本也使用 best-effort，失败不阻断还原；“还原本身也一定可撤回”同样不是硬保证。
-- 文档写/编辑有 runtime 内批次串行，但未接入 edit/create/delete 共用的进程级 writelock。当前 write.rs 与 edit.rs 的写认领条件是 `root_session_id.is_none()`，与普通工具针对子 runtime 认领的条件相反；不能承诺子代理的文档写入完全受认领保护。外部编辑、跨 runtime 同文件修改与该条件仍需专项修复/验收。
+Office 与普通 create/edit/delete 共用 `requires_file_claim(rt) = !rt.is_main_session`。一级/嵌套子代理、无父会话的独立任务都需认领，认领一直保持到 drive 成功、错误、取消、panic 或 abort 结束时释放；主会话豁免长期认领，但仍使用同一全局路径写锁。冲突 `E_FILE_CLAIMED` 要跳过并上报，不自动重试。`root_session_id` 只表示产物归属。
 
-补强这些点需独立代码改动与故障注入：备份目录不可写/磁盘满/并发写时不得静默失去唯一原件。本次指南仅记录现状和必须保留的安全目标。
+公共 [atomic.rs](../src-tauri/src/util/atomic.rs) 不再创建、读取或删除用户同名 `.bak`。目标同目录临时文件同步后交给 tempfile 原生替换（Windows 使用 MoveFileExW 的 replace-existing 路径），没有「复制失败后还从旧 .bak 回写」分支。临时回滚副本不能替代文档持久备份。
+
+边界：路径锁只协调 CodeWave 受管写入口，不覆盖外部 Excel、shell、MCP、硬链接或目录删除的祖先级互斥。摘要复验到最终替换之间仍有外部进程写入窗口，不是跨进程 CAS；尚未给出断电/目录 fsync 级保证。Windows 文件占用、真实 Office 打开/还原、macOS/Linux 文件权限与空间错误仍须平台验收，不能用 Linux 单测外推。
 
 ## 6. 原地引用与项目外访问
 
@@ -110,10 +116,13 @@ CSP 放宽仅为本地 PDF 渲染需要的 wasm 与 worker；不要顺带给 ren
 
 回归入口：
 
+- [reliability_tests.rs](../src-tauri/src/tools/document/reliability_tests.rs)：三格式真实工具故障矩阵、模型回执、同路径并发、取消、只新建竞态、备份还原与认领身份；drive 生命周期回归在 [agent/tests.rs](../src-tauri/src/core/agent/tests.rs)。
 - [faithful_spike.rs](../src-tauri/src/tools/document/faithful_spike.rs)：除目标成员外逐字节一致；覆盖图表、透视表、条件格式、批注等真实样本。
 - [patch.rs](../src-tauri/src/tools/document/patch.rs)：原样复制、缺成员拒绝、加密拒绝、封包 flush 错误。
 - [edit.rs](../src-tauri/src/tools/document/edit.rs)、[formula.rs](../src-tauri/src/tools/document/formula.rs)：公式缓存/重算标记、范围/类型校验、改前备份内容。
 - [edit_word.rs](../src-tauri/src/tools/document/edit_word.rs)、[backup.rs](../src-tauri/src/tools/document/backup.rs)、[preview.rs](../src-tauri/src/host/commands/preview.rs)：跨 run 文字、实体、版本去重、回退目录限制。
 - [fileviewer.document.test.tsx](../ui/src/__tests__/fileviewer.document.test.tsx)：结构化预览与 markdown 包裹。happy-dom 无 canvas，不能替代 PDF 渲染失败路径的实机验收。
 
-开放验收集中为：真实 Excel 打开公式编辑产物的修复提示/重算结果；同批跨表改动缓存一致性；200 MiB 与高压缩比文件的内存/延迟；备份失败与并发覆盖；PDF canvas 失败、中文提取与 wasm 回退。这些不能由曾通过的普通单元格保真样本推定已完成。后端测试、前端 test/build 与人工查看清单遵循[测试指南](./testing.md)，不要重引已删除 LSP 的测试入口。
+开放验收集中为：真实 Excel 打开公式编辑产物的修复提示/重算结果；同批跨表改动缓存一致性；200 MiB 与高压缩比文件的内存/延迟；真实平台备份/替换错误与外部并发窗口；PDF canvas 失败、中文提取与 wasm 回退。这些不能由曾通过的普通单元格保真样本推定已完成。后端测试、前端 test/build 与人工查看清单遵循[测试指南](./testing.md)，不要重引已删除 LSP 的测试入口。
+
+文档写工具的批次任务直接持有执行 future，不能以丢弃 JoinHandle 的方式脱离父运行。非主运行与其每个活跃工具共享同一个认领释放守卫；强制取消先取消令牌，最后一个工具 future 真正退出后才释放认领，防止写锁等待者迟到写入或晚认领泄漏。

@@ -1,4 +1,4 @@
-use super::util::{Core, err};
+use super::util::Core;
 use std::path::PathBuf;
 
 /// 技能扫描上下文：有会话用会话快照 (workspace, data_dir, project_dir)；无会话回退全局 data_dir。
@@ -79,14 +79,17 @@ pub async fn toggle_skill(
     name: String,
     disabled: bool,
 ) -> Result<(), String> {
-    let mut cfg = core.cfg.read().unwrap().clone();
-    cfg.disabled_skills.retain(|s| s != &name);
-    if disabled {
-        cfg.disabled_skills.push(name);
-    }
-    cfg.save().map_err(err)?;
-    *core.cfg.write().unwrap() = cfg;
-    Ok(())
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.commit_config(
+            crate::core::config_commit::ConfigPatch::Skill { name, disabled },
+            &uuid::Uuid::new_v4().to_string(),
+        )
+    })
+    .await
+    .map_err(|_| "Configuration worker stopped".to_string())?
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 // ---------- 工作区目录（Explorer）----------

@@ -11,6 +11,7 @@ import type {
 } from "../ipc/types";
 import type { WritableDraft } from "immer";
 import { ipc } from "../ipc/client";
+import { markMcpStatusEvent } from "../utils/mcpStatusRevision";
 import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { useTasks } from "./tasks";
@@ -624,11 +625,16 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
       useUi.setState({ exitRequest: { running: Array.isArray(p?.running) ? p.running : [] } });
     },
     "mcp:status": (p) => {
+      if (p.session && p.session !== useSessions.getState().activeKey) return;
       // 按 (作用域, server 名) upsert，绝不累积重复项。
       // 只按 name 作键是旧实现的串场根因：全局层与项目层可以有同名 server，
       // 两者是不同条目（后端池键含作用域），按名合并会让它们互相覆盖。
       const next: McpStatusPayload = {
-        name: p.server,
+        name: p.name ?? p.server,
+        generation: p.generation,
+        config_revision: p.config_revision,
+        policy_revision: p.policy_revision,
+        tool_schema_revision: p.tool_schema_revision,
         scope: p.scope,
         state: p.state,
         tools: p.tools,
@@ -639,15 +645,22 @@ export function miscHandlers(set: SetFn): Record<string, (p: any) => void> {
         note: p.note ?? null,
       };
       useUi.setState((s) => {
-        const i = s.mcpStatus.findIndex(
+        const owner = p.session ?? useSessions.getState().activeKey;
+        const current = s.mcpStatusSessionId === owner ? s.mcpStatus : [];
+        const i = current.findIndex(
           (m) => m.name === next.name && m.scope === next.scope,
         );
         if (i >= 0) {
-          const list = s.mcpStatus.slice();
+          const old = current[i];
+          if ((next.config_revision ?? 0) < (old.config_revision ?? 0)
+            || ((next.config_revision ?? 0) === (old.config_revision ?? 0) && (next.generation ?? 0) < (old.generation ?? 0))) return {};
+          markMcpStatusEvent();
+          const list = current.slice();
           list[i] = next;
-          return { mcpStatus: list };
+          return { mcpStatus: list, mcpStatusSessionId: owner };
         }
-        return { mcpStatus: [...s.mcpStatus, next] };
+        markMcpStatusEvent();
+        return { mcpStatus: [...current, next], mcpStatusSessionId: owner };
       });
     },
     "service:update": (p) => {

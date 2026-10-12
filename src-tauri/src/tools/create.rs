@@ -59,7 +59,7 @@ impl Tool for CreateTool {
         };
         // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 写前认领目标；兄弟任务已认领则拒绝并指引跳过上报
-        if !ctx.rt.is_main_session
+        if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
         {
