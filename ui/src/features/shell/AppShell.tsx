@@ -1,3 +1,4 @@
+import { fontSizeCss } from "../../utils/fonts";
 import { useEffect, useState } from "react";
 import { Avatar, Button, Layout, Modal, Tooltip } from "antd";
 import { BarChartOutlined, ClockCircleOutlined, DashboardOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
@@ -243,7 +244,7 @@ function ExitConfirm() {
           </li>
         ))}
       </ul>
-      <div className="dim" style={{ fontSize: 12 }}>
+      <div className="dim" style={{ fontSize: fontSizeCss(12) }}>
         {t("exitApp.waitHint")}
       </div>
     </Modal>
@@ -577,7 +578,7 @@ export default function AppShell() {
         {notifications.map((n) => (
           <Button key={n.id} onClick={() => void handleNotifyActivate(n.sessionId)} style={{ minWidth: 240, textAlign: "left", display: "block", height: "auto", padding: "8px 12px" }}>
             <b>{n.title}</b>
-            <div className="dim" style={{ fontSize: 12 }}>{n.body}</div>
+            <div className="dim" style={{ fontSize: fontSizeCss(12) }}>{n.body}</div>
           </Button>
         ))}
       </div>

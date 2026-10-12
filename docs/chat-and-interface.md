@@ -32,7 +32,11 @@
 
 字体偏好三个同源量：sans（界面）/ mono（代码与日志）/ fontSize（字号，与 sans/mono 双槽联动——v2 拆为 `font_size_sans` + `font_size_mono`），保存在后端配置 `config.ui.{font_sans, font_mono, font_size_sans, font_size_mono}`，WebView 的 `localStorage` 只作首帧防闪缓存。设置页「界面/外观 → 字体」section 按「**界面字体 → 界面字号 → 等宽字体 → 等宽字号**」顺序紧贴排列（v2 布局：字号 Select 紧贴对应字体族的下放；与 `font_sans`/`font_mono` 一一对应）。字号 4 档离散：13/15/17/19 px，控件为 antd `Select` 下拉框、还原默认按钮按「清除 localStorage 键 + 同步 15px」处理。
 
-antd 6 把 `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 间隙），挂在其中且未显式声明 font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）；需要还原字号的容器统一取 `--ws-font-size` / `--ws-font-size-sans`。本变量由 `App.tsx` 的 ConfigProvider `token.fontSize` 从 `config.ui.font_size_sans` 读取，ThemeBridge 同步写到 CSS 变量。
+字号以 15px 为基准：正文与 antd token 跟随当前已应用的 sans 档位；标题、说明等保留原有大小差，使用 `--ws-font-size-sans-offset`。代码、diff、日志等使用独立的 `--ws-font-size-mono-offset`，不受 sans 档位影响；图标和布局尺寸不随文本档位整体缩放。设置页的局部 antd 主题也随 sans 档位调整，保留标题/说明/元数据层级。
+
+`fonts.ts` 是两槽字号 CSS 变量的唯一写入方，`native.css` 提供 15px 默认值。`App.tsx` 订阅当前已应用值，首帧使用缓存、设置选择立即生效；后端回执只更新持久化状态，旧回执和保存失败不回退新预览，失败后可重试。启动配置加载后再对账；后端新增字号的默认 15/15 不阻止旧版仅缓存字体族的迁移。后端和前端均只接受 13/15/17/19，手改配置的未知数值读入时回落 15，非法保存请求拒绝。字体族和字号均不递增页级草稿版本，普通设置保存保留即时值。
+
+antd 6 把 `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 间隙），挂在其中且未显式声明 font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）；需要还原字号的容器统一取 `--ws-font-size` / `--ws-font-size-sans`。ThemeBridge 仅从当前 antd token 桥接 `--ws-font-size`，不覆盖两槽偏好。回归入口：`font.sizes.test.tsx`、`fonts.test.ts` 与配置提交器的即时字段测试。
 - 当前权限按钮与菜单文字均为中性，旧报告的蓝/橙/红和中途绿/黄/红映射已退役。风险/用量类内容可用语义色：工具等待橙、错误红、上下文进度圈四色；代码高亮和身份头像不属于品牌强调色。
 - 帮助说明、错误原因、限制条件应靠近对应控件常驻显示，不能仅靠 placeholder、低透明度或远端标签表达。「即时生效」放在标题旁；动作按钮靠右与信息被推远是不同问题。
 - `prefers-reduced-motion` 下流光隐藏、思考滚动与等待指示降动效；新动效必须保留静态可读结果。

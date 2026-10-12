@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   applyInitialFonts, buildFontOverride, previewFontFamily, readStoredFonts, reconcileFontsFromConfig,
-  sanitizeFontList, storeFonts,
+  commitFontSizeSlot, sanitizeFontList, storeFonts,
 } from "../utils/fonts";
 
 describe("sanitizeFontList", () => {
@@ -124,5 +124,41 @@ describe("与后端配置对账（reconcileFontsFromConfig：后端为真源、�
     expect(r).toEqual({ prefs: { sans: "", mono: "", fontSizeSans: "default", fontSizeMono: "default" }, migrate: false });
     expect(localStorage.getItem("ws_font_sans")).toBeNull();
     expect(document.documentElement.style.getPropertyValue("--ws-font-sans")).toBe("");
+  });
+
+  it("serde's default sizes do not erase legacy cached font families", () => {
+    localStorage.setItem("ws_font_sans", "Existing Sans");
+    localStorage.setItem("ws_font_mono", "Existing Mono");
+    const result = reconcileFontsFromConfig({ sans: "", mono: "", font_size_sans: 15, font_size_mono: 15 });
+    expect(result).toEqual({ prefs: {
+      sans: "Existing Sans", mono: "Existing Mono", fontSizeSans: "default", fontSizeMono: "default",
+    }, migrate: true });
+    expect(readStoredFonts()).toEqual(result.prefs);
+  });
+
+  it.each([0, -1, 14, 100000, Number.NaN, Number.POSITIVE_INFINITY])("unknown backend size %s falls back consistently", (size) => {
+    localStorage.setItem("ws_font_size_sans", "xlarge");
+    localStorage.setItem("ws_font_size_mono", "small");
+    const { prefs } = reconcileFontsFromConfig({ font_size_sans: size, font_size_mono: size });
+    expect(prefs.fontSizeSans).toBe("default");
+    expect(prefs.fontSizeMono).toBe("default");
+    expect(document.documentElement.style.getPropertyValue("--ws-font-size-sans")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--ws-font-size-mono")).toBe("");
+  });
+
+  it("size slots apply from cache before mount, stay independent and reset without stale overrides", () => {
+    localStorage.setItem("ws_font_size_sans", "large");
+    localStorage.setItem("ws_font_size_mono", "small");
+    applyInitialFonts();
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue("--ws-font-size-sans")).toBe("17px");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("13px");
+    commitFontSizeSlot("mono", "xlarge");
+    expect(style.getPropertyValue("--ws-font-size-sans")).toBe("17px");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("19px");
+    commitFontSizeSlot("mono", "default");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("");
+    expect(localStorage.getItem("ws_font_size_mono")).toBeNull();
+    expect(localStorage.getItem("ws_font_size_sans")).toBe("large");
   });
 });

@@ -1,3 +1,4 @@
+import { fontSizeCss } from "../../utils/fonts";
 import { memo, useEffect, useMemo, useState } from "react";
 import { Button, Tag } from "antd";
 import { useTranslation } from "react-i18next";
@@ -245,7 +246,7 @@ function ToolCallCardImpl({
         {hasWidget && (
           <Button
             size="small"
-            style={{ fontSize: 11 }}
+            style={{ fontSize: fontSizeCss(11) }}
             onClick={(e) => {
               e.stopPropagation();
               setWidgetOpen(true);
@@ -325,7 +326,7 @@ function ToolCallCardImpl({
                   {(data.running === true || data.running === undefined) && (
                     <Button
                       size="small"
-                      style={{ fontSize: 11 }}
+                      style={{ fontSize: fontSizeCss(11) }}
                       onClick={(e) => {
                         e.stopPropagation();
                         void stopService();

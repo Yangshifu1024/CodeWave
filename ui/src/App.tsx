@@ -4,7 +4,7 @@ import zhCN from "antd/locale/zh_CN";
 import enUS from "antd/locale/en_US";
 import { I18nextProvider } from "react-i18next";
 import { i18n } from "./i18n";
-import { useSettings } from "./stores/settings";
+import { useFontSize } from "./utils/fonts";
 import { useUi } from "./stores/ui";
 import ThemeBridge from "./theme/bridge";
 import AppShell from "./features/shell/AppShell";
@@ -18,7 +18,7 @@ export default function App() {
   // 主题偏好（设置 → 外观）：system = 跟随系统亮暗；light/dark = 用户固定档。
   // store 初始化时同步读 localStorage，首帧即为持久化主题（无亮↔暗闪屏）。
   const themePref = useUi((s) => s.theme);
-  const config = useSettings((s) => s.config);
+  const fontSizeSans = useFontSize("sans");
   const [osDark, setOsDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
 
   useEffect(() => {
@@ -53,13 +53,12 @@ export default function App() {
       algorithm: effectiveDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
       // 字体走双槽 token（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：antd 组件不继承 body 字体，必须经 token 下发取值；
       // 取值在挂载前由 utils/fonts.ts 内联到 <html>，随设置即时变化。
-      // 字号从 config.ui.font_size_sans 读——该值同样控制全 UI 字号（设置页 / 聊天消息 / 工具卡），
-      // 与 font_sans 同源双槽。fontSizeMono（mono 槽字号）不在 antd 统一 token 里控制，独立走 --ws-font-size-mono CSS 变量
-      // 供手写 mono 区域取用（代码块、文件名、diff）。
+      // Use the applied preference (startup cache / optimistic edit / config
+      // reconciliation), so pending or failed saves never rewind live sizing.
       token: {
         fontFamily: "var(--ws-font-sans)",
         fontFamilyCode: "var(--ws-font-mono)",
-        fontSize: config?.ui.font_size_sans ?? 15,
+        fontSize: fontSizeSans,
         colorPrimary: effectiveDark ? "#424242" : "#1f1f1f",
         // 聚焦外晕（controlOutline 2px 外圈）会在墨色边框外再画一圈浅灰，视觉上像双重描边；
         // 全局去掉后聚焦态收敛为单圈墨色边框（[docs/chat-and-interface](../../docs/chat-and-interface.md)）
@@ -75,7 +74,7 @@ export default function App() {
         controlItemBgActiveHover: effectiveDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.10)",
       },
     }),
-    [effectiveDark, config?.ui.font_size_sans],
+    [effectiveDark, fontSizeSans],
   );
   return (
     <I18nextProvider i18n={i18n}>

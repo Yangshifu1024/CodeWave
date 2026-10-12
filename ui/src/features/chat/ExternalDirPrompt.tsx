@@ -2,6 +2,7 @@
 //
 // 三个选项而不是两个：「取消」与「仅此一次」是两件事（前者不读这个文件，后者读但下次还问）。
 // antd 的确认弹框只有确定/取消两个按钮，所以这里自己搭一个三按钮弹框。
+import { fontSizeCss } from "../../utils/fonts";
 import { Button, Modal } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -38,7 +39,7 @@ export default function ExternalDirPrompt({
     >
       {sessionTitle && <p>{t("composer.allowDirSession", { session: sessionTitle })}</p>}
       <p>{t("composer.allowDirDesc", { path: dir ?? "" })}</p>
-      <p className="dim" style={{ fontSize: 12, marginBottom: 0 }}>
+      <p className="dim" style={{ fontSize: fontSizeCss(12), marginBottom: 0 }}>
         {t("composer.allowDirAlwaysNote")}
       </p>
     </Modal>

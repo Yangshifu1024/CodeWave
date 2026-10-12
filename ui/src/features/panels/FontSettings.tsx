@@ -17,7 +17,7 @@ import { configErrorMessage, reconcileConfigOperation, useSettings } from "../..
 import { useUi, type ThemePref } from "../../stores/ui";
 import {
   commitFontSizeSlot, commitFontSlot, DEFAULT_FONT_LEADS, FONT_SIZE_LEVELS, FONT_SIZE_PX,
-  previewFontFamily, readStoredFonts, sanitizeFontList,
+  previewFontFamily, readStoredFonts, sanitizeFontList, useFontPreferences,
   type FontPreferences, FontSizeLevel, type FontSlot,
 } from "../../utils/fonts";
 
@@ -125,15 +125,13 @@ function persistFontPrefsToBackend(prefs: FontPreferences): Promise<"saved" | "f
  * 为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
  * 「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
  * 界面看上去就是「字体没保存」。 */
-function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
+function FontField({ slot, label, hint, settingId, appliedFont }: {
   slot: FontSlot;
   label: string;
   hint: string;
   /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
   settingId: string;
   appliedFont: string;
-  /** 提交生效后的回调（父组件刷新预览） */
-  onApplied: () => void;
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => readStoredFonts()[slot]);
@@ -159,6 +157,14 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
+  // Config can finish loading while settings is already open. Refresh untouched
+  // inputs, while preserving an in-progress edit or IME composition.
+  useEffect(() => {
+    if (edited.current || composing.current) return;
+    draftRef.current = appliedFont;
+    setDraft(appliedFont);
+  }, [appliedFont]);
+
   function clearIdle() {
     if (idleTimer.current !== null) {
       window.clearTimeout(idleTimer.current);
@@ -179,7 +185,6 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
     const next = commitFontSlot(slot, candidate);
     if (syncInput) setDraft(next[slot]);
     savePair(next);
-    onApplied();
     return true;
   }
 
@@ -256,26 +261,7 @@ function FontField({ slot, label, hint, settingId, appliedFont, onApplied }: {
  *  顺序：界面字体（sans）→ 界面字号（sans）→ 等宽字体（mono）→ 等宽字号（mono）。 */
 function FontSettings() {
   const { t } = useTranslation();
-  // 预览跟随已生效值（提交后立即变化）
-  const [applied, setApplied] = useState<FontPreferences>(() => {
-    const stored = readStoredFonts();
-    return {
-      sans: sanitizeFontList(stored.sans),
-      mono: sanitizeFontList(stored.mono),
-      fontSizeSans: stored.fontSizeSans,
-      fontSizeMono: stored.fontSizeMono,
-    };
-  });
-
-  function refresh() {
-    const stored = readStoredFonts();
-    setApplied({
-      sans: sanitizeFontList(stored.sans),
-      mono: sanitizeFontList(stored.mono),
-      fontSizeSans: stored.fontSizeSans,
-      fontSizeMono: stored.fontSizeMono,
-    });
-  }
+  const applied = useFontPreferences();
 
   return (
     <>
@@ -286,7 +272,6 @@ function FontSettings() {
         hint={t("settings.fontHint")}
         settingId="ui.font_sans"
         appliedFont={applied.sans}
-        onApplied={refresh}
       />
       {/* 界面字号（sans）—— 紧贴界面字体下方的字号 Select，v2 布局 */}
       <FontSizeField
@@ -296,7 +281,6 @@ function FontSettings() {
         settingId="ui.font_size_sans"
         appliedLevel={applied.fontSizeSans}
         appliedFont={applied.sans}
-        onApplied={refresh}
       />
       {/* 等宽字体（mono）—— 字体族输入框 */}
       <FontField
@@ -305,7 +289,6 @@ function FontSettings() {
         hint={t("settings.fontHint")}
         settingId="ui.font_mono"
         appliedFont={applied.mono}
-        onApplied={refresh}
       />
       {/* 等宽字号（mono）—— 紧贴等宽字体下方的字号 Select，v2 布局 */}
       <FontSizeField
@@ -315,7 +298,6 @@ function FontSettings() {
         settingId="ui.font_size_mono"
         appliedLevel={applied.fontSizeMono}
         appliedFont={applied.mono}
-        onApplied={refresh}
       />
     </>
   );
@@ -323,14 +305,13 @@ function FontSettings() {
 
 /** 单个字号槽（sans/mono）：antd Select 4 档（13/15/17/19），即时生效、与字体族同 submit 串行。
  *  改即提交：不需要“停手 / 回车 / 失焦”三处提交（控件本身是枚举选择、不存在部分输入态）。 */
-function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont, onApplied }: {
+function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont }: {
   slot: "sans" | "mono";
   label: string;
   hint: string;
   settingId: string;
   appliedLevel: FontSizeLevel;
   appliedFont: string;
-  onApplied: () => void;
 }) {
   const { t } = useTranslation();
   const [saveFailed, setSaveFailed] = useState(false);
@@ -351,12 +332,11 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
     <SettingsFormItem className="settings-font-row" label={label} settingDescription={hint}>
       <div className="setting-anchor settings-font-size-control" data-setting-id={settingId}>
         <Select<FontSizeLevel>
-          className="settings-font-size-select"
+          className="settings-font-size-select w-narrow"
           value={appliedLevel}
           onChange={(v) => {
             const next = commitFontSizeSlot(slot, v);
             commit(next);
-            onApplied();
           }}
           options={FONT_SIZE_LEVELS.map((lvl) => ({
             value: lvl,
@@ -373,7 +353,6 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
                 e.stopPropagation();
                 const next = commitFontSizeSlot(slot, "default");
                 commit(next);
-                onApplied();
               }}
             />
           }

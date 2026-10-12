@@ -12,6 +12,11 @@ html, body, #root { height: 100%; margin: 0; }
     "SF Mono", Menlo, Consolas, "Cascadia Mono", "Cascadia Code", "Microsoft YaHei", monospace;
   --ws-font-sans: var(--ws-font-sans-fallback);
   --ws-font-mono: var(--ws-font-mono-fallback);
+  --ws-font-size-sans: 15px;
+  --ws-font-size-mono: 15px;
+  /* Offset existing text sizes without flattening headings and metadata. */
+  --ws-font-size-sans-offset: calc(var(--ws-font-size-sans) - 15px);
+  --ws-font-size-mono-offset: calc(var(--ws-font-size-mono) - 15px);
   /* 自绘标题栏（[docs/chat-and-interface](../../../docs/chat-and-interface.md)，tauri-plugin-decoration 消费的应用侧设置）：
      控制条高度对齐 50px 顶栏（32px 按钮在带内垂直居中）；z-index 高于内容、低于通知浮层 */
   --tauri-plugin-decoration-titlebar-height: 50px;
@@ -19,6 +24,7 @@ html, body, #root { height: 100%; margin: 0; }
 }
 body {
   font-family: var(--ws-font-sans);
+  font-size: var(--ws-font-size-sans);
   overflow: hidden;
   background-color: var(--ws-bg);
   color: var(--ws-text-1);

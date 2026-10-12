@@ -919,6 +919,8 @@ fn page_comparable(cfg: &ConfigState) -> serde_json::Value {
     cfg.subagent_models.clear();
     cfg.ui.font_sans.clear();
     cfg.ui.font_mono.clear();
+    cfg.ui.font_size_sans = 15.0;
+    cfg.ui.font_size_mono = 15.0;
     serde_json::to_value(cfg).unwrap_or_default()
 }
 fn validate_config(
@@ -929,6 +931,14 @@ fn validate_config(
         return Err(error(
             "InvalidConfiguration",
             "Unknown configuration schema",
+        ));
+    }
+    if !super::config::is_valid_font_size(cfg.ui.font_size_sans)
+        || !super::config::is_valid_font_size(cfg.ui.font_size_mono)
+    {
+        return Err(error(
+            "InvalidConfiguration",
+            "Font sizes must be one of 13, 15, 17 or 19 pixels",
         ));
     }
     let mut providers = HashSet::new();
@@ -1567,22 +1577,44 @@ mod tests {
         f.commit(ConfigPatch::Fonts {
             sans: "Sans".into(),
             mono: "Mono".into(),
-            font_size_sans: 15.0,
-            font_size_mono: 15.0,
+            font_size_sans: 19.0,
+            font_size_mono: 13.0,
         })
         .unwrap();
+        assert_eq!(f.snapshot().page_version, 0);
         let saved = f.commit(stale).unwrap();
         assert_eq!(
             saved.snapshot.config.subagent_models["backend-dev"].as_deref(),
             Some("m2")
         );
         assert_eq!(saved.snapshot.config.ui.font_sans, "Sans");
+        assert_eq!(saved.snapshot.config.ui.font_size_sans, 19.0);
+        assert_eq!(saved.snapshot.config.ui.font_size_mono, 13.0);
         let stale = f.page(CredentialEdit::Keep);
         f.commit(ConfigPatch::AllowCommand {
             command: "cwd\u{1}git status".into(),
         })
         .unwrap();
         assert_eq!(f.commit(stale).unwrap_err().code, "ConfigConflict");
+    }
+    #[test]
+    fn invalid_font_sizes_never_commit() {
+        for size in [0.0, -1.0, 14.0, 100000.0, f32::INFINITY, f32::NAN] {
+            for (sans_size, mono_size) in [(size, 15.0), (15.0, size)] {
+                let f = Fixture::new();
+                let result = f.commit(ConfigPatch::Fonts {
+                    sans: "Sans".into(),
+                    mono: "Mono".into(),
+                    font_size_sans: sans_size,
+                    font_size_mono: mono_size,
+                });
+                assert_eq!(result.unwrap_err().code, "InvalidConfiguration");
+                assert_eq!(f.snapshot().version.sequence, 0);
+                assert!(f.snapshot().config.ui.font_sans.is_empty());
+                assert_eq!(f.snapshot().config.ui.font_size_sans, 15.0);
+                assert_eq!(f.snapshot().config.ui.font_size_mono, 15.0);
+            }
+        }
     }
     #[test]
     fn different_role_concurrency_merges_and_same_role_conflicts() {

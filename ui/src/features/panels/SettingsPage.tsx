@@ -9,6 +9,7 @@
 //      搜索命中结果**替掉**左导航（两套列表不同时存在，方向键不串味），进阶项按页级开关行内过滤
 //      （只加类、零 DOM 搬迁），控件宽度统一走 .w-narrow / .w-mid / .w-wide 三档。
 // 页面 JSX 手写（不做数据驱动渲染）：注册表只提供页序、页名、分组与字段归属。
+import { fontSizeCss } from "../../utils/fonts";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
@@ -607,7 +608,7 @@ function SettingsPageController() {
     // 会话与残留文件都要删时：只说「将删除 N 个会话」漏掉了残留文件，用户不知道这次还会动别的数据
     const alsoOrphans = !onlyOrphans && orphans > 0;
     return (
-      <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
+      <div style={{ fontSize: fontSizeCss(12.5), display: "grid", gap: 6 }}>
         <div>
           {onlyOrphans
             ? t("settings.cleanupOrphanDesc", { n: orphans })
@@ -765,7 +766,7 @@ function SettingsPageController() {
   function legacyConfirmContent(preview: LegacyCleanupPreview) {
     const keep = preview.keep_sessions ?? 0;
     return (
-      <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
+      <div style={{ fontSize: fontSizeCss(12.5), display: "grid", gap: 6 }}>
         <div>
           {t("settings.legacyHistoryConfirmDesc", {
             n: preview.cleanable_sessions,
@@ -2148,7 +2149,7 @@ function SettingsPageController() {
                     return display.kind === "path" ? (
                       <code title={display.text} className="settings-shell-path">{display.text}</code>
                     ) : (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      <Typography.Text type="secondary" style={{ fontSize: fontSizeCss(12) }}>
                         {t("settings.shellNoPath")}
                       </Typography.Text>
                     );
@@ -2156,12 +2157,12 @@ function SettingsPageController() {
                 </div>
                 {/* 探测列表不含当前所选 shell（已卸载）时警示但不删选项 */}
                 {draft.shell?.selection && shells !== null && !shells.some((s) => s.id === draft.shell!.selection) && (
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                  <Typography.Text type="warning" style={{ fontSize: fontSizeCss(12) }}>
                     {t("settings.shellNotDetected")}
                   </Typography.Text>
                 )}
                 {shells === null && (
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                  <Typography.Text type="warning" style={{ fontSize: fontSizeCss(12) }}>
                     {t("settings.shellDetectFailed")}
                   </Typography.Text>
                 )}

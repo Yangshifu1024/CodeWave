@@ -300,6 +300,24 @@ function zhT(key: string): string {
   return String(dict[key.replace(/^settings\./, "")] ?? key);
 }
 
+describe("font-size settings registration", () => {
+  it("registers both size slots as searchable, immediate appearance settings", () => {
+    for (const [id, label] of [
+      ["ui.font_size_sans", "settings.uiFontSize"],
+      ["ui.font_size_mono", "settings.monoFontSize"],
+    ]) {
+      expect(SETTINGS_ITEMS.find((item) => item.id === id)).toMatchObject({
+        labelKey: label, page: "appearance", width: "narrow",
+      });
+      expect(PAGE_FIELDS.appearance as string[]).toContain(id);
+      expect(INSTANT_APPLY_FIELD_IDS).toContain(id);
+      expect(SHELL_SETTING_KEYS).not.toContain(label.replace("settings.", ""));
+      expect(matchSettings(zhT(label), zhT).map((item) => item.id)).toContain(id);
+      expect(matchSettings("font size", zhT).map((item) => item.id)).toContain(id);
+    }
+  });
+});
+
 /** 用 en-US 的实值模拟 i18n 的 t（英文显示名首字母大写，是 haystack 归一的作用对象） */
 function enT(key: string): string {
   const dict = en.settings as Record<string, unknown>;

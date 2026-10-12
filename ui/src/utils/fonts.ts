@@ -4,6 +4,8 @@
 // 持久化（2026-09-19 修正）：**真源在后端配置文件**（`config.ui.font_sans` / `font_mono`，经
 // `set_font_prefs` 即时落盘）；localStorage 降级为「首帧防闪变缓存」——启动时先按缓存应用到 <html>
 // （挂载前，防 FOUC），配置到手后再用 [`reconcileFontsFromConfig`] 对账（后端优先，老版本只存缓存的自动迁移）。
+import { useMemo, useSyncExternalStore } from "react";
+
 /** 字体槽位：sans = 界面 / mono = 代码与日志 */
 export type FontSlot = "sans" | "mono";
 
@@ -11,7 +13,7 @@ export type FontSlot = "sans" | "mono";
 export type FontSizeLevel = "small" | "default" | "large" | "xlarge";
 
 /** 字号档位 → CSS px 映射。antd `token.fontSize` 走 sans 字号（与 `font_sans` 同源），
- *  所以此表的 4 档在设置页/全 UI 可见。空字符串 `""` = 还原为默认 15 */
+ *  所以此表的 4 档在设置页/全 UI 可见。`default` = 默认基准 15 */
 export const FONT_SIZE_PX: Record<FontSizeLevel, number> = {
   small: 13,
   default: 15,
@@ -28,7 +30,7 @@ export function pxToLevel(px: number): FontSizeLevel | null {
   return null;
 }
 
-/** 两个槽位的字体偏好（空串 = 使用默认链；空档位 = 使用默认字号） */
+/** 两个槽位的字体偏好（空串 = 使用默认链；default 档位 = 使用默认字号） */
 export interface FontPreferences {
   sans: string;
   mono: string;
@@ -57,11 +59,40 @@ const FONT_PROPERTIES: Record<FontSlot, { override: string; fallback: string }> 
   sans: { override: "--ws-font-sans", fallback: "--ws-font-sans-fallback" },
   mono: { override: "--ws-font-mono", fallback: "--ws-font-mono-fallback" },
 };
-/** 字号覆写变量：双槽各一个。回退链变量 = native.css 里 antd 默认 14px 下的同名字号 */
-const FONT_SIZE_PROPERTIES: Record<"sans" | "mono", { override: string; fallback: string }> = {
-  sans: { override: "--ws-font-size-sans", fallback: "--ws-font-size-sans-fallback" },
-  mono: { override: "--ws-font-size-mono", fallback: "--ws-font-size-mono-fallback" },
+/** Defaults live in native.css; only the applied preference overrides them. */
+const FONT_SIZE_PROPERTIES: Record<FontSlot, string> = {
+  sans: "--ws-font-size-sans",
+  mono: "--ws-font-size-mono",
 };
+
+const fontListeners = new Set<() => void>();
+function subscribeFonts(listener: () => void): () => void {
+  fontListeners.add(listener);
+  return () => { fontListeners.delete(listener); };
+}
+
+/** Stable snapshots keep mounted settings controls in sync with config loads. */
+export function useFontPreferences(): FontPreferences {
+  const snapshot = useSyncExternalStore(subscribeFonts, () => JSON.stringify(readStoredFonts()));
+  return useMemo(() => {
+    const prefs = JSON.parse(snapshot) as FontPreferences;
+    return { ...prefs, sans: sanitizeFontList(prefs.sans), mono: sanitizeFontList(prefs.mono) };
+  }, [snapshot]);
+}
+
+/** Applied sizes, including optimistic edits and startup cache, drive antd too.
+ * A delayed save receipt may update config, but must not rewind the live preview. */
+export function useFontSize(slot: FontSlot): number {
+  return useSyncExternalStore(subscribeFonts, () => {
+    const prefs = readStoredFonts();
+    return FONT_SIZE_PX[slot === "sans" ? prefs.fontSizeSans : prefs.fontSizeMono];
+  });
+}
+
+/** Preserve the existing typography hierarchy around the default 15px base. */
+export function fontSizeCss(defaultPx: number, slot: FontSlot = "sans"): string {
+  return `calc(${defaultPx}px + var(--ws-font-size-${slot}-offset))`;
+}
 
 // 过滤可能逃逸双引号 font-family 值的字符与 Unicode「其他」类（控制/零宽/代理项）；
 // 非 ASCII 名称（中文等）保留。
@@ -121,19 +152,13 @@ function applyFont(slot: FontSlot, sanitized: string): void {
 
 /** 写 CSS 变量：字号档位 → px 字符串 */
 function applyFontSize(slot: "sans" | "mono", level: FontSizeLevel): void {
-  const { override, fallback } = FONT_SIZE_PROPERTIES[slot];
+  const override = FONT_SIZE_PROPERTIES[slot];
   const px = FONT_SIZE_PX[level];
   // 默认档位 = 不写 CSS 变量（让 native.css 里的回退链生效），避免老用户首屏胉动
   if (level === "default") {
     document.documentElement.style.removeProperty(override);
   } else {
     document.documentElement.style.setProperty(override, `${px}px`);
-  }
-  // 同步 backup/fallback 变量（反香中供 antd token 使用）。默认档位不写，避免老用户被强覆盖
-  if (level !== "default") {
-    document.documentElement.style.setProperty(fallback, `${px}px`);
-  } else {
-    document.documentElement.style.removeProperty(fallback);
   }
 }
 
@@ -182,6 +207,7 @@ export function storeFonts(prefs: FontPreferences): FontPreferences {
   applyFont("mono", saved.mono);
   applyFontSize("sans", saved.fontSizeSans);
   applyFontSize("mono", saved.fontSizeMono);
+  for (const listener of fontListeners) listener();
   return saved;
 }
 
@@ -221,31 +247,19 @@ export function reconcileFontsFromConfig(backend: BackendFontPrefs): {
 } {
   const backendSans = sanitizeFontList(backend.sans ?? "");
   const backendMono = sanitizeFontList(backend.mono ?? "");
-  const backendSizeSans = backend.font_size_sans ?? 0;
-  const backendSizeMono = backend.font_size_mono ?? 0;
-  // 后端有字体或字号任意一项 → 以后端为准（同时回写缓存）
-  const hasBackend =
-    backendSans !== "" ||
-    backendMono !== "" ||
-    backendSizeSans > 0 ||
-    backendSizeMono > 0;
-  if (hasBackend) {
-    const prefs: FontPreferences = {
-      sans: backendSans,
-      mono: backendMono,
-      fontSizeSans: pxToLevel(backendSizeSans) ?? "default",
-      fontSizeMono: pxToLevel(backendSizeMono) ?? "default",
-    };
-    storeFonts(prefs);
-    return { prefs, migrate: false };
-  }
   const cached = readStoredFonts();
+  // Serde fills the new sizes with 15 even for old configs. Their presence must
+  // not suppress migration of the older, localStorage-only font families.
+  const hasBackendFamilies = backendSans !== "" || backendMono !== "";
   const prefs: FontPreferences = {
-    sans: sanitizeFontList(cached.sans),
-    mono: sanitizeFontList(cached.mono),
-    fontSizeSans: cached.fontSizeSans,
-    fontSizeMono: cached.fontSizeMono,
+    sans: hasBackendFamilies ? backendSans : sanitizeFontList(cached.sans),
+    mono: hasBackendFamilies ? backendMono : sanitizeFontList(cached.mono),
+    fontSizeSans: backend.font_size_sans == null ? cached.fontSizeSans : pxToLevel(backend.font_size_sans) ?? "default",
+    fontSizeMono: backend.font_size_mono == null ? cached.fontSizeMono : pxToLevel(backend.font_size_mono) ?? "default",
   };
   storeFonts(prefs);
-  return { prefs, migrate: prefs.sans !== "" || prefs.mono !== "" || prefs.fontSizeSans !== "default" || prefs.fontSizeMono !== "default" };
+  const migrate = (!hasBackendFamilies && (prefs.sans !== "" || prefs.mono !== "")) ||
+    (backend.font_size_sans == null && prefs.fontSizeSans !== "default") ||
+    (backend.font_size_mono == null && prefs.fontSizeMono !== "default");
+  return { prefs, migrate };
 }
