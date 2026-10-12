@@ -368,7 +368,7 @@ impl Tool for EditTool {
 
         // 严格文件隔离（[docs/subagents](../../../../docs/subagents.md)）：
         // 非主 runtime 编辑前认领全部目标；任一文件被兄弟任务认领则整体拒绝（多文件编辑不部分应用）
-        if !ctx.rt.is_main_session
+        if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) = crate::tools::claims::claim(&ctx.rt.id, &resolved)
         {
             return ToolOutcome::err(

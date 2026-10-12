@@ -288,6 +288,37 @@ impl McpServerConfig {
             ));
             return out;
         }
+        if self.timeout_ms == Some(0) {
+            out.push(ConfigIssue::error(
+                Some(name.into()),
+                "schema",
+                "timeout_ms must be positive".into(),
+                None,
+            ));
+        }
+        if self
+            .env
+            .iter()
+            .any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
+        {
+            out.push(ConfigIssue::error(
+                Some(name.into()),
+                "schema",
+                "env contains an invalid key or NUL byte".into(),
+                None,
+            ));
+        }
+        if self.headers.iter().any(|(key, value)| {
+            reqwest::header::HeaderName::from_bytes(key.as_bytes()).is_err()
+                || reqwest::header::HeaderValue::from_str(value).is_err()
+        }) {
+            out.push(ConfigIssue::error(
+                Some(name.into()),
+                "schema",
+                "headers contain an invalid name or value".into(),
+                None,
+            ));
+        }
         match self.resolve_transport() {
             Ok(McpTransport::Stdio) => {
                 if self.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
@@ -312,7 +343,7 @@ impl McpServerConfig {
                     out.push(ConfigIssue::error(
                         Some(name.to_string()),
                         "schema",
-                        format!("url 必须以 http:// 或 https:// 开头：{url}"),
+                        "url 必须以 http:// 或 https:// 开头".to_string(),
                         None,
                     ));
                 }
@@ -446,7 +477,30 @@ pub struct ScopeDoc {
 /// 同文件其它条目照常生效（旧实现用 `serde_json::from_str::<McpConfigFile>` 一把梭，
 /// 一条坏数据会让整份文件的 server 全部静默消失）。
 pub fn load_scope(sref: &ScopeRef) -> ScopeDoc {
-    let raw = std::fs::read_to_string(&sref.path).unwrap_or_else(|_| default_doc_text());
+    match read_scope_text(sref) {
+        Ok(raw) => parse_scope_text(sref, &raw),
+        Err(e) => ScopeDoc {
+            scope: sref.scope,
+            path: sref.path.clone(),
+            raw: String::new(),
+            servers: vec![],
+            issues: vec![ConfigIssue::error(None, "read", e.message, None)],
+        },
+    }
+}
+
+/// The only missing-file fallback. Permission/read failures must never become empty config.
+pub fn read_scope_text(sref: &ScopeRef) -> Result<String, McpError> {
+    match std::fs::read_to_string(&sref.path) {
+        Ok(raw) => Ok(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(default_doc_text()),
+        Err(_) => Err(McpError::config("MCP configuration could not be read")),
+    }
+}
+
+/// Pure parser shared by loading, commits and draft probes. Never writes credentials to disk.
+pub fn parse_scope_text(sref: &ScopeRef, raw: &str) -> ScopeDoc {
+    let raw = raw.to_string();
     let mut doc = ScopeDoc {
         scope: sref.scope,
         path: sref.path.clone(),
@@ -460,7 +514,11 @@ pub fn load_scope(sref: &ScopeRef) -> ScopeDoc {
             doc.issues.push(ConfigIssue::error(
                 None,
                 "parse",
-                format!("mcp.json 不是合法 JSON：{e}"),
+                format!(
+                    "mcp.json 不是合法 JSON（line {}, column {}）",
+                    e.line(),
+                    e.column()
+                ),
                 Some("修正 JSON 语法后重试；该文件当前整体不生效。".to_string()),
             ));
             return doc;
@@ -492,10 +550,10 @@ pub fn load_scope(sref: &ScopeRef) -> ScopeDoc {
     for (name, value) in servers {
         match serde_json::from_value::<McpServerConfig>(value.clone()) {
             Ok(cfg) => doc.servers.push((name.clone(), cfg)),
-            Err(e) => doc.issues.push(ConfigIssue::error(
+            Err(_) => doc.issues.push(ConfigIssue::error(
                 Some(name.clone()),
                 "parse",
-                format!("条目解析失败：{e}"),
+                "条目解析失败：字段类型无效".to_string(),
                 Some(
                     "检查字段类型：args 必须是字符串数组、env / headers 必须是字符串映射。"
                         .to_string(),
@@ -600,6 +658,45 @@ pub fn merge_scopes(global: &ScopeDoc, project: Option<&ScopeDoc>) -> Vec<Merged
     map.into_values().collect()
 }
 
+/// Serialized with full scope saves and approval policy patches.
+pub static CONFIG_COMMIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Opaque content token. No configuration or credential values are exposed in receipts.
+pub fn scope_version(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(raw.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Resolve existing parent directories too, so creating mcp.json does not change identity.
+pub fn source_identity(path: &Path) -> PathBuf {
+    if let Ok(path) = path.canonicalize() {
+        return path;
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        return source_identity(parent).join(name);
+    }
+    path.to_path_buf()
+}
+
+pub fn validate_server(name: &str, value: Value) -> Result<McpServerConfig, McpError> {
+    let cfg: McpServerConfig = serde_json::from_value(value)
+        .map_err(|_| McpError::config("MCP draft has invalid field types"))?;
+    let errors: Vec<_> = cfg
+        .validate(name)
+        .into_iter()
+        .filter(|i| i.level == IssueLevel::Error)
+        .collect();
+    if !errors.is_empty() || cfg.timeout_ms == Some(0) {
+        return Err(McpError::config(
+            "MCP draft configuration is invalid; check name, transport, endpoint and timeout",
+        ));
+    }
+    Ok(cfg)
+}
+
 /// `always_allow` 在文件里可能的拼写（写回时沿用已有拼写，避免同义键并存）。
 const ALWAYS_ALLOW_KEYS: [&str; 3] = ["always_allow", "alwaysAllow", "alwaysAllowServer"];
 
@@ -607,8 +704,13 @@ const ALWAYS_ALLOW_KEYS: [&str; 3] = ["always_allow", "alwaysAllow", "alwaysAllo
 ///
 /// 走「读原文 JSON → 只改该条目的该键 → 原子写」，**不整份重建**，
 /// 因此 `$schema`、自定义键、顶层其它键、条目内其它键一律不动。
-pub fn set_always_allow(sref: &ScopeRef, name: &str, value: bool) -> Result<(), McpError> {
-    let raw = std::fs::read_to_string(&sref.path).unwrap_or_else(|_| default_doc_text());
+pub(crate) fn set_always_allow(
+    sref: &ScopeRef,
+    name: &str,
+    value: bool,
+    expected: &McpServerConfig,
+) -> Result<(), McpError> {
+    let raw = read_scope_text(sref)?;
     let mut doc: Value = serde_json::from_str(&raw).map_err(|e| {
         McpError::config_hint(
             format!("{} 不是合法 JSON：{e}", sref.path.display()),
@@ -628,6 +730,15 @@ pub fn set_always_allow(sref: &ScopeRef, name: &str, value: bool) -> Result<(), 
         .get_mut(name)
         .and_then(|v| v.as_object_mut())
         .ok_or_else(|| McpError::config(format!("配置里没有名为 {name} 的 server")))?;
+    let current: McpServerConfig =
+        serde_json::from_value(Value::Object(entry.clone())).map_err(|_| {
+            McpError::config("MCP configuration changed before approval could be saved")
+        })?;
+    if &current != expected {
+        return Err(McpError::config(
+            "MCP configuration changed before approval could be saved",
+        ));
+    }
     let key = ALWAYS_ALLOW_KEYS
         .iter()
         .find(|k| entry.contains_key(**k))
@@ -835,7 +946,13 @@ mod tests {
                 "fs":{"command":"npx","alwaysAllow":false,"custom":"keep-me"},
                 "other":{"url":"https://h/mcp"}}}"#,
         );
-        set_always_allow(&sref, "fs", true).unwrap();
+        let expected = load_scope(&sref)
+            .servers
+            .into_iter()
+            .find(|(name, _)| name == "fs")
+            .unwrap()
+            .1;
+        set_always_allow(&sref, "fs", true, &expected).unwrap();
         let text = std::fs::read_to_string(&sref.path).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
         // 沿用文件里已有的 camelCase 拼写，不新增同义键
@@ -851,7 +968,8 @@ mod tests {
     fn set_always_allow_errors_when_entry_missing() {
         let dd = tempfile::tempdir().unwrap();
         let sref = write(dd.path(), r#"{"mcpServers":{"fs":{"command":"npx"}}}"#);
-        let e = set_always_allow(&sref, "nope", true).unwrap_err();
+        let e =
+            set_always_allow(&sref, "nope", true, &cfg_of(json!({"command":"npx"}))).unwrap_err();
         assert!(e.message.contains("nope"));
     }
 

@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // 设置全屏页容器契约（[docs/settings-guide](../../../docs/settings-guide.md) /
 // 10 页（8 页重划 + MCP / 技能拆页）与注册表 [docs/settings-guide](../../../docs/settings-guide.md)）：
 // 覆盖式全屏页必须**不影响正在运行的会话**——工作区全程挂载、只藏可见性、Esc 绝不停运行、
@@ -55,8 +56,8 @@ async function baseInvoke(cmd: string, args?: any) {
   switch (cmd) {
     case "ping": return "pong";
     case "activate_and_show": return null;
-    case "get_config": return fixtureConfig;
-    case "save_config": return null;
+    case "get_config": return configSnapshot(fixtureConfig);
+    case "save_config": return configSaved(args?.config);
     case "list_sessions": return [fixtureSession];
     case "list_projects": return [];
     case "load_session": return [];
@@ -122,6 +123,7 @@ beforeAll(() => {
 
 import App from "../App";
 import { useUi } from "../stores/ui";
+import { useSettings } from "../stores/settings";
 import { useRun } from "../stores/run";
 import { useSessions } from "../stores/sessions";
 import { PAGE_GROUPS, PAGE_ORDER, SETTINGS_ITEMS, type PageKey } from "../features/panels/settingsRegistry";
@@ -267,6 +269,7 @@ function markActiveRunning() {
 
 afterEach(async () => {
   cleanup();
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   (await invokeMock()).mockImplementation(baseInvoke);
   // zustand store 是模块级单例：面板开关/脏标记/退出请求都要复位，否则用例间串味
   useUi.setState({
@@ -1376,7 +1379,7 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
     const invoke = await invokeMock();
     invoke.mockImplementation(async (cmd: string, args?: any) =>
       cmd === "get_config"
-        ? { ...fixtureConfig, approval: { ...fixtureConfig.approval, command_allowlist: entries } }
+        ? configSnapshot({ ...fixtureConfig, approval: { ...fixtureConfig.approval, command_allowlist: entries } })
         : baseInvoke(cmd, args),
     );
     await mountWithSession();
@@ -1642,7 +1645,7 @@ describe("设置页：会话保留期与清理", () => {
     calls.status = 0;
     const invoke = await invokeMock();
     invoke.mockImplementation(async (cmd: string, args?: any) => {
-      if (cmd === "get_config") return configWithRetention(opts.retention);
+      if (cmd === "get_config") return configSnapshot(configWithRetention(opts.retention));
       if (cmd === "preview_session_cleanup") {
         calls.preview.push(args?.days ?? null);
         return opts.preview ?? { count: 0, titles: [], orphan_count: 0 };
@@ -1658,7 +1661,7 @@ describe("设置页：会话保留期与清理", () => {
       }
       if (cmd === "save_config") {
         calls.save.push(args);
-        return args?.skipCleanup ? null : opts.outcome ?? null;
+        return configSaved(args?.config, args?.skipCleanup ? null : opts.outcome ?? null);
       }
       return baseInvoke(cmd, args);
     });
@@ -2197,5 +2200,229 @@ describe("设置页：旧格式历史清理入口", () => {
     await waitFor(() => expect(calls.preview).toBe(2));
     await waitFor(() => expect(document.body.textContent ?? "").toContain("旧格式历史预览失败，本次不清理"));
     expect(calls.run).toBe(0);
+  });
+});
+
+describe("versioned settings integration", () => {
+  async function installBackend(options: { failSave?: boolean; firstSaveError?: unknown; deferredSave?: boolean; warnings?: string[] } = {}) {
+    let snapshot = configSnapshot({ ...structuredClone(fixtureConfig),
+      subagent_models: { "backend-dev": "m1" },
+      providers: fixtureConfig.providers.map((provider) => ({ ...provider, headers: [], credential_count: 1,
+        models: [...provider.models, { ...provider.models[0], id: "m2", model: "alternate-model" }] })),
+    }, { warnings: options.warnings ?? [] });
+    const pages: any[] = [];
+    const roles: any[] = [];
+    let finishSave: (() => void) | undefined;
+    const invoke = await invokeMock();
+    invoke.mockClear();
+    invoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "get_config") return snapshot;
+      if (cmd === "get_config_operation") throw { code: "OperationUncertain", message: "Receipt temporarily unavailable" };
+      if (cmd === "list_agents") return [{ name: "backend-dev", description: "Backend" }];
+      if (cmd === "set_subagent_model") {
+        roles.push(args);
+        snapshot = { ...snapshot, config: { ...snapshot.config,
+          subagent_models: { ...snapshot.config.subagent_models, [args.role]: args.modelId } },
+          version: { ...snapshot.version, sequence: snapshot.version.sequence + 1 },
+          role_versions: { ...snapshot.role_versions, [args.role]: (snapshot.role_versions[args.role] ?? 0) + 1 } };
+        return { ...snapshot, cleanup: null, replayed: false };
+      }
+      if (cmd === "save_config") {
+        pages.push(args);
+        if (pages.length === 1 && options.firstSaveError) throw options.firstSaveError;
+        if (options.failSave) throw { code: "KeyringUnavailable", message: "System keychain unavailable; nothing was saved" };
+        if (args.expectedVersion.sequence !== snapshot.page_version) throw { code: "ConfigConflict", message: "Changed elsewhere" };
+        const saved = { ...structuredClone(args.config), subagent_models: snapshot.config.subagent_models,
+          ui: { ...args.config.ui, font_sans: snapshot.config.ui.font_sans, font_mono: snapshot.config.ui.font_mono } };
+        if (options.deferredSave) await new Promise<void>((resolve) => { finishSave = resolve; });
+        snapshot = { ...snapshot, config: saved, page_version: snapshot.page_version + 1,
+          version: { ...snapshot.version, sequence: snapshot.version.sequence + 1 } };
+        return { ...snapshot, cleanup: null, replayed: false };
+      }
+      return baseInvoke(cmd, args);
+    });
+    return { pages, roles, finish: () => finishSave?.(), current: () => snapshot,
+      changeExternally() {
+        snapshot = { ...snapshot, config: { ...snapshot.config, log: { level: "debug", session_verbose: true } },
+          page_version: snapshot.page_version + 1, version: { ...snapshot.version, sequence: snapshot.version.sequence + 1 } };
+      },
+    };
+  }
+
+  async function selectAlternateRole() {
+    const select = await waitFor(() => {
+      const node = document.querySelector(".subagent-models-select");
+      expect(node).toBeTruthy();
+      return node!;
+    });
+    fireEvent.mouseDown(select);
+    const option = await waitFor(() => {
+      const node = Array.from(document.querySelectorAll(".ant-select-item-option")).find((element) => element.textContent?.includes("alternate-model"));
+      expect(node).toBeTruthy();
+      return node!;
+    });
+    fireEvent.click(option);
+    await waitFor(() => expect(useSettings.getState().config?.subagent_models?.["backend-dev"]).toBe("m2"));
+  }
+
+  it("role selection remains saved after an ordinary page save and reopening", async () => {
+    const backend = await installBackend();
+    await mountWithSession();
+    await openPage("模型与供应商");
+    await selectAlternateRole();
+    expect(navDotCount()).toBe(0);
+    expect(backend.pages).toHaveLength(0);
+    const input = controlByLabel("AI 语言").querySelector("input")!;
+    fireEvent.change(input, { target: { value: "English" } });
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(navDotCount()).toBe(0));
+    expect(backend.pages).toHaveLength(1);
+    expect(backend.pages[0].expectedVersion).toEqual({ boot_id: "test-boot", sequence: 0 });
+    expect(backend.roles[0]).not.toHaveProperty("config");
+    expect(useSettings.getState().config?.ui.ai_language).toBe("English");
+    expect(useSettings.getState().config?.subagent_models?.["backend-dev"]).toBe("m2");
+    fireEvent.click(buttonByText("取消"));
+    await openPage("模型与供应商");
+    expect(document.querySelector(".subagent-models-select")?.textContent).toContain("alternate-model");
+  });
+
+  it("instant patches preserve ordinary draft text; cancelling drops only the ordinary draft", async () => {
+    const backend = await installBackend();
+    await mountWithSession();
+    await openPage("模型与供应商");
+    const input = controlByLabel("AI 语言").querySelector("input")!;
+    fireEvent.change(input, { target: { value: "未保存草稿" } });
+    await selectAlternateRole();
+    expect(input.value).toBe("未保存草稿");
+    expect(navDot("providers")).toBe(true);
+    fireEvent.click(buttonByText("取消"));
+    expect(backend.pages).toHaveLength(0);
+    await openPage("模型与供应商");
+    expect(controlByLabel("AI 语言").querySelector("input")!.value).toBe("");
+    expect(document.querySelector(".subagent-models-select")?.textContent).toContain("alternate-model");
+  });
+
+  it("successful page receipt retains input typed while the request was in flight", async () => {
+    const backend = await installBackend({ deferredSave: true });
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    fireEvent.change(promptArea(), { target: { value: "submitted text" } });
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(backend.pages).toHaveLength(1));
+    fireEvent.change(promptArea(), { target: { value: "later edit" } });
+    await act(async () => { backend.finish(); });
+    await waitFor(() => expect(useSettings.getState().config?.custom_prompt).toBe("submitted text"));
+    expect(promptArea().value).toBe("later edit");
+    expect(navDot("agent")).toBe(true);
+  });
+
+  it("page conflict preserves draft and requires an explicit reload/review before saving", async () => {
+    const backend = await installBackend();
+    await mountWithSession();
+    await openPage("工作区与智能体");
+    fireEvent.change(promptArea(), { target: { value: "my draft" } });
+    backend.changeExternally();
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent).toContain("载入最新配置并保留草稿"));
+    expect(promptArea().value).toBe("my draft");
+    expect(navDot("agent")).toBe(true);
+    fireEvent.click(buttonByText("载入最新配置并保留草稿"));
+    await waitFor(() => expect(useSettings.getState().config?.log.level).toBe("debug"));
+    expect(promptArea().value).toBe("my draft");
+    expect(backend.pages).toHaveLength(1);
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(backend.current().config.custom_prompt).toBe("my draft"));
+    expect(backend.pages[1].expectedVersion.sequence).toBe(1);
+    expect(backend.pages[1].operationId).not.toBe(backend.pages[0].operationId);
+    expect(backend.current().config.log.level).toBe("debug");
+  });
+
+  it("failed credential save retains new input without publishing it in config", async () => {
+    const backend = await installBackend({ failSave: true });
+    await mountWithSession();
+    await openPage("模型与供应商");
+    fireEvent.click(buttonByText("编辑"));
+    const append = Array.from(document.querySelectorAll("label")).find((label) => label.textContent?.includes("追加密钥"))!;
+    fireEvent.click(append);
+    const input = document.querySelector('.settings-provider-modal textarea[aria-label="新密钥（每行一把）"]')!;
+    fireEvent.change(input, { target: { value: "new-secret-test-value" } });
+    fireEvent.click(document.querySelector(".settings-provider-modal .ant-modal-footer .ant-btn-primary")!);
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(backend.pages).toHaveLength(1));
+    expect(backend.pages[0].credentialEdits.p1).toEqual({ kind: "append", new_keys: ["new-secret-test-value"] });
+    expect(JSON.stringify(backend.pages[0].config)).not.toContain("new-secret-test-value");
+    expect(navDot("providers")).toBe(true);
+    expect(useSettings.getState().config?.providers[0].keys).toEqual(["***abcd"]);
+    fireEvent.click(buttonByText("编辑"));
+    expect((document.querySelector('.settings-provider-modal textarea[aria-label="新密钥（每行一把）"]') as HTMLTextAreaElement).value).toBe("new-secret-test-value");
+  });
+
+  it.each(["CredentialWriteFailed", "CredentialVerificationFailed", "ConfigWriteFailed"])(
+    "retries the same payload with a new operation after definite %s rejection", async (code) => {
+      const backend = await installBackend({ firstSaveError: { code, message: "Nothing committed; retry is safe" } });
+      await mountWithSession();
+      await openPage("工作区与智能体");
+      fireEvent.change(promptArea(), { target: { value: "unchanged retry payload" } });
+      fireEvent.click(buttonByText("保存"));
+      await waitFor(() => expect(document.body.textContent).toContain("Nothing committed; retry is safe"));
+      await waitFor(() => expect(buttonByText("保存").classList.contains("ant-btn-loading")).toBe(false));
+      fireEvent.click(buttonByText("保存"));
+      await waitFor(() => expect(backend.current().config.custom_prompt).toBe("unchanged retry payload"));
+      expect(backend.pages).toHaveLength(2);
+      expect(backend.pages[1].config).toEqual(backend.pages[0].config);
+      expect(backend.pages[1].operationId).not.toBe(backend.pages[0].operationId);
+      const invoke = await invokeMock();
+      expect(invoke.mock.calls.filter((call: any[]) => call[0] === "get_config_operation")).toHaveLength(0);
+    },
+  );
+
+  it.each([new Error("transport response lost"), { code: "OperationUncertain", message: "commit outcome uncertain" }])(
+    "keeps the operation identity and checks its receipt after an ambiguous failure %#", async (error) => {
+      const backend = await installBackend({ firstSaveError: error });
+      await mountWithSession();
+      await openPage("工作区与智能体");
+      fireEvent.change(promptArea(), { target: { value: "ambiguous retry payload" } });
+      fireEvent.click(buttonByText("保存"));
+      const invoke = await invokeMock();
+      await waitFor(() => expect(invoke.mock.calls.some((call: any[]) => call[0] === "get_config_operation")).toBe(true));
+      await waitFor(() => expect(buttonByText("保存").classList.contains("ant-btn-loading")).toBe(false));
+      fireEvent.click(buttonByText("保存"));
+      await waitFor(() => expect(backend.current().config.custom_prompt).toBe("ambiguous retry payload"));
+      expect(backend.pages).toHaveLength(2);
+      expect(backend.pages[1].operationId).toBe(backend.pages[0].operationId);
+      expect(invoke.mock.calls).toContainEqual(["get_config_operation", { operationId: backend.pages[0].operationId }]);
+    },
+  );
+
+  it("expired operation requires explicit refresh before issuing a new identity", async () => {
+    const backend = await installBackend({ firstSaveError: { code: "OperationExpired", message: "Receipt expired; review current configuration" } });
+    await mountWithSession(); await openPage("工作区与智能体");
+    fireEvent.change(promptArea(), { target: { value: "reviewed expired draft" } });
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(document.body.textContent).toContain("载入最新配置并保留草稿"));
+    fireEvent.click(buttonByText("载入最新配置并保留草稿"));
+    await waitFor(() => expect(document.body.textContent).not.toContain("载入最新配置并保留草稿"));
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(backend.current().config.custom_prompt).toBe("reviewed expired draft"));
+    expect(backend.pages[1].operationId).not.toBe(backend.pages[0].operationId);
+  });
+
+  it.each(["OperationHistoryFull", "ConfigUnreadable"])("%s blocks further page writes until recovery", async (code) => {
+    const backend = await installBackend({ firstSaveError: { code, message: "Recovery required; saving is blocked" } });
+    await mountWithSession(); await openPage("工作区与智能体");
+    fireEvent.change(promptArea(), { target: { value: "blocked draft" } });
+    fireEvent.click(buttonByText("保存"));
+    await waitFor(() => expect(buttonByText("保存").disabled).toBe(true));
+    expect(document.querySelector(".settings-content .ant-alert-error")?.textContent).toContain("Recovery required");
+    fireEvent.click(buttonByText("保存"));
+    expect(backend.pages).toHaveLength(1);
+    expect(promptArea().value).toBe("blocked draft");
+  });
+
+  it("keeps backend security warnings visible in settings", async () => {
+    await installBackend({ warnings: ["Credential migration failed; existing plaintext has not been secured"] });
+    await mountWithSession();
+    await openSettings();
+    expect(document.querySelector(".settings-content .ant-alert")?.textContent).toContain("existing plaintext has not been secured");
   });
 });

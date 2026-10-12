@@ -28,6 +28,12 @@
 
 主会话单次 read 累计请求窗口超过 2000 行会返回 `E_READ_TOO_BROAD`，应派 explore 只回传结论；为编辑读取小窗口仍能取得版本令牌。子代理/任务不受主会话这个机械门槛限制，不能用它推导所有读工具都无限制。
 
+### 角色模型即时保存
+
+设置页用 `set_subagent_model` 在最新配置上 patch 单角色，并校验 `expected_role_version`（IPC 以含 boot_id 的 expectedVersion 传递）。每角色独立 pending/error；不同角色保存不互相覆盖，同角色旧版本报冲突。普通页保存和字体提交与它共用配置串行器，顶部保存/取消不撤销已成功的角色选择。选项只读已保存供应商；删除模型会同次将相关角色改为继承并提示。
+
+运行时缺失角色自然继承，不再写锁预填全局配置。选择只影响后续 spawn，既有子代理的 model/effort 快照不变。完整版本、脏状态与迟到回执规则见 [设置指南](./settings-guide.md#保存边界与脏状态)；回归入口为 `core::config_commit::tests`、设置整页角色与保存交错测试、`SubagentModelsPanel.test.tsx`。
+
 ## 2. 权限继承与边界
 
 [tools/subagent.rs](../src-tauri/src/tools/subagent.rs) 的基座排除集固定包含 `ask/subagent/plan/skill/scheduled_task/suggest/wait`。子代理不能直接向用户提问、再派生代理或新增定时任务；需要决策时报告给主代理。根身份支持传播，但当前工具限制不开放嵌套派发。
@@ -59,11 +65,11 @@
 
 - key 通过 canonical_best_effort 与写锁同源归一。
 - 同路径或互为祖先的路径视为冲突，覆盖“删目录 vs 写其内部文件”。一次多路径 claim 在单锁内先全查后全插，自身幂等，不能部分认领。
-- 非主 runtime 的受管文件写在写锁前检查认领；冲突为 `E_FILE_CLAIMED`，不得重试等待，应从任务包剔除并在未完成清单列明。
+- 非主 runtime 的受管文件写（create/edit/delete/write_document/edit_document）统一按 `requires_file_claim(rt) = !rt.is_main_session` 在写锁前检查认领；冲突为 `E_FILE_CLAIMED`，不得重试等待，应从任务包剔除并在未完成清单列明。
 - 多文件 edit 任一冲突整体拒绝；主会话豁免，待所有子任务返回后处理共享文件。
-- `ReleaseGuard` 正常结束或 panic Drop 释放认领，顺序派发可复用同一文件。
+- `ReleaseGuard` 按同一 runtime 身份武装，成功、错误、取消、panic 和 future abort 的 Drop 均释放认领，顺序派发可复用同一文件。
 
-这是工具内文件写认领，不是操作系统隔离。shell、MCP 等不能静态归因的写入不受同一表完整覆盖，文档写工具当前 claims 分支使用 `root_session_id.is_none()`，与普通写工具的非主 runtime 判定不一致，不能保证子代理文档写入同样受认领隔离；本轮仅静态核实，未运行并发写复现。不能仅凭 role/任务描述声称没有交叉写风险。
+这是工具内文件写认领，不是操作系统隔离。shell、MCP 等不能静态归因的写入不受同一表完整覆盖。`root_session_id` 只表达产物归属，任务即使没有父 id 也须认领；主会话豁免长期认领，但同文件 Office/文本写入与手动还原仍由共享路径锁串行。不能仅凭 role/任务描述声称没有交叉写风险。
 
 ### 取消
 

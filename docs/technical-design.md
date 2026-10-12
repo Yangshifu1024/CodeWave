@@ -91,7 +91,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - `SessionMeta.project_id + roots` 是会话目录快照；@ 提及和 Git 聚合不能绕回可变注册表重算。`allowed_dirs` 在创建/恢复时并入运行根。
 - 项目删除取消相关运行并级联会话和托管目录，不删除用户代码主目录；迟到检查点不得复活已删除数据。
 - providers 嵌套 models 是配置形态，`ModelConfig` 是运行时摊平形态；前后端摊平逻辑同步维护，新增字段使用 serde default。
-- API key 当前**先落配置再迁 keyring**，成功后重存占位符，失败保留明文并告警，不能保证从未明文落盘。
+- API key 通过 `core/config_commit.rs` 统一提交：先写/核验不可变 keyring generation，再一次性替换占位与引用配置；不降级明文。配置写者共用提交锁、字段域版本与操作回执，详情和历史明文/真平台限制见 [供应商与网络](./providers-and-network.md#2-api-key-与-key-池)。
 
 ### 保存、展示与 wire 必须分离
 

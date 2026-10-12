@@ -105,7 +105,7 @@ export interface SubStream {
   loaded: boolean;
 }
 
-/** Composer 待发图片附件（缩略预览 + base64 本体；类型/大小/数量校验链在 useComposerAttachments） */
+/** Composer 待发图片附件（缩略预览 + base64 本体；读取校验在 useComposerAttachments，原子合并策略在 attachmentPolicy） */
 export interface PendingImage {
   id: string;
   name: string;
@@ -114,8 +114,8 @@ export interface PendingImage {
   dataUrl: string; // 缩略预览
 }
 
-/** Composer 草稿（文本 + 待发图片附件），按 Tab 平行分桶（key 同 tabs）；纯内存态：切会话各自保留，
- *  关 Tab 随 dispose 丢弃，重启不恢复。不放进 TabRunState：击键高频换桶引用会把重渲染广播给
+/** Composer 草稿（文本 + 待发图片附件），按 Tab 平行分桶（key 同 tabs）；已完成内容按 uiState 预算保存；切会话各自保留，
+ *  关 Tab 随 dispose 移除（选择保留时由 uiState 驻留表恢复）。不放进 TabRunState：击键高频换桶引用会把重渲染广播给
  *  全部 useActiveRun 订阅者（ChatMessages 等），独立分片后只有 Composer 订阅者抖动。 */
 export interface ComposerDraft {
   text: string;
