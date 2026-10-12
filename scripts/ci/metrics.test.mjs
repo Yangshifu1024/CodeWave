@@ -31,6 +31,30 @@ test("Cargo parser preserves failed/ignored counts, multiple suites and doctests
   assert.doesNotMatch(timingSummary("cargo test", 1, 1, cargoMetrics([])), /build .*0.00s/);
 });
 
+test("Cargo ANSI colors are ignored by parsing and streamed unchanged by the wrapper", () => {
+  const lines = [
+    "\u001b[1m\u001b[92m    Finished\u001b[0m `test` profile [unoptimized + debuginfo] target(s) in 1m 00s",
+    "\u001b[32mtest result: ok. 1408 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 39.08s\u001b[0m",
+  ];
+  assert.deepEqual(cargoMetrics(lines).builds, [60]);
+  assert.equal(cargoMetrics(lines).suites[0].passed, 1408);
+  const dir = mkdtempSync(join(tmpdir(), "codewave-ci-ansi-"));
+  try {
+    writeFileSync(join(dir, "colored.mjs"), `console.error(${JSON.stringify(lines.join("\n"))});`);
+    const script = fileURLToPath(new URL("./metrics.mjs", import.meta.url));
+    const summary = join(dir, "summary.md");
+    const result = spawnSync(process.execPath, [script, "run", "--", "node", "colored.mjs"], { cwd: dir, encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summary } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stderr.includes(lines[0]), "raw command output must retain its colors");
+    const text = readFileSync(summary, "utf8");
+    assert.match(text, /Cargo test-profile build \(Cargo reported\): 60.00s/);
+    assert.match(text, /39.08s; passed: 1408; failed: 0; ignored: 2/);
+    assert.doesNotMatch(text, /\u001b/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("environment summary uses an allowlist and sanitizes Markdown cells", () => {
   const summary = environmentSummary({ RUNNER_OS: "Windows", RUNNER_ARCH: "X64", ImageVersion: "20261012", CI_RUST_CACHE_HIT: "false", SECRET_TOKEN: "must-not-leak", PATH: "private-path" }, { rustc: "rustc 1.99.0\n|<script>" }, { cpus: 4, ramGiB: 16 });
   assert.match(summary, /Windows \/ X64/);

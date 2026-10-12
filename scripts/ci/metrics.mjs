@@ -4,6 +4,7 @@ import { appendFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 export function parseCargoDuration(value) {
   const match = /^(?:(\d+)m\s+)?(\d+(?:\.\d+)?)s$/.exec(value.trim());
@@ -13,7 +14,8 @@ export function parseCargoDuration(value) {
 export function cargoMetrics(lines) {
   const builds = [];
   const suites = [];
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    const line = stripVTControlCharacters(rawLine);
     const finished = /Finished `test` profile .* in (.+)$/.exec(line);
     if (finished) {
       const seconds = parseCargoDuration(finished[1]);
@@ -73,7 +75,8 @@ export async function run(command, args) {
   for (const [stream, target] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
     stream.on("data", (chunk) => target.write(chunk));
     const reader = createInterface({ input: stream });
-    reader.on("line", (line) => {
+    reader.on("line", (rawLine) => {
+      const line = stripVTControlCharacters(rawLine);
       if (/Finished `test` profile|^test result:/.test(line)) observations.push(line);
     });
   }
