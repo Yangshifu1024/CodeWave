@@ -17,7 +17,7 @@ async function baseInvoke(cmd: string, args?: any) {
   switch (cmd) {
     case "set_font_prefs": {
       const current = useSettings.getState().config!;
-      return configSaved({ ...current, ui: { ...current.ui, font_sans: args.sans, font_mono: args.mono } });
+      return configSaved({ ...current, ui: { ...current.ui, font_sans: args.sans, font_mono: args.mono, font_size_sans: args.fontSizeSans, font_size_mono: args.fontSizeMono } });
     }
     default:
       throw new Error(`unmocked command: ${cmd}`);
@@ -35,10 +35,12 @@ beforeEach(() => {
   localStorage.clear();
   calls.length = 0;
   vi.mocked(invoke).mockImplementation(baseInvoke);
-  const snapshot = configSnapshot({ providers: [], ui: { font_sans: "", font_mono: "", language: "zh-CN" } });
+  const snapshot = configSnapshot({ providers: [], ui: { font_sans: "", font_mono: "", font_size_sans: 15, font_size_mono: 15, language: "zh-CN" } });
   useSettings.setState({ snapshot, config: snapshot.config, loaded: true });
   document.documentElement.style.removeProperty("--ws-font-sans");
   document.documentElement.style.removeProperty("--ws-font-mono");
+  document.documentElement.style.removeProperty("--ws-font-size-sans");
+  document.documentElement.style.removeProperty("--ws-font-size-mono");
 });
 
 afterEach(() => {
@@ -193,5 +195,4 @@ describe("界面字体：提交不丢与后端落盘", () => {
     expect(fontPrefCalls()[1].operationId).not.toBe(firstOperation);
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试・界面字体" })).toBeNull());
   });
-
 });

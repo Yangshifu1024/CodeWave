@@ -179,7 +179,7 @@ const baseConfig: ConfigState = {
     command_allowlist: [],
   },
   post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
-  ui: { font_size: 15, accent: "ink", language: "zh-CN", font_sans: "", font_mono: "" },
+  ui: { font_size_sans: 15, font_size_mono: 15, accent: "ink", language: "zh-CN", font_sans: "", font_mono: "" },
   custom_prompt: null,
   disabled_skills: [],
   log: { level: "info", session_verbose: false },

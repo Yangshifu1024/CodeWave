@@ -364,8 +364,13 @@ impl Default for PostWriteCheckSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
-    /// 界面基础字号
-    pub font_size: f32,
+    /// 界面 sans 文本字号（px）。与 `font_sans` 同源：sans 字体族用此字号渲染。
+    /// 真源在后端配置文件（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
+    /// 由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
+    pub font_size_sans: f32,
+    /// 界面 mono 文本字号（px）。与 `font_mono` 同源：mono 字体族用此字号渲染。
+    /// 同上由 `set_font_prefs` 独占维护，页级 `save_config` 一并护住。
+    pub font_size_mono: f32,
     /// 主题 accent（历史遗留键；现行强调色为墨色，见 docs/chat-and-interface）
     pub accent: String,
     /// 界面语言（zh-CN 等）
@@ -389,7 +394,8 @@ pub struct UiPrefs {
 impl Default for UiPrefs {
     fn default() -> Self {
         UiPrefs {
-            font_size: 15.0,
+            font_size_sans: 15.0,
+            font_size_mono: 15.0,
             accent: "cyan".into(),
             language: "zh-CN".into(),
             close_to_tray: true,

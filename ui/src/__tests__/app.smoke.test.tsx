@@ -28,7 +28,7 @@ const fixtureConfig = {
   compact_threshold: 0.6,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false },
   post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
-  ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
+  ui: { font_size_sans: 15, font_size_mono: 15, accent: "cyan", language: "zh-CN" },
   custom_prompt: null,
   disabled_skills: [],
   log: { level: "info", session_verbose: false },
@@ -310,10 +310,13 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent ?? "").toContain("界面字体");
     expect(document.body.textContent ?? "").toContain("等宽字体");
-    expect(document.querySelectorAll(".font-preview-row").length).toBe(2);
+    expect(document.querySelectorAll(".font-preview-row").length).toBe(4);
     expect(Array.from(document.querySelectorAll(".settings-section-title")).map((node) => node.textContent)).toEqual(["界面语言", "主题", "字体"]);
     expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
     expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
+    // v2 布局：字号行也用 font-preview-row 展示当前字号效果（sans / mono 各一）
+    expect(document.querySelector('[data-setting-id="ui.font_size_sans"] .font-preview-row')).toBeTruthy();
+    expect(document.querySelector('[data-setting-id="ui.font_size_mono"] .font-preview-row')).toBeTruthy();
 
     // 模型与供应商页（[docs/providers-and-network](../../../docs/providers-and-network.md)）：列表 + 编辑表单字段 + AI 回复语言
     await clickTab("模型与供应商");

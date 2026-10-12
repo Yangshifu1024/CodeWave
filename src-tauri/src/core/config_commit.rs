@@ -303,6 +303,10 @@ pub enum ConfigPatch {
     Fonts {
         sans: String,
         mono: String,
+        /// sans 文本字号（px）；与 `sans` 字体族同槽提交。
+        font_size_sans: f32,
+        /// mono 文本字号（px）；与 `mono` 字体族同槽提交。
+        font_size_mono: f32,
     },
     Skill {
         name: String,
@@ -558,9 +562,16 @@ impl ConfigCoordinator {
                 }
                 updated.subagent_models.insert(role, model_id);
             }
-            ConfigPatch::Fonts { sans, mono } => {
+            ConfigPatch::Fonts {
+                sans,
+                mono,
+                font_size_sans,
+                font_size_mono,
+            } => {
                 updated.ui.font_sans = sans.trim().into();
                 updated.ui.font_mono = mono.trim().into();
+                updated.ui.font_size_sans = font_size_sans;
+                updated.ui.font_size_mono = font_size_mono;
             }
             ConfigPatch::Skill { name, disabled } => {
                 updated.disabled_skills.retain(|s| s != &name);
@@ -829,6 +840,8 @@ impl ConfigCoordinator {
 pub fn preserve_instant_fields(updated: &mut ConfigState, current: &ConfigState) {
     updated.ui.font_sans = current.ui.font_sans.clone();
     updated.ui.font_mono = current.ui.font_mono.clone();
+    updated.ui.font_size_sans = current.ui.font_size_sans;
+    updated.ui.font_size_mono = current.ui.font_size_mono;
     updated.subagent_models = current.subagent_models.clone();
     updated.last_operation_id = current.last_operation_id.clone();
 }
@@ -1438,6 +1451,8 @@ mod tests {
                 ConfigPatch::Fonts {
                     sans: "S".into(),
                     mono: "M".into(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 }
             } else {
                 ConfigPatch::SecureExisting
@@ -1552,6 +1567,8 @@ mod tests {
         f.commit(ConfigPatch::Fonts {
             sans: "Sans".into(),
             mono: "Mono".into(),
+            font_size_sans: 15.0,
+            font_size_mono: 15.0,
         })
         .unwrap();
         let saved = f.commit(stale).unwrap();
@@ -1751,6 +1768,8 @@ mod tests {
             ConfigPatch::Fonts {
                 sans: "Concurrent Sans".into(),
                 mono: "Concurrent Mono".into(),
+                font_size_sans: 15.0,
+                font_size_mono: 15.0,
             },
         ];
         let handles: Vec<_> = patches
@@ -2049,6 +2068,8 @@ mod tests {
             f.commit(ConfigPatch::Fonts {
                 sans: format!("Font {i}"),
                 mono: String::new(),
+                font_size_sans: 15.0,
+                font_size_mono: 15.0,
             })
             .unwrap();
         }
@@ -2149,6 +2170,8 @@ mod tests {
                 ConfigPatch::Fonts {
                     sans: "font-migration".into(),
                     mono: String::new(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 },
                 ConfigPatch::Skill {
                     name: "skill".into(),
@@ -2188,7 +2211,9 @@ mod tests {
                         &fallback,
                         ConfigPatch::Fonts {
                             sans: "stale".into(),
-                            mono: String::new()
+                            mono: String::new(),
+                            font_size_sans: 15.0,
+                            font_size_mono: 15.0,
                         },
                         &uuid::Uuid::new_v4().to_string()
                     )
@@ -2204,6 +2229,8 @@ mod tests {
                     ConfigPatch::Fonts {
                         sans: "recovered".into(),
                         mono: String::new(),
+                        font_size_sans: 15.0,
+                        font_size_mono: 15.0,
                     },
                     &uuid::Uuid::new_v4().to_string(),
                 )
@@ -2223,7 +2250,9 @@ mod tests {
         assert_eq!(
             f.commit(ConfigPatch::Fonts {
                 sans: "blocked".into(),
-                mono: String::new()
+                mono: String::new(),
+                font_size_sans: 15.0,
+                font_size_mono: 15.0,
             })
             .unwrap_err()
             .code,
@@ -2252,6 +2281,8 @@ mod tests {
                 ConfigPatch::Fonts {
                     sans: "old font".into(),
                     mono: String::new(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 },
                 &expired,
             )
@@ -2260,12 +2291,16 @@ mod tests {
             f.commit(ConfigPatch::Fonts {
                 sans: format!("new font {i}"),
                 mono: String::new(),
+                font_size_sans: 15.0,
+                font_size_mono: 15.0,
             })
             .unwrap();
         }
         let retry = || ConfigPatch::Fonts {
             sans: "old font".into(),
             mono: String::new(),
+            font_size_sans: 15.0,
+            font_size_mono: 15.0,
         };
         assert_eq!(
             f.coordinator.operation(&f.cfg, &expired).unwrap_err().code,
@@ -2310,6 +2345,8 @@ mod tests {
         let retry = || ConfigPatch::Fonts {
             sans: "reviewed new font".into(),
             mono: String::new(),
+            font_size_sans: 15.0,
+            font_size_mono: 15.0,
         };
         assert_eq!(
             f.coordinator
@@ -2332,7 +2369,9 @@ mod tests {
             assert_eq!(
                 f.commit(ConfigPatch::Fonts {
                     sans: "blocked".into(),
-                    mono: String::new()
+                    mono: String::new(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 })
                 .unwrap_err()
                 .code,
@@ -2381,7 +2420,9 @@ mod tests {
                         &cfg,
                         ConfigPatch::Fonts {
                             sans: "safe".into(),
-                            mono: String::new()
+                            mono: String::new(),
+                            font_size_sans: 15.0,
+                            font_size_mono: 15.0,
                         },
                         &uuid::Uuid::new_v4().to_string()
                     )
@@ -2398,6 +2439,8 @@ mod tests {
                 ConfigPatch::Fonts {
                     sans: "recovered".into(),
                     mono: String::new(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 },
                 &uuid::Uuid::new_v4().to_string(),
             )

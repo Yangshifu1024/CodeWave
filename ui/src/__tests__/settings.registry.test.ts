@@ -655,6 +655,9 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(PAGE_LABEL_KEY[key])": "左导航页名由注册表页名键派生",
     "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
   },
+  "panels/FontSettings.tsx": {
+    "t(`settings.fontSize_${lvl}`)": "字号档位 4 档 label 键由 lvl 变量拼出（small/default/large/xlarge）",
+  },
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
   "chat/Composer.tsx": {
     "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）",

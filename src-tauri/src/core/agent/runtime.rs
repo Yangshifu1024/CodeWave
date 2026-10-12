@@ -1620,6 +1620,8 @@ mod tests {
                 ConfigPatch::Fonts {
                     sans: "Committed Sans".into(),
                     mono: "Committed Mono".into(),
+                    font_size_sans: 15.0,
+                    font_size_mono: 15.0,
                 },
                 &uuid::Uuid::new_v4().to_string(),
             )

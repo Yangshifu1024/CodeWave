@@ -375,6 +375,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "themeDark", // → ui.theme 选项
   "fontHint", // → ui.font_sans / ui.font_mono 的输入说明
   "fontReset", // → 字体槽的「恢复默认」按钮
+  "uiFontSize", // → ui.font_size_sans 字号 Select label（v2）
+  "monoFontSize", // → ui.font_size_mono 字号 Select label（v2）
+  "fontSizeHint", // → 字号 Select 说明（v2）
+  "fontSize_small", // → 字号档「小」
+  "fontSize_default", // → 字号档「默认」
+  "fontSize_large", // → 字号档「大」
+  "fontSize_xlarge", // → 字号档「特大」
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
   "providerGeneral", // 模型与供应商页的通用分组标题
