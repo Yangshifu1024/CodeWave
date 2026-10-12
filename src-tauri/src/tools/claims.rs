@@ -12,6 +12,12 @@ use std::sync::{Mutex, OnceLock};
 
 static CLAIMS: OnceLock<Mutex<ClaimsTable>> = OnceLock::new();
 
+/// One role policy for ordinary files, Office documents, and drive cleanup.
+/// root_session_id describes artifact ownership, never write isolation.
+pub fn requires_file_claim(rt: &crate::core::agent::SessionRuntime) -> bool {
+    !rt.is_main_session
+}
+
 /// 认领表：路径 → 持有者（runtime id）+ 持有者反向索引（释放用）。
 #[derive(Default)]
 struct ClaimsTable {
@@ -193,6 +199,23 @@ mod tests {
         drop(guard);
         claim("t5-other", std::slice::from_ref(&f)).unwrap();
         release("t5-other");
+    }
+
+    #[test]
+    fn shared_drive_guard_retains_claim_until_last_tool_lease_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("leased.docx");
+        let drive = std::sync::Arc::new(ReleaseGuard::arm("leased-drive"));
+        let tool = drive.clone();
+        claim("leased-drive", std::slice::from_ref(&path)).unwrap();
+        drop(drive);
+        assert!(claim("next-drive", std::slice::from_ref(&path)).is_err());
+        // Even a claim made while the root is gone remains covered by the tool lease.
+        let late = dir.path().join("late.docx");
+        claim("leased-drive", std::slice::from_ref(&late)).unwrap();
+        drop(tool);
+        claim("next-drive", &[path, late]).unwrap();
+        release("next-drive");
     }
 
     #[test]

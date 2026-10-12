@@ -107,9 +107,9 @@ describe("i18n 键集合契约", () => {
   it("批④ 新增键全量对偶（段级 / 前缀级闭包，不再是抽样名单）", () => {
     const zhKeys = new Set(keyPaths(zh));
     const enKeys = new Set(keyPaths(en));
-    // ① 段级：`common` 是批④ 新增的段 → 整段对偶，且键集恰为这 5 把。
+    // ① 段级：`common` 是批④ 新增的段 → 整段对偶，且键集恰为这 6 把（含可靠性修复的重试入口）。
     //    少一把（收敛漏改）或多一把（半途改名）都要有人过一眼，故期望集合写死。
-    const COMMON_KEYS = ["builtin", "cancel", "delete", "save", "saved"];
+    const COMMON_KEYS = ["builtin", "cancel", "delete", "retry", "save", "saved"];
     expect(Object.keys(zh.common).sort()).toEqual(COMMON_KEYS);
     expect(Object.keys(en.common).sort()).toEqual(COMMON_KEYS);
     // ② 前缀级：`settings.about*` 是本批迁入 / 新增的一族 → 两侧集合逐把相等且数量写死

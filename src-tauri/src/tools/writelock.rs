@@ -6,13 +6,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-/// 全局锁表：规范路径 → 共享 tokio Mutex。进程内唯一，惰性初始化。
-static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+/// 全局锁表：规范路径 → tokio Mutex 弱引用。guard/等待者拥有强引用，惰性清理空闲项。
+static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> = OnceLock::new();
 
 /// 锁表访问入口。
-fn locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> {
+fn locks() -> &'static Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>> {
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -34,10 +34,18 @@ pub async fn acquire_all(
     let mut guards = Vec::with_capacity(keys.len());
     for k in keys {
         let lock = {
-            let mut g = locks().lock().unwrap();
-            g.entry(k)
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
+            let mut g = locks().lock().unwrap_or_else(|p| p.into_inner());
+            // Guards/waiters own the mutex. The registry must not retain one
+            // allocation per file ever touched during a long-lived app session.
+            g.retain(|_, lock| lock.strong_count() > 0);
+            match g.get(&k).and_then(Weak::upgrade) {
+                Some(lock) => lock,
+                None => {
+                    let lock = Arc::new(tokio::sync::Mutex::new(()));
+                    g.insert(k, Arc::downgrade(&lock));
+                    lock
+                }
+            }
         };
         let guard = match cancel {
             Some(c) => {
@@ -47,8 +55,9 @@ pub async fn acquire_all(
                     return Err(c.clone());
                 }
                 tokio::select! {
-                    g = lock.lock_owned() => g,
+                    biased;
                     _ = c.cancelled() => return Err(c.clone()),
+                    g = lock.lock_owned() => g,
                 }
             }
             None => lock.lock_owned().await,

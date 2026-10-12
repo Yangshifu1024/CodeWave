@@ -14,12 +14,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::sheet_edit::CellValue;
-use super::{backup, formula, patch, sheet_edit, workbook};
+use super::{formula, patch, sheet_edit, transaction, workbook};
 
 /// 单次调用允许修改的单元格数上限（防止一次改动过大、审批卡片无法阅读）。
 const MAX_EDITS: usize = 200;
 /// 文件大小上限（与共识一致：保真修改 50MB）。
-const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = transaction::MAX_FILE_BYTES;
 
 /// 一处单元格修改。
 #[derive(Deserialize, Clone, Debug)]
@@ -170,7 +170,13 @@ fn check_edits(kind: Kind, args: &Args) -> Result<(), String> {
 }
 
 /// Word 文档的修改：只改正文里的文字，其余内部文件与非文字节点全部保留。
-fn run_word(ctx: &ToolCtx, args: &Args, resolved: &std::path::Path) -> ToolOutcome {
+fn run_word(
+    ctx: &ToolCtx,
+    args: &Args,
+    target: &transaction::LockedTarget,
+    prepared: transaction::PreparedDocument,
+) -> ToolOutcome {
+    let resolved = prepared.staged_path();
     if let Err(e) = super::edit_word::preview(
         &match super::patch::read_entry(resolved, super::docx::DOCUMENT_ENTRY) {
             Ok(Some(bytes)) => match String::from_utf8(bytes) {
@@ -221,31 +227,30 @@ fn run_word(ctx: &ToolCtx, args: &Args, resolved: &std::path::Path) -> ToolOutco
         Err(e) => return ToolOutcome::err("E_IO", format!("读取修改结果失败：{e}")),
     };
 
-    finish_write(ctx, args, resolved, &patched, &applied)
+    finish_write(ctx, args, target, prepared, &patched, &applied)
 }
 
 /// 写入公共收尾：备份 → 原子落盘 → 产物登记 → 回执。
 fn finish_write(
     ctx: &ToolCtx,
     args: &Args,
-    resolved: &std::path::Path,
+    target: &transaction::LockedTarget,
+    prepared: transaction::PreparedDocument,
     patched: &[u8],
     applied: &[super::edit_word::Applied],
 ) -> ToolOutcome {
-    let original = std::fs::read(resolved).ok();
-    let backup_path = match &original {
-        Some(bytes) => match super::backup::save(&ctx.rt.data_dir, resolved, bytes) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!("修改前备份失败（{}）：{e}", args.path);
-                None
-            }
-        },
-        None => None,
+    let receipt = match transaction::commit_prepared(
+        target,
+        prepared,
+        &ctx.rt.data_dir,
+        patched,
+        &ctx.cancel,
+        &[],
+    ) {
+        Ok(receipt) => receipt,
+        Err(e) => return e.outcome(),
     };
-    if let Err(e) = crate::util::atomic::atomic_write(resolved, patched) {
-        return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
-    }
+    let resolved = &target.path;
     if !ctx.rt.is_task_runtime {
         let owner = ctx
             .rt
@@ -267,9 +272,11 @@ fn finish_write(
         "path": args.path,
         "changed": applied.iter().map(|a| a.count).sum::<usize>(),
         "changes": super::edit_word::changes_json(applied),
-        "backup": backup_path.map(|p| p.to_string_lossy().into_owned()),
+        "backup": receipt.backup.path().to_string_lossy(),
+        "backupStatus": "saved",
         "hint": "其余内容（图表、页眉页脚、图片、批注、样式）已原样保留。",
     }));
+    out.warnings.extend(receipt.warnings);
     out.warnings
         .push("本次改动已保留原件备份；如需回退请告知。".to_string());
     out
@@ -297,6 +304,10 @@ struct Loaded {
 /// 读入工作簿与本次要用到的工作表内容。
 fn load(roots: &pathutil::WriteRoots, raw_path: &str, edits: &[Edit]) -> Result<Loaded, String> {
     let path = pathutil::resolve_read(roots, raw_path).map_err(|(_, m)| m)?;
+    load_path(path, raw_path, edits)
+}
+
+fn load_path(path: PathBuf, raw_path: &str, edits: &[Edit]) -> Result<Loaded, String> {
     let meta = std::fs::metadata(&path).map_err(|e| format!("{raw_path}: {e}"))?;
     if !meta.is_file() {
         return Err(format!("{raw_path} 不是常规文件"));
@@ -687,35 +698,39 @@ impl Tool for EditDocumentTool {
         if let Err(e) = check_edits(kind, &args) {
             return ToolOutcome::err("E_ARGS", e);
         }
-        if kind == Kind::Word {
-            if ctx.rt.root_session_id.is_none()
-                && let Err(conflicts) =
-                    crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
-            {
-                return ToolOutcome::err(
-                    "E_FILE_CLAIMED",
-                    crate::tools::claims::denial_message(&conflicts),
-                );
-            }
-            return run_word(ctx, &args, &resolved);
+        // Resolve the actual read target against write roots before claiming it.
+        if let Err((c, m)) = pathutil::resolve_write(&roots, &resolved.to_string_lossy()) {
+            return ToolOutcome::err(&c, m);
         }
-
-        let roots = ctx.write_roots();
-        let loaded = match load(&roots, &args.path, &args.edits) {
-            Ok(l) => l,
-            Err(e) => return ToolOutcome::err("E_DOCUMENT", e),
-        };
-
-        // 子代理并发写同一文件时拒绝（与其它写工具一致）
-        if ctx.rt.root_session_id.is_none()
+        if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
-                crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&loaded.path))
+                crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
         {
             return ToolOutcome::err(
                 "E_FILE_CLAIMED",
                 crate::tools::claims::denial_message(&conflicts),
             );
         }
+        let target =
+            match transaction::LockedTarget::acquire(&roots, &resolved, Some(&ctx.cancel)).await {
+                Ok(target) => target,
+                Err(e) => return e.outcome(),
+            };
+        let prepared = match transaction::prepare_existing(&target, &ctx.rt.data_dir, &ctx.cancel) {
+            Ok(prepared) => prepared,
+            Err(e) => return e.outcome(),
+        };
+        if kind == Kind::Word {
+            return run_word(ctx, &args, &target, prepared);
+        }
+        let loaded = match load_path(
+            prepared.staged_path().to_path_buf(),
+            &args.path,
+            &args.edits,
+        ) {
+            Ok(l) => l,
+            Err(e) => return ToolOutcome::err("E_DOCUMENT", e),
+        };
 
         let (planned, sheet_xml, needs_recalc) = match plan(&loaded, &args.edits) {
             Ok(v) => v,
@@ -726,22 +741,17 @@ impl Tool for EditDocumentTool {
             Err(e) => return ToolOutcome::err("E_PATCH_FAILED", e),
         };
 
-        // 备份 → 原子落盘 → 产物登记 → 回执
-        let original = std::fs::read(&loaded.path).ok();
-        let backup_path = match &original {
-            Some(bytes) => match backup::save(&ctx.rt.data_dir, &loaded.path, bytes) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    tracing::warn!("修改前备份失败（{}）：{e}", args.path);
-                    None
-                }
-            },
-            None => None,
+        let receipt = match transaction::commit_prepared(
+            &target,
+            prepared,
+            &ctx.rt.data_dir,
+            &patched,
+            &ctx.cancel,
+            &[],
+        ) {
+            Ok(receipt) => receipt,
+            Err(e) => return e.outcome(),
         };
-
-        if let Err(e) = crate::util::atomic::atomic_write(&loaded.path, &patched) {
-            return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
-        }
 
         // 产物登记（子代理归属主会话；任务 runtime 跳过；失败仅记日志）
         if !ctx.rt.is_task_runtime {
@@ -750,7 +760,7 @@ impl Tool for EditDocumentTool {
                 .root_session_id
                 .clone()
                 .unwrap_or_else(|| ctx.rt.id.clone());
-            let canonical = pathutil::canonical_best_effort(&loaded.path)
+            let canonical = pathutil::canonical_best_effort(&target.path)
                 .to_string_lossy()
                 .into_owned();
             if let Err(e) = ctx.core.store.append_artifact(
@@ -775,9 +785,11 @@ impl Tool for EditDocumentTool {
             "path": args.path,
             "changed": changes.len(),
             "changes": changes,
-            "backup": backup_path.map(|p| p.to_string_lossy().into_owned()),
+            "backup": receipt.backup.path().to_string_lossy(),
+        "backupStatus": "saved",
             "hint": "其余内容（图表、条件格式、数据透视表等）已原样保留。公式单元格没有算好的值，Excel 打开时会自动重算。",
         }));
+        out.warnings.extend(receipt.warnings);
         out.warnings
             .push("本次改动已保留原件备份；如需回退请告知。".to_string());
         out

@@ -251,6 +251,7 @@ export const MCP_FIELD_ID = "mcp.servers";
  * 界面语言同时写 config.ui.language（镜像），但同样即时生效。
  */
 export const INSTANT_APPLY_FIELD_IDS: string[] = [
+  "subagentModels", // Backend-owned, versioned per-role patch.
   "ui.language", // 界面语言：useUi.setLanguage
   "ui.theme", // 主题：localStorage ws_theme
   "ui.font_sans", // 界面字体：localStorage 缓存 + 后端 config.ui.font_sans（set_font_prefs）
@@ -413,6 +414,17 @@ export const SHELL_SETTING_KEYS: string[] = [
   "noModels", // 空态
   "noProviders", // 空态
   "providerNeedsModel", // 空态引导
+  "credentialConfigured",
+  "credentialConfiguredUnknown",
+  "credentialKeep",
+  "credentialAppend",
+  "credentialReplace",
+  "credentialReplaceHint",
+  "credentialNewKeys",
+  "configConflict",
+  "fontSaveFailed",
+  "configReloadDraft",
+  "configReviewDraft",
   "keyMaskedHint", // key 掩码说明
   "customHeaders", // 请求头分组标题（亦用于保存校验文案）
   "customHeadersHint", // 请求头说明
@@ -509,6 +521,8 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpScopeNoProject", // → mcp 页：无项目目录时只读全局配置的提示
   "mcpScopeDirtyHint", // → mcp 页：有未保存改动时禁止切换作用域的说明
   "mcpConfigPath", // → mcp 页：当前作用域 mcp.json 路径回显
+  "mcpSavedApplying",
+  "mcpProbeWarning",
   "mcpTest", // → 动作：单 server 临时测试连接
   "mcpTestOk", // → mcp 页：测试成功结果
   "mcpTestFail", // → mcp 页：测试失败结果

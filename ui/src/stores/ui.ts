@@ -100,6 +100,7 @@ interface UiState {
   /** 空态引导：ProjectNav 监听此标志打开新建项目弹框（用完即复位） */
   createProjectRequested: boolean;
   mcpStatus: McpStatusPayload[];
+  mcpStatusSessionId: string | null;
   /** 请求中的 MCP 连接操作；跨设置页卸载保留，防止关闭再打开时重复发送。 */
   mcpActionPending: Record<string, "disconnect" | "reconnect">;
   /** 应用内通知堆栈；带 sessionId 时点击可回跳对应会话（通知点击回跳批次） */
@@ -196,6 +197,7 @@ export const useUi = create<UiState>((set, get) => ({
   },
   createProjectRequested: false,
   mcpStatus: [],
+  mcpStatusSessionId: null,
   mcpActionPending: {},
   notifications: [],
   setLanguage(lang: Lang) {

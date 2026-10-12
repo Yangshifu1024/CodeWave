@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // 设置页 MCP 页（自「工具与集成」拆出）：服务器卡片 + 配置区共存。
 // 状态数据面（mcp_status 命令 / mcp:status 事件 / useUi.mcpStatus）早已存在，本页是它**唯一**的渲染方，
 // 所以本文件同时守护三件容易做错的事：
@@ -7,13 +8,14 @@
 //   ③ 刷新按钮只重读状态、**不会重连**（手动重连会打断其他会话正在跑的 MCP 调用，属非目标）。
 // 挂载方式与 settings.skills.test.tsx 同源（standalone + useUi 控制开关）。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { App as AntApp } from "antd"; // 必须与组件同源（主入口）：es/app 子路径会产生另一个 context
 import "../i18n";
 import SettingsPage from "../features/panels/SettingsPage";
 import { useUi } from "../stores/ui";
 import { useSettings } from "../stores/settings";
 import { useSessions } from "../stores/sessions";
+import { miscHandlers } from "../stores/runHandlers";
 import { parseMcpDoc } from "../utils/mcpConfig";
 import type { ConfigState, McpServerView } from "../ipc/types";
 
@@ -63,8 +65,8 @@ let testReply: { ok: boolean; tools: number; error: null | { message: string } }
 async function baseInvoke(cmd: string, args?: any) {
   calls.push(args ? `${cmd}:${JSON.stringify(args)}` : cmd);
   switch (cmd) {
-    case "get_config": return makeConfig();
-    case "save_config": return null;
+    case "get_config": return configSnapshot(makeConfig());
+    case "save_config": return configSaved(args?.config);
     case "list_available_shells": return [];
     case "mcp_list_config":
       if (args?.scope === "project" && projectLoadFails) throw new Error("read failed");
@@ -72,11 +74,12 @@ async function baseInvoke(cmd: string, args?: any) {
         scope: args?.scope ?? "global",
         path: args?.scope === "project" ? "C:/proj/.codewave/mcp.json" : "C:/u/.codewave/mcp.json",
         json: configReply,
+        version: "mcp-v1",
         servers: [],
         effective: effectiveReply,
         issues: [],
       };
-    case "mcp_save_config": return { saved: saveAllowed, issues: [] };
+    case "mcp_save_config": return { saved: saveAllowed, issues: [], version: "mcp-v2", apply_revision: 2, affected_servers: ["global:fs"] };
     case "mcp_test": return testReply;
     case "mcp_snapshot":
       return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply.map((s) => ({ scope: "global", ...s })))) };
@@ -99,8 +102,8 @@ async function invokeMock() {
 afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
-  useUi.setState({ settingsOpen: false, settingsTab: "appearance", mcpStatus: [], mcpActionPending: {}, settingsHit: null });
-  useSettings.setState({ config: null, loaded: false });
+  useUi.setState({ settingsOpen: false, settingsTab: "appearance", mcpStatus: [], mcpStatusSessionId: null, mcpActionPending: {}, settingsHit: null });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   calls = [];
   saveAllowed = true;
   projectLoadFails = false;
@@ -151,7 +154,7 @@ async function openMcpTab(edit = false, editIndex = 0) {
   // 状态是**会话级**的（连接池按会话可见集 keyed）：没有活跃会话就没有可读的连接状态，
   // 故这里先立一个活跃会话，再打开 MCP 页。
   useSessions.setState({ activeKey: "s1" });
-  useSettings.setState({ config: makeConfig(), loaded: true });
+  useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "mcp" });
   render(
     <AntApp>
@@ -293,7 +296,7 @@ describe("设置页 MCP 页：服务器状态表", () => {
     statusReply = [];
     // 状态是会话级的：没有活跃会话就不会去读（也就没有「陈旧状态」可谈）
     useSessions.setState({ activeKey: "s1" });
-    useSettings.setState({ config: makeConfig(), loaded: true });
+    useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
     // 先停在「界面」页：挂载时拉过一次状态，之后切页应再拉一次
     useUi.setState({ settingsOpen: true, settingsTab: "appearance" });
     render(
@@ -547,7 +550,7 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
       return baseInvoke(cmd, args);
     });
     useSessions.setState({ activeKey: "s1" });
-    useSettings.setState({ config: makeConfig(), loaded: true });
+    useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "mcp" });
     const first = render(<AntApp><SettingsPage /></AntApp>);
     const reconnect = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".mcp-server-card button"))
@@ -628,9 +631,10 @@ describe("设置页 MCP 页：作用域切换与临时测试连接", () => {
     const call = calls.find((c) => c.startsWith("mcp_test"))!;
     expect(call).toContain('"scope":"global"');
     expect(call).toContain('"name":"fs"');
+    expect(JSON.parse(call.slice("mcp_test:".length)).config).toEqual({ command: "npx", args: ["-y", "@modelcontextprotocol/server-fs"] });
     await waitFor(() =>
       expect(document.body.textContent).toContain(
-        "临时测试：握手成功，发现 2 个工具（未建立正式连接）",
+        "当前草稿：握手成功，发现 2 个工具（未建立正式连接）",
       ),
     );
     // 测试连接不改动正式状态
@@ -812,4 +816,111 @@ describe("设置页 MCP 页：args / env / headers 表格", () => {
     const web = doc.servers.find((s) => s.name === "web")!;
     expect(web.headers).toEqual([{ key: "X-Trace", value: "1" }]);
   });
+});
+
+
+describe("current draft probe identity and save receipts", () => {
+  it("tests an unsaved renamed draft and sends the exact edited command", async () => {
+    await openMcpTab(true);
+    fireEvent.change(document.querySelector<HTMLInputElement>(".mcp-entry input")!, { target: { value: "new draft" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[placeholder="npx -y @modelcontextprotocol/server-fs"]')!, { target: { value: "missing-command" } });
+    fireEvent.click(buttonByText("测试"));
+    await waitFor(() => expect(calls.some((call) => call.startsWith("mcp_test:"))).toBe(true));
+    const payload = JSON.parse(calls.find((call) => call.startsWith("mcp_test:"))!.slice("mcp_test:".length));
+    expect(payload).toEqual({ scope: "global", name: "new draft", sessionId: "s1", config: { command: "missing-command", args: ["-y", "@modelcontextprotocol/server-fs"] } });
+    expect(calls.some((call) => call.startsWith("mcp_save_config:"))).toBe(false);
+  });
+
+  it("single-flights a draft, drops a late result after editing, and accepts only the newer draft", async () => {
+    const pending: Array<(value: typeof testReply) => void> = [];
+    (await invokeMock()).mockImplementation((cmd: string, args?: any) => {
+      if (cmd === "mcp_test") { calls.push(`${cmd}:${JSON.stringify(args)}`); return new Promise((resolve) => pending.push(resolve)); }
+      return baseInvoke(cmd, args);
+    });
+    await openMcpTab(true);
+    fireEvent.click(buttonByText("测试"));
+    fireEvent.click(buttonByText("测试"));
+    expect(pending).toHaveLength(1);
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[placeholder="npx -y @modelcontextprotocol/server-fs"]')!, { target: { value: "newer-command" } });
+    fireEvent.click(buttonByText("测试"));
+    expect(pending).toHaveLength(2);
+    await act(async () => pending[1]({ ok: true, tools: 7, error: null }));
+    expect(document.body.textContent).toContain("发现 7 个工具");
+    await act(async () => pending[0]({ ok: true, tools: 99, error: null }));
+    expect(document.body.textContent).not.toContain("发现 99 个工具");
+    expect(document.body.textContent).toContain("发现 7 个工具");
+    fireEvent.change(document.querySelector<HTMLInputElement>(".mcp-entry input")!, { target: { value: "renamed-again" } });
+    expect(document.body.textContent).not.toContain("发现 7 个工具");
+  });
+
+  it("drops a late result after closing and reopening the same server", async () => {
+    let settle!: (value: typeof testReply) => void;
+    (await invokeMock()).mockImplementation((cmd: string, args?: any) => cmd === "mcp_test"
+      ? new Promise((resolve) => { settle = resolve; }) : baseInvoke(cmd, args));
+    await openMcpTab(true);
+    fireEvent.click(buttonByText("测试"));
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".settings-mcp-editor-modal .ant-modal-close")!);
+    await waitFor(() => expect(document.querySelector(".mcp-entry")).toBeNull());
+    fireEvent.click(Array.from(document.querySelectorAll<HTMLElement>(".mcp-server-card button")).find((button) => button.textContent?.replace(/\s/g, "") === "编辑配置")!);
+    await act(async () => settle({ ok: true, tools: 99, error: null }));
+    expect(document.body.textContent).not.toContain("发现 99 个工具");
+  });
+
+  it("sends the document version and does not reconnect after save", async () => {
+    await openMcpTab(true);
+    fireEvent.click(buttonByText("保存并重连"));
+    await waitFor(() => expect(calls.some((call) => call.startsWith("mcp_save_config:"))).toBe(true));
+    const payload = JSON.parse(calls.find((call) => call.startsWith("mcp_save_config:"))!.slice("mcp_save_config:".length));
+    expect(payload.expectedVersion).toBe("mcp-v1");
+    expect(calls.some((call) => call.startsWith("mcp_connect:"))).toBe(false);
+    await waitFor(() => expect(document.body.textContent).toContain("连接状态将另行更新"));
+  });
+});
+
+
+describe("snapshot and live MCP event ordering", () => {
+  it("a delayed Starting snapshot cannot overwrite a newer Ready event in the same generation", async () => {
+    statusReply = [{ name: "fs", state: "starting", tools: 0 }];
+    await openMcpTab();
+    let settle!: (snapshot: unknown) => void;
+    let reads = 0;
+    (await invokeMock()).mockImplementation((cmd: string, args?: any) => {
+      if (cmd === "mcp_snapshot" && reads++ === 0) return new Promise((resolve) => { settle = resolve; });
+      return baseInvoke(cmd, args);
+    });
+    fireEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="刷新状态（不会重新连接）"]')!);
+    await waitFor(() => expect(settle).toBeTypeOf("function"));
+    act(() => miscHandlers(() => {})["mcp:status"]({ session: "s1", name: "fs", scope: "global", state: "ready", tools: 7, generation: 1, config_revision: 1 }));
+    statusReply = [{ name: "fs", state: "ready", tools: 7 }];
+    await act(async () => settle({ session: "s1", servers: [{ name: "fs", scope: "global", state: "starting", tools: 0, generation: 1, config_revision: 1 }] }));
+    await waitFor(() => expect(reads).toBe(2));
+    expect(useUi.getState().mcpStatus[0]).toMatchObject({ name: "fs", state: "ready", tools: 7 });
+    expect(statusRows()[0].state).toBe("已连接");
+  });
+
+  it("opening snapshot failure preserves the last known state", async () => {
+    useSessions.setState({ activeKey: "s1" });
+    useUi.setState({ mcpStatusSessionId: "s1", mcpStatus: [{ name: "fs", scope: "global", state: "ready", tools: 7, tools_filtered: 0, pid: 3, error: null, note: null }] });
+    (await invokeMock()).mockImplementation((cmd: string, args?: any) => cmd === "mcp_snapshot" ? Promise.reject(new Error("offline")) : baseInvoke(cmd, args));
+    await openMcpTab();
+    await waitFor(() => expect(statusRows()[0]?.state).toBe("已连接"));
+    expect(useUi.getState().mcpStatus[0].tools).toBe(7);
+  });
+});
+
+
+it("MCP status ownership prevents A Ready from appearing in B after B snapshot failure", async () => {
+  await openMcpTab();
+  const status = miscHandlers(() => {})["mcp:status"];
+  act(() => status({ session: "s1", name: "fs", scope: "global", state: "ready", tools: 10, generation: 10, config_revision: 10 }));
+  expect(useUi.getState().mcpStatus[0].state).toBe("ready");
+  (await invokeMock()).mockImplementation((cmd: string, args?: any) => cmd === "mcp_snapshot" ? Promise.reject(new Error("B offline")) : baseInvoke(cmd, args));
+  act(() => useSessions.setState({ activeKey: "s2" }));
+  expect(useUi.getState().mcpStatus).toEqual([]);
+  act(() => status({ session: "s2", name: "fs", scope: "global", state: "starting", tools: 0, generation: 1, config_revision: 1 }));
+  fireEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="刷新状态（不会重新连接）"]')!);
+  await waitFor(() => expect(document.body.textContent).toContain("读取 MCP 状态失败"));
+  expect(useUi.getState().mcpStatusSessionId).toBe("s2");
+  expect(useUi.getState().mcpStatus[0]).toMatchObject({ state: "starting", generation: 1, config_revision: 1 });
+  expect(statusRows()[0].state).toBe("连接中");
 });

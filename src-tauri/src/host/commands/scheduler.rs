@@ -69,9 +69,10 @@ pub async fn create_scheduled_task(
         project_id,
         enabled: true,
         runs: Vec::new(),
+        active_run: None,
+        persistence_error: None,
     };
-    core.tasks.upsert(task.clone()).await; // upsert 内部自持久化（项目附属任务）
-    Ok(task)
+    core.tasks.upsert(task).await // committed durability warnings travel with the returned task
 }
 
 /// 删除计划任务（不存在时报错）。
@@ -83,7 +84,7 @@ pub async fn delete_scheduled_task(
 ) -> Result<(), String> {
     core.tasks
         .remove(&id)
-        .await
+        .await?
         .ok_or_else(|| "任务不存在".to_string())?;
     Ok(())
 }
@@ -118,3 +119,11 @@ pub async fn run_scheduled_task_now(core: Core<'_>, id: String) -> Result<(), St
 }
 
 // ---------- 统计查询（P2-H）----------
+
+/// Recovery/storage issues stay observable separately from the compatible task list.
+#[tauri::command]
+pub async fn list_scheduled_task_diagnostics(
+    core: Core<'_>,
+) -> Result<crate::core::scheduler::TaskDiagnostics, String> {
+    Ok(core.tasks.diagnostics().await)
+}

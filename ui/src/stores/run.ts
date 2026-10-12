@@ -3,6 +3,7 @@
 // [docs/tools-and-safety](../../../docs/tools-and-safety.md) 重构：纯帧 reducer 收敛于 runFrames.ts，后端事件 handler 工厂在 runHandlers.ts，
 // 共享类型在 run.types.ts（下方 re-export，消费方 import 路径保持 "./run" 不变）。
 import { create } from "zustand";
+import { createDraftActions, ensureDraftIdentity, type DraftActions, type DraftState } from "./runDrafts";
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
@@ -61,7 +62,7 @@ import type { ComposerDraft, HistoryPaging, PendingImage, SubStream, SubView, Ta
 
 
   /** 运行态 store 契约：tabs 按会话 id 分桶 + 全部动作；bindGlobalHandlers 的键集合即 29 键事件面（唯一注册点）。 */
-export interface RunStore {
+export interface RunStore extends DraftActions, DraftState {
   tabs: Record<string, TabRunState>;
   /** Composer 草稿平行分桶（key 同 tabs；独立于 tabs 的原因见 ComposerDraft 注释） */
   drafts: Record<string, ComposerDraft>;
@@ -505,6 +506,9 @@ export const useRun = create<RunStore>()(
   immer((set, get) => ({
     tabs: {},
     drafts: {},
+    draftIdentities: {},
+    draftSends: {},
+    ...createDraftActions(set, get, (key) => !!get().tabs[key] || useSessions.getState().tabs.some((tab) => tab.key === key)),
 
     // 仅供动作内部使用（返回可变引用生效前的快照；组件读取请用 useActiveRun）
     st(sessionId) {
@@ -521,6 +525,7 @@ export const useRun = create<RunStore>()(
       if (get().tabs[sessionId]) return;
       set((s) => {
         s.tabs[sessionId] = blank();
+        ensureDraftIdentity(s, sessionId);
       });
     },
 
@@ -529,6 +534,10 @@ export const useRun = create<RunStore>()(
       set((s) => {
         delete s.tabs[sessionId];
         delete s.drafts[sessionId];
+        delete s.draftIdentities[sessionId];
+        for (const [id, snapshot] of Object.entries(s.draftSends)) {
+          if (snapshot.sessionId === sessionId) delete s.draftSends[id];
+        }
       });
     },
 
@@ -814,6 +823,7 @@ export const useRun = create<RunStore>()(
         const key = sessionId ?? useSessions.getState().activeKey ?? "";
         const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [], refs: [] });
         d.text = typeof v === "function" ? v(d.text) : v;
+        ensureDraftIdentity(s, key).textRevision++;
       });
     },
 
@@ -822,6 +832,9 @@ export const useRun = create<RunStore>()(
         const key = sessionId ?? useSessions.getState().activeKey ?? "";
         const d = s.drafts[key] ?? (s.drafts[key] = { text: "", images: [], refs: [] });
         d.images = (typeof v === "function" ? v(d.images as PendingImage[]) : v) as PendingImage[];
+        const identity = ensureDraftIdentity(s, key);
+        identity.attachmentEpoch++;
+        identity.imports = [];
       });
     },
 
@@ -832,12 +845,18 @@ export const useRun = create<RunStore>()(
         // 旧快照回填的桶可能没有 refs（ui-state schema 向前兼容）
         const prev = d.refs ?? [];
         d.refs = typeof v === "function" ? v(prev) : v;
+        ensureDraftIdentity(s, key).refsRevision++;
       });
     },
 
     clearDraft(sessionId) {
       set((s) => {
         const key = sessionId ?? useSessions.getState().activeKey ?? "";
+        const identity = ensureDraftIdentity(s, key);
+        identity.attachmentEpoch++;
+        identity.textRevision++;
+        identity.refsRevision++;
+        identity.imports = [];
         const d = s.drafts[key];
         if (!d) return;
         d.text = "";
