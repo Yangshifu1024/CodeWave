@@ -522,6 +522,7 @@ pub struct AgentCore {
     pub activity: Arc<crate::core::activity::ActivityState>,
     /// 全局配置（RwLock；save_config 热更新写、各处读）
     pub cfg: std::sync::RwLock<ConfigState>,
+    pub config_commits: crate::core::config_commit::ConfigCoordinator,
     /// 活跃会话运行时表：session id → runtime
     pub sessions: DashMap<SessionId, Arc<SessionRuntime>>,
     /// 事件汇（host 注入）
@@ -575,6 +576,12 @@ impl AgentCore {
         AgentCore {
             activity,
             cfg: std::sync::RwLock::new(cfg),
+            config_commits: crate::core::config_commit::ConfigCoordinator::new(
+                Arc::new(crate::host::keyring::SystemCredentialStore),
+                Arc::new(crate::core::config_commit::DiskConfigStore::new(
+                    data_dir.clone(),
+                )),
+            ),
             sessions: DashMap::new(),
             sink,
             tools: Arc::new(ToolRegistry::default_tools()),
@@ -591,6 +598,29 @@ impl AgentCore {
             start_gate: Mutex::new(()),
             wait_targets: crate::core::wait_targets::WaitTargets::default(),
         }
+    }
+
+    /// Blocking commit entry used by all writers. Call from spawn_blocking in async code.
+    pub fn commit_config(
+        &self,
+        patch: crate::core::config_commit::ConfigPatch,
+        operation_id: &str,
+    ) -> Result<
+        crate::core::config_commit::ConfigSaveResult,
+        crate::core::config_commit::ConfigCommitError,
+    > {
+        self.config_commits
+            .commit_with(&self.cfg, patch, operation_id, |updated, effects| {
+                if effects.log_changed {
+                    crate::core::logging::apply_config_level(&updated.log.level);
+                }
+                if effects.proxy_changed {
+                    *self.client.write().unwrap() = crate::provider::proxy::build_client(updated);
+                }
+                if effects.providers_changed {
+                    self.key_pool.reset_all();
+                }
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1552,6 +1582,110 @@ mod tests {
                 .unwrap()
                 .id,
             "m-global"
+        );
+    }
+    #[test]
+    fn config_commit_entry_preserves_instant_fields_and_scopes_side_effects() {
+        use crate::core::config_commit::{ConfigPatch, ConfigVersion};
+        let h = harness();
+        configure_two_models(&h);
+        let initial = h.core.config_commits.snapshot(&h.core.cfg);
+        let mut draft = initial.config.clone();
+        draft.log.session_verbose = true;
+        let keys = vec!["fake-pool-key".to_string()];
+        h.core.key_pool.report(
+            "provider-test",
+            &keys,
+            0,
+            Some(&crate::provider::dto::ProviderError::Auth("fixture".into())),
+        );
+        let role = h
+            .core
+            .commit_config(
+                ConfigPatch::Role {
+                    role: "backend-dev".into(),
+                    model_id: Some("m-session".into()),
+                    expected: initial.version.clone(),
+                },
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        assert!(!role.effects.providers_changed && !role.effects.proxy_changed);
+        assert_eq!(
+            h.core.key_pool.debug_state("provider-test"),
+            vec![(true, 0)]
+        );
+        h.core
+            .commit_config(
+                ConfigPatch::Fonts {
+                    sans: "Committed Sans".into(),
+                    mono: "Committed Mono".into(),
+                },
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        let saved = h
+            .core
+            .commit_config(
+                ConfigPatch::Page {
+                    config: Box::new(draft),
+                    expected: ConfigVersion {
+                        boot_id: initial.version.boot_id,
+                        sequence: initial.page_version,
+                    },
+                    edits: HashMap::new(),
+                    skip_cleanup: false,
+                },
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            saved.snapshot.config.subagent_models["backend-dev"].as_deref(),
+            Some("m-session")
+        );
+        assert_eq!(saved.snapshot.config.ui.font_sans, "Committed Sans");
+        assert!(saved.snapshot.config.log.session_verbose);
+        assert!(saved.effects.cleanup_days.is_none());
+        assert_eq!(
+            h.core.key_pool.debug_state("provider-test"),
+            vec![(true, 0)]
+        );
+        let disk: ConfigState =
+            serde_json::from_slice(&std::fs::read(h.core.data_dir.join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(disk).unwrap(),
+            serde_json::to_value(h.core.cfg.read().unwrap().clone()).unwrap()
+        );
+    }
+
+    #[test]
+    fn config_commit_entry_protects_memory_on_real_file_failure() {
+        use crate::core::config_commit::ConfigPatch;
+        let h = harness();
+        std::fs::create_dir(h.core.data_dir.join("config.json")).unwrap();
+        assert!(
+            h.core
+                .commit_config(
+                    ConfigPatch::AllowCommand {
+                        command: "fixture-command".into()
+                    },
+                    &uuid::Uuid::new_v4().to_string()
+                )
+                .is_err()
+        );
+        assert!(
+            h.core
+                .cfg
+                .read()
+                .unwrap()
+                .approval
+                .command_allowlist
+                .is_empty()
+        );
+        assert_eq!(
+            h.core.config_commits.snapshot(&h.core.cfg).version.sequence,
+            0
         );
     }
 }

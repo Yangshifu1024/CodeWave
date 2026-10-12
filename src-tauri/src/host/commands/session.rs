@@ -422,6 +422,7 @@ pub async fn delete_session(core: Core<'_>, session_id: String) -> Result<(), St
     if let Some(rt) = core.session(&session_id) {
         rt.zombie.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+    core.mcp.release_session(&session_id).await;
     core.sessions.remove(&session_id);
     core.store.remove(&session_id).map_err(err)
 }
@@ -819,6 +820,11 @@ pub(crate) fn execute_cleanup(
             rt.zombie.store(true, Ordering::SeqCst);
         }
         core.sessions.remove(id);
+        let mcp = core.mcp.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            mcp.release_session(&id).await;
+        });
     }
     outcome
 }

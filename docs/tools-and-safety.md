@@ -32,7 +32,7 @@
 
 ask/wait 与其他调用同批时整批 `E_BATCH_POLICY`。suggest 混批时只允许 suggest 自己继续，**其余调用被拒绝，并不是让只读工具一起执行**；若包含 ask/wait，仍整批拒绝。suggest 的计划未收尾门仍在 emit 前检查；成功后只通过 `BatchOutcome.suggest_items` 驱动正常收尾，不能旁路发终态。两条 suggest 不 panic，但不应主动构造此形态。当前 suggest 工具描述仍称可与 read/grep/list_files 同批，这与批次执行分支不一致；实际以批次拒绝结果为准，提示文案尚待另行修正。
 
-同批写冲突当前比较规范化路径集合拼接结果，不能夸成已完整覆盖任意两个多文件集合的部分重叠。跨 runtime 同文件的 edit/create/delete 另有进程级 writelock；并行开发的写认领见[子代理](./subagents.md)。
+同批写冲突当前比较规范化路径集合拼接结果，不能夸成已完整覆盖任意两个多文件集合的部分重叠。跨 runtime 同文件的 edit/create/delete/write_document/edit_document 与用户文档还原共用进程级 writelock；并行开发的写认领见[子代理](./subagents.md)。
 
 ## 2. 文件边界与文本编辑
 

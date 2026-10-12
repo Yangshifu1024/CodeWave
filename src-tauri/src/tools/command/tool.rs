@@ -670,6 +670,7 @@ impl Tool for CommandTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        let mut persistence_warning = None;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
@@ -774,14 +775,21 @@ impl Tool for CommandTool {
                         // 「始终允许本项目」：把 cwd+命令写入白名单并持久化（去重；失败不阻塞已批准的执行）
                         if outcome.always {
                             let cmd = format!("{}\u{1}{}", cwd.display(), args.command.trim());
-                            let mut cfg = ctx.core.cfg.write().unwrap();
-                            if !cfg.approval.command_allowlist.contains(&cmd) {
-                                cfg.approval.command_allowlist.push(cmd);
-                                let snapshot = cfg.clone();
-                                drop(cfg);
-                                if let Err(e) = snapshot.save() {
-                                    tracing::warn!("session {} 白名单持久化失败：{e}", ctx.rt.id);
-                                }
+                            let core = ctx.core.clone();
+                            let persisted = tokio::task::spawn_blocking(move || {
+                                core.commit_config(
+                                    crate::core::config_commit::ConfigPatch::AllowCommand {
+                                        command: cmd,
+                                    },
+                                    &uuid::Uuid::new_v4().to_string(),
+                                )
+                            })
+                            .await;
+                            if !matches!(persisted, Ok(Ok(_))) {
+                                persistence_warning = Some(
+                                    "本次命令已获批准，但‘始终允许’未能保存；后续仍会询问。"
+                                        .to_string(),
+                                );
                             }
                         }
                     }
@@ -799,7 +807,12 @@ impl Tool for CommandTool {
         // 执行 shell = 配置 selection 经 resolve_shell（进程内缓存）；与 system prompt 环境段同一选择
         let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
         let shell = resolve_shell(selection.as_deref());
-        run_process(&args.command, &cwd, timeout, args.full_output, &shell, ctx).await
+        let mut outcome =
+            run_process(&args.command, &cwd, timeout, args.full_output, &shell, ctx).await;
+        if let Some(warning) = persistence_warning {
+            outcome.warnings.push(warning);
+        }
+        outcome
     }
 }
 

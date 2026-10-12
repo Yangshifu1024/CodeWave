@@ -1,3 +1,4 @@
+import { configSnapshot } from "./configFixtures";
 // 主题三档（跟随系统/亮色/暗色）契约测试：store 持久化 + effectiveDark 派生单源 + html.dark 同步 + 设置页切换即时生效。
 // mock 结构对齐 app.smoke.test.tsx；matchMedia 垫片可编程控制 OS 亮暗（setup.ts 的静态垫片对本文件不够用）。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -37,7 +38,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (cmd) {
       case "ping": return "pong";
       case "activate_and_show": return null;
-      case "get_config": return fixtureConfig;
+      case "get_config": return configSnapshot(fixtureConfig);
       case "list_sessions": return [fixtureSession];
       case "list_projects": return [];
       case "load_session": return [];

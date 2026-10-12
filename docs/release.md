@@ -166,3 +166,7 @@ xcrun stapler validate CodeWave_<version>_aarch64.dmg
 6. 三平台安装包、更新资产、签名、清单 URL 和下载结果都正确后，人工 Publish draft。
 
 自动回归入口见 [testing](./testing.md)。模拟更新源脚本 [mock-updater-endpoint.mjs](../scripts/mock-updater-endpoint.mjs) 仅用于隔离测试配置；临时 endpoint 修改不能进入正式发布配置。
+
+## 凭据引用版本的回滚限制
+
+引入 `ProviderConfig.credential_ref` 的版本成功保存后，不支持直接降级到忽略该字段、原位写供应商 UUID 账户的旧二进制。回退必须使用理解引用的修补版或前向修复；不得为兼容双写旧账户。系统钥匙串不可用时保存失败不会默认降级明文；当前历史明文整理与真实平台验收边界见 [供应商与网络](./providers-and-network.md#2-api-key-与-key-池) 和 [安全策略](../SECURITY.md)。
