@@ -29,6 +29,17 @@ pnpm prepr
 
 [pre-pr.test.mjs](../scripts/pre-pr.test.mjs) 将 `PRE_PR_STEPS` 与两个 workflow 的检查命令双向比对，并核对软硬集合、YAML 续行、CRLF 和 Windows 启动语义。新增 CI 检查须同时改本地清单与测试。脚本测试的 glob 必须作为一个参数交给 Node，不能假设 PowerShell 会替原生命令展开。
 
+### CI 并行与耗时观测
+
+- [test.yml](../.github/workflows/test.yml) 的前端 Vitest/Node 脚本矩阵与 Rust 矩阵独立并行，均保留 macOS、Ubuntu、Windows。Rust job 保留 Node、pnpm workspace 与前端 build，满足真实 MCP server fixture 和 Tauri `frontendDist`；没有用占位资源替代构建，也没有减少 Rust 单测、集成测试、doctest 或改变 ignored 语义。
+- 原有 `Test (macos-14)`、`Test (ubuntu-24.04)`、`Test (windows-2022)` 名称由 `always()` 汇总 job 保留。每个汇总都要求**两个完整矩阵**成功，任一平台失败、取消、跳过都不通过；其名称不再表示仅检查该平台。Rust/UI lint 门槛不变。分支保护配置仍需仓库管理员核对，名称保留不是配置已核实的证明。
+- Rust job ID 仍为 `test`，保留 rust-cache 默认 job 隔离；不与 clippy/release 共享 target key，不改 stable、Cargo profile 或缓存权限。缓存摘要只报告 exact hit；`false` 不能区分部分恢复与完全 miss，具体 key、恢复/保存大小与耗时以 action 日志为准。PR merge-ref 的缓存作用域与 main 不同，详见 [GitHub 缓存规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) 与 [rust-cache](https://github.com/Swatinem/rust-cache)。
+- [metrics.mjs](../scripts/ci/metrics.mjs) 流式运行原命令一次，保留退出码；安装、前端测试/build 与 Rust 测试有 wall time。Rust 从 Cargo 原始输出读取 test-profile 编译时长及各测试套件时长/通过/失败/ignored 数，不二次运行测试。套件时长之和不含 Cargo 开销、doctest 编译；缺少指标显示为缺失，不能算作 0 秒。失败时也尽力写摘要，runner 强制终止可能无最终摘要。
+- job summary 记录 runner/image、CPU/RAM、工具版本与缓存 exact hit，不输出整个环境或 secrets。前端 job 的 Rust/CMake 版本只是镜像探测值，不代表该 job 执行过后端检查。
+- [CI 回归测试](../scripts/ci/workflow.test.mjs) 守护矩阵覆盖、汇总失败语义与依赖分组；[CMake 行为测试](../scripts/ci/ensure-cmake.test.mjs) 在有 PowerShell 时执行，Windows 缺 PowerShell 为失败，其他平台无 PowerShell 明确跳过。Linux 成功不能替代 Windows 实际探测/安装链路验证。
+
+比较优化效果时，先记录同一依赖树、工具链和 runner image 的 main 基线，再在获准发布的 PR 上记录第一次与后续热缓存运行。首次运行可能已恢复 main 缓存，必须按日志标注 exact/partial/miss，不能把“首次”直接写成“冷缓存”。若必须做严格冷缓存 A/B，应另获授权后使用隔离缓存 key，不清空共享缓存。两次都记录排队、整个 workflow 关键路径、各 job/步骤、Rust 编译/套件、缓存传输和总 runner 分钟，并核对通过/ignored/doctest 数。拆分增加 checkout/install 和 runner 启动开销，账户并发不足可能变成排队；只有真实数据能判断 wall-clock 收益，不能只报单步骤节省。
+
 ## 按改动面选回归
 
 | 改动面 | 关键验证与入口 |

@@ -1,9 +1,5 @@
-# CodeWave Test（2026-09-13 由 ci.yml 收窄而来：只跑前后端测试，不做任何 build）
-# 触发语义：push main（合并后验证）/ pull_request（PR 检查）；push 其他分支不跑。
-# 构建产物归 release（tag v*）——前端 vite build / tsc 类型检查也随之移交 tag 时点。
-# 三平台跑 cargo test：Windows 验证 git2/libgit2 构建链（G8）；前端 vitest 三平台全量。
-# tauri CLI 从仓库根运行（root package.json + pnpm workspace，见 docs/technical-design 布局说明）。
-# 注：MCP 真实 server 测试（mcp::tests::real_*）依赖 node，setup-node 已满足。
+# Three-platform frontend/script and Rust tests run in parallel; build stays with Rust.
+# Release artifacts remain exclusive to release.yml. See docs/testing.md for metrics.
 name: test
 
 on:
@@ -22,7 +18,8 @@ concurrency:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    # Keep job ID test: rust-cache uses it in the existing cache namespace.
+    name: Backend (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: swatinem/rust-cache@v2
+        id: rust-cache
         with:
           workspaces: src-tauri
 
@@ -61,13 +59,48 @@ jobs:
 
       - name: Install system deps (Windows)
         if: runner.os == 'Windows'
-        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        shell: pwsh
+        run: ./scripts/ci/ensure-cmake.ps1
 
       - name: Install deps (pnpm workspace：root + ui 一次装齐)
-        run: pnpm install --frozen-lockfile
+        run: node scripts/ci/metrics.mjs run -- pnpm install --frozen-lockfile
 
+      # Tauri frontendDist and real MCP server fixtures still need the pnpm workspace.
+      # Keep the short build here so Rust does not wait for the frontend test matrix.
+      - name: Frontend build
+        run: node scripts/ci/metrics.mjs run -- pnpm --dir ui build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: node ../scripts/ci/metrics.mjs run -- cargo test --workspace
+
+      - name: CI environment summary
+        if: always()
+        env:
+          CI_RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: node scripts/ci/metrics.mjs environment
+
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install deps
+        run: node scripts/ci/metrics.mjs run -- pnpm install --frozen-lockfile
       - name: Frontend tests
-        run: pnpm --dir ui test
+        run: node scripts/ci/metrics.mjs run -- pnpm --dir ui test
 
       # scripts/ 下的 node:test 单测（fix-updater-json 等，仅 node 内置模块、零第三方依赖）。
       # 用引号包住 glob 交给 node 自己展开：node --test 不认目录参数（会把目录当模块加载而失败），
@@ -75,10 +108,24 @@ jobs:
       - name: Scripts tests
         run: node --test "scripts/**/*.test.mjs"
 
-      # tsc 类型检查随 vite build 走；产物留在 runner 不上传，正式产物归 release（tag v*）
-      - name: Frontend build
-        run: pnpm --dir ui build
+      - name: CI environment summary
+        if: always()
+        run: node scripts/ci/metrics.mjs environment
 
-      - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test --workspace
+  validation:
+    # Preserve the three existing check names. Each is deliberately an all-platform gate:
+    # no skipped, cancelled or failed matrix component can satisfy a required check.
+    name: Test (${{ matrix.os }})
+    if: ${{ always() }}
+    needs: [test, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2022]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every matrix component
+        env:
+          BACKEND_RESULT: ${{ needs.test.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: test "$BACKEND_RESULT" = success && test "$FRONTEND_RESULT" = success
