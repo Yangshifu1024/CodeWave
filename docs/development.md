@@ -67,6 +67,7 @@ Git 写操作默认由用户执行。批准计划仅覆盖计划明确列出的�
 - 只声明未注册、未消费的插件会增加构建与供应链面；新增/删除时同时核对 Rust 声明、`lib.rs` 注册、前端调用与 capability。
 - 平台条件编译必须由对应目标验证。Windows 的绿态不会编译 `cfg(unix)`；例如进程 `try_wait()` 返回 `Result<Option<ExitStatus>>`，不能按 `Option` 匹配后指望别的平台替你发现。
 - [Dependabot](../.github/dependabot.yml) 继续每周检查 cargo、npm workspace 与 GitHub Actions；每个生态的 minor/patch 版本更新分组，major 仍独立提 PR，安全更新不套用此分组。分组降低重复全矩阵运行次数，但扩大单次变更面；组合不兼容时应拆组定位，不能跳过验证。
+  - npm 暂时仅忽略 `typescript` 的 `>=7.0.0 <8.0.0`：TypeScript 7.0 缺少 typescript-eslint 所需的编译器 API（[官方说明](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6-0)）。TypeScript 6 与其他依赖继续更新；待 typescript-eslint 支持 TypeScript 7 且 lint/test/build 通过后移除此限制。
 
 ## 标识、配置与开源卫生
 

@@ -15,6 +15,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # TypeScript 7.0 lacks the compiler API required by typescript-eslint.
+      # Revisit when typescript-eslint supports TS 7 and lint/test/build pass; keep TS 6 updates enabled.
+      - dependency-name: typescript
+        versions: [">=7.0.0 <8.0.0"]
     groups:
       minor-and-patch:
         applies-to: version-updates
