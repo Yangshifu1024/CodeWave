@@ -1,3 +1,4 @@
+import { configSnapshot } from "./configFixtures";
 // AppShell 启动现场态恢复 / 退出拦截 / 关 Tab 二次确认 —— 集成回归（会话保存与恢复优化 · 批1 的最后一跳接线）。
 //
 // 为什么必须有这条测试：批1 的基础模块（utils/uiState、sessions.restoreTabs、ui store 的请求位）各自都有单测，
@@ -70,7 +71,7 @@ const h = vi.hoisted(() => {
   const fn = (impl: (...args: any[]) => any = async () => null) => vi.fn(impl);
   const ipcMethods: Record<string, any> = {
     // 挂载链直接依赖
-    getConfig: fn(async () => CONFIG),
+    getConfig: fn(async () => configSnapshot(CONFIG)),
     getUiState: fn(async () => state.uiState),
     setUiState: fn(async () => undefined),
     listSessions: fn(async () => state.sessions),
@@ -236,7 +237,7 @@ afterEach(() => {
     notifications: [], mcpStatus: [], // 中断提示条用例会产生 toast（6 秒后自行消失），别漏给后面的用例
   });
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [], unread: {}, explorerOpen: true });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   useRun.setState((s) => {
     s.tabs = {};
     s.drafts = {};

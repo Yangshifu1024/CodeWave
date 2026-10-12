@@ -65,7 +65,7 @@ impl Tool for DeleteTool {
         }
         // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 删除前认领目标（目录认领经祖先匹配覆盖其下文件）；兄弟已认领则拒绝
-        if !ctx.rt.is_main_session
+        if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
         {

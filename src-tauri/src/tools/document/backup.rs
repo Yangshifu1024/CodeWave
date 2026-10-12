@@ -4,10 +4,11 @@
 //! 用途是「写入中途失败时回滚」。这里的备份要**留下来**，用途是「用户事后发现改错了，
 //! 能拿回改动前的原件」——保真修改动的是用户的真实文件，一次误改的代价很高。
 //!
-//! 存放位置与会话数据同目录（`<数据目录>/tmp/document-backup/`），随会话清理一并删除。
+//! 存放于 runtime 的全局数据目录（`<数据目录>/tmp/document-backup/`），不是会话隔离目录。
 //! 同一份文件只保留最近若干份，避免反复修改把磁盘撑满。
 
 use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// 同一份源文件保留的备份份数上限。
@@ -18,15 +19,14 @@ pub fn dir(data_dir: &Path) -> PathBuf {
     data_dir.join("tmp").join("document-backup")
 }
 
-/// 源文件路径的稳定短标识（同名不同目录的文件不会互相覆盖备份）。
+/// 源文件路径的稳定完整摘要（同名不同目录的文件不会互相覆盖备份）。
 fn path_tag(src: &Path) -> String {
-    let canonical = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    let canonical = crate::tools::pathutil::canonical_best_effort(src);
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
     digest
         .iter()
-        .take(4)
         .map(|b| format!("{b:02x}"))
         .collect::<String>()
 }
@@ -44,7 +44,8 @@ fn safe_basename(src: &Path) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "document".to_string());
-    raw.chars()
+    let safe: String = raw
+        .chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
                 c
@@ -52,47 +53,107 @@ fn safe_basename(src: &Path) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    // Hash/UUID/timestamp consume about 130 filename bytes. Preserve a readable
+    // suffix without making valid long/Unicode source filenames unbackuppable.
+    if safe.len() <= 100 {
+        return safe;
+    }
+    let mut end = 90;
+    while !safe.is_char_boundary(end) {
+        end -= 1;
+    }
+    let extension: String = src
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    format!("{}.{}", &safe[..end], extension)
 }
 
-/// 把 `data`（源文件当前内容）备份下来，返回备份文件路径。
-///
-/// 备份失败不算致命：调用方应记录告警后继续修改，而不是因为「备份没存上」就拒绝干活。
+/// Proof that a complete, synced and verified backup has been published.
+/// Construction is private so callers cannot treat a missing backup as success.
+#[derive(Debug)]
+pub struct BackupReceipt {
+    path: PathBuf,
+    digest: Vec<u8>,
+    size: usize,
+}
+impl BackupReceipt {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn verify(&self) -> std::io::Result<()> {
+        let mut f = std::fs::File::open(&self.path)?;
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut f)
+            .take(self.size as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() != self.size || Sha256::digest(&bytes).as_slice() != self.digest {
+            return Err(std::io::Error::other("backup verification failed"));
+        }
+        Ok(())
+    }
+}
+
+/// Save without pruning: only a successfully committed transaction may prune.
+/// Kept as a path-returning helper for legacy callers and backup fixtures.
 pub fn save(data_dir: &Path, src: &Path, data: &[u8]) -> std::io::Result<PathBuf> {
+    Ok(save_verified(data_dir, src, data)?.path)
+}
+
+pub fn save_verified(data_dir: &Path, src: &Path, data: &[u8]) -> std::io::Result<BackupReceipt> {
+    #[cfg(test)]
+    super::faults::check(src, "backup_dir")?;
     let dir = dir(data_dir);
     std::fs::create_dir_all(&dir)?;
-    let path = free_path(&dir, src);
-    std::fs::write(&path, data)?;
-    prune(data_dir, src);
-    Ok(path)
-}
-
-/// 取一个还没被占用的备份路径。
-///
-/// 时间戳已经细到纳秒，撞名实际上不会发生；但**丢掉一个备份是无法接受的**（使用者会少一个
-/// 可回退的版本，而且这件事没有任何提示），所以这里再兜一层：名字被占就在标识段上递增，
-/// 直到拿到空位。递增段插在标识里，列表匹配与排序都不受影响。
-fn free_path(dir: &Path, src: &Path) -> PathBuf {
-    let base = path_tag(src);
-    let name = safe_basename(src);
-    for attempt in 0..100 {
-        let tag = if attempt == 0 {
-            base.clone()
-        } else {
-            format!("{base}-{attempt}")
-        };
-        let p = dir.join(format!("{}-{}-{}.bak", timestamp(), tag, name));
-        if !p.exists() {
-            return p;
-        }
+    #[cfg(test)]
+    super::faults::check(src, "backup_open")?;
+    let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
+    // The temporary is owned by this call and is removed on every pre-publication
+    // failure. No visible .bak can ever be a partially written backup.
+    #[cfg(test)]
+    {
+        tmp.write_all(&data[..data.len() / 2])?;
+        super::faults::check(src, "backup_write")?;
+        tmp.write_all(&data[data.len() / 2..])?;
     }
-    // 极端情况下（同目录一万份同名备份）也不报错：用一个几乎不可能撞的名字兵底
-    dir.join(format!(
-        "{}-{}-{}.bak",
+    #[cfg(not(test))]
+    tmp.write_all(data)?;
+    #[cfg(test)]
+    super::faults::check(src, "backup_flush")?;
+    tmp.flush()?;
+    #[cfg(test)]
+    super::faults::check(src, "backup_sync")?;
+    tmp.as_file().sync_all()?;
+    let digest = Sha256::digest(data).to_vec();
+    let mut verify = Vec::new();
+    tmp.reopen()?
+        .take(data.len() as u64 + 1)
+        .read_to_end(&mut verify)?;
+    #[cfg(test)]
+    super::faults::check(src, "backup_verify")?;
+    if verify.len() != data.len() || Sha256::digest(&verify).as_slice() != digest {
+        return Err(std::io::Error::other("backup verification failed"));
+    }
+    // Full path hash binds new backups to the target; UUID + atomic no-clobber
+    // publication prevents collisions without an exists/write race.
+    let path = dir.join(format!(
+        "{}-{}-{}-{}.bak",
         timestamp(),
         uuid::Uuid::new_v4(),
-        name
-    ))
+        path_tag(src),
+        safe_basename(&crate::tools::pathutil::canonical_best_effort(src))
+    ));
+    tmp.persist_noclobber(&path).map_err(|e| e.error)?;
+    Ok(BackupReceipt {
+        path,
+        digest,
+        size: data.len(),
+    })
 }
 
 /// 列出某个源文件的全部备份（旧的在前）。
@@ -104,9 +165,29 @@ pub fn list_for(data_dir: &Path, src: &Path) -> Vec<PathBuf> {
                 .flatten()
                 .map(|e| e.path())
                 .filter(|p| {
-                    p.file_name()
-                        .map(|n| n.to_string_lossy().contains(&format!("-{tag}-")))
-                        .unwrap_or(false)
+                    p.file_name().is_some_and(|n| {
+                        let n = n.to_string_lossy();
+                        // Full target hash also recognizes a backup when the
+                        // caller used a different symlink basename for this file.
+                        if n.contains(&format!("-{tag}-")) && n.ends_with(".bak") {
+                            return true;
+                        }
+                        // Legacy timestamp-short-hash[-attempt]-basename names
+                        // remain readable. Do not match arbitrary embedded tags.
+                        let Some((stamp, rest)) = n.split_once('-') else {
+                            return false;
+                        };
+                        if stamp.len() < 14 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+                            return false;
+                        }
+                        let Some(rest) = rest.strip_prefix(&format!("{}-", &tag[..8])) else {
+                            return false;
+                        };
+                        // Old writers keyed by the short canonical-path hash
+                        // but used the original alias's basename. Keep those
+                        // names readable without requiring nonexistent metadata.
+                        !rest.is_empty() && rest.ends_with(".bak")
+                    })
                 })
                 .collect()
         })
@@ -115,15 +196,22 @@ pub fn list_for(data_dir: &Path, src: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// 只保留最近 [`KEEP_PER_FILE`] 份。
-pub fn prune(data_dir: &Path, src: &Path) {
+/// Prune only after commit and under the same target lock. The current receipt
+/// and selected restore version remain pinned for the operation's lifetime.
+pub fn prune(data_dir: &Path, src: &Path, protected: &[&Path]) -> std::io::Result<()> {
     let all = list_for(data_dir, src);
-    if all.len() <= KEEP_PER_FILE {
-        return;
+    let mut remaining = all.len();
+    for old in &all {
+        if remaining <= KEEP_PER_FILE {
+            break;
+        }
+        if protected.contains(&old.as_path()) {
+            continue;
+        }
+        std::fs::remove_file(old)?;
+        remaining -= 1;
     }
-    for old in &all[..all.len() - KEEP_PER_FILE] {
-        let _ = std::fs::remove_file(old);
-    }
+    Ok(())
 }
 
 /// 最近一份备份（供「回退到改动前」用）；没有备份返回 None。
@@ -215,7 +303,8 @@ mod tests {
         std::fs::write(&src, b"x").unwrap();
 
         for i in 0..8 {
-            save(data_dir.path(), &src, format!("v{i}").as_bytes()).unwrap();
+            let receipt = save(data_dir.path(), &src, format!("v{i}").as_bytes()).unwrap();
+            prune(data_dir.path(), &src, &[&receipt]).unwrap();
             // 时间戳精度到毫秒，加一点间隔保证排序稳定
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
@@ -310,5 +399,53 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.iter().all(|b| !b.at.is_empty()), "{list:?}");
         assert!(list[0].at >= list[1].at, "{:?}", list);
+    }
+    #[test]
+    fn document_legacy_short_hash_backups_remain_discoverable() {
+        let dd = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let src = ws.path().join("document.docx");
+        std::fs::write(&src, b"current").unwrap();
+        std::fs::create_dir_all(dir(dd.path())).unwrap();
+        let tag = path_tag(&src);
+        let old = dir(dd.path()).join(format!("20261011010203-{}-document.docx.bak", &tag[..8]));
+        let old_alias = dir(dd.path()).join(format!(
+            "20261011010203000000000-{}-1-alias.docx.bak",
+            &tag[..8]
+        ));
+        std::fs::write(&old, b"legacy").unwrap();
+        std::fs::write(&old_alias, b"legacy alias").unwrap();
+        assert_eq!(list_for(dd.path(), &src).len(), 2);
+        std::fs::remove_file(&src).unwrap();
+        assert_eq!(
+            list_for(dd.path(), &src).len(),
+            2,
+            "deleted target must retain its identity"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn document_backup_alias_and_canonical_lists_are_identical() {
+        let dd = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let target = ws.path().join("target.docx");
+        let alias = ws.path().join("alias.docx");
+        std::fs::write(&target, b"current").unwrap();
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        let saved = save(dd.path(), &alias, b"before").unwrap();
+        assert_eq!(list_for(dd.path(), &alias), vec![saved.clone()]);
+        assert_eq!(list_for(dd.path(), &target), vec![saved]);
+    }
+    #[test]
+    fn document_long_unicode_filename_can_be_backed_up() {
+        let dd = tempfile::tempdir().unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        let src = ws.path().join(format!("{}.docx", "文".repeat(60)));
+        std::fs::write(&src, b"original").unwrap();
+        let saved = save(dd.path(), &src, b"original").unwrap();
+        assert_eq!(std::fs::read(&saved).unwrap(), b"original");
+        assert!(saved.file_name().unwrap().as_encoded_bytes().len() < 255);
+        assert_eq!(list_for(dd.path(), &src), vec![saved]);
     }
 }

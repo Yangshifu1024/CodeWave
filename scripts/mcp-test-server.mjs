@@ -6,6 +6,9 @@
 // 提供 echo / add 两个工具，供 src-tauri/src/mcp/mod.rs 的真实 server 集成测试使用。
 
 import http from "node:http";
+import { appendFileSync, writeFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -17,18 +20,30 @@ function makeServer() {
   const server = new McpServer(SERVER_INFO);
   server.registerTool(
     "echo",
-    { description: "回显输入文本", inputSchema: { text: z.string() } },
-    async ({ text }) => ({ content: [{ type: "text", text: `echo: ${text}` }] }),
+    { description: "回显输入文本", inputSchema: { text: z.string(), delay_ms: z.number().optional() } },
+    async ({ text, delay_ms }) => {
+      if (process.env.CODEWAVE_TEST_CALL_LOG) appendFileSync(process.env.CODEWAVE_TEST_CALL_LOG, `${process.pid}:${text}\n`);
+      if (delay_ms) await sleep(delay_ms);
+      return { content: [{ type: "text", text: `echo: ${text}` }] };
+    },
   );
   server.registerTool(
     "add",
     { description: "两个整数相加", inputSchema: { a: z.number(), b: z.number() } },
     async ({ a, b }) => ({ content: [{ type: "text", text: String(a + b) }] }),
   );
+  if (process.env.CODEWAVE_TEST_LIST_DELAY_MS) {
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      await sleep(Number(process.env.CODEWAVE_TEST_LIST_DELAY_MS));
+      return { tools: [] };
+    });
+  }
   return server;
 }
 
 const args = process.argv.slice(2);
+if (process.env.CODEWAVE_TEST_PID_FILE) writeFileSync(process.env.CODEWAVE_TEST_PID_FILE, String(process.pid));
+if (process.env.CODEWAVE_TEST_INIT_DELAY_MS) await sleep(Number(process.env.CODEWAVE_TEST_INIT_DELAY_MS));
 
 if (args[0] === "--http") {
   const port = Number(args[1]);

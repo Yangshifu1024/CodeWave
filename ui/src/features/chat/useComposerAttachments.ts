@@ -15,12 +15,11 @@ import { useCallback, useRef } from "react";
 import { ipc } from "../../ipc/client";
 import { isImagePath } from "../../utils/fileKind";
 import type { PendingImage } from "../../stores/run.types";
+import { useRun } from "../../stores/run";
+import type { DraftTarget } from "../../stores/runDrafts";
+import { IMAGE_MAX_BYTES, IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64 } from "../../stores/attachmentPolicy";
 
 export type { PendingImage };
-
-const IMAGE_MAX_BYTES = 5 * 1024 * 1024; // 单张上限 5MB
-const IMAGE_MAX_COUNT = 4;
-const IMAGE_MAX_TOTAL_BASE64 = 20 * 1024 * 1024; // base64 总量预算
 
 /** 项目外目录放行的用户决定（与 ExternalDirPrompt 的三按钮一致）。 */
 export type DirDecision = "once" | "always" | "cancel";
@@ -38,15 +37,13 @@ export function useComposerAttachments(opts: {
   t: (key: string, opts?: any) => string;
   message: { warning: (content: string) => void };
   images: PendingImage[];
-  setImages: React.Dispatch<React.SetStateAction<PendingImage[]>>;
   /** 当前会话 id：读文件、判定边界、放行目录都要它 */
   sessionId: string | null;
   /** 把引用路径记进草稿的 refs（引用不再写进正文文本，见文件头说明） */
-  onRefs: (refs: string[]) => void;
   /** 项目外目录的放行询问：返回用户的选择（调用方弹 ExternalDirPrompt 并等待） */
-  askExternalDir: (dir: string) => Promise<DirDecision>;
+  askExternalDir: (dir: string, target: DraftTarget) => Promise<DirDecision>;
 }) {
-  const { t, message, images, setImages, sessionId, onRefs, askExternalDir } = opts;
+  const { t, message, images, sessionId, askExternalDir } = opts;
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 用 useCallback 固定标识：本函数会被 Composer / useComposerEvents 放进 effect 依赖，
@@ -69,94 +66,98 @@ export function useComposerAttachments(opts: {
     return out;
   }, [t]);
 
-  /** 图片入列（选择与粘贴共用）：按张数与总量两道上限收口后一次性落库。 */
-  async function pushImages(base: PendingImage[], items: ImageItem[]) {
-    const next = [...base];
-    for (const it of items) {
-      if (next.length >= IMAGE_MAX_COUNT) {
-        message.warning(t("composer.tooManyImages"));
-        break;
-      }
-      next.push({ id: crypto.randomUUID(), ...it });
+  function captureTarget() {
+    const target = sessionId ? useRun.getState().captureAttachmentTarget(sessionId) : null;
+    if (!target) message.warning(t("composer.fileRefHint"));
+    return target;
+  }
+  const current = (target: DraftTarget) => useRun.getState().isAttachmentTargetCurrent(target);
+
+  function pushImages(target: DraftTarget, items: ImageItem[]) {
+    const result = useRun.getState().appendDraftImages(target, items.map((item) => ({ id: crypto.randomUUID(), ...item })));
+    if (result.status === "appended" && result.reason) {
+      message.warning(t(result.reason === "count" ? "composer.tooManyImages" : "composer.imageTotalTooLarge"));
     }
-    const total = next.reduce((acc, b) => acc + b.data.length, 0);
-    if (total > IMAGE_MAX_TOTAL_BASE64) {
-      message.warning(t("composer.imageTotalTooLarge"));
-      return;
-    }
-    setImages(next);
   }
 
-  // 粘贴入口：clipboardData 只给 File 对象（没有路径），故只处理图片
-  async function addImageFiles(files: File[]) {
-    if (!files.length) return;
-    const accepted: ImageItem[] = [];
-    for (const f of files) {
-      if (!f.type.startsWith("image/")) {
-        message.warning(t("composer.onlyImages"));
-        continue;
+  async function addImageFiles(files: File[], target = captureTarget()) {
+    if (!files.length || !target) return;
+    const importId = useRun.getState().startAttachmentImport(target);
+    if (!importId) return;
+    try {
+      const accepted: ImageItem[] = [];
+      for (const f of files) {
+        if (!current(target)) return;
+        if (!f.type.startsWith("image/")) {
+          message.warning(t("composer.onlyImages"));
+          continue;
+        }
+        if (f.size > IMAGE_MAX_BYTES) {
+          message.warning(t("composer.imageTooLarge", { name: f.name }));
+          continue;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.onerror = () => reject(r.error);
+          r.onabort = () => resolve("");
+          r.readAsDataURL(f);
+        }).catch(() => null);
+        if (!current(target)) return;
+        if (!dataUrl) continue;
+        accepted.push({ name: f.name, mime: f.type, data: dataUrl.slice(dataUrl.indexOf(",") + 1), dataUrl });
       }
-      if (f.size > IMAGE_MAX_BYTES) {
-        message.warning(t("composer.imageTooLarge", { name: f.name }));
-        continue;
-      }
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result as string);
-        r.onerror = () => reject(r.error);
-        r.readAsDataURL(f);
-      }).catch(() => null);
-      if (!dataUrl) continue;
-      accepted.push({
-        name: f.name,
-        mime: f.type,
-        data: dataUrl.slice(dataUrl.indexOf(",") + 1),
-        dataUrl,
-      });
+      if (accepted.length) pushImages(target, accepted);
+    } finally {
+      useRun.getState().finishAttachmentImport(target, importId);
     }
-    await pushImages(images, accepted);
   }
 
-  /**
-   * 按路径添加文件（附件按钮与拖拽共用）：图片读成 base64 进附件，其余进草稿 refs（chip 展示）。
-   * 遇到项目外路径时暂停等待用户决定，决定后重问一次判定——
-   * 后端放行时会做规范化，引用写法以放行之后那次为准（否则同一文件会出现两种写法）。
-   */
-  async function addPaths(paths: string[]) {
+  /** Every await is followed by identity validation, before further authorization or reads. */
+  async function addPaths(paths: string[], target = captureTarget()) {
     const list = paths.filter((p) => p.trim() !== "");
-    if (!list.length) return;
-    if (!sessionId) {
-      message.warning(t("composer.fileRefHint"));
-      return;
-    }
-    const refs: string[] = [];
-    const imgs: ImageItem[] = [];
-    for (const p of list) {
-      try {
-        let info = await ipc.checkExternalPath(sessionId, p);
-        if (!info.inside) {
-          const choice = await askExternalDir(info.dir);
-          if (choice === "cancel") continue;
-          await ipc.allowExternalDir(sessionId, info.dir, choice === "always");
-          info = await ipc.checkExternalPath(sessionId, p);
-        }
-        if (isImagePath(p)) {
-          const r = await ipc.readWorkspaceFileBase64(sessionId, p);
-          if (r.size > IMAGE_MAX_BYTES) {
-            message.warning(t("composer.imageTooLarge", { name: nameOf(p) }));
-            continue;
+    if (!list.length || !target) return;
+    const importId = useRun.getState().startAttachmentImport(target);
+    if (!importId) return;
+    const sourceSession = target.sessionId;
+    try {
+      const refs: string[] = [];
+      const imgs: ImageItem[] = [];
+      for (const p of list) {
+        if (!current(target)) return;
+        try {
+          let info = await ipc.checkExternalPath(sourceSession, p);
+          if (!current(target)) return;
+          if (!info.inside) {
+            const choice = await askExternalDir(info.dir, target);
+            if (!current(target)) return;
+            if (choice === "cancel") continue;
+            await ipc.allowExternalDir(sourceSession, info.dir, choice === "always");
+            if (!current(target)) return;
+            info = await ipc.checkExternalPath(sourceSession, p);
+            if (!current(target)) return;
           }
-          const mime = mimeOfImage(p);
-          imgs.push({ name: nameOf(p), mime, data: r.content, dataUrl: `data:${mime};base64,${r.content}` });
-        } else {
-          refs.push(info.ref);
+          if (isImagePath(p)) {
+            const r = await ipc.readWorkspaceFileBase64(sourceSession, p);
+            if (!current(target)) return;
+            if (r.size > IMAGE_MAX_BYTES) {
+              message.warning(t("composer.imageTooLarge", { name: nameOf(p) }));
+              continue;
+            }
+            const mime = mimeOfImage(p);
+            imgs.push({ name: nameOf(p), mime, data: r.content, dataUrl: `data:${mime};base64,${r.content}` });
+          } else {
+            refs.push(info.ref);
+          }
+        } catch (e) {
+          if (current(target)) message.warning(String(e).replace(/^Error[:\s]*/i, ""));
         }
-      } catch (e) {
-        message.warning(String(e).replace(/^Error[:\s]*/i, ""));
       }
+      if (imgs.length) pushImages(target, imgs);
+      if (refs.length) useRun.getState().appendDraftRefs(target, refs);
+    } finally {
+      useRun.getState().finishAttachmentImport(target, importId);
     }
-    if (imgs.length) await pushImages(images, imgs);
-    if (refs.length) onRefs(refs);
   }
 
   // 粘贴：图片直接附件化；非图片文件提示改用附件按钮或 @ 引用；纯文本（无 File）不拦截、走默认粘贴
@@ -179,7 +180,7 @@ export function useComposerAttachments(opts: {
     if (imgs.length < files.length) message.warning(t("composer.pasteFilesHint")); // 非图片部分提示一次
   }
 
-  return { images, setImages, fileRef, recalledImages, addImageFiles, addPaths, onPaste };
+  return { images, fileRef, recalledImages, addImageFiles, addPaths, onPaste, captureTarget };
 }
 
 /** 取路径最后一段作为显示名。 */
