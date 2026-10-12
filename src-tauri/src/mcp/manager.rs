@@ -13,7 +13,7 @@
 //! - 引用计数归零才回收进程；有引用的条目**绝不**被 LRU 淘汰。
 //! - `stop` / `disconnect` / 淘汰都会发状态事件（旧 `stop_all` 不发 → UI 状态残留）。
 //!
-//! 错误一律走 [`McpError`] 结构化分类：只有连接类错误允许重连，且**只重放只读调用**。
+//! 错误一律走 [`McpError`] 结构化分类；当前调用绝不自动重放。
 
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, JsonObject};
@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -40,6 +40,9 @@ use super::tools::{McpTool, McpToolDef, build_tool_defs, filter_tools, normalize
 
 /// 连接 + initialize + list_tools 的总超时。
 pub const INIT_TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// 连接池默认上限（可在 [`McpManager::new`] 调整）。
 pub const DEFAULT_MAX_SERVERS: usize = 16;
 /// 被淘汰的 server 再次被需要时的重拉防抖窗口（避免抖动风暴）。
@@ -74,6 +77,8 @@ pub struct PoolKey {
     pub project_id: Option<String>,
     /// server 名
     pub name: String,
+    /// Canonical configuration file identity, private to the host.
+    pub source: std::path::PathBuf,
 }
 
 impl PoolKey {
@@ -83,6 +88,7 @@ impl PoolKey {
             scope: Scope::Global,
             project_id: None,
             name: name.into(),
+            source: std::path::PathBuf::new(),
         }
     }
 
@@ -92,7 +98,13 @@ impl PoolKey {
             scope: Scope::Project,
             project_id: Some(project_id.into()),
             name: name.into(),
+            source: std::path::PathBuf::new(),
         }
+    }
+
+    pub fn with_source(mut self, path: &std::path::Path) -> Self {
+        self.source = super::config::source_identity(path);
+        self
     }
 
     /// 线缆用的作用域字符串。
@@ -131,6 +143,10 @@ pub struct McpStatusPayload {
     pub error: Option<McpError>,
     /// 可见性提示（「已被淘汰（资源上限）」「已禁用」等）
     pub note: Option<String>,
+    pub generation: u64,
+    pub config_revision: u64,
+    pub policy_revision: u64,
+    pub tool_schema_revision: u64,
 }
 
 /// 状态变化回调：由 host 层接到 `EventSink`（core 层不能依赖 tauri）。
@@ -147,6 +163,12 @@ struct ServerEntry {
     peer: Option<Peer<RoleClient>>,
     pid: Option<u32>,
     generation: u64,
+    config_revision: u64,
+    policy_revision: u64,
+    tool_schema_revision: u64,
+    connecting: bool,
+    handshake_cancel: CancellationToken,
+    in_flight: Arc<AtomicUsize>,
     /// 引用该条目的会话集合
     sessions: HashSet<String>,
     /// 最近一次使用序号（LRU）
@@ -162,6 +184,100 @@ struct Inner {
     entries: HashMap<PoolKey, ServerEntry>,
     /// 会话 id → 可见集
     sessions: HashMap<String, HashSet<PoolKey>>,
+    snapshots: HashMap<String, HashMap<String, CallBinding>>,
+}
+
+/// Private immutable ticket from the exact model-tool snapshot. Never serialized to providers.
+#[derive(Clone)]
+pub struct CallBinding {
+    pub function: String,
+    pub tool: String,
+    pub key: PoolKey,
+    generation: u64,
+    config_revision: u64,
+    policy_revision: u64,
+    tool_schema_revision: u64,
+    cfg: McpServerConfig,
+}
+
+impl CallBinding {
+    pub fn requires_approval(&self) -> bool {
+        !self.cfg.read_only && !self.cfg.always_allow
+    }
+}
+
+fn changed_error() -> McpError {
+    McpError::config(
+        "MCP configuration changed; start a new tool request (配置已变，请重新发起调用)",
+    )
+}
+
+fn validate_binding(inner: &Inner, session: &str, binding: &CallBinding) -> Result<(), McpError> {
+    if !inner
+        .sessions
+        .get(session)
+        .is_some_and(|keys| keys.contains(&binding.key))
+    {
+        return Err(changed_error());
+    }
+    let e = inner.entries.get(&binding.key).ok_or_else(changed_error)?;
+    if e.state != McpState::Ready
+        || e.generation != binding.generation
+        || e.config_revision != binding.config_revision
+        || e.policy_revision != binding.policy_revision
+        || e.tool_schema_revision != binding.tool_schema_revision
+        || e.cfg != binding.cfg
+        || !e.tools.iter().any(|tool| tool.name == binding.tool)
+    {
+        return Err(changed_error());
+    }
+    let tools: Vec<_> = inner.sessions[session]
+        .iter()
+        .filter_map(|key| inner.entries.get(key))
+        .filter(|e| e.state == McpState::Ready)
+        .flat_map(|e| e.tools.iter().cloned())
+        .collect();
+    let (_, index) = build_tool_defs(&tools);
+    if index.get(&binding.function) != Some(&(binding.key.name.clone(), binding.tool.clone())) {
+        return Err(changed_error());
+    }
+    Ok(())
+}
+
+struct InFlight(Arc<AtomicUsize>);
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Keep already-admitted calls on their original peer, then cancel after a bounded drain.
+fn retire_service(service: ClientService, in_flight: Arc<AtomicUsize>) {
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(DRAIN_TIMEOUT, async {
+            while in_flight.load(Ordering::Acquire) != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        close_service(service).await;
+    });
+}
+
+async fn close_service(service: ClientService) {
+    if let Some(service) = Arc::into_inner(service) {
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, service.cancel()).await;
+    }
+}
+
+/// Owns a temporary service across list_tools errors, cancellation, timeout and unwinding.
+struct ProbeGuard(Option<ClientService>);
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        if let Some(service) = self.0.take() {
+            tokio::spawn(close_service(service));
+        }
+    }
 }
 
 /// MCP 连接管理器。
@@ -246,10 +362,18 @@ fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
         pid: e.pid,
         error: e.error.clone(),
         note: e.note.clone(),
+        generation: e.generation,
+        config_revision: e.config_revision,
+        policy_revision: e.policy_revision,
+        tool_schema_revision: e.tool_schema_revision,
     }
 }
 
 fn clear_connection(e: &mut ServerEntry) {
+    e.handshake_cancel.cancel();
+    e.handshake_cancel = CancellationToken::new();
+    e.connecting = false;
+    e.in_flight = Arc::new(AtomicUsize::new(0));
     e.peer = None;
     e.pid = None;
     e.tools.clear();
@@ -265,6 +389,7 @@ impl McpManager {
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
                 sessions: HashMap::new(),
+                snapshots: HashMap::new(),
             }),
             max_servers: max_servers.max(1),
             tick: AtomicU64::new(0),
@@ -282,6 +407,28 @@ impl McpManager {
         if let Some(s) = sink {
             s(session, p);
         }
+    }
+
+    async fn emit_key(&self, key: &PoolKey, _fallback: &str, payload: &McpStatusPayload) {
+        let sessions = {
+            let inner = self.inner.lock().await;
+            let Some(entry) = inner.entries.get(key) else {
+                return;
+            };
+            if entry.generation != payload.generation
+                || entry.config_revision != payload.config_revision
+            {
+                return;
+            }
+            entry.sessions.clone()
+        };
+        for session in sessions {
+            self.emit(&session, payload).await;
+        }
+    }
+
+    pub fn next_revision(&self) -> u64 {
+        self.tick()
     }
 
     fn tick(&self) -> u64 {
@@ -304,140 +451,236 @@ impl McpManager {
     ///
     /// 不 await 全部完成——IPC 立即返回，各 server 独立收敛为 ready/error 并经事件推送
     /// （旧实现串行 await 每个 server，坏配置多时会长时间阻塞打开会话）。
-    pub fn warm(
+    pub async fn warm(
         self: &Arc<Self>,
         session: &str,
         visible: Vec<(PoolKey, McpServerConfig)>,
         http: reqwest::Client,
     ) {
-        let this = self.clone();
-        let session = session.to_string();
-        tokio::spawn(async move {
-            let pending = this.register_session(&session, &visible).await;
-            let mut handles = Vec::new();
-            for (key, cfg) in pending {
-                let this = this.clone();
-                let session = session.clone();
-                let http = http.clone();
-                handles.push(tokio::spawn(async move {
-                    let _ = this.ensure(&key, cfg, http, &session).await;
-                }));
-            }
-            for h in handles {
-                let _ = h.await;
-            }
-        });
+        // Register before returning; a later session release cannot be undone by a queued warm.
+        let pending = self.register_session(session, &visible).await;
+        self.connect_pending(session, pending, http).await;
     }
 
-    /// 登记（或替换）会话可见集：新增键引用 +1、移出的键引用 −1，返回需要建连的条目。
+    /// Register/connect only selected targets; preserve all unrelated desired entries and states.
+    pub async fn connect_named(
+        self: &Arc<Self>,
+        session: &str,
+        visible: Vec<(PoolKey, McpServerConfig)>,
+        names: &[String],
+        http: reqwest::Client,
+    ) {
+        let mut desired = {
+            let inner = self.inner.lock().await;
+            inner
+                .sessions
+                .get(session)
+                .into_iter()
+                .flatten()
+                .filter(|key| !names.contains(&key.name))
+                .filter_map(|key| {
+                    inner
+                        .entries
+                        .get(key)
+                        .map(|entry| (key.clone(), entry.cfg.clone()))
+                })
+                .collect::<Vec<_>>()
+        };
+        desired.extend(
+            visible
+                .into_iter()
+                .filter(|(key, _)| names.contains(&key.name)),
+        );
+        let pending = self
+            .register_session(session, &desired)
+            .await
+            .into_iter()
+            .filter(|(key, _)| names.contains(&key.name))
+            .collect();
+        self.connect_pending(session, pending, http).await;
+    }
+
+    async fn connect_pending(
+        self: &Arc<Self>,
+        session: &str,
+        pending: Vec<(PoolKey, McpServerConfig)>,
+        http: reqwest::Client,
+    ) {
+        for (key, cfg) in pending {
+            let Some(generation) = self
+                .inner
+                .lock()
+                .await
+                .entries
+                .get(&key)
+                .map(|entry| entry.generation)
+            else {
+                continue;
+            };
+            let this = self.clone();
+            let session = session.to_string();
+            let http = http.clone();
+            tokio::spawn(async move {
+                let _ = this
+                    .ensure_at(&key, cfg, http, &session, Some(generation))
+                    .await;
+            });
+        }
+    }
+
+    /// Apply complete visible sets under one manager lock. Network work is always outside it.
+    pub async fn reconcile(
+        self: &Arc<Self>,
+        sessions: Vec<(String, Vec<(PoolKey, McpServerConfig)>)>,
+        http: reqwest::Client,
+    ) -> Vec<String> {
+        let (pending, affected) = self.apply_sessions(&sessions, true).await;
+        for (session, servers) in pending {
+            self.connect_pending(&session, servers, http.clone()).await;
+        }
+        affected
+    }
+
     async fn register_session(
         &self,
         session: &str,
         visible: &[(PoolKey, McpServerConfig)],
     ) -> Vec<(PoolKey, McpServerConfig)> {
-        let wanted: HashSet<PoolKey> = visible.iter().map(|(k, _)| k.clone()).collect();
-        let mut inner = self.inner.lock().await;
-        let previous = inner.sessions.insert(session.to_string(), wanted.clone());
-        // 移出的键：引用 −1
-        let removed: Vec<PoolKey> = previous
-            .unwrap_or_default()
+        self.apply_sessions(&[(session.to_string(), visible.to_vec())], false)
+            .await
+            .0
             .into_iter()
-            .filter(|k| !wanted.contains(k))
-            .collect();
-        let mut to_close: Vec<ClientService> = Vec::new();
-        let mut closed_payloads: Vec<(PoolKey, McpStatusPayload)> = Vec::new();
-        for key in removed {
-            if let Some(e) = inner.entries.get_mut(&key) {
-                e.sessions.remove(session);
-                if e.sessions.is_empty() {
-                    if let Some(svc) = e.service.take() {
-                        to_close.push(svc);
+            .next()
+            .map(|(_, pending)| pending)
+            .unwrap_or_default()
+    }
+
+    async fn apply_sessions(
+        &self,
+        sessions: &[(String, Vec<(PoolKey, McpServerConfig)>)],
+        existing_only: bool,
+    ) -> (Vec<(String, Vec<(PoolKey, McpServerConfig)>)>, Vec<String>) {
+        let mut inner = self.inner.lock().await;
+        let mut retired = Vec::new();
+        let mut payloads = Vec::new();
+        let mut pending_sessions = Vec::new();
+        let mut affected = HashSet::new();
+        for (session, visible) in sessions {
+            if existing_only && !inner.sessions.contains_key(session) {
+                continue;
+            }
+            let wanted: HashSet<_> = visible.iter().map(|(key, _)| key.clone()).collect();
+            let previous = inner
+                .sessions
+                .insert(session.clone(), wanted.clone())
+                .unwrap_or_default();
+            for key in previous.difference(&wanted) {
+                affected.insert(format!("{}:{}", key.scope_str(), key.name));
+                if let Some(e) = inner.entries.get_mut(key) {
+                    e.sessions.remove(session);
+                    // Always notify the losing session, even when another still uses this peer.
+                    let mut removed = payload_of(key, e);
+                    removed.generation = removed.generation.wrapping_add(1);
+                    removed.state = McpState::Stopped;
+                    removed.tools = 0;
+                    removed.tool_details.clear();
+                    removed.note = Some("No longer visible in this session".into());
+                    payloads.push((session.clone(), removed));
+                    if e.sessions.is_empty() {
+                        if let Some(svc) = e.service.take() {
+                            retired.push((svc, e.in_flight.clone()));
+                        }
+                        clear_connection(e);
+                        e.state = McpState::Stopped;
+                        e.note = Some("No remaining references".into());
                     }
-                    clear_connection(e);
-                    e.state = McpState::Stopped;
-                    e.note = Some("会话已关闭".to_string());
-                    closed_payloads.push((key.clone(), payload_of(&key, e)));
                 }
             }
-        }
-        // 新增的键：引用 +1，并挑出未就绪者
-        let mut pending = Vec::new();
-        for (key, cfg) in visible {
-            match inner.entries.get_mut(key) {
-                Some(e) => {
-                    e.sessions.insert(session.to_string());
-                    e.cfg = cfg.clone();
-                    if e.state != McpState::Ready {
+            let mut pending = Vec::new();
+            for (key, cfg) in visible {
+                match inner.entries.get_mut(key) {
+                    Some(e) => {
+                        e.sessions.insert(session.clone());
+                        let changed = e.cfg != *cfg;
+                        if changed {
+                            affected.insert(format!("{}:{}", key.scope_str(), key.name));
+                            if let Some(svc) = e.service.take() {
+                                retired.push((svc, e.in_flight.clone()));
+                            }
+                            clear_connection(e);
+                            e.cfg = cfg.clone();
+                            e.config_revision = self.tick();
+                            e.policy_revision += 1;
+                            e.state = McpState::Starting;
+                            e.error = None;
+                            e.note = Some(
+                                "Configuration changed; previous calls drain for at most 5 seconds"
+                                    .into(),
+                            );
+                        }
+                        if (!existing_only || changed)
+                            && e.state != McpState::Ready
+                            && !e.connecting
+                        {
+                            pending.push((key.clone(), cfg.clone()));
+                        }
+                    }
+                    None => {
+                        affected.insert(format!("{}:{}", key.scope_str(), key.name));
+                        inner.entries.insert(
+                            key.clone(),
+                            ServerEntry {
+                                sessions: HashSet::from([session.clone()]),
+                                ..blank_entry(cfg, self.tick())
+                            },
+                        );
                         pending.push((key.clone(), cfg.clone()));
                     }
                 }
-                None => {
-                    inner.entries.insert(
-                        key.clone(),
-                        ServerEntry {
-                            cfg: cfg.clone(),
-                            state: McpState::Starting,
-                            error: None,
-                            tools: Vec::new(),
-                            tools_filtered: 0,
-                            service: None,
-                            peer: None,
-                            pid: None,
-                            generation: 0,
-                            sessions: HashSet::from([session.to_string()]),
-                            last_used: self.tick(),
-                            note: None,
-                            dirty: None,
-                            last_evict: None,
-                        },
-                    );
-                    pending.push((key.clone(), cfg.clone()));
-                }
             }
+            pending_sessions.push((session.clone(), pending));
         }
         drop(inner);
-        for svc in to_close {
-            if let Some(svc) = Arc::into_inner(svc) {
-                let _ = svc.cancel().await;
-            }
+        for (svc, calls) in retired {
+            retire_service(svc, calls);
         }
-        for (key, p) in closed_payloads {
-            let _ = key;
-            self.emit(session, &p).await;
+        for (session, payload) in payloads {
+            self.emit(&session, &payload).await;
         }
-        pending
+        let mut affected: Vec<_> = affected.into_iter().collect();
+        affected.sort();
+        (pending_sessions, affected)
     }
 
     /// 会话关闭：可见集清空，引用归零的连接立即回收。
     pub async fn release_session(&self, session: &str) {
-        let keys = {
+        let _commit = super::config::CONFIG_COMMIT.lock().await;
+        let (services, payloads) = {
             let mut inner = self.inner.lock().await;
-            inner.sessions.remove(session).unwrap_or_default()
-        };
-        let mut to_close: Vec<ClientService> = Vec::new();
-        let mut payloads: Vec<McpStatusPayload> = Vec::new();
-        {
-            let mut inner = self.inner.lock().await;
+            let keys = inner.sessions.remove(session).unwrap_or_default();
+            inner.snapshots.remove(session);
+            let mut services = Vec::new();
+            let mut payloads = Vec::new();
             for key in keys {
                 if let Some(e) = inner.entries.get_mut(&key) {
                     e.sessions.remove(session);
                     if e.sessions.is_empty() {
                         if let Some(svc) = e.service.take() {
-                            to_close.push(svc);
+                            services.push(svc);
                         }
                         clear_connection(e);
                         e.state = McpState::Stopped;
                         e.error = None;
-                        e.note = Some("会话已关闭".to_string());
+                        e.note = Some("会话已关闭".into());
                         payloads.push(payload_of(&key, e));
                     }
                 }
             }
-        }
-        for svc in to_close {
-            if let Some(svc) = Arc::into_inner(svc) {
-                let _ = svc.cancel().await;
-            }
+            (services, payloads)
+        };
+        drop(_commit);
+        for svc in services {
+            close_service(svc).await;
         }
         for p in payloads {
             self.emit(session, &p).await;
@@ -446,6 +689,7 @@ impl McpManager {
 
     /// 单 server 断开（保留可见集登记，便于重连）。
     pub async fn disconnect(&self, key: &PoolKey, session: &str) {
+        let _commit = super::config::CONFIG_COMMIT.lock().await;
         let (svc, payload) = {
             let mut inner = self.inner.lock().await;
             match inner.entries.get_mut(key) {
@@ -460,16 +704,18 @@ impl McpManager {
                 None => (None, None),
             }
         };
+        drop(_commit);
         if let Some(svc) = svc.and_then(Arc::into_inner) {
             let _ = svc.cancel().await;
         }
         if let Some(p) = payload {
-            self.emit(session, &p).await;
+            self.emit_key(key, session, &p).await;
         }
     }
 
-    /// 停止全部连接并清空（配置保存后热重载用）。每个条目都会发状态事件。
+    /// 明确全停（应用退出等），普通配置保存不可调用。
     pub async fn disconnect_all(&self) {
+        let _commit = super::config::CONFIG_COMMIT.lock().await;
         let (svcs, payloads) = {
             let mut inner = self.inner.lock().await;
             let keys: Vec<PoolKey> = inner.entries.keys().cloned().collect();
@@ -484,12 +730,15 @@ impl McpManager {
                     e.state = McpState::Stopped;
                     e.error = None;
                     e.note = Some("已停止".to_string());
+                    e.sessions.clear();
                     payloads.push(payload_of(&key, e));
                 }
             }
             inner.sessions.clear();
+            inner.snapshots.clear();
             (svcs, payloads)
         };
+        drop(_commit);
         for svc in svcs {
             if let Some(svc) = Arc::into_inner(svc) {
                 let _ = svc.cancel().await;
@@ -568,10 +817,33 @@ impl McpManager {
         http: reqwest::Client,
         session: &str,
     ) -> Result<usize, McpError> {
-        let generation = {
+        self.ensure_at(key, cfg, http, session, None).await
+    }
+
+    async fn ensure_at(
+        self: &Arc<Self>,
+        key: &PoolKey,
+        cfg: McpServerConfig,
+        http: reqwest::Client,
+        session: &str,
+        expected_generation: Option<u64>,
+    ) -> Result<usize, McpError> {
+        let (generation, handshake_cancel) = {
             let mut inner = self.inner.lock().await;
             if let Some(e) = inner.entries.get_mut(key) {
+                // Queued generation-owned work belongs to the key, not its initiating session.
+                // A surviving shared reference may complete it after the initiator closes.
+                if e.sessions.is_empty()
+                    || (expected_generation.is_none() && !e.sessions.contains(session))
+                    || e.cfg != cfg
+                    || expected_generation.is_some_and(|generation| generation != e.generation)
+                {
+                    return Err(changed_error());
+                }
                 e.last_used = self.tick();
+                if e.connecting {
+                    return Ok(0);
+                }
                 if e.state == McpState::Ready {
                     return Ok(e.tools.len());
                 }
@@ -585,12 +857,10 @@ impl McpManager {
                     ));
                 }
                 e.generation = e.generation.wrapping_add(1);
-                e.generation
+                e.connecting = true;
+                (e.generation, e.handshake_cancel.clone())
             } else {
-                let mut e = blank_entry(&cfg, self.tick());
-                e.generation = 1;
-                inner.entries.insert(key.clone(), e);
-                1
+                return Err(changed_error());
             }
         };
         for p in self.reserve_slot(key).await {
@@ -599,7 +869,12 @@ impl McpManager {
         if !self.set_starting(key, &cfg, session, generation).await {
             return Err(McpError::config("连接已取消"));
         }
-        match Self::spawn_connect(key, &cfg, http).await {
+        let connected = tokio::select! {
+            biased;
+            _ = handshake_cancel.cancelled() => Err(changed_error()),
+            result = Self::spawn_connect(key, &cfg, http) => result,
+        };
+        match connected {
             Ok(ready) => {
                 let n = ready.tools.len();
                 if self.set_ready(key, ready, session, generation).await {
@@ -639,7 +914,7 @@ impl McpManager {
             e.last_used = tick;
             payload_of(key, e)
         };
-        self.emit(session, &payload).await;
+        self.emit_key(key, session, &payload).await;
         true
     }
 
@@ -665,6 +940,8 @@ impl McpManager {
                 e.peer = Some(peer);
                 e.pid = pid;
                 e.dirty = Some(dirty);
+                e.connecting = false;
+                e.tool_schema_revision += 1;
                 e.state = McpState::Ready;
                 e.error = None;
                 e.note = None;
@@ -678,7 +955,7 @@ impl McpManager {
             }
             return false;
         };
-        self.emit(session, &payload).await;
+        self.emit_key(key, session, &payload).await;
         true
     }
 
@@ -695,12 +972,13 @@ impl McpManager {
             e.tools_filtered = 0;
             e.peer = None;
             e.pid = None;
+            e.connecting = false;
             e.state = McpState::Error(err.message.clone());
             e.error = Some(err);
             e.note = None;
             payload_of(key, e)
         };
-        self.emit(session, &payload).await;
+        self.emit_key(key, session, &payload).await;
     }
 
     /// 建连 + initialize + list_tools（含工具过滤）。
@@ -718,8 +996,8 @@ impl McpManager {
                 McpTransport::Stdio => {
                     let wrap = build_stdio_wrap(cfg)?;
                     let child = rmcp::transport::child_process::TokioChildProcess::new(wrap)
-                        .map_err(|e| {
-                            McpError::spawn(format!("进程启动失败：{e}"))
+                        .map_err(|_| {
+                            McpError::spawn("进程启动失败；请检查 command、cwd 与 env")
                                 .with_hint("检查 command 是否存在、cwd 是否有效、env 是否合法。")
                         })?;
                     let pid = child.id();
@@ -728,7 +1006,7 @@ impl McpManager {
                     }
                     .serve(child)
                     .await
-                    .map_err(|e| McpError::handshake(format!("initialize 失败：{e}")))?;
+                    .map_err(|_| McpError::handshake("initialize 失败；检查命令与连接设置"))?;
                     Ok::<(ClientService, Option<u32>), McpError>((Arc::new(svc), pid))
                 }
                 McpTransport::StreamableHttp => {
@@ -761,8 +1039,8 @@ impl McpManager {
                     }
                     .serve(tp)
                     .await
-                    .map_err(|e| {
-                        McpError::handshake(format!("连接失败：{e}")).with_hint(
+                    .map_err(|_| {
+                        McpError::handshake("连接失败；检查地址与鉴权设置").with_hint(
                             "确认服务端可达、鉴权头未过期；本地端点请确认代理未拦截 loopback。",
                         )
                     })?;
@@ -778,16 +1056,15 @@ impl McpManager {
                     "initialize 超时（{}s）",
                     INIT_TIMEOUT.as_secs()
                 ))
-                .with_hint(
-                    "server 无响应：确认它能独立启动；必要时调大该 server 的 timeout_ms。",
-                ));
+                .with_hint("server 无响应：确认它能独立启动；初始化上限为 30 秒。"));
             }
         };
         let peer = service.peer().clone();
-        let raw = match tokio::time::timeout(INIT_TIMEOUT, service.list_all_tools()).await {
+        let mut guard = ProbeGuard(Some(service));
+        let raw = match tokio::time::timeout(INIT_TIMEOUT, peer.list_all_tools()).await {
             Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                return Err(McpError::handshake(format!("list_tools 失败：{e}")));
+            Ok(Err(_)) => {
+                return Err(McpError::handshake("list_tools 失败"));
             }
             Err(_) => return Err(McpError::handshake("list_tools 超时")),
         };
@@ -801,6 +1078,10 @@ impl McpManager {
             })
             .collect();
         let (tools, filtered) = filter_tools(&cfg.tools, &all);
+        let service = guard
+            .0
+            .take()
+            .expect("probe owns service until successful handoff");
         Ok(Ready {
             tools,
             filtered,
@@ -827,6 +1108,9 @@ impl McpManager {
             // 再挑出本会话可见且已就绪的条目去刷新。
             let mut dirty = Vec::new();
             for (k, e) in inner.entries.iter_mut() {
+                if !keys.contains(k) {
+                    continue;
+                }
                 let flagged = e
                     .dirty
                     .as_ref()
@@ -859,23 +1143,115 @@ impl McpManager {
         defs
     }
 
+    /// Capture both wire definitions and private bindings in one lock, after dirty refresh.
+    pub async fn tool_snapshot_for(&self, session: &str) -> Vec<McpToolDef> {
+        let _ = self.tool_defs_for(session).await;
+        let mut inner = self.inner.lock().await;
+        let keys = inner.sessions.get(session).cloned().unwrap_or_default();
+        let tools: Vec<_> = keys
+            .iter()
+            .filter_map(|k| inner.entries.get(k))
+            .filter(|e| e.state == McpState::Ready)
+            .flat_map(|e| e.tools.iter().cloned())
+            .collect();
+        let (defs, index) = build_tool_defs(&tools);
+        let mut bindings = HashMap::new();
+        for (function, (server, tool)) in index {
+            if let Some(key) = keys.iter().find(|key| key.name == server)
+                && let Some(e) = inner.entries.get(key)
+            {
+                bindings.insert(
+                    function.clone(),
+                    CallBinding {
+                        function,
+                        tool,
+                        key: key.clone(),
+                        generation: e.generation,
+                        config_revision: e.config_revision,
+                        policy_revision: e.policy_revision,
+                        tool_schema_revision: e.tool_schema_revision,
+                        cfg: e.cfg.clone(),
+                    },
+                );
+            }
+        }
+        inner.snapshots.insert(session.into(), bindings);
+        defs
+    }
+
+    pub async fn request_binding(
+        &self,
+        session: &str,
+        function: &str,
+    ) -> Result<CallBinding, McpError> {
+        let inner = self.inner.lock().await;
+        let binding = inner
+            .snapshots
+            .get(session)
+            .and_then(|snapshot| snapshot.get(function))
+            .ok_or_else(changed_error)?;
+        validate_binding(&inner, session, binding)?;
+        Ok(binding.clone())
+    }
+
+    /// Policy-only merge into the latest document; endpoint/source/schema changes never inherit approval.
+    pub async fn allow_binding(
+        &self,
+        session: &str,
+        binding: &CallBinding,
+    ) -> Result<CallBinding, McpError> {
+        let _commit = super::config::CONFIG_COMMIT.lock().await;
+        let mut inner = self.inner.lock().await;
+        validate_binding(&inner, session, binding)?;
+        if binding.key.source.as_os_str().is_empty() {
+            return Err(changed_error());
+        }
+        let sref = super::config::ScopeRef {
+            scope: binding.key.scope,
+            path: binding.key.source.clone(),
+        };
+        let raw = super::config::read_scope_text(&sref)?;
+        let doc = super::config::parse_scope_text(&sref, &raw);
+        let current = doc
+            .servers
+            .iter()
+            .find(|(name, _)| name == &binding.key.name)
+            .map(|(_, cfg)| cfg);
+        if current != Some(&binding.cfg) {
+            return Err(changed_error());
+        }
+        super::config::set_always_allow(&sref, &binding.key.name, true, &binding.cfg)?;
+        let entry = inner
+            .entries
+            .get_mut(&binding.key)
+            .ok_or_else(changed_error)?;
+        entry.cfg.always_allow = true;
+        entry.policy_revision += 1;
+        let mut updated = binding.clone();
+        updated.cfg = entry.cfg.clone();
+        updated.policy_revision = entry.policy_revision;
+        Ok(updated)
+    }
+
     /// 重新列某条目的工具（`tools/list_changed` 后由 run 边界调用）。
     ///
     /// 失败只 `warn` 并保留旧列表——刷新失败不该把可用连接打成错误态。
     async fn refresh_tools(&self, key: &PoolKey, cfg: &McpServerConfig) {
         let peer = {
             let inner = self.inner.lock().await;
-            inner.entries.get(key).and_then(|e| e.peer.clone())
+            inner
+                .entries
+                .get(key)
+                .and_then(|e| e.peer.clone().map(|p| (p, e.generation)))
         };
-        let Some(peer) = peer else { return };
+        let Some((peer, generation)) = peer else {
+            return;
+        };
         let raw = match tokio::time::timeout(INIT_TIMEOUT, peer.list_all_tools()).await {
             Ok(Ok(t)) => t,
             other => {
-                tracing::warn!(
-                    "MCP {} 的 tools/list_changed 刷新失败：{:?}",
-                    key.name,
-                    other.map(|r| r.map(|_| ()))
-                );
+                let _ = other;
+                tracing::warn!("MCP tools/list_changed refresh failed");
                 return;
             }
         };
@@ -891,13 +1267,20 @@ impl McpManager {
             .collect();
         let (tools, filtered) = filter_tools(&cfg.tools, &all);
         let mut inner = self.inner.lock().await;
-        if let Some(e) = inner.entries.get_mut(key) {
+        if let Some(e) = inner.entries.get_mut(key)
+            && e.generation == generation
+            && e.cfg == *cfg
+        {
+            if e.tools != tools {
+                e.tool_schema_revision += 1;
+            }
             e.tools = tools;
             e.tools_filtered = filtered;
         }
     }
 
     /// 该次调用是否需要审批：返回 `(server 名, 工具名)`；`read_only` / `always_allow` 声明过则 `None`。
+    #[cfg(test)]
     pub async fn approval_target(&self, session: &str, function: &str) -> Option<(String, String)> {
         let inner = self.inner.lock().await;
         let keys = inner.sessions.get(session)?.clone();
@@ -931,50 +1314,32 @@ impl McpManager {
     /// 2. **超时**取自该 server 配置（`timeout_ms`，缺省 120s），不再硬编码。
     /// 3. **取消优先**：`cancel` 一旦置位立即返回 [`McpErrorKind::Cancelled`]，
     ///    且被取消的调用**不再重放**（取消优先于重连判定）。
-    pub async fn call(
+    pub async fn call_bound(
         &self,
         session: &str,
-        function: &str,
+        binding: &CallBinding,
         args: Value,
         cancel: &CancellationToken,
     ) -> Result<McpCallOutput, McpError> {
-        let (peer, tool, timeout) = {
+        let (peer, tool, timeout, _in_flight) = {
             let mut inner = self.inner.lock().await;
-            let keys: Vec<PoolKey> = inner
-                .sessions
-                .get(session)
-                .map(|s| s.iter().cloned().collect())
-                .unwrap_or_default();
-            let mut tools = Vec::new();
-            for k in &keys {
-                if let Some(e) = inner.entries.get(k)
-                    && e.state == McpState::Ready
-                {
-                    tools.extend(e.tools.iter().cloned());
-                }
+            validate_binding(&inner, session, binding)?;
+            if cancel.is_cancelled() {
+                return Err(McpError::cancelled());
             }
-            let (_, index) = build_tool_defs(&tools);
-            let Some((server, tool)) = index.get(function).cloned() else {
-                return Err(McpError::config(format!(
-                    "该会话不可见的 MCP 工具：{function}（可能属于其它项目、已禁用或未连接）"
-                )));
-            };
-            let Some(key) = keys.iter().find(|k| k.name == server) else {
-                return Err(McpError::config(format!(
-                    "MCP server 不在会话可见集：{server}"
-                )));
-            };
-            let Some(e) = inner.entries.get_mut(key) else {
-                return Err(McpError::config(format!("MCP server 未连接：{server}")));
-            };
-            let Some(peer) = e.peer.clone() else {
-                return Err(McpError::handshake(format!(
-                    "MCP server 不可用：{server}（{:?}）",
-                    e.state
-                )));
-            };
+            let e = inner
+                .entries
+                .get_mut(&binding.key)
+                .ok_or_else(changed_error)?;
+            let peer = e.peer.clone().ok_or_else(changed_error)?;
             e.last_used = self.tick();
-            (peer, tool, e.cfg.timeout())
+            e.in_flight.fetch_add(1, Ordering::AcqRel);
+            (
+                peer,
+                binding.tool.clone(),
+                e.cfg.timeout(),
+                InFlight(e.in_flight.clone()),
+            )
         };
 
         let mut params = CallToolRequestParams::new(tool.clone());
@@ -1000,6 +1365,22 @@ impl McpManager {
             },
         };
         Ok(map_call_output(result))
+    }
+
+    #[cfg(test)]
+    async fn call(
+        &self,
+        session: &str,
+        function: &str,
+        args: Value,
+        cancel: &CancellationToken,
+    ) -> Result<McpCallOutput, McpError> {
+        self.tool_snapshot_for(session).await;
+        let binding = self
+            .request_binding(session, function)
+            .await
+            .map_err(|_| McpError::config("该会话不可见的 MCP 工具"))?;
+        self.call_bound(session, &binding, args, cancel).await
     }
 
     /// 会话可见的状态（含未就绪条目，供状态表展示「连接中 / 失败 / 已淘汰」）。
@@ -1036,12 +1417,11 @@ impl McpManager {
         http: reqwest::Client,
     ) -> Result<usize, McpError> {
         let key = PoolKey::global("__test__");
-        let ready = Self::spawn_connect(&key, &cfg, http).await?;
+        let ready = tokio::time::timeout(PROBE_TIMEOUT, Self::spawn_connect(&key, &cfg, http))
+            .await
+            .map_err(|_| McpError::handshake("Draft probe timed out (60s total budget)"))??;
         let n = ready.tools.len();
-        let Ready { service, .. } = ready;
-        if let Some(svc) = Arc::into_inner(service) {
-            let _ = svc.cancel().await;
-        }
+        close_service(ready.service).await;
         Ok(n)
     }
 }
@@ -1072,6 +1452,12 @@ fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
         peer: None,
         pid: None,
         generation: 0,
+        config_revision: tick,
+        policy_revision: 0,
+        tool_schema_revision: 0,
+        connecting: false,
+        handshake_cancel: CancellationToken::new(),
+        in_flight: Arc::new(AtomicUsize::new(0)),
         sessions: HashSet::new(),
         last_used: tick,
         dirty: None,
@@ -1087,11 +1473,13 @@ fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
 fn classify_service_error(e: rmcp::service::ServiceError) -> McpError {
     use rmcp::service::ServiceError as E;
     match e {
-        E::TransportSend(inner) => McpError::handshake(format!("传输发送失败：{inner}")),
+        E::TransportSend(_) => {
+            McpError::handshake("传输发送失败；远端结果可能已生效，不会自动重放")
+        }
         E::TransportClosed => McpError::handshake("连接已断开（transport closed）"),
         E::Cancelled { .. } => McpError::cancelled(),
         E::Timeout { timeout } => McpError::call(format!("MCP 调用超时（{timeout:?}）")),
-        other => McpError::call(format!("{other}")),
+        _ => McpError::call("MCP 调用失败；远端结果可能已生效，不会自动重放"),
     }
 }
 
@@ -1230,6 +1618,555 @@ mod tests {
         .unwrap()
     }
 
+    async fn ready_manager(session: &str, key: PoolKey, cfg: McpServerConfig) -> Arc<McpManager> {
+        assert!(
+            node_available(),
+            "Node is required for MCP protocol regression tests"
+        );
+        let manager = Arc::new(McpManager::default());
+        manager
+            .warm(session, vec![(key, cfg)], reqwest::Client::new())
+            .await;
+        wait_ready(&manager, session, 1).await;
+        manager
+    }
+
+    async fn wait_ready(manager: &McpManager, session: &str, count: usize) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let status = manager.status_for(session).await;
+                if status.len() == count
+                    && status.iter().all(|entry| entry.state == McpState::Ready)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("MCP servers did not become ready");
+    }
+
+    #[tokio::test]
+    async fn reconcile_equivalent_configs_preserves_ready_identity_and_shared_refs() {
+        let manager = Arc::new(McpManager::default());
+        let global = PoolKey::global("shared");
+        let a = PoolKey::project("a", "private");
+        let b = PoolKey::project("b", "private");
+        let cfg = bogus_cfg();
+        manager
+            .register_session(
+                "a",
+                &[(global.clone(), cfg.clone()), (a.clone(), cfg.clone())],
+            )
+            .await;
+        manager
+            .register_session(
+                "b",
+                &[(global.clone(), cfg.clone()), (b.clone(), cfg.clone())],
+            )
+            .await;
+        {
+            let mut inner = manager.inner.lock().await;
+            for entry in inner.entries.values_mut() {
+                entry.state = McpState::Ready;
+                entry.generation = 7;
+                entry.pid = Some(1234);
+            }
+        }
+        let mut changed = cfg.clone();
+        changed.args = vec!["changed".into()];
+        let (_, affected) = manager
+            .apply_sessions(
+                &[(
+                    "a".into(),
+                    vec![(global.clone(), cfg.clone()), (a.clone(), changed)],
+                )],
+                true,
+            )
+            .await;
+        assert_eq!(affected, vec!["project:private"]);
+        let inner = manager.inner.lock().await;
+        for key in [&global, &b] {
+            assert_eq!(inner.entries[key].generation, 7);
+            assert_eq!(inner.entries[key].pid, Some(1234));
+        }
+        assert_eq!(inner.entries[&global].sessions.len(), 2);
+        assert_eq!(inner.entries[&a].generation, 8);
+        assert_eq!(inner.entries[&a].pid, None);
+    }
+
+    #[tokio::test]
+    async fn closed_session_reconcile_does_not_resurrect_and_path_identity_is_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = PoolKey::project("same-id", "server").with_source(&dir.path().join("old/mcp.json"));
+        let b = PoolKey::project("same-id", "server").with_source(&dir.path().join("new/mcp.json"));
+        assert_ne!(a, b);
+        let manager = Arc::new(McpManager::default());
+        manager
+            .register_session("closed", &[(a.clone(), bogus_cfg())])
+            .await;
+        manager.release_session("closed").await;
+        let affected = manager
+            .reconcile(
+                vec![("closed".into(), vec![(a, bogus_cfg())])],
+                reqwest::Client::new(),
+            )
+            .await;
+        assert!(affected.is_empty());
+        assert!(manager.visible_keys("closed").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn other_sessions_dirty_notification_is_not_consumed() {
+        let manager = McpManager::default();
+        let a = PoolKey::global("a");
+        let b = PoolKey::global("b");
+        manager.register_session("a", &[(a, bogus_cfg())]).await;
+        manager
+            .register_session("b", &[(b.clone(), bogus_cfg())])
+            .await;
+        let flag = Arc::new(AtomicBool::new(true));
+        manager
+            .inner
+            .lock()
+            .await
+            .entries
+            .get_mut(&b)
+            .unwrap()
+            .dirty = Some(flag.clone());
+        manager.tool_defs_for("a").await;
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn changed_target_rejects_old_ticket_but_drains_admitted_call_without_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let mut cfg = node_cfg();
+        cfg.env
+            .insert("CODEWAVE_TEST_CALL_LOG".into(), log.display().to_string());
+        let key = PoolKey::global("server");
+        let manager = ready_manager("s", key.clone(), cfg.clone()).await;
+        manager.tool_snapshot_for("s").await;
+        let binding = manager
+            .request_binding("s", "mcp__server__echo")
+            .await
+            .unwrap();
+        let running = {
+            let manager = manager.clone();
+            let binding = binding.clone();
+            tokio::spawn(async move {
+                manager
+                    .call_bound(
+                        "s",
+                        &binding,
+                        json!({"text":"one-write", "delay_ms": 300}),
+                        &CancellationToken::new(),
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !log.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cfg.extra.insert("changed-extension".into(), json!(true));
+        manager
+            .reconcile(vec![("s".into(), vec![(key, cfg)])], reqwest::Client::new())
+            .await;
+        let stale = manager
+            .call_bound(
+                "s",
+                &binding,
+                json!({"text":"must-not-dispatch"}),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(stale.message.contains("configuration changed"));
+        assert_eq!(running.await.unwrap().unwrap().text, "echo: one-write");
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        manager.disconnect_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn always_allow_patch_merges_other_fields_and_never_refreshes_stale_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let cfg = node_cfg();
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({"mcpServers":{"server":cfg},"custom":"old"})).unwrap(),
+        )
+        .unwrap();
+        let key = PoolKey::global("server").with_source(&path);
+        let manager = ready_manager("s", key.clone(), cfg.clone()).await;
+        manager.tool_snapshot_for("s").await;
+        let ticket = manager
+            .request_binding("s", "mcp__server__echo")
+            .await
+            .unwrap();
+        let before = manager.status_for("s").await[0].clone();
+        // Another writer's unrelated document change must survive the patch.
+        std::fs::write(
+            &path,
+            serde_json::to_string(
+                &json!({"mcpServers":{"server":cfg,"other":{"command":"other"}},"custom":"new"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let updated = manager.allow_binding("s", &ticket).await.unwrap();
+        assert!(!updated.requires_approval());
+        let after = manager.status_for("s").await[0].clone();
+        assert_eq!(before.generation, after.generation);
+        assert_eq!(before.pid, after.pid);
+        assert!(after.policy_revision > before.policy_revision);
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["custom"], "new");
+        assert!(doc["mcpServers"]["other"].is_object());
+        assert_eq!(doc["mcpServers"]["server"]["always_allow"], true);
+        assert!(
+            manager
+                .call_bound("s", &ticket, json!({}), &CancellationToken::new())
+                .await
+                .is_err()
+        );
+        let mut changed = cfg;
+        changed.command = Some("new-endpoint".into());
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({"mcpServers":{"server":changed}})).unwrap(),
+        )
+        .unwrap();
+        assert!(manager.allow_binding("s", &updated).await.is_err());
+        assert!(serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap()["mcpServers"]["server"].get("always_allow").is_none());
+        manager.disconnect_all().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborted_probe_reaps_child_during_initialize_and_tools_list() {
+        assert!(
+            node_available(),
+            "Node is required for MCP probe cleanup tests"
+        );
+        for phase in ["CODEWAVE_TEST_INIT_DELAY_MS", "CODEWAVE_TEST_LIST_DELAY_MS"] {
+            let dir = tempfile::tempdir().unwrap();
+            let pidfile = dir.path().join("pid");
+            let mut cfg = node_cfg();
+            cfg.env.insert(
+                "CODEWAVE_TEST_PID_FILE".into(),
+                pidfile.display().to_string(),
+            );
+            cfg.env.insert(phase.into(), "30000".into());
+            let handle = tokio::spawn(McpManager::test_connection(cfg, reqwest::Client::new()));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !pidfile.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let pid = std::fs::read_to_string(pidfile).unwrap();
+            handle.abort();
+            let _ = handle.await;
+            tokio::time::timeout(Duration::from_secs(7), async {
+                while std::process::Command::new("kill")
+                    .args(["-0", &pid])
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+                {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("aborted draft probe left its child alive");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn private_edit_preserves_other_project_and_shared_global_inflight_identity() {
+        let global = PoolKey::global("shared");
+        let a = PoolKey::project("a", "private-a");
+        let b = PoolKey::project("b", "private-b");
+        let cfg = node_cfg();
+        let manager = ready_manager("a", global.clone(), cfg.clone()).await;
+        manager
+            .warm(
+                "a",
+                vec![(global.clone(), cfg.clone()), (a.clone(), cfg.clone())],
+                reqwest::Client::new(),
+            )
+            .await;
+        manager
+            .warm(
+                "b",
+                vec![(global.clone(), cfg.clone()), (b.clone(), cfg.clone())],
+                reqwest::Client::new(),
+            )
+            .await;
+        wait_ready(&manager, "a", 2).await;
+        wait_ready(&manager, "b", 2).await;
+        let before = manager.status_for("b").await;
+        manager.tool_snapshot_for("b").await;
+        let ticket = manager
+            .request_binding("b", "mcp__private-b__echo")
+            .await
+            .unwrap();
+        let running = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .call_bound(
+                        "b",
+                        &ticket,
+                        json!({"text":"unaffected", "delay_ms": 300}),
+                        &CancellationToken::new(),
+                    )
+                    .await
+            })
+        };
+        let mut changed = cfg.clone();
+        changed.extra.insert("revision".into(), json!(2));
+        let affected = manager
+            .reconcile(
+                vec![(
+                    "a".into(),
+                    vec![(global.clone(), cfg.clone()), (a.clone(), changed)],
+                )],
+                reqwest::Client::new(),
+            )
+            .await;
+        assert_eq!(affected, vec!["project:private-a"]);
+        assert_eq!(running.await.unwrap().unwrap().text, "echo: unaffected");
+        let after = manager.status_for("b").await;
+        for (old, new) in before.iter().zip(after.iter()) {
+            assert_eq!(old.pid, new.pid);
+            assert_eq!(old.generation, new.generation);
+        }
+        wait_ready(&manager, "a", 2).await;
+        let current_cfg = manager.inner.lock().await.entries[&a].cfg.clone();
+        let no_op = manager
+            .reconcile(
+                vec![("a".into(), vec![(global, cfg), (a, current_cfg)])],
+                reqwest::Client::new(),
+            )
+            .await;
+        assert!(no_op.is_empty());
+        assert_eq!(manager.status_for("b").await[0].pid, before[0].pid);
+        manager.disconnect_all().await;
+    }
+
+    #[tokio::test]
+    async fn stale_schema_scope_and_queued_connect_are_rejected_without_dispatch() {
+        let manager = Arc::new(McpManager::default());
+        let key = PoolKey::global("server");
+        let cfg = bogus_cfg();
+        manager
+            .register_session("s", &[(key.clone(), cfg.clone())])
+            .await;
+        {
+            let mut inner = manager.inner.lock().await;
+            let entry = inner.entries.get_mut(&key).unwrap();
+            entry.state = McpState::Ready;
+            entry.tools = vec![McpTool {
+                server: "server".into(),
+                name: "echo".into(),
+                description: "echo".into(),
+                schema_json: "{}".into(),
+            }];
+        }
+        manager.tool_snapshot_for("s").await;
+        let binding = manager
+            .request_binding("s", "mcp__server__echo")
+            .await
+            .unwrap();
+        manager
+            .inner
+            .lock()
+            .await
+            .entries
+            .get_mut(&key)
+            .unwrap()
+            .tool_schema_revision += 1;
+        assert!(
+            manager
+                .request_binding("s", "mcp__server__echo")
+                .await
+                .is_err()
+        );
+        assert!(
+            manager
+                .call_bound("s", &binding, json!({}), &CancellationToken::new())
+                .await
+                .is_err()
+        );
+        let generation = manager.inner.lock().await.entries[&key].generation;
+        manager.disconnect(&key, "s").await;
+        assert!(
+            manager
+                .ensure_at(&key, cfg, reqwest::Client::new(), "s", Some(generation))
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.status_for("s").await[0].state, McpState::Stopped);
+        manager
+            .apply_sessions(
+                &[(
+                    "s".into(),
+                    vec![(PoolKey::project("p", "server"), bogus_cfg())],
+                )],
+                true,
+            )
+            .await;
+        assert!(
+            manager
+                .call_bound("s", &binding, json!({}), &CancellationToken::new())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn selected_connect_registers_new_session_and_reconnect_leaves_other_stopped() {
+        assert!(
+            node_available(),
+            "Node required for selected-connect regression"
+        );
+        let manager = Arc::new(McpManager::default());
+        let a = PoolKey::global("a");
+        let b = PoolKey::global("b");
+        let visible = vec![(a.clone(), node_cfg()), (b.clone(), node_cfg())];
+        manager
+            .connect_named("s", visible.clone(), &["a".into()], reqwest::Client::new())
+            .await;
+        wait_ready(&manager, "s", 1).await;
+        assert_eq!(manager.visible_keys("s").await, vec![a.clone()]);
+        manager
+            .connect_named("s", visible.clone(), &["b".into()], reqwest::Client::new())
+            .await;
+        wait_ready(&manager, "s", 2).await;
+        manager.disconnect(&b, "s").await;
+        let stopped_generation = manager.inner.lock().await.entries[&b].generation;
+        manager.disconnect(&a, "s").await;
+        manager
+            .connect_named("s", visible.clone(), &["a".into()], reqwest::Client::new())
+            .await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.inner.lock().await.entries[&a].state != McpState::Ready {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let inner = manager.inner.lock().await;
+        assert_eq!(inner.entries[&b].state, McpState::Stopped);
+        assert_eq!(inner.entries[&b].generation, stopped_generation);
+        drop(inner);
+        manager.release_session("s").await;
+        manager
+            .connect_named("s", visible, &["a".into()], reqwest::Client::new())
+            .await;
+        wait_ready(&manager, "s", 1).await;
+        manager.disconnect_all().await;
+    }
+
+    #[tokio::test]
+    async fn differential_save_never_retries_unchanged_stopped_or_error_entries() {
+        for state in [McpState::Stopped, McpState::Error("saved failure".into())] {
+            let manager = Arc::new(McpManager::default());
+            let a = PoolKey::global("a");
+            let b = PoolKey::global("b");
+            let cfg = bogus_cfg();
+            manager
+                .register_session("s", &[(a.clone(), cfg.clone()), (b.clone(), cfg.clone())])
+                .await;
+            {
+                let mut inner = manager.inner.lock().await;
+                inner.entries.get_mut(&a).unwrap().state = McpState::Ready;
+                let b = inner.entries.get_mut(&b).unwrap();
+                b.state = state.clone();
+                b.generation = 42;
+            }
+            let unchanged = manager
+                .reconcile(
+                    vec![(
+                        "s".into(),
+                        vec![(a.clone(), cfg.clone()), (b.clone(), cfg.clone())],
+                    )],
+                    reqwest::Client::new(),
+                )
+                .await;
+            assert!(unchanged.is_empty());
+            let mut changed = cfg.clone();
+            changed.extra.insert("revision".into(), json!(2));
+            let affected = manager
+                .reconcile(
+                    vec![("s".into(), vec![(a, changed), (b.clone(), cfg)])],
+                    reqwest::Client::new(),
+                )
+                .await;
+            assert_eq!(affected, vec!["global:a"]);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let inner = manager.inner.lock().await;
+            assert_eq!(inner.entries[&b].state, state);
+            assert_eq!(inner.entries[&b].generation, 42);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_changed_connection_transfers_queued_handshake_to_surviving_reference() {
+        assert!(
+            node_available(),
+            "Node required for shared-handshake regression"
+        );
+        let manager = Arc::new(McpManager::default());
+        let key = PoolKey::global("shared");
+        let cfg = node_cfg();
+        manager
+            .register_session("initiator", &[(key.clone(), cfg.clone())])
+            .await;
+        manager
+            .register_session("survivor", &[(key.clone(), cfg.clone())])
+            .await;
+        let mut changed = cfg;
+        changed.extra.insert("revision".into(), json!(2));
+        let (pending, _) = manager
+            .apply_sessions(
+                &[
+                    ("initiator".into(), vec![(key.clone(), changed.clone())]),
+                    ("survivor".into(), vec![(key.clone(), changed.clone())]),
+                ],
+                true,
+            )
+            .await;
+        assert_eq!(pending[0].1.len(), 1);
+        assert!(pending[1].1.is_empty());
+        let generation = manager.inner.lock().await.entries[&key].generation;
+        manager.release_session("initiator").await;
+        manager
+            .ensure_at(
+                &key,
+                changed,
+                reqwest::Client::new(),
+                "initiator",
+                Some(generation),
+            )
+            .await
+            .unwrap();
+        wait_ready(&manager, "survivor", 1).await;
+        assert!(manager.visible_keys("initiator").await.is_empty());
+        manager.disconnect_all().await;
+    }
+
     #[test]
     fn pool_key_scope_and_name_are_part_of_identity() {
         assert_ne!(PoolKey::global("fs"), PoolKey::project("p1", "fs"));
@@ -1291,7 +2228,8 @@ mod tests {
             "s",
             vec![(key.clone(), bogus_cfg())],
             reqwest::Client::new(),
-        );
+        )
+        .await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         {
             let mut inner = mgr.inner.lock().await;
@@ -1339,7 +2277,7 @@ mod tests {
             let mgr = Arc::new(McpManager::default());
             // 会话 A 可见 fs；会话 B 完全看不到任何 MCP
             let visible = vec![(PoolKey::global("fs"), bogus_cfg())];
-            mgr.warm("sA", visible, reqwest::Client::new());
+            mgr.warm("sA", visible, reqwest::Client::new()).await;
             // 等 warm 的内部任务跑完
             tokio::time::sleep(Duration::from_millis(300)).await;
             let cancel = CancellationToken::new();
@@ -1372,7 +2310,8 @@ mod tests {
                 "s1",
                 vec![(PoolKey::global("a"), bogus_cfg())],
                 reqwest::Client::new(),
-            );
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             assert_eq!(mgr.visible_keys("s1").await.len(), 1);
             mgr.release_session("s1").await;
@@ -1419,7 +2358,8 @@ mod tests {
         }
         let mgr = Arc::new(McpManager::default());
         let key = PoolKey::global("test");
-        mgr.warm("s", vec![(key.clone(), node_cfg())], reqwest::Client::new());
+        mgr.warm("s", vec![(key.clone(), node_cfg())], reqwest::Client::new())
+            .await;
         let pid = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(p) = mgr
@@ -1497,7 +2437,8 @@ mod tests {
                     &s,
                     vec![(PoolKey::global("a"), bogus_cfg())],
                     reqwest::Client::new(),
-                );
+                )
+                .await;
                 tokio::time::sleep(Duration::from_millis(120)).await;
                 mgr.release_session(&s).await;
             }
@@ -1521,7 +2462,8 @@ mod tests {
                     &format!("s{i}"),
                     vec![(PoolKey::global(format!("srv{i}")), bogus_cfg())],
                     reqwest::Client::new(),
-                );
+                )
+                .await;
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
             // 全部释放 → 引用归零，但条目仍在（Stopped）
@@ -1533,7 +2475,8 @@ mod tests {
                 "sx",
                 vec![(PoolKey::global("srv-new"), bogus_cfg())],
                 reqwest::Client::new(),
-            );
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             let events = log.lock().unwrap().clone();
             assert!(
@@ -1552,7 +2495,8 @@ mod tests {
                 "s0",
                 vec![(PoolKey::global("srv0"), bogus_cfg())],
                 reqwest::Client::new(),
-            );
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(200)).await;
             // 再塞 3 个新键：池上限 2，但 srv0 被引用，不得淘汰
             for i in 1..4 {
@@ -1560,7 +2504,8 @@ mod tests {
                     &format!("s{i}"),
                     vec![(PoolKey::global(format!("srv{i}")), bogus_cfg())],
                     reqwest::Client::new(),
-                );
+                )
+                .await;
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
             let keys = mgr.visible_keys("s0").await;
@@ -1592,7 +2537,8 @@ mod tests {
             "s-main",
             vec![(PoolKey::global("wavetest.proxy"), node_cfg())],
             reqwest::Client::new(),
-        );
+        )
+        .await;
         for _ in 0..50 {
             if mgr
                 .status_for("s-main")
@@ -1649,7 +2595,8 @@ mod tests {
             "s",
             vec![(PoolKey::global("t"), node_cfg())],
             reqwest::Client::new(),
-        );
+        )
+        .await;
         for _ in 0..50 {
             if mgr
                 .status_for("s")
@@ -1706,7 +2653,8 @@ mod tests {
             "s",
             vec![(PoolKey::global("h"), cfg)],
             reqwest::Client::new(),
-        );
+        )
+        .await;
         for _ in 0..50 {
             if mgr
                 .status_for("s")
@@ -1840,7 +2788,8 @@ setInterval(()=>{}, 1000);
             "s",
             vec![(PoolKey::global("t"), cfg)],
             reqwest::Client::new(),
-        );
+        )
+        .await;
         let mut ready = false;
         for _ in 0..80 {
             if mgr

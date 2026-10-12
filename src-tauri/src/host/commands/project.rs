@@ -35,131 +35,152 @@ fn persist_project(
 
 // ---------- 配置 ----------
 
-/// 读取当前配置（key 脱敏后返回前端）。
+use crate::core::config_commit::{
+    ConfigCommitError, ConfigPatch, ConfigSaveResult, ConfigSnapshot, ConfigVersion,
+    CredentialEdits,
+};
+
+/// The authoritative snapshot includes field-domain versions and startup security warnings.
 #[tauri::command]
-pub async fn get_config(core: Core<'_>) -> Result<ConfigState, String> {
-    Ok(core.cfg.read().unwrap().sanitized())
+pub async fn get_config(core: Core<'_>) -> Result<ConfigSnapshot, ConfigCommitError> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.config_commits.snapshot(&core.cfg))
+        .await
+        .map_err(|_| commit_worker_error())
 }
 
-/// 保存配置：掩码回填 → 落盘 → keyring 迁移 → 日志级别热切换 → 冷却清零。
-/// 会话保留期变化且未跳过时，保存后再跑一次会话清理并把结果回传
-///（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：前端先预览/确认，取消时传 skip_cleanup = true）。
-/// 返回 `None` = 本次没有触发清理（保留期未变 / 明确跳过 / 新保留期为「不清理」）。
+#[tauri::command]
+pub async fn get_config_operation(
+    core: Core<'_>,
+    operation_id: String,
+) -> Result<ConfigSaveResult, ConfigCommitError> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.config_commits.operation(&core.cfg, &operation_id)
+    })
+    .await
+    .map_err(|_| commit_worker_error())?
+}
+
+fn commit_worker_error() -> ConfigCommitError {
+    ConfigCommitError {
+        code: "OperationUncertain".into(),
+        message:
+            "Configuration worker stopped. Query the operation receipt or refresh before retrying"
+                .into(),
+    }
+}
+
+/// All blocking keyring/file operations run on the blocking pool. The coordinator owns validation,
+/// immutable credentials, field ownership, revision checks, the commit point and effect selection.
 #[tauri::command]
 pub async fn save_config(
     core: Core<'_>,
     config: ConfigState,
+    expected_version: ConfigVersion,
+    operation_id: String,
+    credential_edits: CredentialEdits,
     skip_cleanup: Option<bool>,
-) -> Result<Option<crate::core::sessions::CleanupOutcome>, String> {
-    let mut updated = config;
-    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：落盘前校验自定义请求头（头名合法/非保留/不重复、值无换行）
-    for p in &updated.providers {
-        crate::core::config::validate_request_headers(&p.headers)
-            .map_err(|e| format!("供应商「{}」：{e}", p.name))?;
-    }
-    {
-        let current = core.cfg.read().unwrap().clone();
-        apply_page_save_shape(&mut updated, &current);
-    }
-    // 保留期是否变化必须在覆盖内存配置**之前**比较（下面会写 core.cfg）
-    let cleanup_days = cleanup_due(
-        core.cfg.read().unwrap().sessions.retention_days,
-        updated.sessions.retention_days,
-        skip_cleanup,
-    );
-    updated.save().map_err(err)?;
-    // 配置先保存再迁入 keyring（迁移成功后以占位符重存，[docs/providers-and-network](../../../../docs/providers-and-network.md)）；失败保留明文并告警
-    let (changed, warn) = crate::host::keyring::migrate(&mut updated);
-    if let Some(w) = warn {
-        tracing::warn!("keyring 迁移未完成：{w}");
-    }
-    if changed {
-        updated.save().map_err(err)?;
-    }
-    // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：日志级别热切换（无条件调用更便宜且自愈漂移；RUST_LOG 覆盖时为 no-op）
-    crate::core::logging::apply_config_level(&updated.log.level);
-    // 代理热生效：无条件重建共享 client（顺带完成 System 模式重探测；与日志级别同一「便宜且自愈」思路，
-    // [docs/providers-and-network](../../../../docs/providers-and-network.md)）。运行中请求持旧 client clone 不受影响
-    *core.client.write().unwrap() = crate::provider::proxy::build_client(&updated);
-    *core.cfg.write().unwrap() = updated;
-    // [docs/providers-and-network](../../../../docs/providers-and-network.md)：保存的 key 下次尝试即生效——残留的认证/瞬时冷却不得在用户修好配置后
-    // 仍然 failover 到其他 key
-    core.key_pool.reset_all();
-    let Some(days) = cleanup_days else {
-        return Ok(None);
-    };
-    // 清理要删文件（阻塞 IO）：放到阻塞线程上跑，不占住 async worker 让其它命令排队
-    //（与启动清理同一处理）。行为不变：仍然等出结果再返回。
-    // 清理自己炸掉时配置已经落盘——只记 warning 并按「本次不清理」回答，
-    // 不让前端把保存当失败（宁可不报清理结果，也不误报保存失败）。
-    let cleanup_core = core.inner().clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        super::session::execute_cleanup(&cleanup_core, days)
+) -> Result<ConfigSaveResult, ConfigCommitError> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = core.commit_config(
+            ConfigPatch::Page {
+                config: Box::new(config),
+                expected: expected_version,
+                edits: credential_edits.0,
+                skip_cleanup: skip_cleanup.unwrap_or(false),
+            },
+            &operation_id,
+        )?;
+        if !result.replayed {
+            let mut post_completed = true;
+            if let Some(days) = result.effects.cleanup_days {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::session::execute_cleanup(&core, days)
+                })) {
+                    Ok(outcome) => result.cleanup = Some(outcome),
+                    Err(_) => {
+                        post_completed = false;
+                        result.snapshot.warnings.push(
+                            "Configuration saved; session cleanup failed and needs review".into(),
+                        );
+                    }
+                }
+            }
+            if post_completed
+                && core
+                    .config_commits
+                    .mark_post_processed(&operation_id)
+                    .is_err()
+            {
+                result
+                    .snapshot
+                    .warnings
+                    .push("Configuration saved; post-processing receipt needs retry".into());
+            }
+        }
+        Ok(result)
     })
     .await
-    {
-        Ok(outcome) => Ok(Some(outcome)),
-        Err(e) => {
-            tracing::warn!("会话保留期清理任务异常结束（配置已保存，本次不清理）：{e}");
-            Ok(None)
-        }
-    }
+    .map_err(|_| commit_worker_error())?
 }
 
-/// 保存配置后是否需要执行清理：保留期**确实变化**、未明确跳过、且新保留期是合法档位时
-/// 返回要用的天数（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 第 12/27 条）。
-/// 0 与其他白名单之外的怪值一律不触发（手上改配置/旧值都不该删数据）。
-/// 抽成纯函数是为了让判断本身可单测（命令体需要 Tauri State，测不到）。
-fn cleanup_due(
-    old_days: Option<u32>,
-    new_days: Option<u32>,
-    skip_cleanup: Option<bool>,
-) -> Option<u32> {
-    let new = new_days?;
-    if !crate::core::sessions::cleanup::is_valid_retention_days(new)
-        || skip_cleanup == Some(true)
-        || old_days == new_days
-    {
-        return None;
-    }
-    Some(new)
-}
-
-/// 只写字体偏好（界面字体 / 等宽字体）并**落盘**。
-///
-/// 为什么单独一条命令：字体是「即改即生效」的 UI 偏好，不该拖到页级「保存」才生效；
-/// 也就不能走 `save_config`（那是整份覆盖，会把用户还没保存的其他改动一并写进去）。
-/// 与其它「即改即生效」偏好同一纪律：**先落盘再改内存**，且只 patch 这两个字段。
-/// 值净化（引号/控制字符、折叠空白）由前端 `utils/fonts.ts` 负责，这里只做 trim。
 #[tauri::command]
-pub async fn set_font_prefs(core: Core<'_>, sans: String, mono: String) -> Result<(), String> {
-    let mut snapshot = core.cfg.read().unwrap().clone();
-    apply_font_prefs(&mut snapshot.ui, &sans, &mono);
-    snapshot.save().map_err(err)?;
-    {
-        let mut guard = core.cfg.write().unwrap();
-        apply_font_prefs(&mut guard.ui, &sans, &mono);
-    }
-    tracing::debug!("字体偏好已落盘");
-    Ok(())
+pub async fn set_subagent_model(
+    core: Core<'_>,
+    role: String,
+    model_id: Option<String>,
+    expected_version: ConfigVersion,
+    operation_id: String,
+) -> Result<ConfigSaveResult, ConfigCommitError> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.commit_config(
+            ConfigPatch::Role {
+                role,
+                model_id,
+                expected: expected_version,
+            },
+            &operation_id,
+        )
+    })
+    .await
+    .map_err(|_| commit_worker_error())?
 }
 
-/// 字体偏好写入 `ui` 段（空串 = 默认字体链）。
+#[tauri::command]
+pub async fn set_font_prefs(
+    core: Core<'_>,
+    sans: String,
+    mono: String,
+    operation_id: Option<String>,
+) -> Result<ConfigSaveResult, ConfigCommitError> {
+    let core = core.inner().clone();
+    let operation_id = operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        core.commit_config(ConfigPatch::Fonts { sans, mono }, &operation_id)
+    })
+    .await
+    .map_err(|_| commit_worker_error())?
+}
+
+#[cfg(test)]
+fn cleanup_due(old: Option<u32>, new: Option<u32>, skip: Option<bool>) -> Option<u32> {
+    new.filter(|d| {
+        old != new
+            && skip != Some(true)
+            && crate::core::sessions::cleanup::is_valid_retention_days(*d)
+    })
+}
+#[cfg(test)]
 fn apply_font_prefs(ui: &mut crate::core::config::UiPrefs, sans: &str, mono: &str) {
-    ui.font_sans = sans.trim().to_string();
-    ui.font_mono = mono.trim().to_string();
+    ui.font_sans = sans.trim().into();
+    ui.font_mono = mono.trim().into();
 }
-
-/// 页级保存的形状修正：掩码回填（不回写脱敏占位）+ 护住由专门命令独占维护的字段。
-///
-/// 抽成独立函数是为了让**调用点**也进测试边界：原缺陷正是「页级保存少护了一次」，
-/// 只测 preserve 辅助函数的话，删掉调用点仍然全绿。
+#[cfg(test)]
 fn apply_page_save_shape(updated: &mut ConfigState, current: &ConfigState) {
-    updated.unmask_from(current);
-    // 字体偏好由 `set_font_prefs` 独占维护（即时生效、不进草稿）：页级「保存」不得用
-    // 「打开设置页时的旧快照」覆盖它（否则「改完字体 → 保存其他设置 → 重启」会静默回滚）
-    updated.ui.font_sans = current.ui.font_sans.clone();
-    updated.ui.font_mono = current.ui.font_mono.clone();
+    crate::core::config_commit::preserve_instant_fields(updated, current);
 }
 
 /// 当前配置解析出的代理 URL（None = 直连）：设置页「系统代理」回显与前端更新检查传参共用
@@ -213,6 +234,7 @@ pub async fn delete_project(
                     })
                     .await;
                 }
+                core.mcp.release_session(sid).await;
                 core.sessions.remove(sid);
                 let _ = core.store.remove(sid);
             }
@@ -222,7 +244,7 @@ pub async fn delete_project(
         }
     }
     let mut n = sessions.len();
-    crate::core::projects::delete_project(&core.data_dir, &project_id).map_err(err)?;
+    core.tasks.delete_project(&project_id).await.map_err(err)?;
     // H5：最终清扫——快照之后同一项目新建的会话一并删除
     let leftovers: Vec<String> = core
         .store
@@ -235,6 +257,7 @@ pub async fn delete_project(
         if let Some(rt) = core.session(&sid) {
             rt.zombie.store(true, std::sync::atomic::Ordering::SeqCst);
         }
+        core.mcp.release_session(&sid).await;
         core.sessions.remove(&sid);
         let _ = core.store.remove(&sid);
         n += 1;

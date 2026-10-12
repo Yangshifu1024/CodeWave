@@ -30,80 +30,151 @@ export function statusLabel(status: string | null | undefined, t: (key: string) 
 interface TasksState {
   items: ScheduledTask[];
   loading: boolean;
-  /** 加载/操作失败的原因（null = 无错误）；界面据此显示错误行 */
   error: string | null;
-  /** 正在运行的任务 id（由 scheduled:fired / scheduled:done 驱动；不持久化） */
+  diagnostics: import("../ipc/types").TaskDiagnostics | null;
   runningIds: string[];
+  runningRuns: Record<string, string>;
+  terminalRuns: string[];
+  deletedIds: string[];
   load(): Promise<void>;
-  applyFired(p: { id?: string; name?: string }): void;
-  applyDone(p: { id?: string; name?: string; status?: string; summary?: string }): void;
-  upsertLocal(task: ScheduledTask): void;
+  loadDiagnostics(): Promise<void>;
+  applyFired(p: { id?: string; name?: string; run_id?: string }): void;
+  applyDone(p: { id?: string; name?: string; run_id?: string; status?: string; summary?: string; persistence_error?: string | null }): void;
+  captureRevision(): number;
+  upsertLocal(task: ScheduledTask, requestRevision?: number): void;
   removeLocal(id: string): void;
 }
 
+// Any event/edit/delete invalidates a list request started before it. A newer request wins.
+let requestSerial = 0;
+let revision = 0;
+let diagnosticsSerial = 0;
+
+function runningProjection(items: ScheduledTask[]) {
+  const runningRuns: Record<string, string> = {};
+  for (const task of items) if (task.active_run) runningRuns[task.id] = task.active_run.run_id;
+  return { runningRuns, runningIds: Object.keys(runningRuns) };
+}
+
 export const useTasks = create<TasksState>((set, get) => ({
-  items: [],
-  loading: false,
-  error: null,
-  runningIds: [],
+  items: [], loading: false, error: null, diagnostics: null, runningIds: [], runningRuns: {}, terminalRuns: [], deletedIds: [],
 
   async load() {
+    const serial = ++requestSerial;
+    const atRevision = revision;
     set({ loading: true });
     try {
-      // 该命令是全局列表（后端忽略 sessionId；既有调用方都传当前会话 id）——这里无会话上下文，传空串
       const list = await ipc.listScheduledTasks("");
-      // 防御非数组载荷（未 mock 的命令会返回 null）：坏数据不该把左栏与任务页一起炸掉，也不该抹掉旧列表
-      set({ items: Array.isArray(list) ? list : [], error: null, loading: false });
-    } catch (e) {
-      // 只写 error，**不动 items**：读盘失败必须与「确实没有任务」区分开，
-      // 否则一次瞬时失败会把列表擦成空态，用户会以为任务被删了
-      set({ error: String(e), loading: false });
+      if (!Array.isArray(list)) throw new Error("Invalid scheduled task list response");
+      if (serial !== requestSerial) return;
+      if (atRevision !== revision) { set({ loading: false }); return; }
+      revision++;
+      set((state) => ({ items: list, ...runningProjection(list), deletedIds: state.deletedIds.filter((id) => !list.some((task) => task.id === id)), error: null, loading: false }));
+    } catch (error) {
+      if (serial === requestSerial) set({ ...(atRevision === revision ? { error: String(error) } : {}), loading: false });
+    }
+  },
+
+  async loadDiagnostics() {
+    const serial = ++diagnosticsSerial;
+    try {
+      const diagnostics = await ipc.listScheduledTaskDiagnostics();
+      if (!diagnostics || !Array.isArray(diagnostics.issues) || !["loading", "ready", "degraded"].includes(diagnostics.state)) {
+        throw new Error("Invalid task diagnostics response");
+      }
+      if (serial === diagnosticsSerial) set({ diagnostics });
+    } catch (error) {
+      if (serial === diagnosticsSerial) set({ error: String(error) });
     }
   },
 
   applyFired(p) {
     const id = p?.id;
-    if (!id || get().runningIds.includes(id)) return;
-    // 只置运行标记：提示已由用户拍板静默（[docs/runtime-and-scheduling]）
-    set((s) => ({ runningIds: [...s.runningIds, id] }));
+    if (!id) return;
+    const state = get();
+    if (state.deletedIds.includes(id) || (p.run_id && state.terminalRuns.includes(p.run_id))) return;
+    // A delayed event for a completed instance must not resurrect it.
+    if (p.run_id && state.items.find((t) => t.id === id)?.runs.some((r) => r.run_id === p.run_id)) return;
+    const currentRun = state.runningIds.includes(id) ? state.runningRuns[id] : undefined;
+    if (currentRun && p.run_id && currentRun !== p.run_id) {
+      // Different identities have no ordering information. Read the current backend instance
+      // instead of allowing an unknown delayed fired event to replace an established run.
+      revision++;
+      void get().load();
+      return;
+    }
+    revision++;
+    set((s) => ({ runningIds: s.runningIds.includes(id) ? s.runningIds : [...s.runningIds, id],
+      runningRuns: { ...s.runningRuns, [id]: p.run_id ?? "" } }));
   },
 
   applyDone(p) {
-    const id = p?.id;
-    const name = p?.name;
-    // 载荷缺字段时保留旧值，避免把已有状态抹成 null
-    const status = typeof p?.status === "string" ? p.status : null;
-    const summary = typeof p?.summary === "string" ? p.summary : null;
+    const state = get();
+    const hit = p?.id ? state.items.find((t) => t.id === p.id) : state.items.find((t) => !!p?.name && t.name === p.name);
+    const id = p?.id ?? hit?.id;
+    // Record terminal identity immediately, before requesting the full history snapshot.
+    // Otherwise a delayed fired can resurrect the run and invalidate that pending snapshot.
+    if (p.run_id && !state.terminalRuns.includes(p.run_id)) {
+      set({ terminalRuns: [...state.terminalRuns, p.run_id].slice(-1024) });
+    }
+    if (id && state.deletedIds.includes(id)) return;
+    const activeId = id && state.runningIds.includes(id) ? state.runningRuns[id] || hit?.active_run?.run_id : hit?.active_run?.run_id;
+    // Legacy identity-less events cannot settle an identity-aware active run.
+    if (activeId && p.run_id !== activeId) return;
+    revision++;
     set((s) => {
-      // 先认 id；旧/异常载荷没带 id 时退回按 name 匹配（名字非空才有意义）
-      let hitId = id ?? "";
-      const items = s.items.map((t) => {
-        const hit = id ? t.id === id : !!name && t.name === name;
-        if (!hit) return t;
-        hitId = t.id;
-        return { ...t, last_status: status ?? t.last_status, last_summary: summary ?? t.last_summary };
-      });
-      // 命中项可能不在列表里（还没加载完 / 已被删）：仍按 id 清运行标记
-      return { items, runningIds: hitId ? s.runningIds.filter((x) => x !== hitId) : s.runningIds };
+      const runningRuns = { ...s.runningRuns };
+      if (id) delete runningRuns[id];
+      return {
+        items: s.items.map((task) => task.id !== id ? task : { ...task,
+          last_status: typeof p.status === "string" ? p.status : task.last_status,
+          last_summary: typeof p.summary === "string" ? p.summary : task.last_summary,
+          persistence_error: p.persistence_error ?? task.persistence_error,
+          active_run: null,
+        }),
+        runningIds: s.runningIds.filter((value) => value !== id), runningRuns,
+      };
     });
-    // 事件只带收尾摘要，runs/next_run 是后端落盘后才有的：重新拉一次列表补齐。
-    // fire-and-forget——失败由 load 自己兜进 error，这里不再重复处理
     void get().load();
   },
 
-  upsertLocal(task) {
-    // 本地就地合并（创建/编辑成功后的乐观落地）：免一次整表刷新带来的闪烁与滚动跳位
+  captureRevision() { return revision; },
+
+  upsertLocal(task, requestRevision = revision) {
+    const staleLifecycle = requestRevision !== revision;
+    revision++;
     set((s) => {
-      const i = s.items.findIndex((t) => t.id === task.id);
-      if (i < 0) return { items: [...s.items, task] };
-      const items = s.items.slice();
-      items[i] = task;
-      return { items };
+      // A deletion completed after the command began; a delayed response cannot resurrect it.
+      if (staleLifecycle && s.deletedIds.includes(task.id)) return {};
+      const current = s.items.find((item) => item.id === task.id);
+      const merged = staleLifecycle && current ? { ...task,
+        next_run: current.next_run, active_run: current.active_run, runs: current.runs,
+        last_status: current.last_status, last_summary: current.last_summary,
+        persistence_error: current.persistence_error,
+      } : task;
+      const items = current ? s.items.map((item) => item.id === task.id ? merged : item) : [...s.items, merged];
+      if (staleLifecycle) return { items };
+      // A mutation response is authoritative only for its own task. Other task items may
+      // predate fired events whose active identity currently exists only in the projection.
+      const runningRuns = { ...s.runningRuns };
+      const runningIds = s.runningIds.filter((id) => id !== task.id);
+      delete runningRuns[task.id];
+      if (task.active_run) {
+        runningRuns[task.id] = task.active_run.run_id;
+        runningIds.push(task.id);
+      }
+      return { items, runningRuns, runningIds, deletedIds: s.deletedIds.filter((id) => id !== task.id) };
     });
+    // Editable fields are retained, but a lifecycle observed after request start must win.
+    // Refresh next_run/history from a new authoritative read rather than guessing from events.
+    if (staleLifecycle) void get().load();
   },
 
   removeLocal(id) {
-    // 删除成功后本地摘除（同上：不整表刷新）
-    set((s) => ({ items: s.items.filter((t) => t.id !== id) }));
+    revision++;
+    set((s) => {
+      const runningRuns = { ...s.runningRuns }; delete runningRuns[id];
+      return { items: s.items.filter((task) => task.id !== id), runningIds: s.runningIds.filter((value) => value !== id), runningRuns, deletedIds: [...s.deletedIds.filter((value) => value !== id), id].slice(-1024) };
+    });
   },
 }));

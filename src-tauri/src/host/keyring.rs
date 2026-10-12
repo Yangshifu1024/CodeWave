@@ -1,14 +1,13 @@
-//! keyring 迁移（[docs/technical-design](../../../docs/technical-design.md)）：service 名 `codewave.yangshifu.xyz`，account = provider.id（[docs/providers-and-network](../../../docs/providers-and-network.md) 起 key 归属 provider）。
-//! 明文 key 迁入系统 keyring，config 中以占位符替代；解析时按占位符回读。
-//! keyring 不可用（如 Linux 无 Secret Service）时回退明文并在日志中注明。
+//! System credential adapter and resolver. New writes use immutable generation accounts via
+//! core::config_commit; unavailable keyrings never fall back to plaintext persistence.
 
-use crate::core::config::{ConfigState, KEYRING_PLACEHOLDER, ModelConfig, ProviderConfig};
+use crate::core::config::{KEYRING_PLACEHOLDER, ModelConfig, ProviderConfig};
 /// keyring service 名（本应用所有凭据共用）。
 pub const SERVICE: &str = "codewave.yangshifu.xyz";
 
 /// 构造 keyring 条目（service + account）；环境不可用时返回可读错误。
 fn entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, account).map_err(|e| format!("keyring 不可用：{e}"))
+    keyring::Entry::new(SERVICE, account).map_err(|_| "keyring 不可用".to_string())
 }
 
 /// 读取一个 keyring 账户下存储的全部 key（多 key 以换行分隔存储），空行过滤。
@@ -16,7 +15,7 @@ fn read_account(account: &str) -> Result<Vec<String>, String> {
     entry(account)
         .and_then(|e| {
             e.get_password()
-                .map_err(|e| format!("读取 keyring 失败：{e}"))
+                .map_err(|_| "读取 keyring 失败".to_string())
         })
         .map(|stored| {
             stored
@@ -27,44 +26,54 @@ fn read_account(account: &str) -> Result<Vec<String>, String> {
         })
 }
 
-/// 启动/保存时迁移：各 provider 的明文 key → keyring；config 中替换为占位符。
-/// 写入前过滤占位符与空行（防止占位符字符串污染 keyring）。
-/// 返回 (是否有变更, 警告)。
-pub fn migrate(cfg: &mut ConfigState) -> (bool, Option<String>) {
-    let mut changed = false;
-    let mut warning = None;
-    for p in cfg.providers.iter_mut() {
-        let plain: Vec<String> = p
-            .keys
-            .iter()
-            .filter(|k| !k.is_empty() && k.as_str() != KEYRING_PLACEHOLDER)
-            .cloned()
-            .collect();
-        if plain.is_empty() {
-            continue;
-        }
-        match entry(&p.id).and_then(|e| {
-            e.set_password(&plain.join("\n"))
-                .map_err(|e| format!("写入 keyring 失败：{e}"))
-        }) {
-            Ok(()) => {
-                p.keys = vec![KEYRING_PLACEHOLDER.to_string()];
-                changed = true;
-            }
-            Err(e) => {
-                tracing::warn!("{e}（保留明文存储）");
-                warning = Some(e);
-            }
+/// OS credential adapter. Backend errors are deliberately redacted (never include OS payloads).
+pub struct SystemCredentialStore;
+impl crate::core::config_commit::CredentialStore for SystemCredentialStore {
+    fn read(
+        &self,
+        account: &str,
+    ) -> Result<Vec<String>, crate::core::config_commit::ConfigCommitError> {
+        read_account(account).map_err(|_| credential_error("CredentialReadFailed", "Cannot read saved credentials. Unlock the system keyring or explicitly replace the pool"))
+    }
+    fn write(
+        &self,
+        account: &str,
+        keys: &[String],
+    ) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+        entry(account).and_then(|e| e.set_password(&keys.join("\n")).map_err(|_| "write failed".into()))
+            .map_err(|_| credential_error("CredentialWriteFailed", "Cannot store credentials securely. Unlock or enable the system keyring and retry; no plaintext fallback is used"))
+    }
+    fn delete(&self, account: &str) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+        let entry = entry(account).map_err(|_| {
+            credential_error("CredentialCleanupFailed", "Credential cleanup needs retry")
+        })?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(credential_error(
+                "CredentialCleanupFailed",
+                "Credential cleanup needs retry",
+            )),
         }
     }
-    (changed, warning)
+}
+fn credential_error(code: &str, message: &str) -> crate::core::config_commit::ConfigCommitError {
+    crate::core::config_commit::ConfigCommitError {
+        code: code.into(),
+        message: message.into(),
+    }
 }
 
 /// 解析一个模型可用的 keys：
 /// - keys 为空 → 空（用户全删即无 key；不回读旧 keyring 值）
-/// - 含占位符 → 从 keyring 回读（账户优先级：provider 账户 → legacy 按模型账户），与明文行合并去重
+/// - 含占位符 → 从 flatten 决议的 generation 或当前 v2 provider 账户回读，与明文行合并去重
 /// - 纯明文 → 原样返回
 pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
+    resolve_keys_with(&SystemCredentialStore, model)
+}
+fn resolve_keys_with(
+    store: &dyn crate::core::config_commit::CredentialStore,
+    model: &ModelConfig,
+) -> Vec<String> {
     if model.keys.is_empty() {
         return Vec::new();
     }
@@ -84,7 +93,7 @@ pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
     }
     let mut last_err = None;
     for account in &accounts {
-        match read_account(account) {
+        match store.read(account) {
             Ok(keys) => {
                 for k in keys {
                     if !resolved.contains(&k) {
@@ -112,73 +121,52 @@ pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
 /// 未带认证的请求将 401——[docs/chat-and-interface](../../../docs/chat-and-interface.md)
 /// 缺陷的根因；title/compact 现统一走此入口。
 pub fn pick_resolved_key(model: &ModelConfig) -> Option<String> {
-    resolve_keys(model).into_iter().find(|k| !k.is_empty())
+    pick_resolved_key_with(&SystemCredentialStore, model)
+}
+fn pick_resolved_key_with(
+    store: &dyn crate::core::config_commit::CredentialStore,
+    model: &ModelConfig,
+) -> Option<String> {
+    resolve_keys_with(store, model)
+        .into_iter()
+        .find(|k| !k.is_empty())
 }
 
 /// provider 级回读（订阅额度用，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
-/// account = `provider.id`（key 归属 provider），占位符回读逻辑与 `resolve_keys` 同源。
+/// account = credential_ref，缺省才读当前 v2 provider.id；与模型摊平使用同一引用。
 ///
 /// 与 `resolve_keys` 的差异：**回读失败必须返回 Err**——额度行态要据此区分
 /// `invalid`（密钥形态不可用，重试无用）与 `no_key`（用户确实没配 key）。
 /// 回读参数不能携带密钥，错误文案来自 keyring 层，不含密钥。
 pub fn resolve_provider_keys(p: &ProviderConfig) -> Result<Vec<String>, String> {
-    if p.keys.is_empty() {
-        return Ok(Vec::new());
-    }
-    let has_placeholder = p.keys.iter().any(|k| k == KEYRING_PLACEHOLDER);
-    let mut resolved: Vec<String> = p
-        .keys
-        .iter()
-        .filter(|k| !k.is_empty() && k.as_str() != KEYRING_PLACEHOLDER)
-        .cloned()
-        .collect();
-    if !has_placeholder {
-        return Ok(resolved);
-    }
-    for k in read_account(&p.id)? {
-        if !resolved.contains(&k) {
-            resolved.push(k);
-        }
-    }
-    Ok(resolved)
+    crate::core::config_commit::resolve_provider_with(&SystemCredentialStore, p)
+        .map_err(|e| e.to_string())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{ProviderConfig, ProviderModel};
-
-    /// 涉及真实 keyring 的测试必须串行：keyring 是机器全局资源，
-    /// 并发写→回读存在可见性竞态（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 批次实测：两个 migrate
-    /// 测试并发时间歇性 assert contains 失败）
-    static KEYRING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn migrate_and_resolve_roundtrip() {
-        let _serial = KEYRING_LOCK.lock().unwrap();
-        let mut cfg = ConfigState::default();
-        cfg.providers.push(ProviderConfig {
-            keys: vec!["sk-plain".to_string()],
-            models: vec![ProviderModel {
-                id: "m1".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        let provider_id = cfg.providers[0].id.clone();
-
-        let (changed, warning) = migrate(&mut cfg);
-        let flat = cfg.find_model("m1").unwrap();
-        if warning.is_some() {
-            // 无 keyring 环境（CI Linux）：保留明文，解析原样返回
-            assert!(!changed);
-            assert_eq!(resolve_keys(&flat), vec!["sk-plain".to_string()]);
-            return;
+    use crate::core::config::ProviderConfig;
+    struct MissingStore;
+    impl crate::core::config_commit::CredentialStore for MissingStore {
+        fn read(
+            &self,
+            _: &str,
+        ) -> Result<Vec<String>, crate::core::config_commit::ConfigCommitError> {
+            Err(credential_error(
+                "CredentialReadFailed",
+                "test account unavailable",
+            ))
         }
-        assert!(changed);
-        assert_eq!(cfg.providers[0].keys, vec![KEYRING_PLACEHOLDER.to_string()]);
-        assert_eq!(resolve_keys(&flat), vec!["sk-plain".to_string()]);
-        // 清理 keyring 条目（避免污染真实 keyring）
-        let _ = entry(&provider_id).and_then(|e| e.delete_credential().map_err(|e| e.to_string()));
+        fn write(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+            panic!("read-only resolver")
+        }
+        fn delete(&self, _: &str) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+            panic!("read-only resolver")
+        }
     }
 
     #[test]
@@ -188,14 +176,14 @@ mod tests {
             keys: vec![],
             ..Default::default()
         };
-        assert!(resolve_keys(&empty).is_empty());
+        assert!(resolve_keys_with(&MissingStore, &empty).is_empty());
         // 无 keyring 环境也成立的纯逻辑断言：含占位符但无可回读账户时，明文行仍保留
         let mixed = ModelConfig {
             keys: vec![KEYRING_PLACEHOLDER.into(), "sk-plain".into()],
             keyring_accounts: vec!["nonexistent-account-xyz".into()],
             ..Default::default()
         };
-        let keys = resolve_keys(&mixed);
+        let keys = resolve_keys_with(&MissingStore, &mixed);
         assert_eq!(keys, vec!["sk-plain".to_string()]);
     }
 
@@ -216,7 +204,7 @@ mod tests {
             keyring_accounts: vec!["nonexistent-account-xyz".into()],
             ..Default::default()
         };
-        assert_eq!(pick_resolved_key(&placeholder), None);
+        assert_eq!(pick_resolved_key_with(&MissingStore, &placeholder), None);
     }
 
     #[test]
@@ -226,7 +214,10 @@ mod tests {
             keyring_accounts: vec!["nonexistent-account-xyz".into()],
             ..Default::default()
         };
-        assert_eq!(pick_resolved_key(&mixed).as_deref(), Some("sk-plain"));
+        assert_eq!(
+            pick_resolved_key_with(&MissingStore, &mixed).as_deref(),
+            Some("sk-plain")
+        );
     }
 
     #[test]
@@ -247,44 +238,53 @@ mod tests {
         };
         assert_eq!(resolve_provider_keys(&none), Ok(Vec::new()));
     }
-
     #[test]
-    fn resolve_provider_keys_reports_keyring_failure_as_err() {
-        let _serial = KEYRING_LOCK.lock().unwrap();
-        // 占位符 + 不存在的 keyring 账户（随机 uuid 作 account）→ Err（额度层判 invalid）
-        let provider = ProviderConfig {
-            keys: vec![KEYRING_PLACEHOLDER.into()],
-            ..Default::default()
-        };
-        let err = resolve_provider_keys(&provider).unwrap_err();
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn resolve_provider_keys_roundtrips_migrated_key() {
-        let _serial = KEYRING_LOCK.lock().unwrap();
-        let mut cfg = ConfigState::default();
+    fn model_title_compact_and_quota_share_immutable_reference() {
+        struct GenerationStore;
+        impl crate::core::config_commit::CredentialStore for GenerationStore {
+            fn read(
+                &self,
+                account: &str,
+            ) -> Result<Vec<String>, crate::core::config_commit::ConfigCommitError> {
+                assert_eq!(account, "p1:credential:generation");
+                Ok(vec!["versioned-first".into(), "versioned-second".into()])
+            }
+            fn write(
+                &self,
+                _: &str,
+                _: &[String],
+            ) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+                panic!("read-only")
+            }
+            fn delete(&self, _: &str) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+                panic!("read-only")
+            }
+        }
+        let mut cfg = crate::core::config::ConfigState::default();
         cfg.providers.push(ProviderConfig {
-            keys: vec!["sk-migrated".to_string()],
+            id: "p1".into(),
+            credential_ref: Some("p1:credential:generation".into()),
+            keys: vec![KEYRING_PLACEHOLDER.into()],
+            models: vec![crate::core::config::ProviderModel {
+                id: "m1".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         });
-        let (changed, warning) = migrate(&mut cfg);
-        let provider_id = cfg.providers[0].id.clone();
-        if warning.is_some() {
-            // 无 keyring 环境（如 Linux CI）：保留明文
-            assert!(!changed);
-            assert_eq!(
-                resolve_provider_keys(&cfg.providers[0]),
-                Ok(vec!["sk-migrated".to_string()])
-            );
-            return;
-        }
-        assert!(changed);
-        assert_eq!(cfg.providers[0].keys, vec![KEYRING_PLACEHOLDER.to_string()]);
+        let model = cfg.find_model("m1").unwrap();
+        assert_eq!(model.keyring_accounts, vec!["p1:credential:generation"]);
         assert_eq!(
-            resolve_provider_keys(&cfg.providers[0]),
-            Ok(vec!["sk-migrated".to_string()])
+            resolve_keys_with(&GenerationStore, &model),
+            vec!["versioned-first", "versioned-second"]
         );
-        let _ = entry(&provider_id).and_then(|e| e.delete_credential().map_err(|e| e.to_string()));
+        assert_eq!(
+            pick_resolved_key_with(&GenerationStore, &model).as_deref(),
+            Some("versioned-first")
+        );
+        assert_eq!(
+            crate::core::config_commit::resolve_provider_with(&GenerationStore, &cfg.providers[0])
+                .unwrap(),
+            vec!["versioned-first", "versioned-second"]
+        );
     }
 }

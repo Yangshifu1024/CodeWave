@@ -1,3 +1,4 @@
+import { markMcpStatusEvent } from "../utils/mcpStatusRevision";
 // 会话与多 Tab 状态：会话依附于「项目」（单主目录，docs/sessions-and-projects 语义）或作为临时会话免目录存在
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
@@ -592,6 +593,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
 // 不变式：活跃会话永远无未读。activeKey 一变即清——
 // openSession/revealSession/cycleTab/closeTab 邻位切换全部收口于这一处，新增入口自动覆盖。
 useSessions.subscribe((state, prev) => {
+  if (state.activeKey !== prev.activeKey) {
+    markMcpStatusEvent();
+    useUi.setState({ mcpStatus: [], mcpStatusSessionId: state.activeKey });
+  }
   if (!state.activeKey || state.activeKey === prev.activeKey) return;
   if (state.unread[state.activeKey]) useSessions.getState().clearUnread(state.activeKey);
 });
