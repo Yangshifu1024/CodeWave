@@ -177,56 +177,100 @@ pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && !id.contains(['/', '\\', '.']) && id == id.trim()
 }
 
-/// 聚合两处来源的 project.json：
-/// ① directories.json 索引指向的 <主目录>/.codewave/；
-/// ② 索引整体缺失时经会话快照自愈找回。
-/// 单个目录损坏/不可解析即跳过（绝不炸掉整个列表）。
-pub fn load(data_dir: &Path) -> Vec<ProjectEntry> {
-    let mut out: Vec<ProjectEntry> = Vec::new();
-    let mut upsert = |e: ProjectEntry| {
-        if let Some(pos) = out.iter().position(|p| p.id == e.id) {
-            out[pos] = e;
-        } else {
-            out.push(e);
+/// Non-destructive project discovery. A temporarily unavailable directory remains registered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectLoadIssue {
+    pub kind: String,
+    pub project_id: Option<String>,
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+pub struct ProjectLoadReport {
+    pub entries: Vec<ProjectEntry>,
+    pub references: std::collections::HashMap<String, String>,
+    pub issues: Vec<ProjectLoadIssue>,
+}
+
+pub fn load_report(data_dir: &Path) -> ProjectLoadReport {
+    let mut report = ProjectLoadReport::default();
+    let path = index_path(data_dir);
+    let index = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice::<DirectoryIndex>(&bytes) {
+            Ok(index) => Some(index),
+            Err(error) => {
+                report.issues.push(ProjectLoadIssue {
+                    kind: "index_json".into(),
+                    project_id: None,
+                    path: path.display().to_string(),
+                    message: error.to_string(),
+                });
+                None
+            }
+        },
+        Err(error) => {
+            report.issues.push(ProjectLoadIssue {
+                kind: if error.kind() == std::io::ErrorKind::NotFound {
+                    "index_missing"
+                } else {
+                    "index_read"
+                }
+                .into(),
+                project_id: None,
+                path: path.display().to_string(),
+                message: error.to_string(),
+            });
+            None
         }
     };
-    // ① directories.json 索引指向的项目（权威来源）
-    let idx = load_index(data_dir);
-    for (id, dir_str) in &idx.entries {
-        let dir = Path::new(dir_str).join(MANAGED_DIR_NAME);
-        if let Some(mut fresh) = read_project_json(&dir) {
-            fresh = fresh.normalize();
-            if fresh.id != *id {
-                continue; // 索引与内容不一致，跳过
+    if let Some(index) = index {
+        report.references = index.entries;
+    }
+    // Session snapshots may recover a missing discovery anchor, but reads never rewrite it.
+    for (id, directory) in discover_from_sessions(data_dir) {
+        report.references.entry(id).or_insert(directory);
+    }
+    for (id, directory) in &report.references {
+        let managed = Path::new(directory).join(MANAGED_DIR_NAME);
+        let path = project_file(&managed);
+        let result = (|| -> Result<ProjectEntry, (&str, String)> {
+            if !valid_id(id) {
+                return Err(("project_id", "Invalid registered project id".into()));
             }
-            fresh.data_dir = Some(dir.to_string_lossy().into_owned());
-            upsert(fresh);
-        } else if find_in_sessions(data_dir, id).is_none() {
-            // 项目目录没了且无会话引用 → 清掉死索引项
-            index_forget(data_dir, id);
+            let bytes = std::fs::read(&path).map_err(|e| ("project_read", e.to_string()))?;
+            let mut entry: ProjectEntry =
+                serde_json::from_slice(&bytes).map_err(|e| ("project_json", e.to_string()))?;
+            if entry.id != *id {
+                return Err((
+                    "project_mismatch",
+                    "Project id does not match registry".into(),
+                ));
+            }
+            entry = entry.normalize();
+            entry.directory = directory.clone();
+            entry.data_dir = Some(managed.to_string_lossy().into_owned());
+            Ok(entry)
+        })();
+        match result {
+            Ok(entry) => report.entries.push(entry),
+            Err((kind, message)) => report.issues.push(ProjectLoadIssue {
+                kind: kind.into(),
+                project_id: Some(id.clone()),
+                path: path.display().to_string(),
+                message,
+            }),
         }
     }
-    // ② 自愈：索引整个丢失（如 directories.json 被删）时，经会话快照找回项目
-    if load_index(data_dir).entries.is_empty() {
-        for (id, dir_str) in discover_from_sessions(data_dir) {
-            if let Some(mut fresh) = read_project_json(&Path::new(&dir_str).join(MANAGED_DIR_NAME))
-            {
-                fresh = fresh.normalize();
-                if fresh.id == id {
-                    fresh.data_dir = Some(
-                        Path::new(&dir_str)
-                            .join(MANAGED_DIR_NAME)
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
-                    upsert(fresh);
-                    index_remember(data_dir, &id, &dir_str);
-                }
-            }
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    report
+        .entries
+        .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    report
+}
+
+/// Compatibility projection: all normal project reads share non-destructive discovery.
+pub fn load(data_dir: &Path) -> Vec<ProjectEntry> {
+    load_report(data_dir).entries
 }
 
 /// 遍历会话索引：project_id → roots[0]（其下存在 .codewave/project.json 才有效）。
@@ -257,14 +301,6 @@ fn discover_from_sessions(data_dir: &Path) -> Vec<(String, String)> {
         }
     }
     found.into_iter().collect()
-}
-
-/// 单个 id 的会话快照查找（索引项失效时判断项目是否仍存活）。
-fn find_in_sessions(data_dir: &Path, id: &str) -> Option<String> {
-    discover_from_sessions(data_dir)
-        .into_iter()
-        .find(|(pid, _)| pid == id)
-        .map(|(_, dir)| dir)
 }
 
 /// 读取并解析单个 project.json；缺失/损坏返回 None。
@@ -320,7 +356,7 @@ fn normalize_data_dir(entry: &mut ProjectEntry) {
 
 /// 读磁盘上已存在的那一份 entry（按 id）：索引反查旧主目录 → 只读那一个 project.json。
 ///
-/// 刻意**不走** `find()`/`load()`：后者是全量 load（内部还会写索引，见 index_forget/index_remember），
+/// 刻意**不走** `find()`/`load()`：后者是全量、非破坏发现读取；这里只需要单个已登记路径，
 /// 而本函数处在 `create_session` 的 find+save 热路径上。
 /// 必须经索引反查：编辑时用户可能改了主目录，旧 project.json 在**旧**目录之下。
 ///

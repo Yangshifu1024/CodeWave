@@ -1,3 +1,4 @@
+import { configSnapshot } from "./configFixtures";
 // AppShell 启动自动清理提示（会话保留期与清理 · [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）——
 // 「启动时的那一次清理有删除就轻提示一次」这一跳的回归。
 //
@@ -69,7 +70,7 @@ const h = vi.hoisted(() => {
     },
   };
   const ipcMethods: Record<string, any> = {
-    getConfig: fn(async () => CONFIG),
+    getConfig: fn(async () => configSnapshot(CONFIG)),
     getUiState: fn(async () => state.uiState),
     setUiState: fn(async () => undefined),
     listSessions: fn(async () => state.sessions),
@@ -229,7 +230,7 @@ afterEach(() => {
     rightBarOpen: true, rbTab: "info", treeExpand: {}, treeCollapsed: false,
   });
   useSessions.setState({ tabs: [], activeKey: null, sessions: [], projects: [], unread: {}, explorerOpen: true });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   useRun.setState((s) => {
     s.tabs = {};
     s.drafts = {};

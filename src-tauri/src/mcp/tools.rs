@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// 一个已发现的 MCP 工具（供工具注册表与模型可见的 schema）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpTool {
     /// 所属 server 名
     pub server: String,

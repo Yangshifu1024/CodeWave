@@ -29,11 +29,11 @@
 | [settings-guide](./settings-guide.md) | 设置页面、保存语义、注册表、搜索、术语与布局 |
 | [chat-and-interface](./chat-and-interface.md) | 输入草稿、流式显示、工具卡、窗口、侧栏、字体与通知 |
 
-## 待实施专项方案
+## 待验收专项方案
 
-- [可靠性问题修复方案](./reliability-remediation-plan.md)：11 项问题的证据、设计、拆分顺序与验收标准。按用户要求集中保留跨主题的未实施计划；最终契约随修复回写长期指南，全部关闭后移出当前导航。
+- [可靠性问题修复方案](./reliability-remediation-plan.md)：11 项问题的证据、设计、拆分顺序与验收标准。集中保留跨主题设计与尚未关闭的平台验收矩阵；现行契约已随修复回写长期指南，全部验收关闭后移出当前导航。
 
-14 篇长期指南、1 篇待实施专项方案，连同本索引共 16 篇。项目总体介绍见 [README](../README.md)，协作硬约束见 [AGENTS](../AGENTS.md)，贡献流程见 [CONTRIBUTING](../CONTRIBUTING.md)，安全披露见 [SECURITY](../SECURITY.md)。
+14 篇长期指南、1 篇待验收专项方案，连同本索引共 16 篇。项目总体介绍见 [README](../README.md)，协作硬约束见 [AGENTS](../AGENTS.md)，贡献流程见 [CONTRIBUTING](../CONTRIBUTING.md)，安全披露见 [SECURITY](../SECURITY.md)。
 
 ## 维护规则
 

@@ -5,7 +5,7 @@
 
 ## 必读文档
 
-[README](./README.md) 是产品与上手入口；[docs/0-README.md](./docs/0-README.md) 是完整文档索引。当前 `docs/` 共 **16 篇（14 篇长期主题指南 + 1 篇待实施专项方案 + 索引）**，按本次任务选择必读主题：
+[README](./README.md) 是产品与上手入口；[docs/0-README.md](./docs/0-README.md) 是完整文档索引。当前 `docs/` 共 **16 篇（14 篇长期主题指南 + 1 篇待验收专项方案 + 索引）**，按本次任务选择必读主题：
 
 | 任务 | 必读主题 |
 |---|---|
@@ -28,7 +28,7 @@
 ## 核心约束
 
 - **git 写操作默认由用户执行**：commit / push / merge / branch / stash 等 AI 不主动碰；用户明确要求或授权时可执行（范围以当次授权为准）。例外：用户批准计划 = 预授权创建并切换计划所示分支（标准工作流 S5/S6、plan 档 P3，[docs/plan-and-approval.md](./docs/plan-and-approval.md)）；commit / push / merge 仍由用户执行
-- **数据与密钥落位**：全局数据（配置、会话、日志）在 `~/.codewave`，项目托管数据在 `<主目录>/.codewave/`；API key 应入系统钥匙串，避免明文落盘；当前保存流程先写配置再迁移，迁移失败会保留明文，勿把设计目标写成已落实的保证（见 [SECURITY.md](./SECURITY.md)）
+- **数据与密钥落位**：全局数据（配置、会话、日志）在 `~/.codewave`，项目托管数据在 `<主目录>/.codewave/`；API key 经统一提交器先写不可变系统钥匙串账户再提交引用，不默认明文回退；历史明文整理失败保留原件并提示，真平台验收边界见 [SECURITY.md](./SECURITY.md)
 - **纯 Rust 后端，框架边界明确**：`core/` 不引入 Tauri 类型；只有 `lib.rs` 与 `host/` 允许 `use tauri::*`；IPC 命令只做校验 + 转调 core。现有 core → `host::keyring` 凭据依赖例外见[架构与决策](./docs/technical-design.md)，不能据此宣称完全没有宿主层依赖
 - **数据目录 `.codewave`**：全局与项目托管数据共用此目录名，勿再建议改名
 - **项目 = 名称 + 单一主目录**；托管数据（project.json + temps/logs/memory/skills/tasks + mcp.json/lessons.md）存于 `<主目录>/.codewave/`；data_dir 随保存归一化持久化（[docs/technical-design](./docs/technical-design.md)：legacy 目录回退已移除）；`ProjectEntry.allowed_dirs`（serde default）记用户「始终允许」的项目外目录，会话创建/恢复时并入 `extra_roots`

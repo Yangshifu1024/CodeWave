@@ -1,3 +1,4 @@
+import { configSaved } from "./configFixtures";
 // 清理相关的 IPC 封装契约（[docs/sessions-and-projects](../../../docs/sessions-and-projects.md)）：
 // 命令名与参数键名必须与后端逐字一致（一个字符改动就是运行时「命令找不到」），
 // 返回值原样透传（设置页据此弹确认框/报完成提示），saveConfig 的 skipCleanup 默认为 false。
@@ -72,24 +73,27 @@ describe("旧格式历史清理两个命令（分段 JSONL 落地后的显式入
 
 describe("saveConfig 的新签名", () => {
   const cfg = { schema_version: 2 } as ConfigState;
+  const opts = { expectedVersion: { boot_id: "test", sequence: 0 }, operationId: "op-1", credentialEdits: {} };
 
   it("不传选项 → skipCleanup 为 false；传 { skipCleanup: true } 原样透传", async () => {
-    await ipc.saveConfig(cfg);
-    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, skipCleanup: false });
+    await ipc.saveConfig(cfg, opts);
+    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, ...opts, skipCleanup: false });
 
-    await ipc.saveConfig(cfg, { skipCleanup: true });
-    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, skipCleanup: true });
+    await ipc.saveConfig(cfg, { ...opts, skipCleanup: true });
+    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, ...opts, skipCleanup: true });
 
-    await ipc.saveConfig(cfg, {});
-    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, skipCleanup: false });
+    await ipc.saveConfig(cfg, opts);
+    expect(invokeMock).toHaveBeenLastCalledWith("save_config", { config: cfg, ...opts, skipCleanup: false });
   });
 
   it("返回值原样透传：有清理结果给结果，保留期未变/本次跳过给 null", async () => {
     const outcome: CleanupOutcome = { ids: ["s1", "s2"], deleted: 2, failed: 1 };
-    invokeMock.mockResolvedValueOnce(outcome);
-    await expect(ipc.saveConfig(cfg)).resolves.toBe(outcome);
+    const receipt = configSaved(cfg, outcome);
+    invokeMock.mockResolvedValueOnce(receipt);
+    await expect(ipc.saveConfig(cfg, opts)).resolves.toBe(receipt);
 
-    invokeMock.mockResolvedValueOnce(null);
-    await expect(ipc.saveConfig(cfg)).resolves.toBeNull();
+    const emptyReceipt = configSaved(cfg);
+    invokeMock.mockResolvedValueOnce(emptyReceipt);
+    await expect(ipc.saveConfig(cfg, opts)).resolves.toBe(emptyReceipt);
   });
 });

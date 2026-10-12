@@ -25,6 +25,8 @@ pub const RUN_SOURCE_MANUAL: &str = "manual";
 /// 单次执行记录（任务内嵌的最近 MAX_TASK_RUNS 条；新的在前）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TaskRun {
+    #[serde(default)]
+    pub run_id: Option<String>,
     /// 结束时间（RFC3339，本地时区）
     pub at: String,
     /// 执行状态：ok / error / skipped
@@ -44,7 +46,15 @@ fn default_true() -> bool {
     true
 }
 
-/// 一条计划任务（内存表条目 + projects/<project_id>/tasks/<id>.json 持久化形态）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActiveTaskRun {
+    pub run_id: String,
+    pub source: String,
+    pub scheduled_for: Option<String>,
+    pub started_at: String,
+}
+
+/// 一条计划任务（内存表条目 + <主目录>/.codewave/tasks/<id>.json 持久化形态）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduledTask {
     /// 任务 id（uuid）
@@ -61,7 +71,7 @@ pub struct ScheduledTask {
     pub last_status: Option<String>,
     /// 最近一次执行摘要
     pub last_summary: Option<String>,
-    /// 所属项目（持久化于 projects/<project_id>/tasks/；None = 自由会话任务，不落盘）
+    /// 所属项目（持久化于 <主目录>/.codewave/tasks/；None = 自由会话任务，不落盘）
     #[serde(default)]
     pub project_id: Option<String>,
     /// 是否启用（暂停的任务不参与 tick：不执行、不写状态、不记历史、不发事件）；
@@ -71,6 +81,10 @@ pub struct ScheduledTask {
     /// 最近执行记录（新的在前，最多 MAX_TASK_RUNS 条）
     #[serde(default)]
     pub runs: Vec<TaskRun>,
+    #[serde(default)]
+    pub active_run: Option<ActiveTaskRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence_error: Option<String>,
 }
 
 /// 计划语法：`cron:<5 字段>` | `every:<n m|h|d>` | `once:<RFC3339>`。
@@ -162,37 +176,167 @@ fn corrected_cron_next<Z: TimeZone>(
     }
 }
 
-/// 任务表：内存态任务 + 全局串行执行锁 + 持久化根。
+/// A candidate grants no authority to execute. Only a durable, post-lock claim does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueCandidate {
+    pub task_id: String,
+    generation: u64,
+    scheduled_for: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionSnapshot {
+    pub task: ScheduledTask,
+    pub run: ActiveTaskRun,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskIssue {
+    pub kind: String,
+    pub path: String,
+    pub project_id: Option<String>,
+    pub task_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+pub struct TaskLoadReport {
+    pub tasks: Vec<ScheduledTask>,
+    pub issues: Vec<TaskIssue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskDiagnostics {
+    pub state: String,
+    pub issues: Vec<TaskIssue>,
+}
+
+#[derive(Default)]
+struct TaskState {
+    tasks: HashMap<String, ScheduledTask>,
+    generations: HashMap<String, u64>,
+    pending: HashMap<String, DueCandidate>,
+    closed_projects: std::collections::HashSet<String>,
+    initialized: bool,
+    serial: u64,
+    issues: Vec<TaskIssue>,
+}
+
+impl TaskState {
+    fn invalidate(&mut self, id: &str) {
+        self.serial += 1;
+        self.generations.insert(id.to_owned(), self.serial);
+        self.pending.remove(id);
+    }
+}
+
+/// Lock order: exec_lock -> mutation_lock -> state. Never hold state during filesystem IO.
 #[derive(Default)]
 pub struct TaskTable {
-    /// 任务表（id → 任务）
-    pub tasks: Mutex<HashMap<String, ScheduledTask>>,
-    /// 全局串行执行（[docs/technical-design](../../../docs/technical-design.md)：同时至多 1 个任务运行）。
-    /// 用 `Arc` 持有：`trigger_now` 要把 `OwnedMutexGuard` move 进 `tokio::spawn` 的
-    /// 后台任务（裸 `MutexGuard` 借用 `AgentCore` 字段，无法跨 'static 任务）。
+    state: std::sync::Mutex<TaskState>,
     pub exec_lock: Arc<Mutex<()>>,
-    /// 持久化根（~/.codewave）；测试注入临时目录
+    mutation_lock: Mutex<()>,
     pub data_dir: std::path::PathBuf,
+    #[cfg(test)]
+    fail_writes: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_directory_sync: std::sync::atomic::AtomicBool,
 }
 
 impl TaskTable {
-    /// 以给定数据根构造空任务表。
     pub fn new(data_dir: std::path::PathBuf) -> Self {
-        TaskTable {
-            tasks: Mutex::new(HashMap::new()),
-            exec_lock: Arc::new(Mutex::new(())),
+        Self {
             data_dir,
+            ..Self::default()
         }
     }
 
-    /// 新增/更新任务（先落盘再进内存表）。
-    pub async fn upsert(&self, task: ScheduledTask) {
-        self.persist(&task);
-        self.tasks.lock().await.insert(task.id.clone(), task);
+    /// One initialization gate covers supervisor, list, and every mutation. No startup snapshot
+    /// can overwrite a later create/delete, even when the first request precedes supervisor.
+    async fn initialize_locked(&self) {
+        if self.state.lock().unwrap().initialized {
+            return;
+        }
+        let mut report = Self::load_all_from_projects(&self.data_dir).await;
+        let now = Local::now();
+        for task in &mut report.tasks {
+            let changed = recover_task(task, now);
+            if changed {
+                let warning = match self.persist(task) {
+                    Ok(warning) => warning,
+                    Err(error) => Some(error),
+                };
+                if let Some(error) = warning {
+                    task.persistence_error = Some(error.clone());
+                    report.issues.push(task_issue(task, "restore_write", error));
+                }
+            }
+        }
+        let mut state = self.state.lock().unwrap();
+        state.issues = report.issues;
+        for task in report.tasks {
+            state.invalidate(&task.id);
+            state.tasks.insert(task.id.clone(), task);
+        }
+        state.initialized = true;
     }
 
-    /// 编辑任务（名称 / 指令 / 计划）：计划变化时才重算 next_run。
-    /// 计划语法非法、或（改后的）once 时间已过去 → Err（内存与磁盘都不动）。
+    pub async fn restore(&self) {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+    }
+
+    pub async fn diagnostics(&self) -> TaskDiagnostics {
+        // Refresh availability without touching registry anchors or holding the state lock.
+        let projects = crate::core::projects::load_report(&self.data_dir);
+        let state = self.state.lock().unwrap();
+        let mut issues: Vec<_> = state
+            .issues
+            .iter()
+            .filter(|issue| {
+                !issue.kind.starts_with("index_") && !issue.kind.starts_with("project_")
+            })
+            .cloned()
+            .collect();
+        issues.extend(projects.issues.into_iter().map(|issue| TaskIssue {
+            kind: issue.kind,
+            path: issue.path,
+            project_id: issue.project_id,
+            task_id: None,
+            message: issue.message,
+        }));
+        TaskDiagnostics {
+            state: if !state.initialized {
+                "loading"
+            } else if issues.is_empty() {
+                "ready"
+            } else {
+                "degraded"
+            }
+            .into(),
+            issues,
+        }
+    }
+
+    pub async fn upsert(&self, mut task: ScheduledTask) -> Result<ScheduledTask, String> {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        validate_task(&task)?;
+        {
+            let state = self.state.lock().unwrap();
+            check_project_open(&state, &task)?;
+            if state.tasks.contains_key(&task.id) {
+                return Err("任务 id 已存在".into());
+            }
+        }
+        task.persistence_error = None;
+        task.persistence_error = self.persist(&task)?;
+        let mut state = self.state.lock().unwrap();
+        state.invalidate(&task.id);
+        state.tasks.insert(task.id.clone(), task.clone());
+        Ok(task)
+    }
+
     pub async fn update(
         &self,
         id: &str,
@@ -201,204 +345,665 @@ impl TaskTable {
         schedule: String,
     ) -> Result<ScheduledTask, String> {
         let kind = parse_schedule(&schedule)?;
-        let snap = {
-            let mut tasks = self.tasks.lock().await;
-            let Some(t) = tasks.get_mut(id) else {
-                return Err("任务不存在".into());
-            };
-            // 先算后改：校验失败不得留下半改状态
-            let next = if t.schedule == schedule {
-                None
-            } else {
-                match kind.next_after(Local::now()) {
-                    Some(n) => Some(n.to_rfc3339()),
-                    None => return Err("once 时间已过去，请改计划".into()),
-                }
-            };
-            t.name = name;
-            t.instruction = instruction;
-            if let Some(n) = next {
-                t.schedule = schedule;
-                t.next_run = Some(n);
-            }
-            t.clone()
-        };
-        self.persist(&snap);
-        Ok(snap)
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        let mut task = self.current(id).await?;
+        if task.schedule != schedule {
+            task.next_run = Some(
+                kind.next_after(Local::now())
+                    .ok_or("once 时间已过去，请改计划")?
+                    .to_rfc3339(),
+            );
+            task.schedule = schedule;
+        }
+        task.name = name;
+        task.instruction = instruction;
+        self.commit_edit(task).await
     }
 
-    /// 暂停 / 启用：暂停保留 next_run 不动；启用重算 next_run（once 已过期 → Err）。
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ScheduledTask, String> {
-        let snap = {
-            let mut tasks = self.tasks.lock().await;
-            let Some(t) = tasks.get_mut(id) else {
-                return Err("任务不存在".into());
-            };
-            let next = if enabled {
-                let kind = parse_schedule(&t.schedule)?;
-                match kind.next_after(Local::now()) {
-                    Some(n) => Some(n.to_rfc3339()),
-                    None => return Err("once 时间已过去，请改计划".into()),
-                }
-            } else {
-                None
-            };
-            t.enabled = enabled;
-            if let Some(n) = next {
-                t.next_run = Some(n);
-            }
-            t.clone()
-        };
-        self.persist(&snap);
-        Ok(snap)
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        let mut task = self.current(id).await?;
+        if enabled && !task.enabled {
+            task.next_run = Some(
+                parse_schedule(&task.schedule)?
+                    .next_after(Local::now())
+                    .ok_or("once 时间已过去，请修改时间以重新安排")?
+                    .to_rfc3339(),
+            );
+        }
+        task.enabled = enabled;
+        self.commit_edit(task).await
     }
 
-    /// 追加一条执行记录（新的在前，最多 MAX_TASK_RUNS 条）并落盘。
-    pub async fn record_run(&self, id: &str, run: TaskRun) {
-        let snap = {
-            let mut tasks = self.tasks.lock().await;
-            let Some(t) = tasks.get_mut(id) else {
-                return;
-            };
-            t.runs.insert(0, run);
-            t.runs.truncate(MAX_TASK_RUNS);
-            t.clone()
-        };
-        self.persist(&snap);
-    }
-    /// 移除任务并删除其持久化文件（评审 H3：此前只改内存 + 重写 json，
-    /// 任务重启后复活）。
-    pub async fn remove(&self, id: &str) -> Option<ScheduledTask> {
-        let removed = self.tasks.lock().await.remove(id);
-        if let Some(t) = &removed
-            && let Some(pid) = &t.project_id
-        {
-            let file = crate::core::projects::data_dir_by_id(&self.data_dir, pid)
-                .join("tasks")
-                .join(format!("{}.json", t.id));
-            let _ = std::fs::remove_file(&file);
-        }
-        removed
+    async fn current(&self, id: &str) -> Result<ScheduledTask, String> {
+        let state = self.state.lock().unwrap();
+        let task = state.tasks.get(id).ok_or("任务不存在")?;
+        check_project_open(&state, task)?;
+        Ok(task.clone())
     }
 
-    /// 持久化到 projects/<project_id>/tasks/<task-id>.json（自由会话任务跳过）。
-    fn persist(&self, task: &ScheduledTask) {
-        let Some(pid) = &task.project_id else { return };
-        let dir = crate::core::projects::data_dir_by_id(&self.data_dir, pid).join("tasks");
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
-        }
-        let file = dir.join(format!("{}.json", task.id));
-        if let Ok(bytes) = serde_json::to_vec_pretty(task) {
-            let _ = crate::util::atomic::atomic_write(&file, &bytes);
-        }
+    async fn commit_edit(&self, mut task: ScheduledTask) -> Result<ScheduledTask, String> {
+        task.persistence_error = None;
+        task.persistence_error = self.persist(&task)?;
+        let mut state = self.state.lock().unwrap();
+        state.invalidate(&task.id);
+        state.tasks.insert(task.id.clone(), task.clone());
+        Ok(task)
     }
 
-    /// 启动时从各项目目录装载持久化任务（已过期的 once 任务不恢复）。
-    pub async fn load_all_from_projects(data_dir: &std::path::Path) -> Vec<ScheduledTask> {
-        let root = crate::core::projects::projects_root(data_dir);
-        let Ok(rd) = std::fs::read_dir(&root) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for pdir in rd.flatten() {
-            let tdir = pdir.path().join("tasks");
-            let Ok(trd) = std::fs::read_dir(&tdir) else {
-                continue;
-            };
-            for f in trd.flatten() {
-                let Ok(bytes) = std::fs::read(f.path()) else {
-                    continue;
-                };
-                let Ok(mut t) = serde_json::from_slice::<ScheduledTask>(&bytes) else {
-                    continue;
-                };
-                // once 且已过期 → 不恢复（并删除文件）
-                if t.schedule.starts_with("once:")
-                    && let Some(Ok(at)) = t
-                        .next_run
-                        .as_ref()
-                        .map(|s| chrono::DateTime::parse_from_rfc3339(s))
-                    && at < chrono::Local::now()
-                {
-                    let _ = std::fs::remove_file(f.path());
-                    continue;
-                }
-                // 旧版本曾用 UTC 计算 cron 的 next_run，09:00 会落成北京时间 17:00。
-                // 未来值必须是最近一次本地触发（仅检查是否符合 cron 会漏掉 09,17
-                // 这类旧 UTC 值恰好命中 17:00 的情况）。已过期且匹配的值仍留给 tick。
-                if t.enabled
-                    && let (Ok(ScheduleKind::Cron(expr)), Some(stored)) =
-                        (parse_schedule(&t.schedule), t.next_run.as_deref())
-                    && let Ok(at) = DateTime::parse_from_rfc3339(stored)
-                    && let Some(corrected) =
-                        corrected_cron_next(&expr, &Local::now(), &at.with_timezone(&Local))
-                {
-                    t.next_run = Some(corrected.to_rfc3339());
-                }
-                out.push(t);
+    pub async fn remove(&self, id: &str) -> Result<Option<ScheduledTask>, String> {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        let task = self.state.lock().unwrap().tasks.get(id).cloned();
+        let Some(task) = task else { return Ok(None) };
+        if let Some(path) = task_file(&self.data_dir, &task)? {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("删除任务失败 {}: {e}", path.display())),
             }
         }
-        out
+        let mut state = self.state.lock().unwrap();
+        state.invalidate(id);
+        state.tasks.remove(id);
+        Ok(Some(task))
     }
-    /// 列出全部任务（按名称排序）。
-    pub async fn list(&self) -> Vec<ScheduledTask> {
-        let mut v: Vec<ScheduledTask> = self.tasks.lock().await.values().cloned().collect();
-        v.sort_by(|a, b| a.name.cmp(&b.name));
-        v
-    }
-    /// tick：返回到期任务（并更新 next_run；Once 触发即移除）。
-    /// 暂停（!enabled）的任务一律跳过：不执行、不写状态、不记历史、不发事件。
-    pub async fn tick(&self, now: DateTime<Local>) -> Vec<ScheduledTask> {
-        let mut due = Vec::new();
-        // 锁内只改内存：推进过 next_run 的任务快照留到释放锁之后再落盘
-        let mut rescheduled: Vec<ScheduledTask> = Vec::new();
+
+    /// Project deletion shares the task transaction boundary. Late finish/log writes cannot
+    /// recreate its managed directory. A failed deletion still invalidates pending snapshots.
+    pub async fn delete_project(&self, project_id: &str) -> Result<(), String> {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
         {
-            let mut tasks = self.tasks.lock().await;
-            let ids: Vec<String> = tasks.keys().cloned().collect();
+            let mut state = self.state.lock().unwrap();
+            state.closed_projects.insert(project_id.into());
+            let ids: Vec<_> = state
+                .tasks
+                .values()
+                .filter(|t| t.project_id.as_deref() == Some(project_id))
+                .map(|t| t.id.clone())
+                .collect();
             for id in ids {
-                let Some(t) = tasks.get_mut(&id) else {
-                    continue;
-                };
-                if !t.enabled {
+                state.invalidate(&id);
+            }
+        }
+        if let Err(error) = crate::core::projects::delete_project(&self.data_dir, project_id) {
+            self.state
+                .lock()
+                .unwrap()
+                .closed_projects
+                .remove(project_id);
+            return Err(error.to_string());
+        }
+        self.state
+            .lock()
+            .unwrap()
+            .tasks
+            .retain(|_, task| task.project_id.as_deref() != Some(project_id));
+        Ok(())
+    }
+
+    /// Err is strictly pre-rename failure. Ok(Some(warning)) means the new file is
+    /// already committed but directory durability is uncertain; never pretend it was rolled back.
+    fn persist(&self, task: &ScheduledTask) -> Result<Option<String>, String> {
+        #[cfg(test)]
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Injected task persistence failure".into());
+        }
+        let Some(path) = task_file(&self.data_dir, task)? else {
+            return Ok(None);
+        };
+        let bytes = serde_json::to_vec_pretty(task).map_err(|e| e.to_string())?;
+        crate::util::atomic::atomic_write(&path, &bytes)
+            .map_err(|e| format!("保存任务失败 {}: {e}", path.display()))?;
+        #[cfg(test)]
+        if self
+            .fail_directory_sync
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(Some(
+                "任务文件已更新，但目录同步失败，持久化未确认（注入故障）".into(),
+            ));
+        }
+        #[cfg(unix)]
+        if let Err(error) = std::fs::File::open(path.parent().expect("validated task path"))
+            .and_then(|directory| directory.sync_all())
+        {
+            return Ok(Some(format!(
+                "任务文件已更新，但目录同步失败，持久化未确认 {}: {error}",
+                path.display()
+            )));
+        }
+        Ok(None)
+    }
+
+    pub async fn load_all_from_projects(data_dir: &std::path::Path) -> TaskLoadReport {
+        let projects = crate::core::projects::load_report(data_dir);
+        let mut report = TaskLoadReport {
+            tasks: Vec::new(),
+            issues: projects
+                .issues
+                .into_iter()
+                .map(|issue| TaskIssue {
+                    kind: issue.kind,
+                    path: issue.path,
+                    project_id: issue.project_id,
+                    task_id: None,
+                    message: issue.message,
+                })
+                .collect(),
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = std::collections::HashSet::new();
+        for project in projects.entries {
+            let dir = crate::core::projects::project_data_dir(data_dir, &project).join("tasks");
+            let entries = match std::fs::symlink_metadata(&dir) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    report.issues.push(load_issue(
+                        "task_directory_symlink",
+                        &dir,
+                        &project.id,
+                        None,
+                        "Task directory must not be a symlink".into(),
+                    ));
                     continue;
                 }
-                let Some(next) = t.next_run.as_deref().and_then(|s| {
-                    DateTime::parse_from_rfc3339(s)
-                        .ok()
-                        .map(|d| d.with_timezone(&Local))
-                }) else {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                _ => std::fs::read_dir(&dir),
+            };
+            let entries = match entries {
+                Ok(entries) => entries,
+                Err(e) => {
+                    report.issues.push(load_issue(
+                        "task_directory_read",
+                        &dir,
+                        &project.id,
+                        None,
+                        e.to_string(),
+                    ));
                     continue;
+                }
+            };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        report.issues.push(load_issue(
+                            "task_read",
+                            &dir,
+                            &project.id,
+                            None,
+                            e.to_string(),
+                        ));
+                        continue;
+                    }
                 };
-                if next <= now {
-                    due.push(t.clone());
-                    match parse_schedule(&t.schedule).map(|k| k.next_after(now)) {
-                        Ok(Some(n)) => {
-                            t.next_run = Some(n.to_rfc3339());
-                            rescheduled.push(t.clone());
+                let path = entry.path();
+                if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                    continue;
+                }
+                let result = (|| -> Result<ScheduledTask, (&str, String)> {
+                    let meta = std::fs::symlink_metadata(&path)
+                        .map_err(|e| ("task_read", e.to_string()))?;
+                    if meta.file_type().is_symlink() {
+                        return Err(("task_symlink", "Task file must not be a symlink".into()));
+                    }
+                    if !meta.is_file() {
+                        return Err(("task_file_type", "Task path is not a regular file".into()));
+                    }
+                    let bytes = std::fs::read(&path).map_err(|e| ("task_read", e.to_string()))?;
+                    let task: ScheduledTask =
+                        serde_json::from_slice(&bytes).map_err(|e| ("task_json", e.to_string()))?;
+                    if !crate::core::projects::valid_id(&task.id) {
+                        return Err(("task_id", "Invalid task id".into()));
+                    }
+                    if path.file_stem().and_then(|s| s.to_str()) != Some(task.id.as_str()) {
+                        return Err(("task_filename", "Filename and task id disagree".into()));
+                    }
+                    if task.project_id.as_deref() != Some(project.id.as_str()) {
+                        return Err(("task_project", "Task belongs to a different project".into()));
+                    }
+                    Ok(task)
+                })();
+                match result {
+                    Ok(task) => {
+                        if let Err(error) = parse_schedule(&task.schedule) {
+                            report.issues.push(load_issue(
+                                "schedule",
+                                &path,
+                                &project.id,
+                                Some(task.id.clone()),
+                                error,
+                            ));
                         }
-                        // once：触发后移除（Every/Cron 经解析期上限后恒返回 Some）
-                        Ok(None) => {
-                            tasks.remove(&id);
+                        if task
+                            .next_run
+                            .as_ref()
+                            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+                        {
+                            report.issues.push(load_issue(
+                                "next_run",
+                                &path,
+                                &project.id,
+                                Some(task.id.clone()),
+                                "Invalid next_run timestamp; task quarantined from scheduling"
+                                    .into(),
+                            ));
                         }
-                        Err(e) => {
-                            // 计划表达式损坏（如手改任务文件）：隔离而非静默删除循环任务——
-                            // next_run=None 跳过后续 tick
-                            tracing::warn!(
-                                "计划任务「{}」计划表达式失效（{e}），已暂停调度",
-                                t.name
-                            );
-                            t.next_run = None;
-                            rescheduled.push(t.clone());
+                        if !seen.insert(task.id.clone()) {
+                            duplicates.insert(task.id.clone());
+                            report.issues.push(load_issue(
+                                "task_duplicate",
+                                &path,
+                                &project.id,
+                                Some(task.id.clone()),
+                                "Conflicting task id; all copies quarantined".into(),
+                            ));
                         }
+                        report.tasks.push(task);
+                    }
+                    Err((kind, message)) => {
+                        report
+                            .issues
+                            .push(load_issue(kind, &path, &project.id, None, message))
                     }
                 }
             }
         }
-        for t in rescheduled {
-            self.persist(&t);
+        report.tasks.retain(|t| !duplicates.contains(&t.id));
+        report.tasks.sort_by(|a, b| a.id.cmp(&b.id));
+        report
+    }
+
+    pub async fn list(&self) -> Vec<ScheduledTask> {
+        self.restore().await;
+        let mut tasks: Vec<_> = self.state.lock().unwrap().tasks.values().cloned().collect();
+        tasks.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        tasks
+    }
+
+    /// Reserve at most one pending identity per task. No IO, schedule advancement, or events.
+    pub async fn collect_due(&self, now: DateTime<Local>) -> Vec<DueCandidate> {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        let mut state = self.state.lock().unwrap();
+        let mut due = Vec::new();
+        let tasks: Vec<_> = state.tasks.values().cloned().collect();
+        for task in tasks {
+            if !task.enabled
+                || task.active_run.is_some()
+                || task.persistence_error.is_some()
+                || state.pending.contains_key(&task.id)
+                || check_project_open(&state, &task).is_err()
+            {
+                continue;
+            }
+            if let Err(error) = parse_schedule(&task.schedule) {
+                if !state
+                    .issues
+                    .iter()
+                    .any(|i| i.kind == "schedule" && i.task_id.as_deref() == Some(&task.id))
+                {
+                    state.issues.push(task_issue(&task, "schedule", error));
+                }
+                continue;
+            }
+            let Some(next) = task
+                .next_run
+                .as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            else {
+                continue;
+            };
+            if next > now {
+                continue;
+            }
+            let candidate = DueCandidate {
+                task_id: task.id.clone(),
+                generation: *state.generations.get(&task.id).unwrap_or(&0),
+                scheduled_for: task.next_run.unwrap(),
+            };
+            state.pending.insert(task.id, candidate.clone());
+            due.push(candidate);
         }
+        due.sort_by(|a, b| {
+            DateTime::parse_from_rfc3339(&a.scheduled_for)
+                .unwrap()
+                .cmp(&DateTime::parse_from_rfc3339(&b.scheduled_for).unwrap())
+                .then(a.task_id.cmp(&b.task_id))
+        });
         due
+    }
+
+    async fn release_candidate(&self, candidate: &DueCandidate) {
+        let mut state = self.state.lock().unwrap();
+        if state.pending.get(&candidate.task_id) == Some(candidate) {
+            state.pending.remove(&candidate.task_id);
+        }
+    }
+
+    /// Caller holds exec_lock. Persist the active run before exposing any execution side effect.
+    pub async fn claim(
+        &self,
+        id: &str,
+        candidate: Option<&DueCandidate>,
+        now: DateTime<Local>,
+    ) -> Result<Option<ExecutionSnapshot>, String> {
+        let _gate = self.mutation_lock.lock().await;
+        self.initialize_locked().await;
+        let result = self.claim_locked(id, candidate, now).await;
+        if let Some(candidate) = candidate {
+            self.release_candidate(candidate).await;
+        }
+        result
+    }
+
+    async fn claim_locked(
+        &self,
+        id: &str,
+        candidate: Option<&DueCandidate>,
+        now: DateTime<Local>,
+    ) -> Result<Option<ExecutionSnapshot>, String> {
+        let mut task = {
+            let state = self.state.lock().unwrap();
+            let Some(task) = state.tasks.get(id) else {
+                return if candidate.is_some() {
+                    Ok(None)
+                } else {
+                    Err("任务不存在".into())
+                };
+            };
+            check_project_open(&state, task)?;
+            if task.active_run.is_some() {
+                return Err("任务已在运行".into());
+            }
+            if task.persistence_error.is_some() {
+                return Err("任务结果尚未保存，请重试保存后再运行".into());
+            }
+            if let Some(candidate) = candidate
+                && (state.pending.get(id) != Some(candidate)
+                    || state.generations.get(id) != Some(&candidate.generation)
+                    || !task.enabled
+                    || task.next_run.as_deref() != Some(&candidate.scheduled_for)
+                    || DateTime::parse_from_rfc3339(&candidate.scheduled_for)
+                        .map_err(|e| e.to_string())?
+                        > now)
+            {
+                return Ok(None);
+            }
+            task.clone()
+        };
+        let kind = parse_schedule(&task.schedule)?;
+        let mut unexecuted = task.clone();
+        let run = ActiveTaskRun {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            source: if candidate.is_some() {
+                RUN_SOURCE_SCHEDULE
+            } else {
+                RUN_SOURCE_MANUAL
+            }
+            .into(),
+            scheduled_for: candidate.map(|c| c.scheduled_for.clone()),
+            started_at: now.to_rfc3339(),
+        };
+        if candidate.is_some() {
+            task.next_run = kind.next_after(now).map(|t| t.to_rfc3339());
+        }
+        task.active_run = Some(run.clone());
+        if let Some(warning) = self.persist(&task)? {
+            // The disk may contain the claim, but execution has not begun. Quarantine the
+            // unexecuted schedule; retry_unsaved must durably restore it before another claim.
+            let error = format!("任务未执行；认领持久化未确认，等待安全恢复：{warning}");
+            unexecuted.persistence_error = Some(error.clone());
+            self.state
+                .lock()
+                .unwrap()
+                .tasks
+                .insert(id.into(), unexecuted);
+            return Err(error);
+        }
+        let mut state = self.state.lock().unwrap();
+        state
+            .issues
+            .retain(|issue| !(issue.kind == "claim_write" && issue.task_id.as_deref() == Some(id)));
+        state.tasks.insert(id.into(), task.clone());
+        Ok(Some(ExecutionSnapshot { task, run }))
+    }
+
+    /// Merge only this run's terminal fields into the current entity; edits and deletion win.
+    pub async fn finish_run(&self, id: &str, run_id: &str, mut run: TaskRun) -> Result<(), String> {
+        let _gate = self.mutation_lock.lock().await;
+        let mut task = match self.current(id).await {
+            Ok(task) => task,
+            Err(_) => return Ok(()),
+        };
+        if task.active_run.as_ref().map(|r| r.run_id.as_str()) != Some(run_id) {
+            if task
+                .runs
+                .iter()
+                .any(|run| run.run_id.as_deref() == Some(run_id))
+                && let Some(error) = task.persistence_error
+            {
+                return Err(error);
+            }
+            return Ok(());
+        }
+        run.run_id = Some(run_id.into());
+        append_result(&mut task, run);
+        task.active_run = None;
+        task.persistence_error = None;
+        let warning = match self.persist(&task) {
+            Ok(warning) => warning,
+            Err(error) => Some(error),
+        };
+        task.persistence_error = warning.clone();
+        // A completed external action cannot be rolled back; keep its real result in memory.
+        self.state.lock().unwrap().tasks.insert(id.into(), task);
+        warning.map_or(Ok(()), Err)
+    }
+
+    /// One bounded retry per supervisor tick; deleted/project-deleted tasks are absent.
+    pub async fn retry_unsaved(&self) {
+        let _gate = self.mutation_lock.lock().await;
+        let tasks: Vec<_> = self
+            .state
+            .lock()
+            .unwrap()
+            .tasks
+            .values()
+            .filter(|t| t.persistence_error.is_some())
+            .cloned()
+            .collect();
+        for mut task in tasks {
+            task.persistence_error = None;
+            if matches!(self.persist(&task), Ok(None)) {
+                self.state
+                    .lock()
+                    .unwrap()
+                    .tasks
+                    .insert(task.id.clone(), task);
+            }
+        }
+    }
+}
+
+fn check_project_open(state: &TaskState, task: &ScheduledTask) -> Result<(), String> {
+    if task
+        .project_id
+        .as_ref()
+        .is_some_and(|id| state.closed_projects.contains(id))
+    {
+        return Err("项目已关闭，任务不可执行或保存".into());
+    }
+    Ok(())
+}
+
+fn validate_task(task: &ScheduledTask) -> Result<(), String> {
+    if !crate::core::projects::valid_id(&task.id) {
+        return Err("非法任务 id".into());
+    }
+    parse_schedule(&task.schedule)?;
+    Ok(())
+}
+
+fn load_issue(
+    kind: &str,
+    path: &std::path::Path,
+    project_id: &str,
+    task_id: Option<String>,
+    message: String,
+) -> TaskIssue {
+    TaskIssue {
+        kind: kind.into(),
+        path: path.display().to_string(),
+        project_id: Some(project_id.into()),
+        task_id,
+        message,
+    }
+}
+
+fn task_issue(task: &ScheduledTask, kind: &str, message: String) -> TaskIssue {
+    TaskIssue {
+        kind: kind.into(),
+        path: String::new(),
+        project_id: task.project_id.clone(),
+        task_id: Some(task.id.clone()),
+        message,
+    }
+}
+
+/// Strict task-only resolver: never fall back to ~/.codewave/projects/<id>.
+fn resolve_task_project_dir(
+    data_dir: &std::path::Path,
+    id: &str,
+) -> Result<std::path::PathBuf, String> {
+    if !crate::core::projects::valid_id(id) {
+        return Err("非法项目 id".into());
+    }
+    let report = crate::core::projects::load_report(data_dir);
+    if let Some(project) = report.entries.iter().find(|p| p.id == id) {
+        let managed = crate::core::projects::project_data_dir(data_dir, project);
+        if !managed.is_dir() {
+            return Err(format!("项目目录不可用: {}", managed.display()));
+        }
+        return Ok(managed);
+    }
+    if let Some(issue) = report
+        .issues
+        .iter()
+        .find(|i| i.project_id.as_deref() == Some(id) || i.project_id.is_none())
+    {
+        return Err(format!(
+            "项目 {id} 不可读 ({}): {}",
+            issue.path, issue.message
+        ));
+    }
+    Err(format!("项目不存在: {id}"))
+}
+
+fn task_file(
+    data_dir: &std::path::Path,
+    task: &ScheduledTask,
+) -> Result<Option<std::path::PathBuf>, String> {
+    if !crate::core::projects::valid_id(&task.id) {
+        return Err("非法任务 id".into());
+    }
+    let Some(id) = &task.project_id else {
+        return Ok(None);
+    };
+    let dir = resolve_task_project_dir(data_dir, id)?.join("tasks");
+    if let Ok(meta) = std::fs::symlink_metadata(&dir)
+        && (!meta.is_dir() || meta.file_type().is_symlink())
+    {
+        return Err(format!("任务目录不是普通目录: {}", dir.display()));
+    }
+    let path = dir.join(format!("{}.json", task.id));
+    if let Ok(meta) = std::fs::symlink_metadata(&path)
+        && (!meta.is_file() || meta.file_type().is_symlink())
+    {
+        return Err(format!("任务路径不是普通文件: {}", path.display()));
+    }
+    Ok(Some(path))
+}
+
+fn append_result(task: &mut ScheduledTask, run: TaskRun) {
+    if run
+        .run_id
+        .as_ref()
+        .is_some_and(|id| task.runs.iter().any(|r| r.run_id.as_ref() == Some(id)))
+    {
+        return;
+    }
+    task.last_status = Some(run.status.clone());
+    task.last_summary = Some(run.summary.clone());
+    task.runs.insert(0, run);
+    task.runs.truncate(MAX_TASK_RUNS);
+}
+
+fn recover_task(task: &mut ScheduledTask, now: DateTime<Local>) -> bool {
+    task.persistence_error = None;
+    if let Some(active) = task.active_run.take() {
+        append_result(
+            task,
+            TaskRun {
+                run_id: Some(active.run_id),
+                at: now.to_rfc3339(),
+                status: "error".into(),
+                summary: "上次执行中断，结果未确认".into(),
+                source: active.source,
+                out_tokens: 0,
+            },
+        );
+        if task.schedule.starts_with("once:")
+            && task
+                .next_run
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .is_none_or(|next| next <= now)
+        {
+            // Interrupted manual runs must not turn an overdue once into an automatic replay.
+            // An explicitly edited future schedule is still preserved.
+            task.next_run = None;
+        }
+        return true;
+    }
+    if !task.enabled {
+        return false;
+    }
+    let Some(at) = task
+        .next_run
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+    else {
+        return false;
+    };
+    match parse_schedule(&task.schedule) {
+        Ok(ScheduleKind::Once(_)) if at <= now => {
+            let id = format!("missed:{}:{}", task.id, at.to_rfc3339());
+            append_result(
+                task,
+                TaskRun {
+                    run_id: Some(id),
+                    at: now.to_rfc3339(),
+                    status: "skipped".into(),
+                    summary: "应用离线时已错过计划时间".into(),
+                    source: RUN_SOURCE_SCHEDULE.into(),
+                    out_tokens: 0,
+                },
+            );
+            task.next_run = None;
+            true
+        }
+        Ok(ScheduleKind::Cron(expr)) => {
+            if let Some(next) = corrected_cron_next(&expr, &now, &at.with_timezone(&Local)) {
+                task.next_run = Some(next.to_rfc3339());
+                return true;
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -408,54 +1013,180 @@ pub fn initial_next(schedule: &str) -> Result<Option<String>, String> {
     Ok(kind.next_after(Local::now()).map(|t| t.to_rfc3339()))
 }
 
-/// supervisor：每 15s tick 一次；到期任务串行执行。
+/// Every 15 seconds collect identity-only candidates; the execution lock is global.
 pub async fn start_supervisor(core: Arc<crate::core::agent::AgentCore>) {
-    // 恢复持久化任务（projects/<id>/tasks/*.json）
-    let restored = TaskTable::load_all_from_projects(&core.data_dir).await;
-    if !restored.is_empty() {
-        tracing::info!("恢复持久化计划任务 {} 个", restored.len());
-        for t in restored {
-            core.tasks.upsert(t).await;
-        }
-    }
+    core.tasks.restore().await;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
-            let due = core.tasks.tick(Local::now()).await;
-            for task in due {
+            core.tasks.retry_unsaved().await;
+            let due = core.tasks.collect_due(Local::now()).await;
+            for candidate in due {
                 let core = core.clone();
+                let pending = PendingGuard {
+                    table: core.tasks.clone(),
+                    candidate: candidate.clone(),
+                };
                 tokio::spawn(async move {
-                    run_task(core, task, RUN_SOURCE_SCHEDULE).await;
+                    let _pending = pending;
+                    let runner = core.clone();
+                    match dispatch_candidate(
+                        core.tasks.clone(),
+                        &candidate,
+                        Local::now,
+                        move |snapshot, execution| execute_claimed(runner, snapshot, execution),
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(task_id = %candidate.task_id, %error, "Task claim rejected");
+                            let mut state = core.tasks.state.lock().unwrap();
+                            if let Some(task) = state.tasks.get(&candidate.task_id).cloned() {
+                                state.issues.retain(|i| {
+                                    !(i.kind == "claim_write"
+                                        && i.task_id.as_deref() == Some(&candidate.task_id))
+                                });
+                                state.issues.push(task_issue(&task, "claim_write", error));
+                            }
+                        }
+                    }
                 });
             }
         }
     });
 }
 
-/// 单任务执行（定时路径）：等待串行锁后运行。
-async fn run_task(core: Arc<crate::core::agent::AgentCore>, task: ScheduledTask, source: &str) {
-    let _guard = Arc::clone(&core.tasks.exec_lock).lock_owned().await;
-    run_task_locked(core, task, source).await;
+/// The production dispatcher and fault tests share this exact post-lock authorization gate.
+async fn dispatch_candidate<F, Fut, Clock>(
+    table: Arc<TaskTable>,
+    candidate: &DueCandidate,
+    clock: Clock,
+    execute: F,
+) -> Result<bool, String>
+where
+    F: FnOnce(ExecutionSnapshot, tokio::sync::OwnedMutexGuard<()>) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+    Clock: FnOnce() -> DateTime<Local>,
+{
+    let execution = table.exec_lock.clone().lock_owned().await;
+    let Some(snapshot) = table
+        .claim(&candidate.task_id, Some(candidate), clock())
+        .await?
+    else {
+        return Ok(false);
+    };
+    execute(snapshot, execution).await;
+    Ok(true)
 }
 
-/// 立即运行一次任务（IPC「立即运行」路径）：**不修改 next_run**。
-/// 串行锁被占用 → 直接拒绝（不排队）；否则把 guard move 进后台任务后立即返回。
+struct PendingGuard {
+    table: Arc<TaskTable>,
+    candidate: DueCandidate,
+}
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let table = self.table.clone();
+            let candidate = self.candidate.clone();
+            handle.spawn(async move {
+                table.release_candidate(&candidate).await;
+            });
+        }
+    }
+}
+
+struct TaskRunGuard {
+    table: Arc<TaskTable>,
+    core: Option<Arc<crate::core::agent::AgentCore>>,
+    execution: Option<tokio::sync::OwnedMutexGuard<()>>,
+    task_id: String,
+    run: ActiveTaskRun,
+    armed: bool,
+}
+impl Drop for TaskRunGuard {
+    fn drop(&mut self) {
+        if self.armed
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            let table = self.table.clone();
+            let id = self.task_id.clone();
+            let run = self.run.clone();
+            let core = self.core.clone();
+            let execution = self.execution.take();
+            handle.spawn(async move {
+                let _execution = execution;
+                let _ = table
+                    .finish_run(
+                        &id,
+                        &run.run_id,
+                        TaskRun {
+                            run_id: Some(run.run_id.clone()),
+                            at: Local::now().to_rfc3339(),
+                            status: "error".into(),
+                            summary: "任务执行中断，结果未确认".into(),
+                            source: run.source,
+                            out_tokens: 0,
+                        },
+                    )
+                    .await;
+                if let Some(core) = core {
+                    core.wait_targets.finish(
+                        &id,
+                        TargetState::Failed,
+                        Some("任务执行中断，结果未确认".into()),
+                        Some("error".into()),
+                    );
+                }
+            });
+        }
+    }
+}
+
+async fn execute_claimed(
+    core: Arc<crate::core::agent::AgentCore>,
+    snapshot: ExecutionSnapshot,
+    execution: tokio::sync::OwnedMutexGuard<()>,
+) {
+    let mut cleanup = TaskRunGuard {
+        table: core.tasks.clone(),
+        core: Some(core.clone()),
+        execution: Some(execution),
+        task_id: snapshot.task.id.clone(),
+        run: snapshot.run.clone(),
+        armed: true,
+    };
+    run_task_locked(core, snapshot).await;
+    cleanup.armed = false;
+}
+
+/// Manual execution does not advance next_run. A busy executor fails immediately.
 pub async fn trigger_now(core: Arc<crate::core::agent::AgentCore>, id: &str) -> Result<(), String> {
-    let task = {
-        let tasks = core.tasks.tasks.lock().await;
-        tasks.get(id).cloned()
-    };
-    let Some(task) = task else {
-        return Err("任务不存在".into());
-    };
-    let guard = match Arc::clone(&core.tasks.exec_lock).try_lock_owned() {
-        Ok(g) => g,
-        Err(_) => return Err("已有任务正在运行，请稍后再试".into()),
+    let execution = core
+        .tasks
+        .exec_lock
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "已有任务正在运行，请稍后再试")?;
+    let snapshot = core
+        .tasks
+        .claim(id, None, Local::now())
+        .await?
+        .ok_or("任务不存在")?;
+    // Construct the cleanup before spawning so cancellation before the first poll is covered.
+    let cleanup = TaskRunGuard {
+        table: core.tasks.clone(),
+        core: Some(core.clone()),
+        execution: Some(execution),
+        task_id: id.into(),
+        run: snapshot.run.clone(),
+        armed: true,
     };
     tokio::spawn(async move {
-        let _guard = guard;
-        run_task_locked(core, task, RUN_SOURCE_MANUAL).await;
+        let mut cleanup = cleanup;
+        run_task_locked(core, snapshot).await;
+        cleanup.armed = false;
     });
     Ok(())
 }
@@ -474,19 +1205,17 @@ fn task_prefs() -> crate::core::prefs::SessionPrefs {
     }
 }
 
-async fn run_task_locked(
-    core: Arc<crate::core::agent::AgentCore>,
-    task: ScheduledTask,
-    source: &str,
-) {
+async fn run_task_locked(core: Arc<crate::core::agent::AgentCore>, snapshot: ExecutionSnapshot) {
+    let task = snapshot.task;
+    let active = snapshot.run;
     core.sink.emit(
         &String::new(),
         "scheduled:fired",
-        json!({ "name": task.name, "id": task.id }),
+        json!({ "name": task.name, "id": task.id, "run_id": active.run_id }),
     );
     // 登记为可等待目标（`wait` 的 until 可等它跑完）：计划任务无 running 中间态，
     // 每轮登记都会重置上一轮终态；baseline 仅供诊断，连续两轮状态相同也算完成。
-    // 登记表与 ScheduledTask 解耦：不动结构体，避免打破本文件内大量结构体字面量。
+    // 等待目标按本轮重新登记；任务实体的 active_run 仍是列表对账真值。
     core.wait_targets.register(
         task.id.clone(),
         TargetKind::ScheduledTask,
@@ -495,42 +1224,21 @@ async fn run_task_locked(
     // 评审 H4：任务必须跑在所属项目的多根快照内（此前会抓「某个会话的 workspace」，
     // 随机跑在错误位置）
     let Some((workspace, pid, project_dir, extra_roots)) = task_scope(&core, &task) else {
-        task_log(&core, &task, "跳过：所属项目不存在或无有效目录");
-        {
-            let mut tasks = core.tasks.tasks.lock().await;
-            if let Some(t) = tasks.get_mut(&task.id) {
-                t.last_status = Some("skipped".into());
-                t.last_summary = Some("所属项目不存在或无有效目录".into());
-            }
-        }
-        // 跳过也是本次 run 的完成；终态取 Failed——
-        // 它没有拿到成果，wait 超时时看到的摘要已说明原因。
-        core.wait_targets.finish(
-            &task.id,
-            TargetState::Failed,
-            Some("skipped: 所属项目不存在或无有效目录".to_string()),
-            Some("skipped".to_string()),
-        );
-        core.tasks
-            .record_run(
-                &task.id,
-                TaskRun {
-                    at: Local::now().to_rfc3339(),
-                    status: "skipped".into(),
-                    summary: "所属项目不存在或无有效目录".into(),
-                    source: source.to_string(),
-                    out_tokens: 0,
-                },
-            )
-            .await;
-        core.sink.emit(&String::new(), "scheduled:done", json!({
-            "name": task.name, "id": task.id, "status": "skipped", "summary": "所属项目不存在或无有效目录",
-        }));
+        task_log(&core, &task, "跳过：所属项目不存在或无有效目录").await;
+        finish_and_emit(
+            &core,
+            &task,
+            &active,
+            "skipped",
+            "所属项目不存在或无有效目录",
+            0,
+        )
+        .await;
         return;
     };
     let data_dir = core.data_dir.clone();
     let mut rt = SessionRuntime::new_task(
-        format!("task_{}", task.id),
+        format!("task_{}_{}", task.id, active.run_id),
         core.data_dir.clone(),
         workspace.clone(),
         data_dir,
@@ -561,54 +1269,25 @@ async fn run_task_locked(
         &core,
         &task,
         &format!("触发（{}）：{first_line}", task.schedule),
-    );
+    )
+    .await;
     let core2 = core.clone();
     let task2 = task.clone();
     // 隔离运行：指令成为首条用户消息；步数预算 30
-    let (result, usage) = tokio::spawn(crate::core::agent::run_task_agent(
+    use futures::FutureExt;
+    let (result, usage) = std::panic::AssertUnwindSafe(crate::core::agent::run_task_agent(
         core2.clone(),
         rt.clone(),
         task2.clone(),
     ))
+    .catch_unwind()
     .await
-    .unwrap_or_else(|e| (Err(format!("任务执行异常：{e}")), Default::default()));
+    .unwrap_or_else(|_| (Err("任务执行异常：panic".into()), Default::default()));
     let (status, summary) = match &result {
         Ok(text) => ("ok".to_string(), text.chars().take(300).collect::<String>()),
         Err(e) => ("error".to_string(), e.clone()),
     };
-    {
-        let mut tasks = core.tasks.tasks.lock().await;
-        if let Some(t) = tasks.get_mut(&task.id) {
-            t.last_status = Some(status.clone());
-            t.last_summary = Some(summary.clone());
-        }
-    }
-    // run 结束置本轮终态，status == "ok" 归 Succeeded，"error" 归 Failed。
-    // 状态与摘要分别保留供诊断；是否完成不依赖与上轮状态的比较。
-    core.wait_targets.finish(
-        &task.id,
-        if status == "ok" {
-            TargetState::Succeeded
-        } else {
-            TargetState::Failed
-        },
-        Some(summary.clone()),
-        Some(status.clone()),
-    );
-    // 执行记录（新的在前，上限 20）+ 落盘：record_run 落盘时连带写入上一步的
-    // last_status / last_summary（同一份快照）
-    core.tasks
-        .record_run(
-            &task.id,
-            TaskRun {
-                at: Local::now().to_rfc3339(),
-                status: status.clone(),
-                summary: summary.clone(),
-                source: source.to_string(),
-                out_tokens: usage.output,
-            },
-        )
-        .await;
+    finish_and_emit(&core, &task, &active, &status, &summary, usage.output).await;
     // L10：任务运行用量计入统计（来源 kind=task）
     if usage.input + usage.output > 0 {
         let model_id = core
@@ -639,36 +1318,88 @@ async fn run_task_locked(
                     "完成（input {} / output {} tokens）汇报：\n{text}",
                     usage.input, usage.output
                 ),
-            );
+            )
+            .await;
         }
         Err(e) => {
-            task_log(&core, &task, &format!("失败：{e}"));
+            task_log(&core, &task, &format!("失败：{e}")).await;
         }
     }
-    core.sink.emit(
-        &String::new(),
-        "scheduled:done",
-        json!({
-            "name": task.name, "id": task.id, "status": status, "summary": summary,
-        }),
-    );
 }
 
-/// B7：任务执行日志追加到 projects/<project_id>/logs/<task-id>.log（自由会话任务跳过）。
-fn task_log(core: &crate::core::agent::AgentCore, task: &ScheduledTask, line: &str) {
+async fn finish_and_emit(
+    core: &crate::core::agent::AgentCore,
+    task: &ScheduledTask,
+    active: &ActiveTaskRun,
+    status: &str,
+    summary: &str,
+    out_tokens: u64,
+) {
+    let saved = core
+        .tasks
+        .finish_run(
+            &task.id,
+            &active.run_id,
+            TaskRun {
+                run_id: Some(active.run_id.clone()),
+                at: Local::now().to_rfc3339(),
+                status: status.into(),
+                summary: summary.into(),
+                source: active.source.clone(),
+                out_tokens,
+            },
+        )
+        .await;
+    core.wait_targets.finish(
+        &task.id,
+        if status == "ok" {
+            TargetState::Succeeded
+        } else {
+            TargetState::Failed
+        },
+        Some(summary.into()),
+        Some(status.into()),
+    );
+    core.sink.emit(&String::new(), "scheduled:done", json!({ "name": task.name, "id": task.id, "run_id": active.run_id, "status": status, "summary": summary, "persistence_error": saved.err() }));
+}
+
+/// Logs use the same strict project path and deletion lock as task state; no fallback/mkdir.
+async fn task_log(core: &crate::core::agent::AgentCore, task: &ScheduledTask, line: &str) {
     let Some(pid) = &task.project_id else { return };
-    let dir = crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("logs");
-    if std::fs::create_dir_all(&dir).is_err() {
+    let _gate = core.tasks.mutation_lock.lock().await;
+    if check_project_open(&core.tasks.state.lock().unwrap(), task).is_err() {
         return;
     }
-    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let Ok(managed) = resolve_task_project_dir(&core.data_dir, pid) else {
+        return;
+    };
+    let dir = managed.join("logs");
+    let Ok(meta) = std::fs::symlink_metadata(&dir) else {
+        return;
+    };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return;
+    }
+    let path = dir.join(format!("{}.log", task.id));
+    if !crate::core::projects::valid_id(&task.id) {
+        return;
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&path)
+        && (!meta.is_file() || meta.file_type().is_symlink())
+    {
+        return;
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join(format!("{}.log", task.id)))
+        .open(path)
     {
-        use std::io::Write as _;
-        let _ = writeln!(f, "[{ts}] {line}");
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "[{}] {line}",
+            Local::now().format("%Y-%m-%dT%H:%M:%S")
+        );
     }
 }
 
@@ -703,7 +1434,7 @@ fn task_scope(core: &crate::core::agent::AgentCore, task: &ScheduledTask) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{FixedOffset, LocalResult, Timelike};
+    use chrono::{FixedOffset, LocalResult};
 
     #[test]
     fn cron_clock_time_uses_schedule_timezone() {
@@ -757,694 +1488,981 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn restore_repairs_only_cron_times_that_miss_local_schedule() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let wrong = (Local::now() + chrono::Duration::days(1))
-            .format("%Y-%m-%dT17:00:00%:z")
-            .to_string();
-        let due = (Local::now() - chrono::Duration::days(1))
-            .format("%Y-%m-%dT09:00:00%:z")
-            .to_string();
-        for (id, next_run) in [("wrong", wrong), ("due", due.clone())] {
-            table
-                .upsert(ScheduledTask {
-                    id: id.into(),
-                    name: id.into(),
-                    instruction: "test".into(),
-                    schedule: "cron:0 9 * * *".into(),
-                    next_run: Some(next_run),
-                    last_status: None,
-                    last_summary: None,
-                    project_id: Some("project".into()),
-                    enabled: true,
-                    runs: Vec::new(),
-                })
-                .await;
+    fn task(id: &str, now: DateTime<Local>) -> ScheduledTask {
+        ScheduledTask {
+            id: id.into(),
+            name: id.into(),
+            instruction: "safe fixture".into(),
+            schedule: "every:30 m".into(),
+            next_run: Some(now.to_rfc3339()),
+            last_status: None,
+            last_summary: None,
+            project_id: None,
+            enabled: true,
+            runs: vec![],
+            active_run: None,
+            persistence_error: None,
         }
-
-        let restored = TaskTable::load_all_from_projects(dir.path()).await;
-        let repaired = restored.iter().find(|task| task.id == "wrong").unwrap();
-        let next = DateTime::parse_from_rfc3339(repaired.next_run.as_deref().unwrap())
-            .unwrap()
-            .with_timezone(&Local);
-        assert_eq!(next.hour(), 9);
-        assert!(next > Local::now());
-        assert_eq!(
-            restored
-                .iter()
-                .find(|task| task.id == "due")
-                .unwrap()
-                .next_run
-                .as_deref(),
-            Some(due.as_str()),
-            "本地时刻已匹配的过期任务仍交给 tick 处理",
-        );
     }
 
-    /// C1：计划任务运行档位 = 完全访问（无人值守，需写文件与执行命令）。
+    fn project(data: &std::path::Path, root: &std::path::Path, id: &str) {
+        crate::core::projects::save_project(
+            data,
+            &crate::core::projects::ProjectEntry {
+                id: id.into(),
+                name: id.into(),
+                directory: root.display().to_string(),
+                data_dir: None,
+                created_at: Local::now().to_rfc3339(),
+                allowed_dirs: vec![],
+            },
+        )
+        .unwrap();
+    }
+
+    fn fixture() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        TaskTable,
+        ScheduledTask,
+    ) {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        project(data.path(), root.path(), "project");
+        let table = TaskTable::new(data.path().into());
+        let mut task = task("task", Local::now());
+        task.project_id = Some("project".into());
+        (data, root, table, task)
+    }
+
+    fn result(status: &str) -> TaskRun {
+        TaskRun {
+            status: status.into(),
+            summary: format!("safe {status}"),
+            at: Local::now().to_rfc3339(),
+            source: RUN_SOURCE_SCHEDULE.into(),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn task_runtime_prefs_are_full_access() {
-        let p = task_prefs();
-        assert_eq!(
-            p.approval_mode,
-            crate::core::prefs::ApprovalMode::FullAccess
-        );
-        // 模型 / 力度保持默认（跟随全局），只动档位
-        assert!(p.model_id.is_none());
-        assert!(p.reasoning_effort.is_none());
-        // 端到端：新建任务 runtime 默认落在 Plan（本改造前的矛盾源头），置位后为 FullAccess
-        let ws = tempfile::tempdir().unwrap();
+    fn task_runtime_prefs_and_identity_are_explicit() {
+        let data = tempfile::tempdir().unwrap();
         let rt = SessionRuntime::new_task(
-            "task_t1".into(),
-            ws.path().to_path_buf(),
-            ws.path().to_path_buf(),
-            ws.path().to_path_buf(),
+            "task_fixture_run".into(),
+            data.path().into(),
+            data.path().into(),
+            data.path().into(),
         );
-        assert_eq!(
-            rt.prefs().approval_mode,
-            crate::core::prefs::ApprovalMode::Plan
-        );
+        assert!(!rt.is_main_session);
+        assert!(rt.is_task_runtime);
         rt.set_prefs(task_prefs());
         assert_eq!(
             rt.prefs().approval_mode,
             crate::core::prefs::ApprovalMode::FullAccess
         );
-    }
-
-    #[test]
-    fn every_interval_parse_bounds() {
-        assert!(parse_schedule("every:30 d").is_ok());
-        assert!(
-            parse_schedule("every:31 d").is_err(),
-            "超过 30 天上限应报错"
-        );
-        // u64 溢出域必须是解析期错误，而不是 tick 期静默隔离
-        assert!(parse_schedule("every:99999999999999999999 d").is_err());
-        assert!(parse_schedule("every:18446744073709551615 d").is_err());
-        assert!(parse_schedule("every:4467440737095516155 h").is_err());
-    }
-
-    #[test]
-    fn task_log_appends_under_project_dir() {
-        // B7：任务日志落在 projects/<project_id>/logs/<task-id>.log；自由会话任务跳过
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = crate::core::config::ConfigState::default();
-        let store = std::sync::Arc::new(crate::core::sessions::SessionStore::new(
-            dir.path().to_path_buf(),
-        ));
-        let core = std::sync::Arc::new(crate::core::agent::AgentCore::new(
-            cfg,
-            std::sync::Arc::new(crate::core::agent::test_support::NoopSink),
-            store,
-            reqwest::Client::new(),
-            dir.path().to_path_buf(),
-        ));
-        let task = ScheduledTask {
-            id: "t1".into(),
-            name: "daily".into(),
-            instruction: "x".into(),
-            schedule: "every:1 h".into(),
-            next_run: None,
-            last_status: None,
-            last_summary: None,
-            project_id: Some("p1".into()),
-            enabled: true,
-            runs: Vec::new(),
-        };
-        task_log(&core, &task, "触发");
-        task_log(&core, &task, "完成");
-        let log = dir.path().join("projects/p1/logs/t1.log");
-        let text = std::fs::read_to_string(&log).unwrap();
-        assert!(
-            text.contains("触发") && text.contains("完成"),
-            "两行都应追加：{text}"
-        );
-        assert!(text.starts_with('['), "应有时间戳前缀");
-        // 自由会话任务（project_id=None）不落盘
-        let free = ScheduledTask {
-            project_id: None,
-            id: "t2".into(),
-            ..task.clone()
-        };
-        task_log(&core, &free, "x");
-        assert!(!dir.path().join("projects/p1/logs/t2.log").exists());
+        assert!(rt.prefs().model_id.is_none());
+        assert!(rt.prefs().reasoning_effort.is_none());
     }
 
     #[tokio::test]
-    async fn tick_fires_due_and_reschedules() {
-        let table = TaskTable::default();
-        let past = (Local::now() - chrono::Duration::minutes(5)).to_rfc3339();
-        // every：到期 → 触发并重排
-        table
-            .upsert(ScheduledTask {
-                id: "e1".into(),
-                name: "every-task".into(),
-                instruction: "x".into(),
-                schedule: "every:30 m".into(),
-                next_run: Some(past.clone()),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        // once：到期 → 触发后移除
-        table
-            .upsert(ScheduledTask {
-                id: "o1".into(),
-                name: "once-task".into(),
-                instruction: "y".into(),
-                schedule: "once:2020-01-01T00:00:00Z".into(),
-                next_run: Some(past),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        // 未到期：不触发
-        let future = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
-        table
-            .upsert(ScheduledTask {
-                id: "f1".into(),
-                name: "future".into(),
-                instruction: "z".into(),
-                schedule: "cron:0 9 * * *".into(),
-                next_run: Some(future),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-
-        let due = table.tick(Local::now()).await;
-        assert_eq!(due.len(), 2, "到期应触发 2 个");
-        assert!(due.iter().any(|t| t.id == "e1"));
-        assert!(due.iter().any(|t| t.id == "o1"));
-        let list = table.list().await;
-        assert_eq!(list.len(), 2, "once 应被移除，剩 every + future");
-        let e1 = list.iter().find(|t| t.id == "e1").unwrap();
-        let next = DateTime::parse_from_rfc3339(e1.next_run.as_deref().unwrap()).unwrap();
-        assert!(
-            next.with_timezone(&Local) > Local::now(),
-            "every 应重排到未来"
-        );
-    }
-
-    #[test]
-    fn once_future_schedules_next() {
-        let kind = parse_schedule("once:2099-01-01T00:00:00+08:00").unwrap();
-        assert!(kind.next_after(Local::now()).is_some());
-        let past = parse_schedule("once:2020-01-01T00:00:00+08:00").unwrap();
-        assert!(past.next_after(Local::now()).is_none());
+    async fn real_registered_project_roundtrip_and_delete() {
+        let (data, root, table, mut task) = fixture();
+        task.enabled = false;
+        task.last_status = Some("ok".into());
+        task.runs = vec![result("ok")];
+        table.upsert(task.clone()).await.unwrap();
+        let path = root.path().join(".codewave/tasks/task.json");
+        assert!(path.is_file());
+        assert!(!data.path().join("projects/project/tasks").exists());
+        let restored = TaskTable::new(data.path().into());
+        assert_eq!(restored.list().await, vec![task]);
+        restored.remove("task").await.unwrap().unwrap();
+        assert!(!path.exists());
+        assert!(TaskTable::new(data.path().into()).list().await.is_empty());
+        assert!(restored.remove("missing").await.unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn removed_task_file_is_deleted() {
-        // 评审 H3：删除任务必须删除持久化文件，否则 load_all 在重启后复活它
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let task = ScheduledTask {
-            id: "e9".into(),
-            name: "persist".into(),
-            instruction: "x".into(),
-            schedule: "every:1 h".into(),
-            next_run: Some(Local::now().to_rfc3339()),
-            last_status: None,
-            last_summary: None,
-            project_id: Some("p9".into()),
-            enabled: true,
-            runs: Vec::new(),
-        };
-        table.upsert(task).await;
-        let file = dir.path().join("projects/p9/tasks/e9.json");
-        assert!(file.exists(), "upsert 应落盘");
-        table.remove("e9").await;
-        assert!(!file.exists(), "remove 必须删除持久化文件（H3）");
+    async fn missing_project_never_uses_global_fallback() {
+        let data = tempfile::tempdir().unwrap();
+        let table = TaskTable::new(data.path().into());
+        let mut task = task("task", Local::now());
+        task.project_id = Some("unknown".into());
+        assert!(table.upsert(task).await.is_err());
+        assert!(table.list().await.is_empty());
+        assert!(!data.path().join("projects/unknown").exists());
     }
 
-    #[test]
-    fn task_scope_resolves_project_roots() {
-        // 评审 H4：任务范围必须来自项目注册表（主目录 + 附加根）；项目缺失 → None（跳过执行）
-        let dir = tempfile::tempdir().unwrap();
-        let root_a = tempfile::tempdir().unwrap();
-        let root_b = tempfile::tempdir().unwrap();
-        let _ = &root_b; // 单目录语义后已不使用；保留 tempdir 防止作用域过早清理
-        let cfg = crate::core::config::ConfigState::default();
-        let store = std::sync::Arc::new(crate::core::sessions::SessionStore::new(
-            dir.path().to_path_buf(),
-        ));
-        let core = crate::core::agent::AgentCore::new(
-            cfg,
-            std::sync::Arc::new(crate::core::agent::test_support::NoopSink),
-            store,
-            reqwest::Client::new(),
-            dir.path().to_path_buf(),
-        );
-        // p-missing 不在注册表中
-        let missing = ScheduledTask {
-            id: "m1".into(),
-            name: "x".into(),
-            instruction: "x".into(),
-            schedule: "every:1 h".into(),
-            next_run: None,
-            last_status: None,
-            last_summary: None,
-            project_id: Some("p-missing".into()),
-            enabled: true,
-            runs: Vec::new(),
-        };
-        assert!(task_scope(&core, &missing).is_none(), "项目缺失应跳过执行");
-        // 注册项目（先建子目录结构：save_project 需要项目目录存在）
-        let a = std::fs::canonicalize(root_a.path()).unwrap();
-        crate::core::projects::save_project(
-            &core.data_dir,
-            &crate::core::projects::ProjectEntry {
-                id: "p-multi".into(),
-                name: "multi".into(),
-                directory: a.to_string_lossy().into_owned(),
-                data_dir: None,
-                created_at: chrono::Utc::now().to_rfc3339(),
-                allowed_dirs: vec![],
-            },
-        )
-        .unwrap();
-        let task = ScheduledTask {
-            id: "m2".into(),
-            name: "x".into(),
-            instruction: "x".into(),
-            schedule: "every:1 h".into(),
-            next_run: None,
-            last_status: None,
-            last_summary: None,
-            project_id: Some("p-multi".into()),
-            enabled: true,
-            runs: Vec::new(),
-        };
-        let (ws, pid, pdir, extra) = task_scope(&core, &task).unwrap();
-        assert_eq!(ws, a, "主目录 = 项目目录");
-        assert_eq!(pid.as_deref(), Some("p-multi"));
-        assert_eq!(
-            pdir,
-            Some(crate::core::projects::data_dir_by_id(
-                &core.data_dir,
-                "p-multi"
-            ))
-        );
-        assert!(extra.is_empty(), "单目录语义无 extra 根");
-        // 自由会话任务 → 中立 data_dir
-        let free = ScheduledTask {
-            project_id: None,
-            ..task
-        };
-        let (ws2, pid2, pdir2, extra2) = task_scope(&core, &free).unwrap();
-        assert_eq!(ws2, core.data_dir);
-        assert!(pid2.is_none() && pdir2.is_none() && extra2.is_empty());
-    }
-
-    /// 暂停：任务不参与 tick（不执行、不推进 next_run、不记历史、不写状态）。
     #[tokio::test]
-    async fn tick_skips_disabled_tasks() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let past = (Local::now() - chrono::Duration::minutes(5)).to_rfc3339();
-        table
-            .upsert(ScheduledTask {
-                id: "d1".into(),
-                name: "paused".into(),
-                instruction: "x".into(),
-                schedule: "every:30 m".into(),
-                next_run: Some(past.clone()),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: false,
-                runs: Vec::new(),
-            })
-            .await;
-        let due = table.tick(Local::now()).await;
-        assert!(due.is_empty(), "暂停任务不应被触发：{due:?}");
-        let list = table.list().await;
-        assert_eq!(
-            list[0].next_run.as_deref(),
-            Some(past.as_str()),
-            "暂停不推进 next_run"
-        );
-        assert!(list[0].runs.is_empty(), "暂停不记历史");
-        assert!(list[0].last_status.is_none(), "暂停不写状态");
-        // 启用后 next_run 重算到未来，重新入调度
-        let t = table.set_enabled("d1", true).await.unwrap();
-        let next = DateTime::parse_from_rfc3339(t.next_run.as_deref().unwrap()).unwrap();
-        assert!(next.with_timezone(&Local) > Local::now());
-    }
-
-    /// update 仅在 schedule 变化时重算 next_run。
-    #[tokio::test]
-    async fn update_recomputes_next_run_only_when_schedule_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let fixed = (Local::now() + chrono::Duration::hours(3)).to_rfc3339();
-        table
-            .upsert(ScheduledTask {
-                id: "u1".into(),
-                name: "old".into(),
-                instruction: "i1".into(),
-                schedule: "every:1 h".into(),
-                next_run: Some(fixed.clone()),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        // 只改 name / instruction：next_run 原样保留
-        let t = table
-            .update("u1", "new".into(), "i2".into(), "every:1 h".into())
-            .await
-            .unwrap();
-        assert_eq!(t.name, "new");
-        assert_eq!(t.instruction, "i2");
-        assert_eq!(
-            t.next_run.as_deref(),
-            Some(fixed.as_str()),
-            "计划未变不重排"
-        );
-        // 改 schedule：重算到未来
-        let t = table
-            .update("u1", "new".into(), "i2".into(), "every:2 h".into())
-            .await
-            .unwrap();
-        assert_eq!(t.schedule, "every:2 h");
-        assert_ne!(t.next_run.as_deref(), Some(fixed.as_str()));
-        let next = DateTime::parse_from_rfc3339(t.next_run.as_deref().unwrap()).unwrap();
-        assert!(next.with_timezone(&Local) > Local::now(), "计划变化应重排");
-        // 未知 id
+    async fn offline_project_discovery_is_non_destructive_even_with_normal_list_reads() {
+        let (data, root, table, task) = fixture();
+        table.upsert(task).await.unwrap();
+        let index = data.path().join("projects/directories.json");
+        let bytes = std::fs::read(&index).unwrap();
+        let managed = root.path().join(".codewave");
+        let offline = root.path().join("offline");
+        std::fs::rename(&managed, &offline).unwrap();
         assert!(
             table
-                .update("ghost", "n".into(), "i".into(), "every:1 h".into())
+                .diagnostics()
+                .await
+                .issues
+                .iter()
+                .any(|issue| issue.kind == "project_read")
+        );
+        let (load, normal) = tokio::join!(TaskTable::load_all_from_projects(data.path()), async {
+            crate::core::projects::load(data.path())
+        });
+        assert!(normal.is_empty());
+        assert!(load.tasks.is_empty());
+        assert!(load.issues.iter().any(|i| i.kind == "project_read"));
+        assert_eq!(std::fs::read(&index).unwrap(), bytes);
+        std::fs::rename(&offline, &managed).unwrap();
+        assert!(
+            !table
+                .diagnostics()
+                .await
+                .issues
+                .iter()
+                .any(|issue| issue.kind == "project_read")
+        );
+        assert_eq!(
+            TaskTable::load_all_from_projects(data.path())
+                .await
+                .tasks
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_registry_and_files_are_retained_and_diagnosed() {
+        let (data, root, table, task) = fixture();
+        table.upsert(task.clone()).await.unwrap();
+        let dir = root.path().join(".codewave/tasks");
+        std::fs::write(dir.join("bad.json"), b"{").unwrap();
+        std::fs::write(dir.join("ignore.tmp"), b"{").unwrap();
+        let mut mismatch = task.clone();
+        mismatch.id = "other".into();
+        std::fs::write(
+            dir.join("wrong.json"),
+            serde_json::to_vec(&mismatch).unwrap(),
+        )
+        .unwrap();
+        mismatch.id = "foreign".into();
+        mismatch.project_id = Some("not-project".into());
+        std::fs::write(
+            dir.join("foreign.json"),
+            serde_json::to_vec(&mismatch).unwrap(),
+        )
+        .unwrap();
+        let report = TaskTable::load_all_from_projects(data.path()).await;
+        assert_eq!(report.tasks.len(), 1);
+        for kind in ["task_json", "task_filename", "task_project"] {
+            assert!(report.issues.iter().any(|i| i.kind == kind));
+        }
+        assert_eq!(std::fs::read(dir.join("bad.json")).unwrap(), b"{");
+        let index = data.path().join("projects/directories.json");
+        std::fs::write(&index, b"broken registry").unwrap();
+        assert!(
+            TaskTable::load_all_from_projects(data.path())
+                .await
+                .issues
+                .iter()
+                .any(|i| i.kind == "index_json")
+        );
+        assert!(crate::core::projects::load(data.path()).is_empty());
+        assert_eq!(std::fs::read(index).unwrap(), b"broken registry");
+    }
+
+    #[tokio::test]
+    async fn duplicate_task_ids_are_all_quarantined() {
+        let (data, _root, table, task) = fixture();
+        table.upsert(task.clone()).await.unwrap();
+        let second = tempfile::tempdir().unwrap();
+        project(data.path(), second.path(), "second");
+        let mut conflict = task;
+        conflict.project_id = Some("second".into());
+        std::fs::write(
+            second.path().join(".codewave/tasks/task.json"),
+            serde_json::to_vec(&conflict).unwrap(),
+        )
+        .unwrap();
+        let report = TaskTable::load_all_from_projects(data.path()).await;
+        assert!(report.tasks.is_empty());
+        assert!(report.issues.iter().any(|i| i.kind == "task_duplicate"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_file_and_directory_symlinks_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let (data, root, table, task) = fixture();
+        let outside = root.path().join("outside.json");
+        std::fs::write(&outside, serde_json::to_vec(&task).unwrap()).unwrap();
+        symlink(&outside, root.path().join(".codewave/tasks/task.json")).unwrap();
+        assert!(table.upsert(task).await.is_err());
+        let report = TaskTable::load_all_from_projects(data.path()).await;
+        assert!(report.tasks.is_empty());
+        assert!(report.issues.iter().any(|i| i.kind == "task_symlink"));
+        std::fs::remove_dir_all(root.path().join(".codewave/tasks")).unwrap();
+        symlink(root.path(), root.path().join(".codewave/tasks")).unwrap();
+        assert!(
+            TaskTable::load_all_from_projects(data.path())
+                .await
+                .issues
+                .iter()
+                .any(|i| i.kind == "task_directory_symlink")
+        );
+        assert!(outside.is_file());
+    }
+
+    #[tokio::test]
+    async fn mutation_write_failures_preserve_memory_and_disk() {
+        let (_data, root, table, task) = fixture();
+        table.upsert(task.clone()).await.unwrap();
+        let dir = root.path().join(".codewave/tasks");
+        let file = dir.join("task.json");
+        let original = std::fs::read(&file).unwrap();
+        std::fs::rename(&dir, root.path().join("backup")).unwrap();
+        std::fs::write(&dir, b"not a directory").unwrap();
+        assert!(
+            table
+                .update(
+                    "task",
+                    "changed".into(),
+                    "changed".into(),
+                    "every:1 h".into()
+                )
                 .await
                 .is_err()
         );
-    }
-
-    /// update 传非法 schedule → 返回错误原文，且内存与磁盘都不改。
-    #[tokio::test]
-    async fn update_rejects_invalid_schedule_without_persisting() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        table
-            .upsert(ScheduledTask {
-                id: "u2".into(),
-                name: "orig".into(),
-                instruction: "i1".into(),
-                schedule: "every:1 h".into(),
-                next_run: None,
-                last_status: None,
-                last_summary: None,
-                project_id: Some("proj".into()),
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        let file = dir.path().join("projects/proj/tasks/u2.json");
-        let before = std::fs::read_to_string(&file).unwrap();
-        let err = table
-            .update("u2", "changed".into(), "i2".into(), "weekly".into())
-            .await
-            .unwrap_err();
-        assert!(
-            err.contains("cron: / every: / once:"),
-            "应为解析错误原文：{err}"
-        );
+        assert!(table.set_enabled("task", false).await.is_err());
+        assert!(table.remove("task").await.is_err());
+        assert_eq!(table.list().await, vec![task]);
         assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            before,
-            "非法计划不得落盘"
+            std::fs::read(root.path().join("backup/task.json")).unwrap(),
+            original
         );
-        assert_eq!(table.list().await[0].name, "orig", "非法计划不得改内存");
-        // 过去的 once 计划：同样报错且不改内存
-        let err = table
-            .update(
-                "u2",
-                "changed".into(),
-                "i2".into(),
-                "once:2020-01-01T00:00:00Z".into(),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(err, "once 时间已过去，请改计划");
-        assert_eq!(table.list().await[0].name, "orig");
     }
 
-    /// set_enabled(true) 重算 next_run；暂停保留；once 已过期 → 报错且保持暂停。
     #[tokio::test]
-    async fn set_enabled_recomputes_and_rejects_expired_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let stale = (Local::now() - chrono::Duration::hours(2)).to_rfc3339();
-        table
-            .upsert(ScheduledTask {
-                id: "s1".into(),
-                name: "s".into(),
-                instruction: "i".into(),
-                schedule: "every:1 h".into(),
-                next_run: Some(stale),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: false,
-                runs: Vec::new(),
-            })
-            .await;
-        let t = table.set_enabled("s1", true).await.unwrap();
-        assert!(t.enabled);
-        let after_enable = t.next_run.clone().unwrap();
-        let next = DateTime::parse_from_rfc3339(&after_enable).unwrap();
-        assert!(
-            next.with_timezone(&Local) > Local::now(),
-            "启用应重算 next_run"
-        );
-        // 暂停：next_run 原样保留
-        let t = table.set_enabled("s1", false).await.unwrap();
-        assert!(!t.enabled);
-        assert_eq!(t.next_run.as_deref(), Some(after_enable.as_str()));
-        // once 已过期：启用报错且保持暂停
-        table
-            .upsert(ScheduledTask {
-                id: "s2".into(),
-                name: "s2".into(),
-                instruction: "i".into(),
-                schedule: "once:2020-01-01T00:00:00Z".into(),
-                next_run: None,
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: false,
-                runs: Vec::new(),
-            })
-            .await;
-        assert_eq!(
-            table.set_enabled("s2", true).await.unwrap_err(),
-            "once 时间已过去，请改计划"
-        );
-        let list = table.list().await;
-        let s2 = list.iter().find(|t| t.id == "s2").unwrap();
-        assert!(!s2.enabled, "报错后仍保持暂停");
-        assert!(table.set_enabled("ghost", true).await.is_err());
-    }
-
-    /// 执行记录新的在前 + 20 条上限（插 21 条丢最旧）。
-    #[tokio::test]
-    async fn record_run_keeps_newest_first_with_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        table
-            .upsert(ScheduledTask {
-                id: "r1".into(),
-                name: "r".into(),
-                instruction: "i".into(),
-                schedule: "every:1 h".into(),
-                next_run: None,
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        for i in 0..21u64 {
-            table
-                .record_run(
-                    "r1",
-                    TaskRun {
-                        at: format!("2026-01-01T00:00:{i:02}+08:00"),
-                        status: "ok".into(),
-                        summary: format!("run-{i}"),
-                        source: RUN_SOURCE_SCHEDULE.into(),
-                        out_tokens: i,
-                    },
-                )
-                .await;
+    async fn collect_is_bounded_deterministic_and_does_not_advance() {
+        let table = TaskTable::default();
+        let now = Local::now();
+        for id in ["b", "a"] {
+            table.upsert(task(id, now)).await.unwrap();
         }
-        let list = table.list().await;
-        let t = list.iter().find(|t| t.id == "r1").unwrap();
-        assert_eq!(t.runs.len(), MAX_TASK_RUNS, "上限 20 条");
-        assert_eq!(t.runs[0].summary, "run-20", "新的在前");
-        assert_eq!(t.runs[19].summary, "run-1", "最旧的 run-0 被丢弃");
-        assert_eq!(t.runs[0].out_tokens, 20);
-        assert!(t.runs.iter().all(|r| r.source == RUN_SOURCE_SCHEDULE));
-        // 未知 id：静默忽略（不 panic）
-        table.record_run("ghost", TaskRun::default()).await;
+        let before = table.list().await;
+        let due = table.collect_due(now).await;
+        assert_eq!(
+            due.iter().map(|c| c.task_id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        for _ in 0..10 {
+            assert!(table.collect_due(now).await.is_empty());
+        }
+        assert_eq!(table.list().await, before);
     }
 
-    /// 旧 JSON（不含 enabled / runs）兼容：enabled == true（丰 default 会得 false）。
-    #[test]
-    fn legacy_json_defaults_enabled_true() {
-        let json = r#"{
-            "id": "o1", "name": "n", "instruction": "i", "schedule": "every:1 h",
-            "next_run": null, "last_status": null, "last_summary": null, "project_id": null
-        }"#;
-        let t: ScheduledTask = serde_json::from_str(json).unwrap();
-        assert!(t.enabled, "旧数据必须默认启用");
-        assert!(t.runs.is_empty());
-        // TaskRun.out_tokens 同样带默认值
-        let r: TaskRun = serde_json::from_str(
-            r#"{"at":"2026-01-01T00:00:00+08:00","status":"ok","summary":"s","source":"manual"}"#,
-        )
-        .unwrap();
-        assert_eq!(r.out_tokens, 0);
-        assert_eq!(r.source, RUN_SOURCE_MANUAL);
-    }
-
-    /// persist 覆盖 tick / update / set_enabled / record_run，load_all 能读回全部字段。
     #[tokio::test]
-    async fn persist_roundtrip_covers_new_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let table = TaskTable::new(dir.path().to_path_buf());
-        let future = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
+    async fn pending_pause_delete_edit_and_recreate_revoke_old_claims() {
+        for action in ["pause", "delete", "edit", "reenable", "recreate"] {
+            let table = Arc::new(TaskTable::default());
+            let now = Local::now();
+            table.upsert(task("b", now)).await.unwrap();
+            let candidate = table.collect_due(now).await.remove(0);
+            let held = table.exec_lock.clone().lock_owned().await;
+            let (queued, waiting) = tokio::sync::oneshot::channel();
+            let worker = table.clone();
+            let run = tokio::spawn(async move {
+                queued.send(()).unwrap();
+                let _lock = worker.exec_lock.clone().lock_owned().await;
+                worker.claim("b", Some(&candidate), now).await.unwrap()
+            });
+            waiting.await.unwrap();
+            match action {
+                "pause" => {
+                    table.set_enabled("b", false).await.unwrap();
+                }
+                "delete" => {
+                    table.remove("b").await.unwrap();
+                }
+                "edit" => {
+                    table
+                        .update("b", "new".into(), "new".into(), "every:1 d".into())
+                        .await
+                        .unwrap();
+                }
+                "reenable" => {
+                    table.set_enabled("b", false).await.unwrap();
+                    table.set_enabled("b", true).await.unwrap();
+                }
+                "recreate" => {
+                    table.remove("b").await.unwrap();
+                    table.upsert(task("b", now)).await.unwrap();
+                }
+                _ => unreachable!(),
+            }
+            drop(held);
+            assert!(run.await.unwrap().is_none(), "{action}");
+            assert!(
+                table
+                    .list()
+                    .await
+                    .iter()
+                    .all(|t| t.active_run.is_none() && t.runs.is_empty())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn old_candidate_cleanup_cannot_clear_new_generation_pending() {
+        let table = TaskTable::default();
+        let now = Local::now();
+        table.upsert(task("b", now)).await.unwrap();
+        let old = table.collect_due(now).await.remove(0);
         table
-            .upsert(ScheduledTask {
-                id: "p1".into(),
-                name: "orig".into(),
-                instruction: "i".into(),
-                schedule: "every:1 h".into(),
-                next_run: Some(future),
-                last_status: Some("ok".into()),
-                last_summary: Some("done".into()),
-                project_id: Some("proj".into()),
-                enabled: true,
-                runs: vec![TaskRun {
-                    at: Local::now().to_rfc3339(),
-                    status: "ok".into(),
-                    summary: "first".into(),
-                    source: RUN_SOURCE_MANUAL.into(),
-                    out_tokens: 42,
-                }],
-            })
-            .await;
-        // update 落盘
-        table
-            .update("p1", "renamed".into(), "i2".into(), "every:2 h".into())
+            .update("b", "new".into(), "new".into(), "every:30 m".into())
             .await
             .unwrap();
-        // tick 落盘：now 拨到未来令任务到期 → next_run 推进
-        let advanced = table.tick(Local::now() + chrono::Duration::hours(5)).await;
-        assert_eq!(advanced.len(), 1);
-        let mut loaded = TaskTable::load_all_from_projects(dir.path()).await;
-        assert_eq!(loaded.len(), 1);
-        let l = loaded.remove(0);
-        assert_eq!(l.name, "renamed", "update 应落盘");
-        assert_eq!(l.instruction, "i2");
-        assert_eq!(l.schedule, "every:2 h");
-        assert_eq!(l.last_status.as_deref(), Some("ok"));
-        assert_eq!(l.last_summary.as_deref(), Some("done"));
-        assert_eq!(l.runs.len(), 1);
-        assert_eq!(l.runs[0].summary, "first");
-        assert_eq!(l.runs[0].out_tokens, 42);
-        assert_eq!(
-            l.next_run,
-            table.list().await[0].next_run,
-            "tick 推进的 next_run 应落盘"
-        );
-        // set_enabled 落盘（暂停保留 next_run）
-        table.set_enabled("p1", false).await.unwrap();
-        let l = TaskTable::load_all_from_projects(dir.path())
-            .await
-            .remove(0);
-        assert!(!l.enabled, "set_enabled 应落盘");
-        assert!(l.next_run.is_some(), "暂停保留 next_run");
-        // record_run 落盘（新的在前）
-        table
-            .record_run(
-                "p1",
-                TaskRun {
-                    at: "2026-01-02T00:00:00+08:00".into(),
-                    status: "error".into(),
-                    summary: "boom".into(),
-                    source: RUN_SOURCE_SCHEDULE.into(),
-                    out_tokens: 0,
-                },
-            )
-            .await;
-        let l = TaskTable::load_all_from_projects(dir.path())
-            .await
-            .remove(0);
-        assert_eq!(l.runs.len(), 2);
-        assert_eq!(l.runs[0].summary, "boom", "record_run 应落盘");
+        let new = table.collect_due(now).await.remove(0);
+        table.release_candidate(&old).await;
+        assert!(table.collect_due(now).await.is_empty());
+        assert!(table.claim("b", Some(&old), now).await.unwrap().is_none());
+        assert!(table.claim("b", Some(&new), now).await.unwrap().is_some());
     }
 
-    /// exec_lock 被占用时 trigger_now 直接拒绝（且不改 next_run、不记历史）。
     #[tokio::test]
-    async fn trigger_now_rejects_when_busy() {
-        let ws = tempfile::tempdir().unwrap();
-        let dd = tempfile::tempdir().unwrap();
+    async fn claimed_snapshot_is_immutable_but_finish_preserves_new_edits() {
+        let table = TaskTable::default();
+        let now = Local::now();
+        table.upsert(task("task", now)).await.unwrap();
+        let due = table.collect_due(now).await.remove(0);
+        let actual = now + chrono::Duration::hours(3);
+        let snapshot = table
+            .claim("task", Some(&due), actual)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.task.next_run,
+            Some((actual + chrono::Duration::minutes(30)).to_rfc3339())
+        );
+        let edited = table
+            .update(
+                "task",
+                "new".into(),
+                "new instruction".into(),
+                "every:1 d".into(),
+            )
+            .await
+            .unwrap();
+        table.set_enabled("task", false).await.unwrap();
+        table
+            .finish_run("task", &snapshot.run.run_id, result("ok"))
+            .await
+            .unwrap();
+        let current = table.list().await.remove(0);
+        assert_eq!(snapshot.task.instruction, "safe fixture");
+        assert_eq!(current.instruction, "new instruction");
+        assert_eq!(current.next_run, edited.next_run);
+        assert!(!current.enabled);
+        assert_eq!(current.runs.len(), 1);
+        assert!(current.active_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn once_all_terminal_results_remain_and_finish_is_idempotent() {
+        for status in ["ok", "error", "skipped"] {
+            let (data, root, table, mut task) = fixture();
+            let now = Local::now();
+            task.schedule = format!("once:{}", now.to_rfc3339());
+            task.next_run = Some(now.to_rfc3339());
+            table.upsert(task).await.unwrap();
+            let due = table.collect_due(now).await.remove(0);
+            let claimed = table.claim("task", Some(&due), now).await.unwrap().unwrap();
+            assert!(table.list().await[0].next_run.is_none());
+            assert!(table.collect_due(now).await.is_empty());
+            for _ in 0..2 {
+                table
+                    .finish_run("task", &claimed.run.run_id, result(status))
+                    .await
+                    .unwrap();
+            }
+            let after = table.list().await.remove(0);
+            assert!(after.enabled);
+            assert!(after.next_run.is_none());
+            assert_eq!(after.runs.len(), 1);
+            assert_eq!(after.last_status.as_deref(), Some(status));
+            let restored = TaskTable::new(data.path().into());
+            assert_eq!(restored.list().await, vec![after]);
+            assert!(
+                restored
+                    .collect_due(now + chrono::Duration::days(1))
+                    .await
+                    .is_empty()
+            );
+            assert!(root.path().join(".codewave/tasks/task.json").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn active_run_restart_is_interrupted_once_and_never_replayed() {
+        let (data, _root, table, mut task) = fixture();
+        let now = Local::now();
+        task.schedule = format!("once:{}", now.to_rfc3339());
+        task.next_run = Some(now.to_rfc3339());
+        table.upsert(task).await.unwrap();
+        let due = table.collect_due(now).await.remove(0);
+        let claimed = table.claim("task", Some(&due), now).await.unwrap().unwrap();
+        let restored = TaskTable::new(data.path().into());
+        let recovered = restored.list().await.remove(0);
+        assert_eq!(recovered.last_status.as_deref(), Some("error"));
+        assert_eq!(
+            recovered.runs[0].run_id.as_deref(),
+            Some(claimed.run.run_id.as_str())
+        );
+        assert!(recovered.last_summary.unwrap().contains("结果未确认"));
+        assert!(recovered.active_run.is_none());
+        assert!(recovered.next_run.is_none());
+        assert!(restored.collect_due(now).await.is_empty());
+        assert_eq!(
+            TaskTable::new(data.path().into()).list().await[0]
+                .runs
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_once_is_missed_but_paused_once_is_untouched() {
+        let (data, _root, table, mut task) = fixture();
+        task.schedule = "once:2020-01-01T00:00:00Z".into();
+        task.next_run = Some("2020-01-01T00:00:00Z".into());
+        table.upsert(task.clone()).await.unwrap();
+        task.id = "paused".into();
+        task.enabled = false;
+        table.upsert(task.clone()).await.unwrap();
+        let restored = TaskTable::new(data.path().into());
+        let list = restored.list().await;
+        assert_eq!(list.iter().find(|t| t.id == "paused").unwrap(), &task);
+        let missed = list.iter().find(|t| t.id == "task").unwrap();
+        assert!(missed.next_run.is_none());
+        assert_eq!(missed.last_status.as_deref(), Some("skipped"));
+        assert!(restored.set_enabled("paused", true).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn claim_failure_cannot_execute_and_can_retry() {
+        let (_data, root, table, task) = fixture();
+        let now = Local::now();
+        table.upsert(task).await.unwrap();
+        let dir = root.path().join(".codewave/tasks");
+        let backup = root.path().join("backup");
+        std::fs::rename(&dir, &backup).unwrap();
+        std::fs::write(&dir, b"blocked").unwrap();
+        let due = table.collect_due(now).await.remove(0);
+        assert!(table.claim("task", Some(&due), now).await.is_err());
+        assert!(table.list().await[0].active_run.is_none());
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::rename(backup, dir).unwrap();
+        let due = table.collect_due(now).await.remove(0);
+        assert!(
+            table
+                .claim("task", Some(&due), now)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_write_failure_keeps_memory_result_and_retry_is_idempotent() {
+        let (data, root, table, task) = fixture();
+        let now = Local::now();
+        table.upsert(task).await.unwrap();
+        let claimed = table.claim("task", None, now).await.unwrap().unwrap();
+        let dir = root.path().join(".codewave/tasks");
+        let backup = root.path().join("backup");
+        std::fs::rename(&dir, &backup).unwrap();
+        std::fs::write(&dir, b"blocked").unwrap();
+        assert!(
+            table
+                .finish_run("task", &claimed.run.run_id, result("ok"))
+                .await
+                .is_err()
+        );
+        let current = table.list().await.remove(0);
+        assert_eq!(current.runs.len(), 1);
+        assert!(current.active_run.is_none());
+        assert!(current.persistence_error.is_some());
+        assert!(table.claim("task", None, now).await.is_err());
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::rename(backup, dir).unwrap();
+        for _ in 0..2 {
+            table.retry_unsaved().await;
+        }
+        let restored = TaskTable::new(data.path().into()).list().await.remove(0);
+        assert_eq!(restored.runs.len(), 1);
+        assert_eq!(restored.last_status.as_deref(), Some("ok"));
+        assert!(restored.persistence_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_paused_preserves_schedule_and_history_cap() {
+        let table = TaskTable::default();
+        let now = Local::now();
+        let mut task = task("t", now);
+        task.enabled = false;
+        let next = task.next_run.clone();
+        table.upsert(task).await.unwrap();
+        for index in 0..21 {
+            let claim = table.claim("t", None, now).await.unwrap().unwrap();
+            assert_eq!(claim.run.source, RUN_SOURCE_MANUAL);
+            let mut run = result("ok");
+            run.summary = index.to_string();
+            run.source = RUN_SOURCE_MANUAL.into();
+            table.finish_run("t", &claim.run.run_id, run).await.unwrap();
+        }
+        let task = table.list().await.remove(0);
+        assert_eq!(task.next_run, next);
+        assert_eq!(task.runs.len(), 20);
+        assert_eq!(task.runs[0].summary, "20");
+        assert!(table.collect_due(now).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_during_run_never_revives_task_or_project() {
+        let (data, root, table, task) = fixture();
+        let now = Local::now();
+        table.upsert(task.clone()).await.unwrap();
+        let claimed = table.claim("task", None, now).await.unwrap().unwrap();
+        table.remove("task").await.unwrap();
+        table
+            .finish_run("task", &claimed.run.run_id, result("ok"))
+            .await
+            .unwrap();
+        assert!(table.list().await.is_empty());
+        assert!(!root.path().join(".codewave/tasks/task.json").exists());
+        table.upsert(task).await.unwrap();
+        let claimed = table.claim("task", None, now).await.unwrap().unwrap();
+        table.delete_project("project").await.unwrap();
+        table
+            .finish_run("task", &claimed.run.run_id, result("ok"))
+            .await
+            .unwrap();
+        table.retry_unsaved().await;
+        assert!(table.list().await.is_empty());
+        assert!(!root.path().join(".codewave").exists());
+        assert!(!data.path().join("projects/project").exists());
+    }
+
+    #[tokio::test]
+    async fn invalid_schedule_is_quarantined_before_candidate_creation() {
+        let table = TaskTable::default();
+        let now = Local::now();
+        table.upsert(task("t", now)).await.unwrap();
+        table
+            .state
+            .lock()
+            .unwrap()
+            .tasks
+            .get_mut("t")
+            .unwrap()
+            .schedule = "invalid".into();
+        assert!(table.collect_due(now).await.is_empty());
+        assert!(
+            table
+                .diagnostics()
+                .await
+                .issues
+                .iter()
+                .any(|i| i.kind == "schedule")
+        );
+        assert!(table.list().await[0].runs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_pending_and_running_guards_release_only_their_identity() {
+        let table = Arc::new(TaskTable::default());
+        let now = Local::now();
+        table.upsert(task("t", now)).await.unwrap();
+        let candidate = table.collect_due(now).await.remove(0);
+        let pending = PendingGuard {
+            table: table.clone(),
+            candidate,
+        };
+        drop(pending);
+        tokio::task::yield_now().await;
+        assert_eq!(table.collect_due(now).await.len(), 1);
+        let claimed = table.claim("t", None, now).await.unwrap().unwrap();
+        let guard = TaskRunGuard {
+            table: table.clone(),
+            core: None,
+            execution: None,
+            task_id: "t".into(),
+            run: claimed.run,
+            armed: true,
+        };
+        drop(guard);
+        tokio::task::yield_now().await;
+        let current = table.list().await.remove(0);
+        assert!(current.active_run.is_none());
+        assert_eq!(current.last_status.as_deref(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn restore_and_mutations_share_initialization_gate() {
+        let (data, _root, table, task) = fixture();
+        table.upsert(task).await.unwrap();
+        let restored = TaskTable::new(data.path().into());
+        let ((), deleted) = tokio::join!(restored.restore(), restored.remove("task"));
+        deleted.unwrap().unwrap();
+        restored.restore().await;
+        assert!(restored.list().await.is_empty());
+        assert!(TaskTable::new(data.path().into()).list().await.is_empty());
+    }
+
+    #[test]
+    fn serde_defaults_and_schedule_bounds() {
+        let value = serde_json::json!({ "id":"task", "name":"task", "instruction":"safe", "schedule":"every:1 h", "next_run":null, "last_status":null, "last_summary":null });
+        let task: ScheduledTask = serde_json::from_value(value).unwrap();
+        assert!(task.enabled);
+        assert!(task.runs.is_empty());
+        assert!(task.active_run.is_none());
+        assert!(parse_schedule("every:30 d").is_ok());
+        assert!(parse_schedule("every:31 d").is_err());
+        assert!(parse_schedule("every:18446744073709551615 d").is_err());
+        assert!(
+            parse_schedule("once:2099-01-01T00:00:00Z")
+                .unwrap()
+                .next_after(Local::now())
+                .is_some()
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn virtual_time_dispatch_revocation_has_zero_execution_effects() {
+        for action in ["pause", "delete", "edit"] {
+            let table = Arc::new(TaskTable::default());
+            let now = Local::now();
+            table.upsert(task("b", now)).await.unwrap();
+            let candidate = table.collect_due(now).await.remove(0);
+            let hold = table.exec_lock.clone().lock_owned().await;
+            let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = effects.clone();
+            let worker = table.clone();
+            let (ready, queued) = tokio::sync::oneshot::channel();
+            let dispatch = tokio::spawn(async move {
+                ready.send(()).unwrap();
+                dispatch_candidate(
+                    worker,
+                    &candidate,
+                    || now,
+                    move |_, _lock| async move {
+                        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    },
+                )
+                .await
+                .unwrap()
+            });
+            queued.await.unwrap();
+            tokio::time::advance(Duration::from_secs(150)).await;
+            for _ in 0..10 {
+                assert!(table.collect_due(now).await.is_empty());
+            }
+            match action {
+                "pause" => {
+                    table.set_enabled("b", false).await.unwrap();
+                }
+                "delete" => {
+                    table.remove("b").await.unwrap();
+                }
+                "edit" => {
+                    table
+                        .update("b", "new".into(), "new".into(), "every:1 d".into())
+                        .await
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            drop(hold);
+            assert!(!dispatch.await.unwrap());
+            assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(table.list().await.iter().all(|t| t.runs.is_empty()));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fake_executor_serializes_tasks_and_retains_each_terminal_result() {
+        let table = Arc::new(TaskTable::default());
+        let now = Local::now();
+        for id in ["ok", "error", "skipped"] {
+            let mut item = task(id, now);
+            item.schedule = format!("once:{}", now.to_rfc3339());
+            table.upsert(item).await.unwrap();
+        }
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for candidate in table.collect_due(now).await {
+            let executor_table = table.clone();
+            let dispatcher = table.clone();
+            let active = active.clone();
+            let completed = completed.clone();
+            workers.push(tokio::spawn(async move {
+                dispatch_candidate(
+                    dispatcher,
+                    &candidate,
+                    || now,
+                    move |snapshot, execution| async move {
+                        let _execution = execution;
+                        assert_eq!(active.fetch_add(1, std::sync::atomic::Ordering::SeqCst), 0);
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        executor_table
+                            .finish_run(
+                                &snapshot.task.id,
+                                &snapshot.run.run_id,
+                                result(&snapshot.task.id),
+                            )
+                            .await
+                            .unwrap();
+                        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    },
+                )
+                .await
+                .unwrap()
+            }));
+        }
+        for worker in workers {
+            assert!(worker.await.unwrap());
+        }
+        assert_eq!(completed.load(std::sync::atomic::Ordering::SeqCst), 3);
+        for item in table.list().await {
+            assert_eq!(item.runs.len(), 1);
+            assert_eq!(item.last_status, Some(item.id));
+            assert!(item.next_run.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_write_retains_interruption_and_never_replays() {
+        let (data, _root, table, mut item) = fixture();
+        let now = Local::now();
+        item.schedule = format!("once:{}", now.to_rfc3339());
+        item.next_run = Some(now.to_rfc3339());
+        table.upsert(item).await.unwrap();
+        table.claim("task", None, now).await.unwrap().unwrap();
+        let recovered = TaskTable::new(data.path().into());
+        recovered
+            .fail_writes
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let item = recovered.list().await.remove(0);
+        assert!(item.persistence_error.is_some());
+        assert!(item.active_run.is_none());
+        assert!(item.next_run.is_none());
+        assert_eq!(item.runs.len(), 1);
+        assert!(recovered.collect_due(now).await.is_empty());
+        assert!(
+            recovered
+                .diagnostics()
+                .await
+                .issues
+                .iter()
+                .any(|issue| issue.kind == "restore_write")
+        );
+        recovered
+            .fail_writes
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        recovered.retry_unsaved().await;
+        assert_eq!(
+            TaskTable::new(data.path().into()).list().await[0]
+                .runs
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn real_project_cron_restore_corrects_future_but_preserves_matching_overdue() {
+        let (data, _root, table, mut item) = fixture();
+        item.schedule = "cron:0 9 * * *".into();
+        item.next_run = Some(
+            (Local::now() + chrono::Duration::days(1))
+                .format("%Y-%m-%dT17:00:00%:z")
+                .to_string(),
+        );
+        table.upsert(item.clone()).await.unwrap();
+        item.id = "overdue".into();
+        item.next_run = Some(
+            (Local::now() - chrono::Duration::days(1))
+                .format("%Y-%m-%dT09:00:00%:z")
+                .to_string(),
+        );
+        table.upsert(item.clone()).await.unwrap();
+        let restored = TaskTable::new(data.path().into()).list().await;
+        assert_eq!(
+            restored
+                .iter()
+                .find(|t| t.id == "overdue")
+                .unwrap()
+                .next_run,
+            item.next_run
+        );
+        let repaired = restored.iter().find(|t| t.id == "task").unwrap();
+        let next = DateTime::parse_from_rfc3339(repaired.next_run.as_ref().unwrap())
+            .unwrap()
+            .with_timezone(&Local);
+        assert_eq!(chrono::Timelike::hour(&next), 9);
+        assert!(next > Local::now());
+    }
+    #[tokio::test]
+    async fn post_rename_sync_warning_publishes_edits_instead_of_claiming_rollback() {
+        let (_data, root, table, item) = fixture();
+        table
+            .fail_directory_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let created = table.upsert(item).await.unwrap();
+        assert!(created.persistence_error.is_some());
+        let updated = table
+            .update(
+                "task",
+                "changed".into(),
+                "new instruction".into(),
+                "every:1 d".into(),
+            )
+            .await
+            .unwrap();
+        assert!(updated.persistence_error.is_some());
+        assert_eq!(table.list().await[0].name, "changed");
+        let disk: ScheduledTask = serde_json::from_slice(
+            &std::fs::read(root.path().join(".codewave/tasks/task.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(disk.name, "changed");
+        assert_eq!(disk.instruction, "new instruction");
+        let paused = table.set_enabled("task", false).await.unwrap();
+        assert!(!paused.enabled);
+        assert!(paused.persistence_error.is_some());
+        table
+            .fail_directory_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        table.retry_unsaved().await;
+        assert!(table.list().await[0].persistence_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn post_rename_claim_uncertainty_quarantines_until_safe_rollback_is_durable() {
+        let (_data, root, table, item) = fixture();
+        let now = Local::now();
+        let original_next = item.next_run.clone();
+        table.upsert(item).await.unwrap();
+        let candidate = table.collect_due(now).await.remove(0);
+        table
+            .fail_directory_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(table.claim("task", Some(&candidate), now).await.is_err());
+        let disk: ScheduledTask = serde_json::from_slice(
+            &std::fs::read(root.path().join(".codewave/tasks/task.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(disk.active_run.is_some());
+        let quarantined = table.list().await.remove(0);
+        assert!(quarantined.persistence_error.is_some());
+        assert!(quarantined.active_run.is_none());
+        assert_eq!(quarantined.next_run, original_next);
+        assert!(table.collect_due(now).await.is_empty());
+        assert!(table.claim("task", None, now).await.is_err());
+        table.retry_unsaved().await;
+        assert!(table.list().await[0].persistence_error.is_some());
+        table
+            .fail_directory_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        table.retry_unsaved().await;
+        let candidate = table.collect_due(now).await.remove(0);
+        assert!(
+            table
+                .claim("task", Some(&candidate), now)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_rename_finish_uncertainty_keeps_real_result_and_warning() {
+        let (_data, root, table, item) = fixture();
+        table.upsert(item).await.unwrap();
+        let run = table
+            .claim("task", None, Local::now())
+            .await
+            .unwrap()
+            .unwrap()
+            .run;
+        table
+            .fail_directory_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            table
+                .finish_run("task", &run.run_id, result("ok"))
+                .await
+                .is_err()
+        );
+        assert!(
+            table
+                .finish_run("task", &run.run_id, result("ok"))
+                .await
+                .is_err()
+        );
+        let current = table.list().await.remove(0);
+        let disk: ScheduledTask = serde_json::from_slice(
+            &std::fs::read(root.path().join(".codewave/tasks/task.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(current.runs, disk.runs);
+        assert_eq!(current.runs.len(), 1);
+        assert!(current.active_run.is_none());
+        assert!(current.persistence_error.is_some());
+        table
+            .fail_directory_sync
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        table.retry_unsaved().await;
+        assert!(table.list().await[0].persistence_error.is_none());
+    }
+    #[tokio::test]
+    async fn task_scope_and_logs_share_registered_project_and_do_not_recreate_deletion() {
+        let (data, root, _table, item) = fixture();
         let roots = crate::tools::pathutil::WriteRoots {
-            workspace: std::fs::canonicalize(ws.path()).unwrap(),
+            workspace: std::fs::canonicalize(root.path()).unwrap(),
             extra: vec![],
-            data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            data_dir: std::fs::canonicalize(data.path()).unwrap(),
         };
         let core = crate::core::agent::test_support::make_core(&roots);
-        let next = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
-        core.tasks
-            .upsert(ScheduledTask {
-                id: "m1".into(),
-                name: "manual".into(),
-                instruction: "i".into(),
-                schedule: "every:1 h".into(),
-                next_run: Some(next.clone()),
-                last_status: None,
-                last_summary: None,
-                project_id: None,
-                enabled: true,
-                runs: Vec::new(),
-            })
-            .await;
-        // 未知 id
-        assert_eq!(
-            trigger_now(core.clone(), "ghost").await.unwrap_err(),
-            "任务不存在"
-        );
-        // 串行锁被占用 → 拒绝（不排队）
-        let held = core.tasks.exec_lock.lock().await;
-        assert_eq!(
-            trigger_now(core.clone(), "m1").await.unwrap_err(),
-            "已有任务正在运行，请稍后再试"
-        );
-        drop(held);
-        let mut list = core.tasks.list().await;
-        let t = list.remove(0);
-        assert_eq!(
-            t.next_run.as_deref(),
-            Some(next.as_str()),
-            "立即运行不改 next_run"
-        );
-        assert!(t.runs.is_empty(), "被拒绝时不写记录");
+        let (workspace, project_id, project_dir, extra) = task_scope(&core, &item).unwrap();
+        assert_eq!(workspace, roots.workspace);
+        assert_eq!(project_id.as_deref(), Some("project"));
+        assert_eq!(project_dir, Some(root.path().join(".codewave")));
+        assert!(extra.is_empty());
+        let missing = ScheduledTask {
+            project_id: Some("missing".into()),
+            ..item.clone()
+        };
+        assert!(task_scope(&core, &missing).is_none());
+        let free = ScheduledTask {
+            project_id: None,
+            ..item.clone()
+        };
+        assert_eq!(task_scope(&core, &free).unwrap().0, roots.data_dir);
+        task_log(&core, &item, "started").await;
+        task_log(&core, &item, "finished").await;
+        let log = std::fs::read_to_string(root.path().join(".codewave/logs/task.log")).unwrap();
+        assert!(log.contains("started") && log.contains("finished"));
+        task_log(&core, &missing, "not written").await;
+        assert!(!data.path().join("projects/missing").exists());
+        core.tasks.delete_project("project").await.unwrap();
+        task_log(&core, &item, "late completion").await;
+        assert!(!root.path().join(".codewave").exists());
     }
 }

@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // Shell settings tests: general-tab Shell select fed by list_available_shells, persisted via config.shell.selection.
 // SettingsPage is mounted standalone (like providers.panel.test.tsx): useUi controls settingsOpen/settingsTab.
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -42,8 +43,8 @@ let savedConfigs: ConfigState[] = [];
 // Base mock: mirror the backend contract (commands used by SettingsPage resolve with well-typed values)
 async function baseInvoke(cmd: string, _args?: any) {
   switch (cmd) {
-    case "get_config": return makeConfig();
-    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return null;
+    case "get_config": return configSnapshot(makeConfig());
+    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return configSaved(_args?.config);
     case "list_available_shells": return JSON.parse(JSON.stringify(fixtureShells));
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
@@ -73,7 +74,7 @@ afterEach(async () => {
   (await invokeMock()).mockImplementation(baseInvoke);
   // zustand module-level singletons persist across tests: reset panel toggles + settings mirror
   useUi.setState({ settingsOpen: false, settingsTab: "agent" });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   savedConfigs = [];
 });
 
@@ -95,7 +96,7 @@ async function clickSaveAndSettle() {
 
 /** Open the standalone modal and wait for the draft (config mirror) to load */
 async function openSettings() {
-  useSettings.setState({ config: makeConfig(), loaded: true });
+  useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "agent" });
   render(
     <AntApp>
@@ -124,7 +125,7 @@ async function pickShellOption(text: string) {
 
 describe("settings store：shell 默认值", () => {
   it("load 后默认配置 shell.selection === null（自动）", async () => {
-    useSettings.setState({ config: null, loaded: false });
+    useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
     await useSettings.getState().load();
     expect(useSettings.getState().config?.shell?.selection).toBeNull();
     expect(useSettings.getState().config?.shell).toEqual({ selection: null });
@@ -156,7 +157,7 @@ describe("SettingsPage 工作区与智能体页：Shell 选择", () => {
   });
 
   it("从固定 shell 切回自动 → 保存参数 shell.selection = null", async () => {
-    useSettings.setState({ config: makeConfig({ shell: { selection: "powershell" } }), loaded: true });
+    useSettings.setState({ config: makeConfig({ shell: { selection: "powershell" } }), snapshot: configSnapshot(makeConfig({ shell: { selection: "powershell" } })), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "agent" });
     render(
       <AntApp>
@@ -184,7 +185,7 @@ describe("SettingsPage 工作区与智能体页：Shell 选择", () => {
   });
 
   it("所选 shell 已卸载（探测列表不含 selection）：保留选项 + 警告提示", async () => {
-    useSettings.setState({ config: makeConfig({ shell: { selection: "zsh" } }), loaded: true });
+    useSettings.setState({ config: makeConfig({ shell: { selection: "zsh" } }), snapshot: configSnapshot(makeConfig({ shell: { selection: "zsh" } })), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "agent" });
     render(
       <AntApp>

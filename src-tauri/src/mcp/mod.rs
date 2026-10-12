@@ -13,19 +13,21 @@
 //!
 //! # 会话隔离（本次重构的核心）
 //!
-//! 连接按 `(作用域, 项目 id, server 名)` 作键，每个会话登记自己的可见集，
+//! 连接按 `(作用域, 项目 id, server 名, 配置路径身份)` 作键，每个会话登记自己的可见集，
 //! 工具注入与调用都先过可见集校验 —— 项目 A 的 MCP 工具不会再出现在项目 B 的请求里。
 
 mod config;
 mod error;
 mod manager;
 mod process;
+mod service;
 mod tools;
 
 pub use config::{
-    ConfigIssue, DEFAULT_TIMEOUT_MS, IssueLevel, McpServerConfig, McpTransport, MergedServer,
-    Scope, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode, default_doc_text, global_scope,
-    load_scope, merge_scopes, project_scope, set_always_allow,
+    CONFIG_COMMIT, ConfigIssue, DEFAULT_TIMEOUT_MS, IssueLevel, McpServerConfig, McpTransport,
+    MergedServer, Scope, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode, default_doc_text,
+    global_scope, load_scope, merge_scopes, parse_scope_text, project_scope, read_scope_text,
+    scope_version, source_identity, validate_server,
 };
 pub use error::{McpError, McpErrorKind};
 pub use manager::{
@@ -37,3 +39,5 @@ pub use tools::{
 };
 
 pub(crate) use process::wrap_process_tree;
+
+pub use service::{SaveReceipt, save_configuration, visible_servers};
