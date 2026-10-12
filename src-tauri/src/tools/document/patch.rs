@@ -54,7 +54,14 @@ pub fn list_entries(src: &Path) -> Result<Vec<String>, String> {
     let f = File::open(src).map_err(|e| format!("打开 {} 失败：{e}", src.display()))?;
     let archive =
         ZipArchive::new(BufReader::new(f)).map_err(|e| format!("不是有效的压缩包结构：{e}"))?;
-    Ok(archive.file_names().map(|s| s.to_string()).collect())
+    archive
+        .file_names()
+        .enumerate()
+        .map(|(i, name)| {
+            name.map(|name| name.into_owned())
+                .map_err(|e| format!("读取第 {} 个内部条目名称失败：{e}", i + 1))
+        })
+        .collect()
 }
 
 /// 把 `src` 重新打包成 `dst`，其中 `replacements` 里的条目换成新内容，其余原样搬运。
@@ -91,7 +98,10 @@ pub fn apply(src: &Path, dst: &Path, replacements: &[Replacement]) -> Result<Pat
         let entry = archive
             .by_index_raw(i)
             .map_err(|e| format!("读取第 {} 个内部条目失败：{e}", i + 1))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| format!("读取第 {} 个内部条目名称失败：{e}", i + 1))?
+            .into_owned();
 
         // 约束 2：加密条目直接拒绝
         if entry.encrypted() {
@@ -190,6 +200,63 @@ mod tests {
             read_entry(&dst, "keep.txt").unwrap().unwrap(),
             "原始内容".as_bytes()
         );
+    }
+
+    #[test]
+    fn list_entries_preserves_unicode_names_and_archive_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("names.zip");
+        make_zip(
+            &src,
+            &[
+                ("z.txt", "last alphabetically"),
+                ("目录/数据.xml", "中文"),
+                ("a.txt", "first"),
+            ],
+        );
+        assert_eq!(
+            list_entries(&src).unwrap(),
+            vec!["z.txt", "目录/数据.xml", "a.txt"]
+        );
+    }
+
+    #[test]
+    fn list_entries_accepts_empty_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("empty.zip");
+        make_zip(&src, &[]);
+        assert!(list_entries(&src).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_entries_rejects_corrupted_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("bad.zip");
+        std::fs::write(&src, b"not a zip archive").unwrap();
+        let err = list_entries(&src).unwrap_err();
+        assert!(err.contains("压缩包结构"), "{err}");
+    }
+
+    #[test]
+    fn apply_replaces_unicode_entry_and_preserves_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("before.zip");
+        let dst = dir.path().join("after.zip");
+        make_zip(&src, &[("目录/数据.xml", "old"), ("keep.txt", "keep")]);
+        let report = apply(
+            &src,
+            &dst,
+            &[Replacement {
+                name: "目录/数据.xml".into(),
+                bytes: b"new".to_vec(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.replaced, vec!["目录/数据.xml"]);
+        assert_eq!(report.copied, 1);
+        assert_eq!(list_entries(&src).unwrap(), list_entries(&dst).unwrap());
+        assert_eq!(read_entry(&dst, "目录/数据.xml").unwrap().unwrap(), b"new");
+        assert_eq!(read_entry(&dst, "keep.txt").unwrap().unwrap(), b"keep");
     }
 
     #[test]
