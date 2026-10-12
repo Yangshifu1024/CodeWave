@@ -129,7 +129,7 @@
 .settings-theme-root .settings-action-group { display: flex; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; gap: 8px; }
 .settings-theme-root .settings-shell-control { display: flex; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; gap: 8px; }
 .settings-theme-root .settings-shell-control .ant-select { flex: none; }
-.settings-theme-root .settings-shell-path { flex: 1 1 140px; min-width: 0; overflow: hidden; color: var(--ws-text-2); font: var(--settings-metadata-size) var(--ws-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.settings-theme-root .settings-shell-path { flex: 1 1 140px; min-width: 0; overflow: hidden; color: var(--ws-text-2); font: calc(12px + var(--ws-font-size-mono-offset)) var(--ws-font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .settings-theme-root .settings-slider-control { display: flex; align-items: center; width: 100%; min-width: 0; gap: 12px; }
 .settings-theme-root .settings-slider-control .ant-slider { flex: 1; min-width: 80px; }
 .settings-theme-root .settings-slider-value { flex: none; min-width: 3ch; color: var(--ws-text-2); font-size: var(--settings-metadata-size); font-variant-numeric: tabular-nums; text-align: end; }
@@ -239,7 +239,7 @@
   display: block;
   color: var(--ws-text-1);
   font-family: var(--ws-font-mono);
-  font-size: var(--settings-field-title-size);
+  font-size: calc(14px + var(--ws-font-size-mono-offset));
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -396,7 +396,7 @@
   overflow-wrap: anywhere;
   color: var(--ws-text-2);
   font-family: var(--ws-font-mono);
-  font-size: var(--settings-metadata-size);
+  font-size: calc(12px + var(--ws-font-size-mono-offset));
 }
 .settings-theme-root .proxy-mode-field {
   margin-top: 16px;
@@ -500,7 +500,7 @@
   overflow: hidden;
   color: var(--ws-text-1);
   font-family: var(--ws-font-mono);
-  font-size: var(--settings-metadata-size);
+  font-size: calc(12px + var(--ws-font-size-mono-offset));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -542,7 +542,7 @@
   overflow-wrap: anywhere;
   color: var(--ws-text-1);
   font-family: var(--ws-font-mono);
-  font-size: var(--settings-metadata-size);
+  font-size: calc(12px + var(--ws-font-size-mono-offset));
   font-weight: 500;
 }
 .settings-theme-root .settings-provider-model-limits {
@@ -641,7 +641,7 @@
 .settings-theme-root .mcp-server-tools { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
 .settings-theme-root .mcp-tool-list { display: flex; flex-direction: column; gap: 0; min-width: 0; max-height: 240px; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
 .settings-theme-root .mcp-tool-item { display: flex; flex-direction: column; min-width: 0; gap: 2px; padding: 8px 0; border-top: 1px solid var(--ws-border); }
-.settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--ws-font-mono); color: var(--ws-text-1); }
+.settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: calc(13px + var(--ws-font-size-mono-offset)) var(--ws-font-mono); color: var(--ws-text-1); }
 .settings-theme-root .mcp-tool-description-line { display: flex; min-width: 0; align-items: center; gap: 4px; }
 .settings-theme-root .mcp-tool-description { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); font-size: var(--settings-metadata-size); }
 .settings-theme-root .mcp-tool-description-empty { color: var(--ws-dim); }

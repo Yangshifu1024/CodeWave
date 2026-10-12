@@ -77,7 +77,7 @@ function seed(opts: {
       compact_timeout_seconds: 180,
       approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false, command_allowlist: [] },
       post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
-      ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
+      ui: { font_size_sans: 15, font_size_mono: 15, accent: "cyan", language: "zh-CN" },
       custom_prompt: null,
       disabled_skills: [],
       log: { level: "info", session_verbose: false },

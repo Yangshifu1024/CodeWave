@@ -1,6 +1,7 @@
 // [docs/documents](../../../../docs/documents.md)：表格预览视图。
 // 行窗口化（虚拟滚动）是手写的最小实现——仓库没有虚拟滚动依赖，也不为一个弹窗引入；
 // 文案由调用方 FileViewerModal 按当前语言组装后传入，本组件只管渲染与交互。
+import { fontSizeCss } from "../../utils/fonts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Select, Spin } from "antd";
 import { columnLabel, maxCols } from "./parseTable";
@@ -124,7 +125,7 @@ export default function SheetView({
                     padding: "0 6px",
                     lineHeight: `${ROW_H}px`,
                     color: "var(--ws-dim)",
-                    fontSize: 12,
+                    fontSize: fontSizeCss(12),
                     overflow: "hidden",
                     whiteSpace: "nowrap",
                   }}
@@ -166,7 +167,7 @@ export default function SheetView({
         </div>
       )}
       {!loading && hasContent && (
-        <div style={{ display: "flex", gap: 12, marginTop: 8, color: "var(--ws-dim)", fontSize: 12 }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 8, color: "var(--ws-dim)", fontSize: fontSizeCss(12) }}>
           <span>{labels.page}</span>
           {truncated && <span>{labels.truncated}</span>}
         </div>

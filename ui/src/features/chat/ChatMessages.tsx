@@ -1,3 +1,4 @@
+import { fontSizeCss } from "../../utils/fonts";
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Divider, Image, Tooltip } from "antd";
 import {
@@ -184,7 +185,7 @@ const CompactionDivider = memo(function CompactionDivider({ seq, source }: { seq
   return (
     <Divider plain data-boundary-seq={seq} data-boundary-source={source ?? "compact"} style={{ margin: "10px 0" }}>
       <Tooltip title={t("chat.compactedBoundaryHint")}>
-        <span style={{ fontSize: 12.5 }}>{t("chat.compactedBoundary")}</span>
+        <span style={{ fontSize: fontSizeCss(12.5) }}>{t("chat.compactedBoundary")}</span>
       </Tooltip>
     </Divider>
   );
@@ -546,7 +547,7 @@ export default function ChatMessages() {
       const injected = (item.injectedTexts ?? []).filter((s) => s.trim() !== "");
       if (injected.length === 0) {
         return (
-          <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>· {item.text}</div>
+          <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: fontSizeCss(12.5) }}>· {item.text}</div>
         );
       }
       // Tooltip **每条各挂**（而非挂整块）：① 悬停哪一行就给哪一行的全文，N 条时不会张冠李戴；
@@ -556,7 +557,7 @@ export default function ChatMessages() {
       // Tooltip 只克隆子元素加 ref/事件，不额外插 DOM —— 截断行的 width 仍由父级约束，ellipsis 生效。
       // 视觉权重：外层 div 已带 `dim`，正文行继承颜色，不提到 user 气泡级别；paddingLeft 让后续行对齐到「· 」后的正文起始处。
       return (
-        <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: 12.5 }}>
+        <div key={itemKey} className="notice-line dim" data-key={itemKey} data-sig={anchorSig} style={{ margin: "8px 0", fontSize: fontSizeCss(12.5) }}>
           <div>· {item.text}</div>
           <div style={{ paddingLeft: 14 }}>
             {injected.map((s, i) => (
@@ -640,7 +641,7 @@ export default function ChatMessages() {
                 {t("chat.loadEarlier")}
               </Button>
             ) : (
-              <span className="dim" style={{ fontSize: 12.5 }}>
+              <span className="dim" style={{ fontSize: fontSizeCss(12.5) }}>
                 {atPageLimit ? t("chat.loadEarlierCap", { pages: MAX_PAGED_PAGES }) : t("chat.earliest")}
               </span>
             )}

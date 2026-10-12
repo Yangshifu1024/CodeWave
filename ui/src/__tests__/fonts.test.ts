@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   applyInitialFonts, buildFontOverride, previewFontFamily, readStoredFonts, reconcileFontsFromConfig,
-  sanitizeFontList, storeFonts,
+  commitFontSizeSlot, sanitizeFontList, storeFonts,
 } from "../utils/fonts";
 
 describe("sanitizeFontList", () => {
@@ -54,8 +54,8 @@ describe("持久化与应用", () => {
   });
 
   it("storeFonts：sanitize 后写 localStorage 并内联到 <html>，返回值回填草稿", () => {
-    const saved = storeFonts({ sans: ' Map"le ', mono: "  " });
-    expect(saved).toEqual({ sans: "Maple", mono: "" });
+    const saved = storeFonts({ sans: ' Map"le ', mono: "  ", fontSizeSans: "default", fontSizeMono: "default" });
+    expect(saved).toEqual({ sans: "Maple", mono: "", fontSizeSans: "default", fontSizeMono: "default" });
     expect(localStorage.getItem("ws_font_sans")).toBe("Maple");
     expect(localStorage.getItem("ws_font_mono")).toBeNull(); // empty = key removed
     const style = document.documentElement.style;
@@ -82,9 +82,9 @@ describe("持久化与应用", () => {
   });
 
   it("恢复默认：storeFonts 空值移除覆盖与存储键", () => {
-    storeFonts({ sans: "Inter", mono: "JetBrains Mono" });
-    storeFonts({ sans: "", mono: "" });
-    expect(readStoredFonts()).toEqual({ sans: "", mono: "" });
+    storeFonts({ sans: "Inter", mono: "JetBrains Mono", fontSizeSans: "default", fontSizeMono: "default" });
+    storeFonts({ sans: "", mono: "", fontSizeSans: "default", fontSizeMono: "default" });
+    expect(readStoredFonts()).toEqual({ sans: "", mono: "", fontSizeSans: "default", fontSizeMono: "default" });
     expect(document.documentElement.style.getPropertyValue("--ws-font-sans")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--ws-font-mono")).toBe("");
   });
@@ -99,8 +99,8 @@ describe("与后端配置对账（reconcileFontsFromConfig：后端为真源、�
 
   it("后端有值 → 以后端为准：应用并回写缓存（换版本/清缓存后不丢）", () => {
     localStorage.setItem("ws_font_sans", "Maple");
-    const r = reconcileFontsFromConfig({ sans: "PingFang SC", mono: "JetBrains Mono" });
-    expect(r).toEqual({ prefs: { sans: "PingFang SC", mono: "JetBrains Mono" }, migrate: false });
+    const r = reconcileFontsFromConfig({ sans: "PingFang SC", mono: "JetBrains Mono", font_size_sans: 15, font_size_mono: 13 });
+    expect(r).toEqual({ prefs: { sans: "PingFang SC", mono: "JetBrains Mono", fontSizeSans: "default", fontSizeMono: "small" }, migrate: false });
     expect(localStorage.getItem("ws_font_sans")).toBe("PingFang SC");
     expect(localStorage.getItem("ws_font_mono")).toBe("JetBrains Mono");
     const style = document.documentElement.style;
@@ -112,7 +112,7 @@ describe("与后端配置对账（reconcileFontsFromConfig：后端为真源、�
     localStorage.setItem("ws_font_mono", "Consolas");
     const r = reconcileFontsFromConfig({});
     expect(r.migrate).toBe(true);
-    expect(r.prefs).toEqual({ sans: "", mono: "Consolas" });
+    expect(r.prefs).toEqual({ sans: "", mono: "Consolas", fontSizeSans: "default", fontSizeMono: "default" });
     expect(document.documentElement.style.getPropertyValue("--ws-font-mono")).toBe(
       '"Consolas", var(--ws-font-mono-fallback)',
     );
@@ -121,8 +121,44 @@ describe("与后端配置对账（reconcileFontsFromConfig：后端为真源、�
   it("两侧都空 → 默认链且不迁移（顺带清掉脏缓存键）", () => {
     localStorage.setItem("ws_font_sans", ' "" ; } ');
     const r = reconcileFontsFromConfig({ sans: "", mono: "" });
-    expect(r).toEqual({ prefs: { sans: "", mono: "" }, migrate: false });
+    expect(r).toEqual({ prefs: { sans: "", mono: "", fontSizeSans: "default", fontSizeMono: "default" }, migrate: false });
     expect(localStorage.getItem("ws_font_sans")).toBeNull();
     expect(document.documentElement.style.getPropertyValue("--ws-font-sans")).toBe("");
+  });
+
+  it("serde's default sizes do not erase legacy cached font families", () => {
+    localStorage.setItem("ws_font_sans", "Existing Sans");
+    localStorage.setItem("ws_font_mono", "Existing Mono");
+    const result = reconcileFontsFromConfig({ sans: "", mono: "", font_size_sans: 15, font_size_mono: 15 });
+    expect(result).toEqual({ prefs: {
+      sans: "Existing Sans", mono: "Existing Mono", fontSizeSans: "default", fontSizeMono: "default",
+    }, migrate: true });
+    expect(readStoredFonts()).toEqual(result.prefs);
+  });
+
+  it.each([0, -1, 14, 100000, Number.NaN, Number.POSITIVE_INFINITY])("unknown backend size %s falls back consistently", (size) => {
+    localStorage.setItem("ws_font_size_sans", "xlarge");
+    localStorage.setItem("ws_font_size_mono", "small");
+    const { prefs } = reconcileFontsFromConfig({ font_size_sans: size, font_size_mono: size });
+    expect(prefs.fontSizeSans).toBe("default");
+    expect(prefs.fontSizeMono).toBe("default");
+    expect(document.documentElement.style.getPropertyValue("--ws-font-size-sans")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--ws-font-size-mono")).toBe("");
+  });
+
+  it("size slots apply from cache before mount, stay independent and reset without stale overrides", () => {
+    localStorage.setItem("ws_font_size_sans", "large");
+    localStorage.setItem("ws_font_size_mono", "small");
+    applyInitialFonts();
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue("--ws-font-size-sans")).toBe("17px");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("13px");
+    commitFontSizeSlot("mono", "xlarge");
+    expect(style.getPropertyValue("--ws-font-size-sans")).toBe("17px");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("19px");
+    commitFontSizeSlot("mono", "default");
+    expect(style.getPropertyValue("--ws-font-size-mono")).toBe("");
+    expect(localStorage.getItem("ws_font_size_mono")).toBeNull();
+    expect(localStorage.getItem("ws_font_size_sans")).toBe("large");
   });
 });

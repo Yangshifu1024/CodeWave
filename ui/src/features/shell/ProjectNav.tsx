@@ -1,5 +1,6 @@
 // 左侧导航：项目 -> 会话（分组头 [项目∨ | 管理⠿ | 新建+]、会话行、显示更多、行内操作）+ 任务区
 // 具名项目（注册表）为主分组；临时会话（project_id=None）其后按目录归组
+import { fontSizeCss } from "../../utils/fonts";
 import { useEffect, useMemo, useState } from "react";
 import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Tag } from "antd";
 import {
@@ -234,7 +235,7 @@ export default function ProjectNav() {
       okText: t("common.delete"),
       okButtonProps: { danger: true },
       content: (
-        <div style={{ fontSize: 12.5, display: "grid", gap: 6 }}>
+        <div style={{ fontSize: fontSizeCss(12.5), display: "grid", gap: 6 }}>
           <div>{t("nav.deleteProjectData")}</div>
           <div>{t("nav.deleteProjectSessions", { n: count })}</div>
           <div>{t("nav.deleteProjectCodeSafe")}</div>
@@ -447,7 +448,7 @@ export default function ProjectNav() {
           <div className="manage-row" key={p.id}>
             <div className="manage-info">
               <b>{p.name}</b>
-              <div className="dim" style={{ fontSize: 11.5 }}>{p.directory}</div>
+              <div className="dim" style={{ fontSize: fontSizeCss(11.5) }}>{p.directory}</div>
             </div>
             <Button
               size="small"
@@ -549,7 +550,7 @@ function SessionRow({
       <span className="session-title" title={meta.title}>{meta.title || "(untitled)"}</span>
       {/* 中性墨色：等待确认属「需注意」而非成功，不用预设绿（无色彩=默认、色彩只映射风险等级） */}
       {askPending && (
-        <Tag style={{ marginLeft: 6, flex: "none", fontSize: 10, lineHeight: "16px" }}>
+        <Tag style={{ marginLeft: 6, flex: "none", fontSize: fontSizeCss(10), lineHeight: "16px" }}>
           {t("nav.waitingConfirm")}
         </Tag>
       )}

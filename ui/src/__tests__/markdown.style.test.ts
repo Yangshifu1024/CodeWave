@@ -68,8 +68,8 @@ describe("markdown 主题感（docs/chat-and-interface）", () => {
 
   it("标题梯度 h1-h6 + 行高 + 颜色 token", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+:is\(h1,\s*h2,\s*h3,\s*h4,\s*h5,\s*h6\)\s*\{[^}]*line-height:\s*1\.4/);
-    expect(appCss).toMatch(/:is\([^*]+?\)\s+h1\s*\{[^}]*font-size:\s*18\.5px/);
-    expect(appCss).toMatch(/:is\([^*]+?\)\s+h3\s*\{[^}]*font-size:\s*15px/);
+    expect(appCss).toMatch(/:is\([^*]+?\)\s+h1\s*\{[^}]*font-size:\s*calc\(18\.5px \+ var\(--ws-font-size-sans-offset\)\)/);
+    expect(appCss).toMatch(/:is\([^*]+?\)\s+h3\s*\{[^}]*font-size:\s*calc\(15px \+ var\(--ws-font-size-sans-offset\)\)/);
   });
 
   it("段落 line-height 1.7（[docs/chat-and-interface] 阅读感升级）", () => {

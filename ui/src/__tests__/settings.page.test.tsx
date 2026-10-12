@@ -34,7 +34,7 @@ const fixtureConfig = {
   compact_timeout_seconds: 180,
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false, command_allowlist: [] },
   post_write_check: { enabled: false, command: "", timeout_seconds: 30, tail_chars: 3000 },
-  ui: { font_size: 15, accent: "cyan", language: "zh-CN" },
+  ui: { font_size_sans: 15, font_size_mono: 15, accent: "cyan", language: "zh-CN" },
   custom_prompt: null,
   disabled_skills: [],
   log: { level: "info", session_verbose: false },
@@ -357,7 +357,7 @@ describe("设置全屏页：覆盖工作区但不影响运行中会话", () => {
     expect(appCss).not.toContain(".settings-body");
     // 批②：导航自建 → 导航列内的 antd Tabs 规则全部退场；组标题沿用 .nav-section-title 的度量
     expect(appCss).not.toContain(".settings-nav .ant-tabs");
-    expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*11px[^}]*var\(--ws-dim\)/);
+    expect(appCss).toMatch(/\.settings-nav-group\s*\{[^}]*font-size:\s*calc\(11px \+ var\(--ws-font-size-sans-offset\)\)[^}]*var\(--ws-dim\)/);
     expect(appCss).toMatch(/\.settings-nav-item-active\s*\{[^}]*background:\s*var\(--ws-highlight\)/);
     // 写入后检查改走共享表单行，不在半宽网格里再次压缩控件列。
     expect(appCss).not.toContain(".postcheck-grid");
@@ -582,8 +582,10 @@ describe("设置全屏页：逐页脏标记与深链", () => {
 
     // 再全部删空：回到原值（null 与 "" 归一）→ 不脏
     fireEvent.change(promptArea(), { target: { value: "" } });
-    await waitFor(() => expect(document.querySelector(".settings-dirty-dot")).toBeFalsy());
-    expect(useUi.getState().settingsDirty).toBe(false);
+    await waitFor(() => {
+      expect(document.querySelector(".settings-dirty-dot")).toBeFalsy();
+      expect(useUi.getState().settingsDirty).toBe(false);
+    });
 
     // 此时返回工作区直接离开，不得误弹三选
     fireEvent.click(buttonByText("返回工作区"));

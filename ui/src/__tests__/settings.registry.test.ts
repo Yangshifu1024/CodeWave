@@ -300,6 +300,24 @@ function zhT(key: string): string {
   return String(dict[key.replace(/^settings\./, "")] ?? key);
 }
 
+describe("font-size settings registration", () => {
+  it("registers both size slots as searchable, immediate appearance settings", () => {
+    for (const [id, label] of [
+      ["ui.font_size_sans", "settings.uiFontSize"],
+      ["ui.font_size_mono", "settings.monoFontSize"],
+    ]) {
+      expect(SETTINGS_ITEMS.find((item) => item.id === id)).toMatchObject({
+        labelKey: label, page: "appearance", width: "narrow",
+      });
+      expect(PAGE_FIELDS.appearance as string[]).toContain(id);
+      expect(INSTANT_APPLY_FIELD_IDS).toContain(id);
+      expect(SHELL_SETTING_KEYS).not.toContain(label.replace("settings.", ""));
+      expect(matchSettings(zhT(label), zhT).map((item) => item.id)).toContain(id);
+      expect(matchSettings("font size", zhT).map((item) => item.id)).toContain(id);
+    }
+  });
+});
+
 /** 用 en-US 的实值模拟 i18n 的 t（英文显示名首字母大写，是 haystack 归一的作用对象） */
 function enT(key: string): string {
   const dict = en.settings as Record<string, unknown>;
@@ -654,6 +672,9 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(group.titleKey)": "左导航组标题由 PAGE_GROUPS.titleKey 派生",
     "t(PAGE_LABEL_KEY[key])": "左导航页名由注册表页名键派生",
     "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
+  },
+  "panels/FontSettings.tsx": {
+    "t(`settings.fontSize_${lvl}`)": "字号档位 4 档 label 键由 lvl 变量拼出（small/default/large/xlarge）",
   },
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
   "chat/Composer.tsx": {

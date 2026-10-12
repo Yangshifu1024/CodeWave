@@ -125,6 +125,8 @@ export default {
     aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
     fontGroup: "Fonts", uiFont: "UI font", monoFont: "Monospace font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter",
+    uiFontSize: "UI font size", monoFontSize: "Monospace font size", fontSizeHint: "Adjust sans/mono text size; applies immediately",
+    fontSize_small: "Small", fontSize_default: "Default", fontSize_large: "Large", fontSize_xlarge: "Extra large",
     fontReset: "Reset to default",
     approvalEnabled: "Start new sessions in Plan mode", approvalEnabledHint: "On: new sessions start in Plan mode. Off: new sessions start in Full Access mode. Existing sessions are unaffected.", confirmOutside: "Confirm writes creating paths outside workspace",
     confirmPush: "Confirm before git push", autoConfirm: "Auto-confirm recommended option after 5 minutes", autoConfirmHint: "Checked: approvals auto-approve after 5 minutes without response; unchecked: wait for your choice indefinitely",

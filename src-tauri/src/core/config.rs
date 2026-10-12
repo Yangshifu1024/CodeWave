@@ -364,8 +364,15 @@ impl Default for PostWriteCheckSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
-    /// 界面基础字号
-    pub font_size: f32,
+    /// 界面 sans 文本字号（px）。与 `font_sans` 同源：sans 字体族用此字号渲染。
+    /// 真源在后端配置文件（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
+    /// 由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
+    #[serde(deserialize_with = "deserialize_font_size")]
+    pub font_size_sans: f32,
+    /// 界面 mono 文本字号（px）。与 `font_mono` 同源：mono 字体族用此字号渲染。
+    /// 同上由 `set_font_prefs` 独占维护，页级 `save_config` 一并护住。
+    #[serde(deserialize_with = "deserialize_font_size")]
+    pub font_size_mono: f32,
     /// 主题 accent（历史遗留键；现行强调色为墨色，见 docs/chat-and-interface）
     pub accent: String,
     /// 界面语言（zh-CN 等）
@@ -386,10 +393,22 @@ pub struct UiPrefs {
     pub font_mono: String,
 }
 
+pub(super) fn is_valid_font_size(size: f32) -> bool {
+    matches!(size, 13.0 | 15.0 | 17.0 | 19.0)
+}
+
+fn deserialize_font_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f32, D::Error> {
+    let size = f32::deserialize(deserializer)?;
+    Ok(if is_valid_font_size(size) { size } else { 15.0 })
+}
+
 impl Default for UiPrefs {
     fn default() -> Self {
         UiPrefs {
-            font_size: 15.0,
+            font_size_sans: 15.0,
+            font_size_mono: 15.0,
             accent: "cyan".into(),
             language: "zh-CN".into(),
             close_to_tray: true,
@@ -635,6 +654,29 @@ pub const KEYRING_PLACEHOLDER: &str = "__keyring__";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_sizes_default_and_normalize_unknown_config_values() {
+        let missing: UiPrefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.font_size_sans, 15.0);
+        assert_eq!(missing.font_size_mono, 15.0);
+        for size in [0.0, -1.0, 14.0, 100000.0] {
+            let prefs: UiPrefs = serde_json::from_value(serde_json::json!({
+                "font_size_sans": size, "font_size_mono": size
+            }))
+            .unwrap();
+            assert_eq!(prefs.font_size_sans, 15.0);
+            assert_eq!(prefs.font_size_mono, 15.0);
+        }
+        for size in [13.0, 15.0, 17.0, 19.0] {
+            let prefs: UiPrefs = serde_json::from_value(serde_json::json!({
+                "font_size_sans": size, "font_size_mono": size
+            }))
+            .unwrap();
+            assert_eq!(prefs.font_size_sans, size);
+            assert_eq!(prefs.font_size_mono, size);
+        }
+    }
 
     #[test]
     fn api_format_contract_strings_roundtrip() {

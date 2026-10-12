@@ -21,7 +21,7 @@ describe("辅助信息可见性：版式契约", () => {
   it("右栏技能来源紧跟技能名（不再 auto margin 推到行尾），字号与设置页同一档", () => {
     const body = ruleBody(".rb-skill-origin");
     expect(body).not.toMatch(/margin-left:\s*auto/);
-    expect(body).toMatch(/font-size:\s*11px/);
+    expect(body).toContain("font-size: calc(11px + var(--ws-font-size-sans-offset))");
     expect(body).toMatch(/color:\s*var\(--ws-dim\)/);
   });
 

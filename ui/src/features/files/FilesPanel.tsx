@@ -1,5 +1,6 @@
 // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：文件页签内容——单列表全量展示（图标区分类型），点击弹窗查看
 // [docs/documents](../../../../docs/documents.md)：被本应用改过的文档可从这里「回退」到改动前的版本
+import { fontSizeCss } from "../../utils/fonts";
 import { useState } from "react";
 import { Alert, App, Button, Modal, Radio, Tooltip } from "antd";
 import {
@@ -191,7 +192,7 @@ export default function FilesPanel({
               }))}
             />
             {/* 被回退掉的当前内容也会留一份备份，所以「回退」这件事本身能再撤回 */}
-            <div className="rb-dim" style={{ marginTop: 8, fontSize: 12 }}>
+            <div className="rb-dim" style={{ marginTop: 8, fontSize: fontSizeCss(12) }}>
               {t("files.restoreNote")}
             </div>
           </>

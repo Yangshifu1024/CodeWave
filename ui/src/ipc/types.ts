@@ -98,7 +98,10 @@ export interface ApprovalSettings { enabled: boolean; confirm_outside_create: bo
 export interface ShellConfig { selection: string | null }
 /** 界面偏好（字号/强调色/界面语言 + AI 回复语言） */
 export interface UiPrefs {
-  font_size: number;
+  /** 界面 sans 文本字号（px）；与 `font_sans` 同源：sans 字体用此字号渲染 */
+  font_size_sans: number;
+  /** 界面 mono 文本字号（px）；与 `font_mono` 同源：mono 字体用此字号渲染 */
+  font_size_mono: number;
   accent: string;
   language: string;
   /** AI 回复语言（自由输入，如 "中文"/"English"）；空 = 跟随用户消息语言 */

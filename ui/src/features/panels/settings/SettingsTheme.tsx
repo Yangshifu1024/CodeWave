@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { App as AntdApp, ConfigProvider, Form, Typography } from "antd";
 import type { FormItemProps, FormProps } from "antd";
 import "./settings-theme.css";
+import { fontSizeCss, useFontSize } from "../../../utils/fonts";
 
 /** One source for typography, density, surfaces, and field geometry across every settings page. */
 export const SETTINGS_VISUAL = {
@@ -27,11 +28,11 @@ const SETTINGS_STYLE = {
   "--settings-content-width": `${SETTINGS_VISUAL.contentWidth}px`,
   "--settings-page-gutter": `${SETTINGS_VISUAL.pageGutter}px`,
   "--settings-page-gutter-narrow": `${SETTINGS_VISUAL.pageGutterNarrow}px`,
-  "--settings-page-title-size": `${SETTINGS_VISUAL.pageTitleSize}px`,
-  "--settings-section-title-size": `${SETTINGS_VISUAL.sectionTitleSize}px`,
-  "--settings-field-title-size": `${SETTINGS_VISUAL.fieldTitleSize}px`,
-  "--settings-field-description-size": `${SETTINGS_VISUAL.fieldDescriptionSize}px`,
-  "--settings-metadata-size": `${SETTINGS_VISUAL.metadataSize}px`,
+  "--settings-page-title-size": fontSizeCss(SETTINGS_VISUAL.pageTitleSize),
+  "--settings-section-title-size": fontSizeCss(SETTINGS_VISUAL.sectionTitleSize),
+  "--settings-field-title-size": fontSizeCss(SETTINGS_VISUAL.fieldTitleSize),
+  "--settings-field-description-size": fontSizeCss(SETTINGS_VISUAL.fieldDescriptionSize),
+  "--settings-metadata-size": fontSizeCss(SETTINGS_VISUAL.metadataSize),
   "--settings-section-gap": `${SETTINGS_VISUAL.sectionGap}px`,
   "--settings-row-gap": `${SETTINGS_VISUAL.rowGap}px`,
   "--settings-row-padding-block": `${SETTINGS_VISUAL.rowPaddingBlock}px`,
@@ -43,6 +44,7 @@ const SETTINGS_STYLE = {
 
 /** Locally themes settings and all antd overlays while preserving the application's light/dark algorithm. */
 export function SettingsThemeProvider({ children }: { children: ReactNode }) {
+  const sizeOffset = useFontSize("sans") - 15;
   return (
     <ConfigProvider
       componentSize="medium"
@@ -50,8 +52,8 @@ export function SettingsThemeProvider({ children }: { children: ReactNode }) {
         token: {
           fontFamily: "var(--ws-font-sans)",
           fontFamilyCode: "var(--ws-font-mono)",
-          fontSize: SETTINGS_VISUAL.fieldTitleSize,
-          fontSizeSM: SETTINGS_VISUAL.metadataSize,
+          fontSize: SETTINGS_VISUAL.fieldTitleSize + sizeOffset,
+          fontSizeSM: SETTINGS_VISUAL.metadataSize + sizeOffset,
           lineHeight: 1.5,
           controlHeight: 36,
           borderRadius: 8,

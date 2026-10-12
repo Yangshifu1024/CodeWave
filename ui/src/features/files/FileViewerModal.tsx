@@ -1,5 +1,6 @@
 // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：会话产物查看弹窗——markdown 渲染（mermaid/katex 升级）/ 图片 base64 预览 / 代码高亮
 // [docs/documents](../../../../docs/documents.md)：扩展名分派扩到表格（.xlsx/.xlsm/.csv/.tsv）、Word（.docx）与 PDF（.pdf）
+import { fontSizeCss } from "../../utils/fonts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Image, Modal, Spin } from "antd";
 import { useTranslation } from "react-i18next";
@@ -301,7 +302,7 @@ export default function FileViewerModal({
         ) : null
       ) : st.phase === "doc" ? (
         <div>
-          <div style={{ color: "var(--ws-dim)", fontSize: 12, marginBottom: 8 }}>
+          <div style={{ color: "var(--ws-dim)", fontSize: fontSizeCss(12), marginBottom: 8 }}>
             {t("files.docHint")}
             {st.truncated ? ` · ${t("files.docTruncated")}` : ""}
           </div>

@@ -4,6 +4,7 @@ import zhCN from "antd/locale/zh_CN";
 import enUS from "antd/locale/en_US";
 import { I18nextProvider } from "react-i18next";
 import { i18n } from "./i18n";
+import { useFontSize } from "./utils/fonts";
 import { useUi } from "./stores/ui";
 import ThemeBridge from "./theme/bridge";
 import AppShell from "./features/shell/AppShell";
@@ -17,6 +18,7 @@ export default function App() {
   // 主题偏好（设置 → 外观）：system = 跟随系统亮暗；light/dark = 用户固定档。
   // store 初始化时同步读 localStorage，首帧即为持久化主题（无亮↔暗闪屏）。
   const themePref = useUi((s) => s.theme);
+  const fontSizeSans = useFontSize("sans");
   const [osDark, setOsDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
 
   useEffect(() => {
@@ -51,11 +53,12 @@ export default function App() {
       algorithm: effectiveDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
       // 字体走双槽 token（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：antd 组件不继承 body 字体，必须经 token 下发取值；
       // 取值在挂载前由 utils/fonts.ts 内联到 <html>，随设置即时变化。
-      // 强调色墨化（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：亮色近黑 / 暗色中灰（暗色 primary 仍配白字，中灰保对比）；
-      // --ws-accent 经 ThemeBridge 跟随此值，全应用强调色统一为中性墨色
+      // Use the applied preference (startup cache / optimistic edit / config
+      // reconciliation), so pending or failed saves never rewind live sizing.
       token: {
         fontFamily: "var(--ws-font-sans)",
         fontFamilyCode: "var(--ws-font-mono)",
+        fontSize: fontSizeSans,
         colorPrimary: effectiveDark ? "#424242" : "#1f1f1f",
         // 聚焦外晕（controlOutline 2px 外圈）会在墨色边框外再画一圈浅灰，视觉上像双重描边；
         // 全局去掉后聚焦态收敛为单圈墨色边框（[docs/chat-and-interface](../../docs/chat-and-interface.md)）
@@ -71,9 +74,8 @@ export default function App() {
         controlItemBgActiveHover: effectiveDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.10)",
       },
     }),
-    [effectiveDark],
+    [effectiveDark, fontSizeSans],
   );
-
   return (
     <I18nextProvider i18n={i18n}>
       <ConfigProvider locale={language === "zh-CN" ? zhCN : enUS} theme={themeCfg}>
