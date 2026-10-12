@@ -37,12 +37,40 @@ pub struct BatchOutcome {
 pub async fn execute_batch(
     core: &Arc<AgentCore>,
     rt: &Arc<SessionRuntime>,
+    calls: Vec<NormalizedCall>,
+    effective_excludes: &[String],
+    effective_exclude_mcp: bool,
+    main_session: bool,
+    cancel: CancellationToken,
+    run_id: &str,
+) -> BatchOutcome {
+    execute_batch_with_claim_lease(
+        core,
+        rt,
+        calls,
+        effective_excludes,
+        effective_exclude_mcp,
+        main_session,
+        cancel,
+        run_id,
+        None,
+    )
+    .await
+}
+
+/// The drive owns one release guard. Each spawned tool holds the same Arc until
+/// its future is actually dropped, not merely until abort has been requested.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_batch_with_claim_lease(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
     mut calls: Vec<NormalizedCall>,
     effective_excludes: &[String],
     effective_exclude_mcp: bool,
     main_session: bool,
     cancel: CancellationToken,
     run_id: &str,
+    claim_lease: Option<Arc<crate::tools::claims::ReleaseGuard>>,
 ) -> BatchOutcome {
     let batch_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
     let sink = core.sink.clone();
@@ -213,7 +241,9 @@ pub async fn execute_batch(
         let sem = rt.sem_tools.clone();
         let file_ops = rt.file_ops.clone();
 
+        let claim_lease = claim_lease.clone();
         join.spawn(async move {
+            let _claim_lease = claim_lease;
             if conflict_i {
                 return (
                     i,
@@ -463,9 +493,21 @@ async fn run_tool(
     if call.name.starts_with("mcp__") {
         emit_tool_start(core, rt, call, batch_id, index, "running");
         let started = Instant::now();
+        let mut binding = match core.mcp.request_binding(&rt.id, &call.name).await {
+            Ok(binding) => binding,
+            Err(error) => {
+                return (
+                    ToolOutcome::err("E_MCP_CONFIG_CHANGED", error.message),
+                    vec![],
+                    started.elapsed().as_millis(),
+                );
+            }
+        };
         // 审批门：server 未声明 read_only / always_allow 时逐次确认。
         // 只阻塞该次 MCP 调用——其它会话与内置工具不受影响。
-        if let Some((server, tool_name)) = core.mcp.approval_target(&rt.id, &call.name).await {
+        if binding.requires_approval() {
+            let server = binding.key.name.clone();
+            let tool_name = binding.tool.clone();
             emit_tool_start(core, rt, call, batch_id, index, "waiting");
             let auto_confirm = core.cfg.read().unwrap().approval.auto_confirm;
             let verdict = crate::safety::approval::confirm(
@@ -494,31 +536,28 @@ async fn run_tool(
                     started.elapsed().as_millis(),
                 );
             }
-            // 「总是允许」：持久化到该 server 所在作用域的条目（粒度 = server）
-            if verdict.always
-                && let Some(scope) = core.mcp.server_scope(&rt.id, &server).await
-            {
-                let sref = match scope {
-                    crate::mcp::Scope::Global => Some(crate::mcp::global_scope(&rt.data_dir)),
-                    crate::mcp::Scope::Project => {
-                        rt.project_dir.as_deref().map(crate::mcp::project_scope)
+            if verdict.always {
+                binding = match core.mcp.allow_binding(&rt.id, &binding).await {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        return (
+                            ToolOutcome::err("E_MCP_CONFIG_CHANGED", error.message),
+                            vec![],
+                            started.elapsed().as_millis(),
+                        );
                     }
                 };
-                if let Some(sref) = sref
-                    && let Err(e) = crate::mcp::set_always_allow(&sref, &server, true)
-                {
-                    tracing::warn!("写回 always_allow 失败：{e}");
-                }
             }
         }
         let mcp = core.mcp.clone();
         let sid = rt.id.clone();
-        let fname = call.name.clone();
         let args = call.args.clone();
         let call_cancel = cancel.clone();
         let out =
-            match tokio::spawn(async move { mcp.call(&sid, &fname, args, &call_cancel).await })
-                .await
+            match tokio::spawn(
+                async move { mcp.call_bound(&sid, &binding, args, &call_cancel).await },
+            )
+            .await
             {
                 Ok(Ok(o)) => {
                     // server 侧 is_error 显式落成失败结果（不再折叠进 Ok 里丢掉语义）；
@@ -789,18 +828,16 @@ async fn run_tool(
     let args = call.args.clone();
     let tool_kind = tool.kind();
     let fut = async move { tool.run(&ctx, args).await };
-    let joined = tokio::spawn(futures::FutureExt::catch_unwind(
-        std::panic::AssertUnwindSafe(fut),
-    ))
-    .await;
+    // Keep the tool future owned by the batch. A nested bare JoinHandle would
+    // detach it on abort, allowing a waiting write to outlive its drive's claims.
+    let joined = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await;
 
     let mut outcome = match joined {
-        Ok(Ok(out)) => out,
-        Ok(Err(_panic)) => ToolOutcome::err(
+        Ok(out) => out,
+        Err(_panic) => ToolOutcome::err(
             "E_TOOL_PANIC",
             "工具执行 panic，已捕获（进程与历史未受影响）",
         ),
-        Err(join_err) => ToolOutcome::err("E_TOOL_PANIC", format!("工具任务异常终止：{join_err}")),
     };
     if !warnings.is_empty() {
         outcome = outcome.with_warnings(warnings);

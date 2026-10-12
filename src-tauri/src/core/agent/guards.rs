@@ -16,7 +16,9 @@ impl Drop for DriveUnwindGuard {
     fn drop(&mut self) {
         if self.armed {
             self.flush_stop.cancel();
-            *lock_ok(&self.rt.active_cancel) = None;
+            if let Some(cancel) = lock_ok(&self.rt.active_cancel).take() {
+                cancel.cancel();
+            }
         }
     }
 }

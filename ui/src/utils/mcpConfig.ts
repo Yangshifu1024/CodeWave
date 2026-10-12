@@ -40,6 +40,8 @@ export interface McpServerDraft {
    */
   transportRaw: string | null;
   command: string;
+  /** Preserve explicit empty HTTP command fields without synthesizing absent ones. */
+  commandPresent?: boolean;
   args: McpArgRow[];
   env: McpKeyValueRow[];
   cwd: string;
@@ -81,6 +83,7 @@ const MANAGED_KEYS = new Set([
   "readOnly",
   "always_allow",
   "alwaysAllow",
+  "alwaysAllowServer",
   "tools",
 ]);
 
@@ -105,10 +108,11 @@ function toRows(v: unknown): McpKeyValueRow[] {
 
 /** 键值行 → 对象；跳过键为空的行（值是空串仍保留，语义不同）。 */
 function fromRows(rows: McpKeyValueRow[]): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
   for (const r of rows) {
     const k = r.key.trim();
-    if (!k) continue;
+    if (!k && !r.value) continue;
+    if (!k || Object.hasOwn(out, k)) throw new Error("settings.mcpInvalidRows");
     out[k] = r.value;
   }
   return out;
@@ -122,7 +126,7 @@ function toDraft(name: string, cfg: Record<string, unknown>): McpServerDraft {
       : typeof cfg.type === "string"
         ? (cfg.type as string)
         : null;
-  const extra: Record<string, unknown> = {};
+  const extra: Record<string, unknown> = Object.create(null);
   for (const [k, v] of Object.entries(cfg)) {
     if (!MANAGED_KEYS.has(k)) extra[k] = v;
   }
@@ -133,6 +137,7 @@ function toDraft(name: string, cfg: Record<string, unknown>): McpServerDraft {
     name,
     transportRaw: rawTransport,
     command: str(cfg.command),
+    commandPresent: Object.hasOwn(cfg, "command"),
     args: Array.isArray(cfg.args)
       ? cfg.args.map((a) => ({ value: typeof a === "string" ? a : String(a ?? "") }))
       : [],
@@ -143,7 +148,7 @@ function toDraft(name: string, cfg: Record<string, unknown>): McpServerDraft {
     enabled: bool(cfg.enabled, true),
     timeoutMs: typeof timeout === "number" ? String(timeout) : "",
     readOnly: bool(cfg.read_only ?? cfg.readOnly, false),
-    alwaysAllow: bool(cfg.always_allow ?? cfg.alwaysAllow, false),
+    alwaysAllow: bool(cfg.always_allow ?? cfg.alwaysAllow ?? cfg.alwaysAllowServer, false),
     toolsMode: toolsMode === "allow" || toolsMode === "deny" ? toolsMode : "all",
     toolsList: Array.isArray(tools.list) ? tools.list.map(String).join(" ") : "",
     extra,
@@ -169,7 +174,7 @@ export function parseMcpDoc(raw: string): McpDraftDoc | null {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const root = parsed as Record<string, unknown>;
-  const extraTop: Record<string, unknown> = {};
+  const extraTop: Record<string, unknown> = Object.create(null);
   for (const [k, v] of Object.entries(root)) {
     if (k !== "mcpServers") extraTop[k] = v;
   }
@@ -189,18 +194,17 @@ export function parseMcpDoc(raw: string): McpDraftDoc | null {
 }
 
 /** 草稿 → JSON 文本（`null` 与 `undefined` 的 extra 值原样保留）。 */
-export function serializeMcpDoc(doc: McpDraftDoc): string {
-  const servers: Record<string, unknown> = {};
-  for (const d of doc.servers) {
-    const name = d.name.trim();
-    if (!name) continue; // 未命名条目跳过（与旧行为一致）
+/** One canonical serializer for both explicit save and the current-draft probe. */
+export function serializeMcpServer(d: McpServerDraft): Record<string, unknown> {
+  if (!d.name.trim()) throw new Error("settings.mcpInvalidName");
     const cfg: Record<string, unknown> = { ...d.extra };
     // transport：只在文件里本来就有时写回（未知取值原样保留，让后端报定向错误）
     if (d.transportRaw) cfg.transport = d.transportRaw;
     else delete cfg.transport;
     delete cfg.type;
-    cfg.command = d.command;
-    cfg.args = d.args.map((a) => a.value).filter((v) => v !== "");
+    if (d.command || d.commandPresent) cfg.command = d.command;
+    else delete cfg.command;
+    cfg.args = d.args.map((a) => a.value);
     const env = fromRows(d.env);
     if (Object.keys(env).length) cfg.env = env;
     else delete cfg.env;
@@ -214,7 +218,8 @@ export function serializeMcpDoc(doc: McpDraftDoc): string {
     if (!d.enabled) cfg.enabled = false;
     else delete cfg.enabled;
     const t = d.timeoutMs.trim();
-    if (t && Number.isFinite(Number(t))) cfg.timeout_ms = Number(t);
+    if (t && (!/^\d+$/.test(t) || !Number.isSafeInteger(Number(t)) || Number(t) <= 0)) throw new Error("settings.mcpInvalidTimeout");
+    if (t) cfg.timeout_ms = Number(t);
     else delete cfg.timeout_ms;
     delete cfg.timeoutMs;
     if (d.readOnly) cfg.read_only = true;
@@ -231,9 +236,22 @@ export function serializeMcpDoc(doc: McpDraftDoc): string {
     } else {
       delete cfg.tools;
     }
-    servers[name] = cfg;
+  return cfg;
+}
+
+export function serializeMcpDoc(doc: McpDraftDoc): string {
+  const servers: Record<string, unknown> = Object.create(null);
+  for (const d of doc.servers) {
+    const name = d.name.trim();
+    if (Object.hasOwn(servers, name)) throw new Error("settings.mcpDuplicateName");
+    servers[name] = serializeMcpServer(d);
   }
   return JSON.stringify({ ...doc.extraTop, mcpServers: servers }, null, 2);
+}
+
+/** Render-only dirty identity also represents invalid/incomplete drafts without throwing. */
+export function mcpDraftIdentity(doc: McpDraftDoc): string {
+  try { return serializeMcpDoc(doc); } catch { return JSON.stringify(doc); }
 }
 
 /**
@@ -242,7 +260,7 @@ export function serializeMcpDoc(doc: McpDraftDoc): string {
  */
 export function normalizeMcpDoc(raw: string): string {
   const doc = parseMcpDoc(raw);
-  return doc ? serializeMcpDoc(doc) : raw;
+  try { return doc ? serializeMcpDoc(doc) : raw; } catch { return raw; }
 }
 
 /** 空草稿（「添加服务器」用）。 */

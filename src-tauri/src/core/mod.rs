@@ -7,6 +7,7 @@ pub mod activity;
 mod activity_tests;
 pub mod agent;
 pub mod config;
+pub mod config_commit;
 pub mod context;
 pub mod logging;
 pub mod openers;

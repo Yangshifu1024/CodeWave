@@ -2,14 +2,14 @@
 // 模型定义完全以用户输入为准（无内置目录）；「添加模型」弹窗覆盖上下文窗口 / 最大输出 / 输入输出类型。
 // 注意：子组件必须定义在顶层（定义在组件内部会每次渲染重建组件类型，输入框每敲一键就失焦）。
 import { useState } from "react";
-import { Button, Card, Divider, Empty, Flex, Input, InputNumber, Modal, Popconfirm, Select, Space, Tag } from "antd";
+import { Button, Card, Divider, Empty, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Select, Space, Tag } from "antd";
 import {
   DeleteOutlined, EditOutlined, EyeOutlined,
   LockOutlined, PlusOutlined, VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { SettingsForm, SettingsFormItem, SettingsSection, SettingsThemeScope } from "./settings/SettingsTheme";
-import type { ApiFormat, ConfigState, HeaderPair, ProviderConfig, ProviderModel } from "../../ipc/types";
+import type { ApiFormat, ConfigState, CredentialEdit, HeaderPair, ProviderConfig, ProviderModel } from "../../ipc/types";
 
 const API_FORMAT_OPTIONS: { label: string; value: ApiFormat }[] = [
   { label: "OpenAI Chat", value: "openai_chat" },
@@ -84,14 +84,20 @@ function validateHeaders(headers: HeaderPair[]): boolean {
 }
 
 /** 校验单个供应商配置：名称/Base URL 必填 + URL 格式 + key 非空（掩码行算已配置）+ 模型列表非空 + 自定义请求头合法。 */
-export function validateProvider(p: ProviderConfig): ProviderFieldIssue[] {
+export function configuredKeyCount(p: ProviderConfig): number {
+  return p.credential_count ?? p.keys.filter((key) => key.trim() !== "").length;
+}
+
+export function validateProvider(p: ProviderConfig, edit: CredentialEdit = { kind: "keep" }): ProviderFieldIssue[] {
   const issues: ProviderFieldIssue[] = [];
   if (!p.name.trim()) issues.push({ field: "name", kind: "required" });
   const url = p.base_url.trim();
   if (!url) issues.push({ field: "base_url", kind: "required" });
   else if (!/^https?:\/\/[^\s/]+/i.test(url)) issues.push({ field: "base_url", kind: "url" });
-  // 掩码行（*** 开头）视为已配置（[docs/providers-and-network](../../../../docs/providers-and-network.md)：API Key 必填）
-  if (!p.keys.some((k) => k.trim() !== "")) issues.push({ field: "keys", kind: "required" });
+  const hasNewKeys = (edit.kind === "append" || edit.kind === "replace") && edit.new_keys.some((key) => key.trim() !== "");
+  const hasKeys = edit.kind === "replace" ? hasNewKeys
+    : edit.kind !== "clear" && (configuredKeyCount(p) > 0 || hasNewKeys);
+  if (!hasKeys) issues.push({ field: "keys", kind: "required" });
   if (p.models.length === 0) issues.push({ field: "models", kind: "required" });
   if (!validateHeaders(p.headers ?? [])) issues.push({ field: "headers", kind: "header" });
   return issues;
@@ -230,10 +236,15 @@ function ModelListSection(props: {
 function ProviderFields(props: {
   value: ProviderConfig;
   onPatch: (patch: Partial<ProviderConfig>) => void;
+  credentialKind: "keep" | "append" | "replace";
+  newKeys: string;
+  isNew: boolean;
+  onCredentialKind(kind: "keep" | "append" | "replace"): void;
+  onNewKeys(value: string): void;
   errors?: { name?: string; base_url?: string; keys?: string; models?: string; headers?: string };
   children: React.ReactNode;
 }) {
-  const { value, onPatch, errors, children } = props;
+  const { value, onPatch, errors, children, credentialKind, newKeys, isNew, onCredentialKind, onNewKeys } = props;
   const { t } = useTranslation();
   const headers = value.headers ?? [];
   function patchHeader(index: number, patch: Partial<HeaderPair>) {
@@ -292,17 +303,37 @@ function ProviderFields(props: {
         <SettingsFormItem
           label={t("settings.apiKeys")}
           required
-          extra={t("settings.keyMaskedHint")}
+          extra={t(credentialKind === "replace" && !isNew ? "settings.credentialReplaceHint" : "settings.keyMaskedHint")}
           validateStatus={errors?.keys ? "error" : undefined}
           help={errors?.keys}
           style={{ marginBottom: 0 }}
         >
-          <Input.TextArea
-            className="w-wide"
-            rows={2}
-            value={value.keys.join("\n")}
-            onChange={(e) => onPatch({ keys: e.target.value.split("\n").map((s) => s.trim()) })}
-          />
+          <Space orientation="vertical">
+            {!isNew && <span>{value.credential_count == null && configuredKeyCount(value) > 0
+              ? t("settings.credentialConfiguredUnknown")
+              : t("settings.credentialConfigured", { count: configuredKeyCount(value) })}</span>}
+            {!isNew && (
+              <Radio.Group
+                value={credentialKind}
+                onChange={(event) => onCredentialKind(event.target.value)}
+                options={[
+                  { value: "keep", label: t("settings.credentialKeep") },
+                  { value: "append", label: t("settings.credentialAppend") },
+                  { value: "replace", label: t("settings.credentialReplace") },
+                ]}
+              />
+            )}
+            {credentialKind !== "keep" && (
+              <Input.TextArea
+                className="w-wide"
+                rows={2}
+                aria-label={t("settings.credentialNewKeys")}
+                autoComplete="off"
+                value={newKeys}
+                onChange={(event) => onNewKeys(event.target.value)}
+              />
+            )}
+          </Space>
         </SettingsFormItem>
         <SettingsFormItem
           label={t("settings.customHeaders")}
@@ -353,15 +384,21 @@ function ProviderFields(props: {
 interface Props {
   draft: ConfigState;
   patchDraft(patch: Partial<ConfigState>): void;
+  credentialEdits: Record<string, CredentialEdit>;
+  patchCredentialEdit(providerId: string, edit: CredentialEdit): void;
 }
 
 /** 视图状态：供应商列表，或在同一弹框中新增 / 编辑供应商。 */
 type View = { kind: "list" } | { kind: "add" } | { kind: "edit"; providerId: string };
 
 /** 供应商页签：新增供应商在确认后并入 draft；编辑直接补丁 draft；模型编辑内嵌在供应商弹框中。 */
-export default function ProvidersPanel({ draft, patchDraft }: Props) {
+export default function ProvidersPanel({ draft, patchDraft, credentialEdits, patchCredentialEdit }: Props) {
   const { t } = useTranslation();
   const [view, setView] = useState<View>({ kind: "list" });
+  const [credentialKind, setCredentialKind] = useState<"keep" | "append" | "replace">("keep");
+  const [newKeys, setNewKeys] = useState("");
+  const credentialEdit: CredentialEdit = credentialKind === "keep" ? { kind: "keep" }
+    : { kind: credentialKind, new_keys: newKeys.split("\n").map((key) => key.trim()).filter(Boolean) };
   // 新增供应商的本地表单（提交前不并入 draft）
   const [addForm, setAddForm] = useState<ProviderConfig>(blankProvider);
   // 编辑也先在弹框内暂存；完成时才写入页面草稿，取消时直接丢弃。
@@ -378,7 +415,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
 
   /** 新增表单字段错误文本（touched / 尝试提交后显示；模型列表与请求头无单列 touched，仅由提交尝试触发） */
   function addFieldError(field: "name" | "base_url" | "keys" | "models" | "headers"): string | undefined {
-    const issue = validateProvider(addForm).find((e) => e.field === field);
+    const issue = validateProvider(addForm, credentialEdit).find((e) => e.field === field);
     const fieldTouched = field === "models" || field === "headers" ? false : touched[field];
     if (!issue || (!fieldTouched && !submitTried)) return undefined;
     return headerOrFieldMessage(issue.kind);
@@ -386,7 +423,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
 
   /** 编辑表单字段错误文本（实时显示：进入时值本就有效，只有破坏后才见红字） */
   function editFieldError(field: "name" | "base_url" | "keys" | "models" | "headers"): string | undefined {
-    const issue = editing ? validateProvider(editing).find((e) => e.field === field) : undefined;
+    const issue = editing ? validateProvider(editing, credentialEdit).find((e) => e.field === field) : undefined;
     if (!issue) return undefined;
     return headerOrFieldMessage(issue.kind);
   }
@@ -398,6 +435,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   }
 
   function removeProvider(p: ProviderConfig) {
+    patchCredentialEdit(p.id, { kind: "keep" });
     const providers = draft.providers.filter((x) => x.id !== p.id);
     const removed = new Set(p.models.map((m) => m.id));
     const activeValid = draft.active_model_id != null && !removed.has(draft.active_model_id);
@@ -406,6 +444,8 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   }
 
   function startAddProvider() {
+    setCredentialKind("replace");
+    setNewKeys("");
     setAddForm(blankProvider());
     setEditForm(null);
     setTouched({});
@@ -455,7 +495,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   }
 
   const addValid =
-    validateProvider(addForm).length === 0 &&
+    validateProvider(addForm, credentialEdit).length === 0 &&
     addForm.models.every((m) => m.model.trim() !== "");
 
   function submitAdd() {
@@ -472,6 +512,8 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
     };
     const providers = [...draft.providers, provider];
     patchDraft({ providers, active_model_id: draft.active_model_id ?? provider.models[0]?.id ?? null });
+    patchCredentialEdit(provider.id, credentialEdit);
+    setNewKeys("");
     setModelEditor(null);
     setView({ kind: "list" });
   }
@@ -481,6 +523,8 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   const modelTarget = view.kind === "add" ? "add-form" : editing ? { providerId: editing.id } : null;
 
   function closeProviderModal() {
+    setNewKeys("");
+    setCredentialKind("keep");
     setModelEditor(null);
     setEditForm(null);
     setView({ kind: "list" });
@@ -492,6 +536,7 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
       return;
     }
     if (view.kind === "edit" && editing) {
+      patchCredentialEdit(editing.id, credentialEdit);
       const original = draft.providers.find((provider) => provider.id === editing.id);
       const normalizedOriginal = original && {
         ...original,
@@ -513,6 +558,9 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
   }
 
   function startEditProvider(provider: ProviderConfig) {
+    const edit = credentialEdits[provider.id] ?? { kind: "keep" };
+    setCredentialKind(edit.kind === "clear" ? "keep" : edit.kind);
+    setNewKeys(edit.kind === "append" || edit.kind === "replace" ? edit.new_keys.join("\n") : "");
     setEditForm({
       ...provider,
       keys: [...(provider.keys ?? [])],
@@ -667,6 +715,11 @@ export default function ProvidersPanel({ draft, patchDraft }: Props) {
               {modalProvider && modelTarget && (
                 <ProviderFields
                   value={modalProvider}
+                  credentialKind={credentialKind}
+                  newKeys={newKeys}
+                  isNew={view.kind === "add"}
+                  onCredentialKind={setCredentialKind}
+                  onNewKeys={(value) => { setNewKeys(value); setTouched((previous) => ({ ...previous, keys: true })); }}
                   errors={{
                     name: view.kind === "add" ? addFieldError("name") : editFieldError("name"),
                     base_url: view.kind === "add" ? addFieldError("base_url") : editFieldError("base_url"),

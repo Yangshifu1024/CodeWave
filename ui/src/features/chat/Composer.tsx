@@ -24,7 +24,7 @@ import CompactButton from "./ContextInfoBar";
 import AskPanel from "../tools/AskPanel";
 import QueuePanel from "./QueuePanel";
 import ExternalDirPrompt from "./ExternalDirPrompt";
-import type { DirDecision } from "./useComposerAttachments";
+import { useExternalDirQueue } from "./useExternalDirQueue";
 import { useComposerAttachments } from "./useComposerAttachments";
 import { useComposerHistory } from "./useComposerHistory";
 import { useComposerMentions } from "./useComposerMentions";
@@ -66,7 +66,7 @@ export default function Composer() {
   const askActive = !!active.ask;
 
   // 草稿按 Tab 隔离：文本、引用与待发附件存 run store 平行分桶（drafts[key]，见 ComposerDraft 注释），切会话各自保留、
-  // 发送成功 clearDraft 清空；setText/setImages/setRefs 与 useState 同形（支持 updater），直接注入下方子 hooks
+  // 发送按不可变快照消费；同步 setters 与 useState 同形，异步附件必须使用显式身份票据
   const draft = useActiveDraft();
   const text = draft.text;
   // refs 兜底：旧 ui-state 快照（后加字段）回填的桶可能缺该字段
@@ -118,30 +118,16 @@ export default function Composer() {
   // 判定与放行都在后端，这里是「问一次」的桥——把 resolve 存起来，等用户点完三选一再让流程继续。
   // 用 Promise 而不是「先弹框、下次事件再续跑」：一次拖入多个外部文件时流程要原地暂停，
   // 拆成状态机会把后面每个文件的处理都变成回调套回调。
-  const [extDir, setExtDir] = useState<string | null>(null);
-  const extResolve = useRef<((v: DirDecision) => void) | null>(null);
-  const askExternalDir = (dir: string) =>
-    new Promise<DirDecision>((resolve) => {
-      extResolve.current = resolve;
-      setExtDir(dir);
-    });
-  const decideExternalDir = (v: DirDecision) => {
-    setExtDir(null);
-    const r = extResolve.current;
-    extResolve.current = null;
-    r?.(v);
-  };
+  const { extDir, extSessionId, askExternalDir, decideExternalDir } = useExternalDirQueue();
 
   const attachments = useComposerAttachments({
     t,
     message,
     images: draft.images,
-    setImages,
     // 显式锁定当前 Tab：判定与放行都是异步的，期间切 Tab 也不能把引用写进别的会话
     sessionId: tab?.key ?? null,
     // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：引用记进草稿 refs（chip 展示），
     // 不再往正文里押 `@路径`（发送前一刻由 mergeRefs 合成）
-    onRefs: (incoming) => setRefs((cur) => addRefs(cur ?? [], incoming), tab?.key),
     askExternalDir,
   });
   const { images, recalledImages, addPaths, onPaste } = attachments;
@@ -156,6 +142,7 @@ export default function Composer() {
       onOver: () => setDropping(true),
       onLeave: () => setDropping(false),
       onDrop: (paths) => {
+        if (dropped) return;
         setDropping(false);
         void addPaths(paths);
       },
@@ -173,8 +160,10 @@ export default function Composer() {
   /** 附件按钮：开原生文件选择框（拿真实路径，这是「原地引用」的前提）。 */
   async function pickFiles() {
     try {
+      const target = attachments.captureTarget();
+      if (!target) return;
       const paths = await ipc.selectDocumentFiles();
-      if (paths.length) await addPaths(paths);
+      if (paths.length) await addPaths(paths, target);
     } catch (e) {
       message.warning(String(e).replace(/^Error[:\s]*/i, ""));
     }
@@ -463,20 +452,28 @@ export default function Composer() {
       useUi.getState().showSettings("providers");
       return;
     }
-    // vision 软阻断：模型声明不支持图片（vision === false）且有附件时拦截（自 [docs/providers-and-network](../../../../docs/providers-and-network.md) 起为硬布尔）
-    if (images.length > 0 && effectiveModel && !effectiveModel.vision) {
+    const targetKey = useSessions.getState().activeKey;
+    if (!targetKey) return;
+    const snapshot = useRun.getState().beginSend(targetKey);
+    if (!snapshot) return;
+    // Validate the actual wire snapshot, not a possibly older render's image list.
+    if (snapshot.payload.images.length > 0 && !effectiveModel.vision) {
+      useRun.getState().completeSend(snapshot.sendId, false);
       message.warning(t("composer.visionUnsupported"));
       return;
     }
-    // M-2：接受后才清空——运行中按 Enter 不再静默吞掉输入。
-    // 目标 Tab 在调用时捕获：startChat 异步窗口内切 Tab，清空的仍是发送方草稿而非新会话的
-    const targetKey = useSessions.getState().activeKey ?? undefined;
-    const accepted = await useRun.getState().send(v, images.map(({ mime, data }) => ({ mime, data })));
-    if (accepted) {
-      useRun.getState().clearDraft(targetKey); // 文本 + 附件一并清空（发送方 Tab 桶）
-      onTextReplaced(0); // 文本清空且不经 onChange：作废触发片段并把光标收回文首
-      setHistIdx(null); // 发送后序列自然追加新消息；复位指针
-      draftRef.current = null;
+    if (snapshot.pendingImports) message.warning(t("composer.imagesStillLoading"));
+    let accepted = false;
+    try {
+      accepted = await useRun.getState().send(snapshot.payload.text, snapshot.payload.images, snapshot.sessionId);
+    } finally {
+      const consumed = useRun.getState().completeSend(snapshot.sendId, accepted);
+      if (consumed.textConsumed && consumed.target && useSessions.getState().activeKey === snapshot.sessionId
+          && useRun.getState().isAttachmentTargetCurrent(consumed.target)) {
+        onTextReplaced(0);
+        setHistIdx(null);
+        draftRef.current = null;
+      }
     }
   }
 
@@ -762,7 +759,7 @@ export default function Composer() {
           拿不到真实路径，而本应用对文件是原地引用，必须有路径。 */}
 
       {/* 项目外目录放行确认：一次拖入多个外部文件时，后面的会排队等这一个决定 */}
-      <ExternalDirPrompt dir={extDir} onDecide={decideExternalDir} />
+      <ExternalDirPrompt sessionTitle={useSessions.getState().tabs.find((item) => item.key === extSessionId)?.title ?? extSessionId ?? undefined} dir={extDir} onDecide={decideExternalDir} />
 
       <div className="composer">
         {/* 多条流光边框（docs/chat-and-interface，antd 6 BorderBeam）：条纹均匀分布；颜色跟随主题强调色，
@@ -792,7 +789,7 @@ export default function Composer() {
                       style={{ borderRadius: 4, flex: "none" }}
                     />
                     <span className="attach-name">{img.name}</span>
-                    <CloseOutlined className="x" onClick={() => setImages((v) => v.filter((x) => x.id !== img.id))} />
+                    <CloseOutlined className="x" onClick={() => tab?.key && useRun.getState().removeDraftImage(img.id, tab.key)} />
                   </span>
                 ))}
               </Image.PreviewGroup>

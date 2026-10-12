@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // Network settings tests: proxy mode radio cards (none/system/manual), custom URL validation,
 // system-proxy echo. Same standalone-mount pattern as shell.settings.test.tsx.
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -33,8 +34,8 @@ let savedConfigs: ConfigState[] = [];
 
 async function baseInvoke(cmd: string, _args?: any) {
   switch (cmd) {
-    case "get_config": return makeConfig();
-    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return null;
+    case "get_config": return configSnapshot(makeConfig());
+    case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return configSaved(_args?.config);
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
     case "list_skills": return [];
@@ -63,7 +64,7 @@ afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
   useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   savedConfigs = [];
 });
 
@@ -83,7 +84,7 @@ async function clickSaveAndSettle() {
 }
 
 async function openNetworkTab(config: ConfigState = makeConfig()) {
-  useSettings.setState({ config, loaded: true });
+  useSettings.setState({ config, snapshot: configSnapshot(config), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "network" });
   render(
     <AntApp>
