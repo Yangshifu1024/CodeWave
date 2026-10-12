@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // 设置页技能页（自「工具与集成」拆出）：来源短标签 + 重新加载（reload_skills 清缓存重扫）+ 托管技能删除（delete_skill + Popconfirm）。
 // 挂载方式与 shell.settings.test.tsx 同源（standalone + useUi 控制开关），两字按钮按去空白文本匹配。
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -41,8 +42,8 @@ let calls: string[] = [];
 async function baseInvoke(cmd: string, args?: any) {
   calls.push(args ? `${cmd}:${JSON.stringify(args)}` : cmd);
   switch (cmd) {
-    case "get_config": return makeConfig();
-    case "save_config": return null;
+    case "get_config": return configSnapshot(makeConfig());
+    case "save_config": return configSaved(args?.config);
     case "list_available_shells": return [];
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
@@ -68,7 +69,7 @@ afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
   useUi.setState({ settingsOpen: false, settingsTab: "appearance" });
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   calls = [];
 });
 
@@ -81,7 +82,7 @@ function buttonByText(text: string): HTMLElement {
 }
 
 async function openSkillsTab() {
-  useSettings.setState({ config: makeConfig(), loaded: true });
+  useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
   useUi.setState({ settingsOpen: true, settingsTab: "skills" });
   render(
     <AntApp>
@@ -143,7 +144,7 @@ describe("设置页技能页：禁用清单", () => {
     invoke.mockImplementation(async (cmd: string, args?: any) =>
       cmd === "list_skills" ? [] : baseInvoke(cmd, args),
     );
-    useSettings.setState({ config: makeConfig(), loaded: true });
+    useSettings.setState({ config: makeConfig(), snapshot: configSnapshot(makeConfig()), loaded: true });
     useUi.setState({ settingsOpen: true, settingsTab: "skills" });
     render(
       <AntApp>

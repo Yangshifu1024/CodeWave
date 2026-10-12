@@ -67,6 +67,8 @@ interface EditorState {
   preset: SchedulePreset;
   /** 一次性任务的**原始输入串**：`<input type="datetime-local">` 可以处在空/半截状态，Date 装不下 */
   onceText: string;
+  originalSchedule?: string;
+  initialExpression?: string;
 }
 
 /** 取当前周期里的时间串（切周期时沿用，免得用户每换一种都要重填钟点） */
@@ -75,12 +77,17 @@ function presetTime(p: SchedulePreset): string {
 }
 
 /** 编辑态 → 计划表达式（once 以输入串为准；非法时返回 ""，由 canSave 拦下） */
-function editorExpr(ed: EditorState): string {
+function rawEditorExpr(ed: EditorState): string {
   if (ed.preset.kind === "once") {
     const at = parseDateTimeLocal(ed.onceText);
     return at ? presetToExpr({ kind: "once", at }) : "";
   }
   return presetToExpr(ed.preset);
+}
+
+function editorExpr(ed: EditorState): string {
+  const expression = rawEditorExpr(ed);
+  return expression === ed.initialExpression && ed.originalSchedule ? ed.originalSchedule : expression;
 }
 
 /** 计划任务全屏页：任务列表 + 周期选择器 + 执行历史 */
@@ -92,6 +99,8 @@ export default function TasksPage() {
   const items = useTasks((s) => s.items);
   const loading = useTasks((s) => s.loading);
   const error = useTasks((s) => s.error);
+  const diagnostics = useTasks((s) => s.diagnostics);
+  const loadDiagnostics = useTasks((s) => s.loadDiagnostics);
   const runningIds = useTasks((s) => s.runningIds);
   const load = useTasks((s) => s.load);
   const upsertLocal = useTasks((s) => s.upsertLocal);
@@ -125,8 +134,21 @@ export default function TasksPage() {
 
   // 打开页面即拉一次全局列表（store 是唯一入口；失败只置 error，旧列表保留）
   useEffect(() => {
-    void load();
-  }, [load]);
+    const refresh = () => {
+      if (document.visibilityState === "hidden" || useTasks.getState().loading) return;
+      void load();
+      void loadDiagnostics();
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [load, loadDiagnostics]);
 
   // 页内 Esc：捕获阶段注册并 preventDefault，抢在 AppShell 的全局 Esc（停止运行中会话）之前收口。
   // 弹窗/浮层打开时让位给组件库，不平级返回。
@@ -155,7 +177,8 @@ export default function TasksPage() {
     if (hit) return hit.name;
     // 注册表读盘失败时**不能**宣称「项目已不存在」——那是把「没读到」说成「被删了」，
     // 用户会据此以为任务悬空（projectMissing 只在注册表可信且确实查无此 id 时用）。
-    return projectsLoadFailed ? t("tasks.projectUnknown") : t("tasks.projectMissing");
+    const unavailable = diagnostics?.issues.some((issue) => issue.project_id === pid || (!issue.project_id && issue.kind.startsWith("index_")));
+    return projectsLoadFailed || unavailable ? t("tasks.projectUnknown") : t("tasks.projectMissing");
   }
 
   /**
@@ -176,8 +199,9 @@ export default function TasksPage() {
     if (pendingTaskActions.current.has(key)) return;
     pendingTaskActions.current.add(key);
     setPendingTaskActionKeys([...pendingTaskActions.current]);
+    const requestRevision = useTasks.getState().captureRevision();
     try {
-      upsertLocal(await ipc.setScheduledTaskEnabled(task.id, enabled));
+      upsertLocal(await ipc.setScheduledTaskEnabled(task.id, enabled), requestRevision);
     } catch (e) {
       message.error(t("tasks.saveFailed", { msg: String(e) }));
     } finally {
@@ -194,6 +218,7 @@ export default function TasksPage() {
     try {
       // 手工触发是异步的：命令只表示「已开始」，行的「运行中」标记由 scheduled:fired 事件驱动
       await ipc.runScheduledTaskNow(id);
+      await load();
     } catch (e) {
       message.error(t("tasks.runRejected", { msg: String(e) }));
     } finally {
@@ -223,13 +248,16 @@ export default function TasksPage() {
   function openEdit(task: ScheduledTask) {
     setSaveError(null);
     const preset = exprToPreset(task.schedule);
-    setEditor({
+    const next: EditorState = {
       id: task.id,
       name: task.name,
       instruction: task.instruction,
       preset,
       onceText: preset.kind === "once" ? formatDateTimeLocal(preset.at) : "",
-    });
+      originalSchedule: task.schedule,
+    };
+    next.initialExpression = rawEditorExpr(next);
+    setEditor(next);
   }
 
   function updateEditor(fn: (ed: EditorState) => EditorState) {
@@ -318,11 +346,12 @@ export default function TasksPage() {
     const expr = editorExpr(editor);
     setSaving(true);
     setSaveError(null);
+    const requestRevision = useTasks.getState().captureRevision();
     try {
       const saved = editor.id
         ? await ipc.updateScheduledTask(editor.id, editor.name.trim(), editor.instruction.trim(), expr)
         : await ipc.createScheduledTask(sessionId ?? "", editor.name.trim(), editor.instruction.trim(), expr);
-      upsertLocal(saved);
+      upsertLocal(saved, requestRevision);
       setEditor(null);
     } catch (e) {
       // 后端错误原文（含「已有任务正在运行」这类拒绝）就地展示：用户要照它改输入
@@ -388,6 +417,10 @@ export default function TasksPage() {
         </header>
         {/* 加载失败：错误行常驻 + 旧列表照旧显示（一次瞬时失败不该把列表擦成空态） */}
         {error && <div className="tasks-error">{t("tasks.loadFailed", { msg: error })}</div>}
+        {diagnostics?.state === "loading" && <div className="hint">{t("tasks.restoring")}</div>}
+        {diagnostics?.issues.map((issue, index) => <div className="tasks-error" key={`${issue.kind}:${issue.path}:${index}`}>
+          {t("tasks.recoveryIssue", { msg: `${issue.project_id ?? ""} ${issue.task_id ?? ""} ${issue.path}: ${issue.message}`.trim() })}
+        </div>)}
 
         {loading && items.length === 0 && (
           <div className="tasks-loading">
@@ -406,6 +439,7 @@ export default function TasksPage() {
         {items.map((task) => {
           const kind = statusKind(task.last_status);
           const running = runningIds.includes(task.id);
+          const consumedOnce = task.schedule.trim().startsWith("once:") && !task.next_run;
           const expanded = expandedId === task.id;
           const toggling = pendingTaskActionKeys.includes(`toggle:${task.id}`);
           const starting = pendingTaskActionKeys.includes(`run:${task.id}`);
@@ -419,6 +453,9 @@ export default function TasksPage() {
                   <strong className="task-row-name" title={task.name}>{task.name}</strong>
                   {/* 色彩只映射风险：正常收尾为中性，失败为红。 */}
                   {running && <Tag>{t("tasks.running")}</Tag>}
+                  {running && !task.enabled && <Tag>{t("tasks.pausedRunning")}</Tag>}
+                  {task.persistence_error && <Tag color="error" title={task.persistence_error}>{t("tasks.unsaved")}</Tag>}
+                  {consumedOnce && <span className="hint">{t("tasks.rescheduleOnce")}</span>}
                   {kind !== "none" && (
                     <Tag color={kind === "error" ? "error" : undefined}>
                       {statusLabel(task.last_status, t)}
@@ -433,14 +470,14 @@ export default function TasksPage() {
                     size="small"
                     checked={task.enabled}
                     loading={toggling}
-                    disabled={toggling}
+                    disabled={toggling || consumedOnce}
                     aria-label={task.enabled ? t("tasks.pause") : t("tasks.resume")}
                     onChange={(next) => void toggleEnabled(task, next)}
                   />
                 </span>
               }
               actions={[
-                <Button key="run" type="text" block loading={starting} disabled={starting} icon={<PlayCircleOutlined />} onClick={() => void runNow(task.id)}>
+                <Button key="run" type="text" block loading={starting} disabled={starting || running || !!task.persistence_error} icon={<PlayCircleOutlined />} onClick={() => void runNow(task.id)}>
                   {t("tasks.runNow")}
                 </Button>,
                 <Button key="edit" type="text" block icon={<EditOutlined />} onClick={() => openEdit(task)}>

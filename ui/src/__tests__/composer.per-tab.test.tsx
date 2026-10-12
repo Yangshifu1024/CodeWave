@@ -224,10 +224,15 @@ describe("Composer 草稿按 Tab 隔离", () => {
     expect(useSessions.getState().tabs.map((t) => t.key)).not.toContain("s1");
     expect(useRun.getState().drafts["s1"]).toBeUndefined(); // dispose 已删平行桶，内容只在驻留表里
 
+    // A pre-created skeleton can already have an import ticket. Restoring retained
+    // content must establish another identity rather than append to that old draft.
+    useRun.getState().initTab("s1");
+    const beforeRestore = useRun.getState().captureAttachmentTarget("s1")!;
     // 重开会话的真实回填路径（sessions.openSession 在拉消息前先调它）
     act(() => {
       applyRetainedContent("s1");
     });
+    expect(useRun.getState().appendDraftImages(beforeRestore, [IMG])).toEqual({ status: "stale" });
     expect(useRun.getState().drafts["s1"]!.text).toBe("保留我");
     expect(useRun.getState().tabs["s1"]).toBeTruthy();
   });

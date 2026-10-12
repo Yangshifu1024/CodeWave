@@ -2872,3 +2872,248 @@ fn plan_mode_block_describes_two_approve_options() {
     assert!(p.system_extra.contains("mode=\"auto_edit\""));
     assert!(p.system_extra.contains("mode=\"full_access\""));
 }
+
+/// Runtime constructors and orchestration agree on semantic file ownership.
+#[test]
+fn document_claim_policy_matches_production_runtime_constructors() {
+    let roots = test_roots();
+    let core = test_support::make_core(&roots);
+    let main = core.get_or_create_session(
+        "document-role-main",
+        roots.workspace.clone(),
+        None,
+        vec![],
+        None,
+        vec![],
+    );
+    let child = SessionRuntime::new_sub(&main, "document-role-child".into());
+    let nested = SessionRuntime::new_sub(&child, "document-role-nested".into());
+    let task = SessionRuntime::new_task(
+        "document-role-task".into(),
+        roots.data_dir.clone(),
+        roots.workspace.clone(),
+        roots.data_dir.clone(),
+    );
+    assert!(main_drive_params(&main.prefs()).main_session);
+    for (rt, required) in [
+        (&main, false),
+        (&child, true),
+        (&nested, true),
+        (&task, true),
+    ] {
+        assert_eq!(crate::tools::claims::requires_file_claim(rt), required);
+        assert_eq!(rt.is_main_session, !required);
+    }
+    assert!(
+        task.root_session_id.is_none(),
+        "task with no parent still needs claims"
+    );
+    assert_eq!(nested.root_session_id, Some(main.id.clone()));
+}
+
+/// Real drive RAII, including future cancellation/abort. The initial claim is
+/// obtained through write_document itself; no test manually releases it.
+#[tokio::test]
+async fn drive_releases_document_claims_on_all_exits() {
+    use crate::tools::{Tool, ToolCtx, claims};
+    use futures::FutureExt;
+    for exit in ["success", "error", "cancel", "panic", "abort"] {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let roots = crate::tools::pathutil::WriteRoots::new(
+            ws.path().to_path_buf(),
+            dd.path().to_path_buf(),
+        );
+        let core = test_support::make_core(&roots);
+        let parent = core.get_or_create_session(
+            &uuid::Uuid::new_v4().to_string(),
+            roots.workspace.clone(),
+            None,
+            vec![],
+            None,
+            vec![],
+        );
+        let rt = SessionRuntime::new_sub(&parent, uuid::Uuid::new_v4().to_string());
+        let path = ws.path().join("claimed.docx");
+        let ctx = ToolCtx {
+            core: core.clone(),
+            rt: rt.clone(),
+            batch_id: "claim-drive".into(),
+            call_index: 0,
+            call_key: "claim-drive:0".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let written = crate::tools::document::write::WriteDocumentTool.run(&ctx, serde_json::json!({"path":path,"docx":{"blocks":[{"type":"paragraph","text":"original"}]}})).await;
+        assert!(written.ok, "{written:?}");
+        let probe = uuid::Uuid::new_v4().to_string();
+        let _probe_guard = claims::ReleaseGuard::arm(&probe);
+        assert!(claims::claim(&probe, std::slice::from_ref(&path)).is_err());
+        let mut params = DriveParams {
+            max_steps: 0,
+            emit_events: false,
+            main_session: false,
+            ..DriveParams::default()
+        };
+        if exit == "error" {
+            params.max_steps = 1;
+            core.cfg.write().unwrap().providers.clear();
+        }
+        if exit == "cancel" {
+            params.max_steps = 1;
+            let cancel = tokio_util::sync::CancellationToken::new();
+            cancel.cancel();
+            params.parent_cancel = Some(cancel);
+        }
+        if exit == "panic" {
+            // This mutex is first touched after the actual drive guard is armed.
+            let poisoned = rt.clone();
+            let _ = std::thread::spawn(move || {
+                let _lock = poisoned.run_timing.lock().unwrap();
+                panic!("injected drive unwind");
+            })
+            .join();
+            assert!(
+                std::panic::AssertUnwindSafe(super::drive::drive_agent(
+                    &core,
+                    &rt,
+                    params,
+                    "document-drive-panic"
+                ))
+                .catch_unwind()
+                .await
+                .is_err()
+            );
+        } else if exit == "abort" {
+            let run_core = core.clone();
+            let run_rt = rt.clone();
+            // max_steps=0 reaches the real final flush wait while the guard is
+            // still alive. Abort during that await must drop the claim guard.
+            let handle = tokio::spawn(async move {
+                super::drive::drive_agent(&run_core, &run_rt, params, "document-drive-abort").await
+            });
+            while rt.active_cancel.lock().unwrap().is_none() {
+                tokio::task::yield_now().await;
+            }
+            assert!(claims::claim(&probe, std::slice::from_ref(&path)).is_err());
+            handle.abort();
+            assert!(handle.await.unwrap_err().is_cancelled());
+        } else {
+            let (result, _, _) =
+                super::drive::drive_agent(&core, &rt, params, "document-drive-terminal").await;
+            assert_eq!(result.is_ok(), exit == "success", "{exit}: {result:?}");
+        }
+        claims::claim(&probe, std::slice::from_ref(&path))
+            .unwrap_or_else(|e| panic!("claim leaked after {exit}: {e:?}"));
+    }
+}
+
+/// A live Office tool must not outlive an aborted drive, including while waiting
+/// for another writer's path lock. This exercises the production SSE -> batch -> tool chain.
+#[tokio::test]
+async fn aborted_drive_does_not_detach_waiting_document_write() {
+    use crate::tools::{Tool, ToolCtx, claims, writelock};
+    let arguments = serde_json::json!({
+        "path": "claimed.docx", "textEdits": [{"find":"original", "replace":"late-write"}]
+    })
+    .to_string();
+    let delta = serde_json::json!({"choices":[{"delta":{"tool_calls":[{
+        "index":0,"id":"document-abort-call","type":"function",
+        "function":{"name":"edit_document","arguments":arguments}
+    }]}}]})
+    .to_string();
+    let body = sse_body(&[
+        &delta,
+        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+    ]);
+    let (port, _) = spawn_scripted_sse(vec![body]).await;
+    let (core, parent, ws, _dd) = scripted_core(port, "document-abort-live");
+    let path = ws.path().join("claimed.docx");
+    let ctx = ToolCtx {
+        core: core.clone(),
+        rt: parent.clone(),
+        batch_id: "seed".into(),
+        call_index: 0,
+        call_key: "seed:0".into(),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    };
+    let seeded = crate::tools::document::write::WriteDocumentTool
+        .run(
+            &ctx,
+            serde_json::json!({
+                "path":path,"docx":{"blocks":[{"type":"paragraph","text":"original"}]}
+            }),
+        )
+        .await;
+    assert!(seeded.ok, "{seeded:?}");
+    let original = std::fs::read(&path).unwrap();
+    let held = writelock::acquire_all(std::slice::from_ref(&path), None)
+        .await
+        .unwrap();
+    let rt = SessionRuntime::new_sub(&parent, uuid::Uuid::new_v4().to_string());
+    rt.set_prefs(crate::core::prefs::SessionPrefs {
+        approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+        ..Default::default()
+    });
+    rt.history
+        .lock()
+        .unwrap()
+        .push(Message::user_text("Edit the document"));
+    let run_core = core.clone();
+    let run_rt = rt.clone();
+    let handle = tokio::spawn(async move {
+        super::drive::drive_agent(
+            &run_core,
+            &run_rt,
+            DriveParams {
+                max_steps: 2,
+                emit_events: false,
+                main_session: false,
+                ..Default::default()
+            },
+            "document-live-abort",
+        )
+        .await
+    });
+    let next_owner = uuid::Uuid::new_v4().to_string();
+    let _next_guard = claims::ReleaseGuard::arm(&next_owner);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match claims::claim(&next_owner, std::slice::from_ref(&path)) {
+                Err(conflicts) if conflicts.iter().any(|c| c.holder == rt.id) => break,
+                Ok(()) => claims::release(&next_owner),
+                Err(other) => panic!("unexpected owner: {other:?}"),
+            }
+            assert!(
+                !handle.is_finished(),
+                "drive stopped before entering the Office tool"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Office tool must reach its path lock");
+    let token = rt.active_cancel.lock().unwrap().as_ref().unwrap().clone();
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+    assert!(
+        token.is_cancelled(),
+        "abnormal drive exit cancels all owned tool work"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while claims::claim(&next_owner, std::slice::from_ref(&path)).is_err() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all aborted tool futures must release their ownership leases");
+    drop(held);
+    // Reacquiring the same FIFO mutex lets any previously queued waiter run/drop first.
+    let _barrier = writelock::acquire_all(std::slice::from_ref(&path), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "no detached late edit after abort"
+    );
+}

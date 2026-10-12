@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // Component smoke tests: mount the full App (whole antd tree) and assert the UI really renders.
 // Goal: catch "build passes but renders blank" regressions (e.g. a wrong Tabs items config).
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
@@ -62,7 +63,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (cmd) {
       case "ping": return "pong";
       case "activate_and_show": return titlebarState.result;
-      case "get_config": return fixtureConfig;
+      case "get_config": return configSnapshot(fixtureConfig);
+      case "save_config": return configSaved(args?.config);
       case "list_sessions": return [fixtureSession];
       case "list_projects": return [];
       case "save_project": saveProjectLog.push(args?.entry); return null;
@@ -119,9 +121,9 @@ beforeAll(() => {
 
 import App from "../App";
 import { useUi } from "../stores/ui";
+import { useSettings } from "../stores/settings";
 import { useSessions } from "../stores/sessions";
 import { applyFrameToTab, blank } from "../stores/runFrames";
-import { useSettings } from "../stores/settings";
 import { useRun } from "../stores/run";
 
 async function mountApp() {
@@ -166,6 +168,7 @@ async function clickIconBtn(ariaLabel: string) {
 
 afterEach(() => {
   cleanup();
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   // zustand stores are module-level singletons: reset panel toggles so modals do not leak across cases
   useUi.setState({ settingsOpen: false, tasksOpen: false, statsOpen: false, rightBarOpen: true, rbTab: "info" });
   // Reset sidebar toggles + localStorage memory ([docs/chat-and-interface](../../../docs/chat-and-interface.md))
@@ -802,6 +805,10 @@ describe("App 渲染冒烟", () => {
     await waitFor(() => expect(screen.getByText("命令")).toBeTruthy());
     expect(document.body.textContent).toContain("保存并重连");
     expect(document.querySelectorAll(".mcp-entry").length).toBe(1);
+    // An unnamed new draft is now dirty/invalid, rather than silently discarded by serialization.
+    // Cancel the draft explicitly before changing pages.
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".settings-mcp-editor-modal .ant-modal-close")!);
+    await waitFor(() => expect(document.querySelector(".mcp-entry")).toBeNull());
     // 技能列表搬到了独立页（左栏技能分段也会渲染同名技能，此处范围限定到设置页）
     await clickTab("技能");
     await waitFor(() => {

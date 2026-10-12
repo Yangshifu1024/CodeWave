@@ -285,7 +285,7 @@ pub(super) async fn build_stream_request(
     if !params.exclude_mcp {
         // 只注入**本会话可见集**内的 MCP 工具（会话隔离；按名排序在下面统一做）
         tools.extend(crate::mcp::to_provider_tool_defs(
-            &core.mcp.tool_defs_for(&rt.id).await,
+            &core.mcp.tool_snapshot_for(&rt.id).await,
         ));
     }
     tools.sort_by(|a, b| a.name.cmp(&b.name));

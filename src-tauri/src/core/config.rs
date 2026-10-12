@@ -2,7 +2,6 @@
 //! 所有字段 #[serde(default)]：旧 config.json 缺失的字段透明取默认。
 //! Schema v2（[docs/providers-and-network](../../../docs/providers-and-network.md)）：模型归属供应商（providers 嵌套 models）。
 
-use crate::util::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -164,7 +163,7 @@ pub struct HeaderPair {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
-    /// 供应商 id（uuid；keyring 账户即此 id）
+    /// 供应商 id（uuid；当前 v2 旧 keyring 账户使用此 id）
     pub id: String,
     /// 显示名
     pub name: String,
@@ -172,8 +171,14 @@ pub struct ProviderConfig {
     pub api_format: ApiFormat,
     /// 端点 Base URL
     pub base_url: String,
-    /// key 池（明文或 __keyring__ 占位）
+    /// 持久化 key 状态（空或 __keyring__ 占位；当前明文仅允许读入后安全整理）
     pub keys: Vec<String>,
+    /// Immutable application-created keyring generation; None reads the current v2 provider account.
+    #[serde(default)]
+    pub credential_ref: Option<String>,
+    /// Non-secret configured pool size (unknown for an untouched current v2 account).
+    #[serde(default)]
+    pub credential_count: Option<usize>,
     /// 自有模型列表（嵌套结构，schema v2）
     pub models: Vec<ProviderModel>,
     /// 自定义请求头（随该供应商所有请求发送）
@@ -188,6 +193,8 @@ impl Default for ProviderConfig {
             api_format: ApiFormat::OpenAiChat,
             base_url: String::new(),
             keys: Vec::new(),
+            credential_ref: None,
+            credential_count: None,
             models: Vec::new(),
             headers: Vec::new(),
         }
@@ -444,6 +451,9 @@ pub struct SessionSettings {
 pub struct ConfigState {
     /// schema 版本（v2；读入后恒强制为 2）
     pub schema_version: u32,
+    /// Reconciles a crash or lost IPC response at the file commit point.
+    #[serde(default)]
+    pub last_operation_id: Option<String>,
     /// 供应商列表（嵌套模型）
     pub providers: Vec<ProviderConfig>,
     /// 全局 active 模型（指向模型条目 id）
@@ -478,7 +488,7 @@ pub struct ConfigState {
     pub sessions: SessionSettings,
     /// 内置子代理按角色模型覆盖：key = role（kebab-case，与 agents::DELEGABLE_ROLES 对齐），
     /// value = Some(model_id) 显式覆盖 / None 跟随父会话。
-    /// 缺省空 HashMap：旧 config 自动按空读入，运行时由 ensure_subagent_models 预填 8 键为 None。
+    /// 缺省空 HashMap：缺失键自然继承；运行时读取不修改持久化真值。
     #[serde(default)]
     pub subagent_models: HashMap<String, Option<String>>,
 }
@@ -487,6 +497,7 @@ impl Default for ConfigState {
     fn default() -> Self {
         ConfigState {
             schema_version: 2,
+            last_operation_id: None,
             providers: Vec::new(),
             active_model_id: None,
             proxy: None,
@@ -530,17 +541,9 @@ impl ConfigState {
         cfg
     }
 
-    /// 原子持久化配置。
-    pub fn save(&self) -> anyhow::Result<()> {
-        ensure_dirs()?;
-        let bytes = serde_json::to_vec_pretty(self)?;
-        atomic_write(&Self::config_path(), &bytes)?;
-        Ok(())
-    }
-
     /// 供应商 + 模型摊平为运行时视图；wire id 兼作显示名。
     fn flatten(p: &ProviderConfig, m: &ProviderModel) -> ModelConfig {
-        let keyring_accounts = vec![p.id.clone()];
+        let keyring_accounts = vec![p.credential_ref.clone().unwrap_or_else(|| p.id.clone())];
         ModelConfig {
             id: m.id.clone(),
             name: m.model.clone(),
@@ -602,38 +605,8 @@ impl ConfigState {
         c
     }
 
-    /// 前端回传的 key 可能是掩码形态（***abcd）——
-    /// H2 修复：仅当掩码与旧 key 的掩码完全相等时才还原明文；
-    /// 插入/删除行导致的下标移位绝不还原出另一把 key，匹配不上的掩码行
-    /// （行序重排或新供应商）直接丢弃——掩码字符串绝不作为 key 落盘。
-    pub fn unmask_from(&mut self, previous: &ConfigState) {
-        for p in &mut self.providers {
-            let prev_keys = previous
-                .providers
-                .iter()
-                .find(|x| x.id == p.id)
-                .map(|x| x.keys.as_slice())
-                .unwrap_or(&[]);
-            let mut resolved: Vec<String> = Vec::with_capacity(p.keys.len());
-            for k in &p.keys {
-                if !k.starts_with("***") {
-                    resolved.push(k.clone());
-                    continue;
-                }
-                if let Some(orig) = prev_keys
-                    .iter()
-                    .find(|q| Self::mask(q) == *k && !q.starts_with("***"))
-                {
-                    resolved.push(orig.clone());
-                }
-                // 匹配不上的掩码行：无法还原为明文 key → 直接丢弃
-            }
-            p.keys = resolved;
-        }
-    }
-
     /// 掩码生成：*** + 末 4 字符（空 key 返回空串）。
-    fn mask(key: &str) -> String {
+    pub(crate) fn mask(key: &str) -> String {
         if key.is_empty() {
             return String::new();
         }
@@ -768,33 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn unmask_index_shift_does_not_swap_keys() {
-        // H2 回归：在掩码行上方插入行导致下标移位时，不得还原出另一个 key
-        let mut prev = ConfigState::default();
-        prev.providers.push(ProviderConfig {
-            keys: vec!["sk-first-1111".into(), "sk-second-2222".into()],
-            ..Default::default()
-        });
-        let mut incoming = ConfigState::default();
-        // H2 按 provider id 匹配 → 复用 prev 的 id
-        let provider_id = prev.providers[0].id.clone();
-        incoming.providers.push(ProviderConfig {
-            id: provider_id,
-            keys: vec!["sk-new-plain".into(), mask2("sk-second-2222")],
-            ..Default::default()
-        });
-        incoming.unmask_from(&prev);
-        // 第 0 行是用户新输入的明文（旧行 0 的掩码 ***1111 不匹配 → 保留用户输入）
-        assert_eq!(incoming.providers[0].keys[0], "sk-new-plain");
-        // 第 1 行掩码等于旧第二把 key → 还原
-        assert_eq!(incoming.providers[0].keys[1], "sk-second-2222");
-    }
-
-    fn mask2(k: &str) -> String {
-        format!("***{}", &k[k.len() - 4..])
-    }
-
-    #[test]
     fn sanitize_hides_keys() {
         let mut cfg = ConfigState::default();
         cfg.providers.push(ProviderConfig {
@@ -804,20 +750,6 @@ mod tests {
         let s = cfg.sanitized();
         assert_eq!(s.providers[0].keys[0], "***3456");
         assert!(!serde_json::to_string(&s).unwrap().contains("abcdef123456"));
-    }
-
-    /// unmask 回归：新供应商（prev 无同 id）保留明文；匹配不上的掩码行被丢弃。
-    #[test]
-    fn unmask_new_provider_drops_unmatched_mask() {
-        let prev = ConfigState::default();
-        let mut incoming = ConfigState::default();
-        incoming.providers.push(ProviderConfig {
-            id: "new-p".into(),
-            keys: vec!["sk-fresh".into(), "***1234".into()],
-            ..Default::default()
-        });
-        incoming.unmask_from(&prev);
-        assert_eq!(incoming.providers[0].keys, vec!["sk-fresh".to_string()]);
     }
 
     #[test]
@@ -842,6 +774,7 @@ mod tests {
                 name: "x-opencode-session".into(),
                 value: "${session_id}".into(),
             }],
+            ..Default::default()
         });
         let m = cfg.find_model("m1").unwrap();
         assert_eq!(m.model, "model-x");

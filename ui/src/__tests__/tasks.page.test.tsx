@@ -30,6 +30,8 @@ let enableFails = false;
 async function baseInvoke(cmd: string, args?: any) {
   calls.push({ cmd, args });
   switch (cmd) {
+    case "list_scheduled_task_diagnostics":
+      return { state: "ready", issues: [] };
     case "list_scheduled_tasks":
       if (listFails) throw new Error("boom-load");
       return JSON.parse(JSON.stringify(tasks));
@@ -129,7 +131,7 @@ async function confirmPopconfirm(trigger: HTMLElement) {
 }
 
 beforeEach(() => {
-  useTasks.setState({ items: [], loading: false, error: null, runningIds: [] });
+  useTasks.setState({ items: [], loading: false, error: null, runningIds: [], runningRuns: {}, terminalRuns: [], deletedIds: [], diagnostics: null });
   tasks = [];
   calls = [];
   listFails = false;
@@ -206,8 +208,8 @@ describe("任务页：列表渲染", () => {
     expect(rows()[1].textContent).toContain("仅一次");
   });
 
-  it("运行中的任务带「运行中」标记（runningIds 由事件驱动）", async () => {
-    tasks = [task({ id: "t1", name: "日报" })];
+  it("运行中的任务带「运行中」标记（权威列表补齐事件）", async () => {
+    tasks = [task({ id: "t1", name: "日报", active_run: { run_id: "run1", source: "manual", scheduled_for: null, started_at: "2026-10-01T00:00:00Z" } })];
     useTasks.setState({ runningIds: ["t1"] });
     mount();
 
@@ -518,4 +520,38 @@ describe("任务页：周期选择器 → 表达式", () => {
     await waitFor(() => expect(document.querySelector(".ant-modal")?.textContent ?? "").toContain("保存失败"));
     expect(document.querySelector(".ant-modal")?.textContent ?? "").toContain("invalid schedule");
   });
+});
+
+
+describe("task durable lifecycle presentation", () => {
+  it("consumed once keeps history and manual actions but cannot be re-enabled by switch", async () => {
+    tasks = [task({ id: "done-once", schedule: "once:2020-01-01T00:00:00Z", next_run: null, runs: [run({ summary: "kept result" })] })];
+    mount();
+    await waitFor(() => expect(document.body.textContent).toContain("done-once"));
+    expect((document.querySelector('button[role="switch"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.body.textContent).toContain("修改时间以重新安排");
+    expect(buttonByText("立即运行").disabled).toBe(false);
+    fireEvent.click(document.querySelector(".task-row-main")!);
+    await waitFor(() => expect(document.body.textContent).toContain("kept result"));
+  });
+
+  it("shows active paused execution and a terminal result that is not yet saved", async () => {
+    tasks = [task({ id: "running", enabled: false, active_run: { run_id: "new", source: "manual", scheduled_for: null, started_at: "2026-10-01T00:00:00Z" }, persistence_error: "Disk full" })];
+    mount();
+    await waitFor(() => expect(document.body.textContent).toContain("已暂停后续运行，当前运行继续"));
+    expect(document.body.textContent).toContain("结果尚未保存");
+  });
+});
+
+
+it("renaming a consumed once preserves its exact timestamp including seconds and offset", async () => {
+  const schedule = "once:2020-01-01T09:00:43+03:00";
+  tasks = [task({ id: "once-rename", schedule, next_run: null })];
+  mount();
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  fireEvent.click(buttonByText("编辑"));
+  await waitFor(() => expect(document.querySelector("#task-name")).toBeTruthy());
+  fireEvent.change(document.querySelector("#task-name") as HTMLInputElement, { target: { value: "renamed" } });
+  fireEvent.click(document.querySelector(".ant-modal-footer .ant-btn-primary") as HTMLButtonElement);
+  await waitFor(() => expect(calls.find((call) => call.cmd === "update_scheduled_task")?.args.schedule).toBe(schedule));
 });

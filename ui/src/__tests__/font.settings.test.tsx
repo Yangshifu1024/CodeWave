@@ -4,6 +4,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // 独立挂载必须显式初始化 i18n
+import { invoke } from "@tauri-apps/api/core";
+import { useSettings } from "../stores/settings";
+import { useUi } from "../stores/ui";
+import { configSnapshot, configSaved } from "./configFixtures";
 import { AppearanceSettings } from "../features/panels/FontSettings";
 
 const calls: Array<[string, any]> = [];
@@ -11,8 +15,10 @@ const calls: Array<[string, any]> = [];
 async function baseInvoke(cmd: string, args?: any) {
   calls.push([cmd, args]);
   switch (cmd) {
-    case "set_font_prefs":
-      return null;
+    case "set_font_prefs": {
+      const current = useSettings.getState().config!;
+      return configSaved({ ...current, ui: { ...current.ui, font_sans: args.sans, font_mono: args.mono } });
+    }
     default:
       throw new Error(`unmocked command: ${cmd}`);
   }
@@ -28,12 +34,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 beforeEach(() => {
   localStorage.clear();
   calls.length = 0;
+  vi.mocked(invoke).mockImplementation(baseInvoke);
+  const snapshot = configSnapshot({ providers: [], ui: { font_sans: "", font_mono: "", language: "zh-CN" } });
+  useSettings.setState({ snapshot, config: snapshot.config, loaded: true });
   document.documentElement.style.removeProperty("--ws-font-sans");
   document.documentElement.style.removeProperty("--ws-font-mono");
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 function mount() {
@@ -148,4 +158,40 @@ describe("界面字体：提交不丢与后端落盘", () => {
     await waitFor(() => expect(localStorage.getItem("ws_font_sans")).toBeNull());
     await waitFor(() => expect(fontPrefCalls().some((a) => a?.sans === "")).toBe(true));
   });
+  it("authoritative font receipt updates saved state", async () => {
+    mount();
+    const input = fontInput("界面字体");
+    fireEvent.change(input, { target: { value: "Saved Serif" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(useSettings.getState().config?.ui.font_sans).toBe("Saved Serif"));
+    expect(useSettings.getState().snapshot?.version.sequence).toBe(1);
+  });
+
+  it("failed secure persistence explains the reason and retries the unchanged preview", async () => {
+    const notification = vi.spyOn(useUi.getState(), "notify");
+    let fail = true;
+    vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+      if (cmd === "set_font_prefs" && fail) {
+        calls.push([cmd, args]);
+        throw { code: "CredentialWriteFailed", message: "Unlock the system keyring to save" };
+      }
+      return baseInvoke(cmd, args);
+    });
+    mount();
+    const input = fontInput("界面字体");
+    fireEvent.change(input, { target: { value: "Retry Serif" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    await screen.findByRole("button", { name: "重试・界面字体" });
+    expect(useSettings.getState().config?.ui.font_sans).toBe("");
+    expect(localStorage.getItem("ws_font_sans")).toBe("Retry Serif");
+    expect(notification).toHaveBeenCalledWith(expect.any(String), expect.stringContaining("Unlock the system keyring"));
+    const firstOperation = fontPrefCalls()[0].operationId;
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试・界面字体" }));
+    await waitFor(() => expect(useSettings.getState().config?.ui.font_sans).toBe("Retry Serif"));
+    expect(fontPrefCalls()).toHaveLength(2);
+    expect(fontPrefCalls()[1].operationId).not.toBe(firstOperation);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试・界面字体" })).toBeNull());
+  });
+
 });

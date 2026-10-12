@@ -1,7 +1,7 @@
 // 子代理模型覆盖（[docs/subagents](../../../../docs/subagents.md)）：
 // 模型与供应商页一段独立的 `8 角色 × 模型下拉`复合容器——每个内置子代理角色（subagent 工具可委派集，
 // 后端 agents::DELEGABLE_ROLES 顺序，剔除内部 title）可单独指定模型，未指定 = 跟随父会话活跃模型。
-// 容器层只关心 UI 与 IPC 协调；持久化经 useSettings.save（settings store）做整份 ConfigState 覆盖式提交。
+// 容器层只关心 UI 与 IPC 协调；持久化经 settings store 的版本化单角色 patch，绝不提交整份配置。
 //
 // 关键约束：
 // - 只读角色用**前端静态映射**判定（READONLY_ROLES = 后端 agents 三个 readonly=true 的角色）。
@@ -11,7 +11,7 @@
 // - 「继承父会话」= UI 哨兵 `INHERIT_SENTINEL`（绝不可能撞 kebab-case wire id）；
 //   选中后内部翻译回 `null` 写 store（与后端 Option<model_id> 同形）。
 import { useEffect, useMemo, useState } from "react";
-import { App, Flex, Select, Tag } from "antd";
+import { App, Button, Flex, Select, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { useSettings } from "../../stores/settings";
@@ -38,7 +38,10 @@ export default function SubagentModelsPanel() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const config = useSettings((s) => s.config);
-  const save = useSettings((s) => s.save);
+  const setModel = useSettings((s) => s.setSubagentModel);
+  const pending = useSettings((s) => s.rolePending);
+  const errors = useSettings((s) => s.roleErrors);
+  const retry = useSettings((s) => s.roleRetry);
   // 后端 list_agents 已经按 DELEGABLE_ROLES 顺序返回；title 角色在 backend 那一侧剔除（agents::delegable）。
   const [agents, setAgents] = useState<AgentMeta[]>([]);
   // 拉一次：组件挂载时拉，子代理注册表变更需要重启应用生效（与 settings 全量刷新同语义）。
@@ -84,11 +87,9 @@ export default function SubagentModelsPanel() {
   /** 改覆盖：INHERIT_SENTINEL 翻译回 null 写 store；wire id 透传。 */
   async function handleChange(agentName: string, v: string) {
     if (!config) return;
-    const prev = config.subagent_models ?? {};
     const stored = v === INHERIT_SENTINEL ? null : v;
-    const next: Record<string, string | null> = { ...prev, [agentName]: stored };
     try {
-      await save({ ...config, subagent_models: next });
+      await setModel(agentName, stored);
     } catch {
       message.error(t("settings.subagentSaveFailed"));
     }
@@ -114,6 +115,9 @@ export default function SubagentModelsPanel() {
             <Select
               className="subagent-models-select w-wide"
               value={value}
+              disabled={!!pending[agent.name]}
+              loading={!!pending[agent.name]}
+              status={errors[agent.name] ? "error" : undefined}
               placeholder={t("settings.subagentInherit")}
               allowClear={false}
               onChange={(v) => void handleChange(agent.name, v)}
@@ -130,6 +134,15 @@ export default function SubagentModelsPanel() {
                 </Select.OptGroup>
               ))}
             </Select>
+            {errors[agent.name] && (
+              <div role="alert">
+                {errors[agent.name]}
+                <Button size="small" disabled={!!pending[agent.name]} onClick={() => {
+                  const value = retry[agent.name];
+                  if (value !== undefined) void handleChange(agent.name, value ?? INHERIT_SENTINEL);
+                }}>{t("common.retry")}</Button>
+              </div>
+            )}
           </div>
         );
       })}
