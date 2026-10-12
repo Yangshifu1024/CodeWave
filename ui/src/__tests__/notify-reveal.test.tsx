@@ -1,3 +1,4 @@
+import { configSnapshot } from "./configFixtures";
 // Notification click reveal regression tests (notification-click-reveal batch): in-app notification stack click-through + run:done unfocused notification carries the session
 // Covers: open tab jumps / closed tab reopens / deleted session falls back / toast does not jump / run:done notification carries sessionId
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -44,7 +45,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (cmd) {
       case "ping": return "pong";
       case "activate_and_show": return null;
-      case "get_config": return fixtureConfig;
+      case "get_config": return configSnapshot(fixtureConfig);
       case "list_sessions": return [sessionFixture];
       case "list_projects": return [];
       case "load_session": return fixtureMessages;

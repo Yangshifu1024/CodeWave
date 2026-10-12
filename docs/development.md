@@ -18,7 +18,7 @@
 - Linux（与 Ubuntu CI 同源）：安装 `cmake build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`。
 - Windows：VS Build Tools 的 MSVC 工具链、CMake、WebView2 Runtime、Rust、Node 与 pnpm。CI 的 CMake 安装命令见 [test.yml](../.github/workflows/test.yml)。
 - git2 使用源码构建的 libgit2，当前关闭默认 features，不要求另外安装系统 libgit2 或 libssh2。是否新增 SSH 依赖应回到 Cargo 配置核对。
-- Linux 的系统钥匙串功能依赖可用 Secret Service；无图形会话或 CI 中可能不可用，不能因此保证凭据从不明文落盘。
+- Linux 的系统钥匙串功能依赖可用 Secret Service；无图形会话或 CI 中可能不可用；此时新增/修改凭据安全失败，保留旧配置，不降级写明文。旧文件已有明文的启动迁移失败会明确告警，且禁止任何写入口重新复制明文。
 
 在仓库根执行：
 
@@ -72,7 +72,7 @@ Git 写操作默认由用户执行。批准计划仅覆盖计划明确列出的�
 - 应用名 `CodeWave`，bundle id `xyz.yangshifu.codewave`，keyring service `codewave.yangshifu.xyz`。Windows 安装器、通知与 AUMID 需要一致。
 - `.codewave` 名称在后端由 `MANAGED_DIR_NAME`、前端由 `utils/path.ts` 的同名常量复用；日志基本名由 logging 模块集中维护，禁止散落另一套品牌/路径常量。
 - 配置新增字段应有 serde 默认值；不要借小变更重新引入已删除的旧 schema 或旧品牌迁移。历史格式的明确只读兼容是专题契约，不能连带删除。
-- API key 的实际保存顺序是**配置先落盘，再迁入 keyring，成功后保存占位符**；迁移失败保留明文并记录警告。安全说明必须与 [SECURITY.md](../SECURITY.md) 和 [providers-and-network](./providers-and-network.md) 一致。
+- API key 保存经统一提交器先准备不可变 keyring 世代并回读校验，再原子替换仅含安全引用的配置；迁移或校验失败保留旧配置且返回明确错误，无新增明文降级。安全说明必须与 [SECURITY.md](../SECURITY.md) 和 [providers-and-network](./providers-and-network.md) 一致。
 - UI 文案走中英 i18n，键集合保持对称；非 React 上下文用 `i18n` 的 named export。源码解释性注释优先英文，字符串字面量、测试夹具、中文提示词不能机械翻译。
 - 公开交付前检查许可证、仓库链接、个人绝对路径、`.env`/密钥/日志和作者元数据。历史是否重写、仓库是否更换及相关 Git 操作由用户决定；不把旧开源计划当作持续授权。
 

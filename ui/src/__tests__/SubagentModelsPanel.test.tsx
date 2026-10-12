@@ -1,3 +1,4 @@
+import { configSnapshot, configSaved } from "./configFixtures";
 // 子代理模型覆盖面板测试（[docs/subagents](../../../docs/subagents.md)）：
 // 复合容器 = 8 角色 × 模型下拉。本文件以「纯组件」方式挂载 SubagentModelsPanel（不走 SettingsPage 整树）：
 // `shell.settings.test.tsx` 已示范 standalone + AntApp 包裹 + i18n 显式 import 的写法；
@@ -96,12 +97,16 @@ function withProviders(config: ConfigState): ConfigState {
   };
 }
 
-const savedCalls: ConfigState[] = [];
+const savedCalls: Array<{ role: string; modelId: string | null; expectedVersion: { boot_id: string; sequence: number }; operationId: string }> = [];
 
 async function baseInvoke(cmd: string, _args?: any) {
   switch (cmd) {
     case "list_agents": return JSON.parse(JSON.stringify(fixtureAgents));
-    case "save_config": savedCalls.push(JSON.parse(JSON.stringify(_args?.config))); return null;
+    case "set_subagent_model": {
+      savedCalls.push(_args);
+      const current = useSettings.getState().config!;
+      return configSaved({ ...current, subagent_models: { ...current.subagent_models, [_args.role]: _args.modelId } });
+    }
     default: return null;
   }
 }
@@ -123,13 +128,13 @@ afterEach(async () => {
   cleanup();
   (await invokeMock()).mockImplementation(baseInvoke);
   // module-level singletons reset：settings 镜像 + savedCalls 计数器
-  useSettings.setState({ config: null, loaded: false });
+  useSettings.setState({ config: null, snapshot: null, loaded: false, rolePending: {}, roleErrors: {}, roleRetry: {} });
   savedCalls.length = 0;
 });
 
 /** 加载 config 进 store，并 standalone 挂载组件 */
 function mountPanel(config: ConfigState) {
-  useSettings.setState({ config, loaded: true });
+  useSettings.setState({ config, snapshot: configSnapshot(config), loaded: true });
   return render(
     <AntApp>
       <SubagentModelsPanel />
@@ -220,10 +225,14 @@ describe("SubagentModelsPanel：8 行下拉与只读角色", () => {
     await pickOption("alpha-pro");
     await waitFor(() => expect(savedCalls.length).toBe(1));
     const sent = savedCalls[0];
-    expect(sent.subagent_models?.["backend-dev"]).toBe("m2");
-    expect(sent.subagent_models?.backend).toBe("m1");
-    expect(sent.providers).toEqual(config.providers);
-    expect(sent.active_model_id).toBe(config.active_model_id);
+    expect(sent.role).toBe("backend-dev");
+    expect(sent.modelId).toBe("m2");
+    expect(sent.expectedVersion).toEqual({ boot_id: "test-boot", sequence: 0 });
+    expect(sent.operationId).toEqual(expect.any(String));
+    expect(useSettings.getState().config?.subagent_models?.backend).toBe("m1");
+    expect(sent).not.toHaveProperty("config");
+    expect(useSettings.getState().config?.providers).toEqual(config.providers);
+    expect(useSettings.getState().config?.active_model_id).toBe(config.active_model_id);
   });
 
   it("改后端（含已存在的覆盖值）→ subagent_models[role]=新值，旧 role 的覆盖仍保留", async () => {
@@ -237,8 +246,11 @@ describe("SubagentModelsPanel：8 行下拉与只读角色", () => {
     await pickOption("alpha-pro");
     await waitFor(() => expect(savedCalls.length).toBe(1));
     const sent = savedCalls[0];
-    expect(sent.subagent_models?.["backend-dev"]).toBe("m2");
-    expect(sent.subagent_models?.["frontend-dev"]).toBe("m3");
+    expect(sent.role).toBe("backend-dev");
+    expect(sent.modelId).toBe("m2");
+    expect(sent.expectedVersion).toEqual({ boot_id: "test-boot", sequence: 0 });
+    expect(sent.operationId).toEqual(expect.any(String));
+    expect(useSettings.getState().config?.subagent_models?.["frontend-dev"]).toBe("m3");
   });
 
   it("只读角色 explore / reviewer / code-reviewer 显示「只读」Tag，其他角色不显示", async () => {
@@ -302,5 +314,30 @@ describe("SubagentModelsPanel：8 行下拉与只读角色", () => {
     }
     // 不该抛错、不该调 save
     expect(savedCalls.length).toBe(0);
+  });
+});
+
+describe("role patch feedback", () => {
+  it("disables a pending role, keeps the saved selection on error, and retries the requested value", async () => {
+    const config = withProviders(makeConfig({ subagent_models: { "backend-dev": "m1" } }));
+    let reject!: (error: unknown) => void;
+    const pending = new Promise((_, fail) => { reject = fail; });
+    const invoke = await invokeMock();
+    invoke.mockImplementation((cmd: string, args?: any) => cmd === "set_subagent_model" ? pending : baseInvoke(cmd, args));
+    mountPanel(config);
+    await waitFor(() => expect(rowRoleTexts()).toHaveLength(8));
+    await openSelect("backend-dev");
+    await pickOption("alpha-pro");
+    expect(rowSelectByRole("backend-dev").classList.contains("ant-select-disabled")).toBe(true);
+    expect(selectedDisplay("backend-dev")).toContain("alpha-fast");
+    reject({ code: "KeyringUnavailable", message: "keychain unavailable" });
+    await waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain("keychain unavailable"));
+    expect(selectedDisplay("backend-dev")).toContain("alpha-fast");
+    expect(rowSelectByRole("backend-dev").classList.contains("ant-select-disabled")).toBe(false);
+    invoke.mockImplementation(baseInvoke);
+    const retry = Array.from(document.querySelectorAll('[role="alert"] button')).find((button) => button.textContent?.replace(/\s/g, "").includes("重试"));
+    fireEvent.click(retry!);
+    await waitFor(() => expect(selectedDisplay("backend-dev")).toContain("alpha-pro"));
+    expect(savedCalls[0].modelId).toBe("m2");
   });
 });

@@ -7,10 +7,10 @@
 //! （core 层不能依赖 tauri）。
 
 use super::util::{Core, err};
-use crate::core::agent::{AgentCore, SessionRuntime};
+use crate::core::agent::AgentCore;
 use crate::mcp::{
-    ConfigIssue, McpServerConfig, McpTransport, MergedServer, PoolKey, Scope, ScopeDoc, ScopeRef,
-    global_scope, load_scope, merge_scopes, project_scope,
+    ConfigIssue, McpTransport, MergedServer, Scope, ScopeDoc, ScopeRef, global_scope, load_scope,
+    merge_scopes, project_scope, visible_servers,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -45,35 +45,15 @@ fn scope_ref(core: &AgentCore, session_id: Option<&str>, scope: Scope) -> Result
         Scope::Project => {
             let sid = session_id.ok_or("项目级 MCP 配置需要 session_id")?;
             let rt = core.session(sid).ok_or("会话不存在")?;
+            if rt.zombie.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("会话已关闭".into());
+            }
             rt.project_dir
                 .as_deref()
                 .map(project_scope)
                 .ok_or_else(|| "当前会话没有项目目录，无法读写项目级 MCP 配置".to_string())
         }
     }
-}
-
-/// 会话可见集：全局 ∪ 项目（同名项目级胜出），剔除 `enabled: false`。
-fn visible_servers(rt: &SessionRuntime) -> Vec<(PoolKey, McpServerConfig)> {
-    let g = load_scope(&global_scope(&rt.data_dir));
-    let p = rt
-        .project_dir
-        .as_deref()
-        .map(|pd| load_scope(&project_scope(pd)));
-    merge_scopes(&g, p.as_ref())
-        .into_iter()
-        .filter(|m| m.cfg.enabled)
-        .map(|m| {
-            let key = match m.source {
-                Scope::Project => match &rt.project_id {
-                    Some(id) => PoolKey::project(id.clone(), m.name.clone()),
-                    None => PoolKey::global(m.name.clone()),
-                },
-                Scope::Global => PoolKey::global(m.name.clone()),
-            };
-            (key, m.cfg)
-        })
-        .collect()
 }
 
 /// 单条 server 的结构化视图（前端表单与状态表共用）。
@@ -135,6 +115,7 @@ pub struct McpConfigDocPayload {
     path: String,
     /// 该层 mcp.json 原文（前端编辑用；不存在则为空文档）
     json: String,
+    version: String,
     /// 该层文件里的条目（用于编辑）
     servers: Vec<McpServerView>,
     /// 合并后的生效条目（带来源 / 被覆盖信息）
@@ -148,6 +129,7 @@ fn doc_payload(sref: &ScopeRef, doc: &ScopeDoc, effective: &[MergedServer]) -> M
         scope: sref.scope.as_str().to_string(),
         path: sref.path.display().to_string(),
         json: doc.raw.clone(),
+        version: crate::mcp::scope_version(&doc.raw),
         servers: doc
             .servers
             .iter()
@@ -195,45 +177,21 @@ pub async fn mcp_list_config(
 ///
 /// 结构校验走**与运行时同一套规则**（先把文本按正常装载路径解析一遍），
 /// 只要存在 error 级问题就**不落盘**并原样返回问题清单（不静默改写用户文件）。
-/// 落盘后只重载受影响连接：全停再按各会话的新可见集重连，其它会话不受牵连。
+/// 落盘后差量接纳受影响连接的应用计划；Ready/Error 通过事件与快照异步收敛。
 #[tauri::command]
 pub async fn mcp_save_config(
     core: Core<'_>,
     session_id: Option<String>,
     scope: String,
     json: String,
-) -> Result<Value, String> {
+    expected_version: String,
+) -> Result<crate::mcp::SaveReceipt, String> {
     let scope = Scope::parse(&scope).map_err(err)?;
-    let sref = scope_ref(&core, session_id.as_deref(), scope)?;
-    serde_json::from_str::<Value>(&json).map_err(|e| format!("JSON 无效：{e}"))?;
-
-    let tmp = sref.path.with_extension("mcp.validate.json");
-    std::fs::write(&tmp, json.as_bytes()).map_err(err)?;
-    let probe = load_scope(&ScopeRef {
-        scope: sref.scope,
-        path: tmp.clone(),
-    });
-    let _ = std::fs::remove_file(&tmp);
-
-    let blocking = probe
-        .issues
-        .iter()
-        .any(|i| matches!(i.level, crate::mcp::IssueLevel::Error));
-    if blocking {
-        return Ok(serde_json::json!({ "saved": false, "issues": probe.issues }));
-    }
-    if let Some(parent) = sref.path.parent() {
-        std::fs::create_dir_all(parent).map_err(err)?;
-    }
-    crate::util::atomic::atomic_write(&sref.path, json.as_bytes()).map_err(err)?;
-
-    core.mcp.disconnect_all().await;
-    let http = core.client.read().unwrap().clone();
-    for entry in core.sessions.iter() {
-        let rt = entry.value().clone();
-        core.mcp.warm(&rt.id, visible_servers(&rt), http.clone());
-    }
-    Ok(serde_json::json!({ "saved": true, "issues": probe.issues }))
+    let source = scope_ref(&core, session_id.as_deref(), scope)?;
+    wire_sink(&core).await;
+    crate::mcp::save_configuration(&core, &source, &json, &expected_version)
+        .await
+        .map_err(err)
 }
 
 /// 连接该会话可见集里的 MCP server（并行建连，立即返回；状态走事件）。
@@ -248,19 +206,14 @@ pub async fn mcp_connect(
     let rt = core.session(&session_id).ok_or("会话不存在")?;
     wire_sink(&core).await;
     let http = core.client.read().unwrap().clone();
+    let _commit = crate::mcp::CONFIG_COMMIT.lock().await;
+    if core.session(&session_id).is_none() || rt.zombie.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("会话已关闭".into());
+    }
     let visible = visible_servers(&rt);
     match names {
-        None => core.mcp.warm(&rt.id, visible, http),
-        Some(names) => {
-            for (key, cfg) in visible.into_iter().filter(|(k, _)| names.contains(&k.name)) {
-                let mcp = core.mcp.clone();
-                let sid = rt.id.clone();
-                let http = http.clone();
-                tokio::spawn(async move {
-                    let _ = mcp.ensure(&key, cfg, http, &sid).await;
-                });
-            }
-        }
+        None => core.mcp.warm(&rt.id, visible, http).await,
+        Some(names) => core.mcp.connect_named(&rt.id, visible, &names, http).await,
     }
     Ok(())
 }
@@ -295,12 +248,16 @@ pub async fn mcp_reconnect(core: Core<'_>, session_id: String, name: String) -> 
     let http = core.client.read().unwrap().clone();
     let target = visible_servers(&rt)
         .into_iter()
-        .find(|(k, _)| k.name == name)
+        .find(|(key, _)| key.name == name)
         .ok_or_else(|| format!("会话可见集里没有名为 {name} 的 server"))?;
+    core.mcp.disconnect(&target.0, &rt.id).await;
+    let _commit = crate::mcp::CONFIG_COMMIT.lock().await;
+    if rt.zombie.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("会话已关闭".into());
+    }
     core.mcp
-        .ensure(&target.0, target.1, http, &rt.id)
-        .await
-        .map_err(err)?;
+        .connect_named(&rt.id, visible_servers(&rt), &[name], http)
+        .await;
     Ok(())
 }
 
@@ -311,16 +268,12 @@ pub async fn mcp_test(
     session_id: Option<String>,
     scope: String,
     name: String,
+    config: Value,
 ) -> Result<Value, String> {
     let scope = Scope::parse(&scope).map_err(err)?;
-    let sref = scope_ref(&core, session_id.as_deref(), scope)?;
-    let doc = load_scope(&sref);
-    let cfg = doc
-        .servers
-        .iter()
-        .find(|(n, _)| n == &name)
-        .map(|(_, c)| c.clone())
-        .ok_or_else(|| format!("配置里没有名为 {name} 的 server"))?;
+    // Validate project context but never read any on-disk server or change pool membership.
+    let _ = scope_ref(&core, session_id.as_deref(), scope)?;
+    let cfg = crate::mcp::validate_server(&name, config).map_err(err)?;
     let http = core.client.read().unwrap().clone();
     Ok(
         match crate::mcp::McpManager::test_connection(cfg, http).await {
