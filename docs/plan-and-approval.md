@@ -150,4 +150,4 @@ preview 技能只用于已有成型对象，界面示意须标“示意稿 · �
 
 还需补齐文本 ask 的双向契约测试：`text_ask.rs` 的 `MAX_QUESTIONS/MAX_OPTIONS` 与 AskTool schema 的 `maxItems` 目前双写 5/6；当前四档 `ApprovalMode` 的 serde 名与 schema enum 也须成套比对。现有单一 `full_access` 解析用例不能替代这两类等价断言。
 
-尚需专门验收：真实多步 provider 驱动下的根档位变化到下一子代理 step 工具集变化、生产计划任务档位入口，以及子 step 的 approval_mode 后端事件断言。普通 ask 有效回答切档与完整批准 gate 的边界、single 缺省的前后端差异也应纳入端到端测试。GUI 按[测试指南](./testing.md)交手动清单，不把历史“测试全绿”数量当成本次验证。
+计划任务运行偏好与身份已有 `core::scheduler::tests::task_runtime_prefs_and_identity_are_explicit` 自动回归，本次三平台通过记录见[测试指南](./testing.md#可靠性修复自动验证记录2026-10-12)。尚需专门验收：真实多步 provider 驱动下的根档位变化到下一子代理 step 工具集变化、计划任务的应用端到端入口，以及子 step 的 approval_mode 后端事件断言。普通 ask 有效回答切档与完整批准 gate 的边界、single 缺省的前后端差异也应纳入端到端测试。GUI 按[测试指南](./testing.md)交手动清单，不把历史“测试全绿”数量当成本次验证。

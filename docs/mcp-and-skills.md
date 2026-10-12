@@ -113,7 +113,7 @@ MCP 的重点是行为序列而非截图：两作用域同名覆盖、名称碰�
 
 R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价配置与其它项目/shared key 身份不变、同项目 id 异路径、会话释放与迟到 queued-connect、schema/来源变更票据失效、始终允许合并未知字段、已发出调用有界排空且不重放、probe 在初始化/tools-list 阶段取消后的进程回收、UI 精确草稿载荷/单飞/慢旧快新/关闭重开/保存版本及状态代数隔离。
 
-本轮 Linux 云环境可运行前端针对性 Vitest、TypeScript 和独立 headless 核心测试（包含真实 Node stdio/HTTP fixture）。Tauri 完整后端门禁仍受缺失 GLib/GTK/WebKit/DBus 系统依赖阻塞；headless 结果不证明 IPC 宏/宿主链接或三平台 GUI 已验证。最终完整门禁与测试数以本次交付记录为准。
+`v0.11.0` 对应提交的完整三平台 CI 已通过，包含真实 Node stdio/HTTP fixture 与宿主后端测试；各平台结果和跳过边界见[自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本地 Linux 云环境仍缺 GLib/GTK/WebKit/DBus 等系统依赖，不能写成本地完整门禁通过，也不能将 CI/headless 结果写成 GUI 已验收。会话释放进程树回收已有三平台自动证据；初始化/tools-list 期间 probe 取消回收为 Unix 专属测试，Windows 对应边界仍待补验。
 
 手工清单（尚未执行）：
 1. A/B 两项目与临时会话共用 global MCP，B 发起长 echo 时保存 A 私有配置；B/global pid 与工具保持不变。
@@ -121,4 +121,4 @@ R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价�
 3. 编辑已保存可用命令为不存在的命令，不保存直接测试应失败；取消后正式连接保持原 pid。新建/重命名草稿也能测试。
 4. 慢 probe 期间改字段、关闭重开或切换会话；旧成功不得出现。关闭后按预算检查临时进程归零。
 5. 两编辑器交错保存，以及设置保存与“始终允许”交错；冲突保留草稿，允许补丁不覆盖新 endpoint 或其它字段。
-6. Windows Job Object 与 Unix 进程组回收分别验收，不能从 Linux 子进程测试外推 Windows。
+6. 在应用内分别验 Windows Job Object 与 Unix 进程组回收，尤其是初始化/tools-list 期间取消 probe；三平台会话释放回归通过不等于 Windows 已覆盖 Unix 专属 probe 取消用例。
