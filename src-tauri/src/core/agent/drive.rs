@@ -17,7 +17,7 @@ use crate::core::sessions::repair;
 use crate::core::types::Message;
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, ProviderError};
 use crate::provider::retry;
-use crate::tools::batch::execute_batch;
+use crate::tools::batch::execute_batch_with_claim_lease;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -828,7 +828,13 @@ pub async fn drive_agent(
     *rt.active_cancel.lock().unwrap() = Some(run_token.clone());
     // 非主 runtime（子代理/任务运行）：文件写认领随 drive 生命周期——
     // 正常结束与 panic unwind 都经 Drop 释放（[docs/subagents]）
-    let _claims = (!params.main_session).then(|| crate::tools::claims::ReleaseGuard::arm(&rt.id));
+    let claims = crate::tools::claims::requires_file_claim(rt)
+        .then(|| Arc::new(crate::tools::claims::ReleaseGuard::arm(&rt.id)));
+    // Runtime identity is authoritative for claim ownership, even if a caller
+    // accidentally constructs inconsistent orchestration parameters.
+    if params.main_session != rt.is_main_session {
+        tracing::warn!(runtime = %rt.id, "drive/runtime main-session identity mismatch");
+    }
 
     // 64ms 流式刷新 ticker（无通道注册时帧被静默丢弃）
     let flush_stop = CancellationToken::new();
@@ -1334,6 +1340,7 @@ pub async fn drive_agent(
             &run_token,
             run_id,
             last_step,
+            claims.clone(),
         )
         .await;
         if let Some(items) = batch_suggest {
@@ -1896,9 +1903,10 @@ async fn run_tool_batch(
     run_token: &CancellationToken,
     run_id: &str,
     last_step: bool,
+    claim_lease: Option<Arc<crate::tools::claims::ReleaseGuard>>,
 ) -> (Option<Vec<String>>, bool, Vec<CallSig>) {
     let mut results = synth_results;
-    let batch_out = execute_batch(
+    let batch_out = execute_batch_with_claim_lease(
         core,
         rt,
         calls,
@@ -1907,6 +1915,7 @@ async fn run_tool_batch(
         params.main_session,
         run_token.clone(),
         run_id,
+        claim_lease,
     )
     .await;
     results.extend(batch_out.results);
@@ -2001,7 +2010,11 @@ pub async fn run_task_agent(
         .lock()
         .unwrap()
         .push(Message::user_text(task.instruction.clone()).stamped());
-    let run_id = format!("task_{}", task.id);
+    let run_id = task
+        .active_run
+        .as_ref()
+        .map(|run| run.run_id.clone())
+        .unwrap_or_else(|| rt.id.clone());
     let (result, usage, _) = drive_agent(&core, &rt, params, &run_id).await;
     // 任务结果剥离 <report> 包裹（标记只用于收尾判定，不进入任务日志与通知）
     (

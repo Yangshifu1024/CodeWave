@@ -12,6 +12,7 @@ import {
   normalizeMcpDoc,
   parseMcpDoc,
   serializeMcpDoc,
+  serializeMcpServer,
   transportIsExplicit,
   type McpServerDraft,
 } from "../utils/mcpConfig";
@@ -94,7 +95,7 @@ describe("args 表格化：含空格参数不再被拆坏", () => {
 
   it("往返后含空格参数完整保留（旧实现会拆成两个参数）", () => {
     const out = roundTrip(raw) as any;
-    expect(out.mcpServers.fs.args).toEqual(["-y", "pkg", "D:/我的 项目/dir"]);
+    expect(out.mcpServers.fs.args).toEqual(["-y", "pkg", "D:/我的 项目/dir", ""]);
   });
 });
 
@@ -125,11 +126,12 @@ describe("env / headers 表格化：值不被 trim", () => {
     expect(out.mcpServers.fs.headers).toEqual({ Authorization: "Bearer abc def" });
   });
 
-  it("键为空的行被丢弃（点了「＋」没填的行）", () => {
+  it("只有全空行可丢弃，有值但无键时阻止保存与测试", () => {
     const d = doc('{"mcpServers":{"fs":{"command":"x"}}}');
     d.servers[0].env = [{ key: "  ", value: "v" }, { key: "K", value: "v" }];
-    const out = JSON.parse(serializeMcpDoc(d)) as any;
-    expect(out.mcpServers.fs.env).toEqual({ K: "v" });
+    expect(() => serializeMcpDoc(d)).toThrow("settings.mcpInvalidRows");
+    d.servers[0].env[0].value = "";
+    expect(JSON.parse(serializeMcpDoc(d)).mcpServers.fs.env).toEqual({ K: "v" });
   });
 });
 
@@ -201,11 +203,10 @@ describe("字段往返", () => {
     expect(out.mcpServers.a.timeoutMs).toBeUndefined();
   });
 
-  it("非数字超时被忽略（不写入非法值）", () => {
+  it("非法超时被拒绝，不静默删除", () => {
     const d = doc('{"mcpServers":{"a":{"command":"x"}}}');
     d.servers[0].timeoutMs = "abc";
-    const out = JSON.parse(serializeMcpDoc(d)) as any;
-    expect(out.mcpServers.a.timeout_ms).toBeUndefined();
+    expect(() => serializeMcpDoc(d)).toThrow("settings.mcpInvalidTimeout");
   });
 
   it("read_only / always_allow 往返（含 camelCase 读入）", () => {
@@ -239,11 +240,10 @@ describe("字段往返", () => {
     expect(out.mcpServers.a.env).toBeUndefined();
   });
 
-  it("未命名条目被跳过（与旧行为一致）", () => {
+  it("未命名条目阻止保存", () => {
     const d = doc('{"mcpServers":{"a":{"command":"x"}}}');
     d.servers.push({ ...emptyDraft(), name: "   " });
-    const out = JSON.parse(serializeMcpDoc(d)) as any;
-    expect(Object.keys(out.mcpServers)).toEqual(["a"]);
+    expect(() => serializeMcpDoc(d)).toThrow("settings.mcpInvalidName");
   });
 });
 
@@ -272,4 +272,33 @@ describe("draftTransport / emptyDraft", () => {
     expect(d.args).toEqual([]);
     expect(d.extra).toEqual({});
   });
+});
+
+
+describe("draft probe serialization", () => {
+  it("uses exactly the same complete entry as persistence", () => {
+    const draft = doc(JSON.stringify({ mcpServers: { local: {
+      transport: "stdio", command: "node", args: ["path with spaces", "", "a\nb"],
+      env: { TOKEN: " secret\nvalue " }, headers: { Authorization: " private\nvalue " },
+      cwd: "a path", timeout_ms: 1200, enabled: false, read_only: true,
+      always_allow: true, tools: { mode: "deny", list: ["write_*"] }, custom: { nested: true },
+    } } }));
+    expect(serializeMcpServer(draft.servers[0])).toEqual(JSON.parse(serializeMcpDoc(draft)).mcpServers.local);
+  });
+  it("rejects duplicate names and duplicate rows instead of overwriting", () => {
+    const draft = doc('{"mcpServers":{"a":{"command":"node"}}}');
+    draft.servers.push({ ...draft.servers[0] });
+    expect(() => serializeMcpDoc(draft)).toThrow("settings.mcpDuplicateName");
+    draft.servers.pop();
+    draft.servers[0].env = [{ key: "TOKEN", value: "one" }, { key: " TOKEN ", value: "two" }];
+    expect(() => serializeMcpServer(draft.servers[0])).toThrow("settings.mcpInvalidRows");
+  });
+});
+
+
+it("an unchanged HTTP draft does not synthesize an empty command", () => {
+  const parsed = doc('{"mcpServers":{"http":{"url":"https://example.test/mcp"}}}');
+  expect(serializeMcpServer(parsed.servers[0])).not.toHaveProperty("command");
+  const explicit = doc('{"mcpServers":{"http":{"url":"https://example.test/mcp","command":""}}}');
+  expect(serializeMcpServer(explicit.servers[0])).toHaveProperty("command", "");
 });

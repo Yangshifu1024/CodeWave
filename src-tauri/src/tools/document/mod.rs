@@ -13,11 +13,14 @@ pub mod backup;
 pub mod docx;
 pub mod edit;
 pub mod edit_word;
+#[cfg(test)]
+pub(crate) mod faults;
 pub mod formula;
 pub mod patch;
 pub mod pdf;
 pub mod read;
 pub mod sheet_edit;
+pub mod transaction;
 pub mod workbook;
 pub mod write;
 pub mod write_word;
@@ -26,3 +29,6 @@ pub mod xml_util;
 
 #[cfg(test)]
 mod faithful_spike;
+
+#[cfg(test)]
+mod reliability_tests;

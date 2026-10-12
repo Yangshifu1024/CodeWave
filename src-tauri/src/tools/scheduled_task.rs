@@ -36,7 +36,7 @@ impl Tool for ScheduledTaskTool {
         "scheduled_task"
     }
     fn description(&self) -> &'static str {
-        "管理「稍后在隔离上下文中运行你（agent）」的定时任务。action=create {name, instruction, schedule}；action=list；action=delete {id}。计划语法：'cron:<5 字段>'（如 cron:0 9 * * *）、'every:<n> <m|h|d>'（如 every:30 m）或 'once:<RFC3339>'。任务为进程本地（应用重启后清除）且串行运行。"
+        "管理「稍后在隔离上下文中运行你（agent）」的定时任务。action=create {name, instruction, schedule}；action=list；action=delete {id}。计划语法：'cron:<5 字段>'（如 cron:0 9 * * *）、'every:<n> <m|h|d>'（如 every:30 m）或 'once:<RFC3339>'。项目任务保存成功后可跨重启恢复；自由会话任务仅当前进程有效。任务串行运行。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -97,22 +97,27 @@ impl Tool for ScheduledTaskTool {
                     project_id: ctx.rt.project_id.clone(),
                     enabled: true,
                     runs: Vec::new(),
+                    active_run: None,
+                    persistence_error: None,
                 };
-                ctx.core.tasks.upsert(task.clone()).await;
-                ToolOutcome::ok(json!({ "created": task }))
+                match ctx.core.tasks.upsert(task).await {
+                    Ok(created) => ToolOutcome::ok(json!({ "created": created })),
+                    Err(error) => ToolOutcome::err("E_PERSIST", error),
+                }
             }
             "list" => {
                 let list = ctx.core.tasks.list().await;
                 ToolOutcome::ok(json!({ "tasks": list, "count": list.len(),
-                    "note": "挂项目的任务已持久化（重启恢复）；自由会话任务仍为进程本地" }))
+                    "note": "项目任务跨重启保存；persistence_error 表示结果尚未保存。自由会话任务仅当前进程有效" }))
             }
             "delete" => {
                 let Some(id) = args.id else {
                     return ToolOutcome::err("E_ARGS", "delete 需要 id");
                 };
                 match ctx.core.tasks.remove(&id).await {
-                    Some(_) => ToolOutcome::ok(json!({ "deleted": id })),
-                    None => ToolOutcome::err("E_NOT_FOUND", format!("任务不存在：{id}")),
+                    Ok(Some(_)) => ToolOutcome::ok(json!({ "deleted": id })),
+                    Ok(None) => ToolOutcome::err("E_NOT_FOUND", format!("任务不存在：{id}")),
+                    Err(error) => ToolOutcome::err("E_PERSIST", error),
                 }
             }
             other => ToolOutcome::err("E_ARGS", format!("未知 action：{other}")),

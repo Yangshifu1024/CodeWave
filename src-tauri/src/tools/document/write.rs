@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use umya_spreadsheet::Worksheet;
 
-use super::xlsx;
+use super::{transaction, xlsx};
 
 /// 单次生成的工作表数量上限。
 const MAX_SHEETS: usize = 20;
@@ -79,9 +79,10 @@ fn kind_of(path: &str) -> Option<Kind> {
 fn write_word(
     ctx: &ToolCtx,
     args: &Args,
-    resolved: &std::path::Path,
+    target: &transaction::LockedTarget,
     spec: &super::write_word::DocxSpec,
 ) -> ToolOutcome {
+    let resolved = &target.path;
     if !args.sheets.is_empty() {
         return ToolOutcome::err("E_ARGS", "sheets 只用于表格；Word 文档请用 docx 字段。");
     }
@@ -89,8 +90,8 @@ fn write_word(
         Ok(b) => b,
         Err(e) => return ToolOutcome::err("E_ARGS", e),
     };
-    if let Err(e) = crate::util::atomic::atomic_write(resolved, &bytes) {
-        return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
+    if let Err(e) = target.create_new(&bytes, &ctx.cancel) {
+        return e.outcome();
     }
     if !ctx.rt.is_task_runtime {
         let owner = ctx
@@ -324,17 +325,7 @@ impl Tool for WriteDocumentTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
-        if resolved.exists() {
-            return ToolOutcome::err(
-                "E_EXISTS",
-                format!(
-                    "{} 已经存在。要修改已有文件请用 edit_document（它能保住原有图表等），或换一个文件名。",
-                    args.path
-                ),
-            );
-        }
-
-        if ctx.rt.root_session_id.is_none()
+        if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
         {
@@ -343,10 +334,42 @@ impl Tool for WriteDocumentTool {
                 crate::tools::claims::denial_message(&conflicts),
             );
         }
+        let target =
+            match transaction::LockedTarget::acquire(&roots, &resolved, Some(&ctx.cancel)).await {
+                Ok(target) => target,
+                Err(e) => return e.outcome(),
+            };
+        let resolved = &target.path;
+        match std::fs::symlink_metadata(resolved) {
+            Ok(_) => {
+                return ToolOutcome::err(
+                    "E_EXISTS",
+                    format!(
+                        "{} 已经存在；修改请用 edit_document / File already exists",
+                        args.path
+                    ),
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return ToolOutcome::err(
+                    "E_IO",
+                    format!("无法检查目标 / Cannot inspect target: {e}"),
+                );
+            }
+        }
+        if let Some(parent) = resolved.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return ToolOutcome::err(
+                "E_IO",
+                format!("创建目录失败 / Cannot create directory: {e}"),
+            );
+        }
 
         if kind == Kind::Word {
             let spec = args.docx.as_ref().expect("上面已校验过");
-            return write_word(ctx, &args, &resolved, spec);
+            return write_word(ctx, &args, &target, spec);
         }
 
         let mut book = umya_spreadsheet::new_file();
@@ -395,8 +418,8 @@ impl Tool for WriteDocumentTool {
             Ok(b) => b,
             Err(e) => return ToolOutcome::err("E_IO", format!("读取生成结果失败：{e}")),
         };
-        if let Err(e) = crate::util::atomic::atomic_write(&resolved, &bytes) {
-            return ToolOutcome::err("E_IO", format!("写入 {} 失败：{e}", args.path));
+        if let Err(e) = target.create_new(&bytes, &ctx.cancel) {
+            return e.outcome();
         }
 
         // 产物登记（子代理归属主会话；任务 runtime 跳过；失败仅记日志）
@@ -406,7 +429,7 @@ impl Tool for WriteDocumentTool {
                 .root_session_id
                 .clone()
                 .unwrap_or_else(|| ctx.rt.id.clone());
-            let canonical = pathutil::canonical_best_effort(&resolved)
+            let canonical = pathutil::canonical_best_effort(resolved)
                 .to_string_lossy()
                 .into_owned();
             if let Err(e) = ctx.core.store.append_artifact(

@@ -96,15 +96,7 @@ pub fn run() {
         .manage(channels.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
-            let mut cfg = ConfigState::load();
-            // keyring 迁移（[docs/technical-design](../../docs/technical-design.md)）：明文 key 迁入系统钥匙串；失败保留明文
-            let (changed, warn) = host::keyring::migrate(&mut cfg);
-            if let Some(w) = warn {
-                tracing::warn!("keyring 迁移未完成：{w}");
-            }
-            if changed {
-                let _ = cfg.save();
-            }
+            let cfg = ConfigState::load();
             // 日志级别跟随 config（RUST_LOG 环境变量在场时优先）+ 过期滚动日志清理（[docs/sessions-and-projects](../../docs/sessions-and-projects.md)）
             core::logging::apply_config_level(&cfg.log.level);
             core::logging::prune_expired_logs();
@@ -170,6 +162,25 @@ pub fn run() {
                 core::sessions::interrupt::InterruptWatchSink::new(tauri_sink, store.clone()),
             );
             let core = Arc::new(AgentCore::new(cfg, sink, store, client, data_dir.clone()));
+            // Complete startup recovery before exposing any model snapshots. I/O stays on the
+            // blocking pool and uses exactly the same commit protocol as all later writers.
+            let startup_core = core.clone();
+            if tauri::async_runtime::block_on(tauri::async_runtime::spawn_blocking(move || {
+                if let Err(e) = startup_core.config_commits.recover() {
+                    startup_core.config_commits.warn(&e.to_string());
+                }
+                let has_plain = startup_core.cfg.read().unwrap().providers.iter().any(|p|
+                    p.keys.iter().any(|k| !k.is_empty() && k != crate::core::config::KEYRING_PLACEHOLDER));
+                if has_plain && startup_core.commit_config(
+                    crate::core::config_commit::ConfigPatch::SecureExisting,
+                    &uuid::Uuid::new_v4().to_string(),
+                ).is_err() {
+                    startup_core.config_commits.warn("Existing configuration contains credentials that are not securely stored. Unlock the system keyring and retry. No new plaintext copy was written");
+                }
+            })).is_err() {
+                core.config_commits.warn("Credential startup recovery did not complete; review settings before saving");
+            }
+
             // supervisor 在 tauri async runtime 上启动（setup 同步上下文不能直接 tokio::spawn）
             // shell 探测预热（探测含子进程 spawn，后台执行不阻塞启动；PROBED 缓存后零开销）：
             // setup 同步上下文不能直接 tokio::spawn，走 tauri::async_runtime（踩坑清单）
@@ -394,6 +405,8 @@ pub fn run() {
             host::commands::stop_service,
             host::commands::list_services,
             host::commands::set_font_prefs,
+            host::commands::set_subagent_model,
+            host::commands::get_config_operation,
             host::commands::mcp_list_config,
             host::commands::mcp_save_config,
             host::commands::mcp_connect,
@@ -409,6 +422,7 @@ pub fn run() {
             host::commands::delete_skill,
             host::commands::list_workspace_dir,
             host::commands::list_scheduled_tasks,
+            host::commands::list_scheduled_task_diagnostics,
             host::commands::create_scheduled_task,
             host::commands::delete_scheduled_task,
             host::commands::update_scheduled_task,
