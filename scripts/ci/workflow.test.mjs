@@ -57,6 +57,18 @@ test("Dependabot groups only minor/patch version updates in each existing ecosys
     assert.match(entry, /applies-to: version-updates/);
     assert.match(entry, /patterns: \["\*"\]/);
     assert.match(entry, /update-types: \[minor, patch\]/);
-    assert.doesNotMatch(entry, /ignore:|major|security-updates/);
+    assert.doesNotMatch(entry, /major|security-updates/);
+    if (entry.startsWith("npm\n")) {
+      // Only the TS 7 compatibility hold is allowed; TS 6 and other dependencies stay enabled.
+      const ignore = /^    ignore:\n([\s\S]*?)(?=^    \S)/m.exec(entry)?.[1];
+      assert.ok(ignore);
+      assert.equal(
+        ignore.replace(/^\s*#.*\n/gm, ""),
+        '      - dependency-name: typescript\n        versions: [">=7.0.0 <8.0.0"]\n',
+      );
+      assert.equal(entry.match(/^    ignore:/gm)?.length, 1);
+    } else {
+      assert.doesNotMatch(entry, /ignore:/);
+    }
   }
 });
