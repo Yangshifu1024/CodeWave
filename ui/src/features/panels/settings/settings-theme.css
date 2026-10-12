@@ -424,11 +424,15 @@
   border-radius: 10px;
   background: var(--ws-bg-main);
 }
-.settings-theme-root .settings-provider-section { margin-bottom: 0; }
+/* providers section 的视觉外壳由外层 grid 承担（每张 provider 卡 = antd Card），
+   但 section 与下一个 section 之间仍需保留 32px section-gap，避免「Subagent Models
+   标题顶到上方 provider 卡片底边」的双重抹零回归。section 自身不再抹零（line 170 默认
+   32px）；section-card 显式声明 margin-bottom 覆盖 :last-child 抹零（line 196）。 */
 .settings-theme-root .settings-provider-section > .settings-section-card {
   padding: 0;
   border: 0;
   background: transparent;
+  margin-bottom: var(--settings-section-gap);
 }
 .settings-theme-root .settings-provider-list { min-width: 0; }
 .settings-theme-root .settings-provider-cards {
