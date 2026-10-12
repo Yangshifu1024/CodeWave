@@ -6,6 +6,7 @@ import { Alert, Button, Spin } from "antd";
 import { ipc } from "../../ipc/client";
 
 type PdfDoc = import("pdfjs-dist").PDFDocumentProxy;
+type PdfLoadingTask = import("pdfjs-dist").PDFDocumentLoadingTask;
 
 /** 已按当前语言组装好的文案（渲染失败要带具体原因）。 */
 export interface PdfLabels {
@@ -41,21 +42,31 @@ export default function PdfView({
 
   useEffect(() => {
     let cancelled = false;
-    let loaded: PdfDoc | null = null;
+    let loadingTask: PdfLoadingTask | null = null;
+    const destroyLoadingTask = () => {
+      const task = loadingTask;
+      loadingTask = null;
+      // The loading task owns the worker, including while loading is pending.
+      void task?.destroy().catch((error: unknown) => {
+        console.warn("Failed to destroy PDF loading task", error);
+      });
+    };
     setLoading(true);
     setError("");
     setDoc(null);
     setPage(1);
     (async () => {
-      const pdfjs = await import("pdfjs-dist");
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       // worker 走 ?url：vite 会把 node_modules 里的 worker 脚本打进产物并给同源相对路径，
       // 运行时零下载（本应用不依赖任何外部 CDN，产物自包含）。
-      const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+      const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
+      if (cancelled) return;
       pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
       const chunks: Uint8Array[] = [];
       let offset = 0;
       for (;;) {
         const c = await ipc.readFileChunk(sessionId, path, offset);
+        if (cancelled) return;
         chunks.push(base64ToBytes(c.content));
         offset += c.length;
         if (c.eof || c.length === 0) break;
@@ -67,22 +78,20 @@ export default function PdfView({
         data.set(c, at);
         at += c.length;
       }
-      const d = await pdfjs.getDocument({ data }).promise;
-      loaded = d;
-      if (cancelled) {
-        void d.destroy();
-        return;
-      }
+      loadingTask = pdfjs.getDocument({ data });
+      const d = await loadingTask.promise;
+      if (cancelled) return;
       setDoc(d);
       setLoading(false);
     })().catch((e: unknown) => {
+      destroyLoadingTask();
       if (cancelled) return;
       setError(String(e));
       setLoading(false);
     });
     return () => {
       cancelled = true;
-      void loaded?.destroy();
+      destroyLoadingTask();
     };
   }, [sessionId, path]);
 

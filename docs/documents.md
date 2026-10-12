@@ -88,6 +88,10 @@ edit_document 对修改公式走[保守求值器](../src-tauri/src/tools/documen
 
 [read_for_preview](../src-tauri/src/tools/document/read.rs) 复用 read_document，不另建一套解析器。表格用行窗口化 + 工作表选择；Word 是 markdown 文本投影，不能当 Word 排版保真预览；PDF 用 pdfjs 动态加载，worker 随 Vite 产物同源分发，运行时不联网下载。
 
+PDF 预览使用 PDF.js 6 的 `legacy` 主库与同版本 `legacy` worker。上游兼容版支持基线为 Chromium 125+ / Safari 18+（Safari 为部分支持，仍有个别渲染差异）；对应 WebView 也必须满足该基线，旧版 macOS/WebKit 可能无法预览 PDF。这是 PDF 预览的兼容范围，不代表整个应用的最低系统版本。Linux WebKitGTK 需实机验证，不能仅按 Safari 版本推定兼容；生产构建和 happy-dom 测试不替代 WebView 验收。参见 [PDF.js 支持范围](https://github.com/mozilla/pdf.js/wiki/Frequently-Asked-Questions#which-browsersenvironments-are-supported)。
+
+加载任务持有 PDF worker；关闭、切换文件或加载失败时调用 `PDFDocumentLoadingTask.destroy()`，中途取消后不再读取后续文件分片或启动 worker。
+
 | 通道 | 当前上限 | 限制含义 |
 |---|---|---|
 | 文本/二进制普通预览 | 8 MiB | 普通查看器，不等于文档工具读取上限 |
