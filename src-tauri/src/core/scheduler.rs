@@ -2441,7 +2441,10 @@ mod tests {
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let (workspace, project_id, project_dir, extra) = task_scope(&core, &item).unwrap();
-        assert_eq!(workspace, roots.workspace);
+        // Project scope preserves the registered spelling. On macOS a temp
+        // directory under /var canonicalizes to /private/var.
+        assert_eq!(workspace, root.path());
+        assert_eq!(std::fs::canonicalize(&workspace).unwrap(), roots.workspace);
         assert_eq!(project_id.as_deref(), Some("project"));
         assert_eq!(project_dir, Some(root.path().join(".codewave")));
         assert!(extra.is_empty());
@@ -2464,5 +2467,29 @@ mod tests {
         core.tasks.delete_project("project").await.unwrap();
         task_log(&core, &item, "late completion").await;
         assert!(!root.path().join(".codewave").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_scope_preserves_registered_symlink_path() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let aliases = tempfile::tempdir().unwrap();
+        let alias = aliases.path().join("project-alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        project(data.path(), &alias, "project");
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: std::fs::canonicalize(root.path()).unwrap(),
+            extra: vec![],
+            data_dir: std::fs::canonicalize(data.path()).unwrap(),
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let mut item = task("task", Local::now());
+        item.project_id = Some("project".into());
+        let (workspace, project_id, project_dir, _) = task_scope(&core, &item).unwrap();
+        assert_eq!(workspace, alias);
+        assert_eq!(std::fs::canonicalize(&workspace).unwrap(), roots.workspace);
+        assert_eq!(project_id.as_deref(), Some("project"));
+        assert_eq!(project_dir, Some(alias.join(".codewave")));
     }
 }
