@@ -57,6 +57,19 @@ export function runCommands(rawText) {
 /** 不是「检查」的步骤：装依赖/系统包等环境准备，本地无需复现；多行脚本的续行片段也在此滤掉 */
 const NON_CHECK = /^(sudo\s|choco\s|cmake\s|lib|#)/;
 
+// Only these exact observation/setup/aggregation commands are not local gates.
+// Do not exempt every `node scripts/ci/*` command: that would hide future checks.
+const CI_INFRASTRUCTURE = new Set([
+  "./scripts/ci/ensure-cmake.ps1",
+  "node scripts/ci/metrics.mjs environment",
+  'test "$BACKEND_RESULT" = success && test "$FRONTEND_RESULT" = success',
+]);
+
+export function checkCommand(command) {
+  if (NON_CHECK.test(command) || CI_INFRASTRUCTURE.has(command)) return null;
+  return command.replace(/^node (?:\.\.\/)?scripts\/ci\/metrics\.mjs run -- /, "");
+}
+
 /** 把命令归一化为可比较的形态（去引号、压空白） */
 const norm = (s) => s.replace(/["']/g, "").replace(/\s+/g, " ").trim();
 
@@ -64,8 +77,9 @@ test("本地门禁覆盖 CI 两个 workflow 里的每条检查命令", () => {
   const ciCommands = new Set();
   for (const file of WORKFLOWS) {
     for (const cmd of runCommands(readWorkflow(file))) {
-      if (NON_CHECK.test(cmd)) continue;
-      ciCommands.add(norm(cmd));
+      const check = checkCommand(cmd);
+      if (check === null) continue;
+      ciCommands.add(norm(check));
     }
   }
   assert.ok(ciCommands.size >= 5, `解析出的 CI 命令过少，解析器可能失效：${[...ciCommands]}`);
@@ -77,6 +91,14 @@ test("本地门禁覆盖 CI 两个 workflow 里的每条检查命令", () => {
     [],
     `CI 跑了但本地门禁没覆盖（请在 scripts/pre-pr.mjs 的 PRE_PR_STEPS 补上）：\n${uncovered.join("\n")}`,
   );
+  assert.deepEqual([...local].filter((c) => !ciCommands.has(c)), [], "本地检查不能在 CI 拆分时丢失");
+});
+
+test("计时包装只解包已知前缀，不豁免新增检查", () => {
+  assert.equal(checkCommand("node ../scripts/ci/metrics.mjs run -- cargo test --workspace"), "cargo test --workspace");
+  assert.equal(checkCommand("node scripts/ci/metrics.mjs run -- pnpm --dir ui test"), "pnpm --dir ui test");
+  assert.equal(checkCommand("node scripts/ci/new-check.mjs"), "node scripts/ci/new-check.mjs");
+  assert.equal(checkCommand("node scripts/ci/metrics.mjs environment && cargo new-check"), "node scripts/ci/metrics.mjs environment && cargo new-check");
 });
 
 test("软/硬门槛与 CI 的 continue-on-error 一致", () => {

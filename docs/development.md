@@ -16,7 +16,7 @@
 
 - macOS：Xcode 命令行工具（`xcode-select --install`）、Rust、Node 与 pnpm；Apple Silicon 与 Intel 目标需分开核对，不从一个目标推导全架构支持。
 - Linux（与 Ubuntu CI 同源）：安装 `cmake build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`。
-- Windows：VS Build Tools 的 MSVC 工具链、CMake、WebView2 Runtime、Rust、Node 与 pnpm。CI 的 CMake 安装命令见 [test.yml](../.github/workflows/test.yml)。
+- Windows：VS Build Tools 的 MSVC 工具链、CMake、WebView2 Runtime、Rust、Node 与 pnpm。测试 CI 用 [ensure-cmake.ps1](../scripts/ci/ensure-cmake.ps1) 检测并复用 CMake ≥ 3.21（VS 2022 generator 的最低版本）；缺失、不可用或版本不足时才通过 Chocolatey 安装/升级，再验证实际 PATH 命中的程序。release 的独立安装链路不受此优化影响。
 - git2 使用源码构建的 libgit2，当前关闭默认 features，不要求另外安装系统 libgit2 或 libssh2。是否新增 SSH 依赖应回到 Cargo 配置核对。
 - Linux 的系统钥匙串功能依赖可用 Secret Service；无图形会话或 CI 中可能不可用；此时新增/修改凭据安全失败，保留旧配置，不降级写明文。旧文件已有明文的启动迁移失败会明确告警，且禁止任何写入口重新复制明文。
 
@@ -66,6 +66,7 @@ Git 写操作默认由用户执行。批准计划仅覆盖计划明确列出的�
 - [pnpm-workspace.yaml](../pnpm-workspace.yaml) 用 `allowBuilds` 明确允许 esbuild 构建脚本；不要恢复“允许所有构建脚本”的宽泛配置。浏览器 PDF 预览不使用 Node 侧 `@napi-rs/canvas`，目前排除其可选安装。
 - 只声明未注册、未消费的插件会增加构建与供应链面；新增/删除时同时核对 Rust 声明、`lib.rs` 注册、前端调用与 capability。
 - 平台条件编译必须由对应目标验证。Windows 的绿态不会编译 `cfg(unix)`；例如进程 `try_wait()` 返回 `Result<Option<ExitStatus>>`，不能按 `Option` 匹配后指望别的平台替你发现。
+- [Dependabot](../.github/dependabot.yml) 继续每周检查 cargo、npm workspace 与 GitHub Actions；每个生态的 minor/patch 版本更新分组，major 仍独立提 PR，安全更新不套用此分组。分组降低重复全矩阵运行次数，但扩大单次变更面；组合不兼容时应拆组定位，不能跳过验证。
 
 ## 标识、配置与开源卫生
 
