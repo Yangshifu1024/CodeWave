@@ -26,7 +26,10 @@ fn sample_dir() -> Option<PathBuf> {
 fn raw_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
     let f = std::fs::File::open(path).unwrap();
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(f)).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.expect("sample entry name must decode").into_owned())
+        .collect();
     let mut out = BTreeMap::new();
     for name in names {
         let mut e = archive.by_name(&name).unwrap();
