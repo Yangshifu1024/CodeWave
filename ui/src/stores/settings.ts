@@ -6,7 +6,7 @@ import { DEFAULT_POST_WRITE_CHECK } from "../ipc/types";
 import { findModel } from "../utils/models";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
-import { FONT_SIZE_PX, reconcileFontsFromConfig } from "../utils/fonts";
+import { levelToPx, reconcileFontsFromConfig } from "../utils/fonts";
 
 // IPC 不可用（如纯浏览器调试）时回退默认配置，保证 UI 仍可渲染
 const DEFAULT_CONFIG: ConfigState = {
@@ -20,7 +20,7 @@ const DEFAULT_CONFIG: ConfigState = {
   approval: { enabled: true, confirm_outside_create: true, confirm_git_push: true, auto_confirm: false, command_allowlist: [] },
   // 写入后检查默认关闭且命令留空——与后端 PostWriteCheckSettings::default() 同源
   post_write_check: DEFAULT_POST_WRITE_CHECK,
-  ui: { font_size_sans: 15, font_size_mono: 15, accent: "cyan", language: "zh-CN", font_sans: "", font_mono: "" },
+  ui: { font_size_sans: 14, font_size_content: 14, font_size_mono: 12, accent: "cyan", language: "zh-CN", font_sans: "", font_content: "", font_mono: "" },
   custom_prompt: null,
   disabled_skills: [],
   log: { level: "info", session_verbose: false },
@@ -128,12 +128,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
     const { prefs, migrate } = reconcileFontsFromConfig({
       sans: snapshot.config.ui.font_sans,
+      content: snapshot.config.ui.font_content,
       mono: snapshot.config.ui.font_mono,
       font_size_sans: snapshot.config.ui.font_size_sans,
+      font_size_content: snapshot.config.ui.font_size_content,
       font_size_mono: snapshot.config.ui.font_size_mono,
     });
     if (migrate) {
-      void ipc.setFontPrefs(prefs.sans, prefs.mono, prefs.fontSizeSans === "default" ? 15 : FONT_SIZE_PX[prefs.fontSizeSans], prefs.fontSizeMono === "default" ? 15 : FONT_SIZE_PX[prefs.fontSizeMono], crypto.randomUUID())
+      void ipc.setFontPrefs(prefs.sans, prefs.content, prefs.mono, levelToPx(prefs.fontSizeSans), levelToPx(prefs.fontSizeContent), levelToPx(prefs.fontSizeMono), crypto.randomUUID())
         .then((result) => { get().adoptSnapshot(result); }).catch(() => null);
     }
     return true;

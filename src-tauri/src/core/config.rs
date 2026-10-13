@@ -367,11 +367,14 @@ pub struct UiPrefs {
     /// 界面 sans 文本字号（px）。与 `font_sans` 同源：sans 字体族用此字号渲染。
     /// 真源在后端配置文件（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
     /// 由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
-    #[serde(deserialize_with = "deserialize_font_size")]
+    #[serde(deserialize_with = "deserialize_text_font_size")]
     pub font_size_sans: f32,
-    /// 界面 mono 文本字号（px）。与 `font_mono` 同源：mono 字体族用此字号渲染。
+    /// 正文文本字号（px），与 `font_content` 独立于界面和代码保存。
+    #[serde(deserialize_with = "deserialize_text_font_size")]
+    pub font_size_content: f32,
+    /// 代码与日志字号（px），与 `font_mono` 同槽保存。
     /// 同上由 `set_font_prefs` 独占维护，页级 `save_config` 一并护住。
-    #[serde(deserialize_with = "deserialize_font_size")]
+    #[serde(deserialize_with = "deserialize_code_font_size")]
     pub font_size_mono: f32,
     /// 主题 accent（历史遗留键；现行强调色为墨色，见 docs/chat-and-interface）
     pub accent: String,
@@ -389,31 +392,61 @@ pub struct UiPrefs {
     /// 现改为「配置为真源 + localStorage 当首帧缓存」（防闪变），对照逻辑在前端 `utils/fonts.ts`。
     /// 该字段由 `set_font_prefs` 独占维护，页级 `save_config` 会把它护住不回写旧值。
     pub font_sans: String,
+    /// 内容字体（聊天与 Markdown 正文），空串使用默认链。
+    pub font_content: String,
     /// 等宽字体（代码与日志），同上。
     pub font_mono: String,
 }
 
+/// 合法字号白名单：必须与前端 `FONT_SIZE_LEVELS`（ui/src/utils/fonts.ts）逐一对应。
+/// 两份清单是重复事实源，`font_size_levels_match_frontend` 会钉住它们一致。
+/// 保持离散白名单而非区间判断：前端下拉提供 12–20px 的 9 个整数选项。
 pub(super) fn is_valid_font_size(size: f32) -> bool {
-    matches!(size, 13.0 | 15.0 | 17.0 | 19.0)
+    VALID_FONT_SIZES.contains(&size)
+}
+
+/// 生产校验与回归共用这一份字号清单，避免两者接受不同值。
+pub(super) const VALID_FONT_SIZES: [f32; 9] =
+    [12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0];
+pub(super) const DEFAULT_TEXT_FONT_SIZE: f32 = 14.0;
+pub(super) const DEFAULT_CODE_FONT_SIZE: f32 = 12.0;
+
+fn deserialize_text_font_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f32, D::Error> {
+    deserialize_font_size(deserializer, DEFAULT_TEXT_FONT_SIZE)
+}
+
+fn deserialize_code_font_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f32, D::Error> {
+    deserialize_font_size(deserializer, DEFAULT_CODE_FONT_SIZE)
 }
 
 fn deserialize_font_size<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
+    default_size: f32,
 ) -> Result<f32, D::Error> {
     let size = f32::deserialize(deserializer)?;
-    Ok(if is_valid_font_size(size) { size } else { 15.0 })
+    Ok(if is_valid_font_size(size) {
+        size
+    } else {
+        default_size
+    })
 }
 
 impl Default for UiPrefs {
     fn default() -> Self {
         UiPrefs {
-            font_size_sans: 15.0,
-            font_size_mono: 15.0,
+            font_size_sans: DEFAULT_TEXT_FONT_SIZE,
+            font_size_content: DEFAULT_TEXT_FONT_SIZE,
+            font_size_mono: DEFAULT_CODE_FONT_SIZE,
             accent: "cyan".into(),
             language: "zh-CN".into(),
             close_to_tray: true,
             ai_language: None,
             font_sans: String::new(),
+            font_content: String::new(),
             font_mono: String::new(),
         }
     }
@@ -658,24 +691,63 @@ mod tests {
     #[test]
     fn font_sizes_default_and_normalize_unknown_config_values() {
         let missing: UiPrefs = serde_json::from_str("{}").unwrap();
-        assert_eq!(missing.font_size_sans, 15.0);
-        assert_eq!(missing.font_size_mono, 15.0);
-        for size in [0.0, -1.0, 14.0, 100000.0] {
+        assert_eq!(missing.font_sans, "");
+        assert_eq!(missing.font_content, "");
+        assert_eq!(missing.font_mono, "");
+        assert_eq!(missing.font_size_sans, 14.0);
+        assert_eq!(missing.font_size_content, 14.0);
+        assert_eq!(missing.font_size_mono, 12.0);
+        for size in [0.0, -1.0, 11.0, 21.0, 12.5, 100000.0] {
             let prefs: UiPrefs = serde_json::from_value(serde_json::json!({
-                "font_size_sans": size, "font_size_mono": size
+                "font_size_sans": size, "font_size_content": size, "font_size_mono": size
             }))
             .unwrap();
-            assert_eq!(prefs.font_size_sans, 15.0);
-            assert_eq!(prefs.font_size_mono, 15.0);
+            assert_eq!(prefs.font_size_sans, 14.0);
+            assert_eq!(prefs.font_size_content, 14.0);
+            assert_eq!(prefs.font_size_mono, 12.0);
         }
-        for size in [13.0, 15.0, 17.0, 19.0] {
+        for size in VALID_FONT_SIZES {
             let prefs: UiPrefs = serde_json::from_value(serde_json::json!({
-                "font_size_sans": size, "font_size_mono": size
+                "font_size_sans": size, "font_size_content": size, "font_size_mono": size
             }))
             .unwrap();
             assert_eq!(prefs.font_size_sans, size);
+            assert_eq!(prefs.font_size_content, size);
             assert_eq!(prefs.font_size_mono, size);
         }
+        // JSON 不允许非有限数；直接走字段反序列化器验证它们的读入兜底。
+        for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let deserializer =
+                || serde::de::value::F32Deserializer::<serde::de::value::Error>::new(size);
+            assert!(!is_valid_font_size(size));
+            assert_eq!(deserialize_text_font_size(deserializer()).unwrap(), 14.0);
+            assert_eq!(deserialize_code_font_size(deserializer()).unwrap(), 12.0);
+        }
+    }
+
+    #[test]
+    fn font_size_levels_match_frontend() {
+        let frontend = include_str!("../../../ui/src/utils/fonts.ts");
+        // 从声明的等号后取数组，不能误读类型注解里的 `[]`。
+        let declaration = frontend
+            .split_once("export const FONT_SIZE_LEVELS")
+            .unwrap()
+            .1;
+        let initializer = declaration.split_once('=').unwrap().1;
+        let entries = initializer
+            .split_once('[')
+            .unwrap()
+            .1
+            .split_once(']')
+            .unwrap()
+            .0;
+        let levels: Vec<f32> = entries
+            .split(',')
+            .map(|entry| entry.trim().trim_matches(['\'', '"']))
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.parse::<f32>().expect("numeric font size option"))
+            .collect();
+        assert_eq!(levels.as_slice(), VALID_FONT_SIZES.as_slice());
     }
 
     #[test]

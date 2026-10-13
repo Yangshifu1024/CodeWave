@@ -150,11 +150,14 @@ pub async fn set_subagent_model(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 六个字体字段保持 IPC 命名参数，统一交给原子提交器。
 pub async fn set_font_prefs(
     core: Core<'_>,
     sans: String,
+    content: String,
     mono: String,
     font_size_sans: f32,
+    font_size_content: f32,
     font_size_mono: f32,
     operation_id: Option<String>,
 ) -> Result<ConfigSaveResult, ConfigCommitError> {
@@ -164,8 +167,10 @@ pub async fn set_font_prefs(
         core.commit_config(
             ConfigPatch::Fonts {
                 sans,
+                content,
                 mono,
                 font_size_sans,
+                font_size_content,
                 font_size_mono,
             },
             &operation_id,
@@ -187,13 +192,17 @@ fn cleanup_due(old: Option<u32>, new: Option<u32>, skip: Option<bool>) -> Option
 fn apply_font_prefs(
     ui: &mut crate::core::config::UiPrefs,
     sans: &str,
+    content: &str,
     mono: &str,
     font_size_sans: f32,
+    font_size_content: f32,
     font_size_mono: f32,
 ) {
     ui.font_sans = sans.trim().into();
+    ui.font_content = content.trim().into();
     ui.font_mono = mono.trim().into();
     ui.font_size_sans = font_size_sans;
+    ui.font_size_content = font_size_content;
     ui.font_size_mono = font_size_mono;
 }
 #[cfg(test)]
@@ -289,7 +298,7 @@ mod tests {
     use super::*;
     use crate::core::config::ConfigState;
 
-    /// 字体偏好只改 `ui.font_sans` / `ui.font_mono` / `ui.font_size_sans` / `ui.font_size_mono`，
+    /// 字体偏好只改界面、正文、代码三组字体与字号，
     /// 且字串两侧都 trim（空串 = 默认链）。
     #[test]
     fn font_prefs_patch_only_font_fields() {
@@ -300,24 +309,30 @@ mod tests {
         apply_font_prefs(
             &mut cfg.ui,
             "  PingFang SC ",
+            "  Noto Sans SC ",
             " JetBrains Mono ",
             16.0,
+            18.0,
             14.0,
         );
         assert_eq!(cfg.ui.font_sans, "PingFang SC");
+        assert_eq!(cfg.ui.font_content, "Noto Sans SC");
         assert_eq!(cfg.ui.font_mono, "JetBrains Mono");
         assert_eq!(cfg.ui.font_size_sans, 16.0);
+        assert_eq!(cfg.ui.font_size_content, 18.0);
         assert_eq!(cfg.ui.font_size_mono, 14.0);
         // 同段其他字段一律不动（命令是即时生效的，不得顺手改写别人的偏好）
         assert_eq!(cfg.ui.language, "en-US");
         assert!(!cfg.ui.close_to_tray);
 
-        // 清空 = 恢复默认链（存空串，不删字段）；字号传 15 表示回归默认
-        apply_font_prefs(&mut cfg.ui, "", "", 15.0, 15.0);
+        // 清空 = 恢复默认链；三组字号分别恢复 14 / 14 / 12。
+        apply_font_prefs(&mut cfg.ui, "", "", "", 14.0, 14.0, 12.0);
         assert_eq!(cfg.ui.font_sans, "");
+        assert_eq!(cfg.ui.font_content, "");
         assert_eq!(cfg.ui.font_mono, "");
-        assert_eq!(cfg.ui.font_size_sans, 15.0);
-        assert_eq!(cfg.ui.font_size_mono, 15.0);
+        assert_eq!(cfg.ui.font_size_sans, 14.0);
+        assert_eq!(cfg.ui.font_size_content, 14.0);
+        assert_eq!(cfg.ui.font_size_mono, 12.0);
     }
 
     /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：保留期变化时触发清理；
@@ -360,14 +375,22 @@ mod tests {
         );
     }
 
-    /// 页级保存的形状修正（调用点同一函数）：字体 4 项（族×2、字号×2）按当前生效值护住，
+    /// 页级保存的形状修正（调用点同一函数）：字体 6 项（族×3、字号×3）按当前生效值护住，
     /// 其他字段照常采用提交值。
     /// 🔴 审查发现：不护住就会被「改完字体 → 保存其他设置 → 重启」静默回滚。
     #[test]
     fn page_save_shape_preserves_live_font_prefs_only() {
         // 当前生效值（用户刚改完、已由 set_font_prefs 落盘）
         let mut current = ConfigState::default();
-        apply_font_prefs(&mut current.ui, "PingFang SC", "JetBrains Mono", 17.0, 14.0);
+        apply_font_prefs(
+            &mut current.ui,
+            "PingFang SC",
+            "Noto Sans SC",
+            "JetBrains Mono",
+            17.0,
+            18.0,
+            14.0,
+        );
         // 前端提交的整份配置：字体还是「打开设置页时」的旧值（空），其他字段是用户的新改动
         let mut updated = ConfigState::default();
         updated.ui.language = "en-US".into();
@@ -377,10 +400,12 @@ mod tests {
         apply_page_save_shape(&mut updated, &current);
 
         assert_eq!(updated.ui.font_sans, "PingFang SC");
+        assert_eq!(updated.ui.font_content, "Noto Sans SC");
         assert_eq!(updated.ui.font_mono, "JetBrains Mono");
         assert_eq!(updated.ui.font_size_sans, 17.0);
+        assert_eq!(updated.ui.font_size_content, 18.0);
         assert_eq!(updated.ui.font_size_mono, 14.0);
-        // 同段其他字段照常采用本次提交的值（护住的只有字体四项）
+        // 同段其他字段照常采用本次提交的值（护住的只有字体六项）
         assert_eq!(updated.ui.language, "en-US");
         assert_eq!(updated.ui.ai_language.as_deref(), Some("English"));
         assert_eq!(updated.compact_threshold, 0.8);
@@ -445,14 +470,16 @@ mod tests {
         assert_eq!(listed[0].name, "真实项目");
     }
 
-    /// 旧配置没这四个字段也必须能读（serde default 向前兼容，不得报错）。
+    /// 缺少新增正文组字段时使用默认值，已有合法界面/代码显式值保留。
     #[test]
     fn old_config_without_font_fields_still_deserializes() {
         let json = r#"{ "schema_version": 2, "ui": { "font_size_sans": 15.0, "font_size_mono": 15.0, "language": "zh-CN" } }"#;
         let cfg: ConfigState = serde_json::from_str(json).expect("缺字体字段的旧配置必须可读");
         assert_eq!(cfg.ui.font_sans, "");
+        assert_eq!(cfg.ui.font_content, "");
         assert_eq!(cfg.ui.font_mono, "");
         assert_eq!(cfg.ui.font_size_sans, 15.0);
+        assert_eq!(cfg.ui.font_size_content, 14.0);
         assert_eq!(cfg.ui.font_size_mono, 15.0);
     }
 }

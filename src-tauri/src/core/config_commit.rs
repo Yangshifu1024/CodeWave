@@ -302,9 +302,12 @@ pub enum ConfigPatch {
     },
     Fonts {
         sans: String,
+        content: String,
         mono: String,
         /// sans 文本字号（px）；与 `sans` 字体族同槽提交。
         font_size_sans: f32,
+        /// 正文字号（px）；与 `content` 字体族同槽提交。
+        font_size_content: f32,
         /// mono 文本字号（px）；与 `mono` 字体族同槽提交。
         font_size_mono: f32,
     },
@@ -564,13 +567,17 @@ impl ConfigCoordinator {
             }
             ConfigPatch::Fonts {
                 sans,
+                content,
                 mono,
                 font_size_sans,
+                font_size_content,
                 font_size_mono,
             } => {
                 updated.ui.font_sans = sans.trim().into();
+                updated.ui.font_content = content.trim().into();
                 updated.ui.font_mono = mono.trim().into();
                 updated.ui.font_size_sans = font_size_sans;
+                updated.ui.font_size_content = font_size_content;
                 updated.ui.font_size_mono = font_size_mono;
             }
             ConfigPatch::Skill { name, disabled } => {
@@ -839,8 +846,10 @@ impl ConfigCoordinator {
 
 pub fn preserve_instant_fields(updated: &mut ConfigState, current: &ConfigState) {
     updated.ui.font_sans = current.ui.font_sans.clone();
+    updated.ui.font_content = current.ui.font_content.clone();
     updated.ui.font_mono = current.ui.font_mono.clone();
     updated.ui.font_size_sans = current.ui.font_size_sans;
+    updated.ui.font_size_content = current.ui.font_size_content;
     updated.ui.font_size_mono = current.ui.font_size_mono;
     updated.subagent_models = current.subagent_models.clone();
     updated.last_operation_id = current.last_operation_id.clone();
@@ -918,9 +927,11 @@ fn page_comparable(cfg: &ConfigState) -> serde_json::Value {
     cfg.last_operation_id = None;
     cfg.subagent_models.clear();
     cfg.ui.font_sans.clear();
+    cfg.ui.font_content.clear();
     cfg.ui.font_mono.clear();
-    cfg.ui.font_size_sans = 15.0;
-    cfg.ui.font_size_mono = 15.0;
+    cfg.ui.font_size_sans = super::config::DEFAULT_TEXT_FONT_SIZE;
+    cfg.ui.font_size_content = super::config::DEFAULT_TEXT_FONT_SIZE;
+    cfg.ui.font_size_mono = super::config::DEFAULT_CODE_FONT_SIZE;
     serde_json::to_value(cfg).unwrap_or_default()
 }
 fn validate_config(
@@ -934,11 +945,12 @@ fn validate_config(
         ));
     }
     if !super::config::is_valid_font_size(cfg.ui.font_size_sans)
+        || !super::config::is_valid_font_size(cfg.ui.font_size_content)
         || !super::config::is_valid_font_size(cfg.ui.font_size_mono)
     {
         return Err(error(
             "InvalidConfiguration",
-            "Font sizes must be one of 13, 15, 17 or 19 pixels",
+            "Font sizes must be whole pixels from 12 to 20",
         ));
     }
     let mut providers = HashSet::new();
@@ -1459,9 +1471,11 @@ mod tests {
             f.credentials.fail_write_at.store(1, Ordering::SeqCst);
             let patch = if is_font {
                 ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "S".into(),
                     mono: "M".into(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 }
             } else {
@@ -1575,9 +1589,11 @@ mod tests {
         })
         .unwrap();
         f.commit(ConfigPatch::Fonts {
+            content: "Content".into(),
             sans: "Sans".into(),
             mono: "Mono".into(),
             font_size_sans: 19.0,
+            font_size_content: 18.0,
             font_size_mono: 13.0,
         })
         .unwrap();
@@ -1588,7 +1604,10 @@ mod tests {
             Some("m2")
         );
         assert_eq!(saved.snapshot.config.ui.font_sans, "Sans");
+        assert_eq!(saved.snapshot.config.ui.font_content, "Content");
+        assert_eq!(saved.snapshot.config.ui.font_mono, "Mono");
         assert_eq!(saved.snapshot.config.ui.font_size_sans, 19.0);
+        assert_eq!(saved.snapshot.config.ui.font_size_content, 18.0);
         assert_eq!(saved.snapshot.config.ui.font_size_mono, 13.0);
         let stale = f.page(CredentialEdit::Keep);
         f.commit(ConfigPatch::AllowCommand {
@@ -1599,23 +1618,173 @@ mod tests {
     }
     #[test]
     fn invalid_font_sizes_never_commit() {
-        for size in [0.0, -1.0, 14.0, 100000.0, f32::INFINITY, f32::NAN] {
-            for (sans_size, mono_size) in [(size, 15.0), (15.0, size)] {
+        for size in [
+            0.0,
+            -1.0,
+            11.0,
+            21.0,
+            12.5,
+            100000.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ] {
+            for (sans_size, content_size, mono_size) in
+                [(size, 14.0, 12.0), (14.0, size, 12.0), (14.0, 14.0, size)]
+            {
                 let f = Fixture::new();
                 let result = f.commit(ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "Sans".into(),
                     mono: "Mono".into(),
                     font_size_sans: sans_size,
+                    font_size_content: content_size,
                     font_size_mono: mono_size,
                 });
                 assert_eq!(result.unwrap_err().code, "InvalidConfiguration");
                 assert_eq!(f.snapshot().version.sequence, 0);
                 assert!(f.snapshot().config.ui.font_sans.is_empty());
-                assert_eq!(f.snapshot().config.ui.font_size_sans, 15.0);
-                assert_eq!(f.snapshot().config.ui.font_size_mono, 15.0);
+                assert!(f.snapshot().config.ui.font_content.is_empty());
+                assert!(f.snapshot().config.ui.font_mono.is_empty());
+                assert_eq!(f.snapshot().config.ui.font_size_sans, 14.0);
+                assert_eq!(f.snapshot().config.ui.font_size_content, 14.0);
+                assert_eq!(f.snapshot().config.ui.font_size_mono, 12.0);
+                assert!(f.files.captured.lock().unwrap().is_empty());
             }
         }
     }
+
+    #[test]
+    fn all_font_size_options_and_reset_commit_without_advancing_page_version() {
+        let f = Fixture::new();
+        for size in super::super::config::VALID_FONT_SIZES {
+            let saved = f
+                .commit(ConfigPatch::Fonts {
+                    sans: "Sans".into(),
+                    content: "Content".into(),
+                    mono: "Mono".into(),
+                    font_size_sans: size,
+                    font_size_content: size,
+                    font_size_mono: size,
+                })
+                .unwrap();
+            assert_eq!(saved.snapshot.page_version, 0);
+            assert_eq!(saved.snapshot.config.ui.font_size_sans, size);
+            assert_eq!(saved.snapshot.config.ui.font_size_content, size);
+            assert_eq!(saved.snapshot.config.ui.font_size_mono, size);
+        }
+        let defaults = super::super::config::UiPrefs::default();
+        let reset = f
+            .commit(ConfigPatch::Fonts {
+                sans: defaults.font_sans.clone(),
+                content: defaults.font_content.clone(),
+                mono: defaults.font_mono.clone(),
+                font_size_sans: defaults.font_size_sans,
+                font_size_content: defaults.font_size_content,
+                font_size_mono: defaults.font_size_mono,
+            })
+            .unwrap();
+        assert_eq!(reset.snapshot.page_version, 0);
+        assert_eq!(
+            serde_json::to_value(&reset.snapshot.config.ui).unwrap(),
+            serde_json::to_value(defaults).unwrap(),
+        );
+    }
+
+    #[test]
+    fn font_prefs_persist_and_replayed_operation_keeps_newer_three_slots() {
+        let f = Fixture::new();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let original = || ConfigPatch::Fonts {
+            sans: "  First Sans  ".into(),
+            content: "  First Content  ".into(),
+            mono: "  First Mono  ".into(),
+            font_size_sans: 13.0,
+            font_size_content: 17.0,
+            font_size_mono: 15.0,
+        };
+        let saved = f
+            .coordinator
+            .commit(&f.cfg, original(), &operation)
+            .unwrap();
+        assert_eq!(saved.snapshot.config.ui.font_sans, "First Sans");
+        assert_eq!(saved.snapshot.config.ui.font_content, "First Content");
+        assert_eq!(saved.snapshot.config.ui.font_mono, "First Mono");
+        let disk_dir = tempfile::tempdir().unwrap();
+        let disk = DiskConfigStore::new(disk_dir.path().to_path_buf());
+        disk.write_config(&saved.snapshot.config).unwrap();
+        let persisted = disk.read_config().unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&persisted.ui).unwrap(),
+            serde_json::to_value(&saved.snapshot.config.ui).unwrap(),
+        );
+
+        let newest = f
+            .commit(ConfigPatch::Fonts {
+                sans: "Latest Sans".into(),
+                content: "Latest Content".into(),
+                mono: "Latest Mono".into(),
+                font_size_sans: 20.0,
+                font_size_content: 18.0,
+                font_size_mono: 12.0,
+            })
+            .unwrap();
+        let writes = f.files.captured.lock().unwrap().len();
+        let replay = f
+            .coordinator
+            .commit(&f.cfg, original(), &operation)
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(
+            replay.snapshot.version.sequence,
+            newest.snapshot.version.sequence
+        );
+        assert_eq!(
+            serde_json::to_value(&replay.snapshot.config.ui).unwrap(),
+            serde_json::to_value(&newest.snapshot.config.ui).unwrap(),
+        );
+        assert_eq!(f.files.captured.lock().unwrap().len(), writes);
+    }
+
+    #[test]
+    fn failed_font_write_keeps_all_six_saved_fields() {
+        let f = Fixture::new();
+        let saved = f
+            .commit(ConfigPatch::Fonts {
+                sans: "Saved Sans".into(),
+                content: "Saved Content".into(),
+                mono: "Saved Mono".into(),
+                font_size_sans: 16.0,
+                font_size_content: 18.0,
+                font_size_mono: 13.0,
+            })
+            .unwrap();
+        f.files.fail_config.store(true, Ordering::SeqCst);
+        let failed = f
+            .commit(ConfigPatch::Fonts {
+                sans: "Failed Sans".into(),
+                content: "Failed Content".into(),
+                mono: "Failed Mono".into(),
+                font_size_sans: 20.0,
+                font_size_content: 19.0,
+                font_size_mono: 12.0,
+            })
+            .unwrap_err();
+        assert_eq!(failed.code, "ConfigWriteFailed");
+        assert_eq!(
+            f.snapshot().version.sequence,
+            saved.snapshot.version.sequence
+        );
+        assert_eq!(
+            serde_json::to_value(&f.snapshot().config.ui).unwrap(),
+            serde_json::to_value(&saved.snapshot.config.ui).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(&f.files.read_config().unwrap().unwrap().ui).unwrap(),
+            serde_json::to_value(&saved.snapshot.config.ui).unwrap(),
+        );
+    }
+
     #[test]
     fn different_role_concurrency_merges_and_same_role_conflicts() {
         let f = Arc::new(Fixture::new());
@@ -1798,9 +1967,11 @@ mod tests {
                 expected: token,
             },
             ConfigPatch::Fonts {
+                content: "Content".into(),
                 sans: "Concurrent Sans".into(),
                 mono: "Concurrent Mono".into(),
                 font_size_sans: 15.0,
+                font_size_content: 14.0,
                 font_size_mono: 15.0,
             },
         ];
@@ -1826,6 +1997,11 @@ mod tests {
             Some("m2")
         );
         assert_eq!(saved.config.ui.font_sans, "Concurrent Sans");
+        assert_eq!(saved.config.ui.font_content, "Content");
+        assert_eq!(saved.config.ui.font_mono, "Concurrent Mono");
+        assert_eq!(saved.config.ui.font_size_sans, 15.0);
+        assert_eq!(saved.config.ui.font_size_content, 14.0);
+        assert_eq!(saved.config.ui.font_size_mono, 15.0);
         assert_eq!(saved.page_version, 1);
         assert_eq!(saved.version.sequence, 3);
         let disk = f.files.config.lock().unwrap().clone().unwrap();
@@ -2098,9 +2274,11 @@ mod tests {
             .unwrap();
         for i in 0..600 {
             f.commit(ConfigPatch::Fonts {
+                content: "Content".into(),
                 sans: format!("Font {i}"),
                 mono: String::new(),
                 font_size_sans: 15.0,
+                font_size_content: 14.0,
                 font_size_mono: 15.0,
             })
             .unwrap();
@@ -2200,9 +2378,11 @@ mod tests {
             let token = coordinator.snapshot(&fallback).version;
             let patches = [
                 ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "font-migration".into(),
                     mono: String::new(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 },
                 ConfigPatch::Skill {
@@ -2242,9 +2422,11 @@ mod tests {
                     .commit(
                         &fallback,
                         ConfigPatch::Fonts {
+                            content: "Content".into(),
                             sans: "stale".into(),
                             mono: String::new(),
                             font_size_sans: 15.0,
+                            font_size_content: 14.0,
                             font_size_mono: 15.0,
                         },
                         &uuid::Uuid::new_v4().to_string()
@@ -2259,9 +2441,11 @@ mod tests {
                 .commit(
                     &loaded,
                     ConfigPatch::Fonts {
+                        content: "Content".into(),
                         sans: "recovered".into(),
                         mono: String::new(),
                         font_size_sans: 15.0,
+                        font_size_content: 14.0,
                         font_size_mono: 15.0,
                     },
                     &uuid::Uuid::new_v4().to_string(),
@@ -2281,9 +2465,11 @@ mod tests {
         f.files.fail_read_config.store(true, Ordering::SeqCst);
         assert_eq!(
             f.commit(ConfigPatch::Fonts {
+                content: "Content".into(),
                 sans: "blocked".into(),
                 mono: String::new(),
                 font_size_sans: 15.0,
+                font_size_content: 14.0,
                 font_size_mono: 15.0,
             })
             .unwrap_err()
@@ -2311,9 +2497,11 @@ mod tests {
             .commit(
                 &f.cfg,
                 ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "old font".into(),
                     mono: String::new(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 },
                 &expired,
@@ -2321,17 +2509,21 @@ mod tests {
             .unwrap();
         for i in 0..132 {
             f.commit(ConfigPatch::Fonts {
+                content: "Content".into(),
                 sans: format!("new font {i}"),
                 mono: String::new(),
                 font_size_sans: 15.0,
+                font_size_content: 14.0,
                 font_size_mono: 15.0,
             })
             .unwrap();
         }
         let retry = || ConfigPatch::Fonts {
+            content: "Content".into(),
             sans: "old font".into(),
             mono: String::new(),
             font_size_sans: 15.0,
+            font_size_content: 14.0,
             font_size_mono: 15.0,
         };
         assert_eq!(
@@ -2375,9 +2567,11 @@ mod tests {
             }
         }
         let retry = || ConfigPatch::Fonts {
+            content: "Content".into(),
             sans: "reviewed new font".into(),
             mono: String::new(),
             font_size_sans: 15.0,
+            font_size_content: 14.0,
             font_size_mono: 15.0,
         };
         assert_eq!(
@@ -2400,9 +2594,11 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(
                 f.commit(ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "blocked".into(),
                     mono: String::new(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 })
                 .unwrap_err()
@@ -2451,9 +2647,11 @@ mod tests {
                     .commit(
                         &cfg,
                         ConfigPatch::Fonts {
+                            content: "Content".into(),
                             sans: "safe".into(),
                             mono: String::new(),
                             font_size_sans: 15.0,
+                            font_size_content: 14.0,
                             font_size_mono: 15.0,
                         },
                         &uuid::Uuid::new_v4().to_string()
@@ -2469,9 +2667,11 @@ mod tests {
             .commit(
                 &cfg,
                 ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "recovered".into(),
                     mono: String::new(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 },
                 &uuid::Uuid::new_v4().to_string(),

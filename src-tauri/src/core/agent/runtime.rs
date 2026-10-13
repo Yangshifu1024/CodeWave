@@ -1618,9 +1618,11 @@ mod tests {
         h.core
             .commit_config(
                 ConfigPatch::Fonts {
+                    content: "Content".into(),
                     sans: "Committed Sans".into(),
                     mono: "Committed Mono".into(),
                     font_size_sans: 15.0,
+                    font_size_content: 14.0,
                     font_size_mono: 15.0,
                 },
                 &uuid::Uuid::new_v4().to_string(),

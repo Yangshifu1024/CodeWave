@@ -25,18 +25,18 @@
 
 当前亮色导航底是 `#eef4f9`，主内容与右栏底是 `#FFFFFF`；暗色分别取 antd 容器/布局 token。不要复用旧报告中的 `#ececee`、`#f8f8f8`。亮度判定集中在 [colors.ts](../ui/src/theme/colors.ts)，必须同时接受 `#000`/`#fff` 与六位 hex；主题桥、代码高亮和 HTML 预览须同判据，避免暗色文字配亮色背景。
 
-- 字体统一消费 `--ws-font-sans` / `--ws-font-mono`，antd 同时经 `fontFamily` / `fontFamilyCode` 接线；用户字体名经过清洗，再与默认回退链组合。字号通过 `--ws-font-size-sans` / `--ws-font-size-mono` 与 antd `token.fontSize`（默认随 sans）联动，antd 6 的两个容器 `font-size: 0` 问题见「 1.2.x」。字体保存与失败边界见[设置指南](./settings-guide.md)。
+- 字体分为界面、内容、代码三槽，分别消费 `--ws-font-sans` / `--ws-font-content` / `--ws-font-mono`；antd 的 `fontFamily` / `token.fontSize` 跟随界面槽，`fontFamilyCode` 接代码槽。用户字体名经过清洗，再与各自默认回退链组合。字号默认 **14 / 14 / 12px**；antd 6 的 `font-size: 0` 容器问题见下节，保存与失败边界见[设置指南](./settings-guide.md)。
 - 控件由 antd 6 接管；自定义样式消费主题桥的 `--ws-*`，不要重新引入默认蓝主色或多套调色板。菜单选中底使用中性半透明填充，悬停选中再加深；`controlOutline: transparent` 去除输入控件双重外晕，聚焦仍以边框等既有反馈表示。
 
-#### 1.2.x 字体与字号双槽
+#### 1.2.x 字体与字号三槽
 
-字体偏好三个同源量：sans（界面）/ mono（代码与日志）/ fontSize（字号，与 sans/mono 双槽联动——v2 拆为 `font_size_sans` + `font_size_mono`），保存在后端配置 `config.ui.{font_sans, font_mono, font_size_sans, font_size_mono}`，WebView 的 `localStorage` 只作首帧防闪缓存。设置页「界面/外观 → 字体」section 按「**界面字体 → 界面字号 → 等宽字体 → 等宽字号**」顺序紧贴排列（v2 布局：字号 Select 紧贴对应字体族的下放；与 `font_sans`/`font_mono` 一一对应）。字号 4 档离散：13/15/17/19 px，控件为 antd `Select` 下拉框、还原默认按钮按「清除 localStorage 键 + 同步 15px」处理。
+每槽独立保存字体族与字号，配置为 `config.ui.{font_sans, font_content, font_mono, font_size_sans, font_size_content, font_size_mono}`，WebView 的 `localStorage` 只作首帧防闪缓存。设置页按「**界面字体 → 界面字号 → 内容字体 → 内容字号 → 代码字体 → 代码字号**」排列，字号 Select 与字体输入同宽，每项带独立预览和还原默认入口。字号为连续 **12–20px** 整数；默认及还原值是 **14 / 14 / 12px**。已有合法显式值保留，新增内容字段缺失时默认 14px；还原只清除本槽缓存覆盖并同步本槽默认值。
 
-字号以 15px 为基准：正文与 antd token 跟随当前已应用的 sans 档位；标题、说明等保留原有大小差，使用 `--ws-font-size-sans-offset`。代码、diff、日志等使用独立的 `--ws-font-size-mono-offset`，不受 sans 档位影响；图标和布局尺寸不随文本档位整体缩放。设置页的局部 antd 主题也随 sans 档位调整，保留标题/说明/元数据层级。
+界面槽覆盖标题栏、导航、设置、输入控件、工具标题、状态和元数据；内容槽覆盖用户/助手正文，以及子代理、计划、技能、发布说明、Markdown 与纯文本预览中的正文。代码槽覆盖行内代码、代码块、源码预览、diff 与日志，包括内容中的代码。按钮（含正文内复制按钮）仍取界面槽。正文、代码基础字号直接取对应槽；标题和辅助文字保留相对层级，界面/内容偏移基准各为 14px、代码为 12px。三槽不互相继承已选字体或字号，不添加统一 +1/导航 +2 补偿；图标、布局尺寸、图片、PDF 与文档自身排版不随字体设置整体缩放。
 
-`fonts.ts` 是两槽字号 CSS 变量的唯一写入方，`native.css` 提供 15px 默认值。`App.tsx` 订阅当前已应用值，首帧使用缓存、设置选择立即生效；后端回执只更新持久化状态，旧回执和保存失败不回退新预览，失败后可重试。启动配置加载后再对账；后端新增字号的默认 15/15 不阻止旧版仅缓存字体族的迁移。后端和前端均只接受 13/15/17/19，手改配置的未知数值读入时回落 15，非法保存请求拒绝。字体族和字号均不递增页级草稿版本，普通设置保存保留即时值。
+`fonts.ts` 是三槽字号 CSS 变量的唯一写入方，`native.css` 提供默认值。`App.tsx` 订阅已应用的界面字号；首帧使用缓存，选择立即生效。六字段经同一串行队列和后端 Fonts patch 原子保存；后端回执只更新持久化状态，迟到旧回执和保存失败不回退新预览，失败可同值重试。启动配置加载后再对账；缺省字号不阻止既有缓存字体族的导入。前后端同用 12–20 整数白名单；未知配置数值按槽回落 14/14/12，非法保存请求拒绝。旧缓存语义档位仅接受明确键，继承属性名等非法缓存不能生成 NaN。字体与字号不递增页级草稿版本，普通设置保存保护全部六字段。
 
-antd 6 把 `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 间隙），挂在其中且未显式声明 font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）；需要还原字号的容器统一取 `--ws-font-size` / `--ws-font-size-sans`。ThemeBridge 仅从当前 antd token 桥接 `--ws-font-size`，不覆盖两槽偏好。回归入口：`font.sizes.test.tsx`、`fonts.test.ts` 与配置提交器的即时字段测试。
+antd 6 把 `.ant-radio-group` 等容器设了 `font-size: 0`（消除 inline-block 间隙），挂在其中且未显式声明 font-size 的自定义内容会继承成 0 号字（DOM 里有文本、肉眼看不见）；需要还原字号的界面容器统一取 `--ws-font-size` / `--ws-font-size-sans`。ThemeBridge 仅从当前 antd token 桥接 `--ws-font-size`，不覆盖三槽偏好。回归入口：`font.sizes.test.tsx`、`fonts.test.ts`、`font.settings.test.tsx` 和配置提交器的即时字段测试。真实视觉、跨平台字体回退与应用重启仍需手动验收。
 - 当前权限按钮与菜单文字均为中性，旧报告的蓝/橙/红和中途绿/黄/红映射已退役。风险/用量类内容可用语义色：工具等待橙、错误红、上下文进度圈四色；代码高亮和身份头像不属于品牌强调色。
 - 帮助说明、错误原因、限制条件应靠近对应控件常驻显示，不能仅靠 placeholder、低透明度或远端标签表达。「即时生效」放在标题旁；动作按钮靠右与信息被推远是不同问题。
 - `prefers-reduced-motion` 下流光隐藏、思考滚动与等待指示降动效；新动效必须保留静态可读结果。

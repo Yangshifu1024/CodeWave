@@ -1,10 +1,5 @@
-// 设置页「界面」页（批② 8 页重划后的 appearance）：界面语言（即时生效）+ 主题三档
-// （跟随系统/亮色/暗色，即选即生效）+ 自定义字体双槽 + 字号双 Select
-// （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)，Enter/失焦提交）。
-// 三组偏好均为 localStorage 持久化的纯 UI 偏好，绕过设置保存按钮；
-// 界面语言随批② 从旧「通用」页迁入本页（[docs/settings-guide](../../../../docs/settings-guide.md)）。
-// **v2 布局**：字号 Select 紧贴对应字体族（界面字号紧贴界面字体，等宽字号紧贴等宽字体），
-// 与 sans/mono 双槽同槽一一对应。控件 = antd Select 下拉框；档位 = 离散 4 档。
+// Appearance preferences apply immediately. Fonts and sizes share one atomic
+// backend patch; localStorage is only the first-frame preview cache.
 import { useEffect, useRef, useState } from "react";
 import { Button, Input, Radio, Select } from "antd";
 import { UndoOutlined } from "@ant-design/icons";
@@ -16,14 +11,14 @@ import { i18n } from "../../i18n";
 import { configErrorMessage, reconcileConfigOperation, useSettings } from "../../stores/settings";
 import { useUi, type ThemePref } from "../../stores/ui";
 import {
-  commitFontSizeSlot, commitFontSlot, DEFAULT_FONT_LEADS, FONT_SIZE_LEVELS, FONT_SIZE_PX,
-  previewFontFamily, readStoredFonts, sanitizeFontList, useFontPreferences,
+  commitFontSizeSlot, commitFontSlot, DEFAULT_FONT_LEADS, DEFAULT_FONT_SIZE_LEVEL, FONT_SIZE_LEVELS,
+  levelToPx, previewFontFamily, readStoredFonts, sanitizeFontList, useFontPreferences,
   type FontPreferences, FontSizeLevel, type FontSlot,
 } from "../../utils/fonts";
 
 const PREVIEW_SAMPLE = "Aa Bb 0123 — The quick brown fox · 中文字体预览 0O1lI";
 
-/** 界面页容器：主题三档 + 字体双槽（本组件持有唯一 Form，FontSettings 只渲染表单项）+ 界面语言。
+/** 界面页容器：主题三档 + 三组字体（本组件持有唯一 Form，FontSettings 只渲染表单项）+ 界面语言。
  *  界面语言需要页级 draft 与 patchDraft（由 SettingsPage 注入）——未注入时不渲染该项，
  *  保持本组件可独立挂载（测试与后续复用）。 */
 export function AppearanceSettings({ draft, patchDraft }: {
@@ -81,8 +76,7 @@ export function AppearanceSettings({ draft, patchDraft }: {
           </div>
         </SettingsFormItem>
       </SettingsSection>
-      {/* 字体组：sans / mono 双槽 + 预览合成一张 section 卡片（[docs/settings-guide](../../../../docs/settings-guide.md)，
-          与参考图「浅色主题」组的圆角浅灰容器同构）。Form 上下文由外层 Form 提供。 */}
+      {/* Each family is followed by its independent size and preview. */}
       <SettingsSection title={t("settings.fontGroup")}>
         <FontSettings />
       </SettingsSection>
@@ -93,7 +87,7 @@ export function AppearanceSettings({ draft, patchDraft }: {
 /** 输入停止多久后自动提交（敲完就走也不丢；回车/失焦立即提交） */
 const COMMIT_IDLE_MS = 600;
 
-// Serialize both slots together: each request contains the whole font pair.
+// Serialize all slots together: each request contains the complete preference set.
 // This prevents an earlier slow request from overwriting a later edit.
 let fontPersistQueue: Promise<void> = Promise.resolve();
 
@@ -102,10 +96,10 @@ function persistFontPrefsToBackend(prefs: FontPreferences): Promise<"saved" | "f
   const operationId = crypto.randomUUID();
   const attempt = fontPersistQueue.then(async () => {
     try {
-      // 5 参：sans / mono / 字号 sans / 字号 mono（后端 set_font_prefs 同步收到 4 个偏好）
-      const sizeSans = FONT_SIZE_PX[prefs.fontSizeSans];
-      const sizeMono = FONT_SIZE_PX[prefs.fontSizeMono];
-      const result = await ipc.setFontPrefs(prefs.sans, prefs.mono, sizeSans, sizeMono, operationId)
+      const sizeSans = levelToPx(prefs.fontSizeSans);
+      const sizeContent = levelToPx(prefs.fontSizeContent);
+      const sizeMono = levelToPx(prefs.fontSizeMono);
+      const result = await ipc.setFontPrefs(prefs.sans, prefs.content, prefs.mono, sizeSans, sizeContent, sizeMono, operationId)
         .catch((error: unknown) => reconcileConfigOperation(operationId, error));
       useSettings.getState().adoptSnapshot(result);
       return "saved" as const;
@@ -125,13 +119,14 @@ function persistFontPrefsToBackend(prefs: FontPreferences): Promise<"saved" | "f
  * 为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
  * 「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
  * 界面看上去就是「字体没保存」。 */
-function FontField({ slot, label, hint, settingId, appliedFont }: {
+function FontField({ slot, label, hint, settingId, appliedFont, appliedLevel }: {
   slot: FontSlot;
   label: string;
   hint: string;
   /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
   settingId: string;
   appliedFont: string;
+  appliedLevel: FontSizeLevel;
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => readStoredFonts()[slot]);
@@ -139,7 +134,7 @@ function FontField({ slot, label, hint, settingId, appliedFont }: {
   const [retrying, setRetrying] = useState(false);
   const saveGeneration = useRef(0);
 
-  function savePair(prefs: FontPreferences) {
+  function savePreferences(prefs: FontPreferences) {
     const generation = ++saveGeneration.current;
     setRetrying(true);
     void persistFontPrefsToBackend(prefs).then((saved) => {
@@ -184,7 +179,7 @@ function FontField({ slot, label, hint, settingId, appliedFont }: {
     edited.current = false;
     const next = commitFontSlot(slot, candidate);
     if (syncInput) setDraft(next[slot]);
-    savePair(next);
+    savePreferences(next);
     return true;
   }
 
@@ -245,11 +240,14 @@ function FontField({ slot, label, hint, settingId, appliedFont }: {
           }
         />
         {saveFailed && <Button size="small" loading={retrying}
-          onClick={() => savePair(readStoredFonts())}
+          onClick={() => savePreferences(readStoredFonts())}
           aria-label={`${t("common.retry")}・${label}`}>
           {t("common.retry")}
         </Button>}
-        <div className="font-preview-row" style={{ fontFamily: previewFontFamily(appliedFont, slot) }}>
+        <div className="font-preview-row" style={{
+          fontFamily: previewFontFamily(appliedFont, slot),
+          fontSize: `${levelToPx(appliedLevel)}px`,
+        }}>
           {PREVIEW_SAMPLE}
         </div>
       </div>
@@ -257,8 +255,7 @@ function FontField({ slot, label, hint, settingId, appliedFont }: {
   );
 }
 
-/** 外观页签字体设置：sans/mono 双槽 + v2 布局——字号 Select 紧贴对应字体族。
- *  顺序：界面字体（sans）→ 界面字号（sans）→ 等宽字体（mono）→ 等宽字号（mono）。 */
+/** Three independent groups: interface, content, and code. */
 function FontSettings() {
   const { t } = useTranslation();
   const applied = useFontPreferences();
@@ -272,6 +269,7 @@ function FontSettings() {
         hint={t("settings.fontHint")}
         settingId="ui.font_sans"
         appliedFont={applied.sans}
+        appliedLevel={applied.fontSizeSans}
       />
       {/* 界面字号（sans）—— 紧贴界面字体下方的字号 Select，v2 布局 */}
       <FontSizeField
@@ -282,15 +280,32 @@ function FontSettings() {
         appliedLevel={applied.fontSizeSans}
         appliedFont={applied.sans}
       />
-      {/* 等宽字体（mono）—— 字体族输入框 */}
+      <FontField
+        slot="content"
+        label={t("settings.contentFont")}
+        hint={t("settings.fontHint")}
+        settingId="ui.font_content"
+        appliedFont={applied.content}
+        appliedLevel={applied.fontSizeContent}
+      />
+      <FontSizeField
+        slot="content"
+        label={t("settings.contentFontSize")}
+        hint={t("settings.fontSizeHint")}
+        settingId="ui.font_size_content"
+        appliedLevel={applied.fontSizeContent}
+        appliedFont={applied.content}
+      />
+      {/* 代码字体（mono）—— 字体族输入框 */}
       <FontField
         slot="mono"
         label={t("settings.monoFont")}
         hint={t("settings.fontHint")}
         settingId="ui.font_mono"
         appliedFont={applied.mono}
+        appliedLevel={applied.fontSizeMono}
       />
-      {/* 等宽字号（mono）—— 紧贴等宽字体下方的字号 Select，v2 布局 */}
+      {/* 代码字号（mono）—— 紧贴代码字体下方的字号 Select */}
       <FontSizeField
         slot="mono"
         label={t("settings.monoFontSize")}
@@ -303,10 +318,10 @@ function FontSettings() {
   );
 }
 
-/** 单个字号槽（sans/mono）：antd Select 4 档（13/15/17/19），即时生效、与字体族同 submit 串行。
+/** Independent size slot: integer 12–20px choices, serialized with all families.
  *  改即提交：不需要“停手 / 回车 / 失焦”三处提交（控件本身是枚举选择、不存在部分输入态）。 */
 function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont }: {
-  slot: "sans" | "mono";
+  slot: FontSlot;
   label: string;
   hint: string;
   settingId: string;
@@ -332,16 +347,13 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
     <SettingsFormItem className="settings-font-row" label={label} settingDescription={hint}>
       <div className="setting-anchor settings-font-size-control" data-setting-id={settingId}>
         <Select<FontSizeLevel>
-          className="settings-font-size-select w-narrow"
+          className="settings-font-size-select"
           value={appliedLevel}
           onChange={(v) => {
             const next = commitFontSizeSlot(slot, v);
             commit(next);
           }}
-          options={FONT_SIZE_LEVELS.map((lvl) => ({
-            value: lvl,
-            label: `${t(`settings.fontSize_${lvl}`)} (${FONT_SIZE_PX[lvl]}px)`,
-          }))}
+          options={FONT_SIZE_LEVELS.map((lvl) => ({ value: lvl, label: `${lvl}px` }))}
           suffixIcon={
             <Button
               type="text"
@@ -351,7 +363,7 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
               icon={<UndoOutlined />}
               onClick={(e) => {
                 e.stopPropagation();
-                const next = commitFontSizeSlot(slot, "default");
+                const next = commitFontSizeSlot(slot, DEFAULT_FONT_SIZE_LEVEL[slot]);
                 commit(next);
               }}
             />
@@ -375,7 +387,7 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
           className="font-preview-row"
           style={{
             fontFamily: previewFontFamily(appliedFont, slot),
-            fontSize: `${FONT_SIZE_PX[appliedLevel]}px`,
+            fontSize: `${levelToPx(appliedLevel)}px`,
           }}
         >
           {PREVIEW_SAMPLE}

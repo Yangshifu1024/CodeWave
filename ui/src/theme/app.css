@@ -12,10 +12,10 @@
   --ws-highlight: color-mix(in srgb, var(--ws-bg-nav) 88%, var(--ws-text-1) 12%);
 }
 
-/* 裸 <code> 一律走等宽双槽 token：UA 默认 monospace 不随用户字体设置变化
+/* 裸 <code> 一律走代码 token：UA 默认 monospace 不随用户字体设置变化
    （composer 三弹窗技能名/命令名/提及名、任务中心 sched、providers 模型名、changes 路径等；
    字体 token 体系见 theme/native.css 与 utils/fonts.ts） */
-code { font-family: var(--ws-font-mono); font-size: calc(13px + var(--ws-font-size-mono-offset)); }
+code { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); }
 
 /* ---------- AppShell ---------- */
 .toolbar {
@@ -165,6 +165,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .msg.user .role { text-align: right; justify-content: flex-end; }
 .user-bubble {
+  font-family: var(--ws-font-content); font-size: var(--ws-font-size-content);
   max-width: 78%; background: var(--ws-user-bubble); color: var(--ws-text-1);
   padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word;
 }
@@ -175,9 +176,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .user-bubble.md > p:first-child { margin-top: 0; }
 .user-bubble.md > p:last-child { margin-bottom: 0; }
 .user-bubble.md :is(h1, h2, h3, h4, h5, h6) { margin: 0.45em 0 0.2em; font-weight: 600; line-height: 1.35; color: var(--ws-text-1); }
-.user-bubble.md h1 { font-size: calc(16.5px + var(--ws-font-size-sans-offset)); }
-.user-bubble.md h2 { font-size: calc(15px + var(--ws-font-size-sans-offset)); }
-.user-bubble.md h3 { font-size: calc(14px + var(--ws-font-size-sans-offset)); }
+.user-bubble.md h1 { font-size: calc(16.5px + var(--ws-font-size-content-offset)); }
+.user-bubble.md h2 { font-size: calc(15px + var(--ws-font-size-content-offset)); }
+.user-bubble.md h3 { font-size: calc(14px + var(--ws-font-size-content-offset)); }
 .user-bubble.md :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
 .user-bubble.md :is(ul, ol) { padding-inline-start: 20px; margin: 0.3em 0; }
 .user-bubble.md li { margin: 0.1em 0; }
@@ -188,7 +189,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   background: color-mix(in srgb, var(--ws-accent) 4%, transparent);
 }
 .user-bubble.md hr { border: 0; border-top: 1px solid var(--ws-border); margin: 0.6em 0; }
-.user-bubble.md :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); font-family: var(--ws-font-mono); font-size: calc(12.5px + var(--ws-font-size-mono-offset)); }
+.user-bubble.md :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); }
 .user-bubble.md a { color: var(--ws-accent); text-decoration: underline; text-underline-offset: 2px; }
 .user-bubble.md strong { font-weight: 600; }
 .user-bubble.md em { font-style: italic; }
@@ -214,6 +215,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    .skill-body.md = 技能详情弹框的 SKILL.md 正文，此前漏在本组外——正文段落无间距、代码块无 github 底色、Copy 按钮不显形、表格无边框；
    .viewer-md.md = 文件预览弹框的 markdown/doc 正文，此前复用聊天区 .assistant 容器，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
    新增消费点一律往这里的 :is() 里加容器选择器，不要另抄一套排版。 */
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) {
+  font-family: var(--ws-font-content); font-size: var(--ws-font-size-content);
+}
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) p { margin: 0.4em 0; }
 /* 代码框：github 亮色风格（需求 2.1，浅色背景）；外层 .code-wrap 承载右上角复制按钮 */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .code-wrap { position: relative; }
@@ -237,11 +241,12 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre,
 .code-block {
   font-family: var(--ws-font-mono);
-  font-size: calc(12.5px + var(--ws-font-size-mono-offset));
+  font-size: var(--ws-font-size-mono);
   border-radius: 8px; padding: 10px 12px; overflow-x: auto;
   background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328;
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) code { font-family: var(--ws-font-mono); font-size: calc(12.5px + var(--ws-font-size-mono-offset)); color: inherit; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) code { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); color: inherit; }
+.code-block.viewer-text { font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); }
 /* inline code chip：背景 = 左栏 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）；
    与左侧导航同色，整体观感统一（[docs/chat-and-interface]）。 */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :not(pre) > code { background: var(--ws-bg-nav); padding: 1px 5px; border-radius: 4px; color: var(--ws-text-1); }
@@ -257,18 +262,18 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    max-width:100% 是滚动的关键——它把 wrapper 钉在容器宽度内，宽表格才会溢出成可滚动区。
    （min-width 对块级盒实际是 no-op，写着是为了与 .assistant/.md 的 min-width:0 惯例一致，兼作意图声明。） */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .table-wrap > table { width: 100%; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: calc(12.5px + var(--ws-font-size-sans-offset)); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) td { border: 1px solid var(--ws-border); padding: 5px 9px; text-align: left; font-size: var(--ws-font-size-content); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) th { background: var(--ws-bg-nav); font-weight: 600; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) tr:hover td { background: var(--ws-bg-nav); }
 /* 标题：渐变 + 紧凑（[docs/chat-and-interface]） */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.8em 0 0.3em; font-weight: 600; line-height: 1.4; color: var(--ws-text-1);
 }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h1 { font-size: calc(18.5px + var(--ws-font-size-sans-offset)); margin-top: 1em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h2 { font-size: calc(16.5px + var(--ws-font-size-sans-offset)); margin-top: 0.9em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h3 { font-size: calc(15px + var(--ws-font-size-sans-offset)); margin-top: 0.8em; }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h4 { font-size: calc(14px + var(--ws-font-size-sans-offset)); }
-:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h5, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h6 { font-size: calc(13.5px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h1 { font-size: calc(18.5px + var(--ws-font-size-content-offset)); margin-top: 1em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h2 { font-size: calc(16.5px + var(--ws-font-size-content-offset)); margin-top: 0.9em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h3 { font-size: calc(15px + var(--ws-font-size-content-offset)); margin-top: 0.8em; }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h4 { font-size: calc(14px + var(--ws-font-size-content-offset)); }
+:is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h5, :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) h6 { font-size: calc(13.5px + var(--ws-font-size-content-offset)); color: var(--ws-text-2); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) p { line-height: 1.7; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) a {
@@ -312,7 +317,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .thinking-block .ant-collapse-header-text { flex: 1; min-width: 0; overflow: hidden; display: flex; }
 .thinking-block .thinking-body {
-  font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); white-space: pre-wrap; word-break: break-word;
+  font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); color: var(--ws-dim); white-space: pre-wrap; word-break: break-word;
   border-left: 2px solid var(--ws-border); padding: 2px 8px;
   max-height: 240px; overflow-y: auto;
   /* 隐藏内层滚动条：展开时「live tailing」自动跟随最新内容（上滚回看；回到底部恢复 tailing） */
@@ -528,7 +533,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ctx-popover-row.ctx-popover-threshold-row { gap: 12px; }
 .ctx-popover-row.ctx-popover-threshold-row .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
 .ctx-popover-label { flex: none; color: var(--ws-dim); min-width: 56px; }
-.ctx-popover-value { flex: 1; min-width: 0; color: var(--ws-text-1); font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset)); }
+.ctx-popover-value { flex: 1; min-width: 0; color: var(--ws-text-1); font-family: var(--ws-font-sans); font-size: calc(12px + var(--ws-font-size-sans-offset)); font-variant-numeric: tabular-nums; }
 .ctx-popover-meta { flex: none; color: var(--ws-dim); font-size: calc(11.5px + var(--ws-font-size-sans-offset)); }
 .ctx-popover-empty { display: flex; align-items: center; gap: 12px; color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); padding: 2px 0; }
 .ctx-popover-empty .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
@@ -547,7 +552,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* ---------- CodeBlock / shared code ---------- */
 .code-block {
   margin: 0;
-  font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   overflow-x: auto; white-space: pre-wrap; word-break: break-all;
   max-height: 320px; overflow-y: auto;
 }
@@ -567,13 +572,13 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card.st-neutral .dot { background: var(--ws-dim); opacity: 0.55; }
 @keyframes pulse { 50% { opacity: 0.3; } }
 .tool-card .verb { color: var(--ws-dim); white-space: nowrap; }
-.tool-card .tool-name { color: var(--ws-accent); white-space: nowrap; }
+.tool-card .tool-name { color: var(--ws-accent); white-space: nowrap; font-family: var(--ws-font-sans); font-size: calc(12.5px + var(--ws-font-size-sans-offset)); }
 .tool-card .summary { color: var(--ws-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .tool-card .dur { color: var(--ws-dim); font-size: calc(11px + var(--ws-font-size-sans-offset)); }
 .tool-card .chev { color: var(--ws-dim); }
 .tool-card .tail {
   margin: 0; padding: 8px 10px; background: var(--ws-code-bg);
-  font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   overflow-x: auto; white-space: pre-wrap; word-break: break-all;
   max-height: 320px; overflow-y: auto;
 }
@@ -582,7 +587,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .kv { display: flex; gap: 8px; align-items: center; padding: 6px 10px; flex-wrap: wrap; }
 .tool-card .cmd-line { padding-top: 10px; }
 .tool-card .cmd-line code {
-  font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   white-space: pre-wrap; word-break: break-all;
 }
 .tool-card .img { max-width: 320px; max-height: 240px; margin: 6px 10px; border-radius: 6px; }
@@ -592,7 +597,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .ask-row .a { color: var(--ws-text); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-card .ask-row .note { color: var(--ws-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-card .diff-line {
-  display: flex; padding: 0 10px; font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset));
+  display: flex; padding: 0 10px; font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   white-space: pre-wrap; word-break: break-all;
 }
 .diff-line.add { background: var(--ws-diff-add-bg); color: var(--ws-diff-add-text); }
@@ -648,7 +653,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ask-detail {
   margin: 0 0 10px; padding: 8px 10px; border-radius: 8px;
   background: var(--ws-code-bg); font-family: var(--ws-font-mono);
-  font-size: calc(12px + var(--ws-font-size-mono-offset)); white-space: pre-wrap; word-break: break-all;
+  font-size: var(--ws-font-size-mono); white-space: pre-wrap; word-break: break-all;
   max-height: 160px; overflow: auto;
 }
 .ask-options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
@@ -734,7 +739,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .plan-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .plan-title { font-weight: 600; font-size: calc(13px + var(--ws-font-size-sans-offset)); display: inline-flex; align-items: center; gap: 6px; }
 .plan-body {
-  max-height: 220px; overflow-y: auto; font-size: calc(13px + var(--ws-font-size-sans-offset)); line-height: 1.7; color: var(--ws-text-2);
+  max-height: 220px; overflow-y: auto; font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); line-height: 1.7; color: var(--ws-text-2);
 }
 .plan-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
 .ask-submit-error { margin-bottom: 8px; }
@@ -779,7 +784,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .sub-card .sub-card-meta {
   flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: calc(11px + var(--ws-font-size-mono-offset)); color: var(--ws-dim); font-family: var(--ws-font-mono);
+  font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); font-family: var(--ws-font-sans); font-variant-numeric: tabular-nums;
 }
 .sub-card.st-error .sub-card-meta { color: var(--ws-err); }
 /* 提前退出原因（done 态的诊断信息）：与旁边的橙色感叹号图标同档强度，不再与普通 meta 同色 */
@@ -906,14 +911,17 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .project-group { margin-bottom: 6px; }
 .project-row {
   display: flex; align-items: center; gap: 6px; padding: 4px 8px;
-  font-size: calc(13px + var(--ws-font-size-sans-offset)); font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: 8px;
   cursor: pointer; user-select: none;
 }
 .project-row .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 会话列表容器：之前无任何样式（裸 div），会话行块级依次排列、零间距，
+   hover 高亮块会连成一片。行高提到 30px 后更需要间隙才能看清行边界。 */
+.project-sessions { display: flex; flex-direction: column; gap: 2px; }
 .session-nav-row {
   position: relative; display: flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
-  font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
+  height: 30px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
+  font-size: var(--ws-font-size-sans); color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
 }
 /* 会话行高亮走 --ws-highlight（与全站统一），见 :root 定义 */
 .session-nav-row:hover { background: var(--ws-highlight); }
@@ -940,8 +948,8 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .session-nav-row:hover .row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
 .session-nav-row:hover .session-time { opacity: 0; }
 .project-row {
-  position: relative; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
-  font-size: calc(13px + var(--ws-font-size-sans-offset)); font-weight: 600; color: var(--ws-text-1); border-radius: 8px;
+  position: relative; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
+  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: 8px;
 }
 .project-row .row-action {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
@@ -990,7 +998,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-changes-tools .flex { flex: 1; }
 .rb-changes .gitdiff { flex: 1; min-height: 0; overflow-y: auto; }
 /* 窄右栏内的 diff 代码块：字号与 padding 略降（原弹框 860px → 右栏 468px、现 328px） */
-.rb-changes .code-block { font-size: calc(11px + var(--ws-font-size-mono-offset)); padding: 8px 10px; }
+.rb-changes .code-block { font-size: var(--ws-font-size-mono); padding: 8px 10px; }
 
 /* ---------- 左侧文件树（已随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 移除工作区文件面板） ---------- */
 
@@ -1248,7 +1256,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 /* 展开的完整错误（含 stderr）：等宽小字 + 换行保留 + 限高滚动，不撑破布局 */
 .mcp-status-error {
   margin: 0 8px 6px; padding: 8px 10px; border-radius: 6px; background: var(--ws-bg-nav);
-  color: var(--ws-text-2); font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset));
+  color: var(--ws-text-2); font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
 }
 .mcp-pane { display: flex; flex-direction: column; gap: 14px; }
@@ -1263,9 +1271,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .mcp-summary-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px + var(--ws-font-size-sans-offset)); color: var(--ws-text-1); }
 .mcp-summary-transport { flex: none; font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); }
 .mcp-summary > .ant-btn { align-self: flex-start; }
-.mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset)); }
+.mcp-pane .mcp-json textarea { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); }
 .hint { color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); }
-/* 外观页签字体预览：各自跟随界面字体 / 等宽字体设置行。
+/* 外观页签字体预览：各自跟随界面 / 内容 / 代码字体与字号设置行。
    预览块在 section 卡片内用主背景色 --ws-bg-main 与卡片底色形成对比，
    避免 dashed 边框在浅灰底上"飘"看不见边界（[docs/settings-guide](../../../docs/settings-guide.md)） */
 .font-preview-row {
@@ -1331,7 +1339,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-label { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); margin-bottom: 4px; } /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：去 letter-spacing + 提到 11px，中文标签不再显松散 */
 /* 行级取值统一两档（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 排版 + [docs/chat-and-interface](../../../docs/chat-and-interface.md)）：标签 11px dim、取值行 12px text-2；加粗分支行已移除（rb-value 退役） */
 .rb-dim { color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-mono { font-family: var(--ws-font-mono); font-size: calc(12px + var(--ws-font-size-mono-offset)); }
+.rb-mono { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); }
 .rb-section { border-top: 1px dashed var(--ws-border); padding-top: 10px; }
 .rb-path {
   /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：路径改走 sans 槽——mono 字族无中文字形，含中文目录的路径曾逐字回退成乱排混排；字号与正文统一 12px */
@@ -1366,7 +1374,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-log-tools { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
 .rb-log {
   flex: 1; min-height: 0; margin: 6px 0 2px; overflow: auto; padding: 6px 8px;
-  font-family: var(--ws-font-mono); font-size: calc(10.5px + var(--ws-font-size-mono-offset)); line-height: 1.5;
+  font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); line-height: 1.5;
   color: var(--ws-text-2); background: var(--ws-code-bg, rgba(127, 127, 127, 0.08));
   border-radius: 6px; white-space: pre-wrap; word-break: break-all;
 }
@@ -1507,7 +1515,7 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 .rb-quota-bar.risk-danger .ant-progress-track { background: var(--ws-err, #cf1322) !important; }
 /* 未展开时也要能看出这家不对劲（否则只剩一个名字，错误被藏在展开内容里） */
 .rb-quota-flag { flex: none; font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-err, #cf1322); }
-.rb-quota-value { flex: none; font-size: calc(11.5px + var(--ws-font-size-mono-offset)); color: var(--ws-text-2); }
+.rb-quota-value { flex: none; font-family: var(--ws-font-sans); font-size: calc(11.5px + var(--ws-font-size-sans-offset)); font-variant-numeric: tabular-nums; color: var(--ws-text-2); }
 .rb-quota-bar { flex: 1; min-width: 40px; }
 .rb-quota-bar .ant-progress { margin: 0; line-height: 1; }
 .rb-quota-entries { display: flex; flex-direction: column; gap: 3px; padding: 3px 0 3px 8px; }
@@ -1538,10 +1546,10 @@ html.ws-resizing .tb-left-seg { transition: none !important; }
 }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-diagram-error {
   white-space: pre-wrap; text-align: left; font-family: var(--ws-font-mono);
-  font-size: calc(12px + var(--ws-font-size-mono-offset)); color: var(--ws-err);
+  font-size: var(--ws-font-size-mono); color: var(--ws-err);
 }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .ws-math-raw {
-  font-family: var(--ws-font-mono); font-size: calc(12.5px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
   white-space: pre-wrap; color: var(--ws-text-2);
 }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }

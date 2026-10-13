@@ -116,6 +116,8 @@ export const SETTINGS_ITEMS: SettingItem[] = [
   { id: "ui.theme", labelKey: "settings.theme", page: "appearance", width: "narrow", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
   { id: "ui.font_sans", labelKey: "settings.uiFont", page: "appearance", keywords: ["font", "sans", "字体", "界面字体"] },
   { id: "ui.font_size_sans", labelKey: "settings.uiFontSize", page: "appearance", width: "narrow", keywords: ["font size", "sans", "字号", "界面字号"] },
+  { id: "ui.font_content", labelKey: "settings.contentFont", page: "appearance", keywords: ["font", "content", "字体", "内容字体", "正文字体"] },
+  { id: "ui.font_size_content", labelKey: "settings.contentFontSize", page: "appearance", width: "narrow", keywords: ["font size", "content", "字号", "内容字号", "正文字号"] },
   { id: "ui.font_mono", labelKey: "settings.monoFont", page: "appearance", keywords: ["font", "mono", "等宽", "代码字体"] },
   { id: "ui.font_size_mono", labelKey: "settings.monoFontSize", page: "appearance", width: "narrow", keywords: ["font size", "mono", "字号", "等宽字号", "代码字号"] },
   { id: "ui.language", labelKey: "settings.language", page: "appearance", width: "narrow", keywords: ["language", "语言", "界面语言"] },
@@ -207,6 +209,7 @@ export const WIDTH_TIERS: SettingWidth[] = ["narrow", "mid", "wide"];
 export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
   // —— 整行 / 多行文本：内容长度不可预知，占满整行（宽度由容器决定） ——
   "ui.font_sans", // 界面字体名（可含多个 family，逗号分隔）+ 行内「恢复默认」按钮
+  "ui.font_content", // 内容字体名，同上
   "ui.font_mono", // 等宽字体名，同上
   "custom_prompt", // TextArea：多行自定义提示词
 
@@ -257,8 +260,10 @@ export const INSTANT_APPLY_FIELD_IDS: string[] = [
   "ui.language", // 界面语言：useUi.setLanguage
   "ui.theme", // 主题：localStorage ws_theme
   "ui.font_sans", // 界面字体：localStorage 缓存 + 后端 config.ui.font_sans（set_font_prefs）
+  "ui.font_content", // 独立的内容字体，与另外两槽一起提交。
   "ui.font_mono", // 等宽字体：同上
   "ui.font_size_sans", // Applied immediately; persisted through set_font_prefs.
+  "ui.font_size_content", // Independent content size, with the same persistence path.
   "ui.font_size_mono", // Independent monospace size, with the same persistence path.
   "ui.auto_update", // 启动时自动检查更新：localStorage ws_auto_update
 ];
@@ -267,8 +272,10 @@ export const INSTANT_APPLY_FIELD_IDS: string[] = [
 export type SettingFieldPath =
   | "ui.theme"
   | "ui.font_sans"
+  | "ui.font_content"
   | "ui.font_mono"
   | "ui.font_size_sans"
+  | "ui.font_size_content"
   | "ui.font_size_mono"
   | "ui.language"
   | "ui.auto_update"
@@ -306,7 +313,7 @@ export type SettingFieldPath =
 export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
   // 界面页：主题与双字体槽是 localStorage 偏好、界面语言是即时生效项 ——
   // 本页没有可保存的改动，故**永不亮脏点**（有意为之，见 docs/settings-guide.md）。
-  appearance: ["ui.theme", "ui.font_sans", "ui.font_size_sans", "ui.font_mono", "ui.font_size_mono", "ui.language"],
+  appearance: ["ui.theme", "ui.font_sans", "ui.font_size_sans", "ui.font_content", "ui.font_size_content", "ui.font_mono", "ui.font_size_mono", "ui.language"],
   providers: ["providers", "active_model_id", "ui.ai_language", "subagentModels"],
   network: ["network.proxy", "network.allow_private_network"],
   security: [
@@ -381,11 +388,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "themeDark", // → ui.theme 选项
   "fontHint", // → ui.font_sans / ui.font_mono 的输入说明
   "fontReset", // → 字体槽的「恢复默认」按钮
-  "fontSizeHint", // → 字号 Select 说明（v2）
-  "fontSize_small", // → 字号档「小」
-  "fontSize_default", // → 字号档「默认」
-  "fontSize_large", // → 字号档「大」
-  "fontSize_xlarge", // → 字号档「特大」
+  "fontSizeHint", // → 字号 Select 说明（v2）；选项只显 px 数字，不再用 i18n 档位文案
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
   "providerGeneral", // 模型与供应商页的通用分组标题

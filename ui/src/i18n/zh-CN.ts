@@ -125,9 +125,8 @@ export default {
     // 批④：占位符原先借用 composer.effortDefault（跨段借键），本批拆出独立键（值不变）
     aiLanguagePlaceholder: "默认", compactThreshold: "自动压缩阈值", compactTimeout: "压缩请求超时（秒，30–3600）",
     theme: "主题", themeSystem: "跟随系统", themeLight: "亮色", themeDark: "暗色",
-    fontGroup: "字体", uiFont: "界面字体", monoFont: "等宽字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车生效",
-    uiFontSize: "界面字号", monoFontSize: "等宽字号", fontSizeHint: "调整 sans/mono 文本的字号；改即生效",
-    fontSize_small: "小", fontSize_default: "默认", fontSize_large: "大", fontSize_xlarge: "特大",
+    fontGroup: "字体", uiFont: "界面字体", contentFont: "内容字体", monoFont: "代码字体", fontHint: "本机已安装的字体名，多个用逗号分隔；留空恢复默认，回车生效",
+    uiFontSize: "界面字号", contentFontSize: "内容字号", monoFontSize: "代码字号", fontSizeHint: "12–20px，三组独立；默认界面 14px、内容 14px、代码 12px，改即生效",
     fontReset: "恢复默认",
     approvalEnabled: "新会话默认计划模式", approvalEnabledHint: "开启时新会话从计划模式开始；关闭时从完全访问模式开始。已有会话不受影响。", confirmOutside: "工作区外新建路径时确认", confirmPush: "git push 前确认",
     autoConfirm: "5 分钟后自动确认推荐选项", autoConfirmHint: "勾选：审批 5 分钟无响应自动允许；不勾选：始终等待你的选择",

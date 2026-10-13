@@ -100,7 +100,9 @@ export interface ShellConfig { selection: string | null }
 export interface UiPrefs {
   /** 界面 sans 文本字号（px）；与 `font_sans` 同源：sans 字体用此字号渲染 */
   font_size_sans: number;
-  /** 界面 mono 文本字号（px）；与 `font_mono` 同源：mono 字体用此字号渲染 */
+  /** Content prose size; missing values use 14px. */
+  font_size_content?: number;
+  /** Code/log text size (px), independent of interface and content. */
   font_size_mono: number;
   accent: string;
   language: string;
@@ -109,6 +111,8 @@ export interface UiPrefs {
   /** 界面字体（逗号分隔的已安装字体名，空 = 默认链）。
    *  **真源在后端配置文件**；WebView 的 localStorage 只当首帧缓存（防闪变）。 */
   font_sans?: string;
+  /** Prose font, independent of interface and code fonts. */
+  font_content?: string;
   /** 等宽字体（代码与日志），同上。 */
   font_mono?: string;
 }

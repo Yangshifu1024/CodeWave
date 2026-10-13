@@ -17,7 +17,10 @@ async function baseInvoke(cmd: string, args?: any) {
   switch (cmd) {
     case "set_font_prefs": {
       const current = useSettings.getState().config!;
-      return configSaved({ ...current, ui: { ...current.ui, font_sans: args.sans, font_mono: args.mono, font_size_sans: args.fontSizeSans, font_size_mono: args.fontSizeMono } });
+      return configSaved({ ...current, ui: { ...current.ui,
+        font_sans: args.sans, font_content: args.content, font_mono: args.mono,
+        font_size_sans: args.fontSizeSans, font_size_content: args.fontSizeContent, font_size_mono: args.fontSizeMono,
+      } });
     }
     default:
       throw new Error(`unmocked command: ${cmd}`);
@@ -35,11 +38,16 @@ beforeEach(() => {
   localStorage.clear();
   calls.length = 0;
   vi.mocked(invoke).mockImplementation(baseInvoke);
-  const snapshot = configSnapshot({ providers: [], ui: { font_sans: "", font_mono: "", font_size_sans: 15, font_size_mono: 15, language: "zh-CN" } });
+  const snapshot = configSnapshot({ providers: [], ui: {
+    font_sans: "", font_content: "", font_mono: "",
+    font_size_sans: 14, font_size_content: 14, font_size_mono: 12, language: "zh-CN",
+  } });
   useSettings.setState({ snapshot, config: snapshot.config, loaded: true });
   document.documentElement.style.removeProperty("--ws-font-sans");
+  document.documentElement.style.removeProperty("--ws-font-content");
   document.documentElement.style.removeProperty("--ws-font-mono");
   document.documentElement.style.removeProperty("--ws-font-size-sans");
+  document.documentElement.style.removeProperty("--ws-font-size-content");
   document.documentElement.style.removeProperty("--ws-font-size-mono");
 });
 
@@ -95,7 +103,7 @@ describe("界面字体：提交不丢与后端落盘", () => {
 
   it("回车立即提交（原行为不回归）", async () => {
     mount();
-    const el = fontInput("等宽字体");
+    const el = fontInput("代码字体");
     fireEvent.change(el, { target: { value: "JetBrains Mono" } });
     fireEvent.keyDown(el, { key: "Enter", code: "Enter" });
 
@@ -104,7 +112,7 @@ describe("界面字体：提交不丢与后端落盘", () => {
 
   it("输入法组合期间不提交，组合结束才落盘（半成品不写库）", async () => {
     mount();
-    const el = fontInput("等宽字体");
+    const el = fontInput("代码字体");
     fireEvent.compositionStart(el);
     fireEvent.change(el, { target: { value: "上海宋" } });
     fireEvent.keyDown(el, { key: "Enter", code: "Enter" });
@@ -169,7 +177,11 @@ describe("界面字体：提交不丢与后端落盘", () => {
     expect(useSettings.getState().snapshot?.version.sequence).toBe(1);
   });
 
-  it("failed secure persistence explains the reason and retries the unchanged preview", async () => {
+  it.each([
+    ["sans", "界面字体", "font_sans"],
+    ["content", "内容字体", "font_content"],
+    ["mono", "代码字体", "font_mono"],
+  ] as const)("%s persistence failure retains the preview and retries the unchanged value", async (slot, label, field) => {
     const notification = vi.spyOn(useUi.getState(), "notify");
     let fail = true;
     vi.mocked(invoke).mockImplementation(async (cmd, args) => {
@@ -180,19 +192,56 @@ describe("界面字体：提交不丢与后端落盘", () => {
       return baseInvoke(cmd, args);
     });
     mount();
-    const input = fontInput("界面字体");
+    const input = fontInput(label);
     fireEvent.change(input, { target: { value: "Retry Serif" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-    await screen.findByRole("button", { name: "重试・界面字体" });
-    expect(useSettings.getState().config?.ui.font_sans).toBe("");
-    expect(localStorage.getItem("ws_font_sans")).toBe("Retry Serif");
+    await screen.findByRole("button", { name: `重试・${label}` });
+    expect(useSettings.getState().config?.ui[field]).toBe("");
+    expect(localStorage.getItem(`ws_font_${slot}`)).toBe("Retry Serif");
     expect(notification).toHaveBeenCalledWith(expect.any(String), expect.stringContaining("Unlock the system keyring"));
     const firstOperation = fontPrefCalls()[0].operationId;
     fail = false;
-    fireEvent.click(screen.getByRole("button", { name: "重试・界面字体" }));
-    await waitFor(() => expect(useSettings.getState().config?.ui.font_sans).toBe("Retry Serif"));
+    fireEvent.click(screen.getByRole("button", { name: `重试・${label}` }));
+    await waitFor(() => expect(useSettings.getState().config?.ui[field]).toBe("Retry Serif"));
     expect(fontPrefCalls()).toHaveLength(2);
     expect(fontPrefCalls()[1].operationId).not.toBe(firstOperation);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "重试・界面字体" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: `重试・${label}` })).toBeNull());
+  });
+
+  it("content edits persist all six preferences and preserve the other font groups", async () => {
+    localStorage.setItem("ws_font_sans", "Inter");
+    localStorage.setItem("ws_font_mono", "Menlo");
+    localStorage.setItem("ws_font_size_sans", "16");
+    localStorage.setItem("ws_font_size_content", "18");
+    localStorage.setItem("ws_font_size_mono", "12");
+    mount();
+    const input = fontInput("内容字体");
+    fireEvent.change(input, { target: { value: "Source Han Serif" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(fontPrefCalls()).toHaveLength(1));
+    expect(fontPrefCalls()[0]).toMatchObject({
+      sans: "Inter", content: "Source Han Serif", mono: "Menlo",
+      fontSizeSans: 16, fontSizeContent: 18, fontSizeMono: 12,
+    });
+    await waitFor(() => expect(useSettings.getState().config?.ui.font_content).toBe("Source Han Serif"));
+    expect(fontInput("界面字体").value).toBe("Inter");
+    expect(fontInput("代码字体").value).toBe("Menlo");
+    const preview = input.closest(".settings-font-control")!.querySelector<HTMLElement>(".font-preview-row")!;
+    expect(preview.style.fontFamily).toBe('"Source Han Serif", var(--ws-font-content-fallback)');
+    expect(preview.style.fontSize).toBe("18px");
+  });
+
+  it("restoring the content family preserves interface/code families and all sizes", async () => {
+    localStorage.setItem("ws_font_sans", "Inter");
+    localStorage.setItem("ws_font_content", "Georgia");
+    localStorage.setItem("ws_font_mono", "Menlo");
+    mount();
+    fireEvent.click(screen.getByLabelText("恢复默认・内容字体"));
+    await waitFor(() => expect(fontPrefCalls()).toHaveLength(1));
+    expect(fontPrefCalls()[0]).toMatchObject({
+      sans: "Inter", content: "", mono: "Menlo",
+      fontSizeSans: 14, fontSizeContent: 14, fontSizeMono: 12,
+    });
+    expect(localStorage.getItem("ws_font_content")).toBeNull();
   });
 });
