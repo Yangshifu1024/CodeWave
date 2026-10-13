@@ -301,9 +301,10 @@ function zhT(key: string): string {
 }
 
 describe("font-size settings registration", () => {
-  it("registers both size slots as searchable, immediate appearance settings", () => {
+  it("registers all three size slots as searchable, immediate appearance settings", () => {
     for (const [id, label] of [
       ["ui.font_size_sans", "settings.uiFontSize"],
+      ["ui.font_size_content", "settings.contentFontSize"],
       ["ui.font_size_mono", "settings.monoFontSize"],
     ]) {
       expect(SETTINGS_ITEMS.find((item) => item.id === id)).toMatchObject({
@@ -315,6 +316,17 @@ describe("font-size settings registration", () => {
       expect(matchSettings(zhT(label), zhT).map((item) => item.id)).toContain(id);
       expect(matchSettings("font size", zhT).map((item) => item.id)).toContain(id);
     }
+  });
+
+  it("content family search has a real appearance field and shares font-width exemption", () => {
+    expect(SETTINGS_ITEMS.find((item) => item.id === "ui.font_content")).toMatchObject({
+      labelKey: "settings.contentFont", page: "appearance",
+    });
+    expect(PAGE_FIELDS.appearance as string[]).toContain("ui.font_content");
+    expect(INSTANT_APPLY_FIELD_IDS).toContain("ui.font_content");
+    expect(WIDTH_EXEMPT_ITEM_IDS).toContain("ui.font_content");
+    expect(matchSettings("内容字体", zhT).map((item) => item.id)).toContain("ui.font_content");
+    expect(matchSettings("Content font", enT).map((item) => item.id)).toContain("ui.font_content");
   });
 });
 
@@ -672,9 +684,6 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(group.titleKey)": "左导航组标题由 PAGE_GROUPS.titleKey 派生",
     "t(PAGE_LABEL_KEY[key])": "左导航页名由注册表页名键派生",
     "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
-  },
-  "panels/FontSettings.tsx": {
-    "t(`settings.fontSize_${lvl}`)": "字号档位 4 档 label 键由 lvl 变量拼出（small/default/large/xlarge）",
   },
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
   "chat/Composer.tsx": {

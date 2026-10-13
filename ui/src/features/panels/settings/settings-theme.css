@@ -129,7 +129,7 @@
 .settings-theme-root .settings-action-group { display: flex; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; gap: 8px; }
 .settings-theme-root .settings-shell-control { display: flex; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; gap: 8px; }
 .settings-theme-root .settings-shell-control .ant-select { flex: none; }
-.settings-theme-root .settings-shell-path { flex: 1 1 140px; min-width: 0; overflow: hidden; color: var(--ws-text-2); font: calc(12px + var(--ws-font-size-mono-offset)) var(--ws-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.settings-theme-root .settings-shell-path { flex: 1 1 140px; min-width: 0; overflow: hidden; color: var(--ws-text-2); font: var(--ws-font-size-mono) var(--ws-font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .settings-theme-root .settings-slider-control { display: flex; align-items: center; width: 100%; min-width: 0; gap: 12px; }
 .settings-theme-root .settings-slider-control .ant-slider { flex: 1; min-width: 80px; }
 .settings-theme-root .settings-slider-value { flex: none; min-width: 3ch; color: var(--ws-text-2); font-size: var(--settings-metadata-size); font-variant-numeric: tabular-nums; text-align: end; }
@@ -239,7 +239,7 @@
   display: block;
   color: var(--ws-text-1);
   font-family: var(--ws-font-mono);
-  font-size: calc(14px + var(--ws-font-size-mono-offset));
+  font-size: var(--ws-font-size-mono);
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -305,6 +305,17 @@
 }
 .settings-theme-root .settings-font-control .ant-input-affix-wrapper { width: 100%; }
 .settings-theme-root .settings-font-control .font-preview-row { overflow-wrap: anywhere; }
+/* 字号行（ui.font_size_sans / ui.font_size_content / ui.font_size_mono）：与上方字体族行同构。
+   antd Select 默认 inline-block 按内容撑宽，缺 width:100% 会与上方满宽输入框右侧错位。 */
+.settings-theme-root .settings-font-size-control {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-theme-root .settings-font-size-control .settings-font-size-select { width: 100%; }
+.settings-theme-root .settings-font-size-control .font-preview-row { overflow-wrap: anywhere; }
 .settings-theme-root .settings-theme-option {
   display: flex;
   min-width: 0;
@@ -395,8 +406,8 @@
   margin: 8px 0 0 28px;
   overflow-wrap: anywhere;
   color: var(--ws-text-2);
-  font-family: var(--ws-font-mono);
-  font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-sans);
+  font-size: var(--settings-metadata-size);
 }
 .settings-theme-root .proxy-mode-field {
   margin-top: 16px;
@@ -499,8 +510,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--ws-text-1);
-  font-family: var(--ws-font-mono);
-  font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-sans);
+  font-size: var(--settings-metadata-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -541,8 +552,8 @@
   white-space: nowrap;
   overflow-wrap: anywhere;
   color: var(--ws-text-1);
-  font-family: var(--ws-font-mono);
-  font-size: calc(12px + var(--ws-font-size-mono-offset));
+  font-family: var(--ws-font-sans);
+  font-size: var(--settings-field-title-size);
   font-weight: 500;
 }
 .settings-theme-root .settings-provider-model-limits {
@@ -641,7 +652,7 @@
 .settings-theme-root .mcp-server-tools { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
 .settings-theme-root .mcp-tool-list { display: flex; flex-direction: column; gap: 0; min-width: 0; max-height: 240px; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
 .settings-theme-root .mcp-tool-item { display: flex; flex-direction: column; min-width: 0; gap: 2px; padding: 8px 0; border-top: 1px solid var(--ws-border); }
-.settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: calc(13px + var(--ws-font-size-mono-offset)) var(--ws-font-mono); color: var(--ws-text-1); }
+.settings-theme-root .mcp-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-font-sans); font-size: var(--settings-field-title-size); color: var(--ws-text-1); }
 .settings-theme-root .mcp-tool-description-line { display: flex; min-width: 0; align-items: center; gap: 4px; }
 .settings-theme-root .mcp-tool-description { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-2); font-size: var(--settings-metadata-size); }
 .settings-theme-root .mcp-tool-description-empty { color: var(--ws-dim); }

@@ -51,7 +51,8 @@ export default function App() {
   const themeCfg = useMemo(
     () => ({
       algorithm: effectiveDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
-      // 字体走双槽 token（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：antd 组件不继承 body 字体，必须经 token 下发取值；
+      // antd controls use the interface slot; prose and code use their own CSS slots
+      // ([docs/chat-and-interface](../../docs/chat-and-interface.md)).
       // 取值在挂载前由 utils/fonts.ts 内联到 <html>，随设置即时变化。
       // Use the applied preference (startup cache / optimistic edit / config
       // reconciliation), so pending or failed saves never rewind live sizing.

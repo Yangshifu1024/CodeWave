@@ -107,7 +107,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 
 ## 5. 界面与维护入口
 
-界面由 antd 与主题桥接统一管理，字体用双槽 token；非图片附件保留真实路径引用，发送时合成正文，图片才读取为 base64。Composer 光标触发、draft 的 text/refs/images、运行中状态和异步恢复须一起维护。
+界面由 antd 与主题桥接统一管理，字体用界面/内容/代码三槽 token；非图片附件保留真实路径引用，发送时合成正文，图片才读取为 base64。Composer 光标触发、draft 的 text/refs/images、运行中状态和异步恢复须一起维护。
 
 - 聊天、导航、工具卡、通知与主题：[chat-and-interface](./chat-and-interface.md)
 - 设置的保存边界、即时偏好与页面组织：[settings-guide](./settings-guide.md)

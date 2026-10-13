@@ -39,6 +39,14 @@ describe("侧栏折叠样式契约（docs/chat-and-interface）", () => {
     expect(appCss).toMatch(/\.session-nav-row \.session-unread-dot\s*\{[^}]*border-radius:\s*50%[^}]*background:\s*var\(--ws-accent\)/);
   });
 
+  // 回归点：.project-sessions 曾是零样式裸 div，会话行块级依次排列、零间距，
+  // hover 高亮块连成一片、看不出行边界（行高提到 30px 后更明显）。
+  it(".project-sessions：会话行之间有留白（flex 列 + gap），行高 30px 时 hover 块不再相连", () => {
+    expect(appCss).toMatch(
+      /\.project-sessions\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*gap:\s*\d+px/,
+    );
+  });
+
   it(".rb-tabs 根高度约束：flex:1 + min-height:0（缺失则 Tabs 根被内容撑高、body-holder 永不滚动——10f11fc 回归教训，docs/chat-and-interface）+ 动画期内容 300px 下限（docs/chat-and-interface）", () => {
     expect(appCss).toMatch(/\.rb-tabs\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0/);
     expect(appCss).toMatch(/\.rb-tabs\s*\{[^}]*min-width:\s*300px/);

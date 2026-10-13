@@ -322,7 +322,7 @@ export default function FileViewerModal({
       ) : (
         <>
           <EncodingNote encoding={st.phase === "code" ? st.encoding : "utf-8"} />
-          <CodeBlock code={st.phase === "code" ? st.text : ""} language={lang} />
+          <CodeBlock code={st.phase === "code" ? st.text : ""} language={lang} prose={extOf(target) === "txt" || extOf(target) === "text"} />
         </>
       )}
     </Modal>

@@ -272,7 +272,7 @@ export const ipc = {
     invoke<void>("clear_session_interrupt", { sessionId }),
 
   // ---------- 界面字体（[docs/chat-and-interface]）----------
-  /** 字体偏好落盘（真源在配置文件的 ui.font_sans / ui.font_mono / ui.font_size_sans / ui.font_size_mono；只写这四个字段） */
-  setFontPrefs: (sans: string, mono: string, fontSizeSans: number, fontSizeMono: number, operationId?: string) =>
-    invoke<ConfigSaveResult>("set_font_prefs", { sans, mono, fontSizeSans, fontSizeMono, operationId }),
+  /** Atomically persist interface, content and code font families and sizes. */
+  setFontPrefs: (sans: string, content: string, mono: string, fontSizeSans: number, fontSizeContent: number, fontSizeMono: number, operationId?: string) =>
+    invoke<ConfigSaveResult>("set_font_prefs", { sans, content, mono, fontSizeSans, fontSizeContent, fontSizeMono, operationId }),
 };

@@ -306,15 +306,18 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeTruthy();
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeFalsy();
 
-    // 落地页「界面」：主题预览卡、界面语言 Select + 字体双槽与预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
+    // Appearance: theme, language and three independent font/size previews.
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
     expect(document.body.textContent ?? "").toContain("界面字体");
-    expect(document.body.textContent ?? "").toContain("等宽字体");
-    expect(document.querySelectorAll(".font-preview-row").length).toBe(4);
+    expect(document.body.textContent ?? "").toContain("内容字体");
+    expect(document.body.textContent ?? "").toContain("代码字体");
+    expect(document.querySelectorAll(".font-preview-row").length).toBe(6);
     expect(Array.from(document.querySelectorAll(".settings-section-title")).map((node) => node.textContent)).toEqual(["界面语言", "主题", "字体"]);
     expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
     expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
-    // v2 布局：字号行也用 font-preview-row 展示当前字号效果（sans / mono 各一）
+    expect(document.querySelector('[data-setting-id="ui.font_content"] .font-preview-row')).toBeTruthy();
+    expect(document.querySelector('[data-setting-id="ui.font_size_content"] .font-preview-row')).toBeTruthy();
+    // Each size row also previews its applied family and size.
     expect(document.querySelector('[data-setting-id="ui.font_size_sans"] .font-preview-row')).toBeTruthy();
     expect(document.querySelector('[data-setting-id="ui.font_size_mono"] .font-preview-row')).toBeTruthy();
 

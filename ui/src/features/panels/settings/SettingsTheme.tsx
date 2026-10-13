@@ -44,7 +44,7 @@ const SETTINGS_STYLE = {
 
 /** Locally themes settings and all antd overlays while preserving the application's light/dark algorithm. */
 export function SettingsThemeProvider({ children }: { children: ReactNode }) {
-  const sizeOffset = useFontSize("sans") - 15;
+  const sizeOffset = useFontSize("sans") - 14;
   return (
     <ConfigProvider
       componentSize="medium"

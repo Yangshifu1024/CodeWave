@@ -105,6 +105,14 @@ describe("表格预览", () => {
 });
 
 describe("PDF 与既有路径", () => {
+  it.each(["txt", "text", "ts", "log"])("routes %s preview to prose or code fonts", async (ext) => {
+    mocks.readFile.mockResolvedValue({ content: "preview font sample", encoding: "utf-8" });
+    render(<FileViewerModal sessionId="s1" path={`/ws/sample.${ext}`} onClose={() => {}} />);
+    await screen.findByText("preview font sample");
+    const block = document.querySelector("pre.code-block")!;
+    expect(block.classList.contains("viewer-text")).toBe(ext === "txt" || ext === "text");
+  });
+
   it("扫描件显示扫描提示，且不进入网页渲染器", async () => {
     mocks.preview.mockResolvedValue({ pages: 3, scanned: true, text: "" });
     render(<FileViewerModal sessionId="s1" path="/ws/scan.pdf" onClose={() => {}} />);

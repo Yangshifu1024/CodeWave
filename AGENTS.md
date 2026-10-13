@@ -35,7 +35,7 @@
 - **文件入口统一为「原地引用」**：附件按钮与拖入窗口拿到的都是**真实路径**，非图片文件记进草稿 `refs` 并以 **chip** 展示（输入框里不出现路径），发送前一刻才合成 `@路径` 追加正文末尾（不复制副本、不占上下文；[docs/chat-and-interface](./docs/chat-and-interface.md)）；图片因要上 wire 才读成 base64；网页内 `<input type=file>` 拿不到路径，故附件按钮走原生选择框（[docs/documents](./docs/documents.md)）
 - **会话语义**：项目会话（必须选项目，快照固化主目录）或临时会话（免目录，工作区 = 全局数据目录，写入仍走 fence 审批）；命令默认 cwd = 项目托管目录 `<主目录>/.codewave/`（临时会话 = 工作区根，通常为全局数据目录）；显式 cwd 按读取边界解析
 - **删除项目** = 级联删除其下会话 + 托管目录（确认弹框列明影响）；用户代码目录永不动
-- **界面风格**：自绘标题栏（[docs/chat-and-interface](./docs/chat-and-interface.md)：tauri-plugin-decoration v3，顶栏即标题栏；窗口 `visible:false` 起动，激活失败回退原生框）；主题跟随系统；**强调色 = 中性墨色**（`colorPrimary` 亮 `#1f1f1f`/暗 `#424242`，[docs/plan-and-approval](./docs/plan-and-approval.md)——勿再引入默认蓝或彩色 accent；色彩强度映射风险等级：无彩色=默认、橙=需注意、红=危险）；字体走 `--ws-font-sans/--ws-font-mono` 双槽 token（用户偏好由 `ui/src/utils/fonts.ts` 管理，勿再硬编码字体链）；组件样式一律 antd 组件库接管（`--ws-*` token 由 `ui/src/theme/bridge.tsx` 桥接），不手搓皮肤/自绘调色板
+- **界面风格**：自绘标题栏（[docs/chat-and-interface](./docs/chat-and-interface.md)：tauri-plugin-decoration v3，顶栏即标题栏；窗口 `visible:false` 起动，激活失败回退原生框）；主题跟随系统；**强调色 = 中性墨色**（`colorPrimary` 亮 `#1f1f1f`/暗 `#424242`，[docs/plan-and-approval](./docs/plan-and-approval.md)——勿再引入默认蓝或彩色 accent；色彩强度映射风险等级：无彩色=默认、橙=需注意、红=危险）；字体走 `--ws-font-sans/--ws-font-content/--ws-font-mono` 三槽 token（界面/内容/代码默认 14/14/12px）（用户偏好由 `ui/src/utils/fonts.ts` 管理，勿再硬编码字体链）；组件样式一律 antd 组件库接管（`--ws-*` token 由 `ui/src/theme/bridge.tsx` 桥接），不手搓皮肤/自绘调色板
 
 ## 常用命令
 
