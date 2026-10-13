@@ -8,10 +8,13 @@ pub fn ping() -> &'static str {
     "pong"
 }
 
-/// 应用重启（自动更新下载安装完成后由「检查更新」流程调用——updater 替换产物后
-/// 必须 relaunch 才运行新版本；「关于」对话框亦用）。restart 不返回，进程直接重启。
+/// 用户点击「立即重启」后运行新版。同步命令在主线程执行，restart 会跳过 Exit 钩子。
 #[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) {
+    // 先释放单实例资源，否则新进程会通知仍在退出的旧实例，然后被当作重复实例退出。
+    // 主线程 restart 不触发插件的 RunEvent::Exit 清理，必须在启动新进程前显式调用。
+    tauri_plugin_single_instance::destroy(&app);
+    tracing::info!("手动重启：已调用单实例资源清理，准备启动新进程");
     app.restart();
 }
 

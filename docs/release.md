@@ -114,7 +114,20 @@ xcrun stapler validate CodeWave_<version>_aarch64.dmg
 - 启动延迟 3 秒检查；无更新/失败保持安静，**有更新仍弹窗**。`ws_auto_update` 只有字符串 `false` 关闭，偏好在 localStorage，不属于 config.json；StrictMode 的“已经开始”标记在 timer 回调里置位。
 - 显式检查无更新给 toast，失败给错误弹窗。Linux 由 userAgent 配合后端 `is_appimage` 判断；deb/rpm 走发布页手动下载，AppImage 才走自替换。平台判断有误判边界。
 - Windows 的下载安装流程可能自行退出并启动安装器；ready 的手动重启入口主要服务 macOS/Linux，必须在真机按平台验收。
+- macOS / Linux AppImage 安装完成只进入 ready 并显示「稍后 / 立即重启」，由用户点击才重启。同步 [restart_app](../src-tauri/src/host/commands/system.rs) 在启动新进程前显式调用 single-instance 的 `destroy()`：主线程 `app.restart()` 跳过 Exit 钩子，若不先释放资源，新实例可能被仍在退出的旧实例判为重复实例并退出。普通启动仍由单实例插件处理。
 - 更新请求使用解析后的代理设置；无显式代理参数不等于可保证绕过系统代理，详见 [providers-and-network](./providers-and-network.md)。
+
+### 手动重启排障与验收
+
+更新包安装成功与新进程启动成功是两步。较旧客户端更新后的第一次重启仍由旧进程执行，可能需要手动打开一次；单实例清理修复在运行修复后的版本时生效。
+
+macOS 安装版验收前退出同 bundle id 的 dev 实例，然后依次检查：
+
+1. 安装完成后等待数秒，应用继续运行，显示「稍后 / 立即重启」；下载途中隐藏弹窗，完成后仍显示待重启。
+2. 分别验证「稍后」可继续使用，以及点击「立即重启」后窗口重新出现，并在「关于」核对新版本。
+3. 再启动一次安装版，确认只聚焦现有窗口，没有两个实例。Linux AppImage 与 Windows 安装器分别进行平台验收；deb/rpm 保持手动下载路径。
+
+若点击后仍只退出，在 `~/.codewave/logs/` 查找「手动重启：已调用单实例资源清理」及 Tauri 的 `failed to restart app` 日志，并核对安装路径。前者只证明请求已进入宿主且调用了清理；不能证明新进程启动成功，单实例插件的资源清理本身也没有返回可检查的结果。未找到该日志也不能反推命令未执行：日志级别可能过滤 info，退出前的异步日志也可能尚未落盘。应用已退出后的启动错误不能由前端弹窗反馈。本地单元测试不替代安装版、签名更新包和三平台人工验收。
 
 ### 发布说明与进度
 
