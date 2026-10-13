@@ -98,7 +98,9 @@ export default {
     keyHintSingle: "Single choice: click or number key to pick; options are mutually exclusive; Enter = submit",
     /* Defect fix: Enter now submits from the note input too — say so, otherwise users assume mouse-only */
     noteHint: "Enter = next / submit; Shift + Enter for a new line",
-    planTitle: "Plan", copyPlan: "Copy full plan", viewFullPlan: "View full plan", proceedPlan: "Proceed with the plan above?",
+    planTitle: "Plan", copyPlan: "Copy full plan", viewFullPlan: "View plan", proceedPlan: "Proceed with the plan above?",
+    viewPreview: "View preview", previewUnavailable: "This plan cannot be previewed right now. Wait for a new plan question.",
+    previewFailed: "Preview request failed. Please try again: {{error}}", submitFailed: "Answer could not be submitted. Please try again: {{error}}",
     prevPage: "Previous question", nextPage: "Next question",
     recommended: "Recommended",
     switchHint: "Submitting will switch to auto-edit mode",

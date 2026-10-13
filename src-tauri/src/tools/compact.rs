@@ -1,4 +1,4 @@
-//! 双通道结果：模型侧瘦身（[docs/technical-design](../../../docs/technical-design.md)）。read 不压缩（保留行号）；其余头尾截断。
+//! 双通道结果：模型侧瘦身（[docs/technical-design](../../../docs/technical-design.md)）。read 不压缩（保留行号）；ask 预览保留完整方案快照，其余头尾截断。
 //!
 //! 图片例外（会话 6bca80f4 反复被上游 400 的根因）：read 读到图片时 `outcome.data` 里带
 //! `data_url`（整段 base64；实测 944KB 截图 → 1,259,669 字符）。模型侧此前直接照搬这份 data，
@@ -17,7 +17,7 @@ pub const HEAD_BYTES: usize = 4 * 1024;
 pub const TAIL_BYTES: usize = 8 * 1024;
 
 /// 把工具结果压缩为模型可读文本：失败只留错误行；read 保持全量；
-/// command 已在工具内语义化瘦身故原样透传；其余按 head/tail 字节截断。
+/// command 已在工具内语义化瘦身故原样透传；ask 预览保留完整方案快照；其余按 head/tail 字节截断。
 /// `vision` = 会话生效模型是否勾选「支持图片输入」：决定图片说明怎么写
 ///（勾选时图片随后以独立消息送达；未勾选则不发，说明里如实写明模型看不到）。
 pub fn compact_for_model(
@@ -49,6 +49,14 @@ pub fn compact_for_model(
     // 图片条目的 base64 例外，见 read_model_text
     if kind == ToolKind::ReadOnly && matches!(name, "read" | "batch_read") {
         return read_model_text(outcome, vision);
+    }
+    // 预览必须渲染并重发当前询问的精确方案。计划文件可能未保存成功，不能指望读文件
+    // 补回超过 12 KiB 时被头尾截断的正文；只豁免成功的专用预览结果，普通 ask 仍瘦身。
+    if kind == ToolKind::Interactive
+        && name == "ask"
+        && outcome.data["preview_requested"].as_bool() == Some(true)
+    {
+        return outcome.data.to_string();
     }
     let raw = outcome.data.to_string();
     truncate_head_tail(&raw, HEAD_BYTES, TAIL_BYTES)
@@ -198,6 +206,43 @@ mod tests {
         let s = compact_for_model(ToolKind::ReadOnly, "service", &out, true);
         assert!(s.len() < 20_000);
         assert!(s.contains("已截断"));
+    }
+
+    #[test]
+    fn only_successful_ask_preview_keeps_large_plan_snapshot() {
+        let plan = "精确方案正文，不能丢失中间步骤。".repeat(2000);
+        let mut out = ToolOutcome::ok(serde_json::json!({
+            "preview_requested": true,
+            "plan_approved": false,
+            "plan_body": plan,
+        }));
+        let text = compact_for_model(ToolKind::Interactive, "ask", &out, false);
+        let parsed: Value = serde_json::from_str(&text).expect("预览结果保持有效完整 JSON");
+        assert_eq!(parsed["plan_body"], serde_json::json!(plan));
+        assert_eq!(text, out.data.to_string());
+
+        for (kind, name) in [
+            (ToolKind::ReadOnly, "ask"),
+            (ToolKind::Interactive, "other"),
+        ] {
+            assert!(compact_for_model(kind, name, &out, false).contains("已截断"));
+        }
+        for marker in [Value::Bool(false), Value::Null, serde_json::json!("true")] {
+            out.data["preview_requested"] = marker;
+            assert!(
+                compact_for_model(ToolKind::Interactive, "ask", &out, false).contains("已截断")
+            );
+        }
+        out.data["preview_requested"] = Value::Bool(true);
+        out.ok = false;
+        out.error = Some(crate::tools::ToolError::new(
+            "E_ASK_INVALID_ACTION",
+            "invalid",
+        ));
+        assert_eq!(
+            compact_for_model(ToolKind::Interactive, "ask", &out, false),
+            "[error E_ASK_INVALID_ACTION: invalid]"
+        );
     }
 
     #[test]

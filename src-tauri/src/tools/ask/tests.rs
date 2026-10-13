@@ -1169,3 +1169,427 @@ async fn legacy_approve_without_mode_still_switches_to_auto_edit() {
         crate::core::prefs::ApprovalMode::AutoEdit
     ));
 }
+
+// ---------- 固定「查看预览」UI 动作：能力快照与批准路径隔离 ----------
+
+#[derive(Default)]
+struct AskEventSink(std::sync::Mutex<Vec<(String, Value)>>);
+
+impl crate::core::agent::EventSink for AskEventSink {
+    fn channel_frame(
+        &self,
+        _session: &crate::core::types::SessionId,
+        _frame: &crate::core::agent::Frame,
+    ) {
+    }
+
+    fn emit(&self, _session: &crate::core::types::SessionId, event: &str, payload: Value) {
+        self.0.lock().unwrap().push((event.to_string(), payload));
+    }
+}
+
+impl AskEventSink {
+    fn opened(&self) -> Value {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(event, _)| event == "ask:opened")
+            .expect("必须下发 ask:opened")
+            .1
+            .clone()
+    }
+}
+
+fn recorded_ask_ctx(
+    mode: crate::core::prefs::ApprovalMode,
+) -> (ToolCtx, std::sync::Arc<AskEventSink>) {
+    let mut ctx = ask_ctx_mode(mode);
+    let sink = std::sync::Arc::new(AskEventSink::default());
+    std::sync::Arc::get_mut(&mut ctx.core).unwrap().sink = sink.clone();
+    (ctx, sink)
+}
+
+const PREVIEW_PLAN: &str = "## 当前方案\n分支 feat/preview\n1. 修改按钮\n2. 验证权限不变";
+
+fn previewable_gate_args() -> Value {
+    let mut args = approval_gate_args(true);
+    args["plan"] = json!(PREVIEW_PLAN);
+    args
+}
+
+#[tokio::test]
+async fn preview_capability_needs_approval_shape_and_usable_body_not_model_option_or_file() {
+    use crate::core::prefs::ApprovalMode;
+    let (ctx, sink) = recorded_ask_ctx(ApprovalMode::Plan);
+    // 阻止计划落盘：真实正文足够支持预览，文件不存在不能关闭 UI 入口。
+    std::fs::create_dir_all(&ctx.rt.workspace).unwrap();
+    std::fs::write(
+        ctx.rt.workspace.join(crate::core::config::MANAGED_DIR_NAME),
+        "block plan directory",
+    )
+    .unwrap();
+    let outcome = drive_ask_with_answer(
+        &ctx,
+        previewable_gate_args(),
+        json!({ "action": "preview_plan" }),
+    )
+    .await;
+    assert!(outcome.ok);
+    let opened = sink.opened();
+    assert_eq!(opened["can_preview_plan"], json!(true));
+    assert_eq!(opened["plan_body"], json!(PREVIEW_PLAN));
+    assert!(opened["plan_file"].is_null());
+    assert_eq!(
+        opened["questions"][0]["options"].as_array().unwrap().len(),
+        3
+    );
+
+    let plain =
+        json!({ "questions": [{ "id": "q", "question": "普通问题" }], "plan": PREVIEW_PLAN });
+    let mut multiple = previewable_gate_args();
+    multiple["questions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "id": "q2", "question": "第二问" }));
+    let mut empty = approval_gate_args(true);
+    empty["plan"] = json!(" \n ");
+    // planFile 即便来自客户端，也不能冒充真实正文。
+    empty["planFile"] = json!("/some/plan.md");
+    for args in [plain, multiple, empty, approval_gate_args(true)] {
+        let (ctx, sink) = recorded_ask_ctx(ApprovalMode::ConfirmEach);
+        let outcome = drive_ask_with_answer(&ctx, args, json!({ "action": "preview_plan" })).await;
+        assert!(!outcome.ok);
+        assert_eq!(outcome.error.unwrap().code, "E_ASK_PREVIEW_UNAVAILABLE");
+        assert_eq!(sink.opened()["can_preview_plan"], json!(false));
+        assert_eq!(ctx.rt.prefs().approval_mode, ApprovalMode::ConfirmEach);
+    }
+}
+
+#[tokio::test]
+async fn preview_action_preserves_all_four_modes_and_existing_scope_state() {
+    use crate::core::prefs::ApprovalMode;
+    use std::sync::atomic::Ordering;
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        for note in [None, Some(""), Some("  "), Some("请突出权限变化")] {
+            let (ctx, sink) = recorded_ask_ctx(mode);
+            // 留空 todos 且没有分析产物：预览不得误跑批准 G2/G3，也不重置旧基线/范围状态。
+            *ctx.rt.approved_plan.lock().unwrap() = Some(vec!["旧批准步骤".into()]);
+            ctx.rt
+                .scope_denied_titles
+                .lock()
+                .unwrap()
+                .push("被拒步骤".into());
+            ctx.rt.scope_allowed.store(true, Ordering::SeqCst);
+            ctx.rt.scope_expanded.store(true, Ordering::SeqCst);
+            let mut answer = json!({ "action": "preview_plan" });
+            if let Some(note) = note {
+                answer["note"] = json!(note);
+            }
+            let outcome =
+                drive_ask_with_answer(&ctx, previewable_gate_args(), answer.clone()).await;
+            assert!(outcome.ok, "{mode:?}: {:?}", outcome.error);
+            assert_eq!(outcome.data["preview_requested"], json!(true));
+            assert_eq!(outcome.data["plan_approved"], json!(false));
+            assert_eq!(outcome.data["plan_body"], json!(PREVIEW_PLAN));
+            assert_eq!(outcome.data["raw"], answer);
+            let summary = outcome.data["summary"].as_str().unwrap();
+            for required in [
+                "加载 preview 技能",
+                "plan_body 原文",
+                "同一批准询问",
+                "尚未批准",
+                "同一 plan 正文、选项与分支名",
+            ] {
+                assert!(summary.contains(required), "{summary}");
+            }
+            if let Some(note) = note.filter(|note| !note.trim().is_empty()) {
+                assert!(summary.contains(note));
+            }
+            assert_eq!(ctx.rt.prefs().approval_mode, mode);
+            assert_eq!(
+                *ctx.rt.approved_plan.lock().unwrap(),
+                Some(vec!["旧批准步骤".to_string()])
+            );
+            assert_eq!(
+                *ctx.rt.scope_denied_titles.lock().unwrap(),
+                vec!["被拒步骤".to_string()]
+            );
+            assert!(ctx.rt.scope_allowed.load(Ordering::SeqCst));
+            assert!(ctx.rt.scope_expanded.load(Ordering::SeqCst));
+            assert_eq!(ctx.rt.analysis_gate_denials.load(Ordering::SeqCst), 0);
+            assert!(ctx.rt.todos.lock().unwrap().is_empty());
+            assert!(
+                !sink
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(event, _)| event == "run:inject")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_or_mixed_preview_actions_fail_closed_before_approval() {
+    use crate::core::prefs::ApprovalMode;
+    let mut mixed = gate_answer("approve_full");
+    mixed["action"] = json!("preview_plan");
+    let mut invalid_mixed = mixed.clone();
+    invalid_mixed["action"] = json!("unknown");
+    let answers = vec![
+        mixed,
+        invalid_mixed,
+        json!({ "action": "preview_plan", "answers": {} }),
+        json!({ "action": "preview_plan", "note": null }),
+        json!({ "action": "preview_plan", "note": 1 }),
+        json!({ "action": "preview_plan", "selections": ["approve"] }),
+        json!({ "action": "preview_plan", "mode": "full_access" }),
+        json!({ "action": "preview_plan", "plan_approved": true }),
+        json!({ "action": "PREVIEW_PLAN" }),
+        json!({ "action": "" }),
+        json!({ "action": null }),
+        json!({ "action": false }),
+        json!({ "action": { "preview_plan": true } }),
+    ];
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        for answer in &answers {
+            let ctx = ask_ctx_mode(mode);
+            register_todos(&ctx, &["允许批准的步骤"]);
+            ctx.rt
+                .analysis_done
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let outcome =
+                drive_ask_with_answer(&ctx, previewable_gate_args(), answer.clone()).await;
+            assert!(!outcome.ok, "{mode:?}: {answer}");
+            assert_eq!(
+                outcome.error.unwrap().code,
+                "E_ASK_INVALID_ACTION",
+                "{answer}"
+            );
+            assert_ne!(outcome.data["plan_approved"], json!(true));
+            assert_eq!(ctx.rt.prefs().approval_mode, mode);
+            assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn preview_uses_opened_plan_snapshot_even_when_current_turn_changes() {
+    let (ctx, sink) = recorded_ask_ctx(crate::core::prefs::ApprovalMode::Plan);
+    ctx.rt
+        .history
+        .lock()
+        .unwrap()
+        .push(crate::core::types::Message {
+            role: crate::core::types::Role::Assistant,
+            content: vec![crate::core::types::Content::Text {
+                text: PREVIEW_PLAN.into(),
+            }],
+            created_at: None,
+        });
+    let rt = ctx.rt.clone();
+    let response_sink = sink.clone();
+    let responder = tokio::spawn(async move {
+        for _ in 0..500 {
+            let opened = response_sink
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(event, _)| event == "ask:opened")
+                .map(|(_, payload)| payload.clone());
+            if let Some(opened) = opened {
+                rt.history.lock().unwrap().clear();
+                assert!(rt.resolve_ask(
+                    opened["ask_id"].as_str().unwrap(),
+                    json!({ "action": "preview_plan" })
+                ));
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        panic!("ask:opened 未在超时内下发");
+    });
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        AskTool.run(&ctx, approval_gate_args(true)),
+    )
+    .await
+    .expect("ask 工具超时未返回");
+    responder.await.unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert_eq!(sink.opened()["can_preview_plan"], json!(true));
+    assert_eq!(outcome.data["plan_body"], json!(PREVIEW_PLAN));
+}
+
+#[tokio::test]
+async fn fixed_preview_capability_does_not_change_real_approval_or_revise() {
+    use crate::core::prefs::ApprovalMode;
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        for (choice, target) in [
+            ("approve", ApprovalMode::AutoEdit),
+            ("approve_full", ApprovalMode::FullAccess),
+        ] {
+            let ctx = ask_ctx_mode(mode);
+            register_todos(&ctx, &["正式批准步骤"]);
+            ctx.rt
+                .analysis_done
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let outcome =
+                drive_ask_with_answer(&ctx, previewable_gate_args(), gate_answer(choice)).await;
+            assert!(outcome.ok, "{mode:?}: {choice}");
+            assert_eq!(outcome.data["plan_approved"], json!(true));
+            assert_ne!(outcome.data["preview_requested"], json!(true));
+            assert_eq!(ctx.rt.prefs().approval_mode, target);
+            assert_eq!(
+                *ctx.rt.approved_plan.lock().unwrap(),
+                Some(vec!["正式批准步骤".to_string()])
+            );
+        }
+        let ctx = ask_ctx_mode(mode);
+        let outcome =
+            drive_ask_with_answer(&ctx, previewable_gate_args(), gate_answer("revise")).await;
+        assert!(outcome.ok);
+        assert_ne!(outcome.data["plan_approved"], json!(true));
+        assert_eq!(ctx.rt.prefs().approval_mode, mode);
+        assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn legacy_preview_only_options_still_never_switch_modes() {
+    use crate::core::prefs::ApprovalMode;
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        for (id, label, declared_mode) in [
+            ("preview", "先看预览", None),
+            ("PREVIEW", "Preview first", Some("full_access")),
+            (
+                "preview_approve",
+                "先看预览并检查执行方案",
+                Some("auto_edit"),
+            ),
+        ] {
+            let ctx = ask_ctx_mode(mode);
+            let mut args = approval_gate_args(true);
+            let mut option = json!({ "id": id, "label": label });
+            if let Some(declared_mode) = declared_mode {
+                option["mode"] = json!(declared_mode);
+            }
+            args["questions"][0]["options"]
+                .as_array_mut()
+                .unwrap()
+                .push(option);
+            let mut answer = gate_answer(id);
+            answer["answers"]["approve_plan"]["note"] = json!("请预览");
+            let outcome = drive_ask_with_answer(&ctx, args, answer).await;
+            assert!(outcome.ok);
+            assert_ne!(outcome.data["plan_approved"], json!(true));
+            assert_eq!(ctx.rt.prefs().approval_mode, mode);
+            assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_preview_identification_keeps_lenient_approval_shape() {
+    let questions = vec![Question {
+        id: "approve_plan".into(),
+        question: "是否执行？".into(),
+        options: vec![opt("preview_approve", "先看预览")],
+        single: true,
+    }];
+    // approval_shape 是渲染标记；收紧成剔除 preview 会丢掉 preview_only 保护。
+    assert!(approval_shape(&questions));
+    assert!(preview_only(&questions, &gate_answer("preview_approve")));
+    assert_eq!(approve_option_id(&questions), None);
+}
+
+#[tokio::test]
+async fn repeated_preview_requests_do_not_remove_capability() {
+    let (ctx, sink) = recorded_ask_ctx(crate::core::prefs::ApprovalMode::Plan);
+    for _ in 0..5 {
+        let outcome = drive_ask_with_answer(
+            &ctx,
+            previewable_gate_args(),
+            json!({ "action": "preview_plan" }),
+        )
+        .await;
+        assert!(outcome.ok);
+        assert_eq!(outcome.data["preview_requested"], json!(true));
+    }
+    let events = sink.0.lock().unwrap();
+    let opened: Vec<_> = events
+        .iter()
+        .filter(|(event, _)| event == "ask:opened")
+        .collect();
+    assert_eq!(opened.len(), 5);
+    assert!(
+        opened
+            .iter()
+            .all(|(_, payload)| payload["can_preview_plan"] == json!(true))
+    );
+    assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn large_preview_plan_survives_model_compaction_without_saved_file() {
+    let (ctx, sink) = recorded_ask_ctx(crate::core::prefs::ApprovalMode::Plan);
+    std::fs::create_dir_all(&ctx.rt.workspace).unwrap();
+    std::fs::write(
+        ctx.rt.workspace.join(crate::core::config::MANAGED_DIR_NAME),
+        "block plan directory",
+    )
+    .unwrap();
+    let plan = format!(
+        "# 方案\n{}\n中段必须保留\n{}\n结尾",
+        "前半步骤\n".repeat(2000),
+        "后半步骤\n".repeat(2000)
+    );
+    assert!(plan.len() > crate::tools::compact::HEAD_BYTES + crate::tools::compact::TAIL_BYTES);
+    let mut args = previewable_gate_args();
+    args["plan"] = json!(plan);
+    let outcome = drive_ask_with_answer(&ctx, args, json!({ "action": "preview_plan" })).await;
+    assert!(outcome.ok);
+    assert!(sink.opened()["plan_file"].is_null());
+    let model_text = crate::tools::compact::compact_for_model(
+        crate::tools::ToolKind::Interactive,
+        "ask",
+        &outcome,
+        false,
+    );
+    let model_data: Value = serde_json::from_str(&model_text).expect("模型必须收到完整预览快照");
+    assert_eq!(model_data["plan_body"], json!(plan));
+    assert_eq!(model_data["preview_requested"], json!(true));
+    assert_eq!(model_data["plan_approved"], json!(false));
+}
+
+#[test]
+fn ask_description_uses_fixed_preview_action_instead_of_fourth_option() {
+    let description = AskTool.description();
+    assert!(description.contains("preview_requested=true"));
+    assert!(description.contains("查看预览"));
+    assert!(description.contains("不要再添加 preview 选项"));
+    assert!(!description.contains("id=\"preview\""));
+}

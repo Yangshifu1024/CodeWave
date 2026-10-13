@@ -76,7 +76,8 @@ export interface RunStore extends DraftActions, DraftState {
   cancel(sessionId?: string): Promise<void>;
   /** 子代理卡单独停止该子代理（主代理会收到 E_SUBAGENT_STOPPED 并询问用户是否重派） */
   stopSubagent(sessionId: string | null, subId: string): Promise<void>;
-  resolveAsk(askId: string, value: any): Promise<void>;
+  resolveAsk(askId: string, value: any, sessionId?: string | null, legacyPreview?: boolean): Promise<void>;
+  previewPlan(sessionId: string, askId: string, note?: string): Promise<void>;
   restoreAsk(payload: AskOpenedEvent): void;
   /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：置位「先看预览」信号——批准门选 preview 时由 AskPanel 调用。
    *  previewOnly 语义，**与切档无关**（预览项不带 mode，故不构成批准、不切档）；桶不存在则不新建（纯 UI 信号不凭空造桶）。 */
@@ -673,10 +674,61 @@ export const useRun = create<RunStore>()(
       await ipc.stopSubagent(sid, subId).catch(() => {});
     },
 
-    async resolveAsk(askId, value) {
-      const sessionId = useSessions.getState().activeKey;
+    async resolveAsk(askId, value, targetSessionId, legacyPreview = false) {
+      const sessionId = targetSessionId ?? useSessions.getState().activeKey;
       if (!sessionId) return;
-      await ipc.resolveAsk(sessionId, askId, value);
+      const tab = get().tabs[sessionId];
+      const ask = tab?.ask;
+      const runId = tab?.runId;
+      const runEpoch = tab?.runEpoch;
+      const requestId = legacyPreview ? crypto.randomUUID() : undefined;
+      if (ask?.askId === askId && ask.previewPending) throw new Error(i18n.t("ask.previewUnavailable"));
+      set((s) => {
+        const t = s.tabs[sessionId];
+        if (t?.ask?.askId === askId) {
+          t.ask.previewPending = true;
+          if (legacyPreview) t.widgetAutoOpen = { armed: true, requestId, askId, runId };
+        }
+      });
+      try {
+        await ipc.resolveAsk(sessionId, askId, value);
+      } catch (error) {
+        set((s) => {
+          const t = s.tabs[sessionId];
+          if (!t) return;
+          if (t.ask?.askId === askId && t.runEpoch === runEpoch && t.runId === runId) t.ask.previewPending = false;
+          if (requestId && t.widgetAutoOpen?.requestId === requestId) t.widgetAutoOpen = null;
+        });
+        throw error;
+      }
+    },
+
+    async previewPlan(sessionId, askId, note = "") {
+      const tab = get().tabs[sessionId];
+      if (!tab?.ask || tab.ask.askId !== askId || !tab.ask.canPreviewPlan || !tab.ask.planBody?.trim()) {
+        throw new Error(i18n.t("ask.previewUnavailable"));
+      }
+      if (tab.ask.previewPending) throw new Error(i18n.t("ask.previewUnavailable"));
+      const requestId = crypto.randomUUID();
+      const runId = tab.runId;
+      const runEpoch = tab.runEpoch;
+      set((s) => {
+        const t = s.tabs[sessionId]!;
+        t.ask!.previewPending = true;
+        // Arm before resolving: the first render result can beat the IPC response.
+        t.widgetAutoOpen = { armed: true, requestId, askId, runId };
+      });
+      try {
+        await ipc.resolveAsk(sessionId, askId, { action: "preview_plan", note });
+      } catch (error) {
+        set((s) => {
+          const t = s.tabs[sessionId];
+          if (!t) return;
+          if (t.ask?.askId === askId && t.runEpoch === runEpoch && t.runId === runId) t.ask.previewPending = false;
+          if (t.widgetAutoOpen?.requestId === requestId) t.widgetAutoOpen = null;
+        });
+        throw error;
+      }
     },
 
     // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：「先看预览」置位——整体替换（不带旧 callKey）：
@@ -911,6 +963,7 @@ export const useRun = create<RunStore>()(
           ok &&
           p.tool === "render_html" &&
           t.widgetAutoOpen?.armed === true &&
+          (!t.widgetAutoOpen.runId || t.widgetAutoOpen.runId === p.run_id) &&
           typeof html === "string" &&
           html !== ""
         ) {

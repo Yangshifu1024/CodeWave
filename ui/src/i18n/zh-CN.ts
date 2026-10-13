@@ -98,7 +98,9 @@ export default {
     keyHintSingle: "单选：点选或数字键选中；选项互斥；回车 = 提交",
     /* 缺陷修复：补充说明输入框内现在也能回车提交，明示以免用户误以为只能鼠标点提交 */
     noteHint: "回车 = 下一题 / 提交；Shift + 回车换行",
-    planTitle: "计划", copyPlan: "复制计划全文", viewFullPlan: "查看完整计划", proceedPlan: "是否按上述计划执行？",
+    planTitle: "计划", copyPlan: "复制计划全文", viewFullPlan: "查看方案", proceedPlan: "是否按上述计划执行？",
+    viewPreview: "查看预览", previewUnavailable: "当前方案暂不可预览，请等待新的方案询问。",
+    previewFailed: "预览请求失败，请重试：{{error}}", submitFailed: "回答提交失败，请重试：{{error}}",
     prevPage: "上一题", nextPage: "下一题",
     recommended: "推荐",
     switchHint: "提交后将切换到自动编辑档",

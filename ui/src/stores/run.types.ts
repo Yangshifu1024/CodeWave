@@ -52,6 +52,9 @@ export interface AskState {
   planFile?: string | null;
   /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：后端下发的真实方案正文（与 planFile 同源；AskPanel 卡片正文与「复制计划全文」用此字段渲染）；null/缺省 = 不渲染计划卡 */
   planBody?: string | null;
+  canPreviewPlan?: boolean;
+  /** Any pending reply locks preview too; reset only by a new ask or a failed request. */
+  previewPending?: boolean;
   /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：批准形标记 + 批准项 id（后端宽松识别；驱动 AskPanel 单选互斥与直提判定） */
   approval?: boolean;
   approveId?: string | null;
@@ -164,6 +167,10 @@ export interface HistoryPaging {
  *  天然排除「armed 已关但 callKey 未置」的中间态。
  *  可选：缺省/undefined = 本 Tab 没有待弹的预览（测试夹具逐字构造 TabRunState，不写它）。 */
 export interface WidgetAutoOpen {
+  /** Structured preview requests bind rollback and results to their original ask/run. */
+  requestId?: string;
+  askId?: string;
+  runId?: string | null;
   /** 已置位待弹（armed 已被同一份对象取代为带 callKey 的形态） */
   armed?: boolean;
   /** 目标工具卡的 callKey；存在即表示已锁定，UI 弹框后调用 consumeWidgetAutoOpen 清空 */

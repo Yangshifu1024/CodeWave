@@ -727,7 +727,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ask-foot .hint { color: var(--ws-dim); font-size: calc(11px + var(--ws-font-size-sans-offset)); flex: 1; min-width: 0; }
 .ask-foot .hint .switch-hint { color: var(--ws-warn); margin-right: 8px; }
 .ask-foot .foot-btns { display: inline-flex; gap: 8px; }
-/* 计划卡（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：完整方案 markdown + 复制 + 查看完整方案；[docs/chat-and-interface](../../../docs/chat-and-interface.md) 虚线改实线（降噪） */
+/* 计划卡（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：完整方案 markdown + 复制 + 查看方案 / 查看预览；[docs/chat-and-interface](../../../docs/chat-and-interface.md) 虚线改实线（降噪） */
 .plan-card {
   border-bottom: 1px solid var(--ws-border); margin: -2px -14px 10px; padding: 10px 14px 12px;
 }
@@ -736,7 +736,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .plan-body {
   max-height: 220px; overflow-y: auto; font-size: calc(13px + var(--ws-font-size-sans-offset)); line-height: 1.7; color: var(--ws-text-2);
 }
-.plan-foot { display: flex; justify-content: center; margin-top: 8px; }
+.plan-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.ask-submit-error { margin-bottom: 8px; }
+.ask-opt[aria-disabled="true"] { cursor: not-allowed; opacity: 0.65; }
 
 /* ---------- 运行队列（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）：运行中提交的任务入队顺序执行 ----------
    宽度与 composer 同步：左右边距与 .composer 的 0 15% 同公式（输入区与中栏同一容器宽度）。
