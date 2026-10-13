@@ -1408,9 +1408,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* ---------- 栏宽分隔条（可拖拽栏宽，[docs/chat-and-interface](../../../docs/chat-and-interface.md)） ---------- */
 /* 绝对定位在栏边界上（父 Layout position:relative），命中区 6px 居中跨越边界；折叠态不渲染 */
+/* 自身禁选：分隔条是拖拽把手，按下时浏览器的选区锚点必须落不成形（拖动期全局禁选见下方 html.ws-resizing） */
 .rb-resize-handle {
   position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px; z-index: 6;
   cursor: col-resize; background: transparent; border: 0; padding: 0;
+  -webkit-user-select: none; user-select: none;
 }
 .rb-resize-handle.resize-right { margin-left: 0; margin-right: -3px; }
 /* 被窗口夹小（显示值 < 记忆值）时禁用拖动：写回去会抹掉用户原本的宽度，只保留双击复位 */
@@ -1426,6 +1428,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 html.ws-resizing .right-bar,
 html.ws-resizing .ant-layout-sider,
 html.ws-resizing .tb-left-seg { transition: none !important; }
+/* 拖动期间禁选（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：只给分隔条加 user-select 不够——
+   选区锚点一旦在分隔条上落下，pointermove 扫过的路径上的文字都会进选区（WebKit 的选区延展不跨 flex 块级边界设障），
+   表现为「拖完整个窗口全是高亮」且松手后残留。这里对拖动期整棵子树禁选兜住整条路径；
+   !important 是为压过 antd 运行时 cssinjs 可能声明的 user-select: text（与上方豁免规则同口径）。
+   作用域只有拖动这一瞬间（pointerup / pointerCancel / onLostPointerCapture / 卸载兜底都会摘掉类），
+   松手后正文的正常选中与复制不受影响。前缀在前供老 WebKit 解析（本文件无 autoprefixer）。 */
+html.ws-resizing,
+html.ws-resizing * { -webkit-user-select: none !important; user-select: none !important; }
 
 /* ---------- 信息页签：项目目录标签行动作区（文件管理器按钮 + 编辑器下拉） ---------- */
 .rb-label-actions { display: flex; align-items: center; gap: 4px; flex: none; }
