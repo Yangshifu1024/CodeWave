@@ -465,6 +465,8 @@ export interface AskOpenedEvent {
   plan_file?: string | null;
   /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」；缺省走 `skip_serializing_if`（后端仅在有可用方案时下传） */
   plan_body?: string;
+  /** Host-owned capability for previewing this pending plan; independent of model options and file persistence. */
+  can_preview_plan?: boolean;
   /** 命令审批「始终允许本项目」第三选项 */
   allow_always?: boolean;
   /** [docs/plan-and-approval](../../../docs/plan-and-approval.md)：审批语义类别（`once` = 单次操作审批；`scope` = G3 范围门）——决定按钮文案；缺省 = `once` */

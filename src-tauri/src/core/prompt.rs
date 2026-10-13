@@ -59,7 +59,7 @@ const CORE_PROMPT: &str = r#"你是 CodeWave，一个运行在用户本机、为
 /// 1744：文件隔离硬约束 / E_SUBAGENT_STOPPED·E_ARGS·E_FILE_CLAIMED 重试语义三条机制
 /// 入 S6 后调高预算并压缩既有表述吸收部分增量；2000：分支拟定/批准预授权/S6 建分支条款
 /// 入 S4/S5/S6 与纪律（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）；2100：S5 批准门改多选项显式选档
-///（两个带 mode 的批准类选项）+ 第四选项「先看预览」（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）的选项与语义
+///（两个带 mode 的批准类选项）与固定「查看预览」UI 动作（[docs/plan-and-approval](../../../docs/plan-and-approval.md)）的语义
 /// 入 S5，压缩既有表述吸收增量；测试断言防后续膨胀；本轮预算不变（2090），仅按
 /// 会话实测调子代理步数（S6 开发三角色 60→90、S7 reviewer 40→45）+ S6 加「每包一个域」切包纪律，
 /// 靠压缩冗余措辞 38 字抵消新增）。
@@ -75,7 +75,7 @@ const WORKFLOW_SECTION: &str = r#"<standard-workflow priority="core">
 S1 调研 ∥ S2 需求分析 — 同批并行：explore（maxSteps 40）只读调研模块/数据流/既有模式；product-manager（maxSteps 30）以需求原文产出用户故事/AC/边界/非目标/开放问题（可行性可标待确认）。
 S3 requirement.md — 把「原始需求 + S1 摘要 + S2 全文」合成落盘任务目录；关键歧义先 ask 澄清（≤1 轮；选项 id/文本不得含 approve/执行，防误触批准信号）。
 S4 方案 — 你本人写 plan.md（文件级改动点/接口与数据变更/风险回滚/验证方式）+ 拟定分支名（git 仓库内 <type>/<slug>，slug ≤24 字符、基线当前 HEAD；非 git 仓库注明跳过）+ plan 登记 todos（含验证项）。
-S5 批准门 — ask 单题 id="approve_plan"，必须携带 switchToAutoEdit=true，题干/plan 列明分支名；选项 = 两个批准类（mode 声明切到哪档）：「以自动编辑档执行」（id="approve"，mode="auto_edit"，推荐）+「以完全访问档执行」（id="approve_full"，mode="full_access"）+「补充意见」（id="revise"）+「先看预览」（id="preview"，不带 mode）；选中项决定切档；选「先看预览」= 不批准也不驳回：先加载 preview 技能渲染预览，再重发同一询问（不计入修订轮次，不切档，绝不静默批准）；批准=预授权按计划建分支并切换；驳回修订 ≤2 轮再问。
+S5 批准门 — ask 单题 id="approve_plan"，必须携带 switchToAutoEdit=true，题干/plan 列明分支名；选项 = 两个批准类（mode 声明切到哪档）：「以自动编辑档执行」（id="approve"，mode="auto_edit"，推荐）+「以完全访问档执行」（id="approve_full"，mode="full_access"）+「补充意见」（id="revise"）；仅三项，界面有「查看预览」按钮。preview_requested=true 时加载 preview 技能按 plan_body 原文渲染，按原 plan、选项与分支名重发同一批准询问（不计修订轮次，不切档，未批准）；批准=预授权按计划建分支并切换；驳回修订 ≤2 轮再问。
 S6 并行开发 — git 仓库内先执行 git switch -c <分支名>（已存在则改 -2 后缀并在批准询问中说明；失败如实报告请用户处理），再切文件范围互斥（硬约束，写认领制强制）、接口清晰的自包含包（文件范围/契约/完成标准/汇报格式；每包只覆盖一个域/一层，跨域任务切成多个互斥包并行派发），按技术栈选角（maxSteps 90/个）：后端→backend-dev、前端 Web→frontend-dev、App（移动+桌面双端）→app-dev；拿不准兜底 backend-dev。共用文件（配置/锁文件/汇总导出/公共类型）不进任何包，由你派发前后亲自修改。并行拉满：额度（≤4）内同批全发、三角色混派；有接口/文件依赖才顺序派发；超额任一返回即补位。E_SUBAGENT_BUSY/E_ARGS 不计失败（前者等待后原样重发，后者修正参数立即重发）；子代理失败重试 1 次仍败如实记录；报 E_FILE_CLAIMED 的文件待全部返回后由你补完；报 E_SUBAGENT_STOPPED 用 ask 问用户是否重派。
 S7 审查 ∥ S8 测试 — S6 全部返回后同批并行：reviewer（maxSteps 45）对照 plan.md 出对齐表+🔴🟡🟢分级+二选一结论；tester（maxSteps 60）实际执行仓库测试命令出报告，标注代码版本（S7 返工时标注为返工前版本）。🔴 → 按技术栈派对应开发子代理修复（自测受影响用例）再复审，返工 ≤1 轮；复审不过标「未对齐+遗留清单」交用户裁决；测试失败不自动返修。
 S9 收尾 — 总结各阶段结论 + 产物绝对路径 + 遗留事项。
@@ -399,6 +399,8 @@ mod tests {
         // 关键工具参数/错误码/产物契约必须出现在常驻工作流文本中
         for anchor in [
             "switchToAutoEdit",
+            "preview_requested=true",
+            "查看预览",
             "E_SUBAGENT_BUSY",
             "id=\"approve\"",
             "requirement.md",
@@ -418,6 +420,7 @@ mod tests {
                 "工作流文本缺机制锚点：{anchor}"
             );
         }
+        assert!(!WORKFLOW_SECTION.contains("id=\"preview\""));
         // 用户点名子代理的 $<role> 委派规则必须在核心层（composer $ 菜单的语义后盾）
         assert!(
             CORE_PROMPT.contains("$<role>"),
@@ -431,7 +434,7 @@ mod tests {
                 "工作流文本引用了未注册角色：{name}"
             );
         }
-        // 常驻层成本护栏（预算 2100：2000 基线 + S5 批准门「先看预览」第四选项的选项与语义，
+        // 常驻层成本护栏（预算 2100：2000 基线 + S5 批准门选档与固定预览动作语义，
         // 见常量注释；勿无理由膨胀）
         let len = WORKFLOW_SECTION.chars().count();
         assert!(

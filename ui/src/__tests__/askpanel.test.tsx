@@ -1,17 +1,19 @@
 // AskPanel refactor ([docs/plan-and-approval](../../../docs/plan-and-approval.md)): approval three options (incl. "always allow this project"), resolve payload / keyboard navigation / plan card
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
-import "../i18n"; // i18n init (nothing triggers it when rendering the component directly; otherwise t() returns the raw key)
+import { i18n } from "../i18n"; // i18n init (nothing triggers it when rendering the component directly; otherwise t() returns the raw key)
 import AskPanel from "../features/tools/AskPanel";
-import type { ApprovalMode } from "../ipc/types";
+import type { ApprovalMode, AskOptionPayload } from "../ipc/types";
 import { useSessions } from "../stores/sessions";
 import { useRun } from "../stores/run";
 
 const calls: { cmd: string; args: any }[] = [];
+let resolveResponse: (() => Promise<unknown>) | null = null;
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args?: any) => {
     calls.push({ cmd, args });
+    if (cmd === "resolve_ask" && resolveResponse) return resolveResponse();
     if (cmd === "read_workspace_file") return { path: args?.path ?? "", size: 10, content: "# 计划全文" };
     return null;
   }),
@@ -41,8 +43,10 @@ function seedAsk(ask: any, mode: ApprovalMode = "plan") {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  resolveResponse = null;
+  await i18n.changeLanguage("zh-CN");
   calls.length = 0;
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
   useRun.setState((s) => {
@@ -129,7 +133,7 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     expect(screen.queryByText("本会话始终允许")).toBeNull();
   });
 
-  it("计划卡片：渲染计划全文 + 「查看完整计划」打开文件查看器", async () => {
+  it("计划卡片：渲染计划全文 + 「查看方案」打开文件查看器", async () => {
     seedAsk({
       askId: "a3", kind: "ask",
       planFile: "/ws/.codewave/tasks/plan-20260901-120000.md",
@@ -142,7 +146,7 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     render(<AskPanel />);
     expect(document.querySelector(".plan-card")).toBeTruthy();
     expect(screen.getByText("计划")).toBeTruthy();
-    fireEvent.click(screen.getByText(/查看完整计划/));
+    fireEvent.click(screen.getByText(/查看方案/));
     await waitFor(() => expect(calls.some((c) => c.cmd === "read_workspace_file" && c.args.path.includes("plan-20260901"))).toBe(true));
   });
 
@@ -374,7 +378,7 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     expect(document.querySelector(".plan-body")?.textContent ?? "").toContain("完整方案");
     expect(screen.getAllByText(/第一段方案/).length).toBeGreaterThan(0);
     expect(document.querySelector(".q-text")?.textContent).toBe("第一段方案"); // page 1 题干仍显示
-    fireEvent.click(screen.getByText(/查看完整计划/));
+    fireEvent.click(screen.getByText(/查看方案/));
     await waitFor(() => expect(calls.some((c) => c.cmd === "read_workspace_file")).toBe(true));
   });
 
@@ -1436,7 +1440,7 @@ describe("AskPanel planCard 与互斥推断", () => {
     expect(body).not.toContain("我把方案落到哪种粒度？");
   });
 
-  it("planFile / planBody 均为空时不渲染计划卡、没有「查看完整计划」按钮", () => {
+  it("planFile / planBody 均为空时不渲染计划卡、没有「查看方案」按钮", () => {
     seedAsk({
       askId: "c2", kind: "ask",
       planFile: null,
@@ -1448,7 +1452,7 @@ describe("AskPanel planCard 与互斥推断", () => {
     });
     render(<AskPanel />);
     expect(document.querySelector(".plan-card")).toBeNull();
-    expect(screen.queryByText(/查看完整计划/)).toBeNull();
+    expect(screen.queryByText(/查看方案/)).toBeNull();
   });
 
   // R4 回归：老后端可能下发了 planFile 但没 planBody（仅 planFile 场景）—— AskPanel 不应仅凭 planFile 渲染计划卡。
@@ -1465,7 +1469,7 @@ describe("AskPanel planCard 与互斥推断", () => {
     });
     render(<AskPanel />);
     expect(document.querySelector(".plan-card")).toBeNull();
-    expect(screen.queryByText(/查看完整计划/)).toBeNull();
+    expect(screen.queryByText(/查看方案/)).toBeNull();
   });
 
   it("互斥推断：后台未声明 single 时按启发式兑底", () => {
@@ -1588,7 +1592,7 @@ describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/p
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["preview"]);
     await settle();
-    expect(widgetAutoOpen()).toEqual({ armed: true });
+    expect(widgetAutoOpen()).toMatchObject({ armed: true, requestId: expect.any(String), askId: "w1" });
   });
 
   it("对照：点「以自动编辑档执行」→ 信号不置位，档位照常切到 auto_edit", async () => {
@@ -1620,7 +1624,7 @@ describe("AskPanel 批准门「先看预览」置位自动弹框信号（[docs/p
     expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
     expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
     // 信号与切档必须互不相干：要置位（供 widget 弹框）但不得提权
-    expect(widgetAutoOpen()).toEqual({ armed: true });
+    expect(widgetAutoOpen()).toMatchObject({ armed: true, requestId: expect.any(String), askId: "w4" });
   });
 });
 
@@ -1730,4 +1734,326 @@ describe("AskPanel 选项说明独占下一行（结构契约）", () => {
     fireEvent.click(btnByText("提交回答"));
     return waitFor(() => expect(calls.find((c) => c.cmd === "resolve_ask")?.args?.value.answers.q1.selections).toEqual(["a"]));
   });
+});
+
+
+// Fixed host-backed preview action: capability and body, independent of model options or file saving.
+describe("AskPanel fixed plan preview", () => {
+  function previewAsk(overrides: Record<string, unknown> = {}) {
+    return {
+      askId: "fixed-preview", kind: "ask" as const, canPreviewPlan: true, approval: true,
+      planFile: "/ws/.codewave/tasks/plan-preview.md", planBody: "## 当前方案\n修改界面并补充回归测试。",
+      questions: [{
+        id: "q1", question: "是否执行？",
+        options: [
+          { id: "approve", label: "执行方案", mode: "auto_edit", recommended: true },
+          { id: "revise", label: "补充意见" },
+        ] as AskOptionPayload[],
+      }],
+      ...overrides,
+    };
+  }
+
+  function deferredResolve() {
+    let resolve!: (value?: unknown) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<unknown>((done, fail) => { resolve = done; reject = fail; });
+    resolveResponse = () => promise;
+    return { resolve, reject, promise };
+  }
+
+  function addSecondTab(ask = previewAsk({ askId: "other-preview", planBody: "## 第二个方案" })) {
+    useSessions.setState((s) => ({ tabs: [...s.tabs, { ...s.tabs[0], key: "s2", sessionId: "s2", title: "s2" }] }));
+    useRun.setState((s) => { s.tabs.s2 = { ...s.tabs.s1, ask, widgetAutoOpen: null }; });
+  }
+
+  it("shows View preview next to renamed View plan without a model preview option", () => {
+    seedAsk(previewAsk());
+    render(<AskPanel />);
+    const footer = document.querySelector(".plan-foot")!;
+    expect(Array.from(footer.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["查看方案 →", "查看预览"]);
+    expect(screen.queryByText("先看预览")).toBeNull();
+    expect(document.querySelectorAll(".ask-opt")).toHaveLength(2);
+  });
+
+  it("uses the requested English button labels", async () => {
+    await i18n.changeLanguage("en-US");
+    seedAsk(previewAsk());
+    render(<AskPanel />);
+    expect(screen.getByRole("button", { name: "View plan →" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View preview" })).toBeTruthy();
+  });
+
+  it("host capability works without any option or an inferred approval shape", async () => {
+    seedAsk(previewAsk({ approval: undefined, questions: [{ id: "q1", question: "是否执行？" }] }), "confirm_each");
+    render(<AskPanel />);
+    fireEvent.change(screen.getByPlaceholderText("补充说明（可选）"), { target: { value: "显示窄屏效果" } });
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args).toEqual({
+      sessionId: "s1", askId: "fixed-preview", value: { action: "preview_plan", note: "显示窄屏效果" },
+    });
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("keeps preview when file saving failed and omits the file-view action", () => {
+    seedAsk(previewAsk({ planFile: null }));
+    render(<AskPanel />);
+    expect(screen.getByRole("button", { name: "查看预览" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查看方案/ })).toBeNull();
+  });
+
+  it.each([undefined, false])("does not infer the capability from legacy options (%s)", async (canPreviewPlan) => {
+    const ask = previewAsk({ canPreviewPlan });
+    ask.questions[0].options.push({ id: "preview", label: "先看预览" });
+    seedAsk(ask, "confirm_each");
+    render(<AskPanel />);
+    expect(screen.queryByRole("button", { name: "查看预览" })).toBeNull();
+    fireEvent.click(screen.getByText("先看预览"));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value).toEqual({
+      answers: { q1: { selections: ["preview"], note: "" } },
+    });
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it.each([null, "", "   "])("does not offer a new preview without a real plan body (%s)", (planBody) => {
+    seedAsk(previewAsk({ planBody }));
+    render(<AskPanel />);
+    expect(screen.queryByRole("button", { name: "查看预览" })).toBeNull();
+  });
+
+  it("removes every legacy preview row before numbering and recommended defaults", async () => {
+    const ask = previewAsk();
+    ask.questions[0].options.unshift(
+      { id: "PREVIEW", label: "旧入口", recommended: true },
+      { id: "preview_approve", label: "先看预览", mode: "full_access", recommended: true },
+      { id: "custom", label: "Preview first" },
+    );
+    seedAsk(ask);
+    render(<AskPanel />);
+    expect(document.querySelectorAll(".ask-opt")).toHaveLength(2);
+    expect(screen.queryByText("旧入口")).toBeNull();
+    expect(screen.queryByText("先看预览")).toBeNull();
+    expect(screen.queryByText("Preview first")).toBeNull();
+    expect(Array.from(document.querySelectorAll(".ask-opt .idx")).map((n) => n.textContent)).toEqual(["1.", "2."]);
+    fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "2" });
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1));
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value.answers.q1.selections).toEqual(["revise"]);
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it.each(["plan", "confirm_each", "auto_edit", "full_access"] as ApprovalMode[])(
+    "preview sends only the note despite selected approval and never changes %s mode", async (mode) => {
+      seedAsk(previewAsk(), mode);
+      render(<AskPanel />);
+      expect(document.querySelector('.ask-opt[aria-checked="true"]')?.textContent).toContain("执行方案");
+      fireEvent.change(screen.getByPlaceholderText("补充说明（可选）"), { target: { value: "保留原有布局" } });
+      fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+      await act(async () => { await Promise.resolve(); });
+      expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+      expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value).toEqual({ action: "preview_plan", note: "保留原有布局" });
+      expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+      expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe(mode);
+    },
+  );
+
+  it("locks repeated clicks and every answer route until the pending preview closes", async () => {
+    seedAsk(previewAsk());
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    const button = screen.getByRole("button", { name: "查看预览" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(screen.getByText("执行方案"));
+    fireEvent.click(btnByText("忽略"));
+    fireEvent.click(btnByText("提交回答"));
+    fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "Enter" });
+    fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "1" });
+    fireEvent.keyDown(screen.getByPlaceholderText("补充说明（可选）"), { key: "Enter" });
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector(".ask-card")?.getAttribute("aria-busy")).toBe("true");
+    await act(async () => { pending.resolve(); await pending.promise; });
+    // The host close event, not an early IPC receipt, releases this ask.
+    fireEvent.click(button);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it.each(["执行方案", "提交回答", "忽略"])("blocks preview during an already pending %s answer", async (action) => {
+    seedAsk(previewAsk());
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.click(action === "执行方案" ? screen.getByText(action) : btnByText(action));
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value.action).toBeUndefined();
+    await act(async () => { pending.resolve(); await pending.promise; });
+  });
+
+  it("keeps the shared ask lock after unmounting and reopening the panel", async () => {
+    seedAsk(previewAsk());
+    const pending = deferredResolve();
+    const panel = render(<AskPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    panel.unmount();
+    render(<AskPanel />);
+    expect((screen.getByRole("button", { name: "查看预览" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("执行方案"));
+    fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "Enter" });
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    await act(async () => { pending.resolve(); await pending.promise; });
+  });
+
+  it.each(["Enter", " "])("native preview activation with %s cannot bubble into approval", async (key) => {
+    seedAsk(previewAsk());
+    render(<AskPanel />);
+    const button = screen.getByRole("button", { name: "查看预览" });
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    expect(button.tabIndex).toBe(0);
+    // happy-dom does not synthesize native click from key events; verify that the key stays
+    // uncancelled, then dispatch the browser activation. No custom key handler is needed.
+    expect(fireEvent.keyDown(button, { key, bubbles: true })).toBe(true);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(0);
+    fireEvent.keyUp(button, { key, bubbles: true });
+    fireEvent.click(button);
+    await act(async () => { await Promise.resolve(); });
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value).toEqual({ action: "preview_plan", note: "" });
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("leaves Tab, Shift+Tab and other plan buttons out of card-level shortcuts", () => {
+    seedAsk(previewAsk());
+    render(<AskPanel />);
+    for (const button of document.querySelectorAll<HTMLButtonElement>(".plan-card button")) {
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      expect(button.tabIndex).toBe(0);
+      for (const key of ["Tab", "Enter", " "]) {
+        expect(fireEvent.keyDown(button, { key, bubbles: true })).toBe(true);
+      }
+      expect(fireEvent.keyDown(button, { key: "Tab", shiftKey: true, bubbles: true })).toBe(true);
+    }
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(0);
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("shows a failed preview and permits retry without losing the note or selected answer", async () => {
+    seedAsk(previewAsk());
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.change(screen.getByPlaceholderText("补充说明（可选）"), { target: { value: "看看表格" } });
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    await act(async () => { pending.reject(new Error("connection lost")); await pending.promise.catch(() => {}); });
+    expect(screen.getByRole("alert").textContent).toContain("预览请求失败，请重试：connection lost");
+    expect((screen.getByRole("button", { name: "查看预览" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByPlaceholderText("补充说明（可选）") as HTMLInputElement).value).toBe("看看表格");
+    expect(document.querySelector('.ask-opt[aria-checked="true"]')?.textContent).toContain("执行方案");
+    expect(useRun.getState().tabs.s1.widgetAutoOpen).toBeNull();
+    resolveResponse = null;
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(2);
+    expect(calls.filter((c) => c.cmd === "resolve_ask")[1].args.value).toEqual({ action: "preview_plan", note: "看看表格" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("keeps an in-flight preview and its late failure bound to the original tab", async () => {
+    seedAsk(previewAsk());
+    addSecondTab();
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.change(screen.getByPlaceholderText("补充说明（可选）"), { target: { value: "只属于第一个会话" } });
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    act(() => useSessions.setState({ activeKey: "s2" }));
+    expect(document.querySelector(".plan-body")?.textContent).toContain("第二个方案");
+    expect((screen.getByRole("button", { name: "查看预览" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByPlaceholderText("补充说明（可选）") as HTMLInputElement).value).toBe("");
+    await act(async () => { pending.reject(new Error("first tab failed")); await pending.promise.catch(() => {}); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(useRun.getState().tabs.s2.widgetAutoOpen).toBeNull();
+    expect(useRun.getState().tabs.s2.ask?.askId).toBe("other-preview");
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args).toEqual({
+      sessionId: "s1", askId: "fixed-preview", value: { action: "preview_plan", note: "只属于第一个会话" },
+    });
+    act(() => useSessions.setState({ activeKey: "s1" }));
+    expect(screen.getByRole("alert").textContent).toContain("first tab failed");
+    expect((screen.getByRole("button", { name: "查看预览" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("keeps approval preference synchronization bound to the original tab too", async () => {
+    seedAsk(previewAsk());
+    addSecondTab();
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("执行方案"));
+    act(() => useSessions.setState({ activeKey: "s2" }));
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(useSessions.getState().tabs.find((tab) => tab.key === "s1")?.prefs.approval_mode).toBe("auto_edit");
+    expect(useSessions.getState().tabs.find((tab) => tab.key === "s2")?.prefs.approval_mode).toBe("plan");
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.sessionId).toBe("s1");
+    expect(calls.find((c) => c.cmd.includes("prefs"))?.args.sessionId).toBe("s1");
+  });
+
+  it.each(["terminal", "new-run", "new-ask"])("ignores stale approval effects after %s", async (replacement) => {
+    seedAsk(previewAsk());
+    useRun.setState((s) => { s.tabs.s1.runEpoch = 1; s.tabs.s1.runId = "run-1"; });
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("执行方案"));
+    act(() => useRun.setState((s) => {
+      if (replacement !== "new-ask") s.tabs.s1.runEpoch = 2;
+      if (replacement === "new-run") s.tabs.s1.runId = "run-2";
+      s.tabs.s1.ask = replacement === "terminal" ? null : previewAsk({ askId: "replacement" });
+      s.tabs.s1.widgetAutoOpen = null;
+    }));
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("plan");
+    expect(useRun.getState().tabs.s1.widgetAutoOpen).toBeNull();
+  });
+
+  it.each(["terminal", "new-run"])("never rearms a legacy preview after a late receipt across %s", async (replacement) => {
+    const ask = previewAsk({ canPreviewPlan: undefined });
+    ask.questions[0].options.push({ id: "preview", label: "先看预览" });
+    seedAsk(ask);
+    useRun.setState((s) => { s.tabs.s1.runEpoch = 1; s.tabs.s1.runId = "run-1"; });
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    expect(useRun.getState().tabs.s1.widgetAutoOpen).toMatchObject({ armed: true, askId: "fixed-preview", runId: "run-1" });
+    act(() => useRun.setState((s) => {
+      s.tabs.s1.runEpoch = 2;
+      if (replacement === "new-run") s.tabs.s1.runId = "run-2";
+      s.tabs.s1.ask = null;
+      s.tabs.s1.widgetAutoOpen = null;
+    }));
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(useRun.getState().tabs.s1.widgetAutoOpen).toBeNull();
+    expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
+  });
+
+  it("arms legacy preview before IPC and does not reopen an already consumed result", async () => {
+    const ask = previewAsk({ canPreviewPlan: undefined });
+    ask.questions[0].options.push({ id: "preview", label: "先看预览" });
+    seedAsk(ask);
+    const pending = deferredResolve();
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("先看预览"));
+    expect(useRun.getState().tabs.s1.widgetAutoOpen?.armed).toBe(true);
+    act(() => {
+      useRun.setState((s) => { s.tabs.s1.widgetAutoOpen!.callKey = "early-widget"; });
+      useRun.getState().consumeWidgetAutoOpen("s1", "early-widget");
+    });
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(useRun.getState().tabs.s1.widgetAutoOpen).toBeNull();
+  });
+
 });

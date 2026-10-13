@@ -144,7 +144,7 @@ whenToUse: Use when the user asks to transform or convert local text-based docum
             r#"---
 name: preview
 description: Render a visual HTML preview of the current plan (or the object under discussion) as a sandboxed widget.
-whenToUse: Use when the user asks to preview something (预览一下/看下效果/看看界面/mock 一下), or when the plan approval question offers「先看预览」and the user picks it.
+whenToUse: Use when the user asks to preview something (预览一下/看下效果/看看界面/mock 一下), or when the user clicks the plan approval UI’s「查看预览」button (ask returns preview_requested=true); legacy「先看预览」choices are also supported.
 ---
 # preview 工作流
 
@@ -155,7 +155,7 @@ whenToUse: Use when the user asks to preview something (预览一下/看下效�
 ## 一、什么时候渲染
 渲染（两种入口）：
 1. 用户明确要求预览（预览一下 / 看下效果 / 看看界面 / mock 一下），且上下文里已有**成型方案**或**明确讨论对象**。
-2. 批准门里用户选了「先看预览」：先本技能，再渲染，然后**重新发起同一批准询问**。
+2. 用户点击批准门固定「查看预览」按钮，ask 返回 `preview_requested=true`：加载本技能，严格按返回的 `plan_body` 原文渲染，然后**重新发起同一批准询问**。旧版模型选项「先看预览」仍兼容。
 
 不渲染（先澄清，别硬渲）：
 - 没有可预览对象（纯问答、闲聊、方案还没讨论出来）→ 先问清「要预览哪一部分」。
@@ -175,10 +175,10 @@ whenToUse: Use when the user asks to preview something (预览一下/看下效�
 
 ## 四、产出之后
 - 用一句话说明这张预览是什么，然后回到原任务：
-  - 处于批准门：**重新发起同一批准询问**（题干加一句「预览已更新，是否按计划执行？」）——
-    看预览不等于批准，绝不静默批准、绝不自行切档。
+  - 处于批准门：**重新发起同一批准询问**，保留当前方案完整 `plan` 原文、选项与分支名；标准选项仍为两个批准项与一个修订项，不添加 preview 选项，固定「查看预览」入口由界面提供。
+    看预览不等于批准，绝不静默批准、绝不自行切档，不冻结或重置计划基线。
   - 只是讨论中：问一句是否需要按此继续。
-- 同一方案连续 3 次预览后，重发询问时去掉预览项并说明原因（防来回空转）。
+- 预览不计入修订轮次；用户可反复查看，不能因预览次数隐藏或删除界面入口。
 - `render_html` 报错（如 E_TOO_LARGE）或不可用时：如实说明，并用聊天内 markdown 概览降级呈现；
   **批准门照常存在**，不得因预览失败跳过批准。
 "#,
@@ -768,6 +768,27 @@ mod tests {
             assert!(!s.meta.when_to_use.is_empty(), "{name} 缺 whenToUse");
             assert!(!s.body.contains('\r'), "{name} 正文含 CR");
         }
+    }
+
+    #[test]
+    fn preview_skill_preserves_plan_and_fixed_entry_after_repeated_previews() {
+        let (_, body) = builtin_skills()
+            .into_iter()
+            .find(|(name, _)| *name == "preview")
+            .unwrap();
+        let skill = parse_skill_md(body, "preview").unwrap();
+        assert!(skill.meta.when_to_use.contains("preview_requested=true"));
+        for anchor in [
+            "plan_body",
+            "同一批准询问",
+            "查看预览",
+            "不添加 preview 选项",
+            "用户可反复查看",
+        ] {
+            assert!(skill.body.contains(anchor), "preview 技能缺契约：{anchor}");
+        }
+        assert!(!skill.body.contains("连续 3 次"));
+        assert!(!skill.body.contains("去掉预览项"));
     }
 
     #[test]

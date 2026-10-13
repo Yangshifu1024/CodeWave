@@ -469,11 +469,18 @@ export function hydrateAsk(set: SetFn, p: AskOpenedEvent): void {
       t.textRecovered = p.text_recovered;
       stripRecoveredInTab(t);
     }
+    // A new question ends an unfulfilled preview attempt. A widget already locked
+    // to a callKey remains available to open once, even if the question arrives first.
+    if (t.widgetAutoOpen?.armed && t.widgetAutoOpen.askId !== p.ask_id) {
+      t.widgetAutoOpen = null;
+    }
+    const previewPending = t.ask?.askId === p.ask_id && t.ask.previewPending;
     t.ask = {
       askId: p.ask_id, kind: p.kind, title: p.title, detail: p.detail,
       questions: p.questions, switchToAutoEdit: p.switch_to_auto_edit,
       allowAlways: p.allow_always, approvalKind: p.approval_kind,
       planFile: p.plan_file ?? null, planBody: p.plan_body ?? null,
+      canPreviewPlan: p.can_preview_plan === true, previewPending,
       approval: p.approval, approveId: p.approve_id ?? null,
     };
   });

@@ -21,7 +21,7 @@ pub struct Args {
     #[serde(rename = "switchToAutoEdit")]
     pub(super) switch_to_autoedit: Option<bool>,
     /// 显式计划正文（可选）：plan 档批准形询问时由模型携带完整方案 markdown。
-    /// 落盘计划文件优先用此内容，缺失/空白时回退题干拼接（plan_text，历史行为兼容）。
+    /// 落盘计划文件优先用此内容，缺失/空白时仅采信通过有效性检查的本轮 assistant 正文。
     /// 此前「方案放 question」只是提示词协议，模型不遵从时计划文件只剩短题干（用户实测缺陷）。
     #[serde(default)]
     pub(super) plan: Option<String>,
@@ -73,6 +73,18 @@ pub struct Option2 {
 /// 计划文本自动落盘为计划文件供前端卡片查看。
 pub struct AskTool;
 
+/// UI 动作使用独立载荷，不能与 questions 的 answers 混用。
+/// 未知动作、额外字段以及非字符串备注都必须失败关闭，不能回落到批准/轻量切档路径。
+#[derive(Deserialize)]
+#[serde(tag = "action", deny_unknown_fields)]
+enum AskAction {
+    #[serde(rename = "preview_plan")]
+    PreviewPlan {
+        #[serde(default)]
+        note: String,
+    },
+}
+
 /// O8 口令表（固定关键词，Q3=A）：最近一条用户消息命中任一关键词时 skipAnalysis 声明才被采信。
 const SKIP_ANALYSIS_PHRASES: &[&str] = &[
     "不用分析",
@@ -115,7 +127,7 @@ impl Tool for AskTool {
         "ask"
     }
     fn description(&self) -> &'static str {
-        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。**选项互斥语义**：默认按 `single` 字段渲染（true=radio 单选，false=checkbox 多选）；未声明 `single` 时前端会做形态启发式——互斥关键词（题干以「选一个 / 哪一种 / 走哪种 / 选中 X / 是否按…执行」收尾、选项 ≤4 且无「同时 / 可多」语义、label 含「要么…要么…」等）命中则按 radio 渲染。强互斥场景（粒度 / 方向 / 档位选择）请显式 `single: true` 以避免启发式误判。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，提供两个批准类选项 + 一个修订选项 + 一个预览选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）、id=\"revise\"（label 补充意见/Request changes）与 id=\"preview\"（label 先看预览/Preview first，**不带 mode**）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。预览选项 = 不批准也不驳回：先加载 preview 技能渲染方案预览，再重发同一询问（不切档、不计入修订轮次，绝不静默批准）。**plan 字段契约**：凡带完整方案的询问都必须把方案放进 `plan` 字段（question 只放题干）——系统会把它落盘为计划文件、向前端下发真实方案正文渲染计划卡。不传 plan 也能工作：后端会用当轮正文做兜底（仅当正文与题干不等价、长度不短于题干、不含 `<ask>` 示例残留时才下传），仍拿不到真方案就**不落盘也不显示计划卡**——避免出现「空壳计划卡 / 3 行文件 viewer」的误导。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
+        "暂停并向用户提出 1–5 个问题，可带多选选项。仅在改变方向的关键决策上节制使用（技术选型、破坏性范围等）。run 会挂起直到用户作答。选项互斥的问题标记 single=true（单选 UI，选中一项即替换之前的选择）；真正的多选则不要设置。**选项互斥语义**：默认按 `single` 字段渲染（true=radio 单选，false=checkbox 多选）；未声明 `single` 时前端会做形态启发式——互斥关键词（题干以「选一个 / 哪一种 / 走哪种 / 选中 X / 是否按…执行」收尾、选项 ≤4 且无「同时 / 可多」语义、label 含「要么…要么…」等）命中则按 radio 渲染。强互斥场景（粒度 / 方向 / 档位选择）请显式 `single: true` 以避免启发式误判。plan 档批准协议：产出完整方案后（todos 已登记、分析已完成），必须调用 ask 发起单题询问，仅提供两个批准类选项 + 一个修订选项：id=\"approve\"（label 以自动编辑档执行，mode=\"auto_edit\"，recommended）、id=\"approve_full\"（label 以完全访问档执行，mode=\"full_access\"）与 id=\"revise\"（label 补充意见/Request changes）。批准类选项必须带 mode 字段声明「选中后把会话切到哪个权限档」（auto_edit=工作区内写入直通，fence 高危命令仍需确认；full_access=跳过审批弹窗），用户选中哪个批准类选项就切到哪档（可从任意档位一次跳档）。界面会为有真实方案的单题批准询问提供固定「查看预览」按钮，不要再添加 preview 选项。收到 preview_requested=true 表示不批准也不驳回：先加载 preview 技能，严格按返回的 plan_body 渲染当前方案预览，再以相同 plan、选项与分支名重发同一询问（不切档、不计入修订轮次，绝不静默批准）。**plan 字段契约**：凡带完整方案的询问都必须把方案放进 `plan` 字段（question 只放题干）——系统会把它落盘为计划文件、向前端下发真实方案正文渲染计划卡。不传 plan 也能工作：后端会用当轮正文做兜底（仅当正文与题干不等价、长度不短于题干、不含 `<ask>` 示例残留时才下传），仍拿不到真方案就**不落盘也不显示计划卡**——避免出现「空壳计划卡 / 3 行文件 viewer」的误导。用户批准后，系统把会话切到所选档位并通过系统消息指示你立即执行方案（不要再次询问）。用户要求修改时，修订方案后再次询问。"
     }
     fn schema(&self) -> &'static str {
         r#"{
@@ -194,6 +206,9 @@ impl Tool for AskTool {
             &current_turn_text(&ctx.rt),
             &args.questions,
         );
+        // 固定 UI 入口只取决于本次询问与真实正文，不依赖模型是否声明 preview 选项、
+        // 当前权限档位或计划文件是否成功落盘；应答时沿用此快照，不能重读运行态推断能力。
+        let can_preview_plan = approval_shape(&args.questions) && usable.is_some();
         let plan_file = usable.as_deref().and_then(|body| save_plan_file(ctx, body));
         let mut ask_opened = json!({
             "session": ctx.rt.id, "run_id": run_id, "ask_id": ask_id, "kind": "ask",
@@ -207,6 +222,7 @@ impl Tool for AskTool {
             //（此前 id 自拟会使面板回退为多选切换）
             "approval": approval_shape(&args.questions),
             "approve_id": approve_option_id(&args.questions),
+            "can_preview_plan": can_preview_plan,
         });
         // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
         // 真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」。
@@ -238,6 +254,41 @@ impl Tool for AskTool {
             );
             return ToolOutcome::err("E_ASK_CANCELLED", "用户取消或未回答");
         };
+
+        // UI 预览动作必须先于忽略、批准匹配、G2/G3 与所有切档路径处理。
+        // 只要携带 action，就不允许任何错误载荷退回普通 answers 路径。
+        if answer.get("action").is_some() {
+            let action: AskAction = match serde_json::from_value(answer.clone()) {
+                Ok(action) => action,
+                Err(_) => {
+                    return ToolOutcome::err(
+                        "E_ASK_INVALID_ACTION",
+                        "询问动作无效：只接受 {action: 'preview_plan', note?: string}，不得混入 answers 或批准选项。方案未获批准，请停下等待用户指示。",
+                    );
+                }
+            };
+            if !can_preview_plan {
+                return ToolOutcome::err(
+                    "E_ASK_PREVIEW_UNAVAILABLE",
+                    "本次询问没有可预览的批准方案，预览请求未生效。方案未获批准，请停下等待用户指示。",
+                );
+            }
+            let AskAction::PreviewPlan { note } = action;
+            crate::core::session_log::info(
+                ctx.rt.as_ref(),
+                &format!("ask [{ask_id}] 用户请求查看预览（不批准、不切档、不改变计划基线）"),
+            );
+            return ToolOutcome::ok(json!({
+                "summary": format!(
+                    "[system] 用户请求查看预览，尚未批准方案。请先加载 preview 技能，严格按本次询问的 plan_body 原文渲染预览，不得修改方案；随后携带同一 plan 正文、选项与分支名重新发起同一批准询问，继续等待明确批准。不要执行方案、切换权限档位或冻结/重置计划基线。{}",
+                    if note.trim().is_empty() { String::new() } else { format!("\n用户预览备注：{note}") }
+                ),
+                "raw": answer,
+                "plan_body": usable,
+                "preview_requested": true,
+                "plan_approved": false,
+            }));
+        }
 
         // 忽略检测（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：前端「忽略」= 清空末页直提空载荷
         //（所有 selections 空 + 所有 note 空）；产品语义是「未回答 / 不作答」。
@@ -493,7 +544,7 @@ pub(super) fn approve_option_id(questions: &[Question]) -> Option<String> {
         .map(|o| o.id.clone())
 }
 
-/// 预览选项（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门单题询问的第四选项 `id="preview"`，
+/// 旧版预览选项兼容（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：模型声明的 `id="preview"`，
 /// 语义是「先看方案预览」——既不是批准（`is_approve_option` 不匹配），也不是**有效应答**：
 /// ConfirmEach 档的切档判定含 valid_answer，不排除它就会让用户点「先看预览」被静默切到自动编辑档。
 /// 只在批准形询问里认（普通澄清询问里的同名选项不受影响）。

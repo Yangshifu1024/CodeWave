@@ -173,7 +173,7 @@ read/batch_read/edit 一次批量调用本来就是一张卡。头部展示全�
 
 `render_html` 接受 1–50,000 个 Unicode 字符，工具卡头部「预览」打开大弹框，卡内不再嵌一个默认约 150px 高 iframe。没有可恢复 html 的旧卡显示不可用说明，不提供坏入口。
 
-弹框约 90vw × 85vh，内容滚动在 iframe 内；支持原样复制、重挂 iframe 重新加载、浅/深画布，复制失败有反馈。每次打开按当前主题选画布；画布色与 `color-scheme` 不改写 `srcDoc`，HTML 自带背景照常覆盖。关闭即销毁 iframe，切会话卡片卸载也关闭。自动预览是一轮内的一次性信号，不是每张 render_html 都自动弹；批准门「先看预览」的授权语义见[计划与批准](./plan-and-approval.md)。
+弹框约 90vw × 85vh，内容滚动在 iframe 内；支持原样复制、重挂 iframe 重新加载、浅/深画布，复制失败有反馈。每次打开按当前主题选画布；画布色与 `color-scheme` 不改写 `srcDoc`，HTML 自带背景照常覆盖。关闭即销毁 iframe，切会话卡片卸载也关闭。自动预览是一轮内的一次性信号，不是每张 render_html 都自动弹；方案卡「查看方案 / 查看预览」同行；「查看预览」固定入口的授权语义见[计划与批准](./plan-and-approval.md)。
 
 iframe 使用 `sandbox="allow-scripts"`、不授予 `allow-same-origin`；资源访问还受应用 CSP 限制。不要仅凭 sandbox 声称任意网络都被独立封禁，也不要为预览偷偷放宽 CSP/同源能力。源码复制保持字节原样不等于任意脚本在当前 CSP 下都能运行。完整出参恢复由通用 sidecar 完成，旧会话没有备份时无法凭空补全。
 
