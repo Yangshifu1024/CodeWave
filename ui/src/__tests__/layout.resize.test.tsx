@@ -84,7 +84,11 @@ describe("分隔条交互", () => {
     label: "调整左栏宽度",
   };
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    // ws-resizing 挂在 <html> 上（全局样式开关），一旦某个用例中途失败就会漏给后续用例——显式清零
+    document.documentElement.classList.remove("ws-resizing");
+  });
 
   it("左栏分隔条：aria 语义 + 位置内联", () => {
     const { container } = render(<ResizeHandle {...props} onWidth={() => {}} onReset={() => {}} />);
@@ -165,6 +169,51 @@ describe("分隔条交互", () => {
     // 三类目标元素必须并列出现在同一豁免规则块里（避免「改了别处、漏改 tb-left-seg」的单边脱节）：
     // 选择器部分要含 .tb-left-seg，且同一规则块的声明部分含 transition: none !important
     expect(css).toMatch(/html\.ws-resizing[^{]+\.tb-left-seg[^{]*\{[^}]*transition:\s*none\s*!important/);
+  });
+
+  it("分隔条自身禁选：拖拽把手按下时不得让浏览器的选区锚点成形", () => {
+    // happy-dom 不解析外链 CSS（见上条），只能断言 app.css 文本契约。
+    // 只给分隔条加 user-select 是**不够**的（见下条），但它是第一道防线：命中区只有 6px，
+    // 锚点正是在这里落下，漏了这行会出现「大部分时候正常、偶尔整屏高亮」的飘忽行为。
+    const css = readFileSync(join(__dirname, "..", "theme", "app.css"), "utf8");
+    // 兼容 -webkit-user-select: none / user-select: none 两种前缀写法与声明顺序
+    expect(css).toMatch(/\.rb-resize-handle\s*\{[^}]*user-select:\s*none/);
+    // WKWebView 上的老 WebKit 只认前缀写法；本文件无 autoprefixer，必须手写
+    expect(css).toMatch(/\.rb-resize-handle\s*\{[^}]*-webkit-user-select:\s*none/);
+  });
+
+  it("拖动期对整棵子树禁选（拖拽经过的路径不会把文字扫进选区）", () => {
+    // 缺陷根因：选区延展不跨 flex 块级边界设障，所以只禁选分隔条挡不住 pointermove 扫过的正文；
+    // 必须有 `html.ws-resizing *` 兜住整条路径，否则表现为「拖完整个窗口全是高亮」且松手后残留。
+    const css = readFileSync(join(__dirname, "..", "theme", "app.css"), "utf8");
+    // 选择器部分必须同时含 html.ws-resizing 与 html.ws-resizing *（钉住子选择器不能被漏掉）
+    expect(css).toMatch(
+      /html\.ws-resizing\s*,\s*html\.ws-resizing\s+\*\s*\{[^}]*user-select:\s*none\s*!important/,
+    );
+    // !important 不能去掉：antd 运行时 cssinjs 可能声明 user-select: text 把它压回去
+    expect(css).toMatch(
+      /html\.ws-resizing\s*,\s*html\.ws-resizing\s+\*\s*\{[^}]*-webkit-user-select:\s*none\s*!important/,
+    );
+  });
+
+  it("右栏分隔条同样在拖动期挂 ws-resizing（两侧共用同一禁选路径）", () => {
+    // 左侧用例已覆盖 nav；这里钉住 right 不对称回归：只给 nav 加抑制时右栏仍会整屏高亮
+    const onWidth = vi.fn();
+    const { container } = render(
+      <ResizeHandle {...props} side="right" width={328} offset={328} onWidth={onWidth} onReset={() => {}} />,
+    );
+    const handle = container.querySelector(".rb-resize-handle") as HTMLElement;
+    // happy-dom 无 setPointerCapture/releasePointerCapture 的真实实现：显式补齐，避免拖动路径被跳过
+    (handle as any).setPointerCapture = () => {};
+    (handle as any).releasePointerCapture = () => {};
+
+    fireEvent.pointerDown(handle, { clientX: 900, button: 0, pointerId: 2 });
+    expect(document.documentElement.classList.contains("ws-resizing")).toBe(true);
+    // 右栏向左拖变宽：900 -> 860 应当变宽 40
+    fireEvent.pointerMove(handle, { clientX: 860, pointerId: 2 });
+    expect(onWidth).toHaveBeenLastCalledWith(368);
+    fireEvent.pointerUp(handle, { pointerId: 2 });
+    expect(document.documentElement.classList.contains("ws-resizing")).toBe(false);
   });
 
   it("指针被系统夺走（onLostPointerCapture）也能摘掉 ws-resizing", () => {

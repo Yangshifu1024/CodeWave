@@ -17,6 +17,8 @@
 
 宽度真源在 [layout.ts](../ui/src/utils/layout.ts)：左栏默认 280、范围 180–480；右栏默认 328、范围 328–640；中栏目标保底 480。窗口缩窄时先压右栏再压左栏，**只夹显示值，不回写用户记忆宽度**。分隔条支持拖动、方向键 16px 微调、双击复位；显示受夹取时禁止拖动，仍可复位。标题栏、Sider、右栏必须消费同一套显示宽度，不能各自计算。布局最小值不意味着任意异常尺寸下中栏绝不会被挤压。
 
+**拖动期必须禁选**：分隔条按下后浏览器会落一个选区锚点，而选区延展不跨 flex 块级边界设障，于是 pointermove 扫过的路径上的文字全部进选区，表现为「拖完整个窗口全是高亮」且松手后残留（连 Composer 输入框都会被扫进去）。因此拖动期由 `<html>` 上的 `ws-resizing` 类（`ResizeHandle` 在 `pointerdown` 挂、`pointerup`/`pointerCancel`/`onLostPointerCapture`/卸载兜底摘）对**整棵子树**加 `user-select: none !important`——只禁选分隔条自身不够，子选择器 `html.ws-resizing *` 不能省。作用域仅限拖动这一瞬间，松手后正文的正常选中与复制不受影响。回归入口：[layout.resize.test.tsx](../ui/src/__tests__/layout.resize.test.tsx)（CSS 文本契约断言，happy-dom 不解析外链 CSS）。
+
 实现入口：[AppShell.tsx](../ui/src/features/shell/AppShell.tsx)、[TopBar.tsx](../ui/src/features/shell/TopBar.tsx)、[RightBar.tsx](../ui/src/features/shell/RightBar.tsx)、[ResizeHandle.tsx](../ui/src/features/shell/ResizeHandle.tsx)。
 
 ### 1.2 主题、字体与可见性约束
