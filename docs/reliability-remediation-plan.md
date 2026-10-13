@@ -1,13 +1,13 @@
 # 可靠性问题修复方案
 
-> 状态：修复实现与自动回归已进入验收阶段，原生平台与 GUI 验收未关闭。下文保留设计基线和验收矩阵；现行契约已回写对应长期指南，不把设计中的建议或历史“未执行”说明当作当前运行结果。设计基线：2026-10-11 的 `main`，提交 [`8df75db5e9aeb6e9830892fba0e54ddd63856a9b`](https://github.com/Yangshifu1024/CodeWave/commit/8df75db5e9aeb6e9830892fba0e54ddd63856a9b)。
+> 状态：R01–R11 修复实现及对应自动回归已完成，并已进入 `main` / `v0.11.0`；原生平台与 GUI 验收未关闭。当前证据与逐项余项见[实施与验收状态](#实施与验收状态2026-10-12)。下文保留设计基线和验收矩阵；现行契约已回写对应长期指南，不把设计中的建议或历史“未执行”说明当作当前运行结果。设计基线：2026-10-11 的 `main`，提交 [`8df75db5e9aeb6e9830892fba0e54ddd63856a9b`](https://github.com/Yangshifu1024/CodeWave/commit/8df75db5e9aeb6e9830892fba0e54ddd63856a9b)。
 
 本文保留 11 项可靠性问题的设计、验收与发布基线；代码及自动回归已按此实现，剩余原生平台验收继续按下列矩阵执行。建议先封住密钥与文档的数据安全风险，再处理调度状态与跨会话隔离，最后完成设置保存和 MCP 测试体验的闭环。优先级是基于影响和可恢复性给出的建议，不代表已在用户机器上发生事故。
 
 ## 范围与证据口径
 
 - **设计基线**：逐项阅读调用链、持久化路径、前端状态与相关测试，记录支持证据和反证；下文历史源码链接与行号对应以上基线，拟议名称不一定等同最终接口。现行实现及回归入口见对应长期指南。
-- **尚未完成**：GUI 手动验收、真实系统钥匙串故障注入、Windows/macOS 文件占用与 Office 实机还原、完整 Tauri 应用重启及多会话点验。自动测试已覆盖模拟故障、取消、并发、子进程重启及真实本地 MCP 进程，但不能替代这些实机检查；下文矩阵本身不是通过记录。
+- **尚未完成**：GUI 手动验收、真实系统钥匙串故障注入、Office 应用打开/还原、macOS/Linux 权限与空间错误、完整 Tauri 应用重启及多会话点验。Windows 独占文件锁下替换失败保留原件及用户 `.bak` 已有本次 Windows CI 证据；不外推为所有 Office 占用场景通过。自动测试已覆盖模拟故障、取消、并发、子进程重启及真实本地 MCP 进程，但不能替代这些应用实机检查；下文设计矩阵本身不是通过记录。
 - **方案边界**：修复所列 11 项；不借机改权限档位、调度并行度、Office 保真策略、配置全新 schema、MCP 协议、产品视觉或自动执行用户项目代码。后文新增类型、错误码、字段、测试名均为**拟议设计**，不是现有 API。
 - **文档职责**：这是一份用户明确要求的跨主题、尚未全部验收关闭的汇总计划。问题相互依赖，拆散到现行行为指南会混淆“已实现”和“建议”；因此暂时单列。各项实施后，将最终契约及长期回归入口回写现有主题；全部关闭后从当前导航移除本计划，通过 Git 历史保留，不建立第二份归档。
 
@@ -45,7 +45,7 @@
 | F 设置局部保存 | R10；即时字段专用补丁、页草稿可写范围和 revision | 依赖 A 的统一配置提交/回执基础，避免双写入口 |
 | G MCP 配置与测试 | R08 + R11；先纯解析器，再影响域重连与临时测试连接 | 可拆为两 PR，但必须共用校验规则；测试连接不能借用活跃连接 |
 
-这些是原设计中的**修复 PR 拆分建议**；当前修复在独立本地分支集成，没有发布或合并主分支。各项人日估算见章节，默认一名熟悉仓库的工程师，包含开发和自动回归，不含排队审查、产品决策和所有平台人工验收；共享基础设施不能把各项上限简单相加。排期前先确认先行批次和下述未决产品语义，再将高风险项拆成可独立回滚的提交。
+这些是原设计中的**修复 PR 拆分建议**，不是当前待实施排期；修复已合入 `main` 并包含于 `v0.11.0` 对应提交，自动回归证据见[实施与验收状态](#实施与验收状态2026-10-12)。tag 与测试通过不代表 draft Release 已公开发布或实机验收已关闭。各项人日估算见章节，默认一名熟悉仓库的工程师，包含开发和自动回归，不含排队审查、产品决策和所有平台人工验收；共享基础设施不能把各项上限简单相加。排期前先确认先行批次和下述未决产品语义，再将高风险项拆成可独立回滚的提交。
 
 ## 共同设计约束
 
@@ -246,7 +246,7 @@
 - **AC-R03-4（同一版本）**：用 barrier 控制两次受管写/编辑与还原交错，第二次只能读取第一次提交后的版本或明确冲突，不能拿旧补丁覆盖新内容。注入外部变更在摘要复验前发生，必须 `E_DOCUMENT_CHANGED`；不将该测试外推为所有外部竞态已消失。
 - **AC-R03-5（版本库）**：连续六次成功后保留规定数量；备份失败不修剪原版本；在还原最旧版本时，当前版本保存不得令已选择内容不可用。缺失目标分支按最终选择测试 no-clobber 或明确拒绝；目录外、symlink 指向外部、其他目标备份全部拒绝。
 - **AC-R03-6（保真与平台）**：重跑现有 `faithful_spike`/patch 样本，未修改 ZIP 成员逐字节一致；Windows 占用文件及 macOS/Linux 权限/空间错误分别执行。交用户人工检查真实 Office 打开、修改、还原和失败提示，不做 GUI 自动点验。
-- **AC-R03-7（Windows 安全替换）**：预置目标及用户同名 `.bak`，分别注入回滚复制失败、persist 失败、复制与 persist 双故障配置、回滚失败及正常成功；每例都断言用户 `.bak` 原样存在。复制失败时 persist 调用计数为 0，未验证回滚文件绝不读取/回写；persist 失败时原目标保持或从本次完整凭据恢复，恢复失败则返回真实降级状态并保留恢复文件。同时验证多个相同 stem、不同扩展名文件并发写不会共享临时回滚名。拟增 `document_windows_atomic_preserves_user_bak`，故障适配器单测与真实 Windows 集成均必需。
+- **AC-R03-7（原设计：Windows 安全替换）**：预置目标及用户同名 `.bak`，分别注入回滚复制失败、persist 失败、复制与 persist 双故障配置、回滚失败及正常成功；每例都断言用户 `.bak` 原样存在。复制失败时 persist 调用计数为 0，未验证回滚文件绝不读取/回写；persist 失败时原目标保持或从本次完整凭据恢复，恢复失败则返回真实降级状态并保留恢复文件。同时验证多个相同 stem、不同扩展名文件并发写不会共享临时回滚名。拟增 `document_windows_atomic_preserves_user_bak`，故障适配器单测与真实 Windows 集成均必需。**最终实现未采用回滚复制分支**；该部分由无回滚副本的原子替换及用户 `.bak` 保留/真实独占锁测试替代，证据与仍待验边界见[实施与验收状态](#实施与验收状态2026-10-12)。
 
 实施后在 `src-tauri/` 执行 `cargo test --workspace document_`（新测试统一前缀）、`cargo test --workspace tools::document`、`cargo test --workspace host::commands::preview`，再执行完整 `cargo test --workspace`。涉及 UI 回执则从仓库根执行 `pnpm --dir ui test` 与 `pnpm --dir ui build`；开 PR 前执行完整 `pnpm prepr`。均记录实际平台、退出码及未跑项。
 
@@ -683,7 +683,7 @@ R05、R06、R09 应一起设发布门槛：路径恢复先正确，认领先具�
 用户改了 command、args、env、URL 或 headers，点击“测试”后却测到磁盘旧配置；新建/重命名条目还可能报“配置里没有此 server”。这会给出错误的通过结论，用户随后保存才发现真正配置不可用。
 
 - 编辑状态存于 `mcpDoc/mcpEntries`，字段修改只更新草稿，见 [SettingsPage.tsx:306–324](../ui/src/features/panels/SettingsPage.tsx#L306-L324)、[SettingsPage.tsx:927–975](../ui/src/features/panels/SettingsPage.tsx#L927-L975)。按钮只传 `e.name.trim()`，见 [SettingsPage.tsx:1786](../ui/src/features/panels/SettingsPage.tsx#L1786)。
-- `testMcpServer` 仅传 scope/name/sessionId，见 [SettingsPage.tsx:1085–1100](../ui/src/features/panels/SettingsPage.tsx#L1085-L1100)、[client.ts:181–182](../ui/src/ipc/client.ts#L181-L182)。后端重新 load_scope 并按 name 查磁盘配置，见 [mcp.rs:307–330](../src-tauri/src/host/commands/mcp.rs#L307-L330)。
+- `testMcpServer` 仅传 scope/name/sessionId，见 [SettingsPage.tsx:1085–1100](../ui/src/features/panels/SettingsPage.tsx#L1085-L1100)、[client.ts:181–182](../ui/src/ipc/client.ts#L181-L182)。后端重新 load_scope 并按 name 查磁盘配置，见 [mcp.rs:307–330（设计基线）](https://github.com/Yangshifu1024/CodeWave/blob/8df75db5e9aeb6e9830892fba0e54ddd63856a9b/src-tauri/src/host/commands/mcp.rs#L307-L330)。
 - 反证边界：测试确为临时连接，`test_connection` 不并入池，完成后回收，见 [manager.rs:1033–1045](../src-tauri/src/mcp/manager.rs#L1033-L1045)。现有 UI 测试只断言 scope/name 与不触发 connect，见 [settings.mcp.test.tsx:622–637](../ui/src/__tests__/settings.mcp.test.tsx#L622-L637)，没有断言草稿字段被送到后端。当前 [设置指南](./settings-guide.md#mcp-页与编辑器) 已明示测试已保存配置，因此本项是有意改进该现行边界，文档也须同步，不能只改测试名。
 - 本次未启动 MCP、未传输用户凭据、未 GUI 复现；静态链路足以确认输入源错误与缺失覆盖。
 
@@ -732,6 +732,26 @@ R05、R06、R09 应一起设发布门槛：路径恢复先正确，认领先具�
 
 ## 发布门禁与交付记录
 
+### 实施与验收状态（2026-10-12）
+
+核验提交为 [`6c3a205e312778bffce39c9df60935d55247f40f`（v0.11.0）](https://github.com/Yangshifu1024/CodeWave/commit/6c3a205e312778bffce39c9df60935d55247f40f)。下表所有项目的**实现及对应自动回归已完成**；“剩余验收”未完成前不将整项标为关闭。三平台测试、lint、ignored 与条件编译覆盖边界集中见[本次自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本节记录实际实现，各节 R01–R11 设计中的拟议名称、估算、历史静态问题及“本次未执行”均属于原设计基线，不覆盖此处当前状态。
+
+| 项目 | 当前自动回归证据（实际测试名/文件） | 剩余验收 |
+|---|---|---|
+| R01 凭据提交 | [config_commit](../src-tauri/src/core/config_commit.rs)：`credentials_never_enter_config_writes`、`failed_file_commit_keeps_old_credentials_and_memory`、`process_crashes_before_and_after_commit_recover_whole_pools` | 三平台真实钥匙串可用/拒绝/锁定；应用保存、重启与假 key 泄漏扫描 |
+| R02 追加密钥 | 同模块：`append_preserves_existing_pool_and_stable_deduplication`、`append_read_failure_never_overwrites`、`concurrent_append_uses_domain_conflict_instead_of_last_writer_wins` | 真实钥匙串追加、重开、读取失败后旧池保持 |
+| R03 Office 事务 | [reliability_tests](../src-tauri/src/tools/document/reliability_tests.rs)：`document_backup_failure_keeps_original_in_all_edit_paths`、`document_restore_requires_current_backup_at_every_fault`、`document_success_receipt_is_reversible_and_model_visible`；[atomic](../src-tauri/src/util/atomic.rs)：Windows 独占锁测试通过 | 真实 Office 打开/编辑/还原与失败提示；macOS/Linux 权限/空间故障；断电耐久性未认证 |
+| R04 认领与锁 | 同一可靠性测试：`document_claim_policy_matches_runtime_role_for_all_write_tools`、`document_managed_edits_serialize_and_read_latest_snapshot`、`document_create_race_never_overwrites`；[agent/tests](../src-tauri/src/core/agent/tests.rs)：`drive_releases_document_claims_on_all_exits` | 应用内主/子会话续改、取消、用户还原与生命周期点验 |
+| R05 项目任务恢复 | [scheduler](../src-tauri/src/core/scheduler.rs)：`real_registered_project_roundtrip_and_delete`、`offline_project_discovery_is_non_destructive_even_with_normal_list_reads` | 完整应用退出重开；项目离线、移回后的诊断与恢复 |
+| R06 排队领取 | 同模块：`pending_pause_delete_edit_and_recreate_revoke_old_claims`、`virtual_time_dispatch_revocation_has_zero_execution_effects` | 应用中 A 占锁、B 排队后暂停/删除/改期的实际执行次数与提示 |
+| R07 图片草稿 | [composer.attachments.race](../ui/src/__tests__/composer.attachments.race.test.tsx)、[run.attachments](../ui/src/__tests__/run.attachments.test.ts)：目标身份、逆序完成、失效和发送快照 | 原生 WebView 粘贴/拖入/选择框；跨 Tab、关闭、清空、发送交错 |
+| R08 MCP 影响域 | [manager](../src-tauri/src/mcp/manager.rs)：`private_edit_preserves_other_project_and_shared_global_inflight_identity`、`changed_target_rejects_old_ticket_but_drains_admitted_call_without_replay` | 应用 A/B/临时会话在途连接与审批、配置改变后的实际状态 |
+| R09 once 终态 | [scheduler](../src-tauri/src/core/scheduler.rs)：`once_all_terminal_results_remain_and_finish_is_idempotent`、`active_run_restart_is_interrupted_once_and_never_replayed` | 应用重启后的历史、未确认状态不重放、手动重跑及写失败提示 |
+| R10 设置字段隔离 | [settings.page](../ui/src/__tests__/settings.page.test.tsx)：`role selection remains saved after an ordinary page save and reopening`、`instant patches preserve ordinary draft text; cancelling drops only the ordinary draft`；后端角色/页级域冲突回归 | 真实设置页改角色→改普通项→保存/取消→重开→删除所选模型 |
+| R11 MCP 草稿测试 | [settings.mcp](../ui/src/__tests__/settings.mcp.test.tsx) 精确载荷/迟到结果；manager 的 `test_connection_probes_without_joining_pool` 与 Unix `aborted_probe_reaps_child_during_initialize_and_tools_list` | Windows 对应 probe 取消回收；应用新建/重命名、不保存测试、修改/关闭后的结果失效及正式池不变 |
+
+R03 最终选择同目录 `NamedTempFile` + `persist`，不复制/删除目标、不创建或使用回滚 `.bak`；因此原方案“回滚复制失败/回写失败”的分支不再适用。对应替代回归为 `document_atomic_preserves_user_bak_on_success_and_failure`、`document_same_stem_writes_never_share_rollback_files`、`document_windows_atomic_preserves_user_bak_when_target_is_locked`；最后一项在本次 Windows runner 上使用真实独占句柄验证。保留真实 Office 和断电边界，不把替代设计解释为省略验收。
+
 ### 每项修复的关闭条件
 
 每项需在对应修复 PR 写明：基线及最终 commit、实现了哪些设计、哪些建议被替换及理由、测试命令/工作目录/平台/退出码、人工验收者和结果、仍未覆盖的边界。下列条件全部满足才可标记关闭：
@@ -744,7 +764,7 @@ R05、R06、R09 应一起设发布门槛：路径恢复先正确，认领先具�
 
 ### 自动门禁
 
-未来修复在开 PR 或发布前，从仓库根执行 `pnpm prepr`，与 [完整门禁](./testing.md#开-pr-前的完整门禁) 保持同源。它包含锁定依赖安装、Rust fmt/clippy/test、UI lint/test/build 和 Node 脚本测试。硬步骤失败即停；clippy 仍按现行规则作为软步骤单独报告，不能用总退出码掩盖新增 warning。
+后续修复在开 PR 或发布前，从仓库根执行 `pnpm prepr`，与 [完整门禁](./testing.md#开-pr-前的完整门禁) 保持同源。它包含锁定依赖安装、Rust fmt/clippy/test、UI lint/test/build 和 Node 脚本测试。硬步骤失败即停；clippy 仍按现行规则作为软步骤单独报告，不能用总退出码掩盖新增 warning。
 
 开发中可先执行针对性测试，但不替代完整门禁：
 
@@ -756,11 +776,11 @@ R05、R06、R09 应一起设发布门槛：路径恢复先正确，认领先具�
 | R07 | Composer 完整挂载、附件导入 deferred promise、run store 关闭/清空/发送/切换/取消竞态 |
 | R08/R11 | MCP manager 配置差异、连接世代、调用票据与回收、模拟 server in-flight 行为、草稿测试弹框及迟到结果 |
 
-具体执行以仓库实际新增测试文件为准；这些测试名称或类别是未来实施要求，不表示当前已经存在或执行。后端命令在 `src-tauri/` 执行 `cargo test --workspace`；UI 从根执行 `pnpm --dir ui test`、`pnpm --dir ui run lint`、`pnpm --dir ui build`。
+当前已执行项目与实际测试名见[实施与验收状态](#实施与验收状态2026-10-12)，详细平台结果见[测试指南](./testing.md#可靠性修复自动验证记录2026-10-12)；上表仍作为后续修改的最低回归范围，不能据设计中的拟议测试名推定通过。后端命令在 `src-tauri/` 执行 `cargo test --workspace`；UI 从根执行 `pnpm --dir ui test`、`pnpm --dir ui run lint`、`pnpm --dir ui build`。
 
 ### 平台与人工门禁
 
-按仓库约定提供分步人工清单，不做 GUI 自动点验。macOS、Windows、Linux 的 CI 结果分别记录；其中系统钥匙串、文件占用/替换、WebView 文件导入、MCP stdio 进程回收还需真实平台验收，不能从单平台结果外推。
+按仓库约定提供分步人工清单，不做 GUI 自动点验。macOS、Windows、Linux 的 CI 结果分别记录；其中真实系统钥匙串、Office 应用占用/还原、WebView 文件导入与应用内 MCP probe 回收仍需按下列清单验收。Windows 独占文件锁与三平台 MCP 会话释放进程树回收已有自动平台证据，Unix probe 取消测试不覆盖 Windows，不能从单平台结果外推。
 
 1. **凭据**：系统钥匙串可用/拒绝/锁定各测一轮保存和重启；观察错误与持久化结果，检测测试假 key 是否出现在配置/临时文件/日志。已有安全引用仍能读取，且新失败不破坏旧池。
 2. **Office**：打开有图表等非目标内容的合成文件；拒绝备份、模拟目标被占用、并发修改与取消；逐步确认原始字节、备份、目标结果、UI 回执与还原后的内容一致。

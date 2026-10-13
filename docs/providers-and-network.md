@@ -60,7 +60,7 @@ KeyPool 以供应商 id 分组，同供应商模型共享健康状态：优先�
 - 删除供应商/清空池只撤销新配置解析，已捕获旧 `ModelConfig` 的在途轮次或重试仍可用旧账户直至结束；不承诺即时撤销。
 - `resolve_provider_keys` 回读失败返回错误，供额度显示 `invalid`；模型 `resolve_keys` 仍以空 key 的请求错误链展示故障，二者错误语义不要混用。
 - 成功写入版本化引用后不能直接退回不理解 `credential_ref` 的旧二进制；需修补版/前向修复，不双写旧账户换取兼容。
-- 回归入口：`core::config_commit::tests` 的秘密字节扫描、文件/读回/多供应商失败、启动整理、崩溃阶段重建、并发追加、字段域冲突和旧快照测试；`providers.panel.test.tsx`、`settings.cleanup.test.ts`、`SubagentModelsPanel.test.tsx` 及设置整页测试覆盖表单与响应顺序。真实钥匙串三平台与 Windows 断电/替换语义仍需人工验收。
+- 回归入口：`core::config_commit::tests` 的秘密字节扫描、文件/读回/多供应商失败、启动整理、崩溃阶段重建、并发追加、字段域冲突和旧快照测试；`providers.panel.test.tsx`、`settings.cleanup.test.ts`、`SubagentModelsPanel.test.tsx` 及设置整页测试覆盖表单与响应顺序。真实钥匙串三平台及 Windows 配置替换/断电语义仍需人工验收。通用文件写入器的 Windows 独占锁回归已通过，但它不等于配置专用替换器或真实钥匙串已验收；范围见[本次自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。
 
 源码：[host/keyring.rs](../src-tauri/src/host/keyring.rs)、[host/commands/project.rs](../src-tauri/src/host/commands/project.rs)、[config_commit.rs](../src-tauri/src/core/config_commit.rs)、[provider/keys.rs](../src-tauri/src/provider/keys.rs)。
 

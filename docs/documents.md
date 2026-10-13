@@ -80,7 +80,7 @@ Office 与普通 create/edit/delete 共用 `requires_file_claim(rt) = !rt.is_mai
 
 公共 [atomic.rs](../src-tauri/src/util/atomic.rs) 不再创建、读取或删除用户同名 `.bak`。目标同目录临时文件同步后交给 tempfile 原生替换（Windows 使用 MoveFileExW 的 replace-existing 路径），没有「复制失败后还从旧 .bak 回写」分支。临时回滚副本不能替代文档持久备份。
 
-边界：路径锁只协调 CodeWave 受管写入口，不覆盖外部 Excel、shell、MCP、硬链接或目录删除的祖先级互斥。摘要复验到最终替换之间仍有外部进程写入窗口，不是跨进程 CAS；尚未给出断电/目录 fsync 级保证。Windows 文件占用、真实 Office 打开/还原、macOS/Linux 文件权限与空间错误仍须平台验收，不能用 Linux 单测外推。
+边界：路径锁只协调 CodeWave 受管写入口，不覆盖外部 Excel、shell、MCP、硬链接或目录删除的祖先级互斥。摘要复验到最终替换之间仍有外部进程写入窗口，不是跨进程 CAS；尚未给出断电/目录 fsync 级保证。Windows 独占句柄占用下替换失败保留原件及用户 `.bak` 已有[本次 Windows CI 证据](./testing.md#可靠性修复自动验证记录2026-10-12)；真实 Office 打开/还原、其它占用方式、macOS/Linux 文件权限与空间错误仍须平台验收，不能由该窄项通过或 Linux 单测外推。
 
 ## 6. 原地引用与项目外访问
 

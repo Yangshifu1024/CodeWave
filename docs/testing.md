@@ -40,6 +40,29 @@ pnpm prepr
 
 比较优化效果时，先记录同一依赖树、工具链和 runner image 的 main 基线，再在获准发布的 PR 上记录第一次与后续热缓存运行。首次运行可能已恢复 main 缓存，必须按日志标注 exact/partial/miss，不能把“首次”直接写成“冷缓存”。若必须做严格冷缓存 A/B，应另获授权后使用隔离缓存 key，不清空共享缓存。两次都记录排队、整个 workflow 关键路径、各 job/步骤、Rust 编译/套件、缓存传输和总 runner 分钟，并核对通过/ignored/doctest 数。拆分增加 checkout/install 和 runner 启动开销，账户并发不足可能变成排队；只有真实数据能判断 wall-clock 收益，不能只报单步骤节省。
 
+## 可靠性修复自动验证记录（2026-10-12）
+
+本记录仅对应 [`6c3a205e312778bffce39c9df60935d55247f40f`（v0.11.0）](https://github.com/Yangshifu1024/CodeWave/commit/6c3a205e312778bffce39c9df60935d55247f40f)，不承诺后续 checkout 沿用此结果。R01–R11 的实现、实际回归入口及剩余人工验收见[专项方案](./reliability-remediation-plan.md#实施与验收状态2026-10-12)。
+
+- [三平台测试 workflow](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537448)：三个 Backend、三个 Frontend 及三个汇总 job 均成功。Backend 包含前端生产构建及 `src-tauri/` 中 `cargo test --workspace`；Frontend 包含 Vitest 和 Node 脚本测试。
+- [lint workflow](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537545)：Rust fmt/clippy 与 UI eslint 步骤成功；此结论不等于 clippy 无 warning。
+- 本地完整 `pnpm prepr` 未执行完成：云环境缺少 GTK/GLib/WebKit 等系统依赖。此次发版经维护者明确批准，以最终提交的三平台 CI 补足完整后端验证；不是修改默认本地门禁，也不能写成本地 prepr 成功。
+
+| 实际日志 | Rust 主测试套件 | 说明 |
+|---|---|---|
+| [macOS](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537448/job/114832523184) | 1414 passed / 0 failed / 3 ignored | 后续二进制测试与 doctest 各 0 项 |
+| [Linux](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537448/job/114832523311) | 1414 passed / 0 failed / 2 ignored | 后续二进制测试与 doctest 各 0 项 |
+| [Windows](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537448/job/114832523341) | 1397 passed / 0 failed / 3 ignored | 后续二进制测试与 doctest 各 0 项 |
+
+[Windows 前端日志](https://github.com/Yangshifu1024/CodeWave/actions/runs/38255537448/job/114832523217)明确记录 122 个文件、1586 项 Vitest 通过；Node 脚本 34 passed / 0 failed / 1 skipped，跳过项为 `cancellation cannot succeed even when the child handles the signal and exits zero`（POSIX signal handling regression）。不同平台条件编译和跳过项不得合并成“所有测试均执行”。
+
+Rust ignored 的完整名称：
+- 三平台共有：`core::quota::tests::live_probe_opencode_go_usage`（真实账户/网络探针）、`tools::skill::tests::disabled_after_load_should_invalidate_within_ttl`（尚未关闭的缓存失效回归）。
+- macOS 另有：`host::notify::tests::probe_macos_notification_no_choose_application`（真实通知人工探针）。
+- Windows 另有：`host::notify::tests::probe_own_aumid_toast`（真实 toast 点击人工探针）。
+
+平台覆盖的窄边界：`document_windows_atomic_preserves_user_bak_when_target_is_locked` 在 Windows 通过，验证独占句柄占用下替换失败且原件/用户 `.bak` 保留；`process_tree_is_reclaimed_on_session_release` 在三平台通过。`aborted_probe_reaps_child_during_initialize_and_tools_list` 为 `cfg(unix)`，在 macOS/Linux 通过，在 Windows 未编译纳入，**不是 Windows ignored 用例**。这些均不替代真实系统钥匙串锁定/拒绝、Office 打开/还原、GUI 操作、完整应用重启、安装/自动更新或发布签名核验。发布产物与签名应另按[发布指南](./release.md#人工验收清单)核对。
+
 ## 按改动面选回归
 
 | 改动面 | 关键验证与入口 |
