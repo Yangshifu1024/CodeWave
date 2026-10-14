@@ -1,6 +1,6 @@
 # CodeWave 文档导航
 
-> 维护日期：2026-10-14。这里是当前行为与长期维护指南；实现细节以文中链接的源码和测试为准。
+> 维护日期：2026-10-15。这里是当前行为与长期维护指南；实现细节以文中链接的源码和测试为准。
 
 ## 按任务阅读
 
@@ -9,6 +9,7 @@
 - 修改授权或能力：[计划与审批](./plan-and-approval.md)、[工具与安全](./tools-and-safety.md)、[文档工具](./documents.md)、[MCP 与技能](./mcp-and-skills.md)
 - 修改产品交互：[供应商与网络](./providers-and-network.md)、[设置](./settings-guide.md)、[聊天与界面](./chat-and-interface.md)
 - 设计外部 Agent 接入：[ACP 接入方案](./acp-integration.md)（待批准、未实施；codeg 为 Client，CodeWave 为 Agent）
+- 规划工程编排：[CodeWave 工程编排与下一步开发方案](./engineering-workflows.md)（开发建议、未实施；工作项、单 Loop、Inbox、修复与交付）
 - 交付版本：[发布、签名与自动更新](./release.md)
 
 ## 全部主题
@@ -34,8 +35,9 @@
 
 - [可靠性问题修复方案](./reliability-remediation-plan.md)：11 项问题的证据、设计、拆分顺序与验收标准。集中保留跨主题设计与尚未关闭的平台验收矩阵；现行契约已随修复回写长期指南，全部验收关闭后移出当前导航。
 - [CodeWave ACP 接入方案](./acp-integration.md)：待批准，未实施。独立 ACP CLI、宿主适配、询问与 MCP、codeg 批准回执兼容依赖、共享数据协调、三平台分发与验收。ACP 双向协议及互操作矩阵需要独立维护，现有架构/MCP 指南保留入口；实施后原位转为接入指南，完成计划留在 Git 历史。
+- [CodeWave 工程编排与下一步开发方案](./engineering-workflows.md)：开发建议，未实施。设计持久工作项、阶段、Inbox、有界修复和交付门控；跨主题的产品与架构设计需独立维护，实施后原位转为工程工作流指南。
 
-14 篇长期指南、2 篇待批准或验收专项方案，连同本索引共 17 篇。项目总体介绍见 [README](../README.md)，协作硬约束见 [AGENTS](../AGENTS.md)，贡献流程见 [CONTRIBUTING](../CONTRIBUTING.md)，安全披露见 [SECURITY](../SECURITY.md)。
+14 篇长期指南、3 篇待批准或验收专项方案，连同本索引共 18 篇。项目总体介绍见 [README](../README.md)，协作硬约束见 [AGENTS](../AGENTS.md)，贡献流程见 [CONTRIBUTING](../CONTRIBUTING.md)，安全披露见 [SECURITY](../SECURITY.md)。
 
 ## 维护规则
 

@@ -101,7 +101,7 @@ pnpm prepr                 # 开 PR 或发版前的完整本地门禁
 
 ## 文档
 
-[完整文档索引](./docs/0-README.md)包含 14 篇长期主题指南、2 篇待批准或验收专项方案，连同索引共 17 篇。按任务选择入口：
+[完整文档索引](./docs/0-README.md)包含 14 篇长期主题指南、3 篇待批准或验收专项方案，连同索引共 18 篇。按任务选择入口：
 
 | 任务 | 阅读入口 |
 |---|---|
@@ -110,6 +110,7 @@ pnpm prepr                 # 开 PR 或发版前的完整本地门禁
 | 维护权限与工具 | [计划与审批](./docs/plan-and-approval.md)、[工具与安全](./docs/tools-and-safety.md)、[Office/PDF 文档工具](./docs/documents.md) |
 | 配置模型与扩展 | [供应商与网络](./docs/providers-and-network.md)、[MCP 与技能](./docs/mcp-and-skills.md) |
 | 设计 codeg 接入 | [ACP 接入方案](./docs/acp-integration.md)（待批准，未实施） |
+| 规划工程编排 | [CodeWave 工程编排与下一步开发方案](./docs/engineering-workflows.md)（开发建议，未实施） |
 | 维护产品交互 | [设置指南](./docs/settings-guide.md)、[聊天与界面](./docs/chat-and-interface.md) |
 | 交付版本 | [发布、签名与自动更新](./docs/release.md) |
 | 参与协作 | [贡献指南](./CONTRIBUTING.md)、[AI 协作规约](./AGENTS.md)、[安全策略](./SECURITY.md) |
