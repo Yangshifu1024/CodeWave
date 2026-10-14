@@ -1574,7 +1574,6 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
 .rb-overview-changes.ant-btn,
 .rb-overview-row.ant-btn,
 .rb-skill-line.rb-skill-clickable { width: calc(100% + var(--rb-row-padding) * 2); }
-.rb-quota-compact > .rb-label-row { justify-content: flex-end; margin-bottom: 8px; }
 
 /* ---------- 信息页签：额度与余额段（行集合 = 供应商配置；色彩强度映射风险等级） ---------- */
 .rb-quota .rb-quota-provider + .rb-quota-provider { margin-top: 6px; }

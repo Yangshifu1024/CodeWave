@@ -134,30 +134,34 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
           {sessionId && files.length > 0 && <Button type="text" size="small" className="rb-view-all" icon={<RightOutlined />} aria-label={t("rightbar.viewAll")} onClick={() => setRbTab("files")}>{t("rightbar.viewAll")}</Button>}
         </section>
 
-        <Collapse ghost className="rb-collapse" expandIconPlacement="start" activeKey={openSections}
-          onChange={keys => {
-            const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
-            const next = new Set(collapsed);
-            for (const id of sections) { if (open.has(id)) next.delete(id); else next.add(id); }
-            setCollapsed(next);
-            writeCollapsedSections(next);
-          }}
-          items={[
-            ...(todos.length ? [{
-              key: "plan", label: t("rightbar.currentPlan"), extra: <Typography.Text type="secondary">{t("rightbar.planProgress", { done: todos.filter(todo => todo.status === "completed").length, total: todos.length })}</Typography.Text>,
-              children: todos.map((todo, i) => <div className="rb-todo" key={i}><span className={`rb-todo-dot ${todo.status}`}>{todo.status === "completed" ? <CheckOutlined /> : todo.status === "in_progress" ? "●" : "○"}</span><span className={todo.status === "completed" ? "rb-todo-done" : ""}>{todo.title}</span></div>),
-            }] : []),
-            { key: "quota", label: t("rightbar.quota"), forceRender: true, children: <QuotaSection compact visible={visible && openSections.includes("quota")} /> },
-            { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>
-              {skills.length === 0 && <div className="rb-dim">{t("rightbar.noSkills")}</div>}
-              {skills.map(skill => <Tooltip key={skill.name} title={[skill.name, skill.description, skill.origin === "<builtin>" ? "" : skill.origin].filter(Boolean).join("\n")}>
-                <Button type="text" block className="rb-skill-line rb-skill-clickable" onClick={() => setDetail({ sessionId, skill })}>
-                  <span className="rb-skill-name">{skill.name}</span><span className="rb-skill-origin">{skill.origin === "<builtin>" ? t("common.builtin") : originLabel(skill.origin)}</span>
-                </Button>
-              </Tooltip>)}
-            </> },
-          ]}
-        />
+        <QuotaSection visible={visible && openSections.includes("quota")} headerVisible={visible}>
+          {(quotaActions, quotaContent) => (
+            <Collapse ghost className="rb-collapse" expandIconPlacement="start" activeKey={openSections}
+              onChange={keys => {
+                const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
+                const next = new Set(collapsed);
+                for (const id of sections) { if (open.has(id)) next.delete(id); else next.add(id); }
+                setCollapsed(next);
+                writeCollapsedSections(next);
+              }}
+              items={[
+                ...(todos.length ? [{
+                  key: "plan", label: t("rightbar.currentPlan"), extra: <Typography.Text type="secondary">{t("rightbar.planProgress", { done: todos.filter(todo => todo.status === "completed").length, total: todos.length })}</Typography.Text>,
+                  children: todos.map((todo, i) => <div className="rb-todo" key={i}><span className={`rb-todo-dot ${todo.status}`}>{todo.status === "completed" ? <CheckOutlined /> : todo.status === "in_progress" ? "●" : "○"}</span><span className={todo.status === "completed" ? "rb-todo-done" : ""}>{todo.title}</span></div>),
+                }] : []),
+                { key: "quota", label: t("rightbar.quota"), extra: quotaActions, forceRender: true, children: quotaContent },
+                { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>
+                  {skills.length === 0 && <div className="rb-dim">{t("rightbar.noSkills")}</div>}
+                  {skills.map(skill => <Tooltip key={skill.name} title={[skill.name, skill.description, skill.origin === "<builtin>" ? "" : skill.origin].filter(Boolean).join("\n")}>
+                    <Button type="text" block className="rb-skill-line rb-skill-clickable" onClick={() => setDetail({ sessionId, skill })}>
+                      <span className="rb-skill-name">{skill.name}</span><span className="rb-skill-origin">{skill.origin === "<builtin>" ? t("common.builtin") : originLabel(skill.origin)}</span>
+                    </Button>
+                  </Tooltip>)}
+                </> },
+              ]}
+            />
+          )}
+        </QuotaSection>
       </Card>
       <SkillDetailModal skill={rightBarOpen && visible && detail?.sessionId === sessionId ? detail.skill : null} sessionId={sessionId} onClose={() => setDetail(null)} />
     </div>
