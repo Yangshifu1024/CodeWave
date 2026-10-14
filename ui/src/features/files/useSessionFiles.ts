@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ipc } from "../../ipc/client";
 import type { SessionFileEntry } from "../../ipc/types";
-import { useActiveRun } from "../../stores/run";
+import { useRun } from "../../stores/run";
 
 /** 会话产物列表 hook：按 sessionId 拉取产物登记；writeTick 变化时 300ms 防抖刷新，
  *  内置过期响应守卫（切换会话后迟到的旧响应不得覆盖新列表）。 */
@@ -11,31 +11,31 @@ export function useSessionFiles(sessionId: string | null): {
   files: SessionFileEntry[];
   refresh: () => void;
 } {
-  const active = useActiveRun();
-  const writeTick = active.writeTick;
-  const [files, setFiles] = useState<SessionFileEntry[]>([]);
+  const writeTick = useRun(state => sessionId ? state.tabs[sessionId]?.writeTick ?? 0 : 0);
+  const [result, setResult] = useState<{ sessionId: string | null; files: SessionFileEntry[] }>({ sessionId: null, files: [] });
   // 过期响应守卫：切换会话后迟到的旧响应不得覆盖新列表
-  const reqIdRef = useRef(0);
+  const requests = useRef({ id: 0 }).current;
 
   const refresh = useCallback(() => {
-    const my = ++reqIdRef.current;
+    const my = ++requests.id;
     if (!sessionId) {
-      setFiles([]);
+      setResult({ sessionId, files: [] });
       return;
     }
     ipc
       .listSessionFiles(sessionId)
       .then((r) => {
-        if (reqIdRef.current === my) setFiles(Array.isArray(r) ? r : []);
+        if (requests.id === my) setResult({ sessionId, files: Array.isArray(r) ? r : [] });
       })
       .catch(() => {
-        if (reqIdRef.current === my) setFiles([]);
+        if (requests.id === my) setResult({ sessionId, files: [] });
       });
-  }, [sessionId]);
+  }, [sessionId, requests]);
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    return () => { ++requests.id; };
+  }, [refresh, requests]);
 
   useEffect(() => {
     if (!writeTick) return;
@@ -43,5 +43,5 @@ export function useSessionFiles(sessionId: string | null): {
     return () => clearTimeout(t);
   }, [writeTick, refresh]);
 
-  return { files, refresh };
+  return { files: result.sessionId === sessionId ? result.files : [], refresh };
 }

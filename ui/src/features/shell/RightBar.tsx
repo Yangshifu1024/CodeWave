@@ -1,198 +1,25 @@
-// 常驻右侧栏（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：Tabs 四页签 [信息 | 日志 | 文件 | 变更]（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 调序，信息为默认页签）
-// 变更 = 工作区 vs HEAD 的多根聚合 diff（原 GitDiffModal 面板化）；信息 = 项目目录 / 会话 / 技能 / 当前计划；
+// Right sidebar: segmented navigation, three retained panes, and a wide changes dialog.
+// [docs/chat-and-interface](../../../../docs/chat-and-interface.md): info remains the default view.
 // 日志 = 会话黑盒 / 全局滚动日志（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）；文件 = 会话产物登记列表（create/edit 边车），点击弹窗查看
 // 隐藏时保持挂载（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：宽度经 0.2s 过渡收零（裁切式收缩）；visibility 待动画结束后才隐藏，
 // 轮询 hook 均以 rightBarOpen 门控——隐藏即停轮询。顶栏切换按钮是唯一开合入口；
 // rbTab 上收到 ui store 供外部切换（Composer 命令等）
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { App as AntApp, Button, Collapse, Segmented, Select, Switch, Tabs } from "antd";
-import { FolderOpenOutlined } from "@ant-design/icons";
+import { Button, Card, ConfigProvider, Segmented, Select, Switch, Tabs } from "antd";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
-import type { LogFileEntry, SkillMeta } from "../../ipc/types";
-import { originLabel } from "../../utils/skills";
-import {
-  readCollapsedSections,
-  writeCollapsedSections,
-  type CollapsibleSection,
-} from "../../utils/rightbarPrefs";
-import { useActiveRun } from "../../stores/run";
-import { useActiveTab, useSessions } from "../../stores/sessions";
+import type { LogFileEntry } from "../../ipc/types";
+import { useActiveTab } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import FilesPanel from "../files/FilesPanel";
 import FileViewerModal from "../files/FileViewerModal";
 import { useSessionFiles } from "../files/useSessionFiles";
-import QuotaSection from "../quota/QuotaSection";
-import ChangesPanel from "../workspace/ChangesPanel";
-import OpenInEditorSelect from "./OpenInEditorSelect";
-import SkillDetailModal from "./SkillDetailModal";
+import ChangesModal from "../workspace/ChangesModal";
+import { useWorkspaceChanges } from "../workspace/useWorkspaceChanges";
+import RightBarInfo from "./RightBarInfo";
 import { useDisplayWidths } from "./useDisplayWidths";
 
-/**
- * 信息页签：项目目录 / 额度与余额 / 技能 / 当前计划。
- * - 项目目录行：文件管理器按钮（Windows 自动识别 Files）+ 「在编辑器中打开」下拉；
- *   数据目录行已移除（`open_data_dir` 能力保留给「关于」弹框）；
- * - 额度与余额：顶替原「会话」段（开始时间信息已删）；行集合 = CodeWave 供应商配置，与凭证链无关；
- * - 技能 / 当前计划：antd Collapse，默认展开，折叠态记 localStorage（全局一份）。
- *
- * [docs/chat-and-interface](../../../../docs/chat-and-interface.md)
- */
-function InfoPanel({ visible }: { visible: boolean }) {
-  const { t } = useTranslation();
-  const { message } = AntApp.useApp();
-  const active = useActiveRun();
-  const tab = useActiveTab();
-  const projects = useSessions((s) => s.projects);
-  // 当前会话工作区可用技能（复用设置面板同源 IPC，随会话切换刷新；显示序由后端 list 按来源分桶排好）
-  const [skills, setSkills] = useState<SkillMeta[]>([]);
-  // 技能详情弹层（点击技能行弹出；共享组件仅查看，无插入动作）
-  const [detail, setDetail] = useState<SkillMeta | null>(null);
-  const sessionId = tab?.sessionId ?? null;
-  const rightBarOpen = useUi((s) => s.rightBarOpen);
-  // 折叠段（技能/当前计划）：默认全展开，只记「已折叠」集合
-  const [collapsedSections, setCollapsedSections] = useState<Set<CollapsibleSection>>(() =>
-    readCollapsedSections(),
-  );
-  // 面板关闭时收起详情（其 Portal 渲染到 <body>，会逃出外壳的 visibility:hidden；与产物查看弹窗同一守卫）
-  useEffect(() => {
-    if (!rightBarOpen && detail) setDetail(null);
-  }, [rightBarOpen, detail]);
-  useEffect(() => {
-    if (!sessionId) {
-      setSkills([]);
-      return;
-    }
-    void ipc
-      .listSkills(sessionId)
-      .then(setSkills)
-      .catch(() => setSkills([]));
-  }, [sessionId]);
-
-  const project = tab?.projectId ? projects.find((p) => p.id === tab.projectId) : null;
-  // 「项目目录」section 要打开的目标：项目会话 = 主目录；临时会话 = 工作区；无目标则不渲染图标按钮
-  const dirToOpen = project?.directory ?? tab?.workspace ?? "";
-  // 折叠段集合：计划段仅在当前会话有内容时参与（避免「折叠了不存在的段」）
-  const allSections: CollapsibleSection[] = [
-    "skills",
-    ...(active.todos.length > 0 ? (["plan"] as const) : []),
-  ];
-  const openSections = allSections.filter((id) => !collapsedSections.has(id));
-
-  const openInFileManager = (dir: string) => {
-    if (!dir) return;
-    void ipc.openDir(dir).catch((e) => message.error(`${t("rightbar.openDirFailed")}\n${String(e).replace(/^Error[:\s]*/i, "")}`));
-  };
-
-  return (
-    <div className="rb-info-scroll">
-      {/* 项目主目录：标签行带文件管理器按钮 + 「在编辑器中打开」下拉（无检测到编辑器时不下拉） */}
-      <div className="rb-section">
-        <div className="rb-label-row">
-          <div className="rb-label">{t("rightbar.projectDir")}</div>
-          <div className="rb-label-actions">
-            {dirToOpen && (
-              <Button
-                className="rb-open-dir-btn"
-                type="text"
-                size="small"
-                icon={<FolderOpenOutlined />}
-                title={t("rightbar.openInFileManager")}
-                aria-label={t("rightbar.openInFileManager")}
-                onClick={() => openInFileManager(dirToOpen)}
-              />
-            )}
-            <OpenInEditorSelect dir={dirToOpen} />
-          </div>
-        </div>
-        {project ? (
-          <div className="rb-path" title={project.directory}>{project.directory}</div>
-        ) : tab ? (
-          <>
-            <div className="rb-path">{tab.workspace}</div>
-            <div className="rb-dim">{t("rightbar.freeSession")}</div>
-          </>
-        ) : (
-          <div className="rb-dim">—</div>
-        )}
-      </div>
-
-      {/* 额度与余额段（顶替原「会话」段） */}
-      <QuotaSection visible={visible} />
-
-      {/* 技能 / 当前计划：antd Collapse（ghost），默认全展开；折叠态写 localStorage（全局一份）。
-          expandIconPlacement="end"：标题文字与「项目目录 / 额度与余额」左对齐，箭头落在行末
-          （antd 6.6 起 expandIconPosition 已弃用，勿回退）；
-          标题字号/颜色由 app.css 的 .rb-collapse .ant-collapse-title 统一为 11px + dim。 */}
-      <Collapse
-        className="rb-collapse"
-        ghost
-        expandIconPlacement="end"
-        activeKey={openSections}
-        onChange={(keys) => {
-          const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
-          const next = new Set<CollapsibleSection>();
-          for (const id of allSections) if (!open.has(id)) next.add(id);
-          setCollapsedSections(next);
-          writeCollapsedSections(next);
-        }}
-        items={[
-          {
-            key: "skills",
-            label: t("rightbar.skills"),
-            children: (
-              <>
-                {skills.length === 0 && <div className="rb-dim">{t("rightbar.noSkills")}</div>}
-                {skills.map((s) => {
-                  const builtin = s.origin === "<builtin>";
-                  const label = originLabel(s.origin);
-                  const tip = [s.description, builtin ? "" : s.origin].filter(Boolean).join("\n");
-                  return (
-                    <div
-                      className="rb-skill-line rb-skill-clickable"
-                      key={s.name}
-                      title={tip || undefined}
-                      onClick={() => setDetail(s)}
-                    >
-                      <span className="rb-skill-name">{s.name}</span>
-                      {builtin ? (
-                        <span className="rb-skill-origin">{t("common.builtin")}</span>
-                      ) : (
-                        label && <span className="rb-skill-origin" title={s.origin}>{label}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            ),
-          },
-          // 计划段仅在当前会话有计划 todos 时出现（与批次前行为一致）
-          ...(active.todos.length > 0
-            ? [
-                {
-                  key: "plan",
-                  label: t("rightbar.currentPlan"),
-                  children: (
-                    <>
-                      {active.todos.map((td, i) => (
-                        <div className="rb-todo" key={i}>
-                          <span className={`rb-todo-dot ${td.status}`}>
-                            {td.status === "completed" ? "✓" : td.status === "in_progress" ? "●" : "○"}
-                          </span>
-                          <span className={td.status === "completed" ? "rb-todo-done" : ""}>{td.title}</span>
-                        </div>
-                      ))}
-                    </>
-                  ),
-                },
-              ]
-            : []),
-        ]}
-      />
-      <SkillDetailModal skill={detail} sessionId={sessionId} onClose={() => setDetail(null)} />
-    </div>
-  );
-}
 const TAIL_LINES = 300;
 
 const POLL_MS = 2000;
@@ -341,7 +168,7 @@ function LogPanel({ visible }: { visible: boolean }) {
   );
 }
 
-/** 常驻右侧栏根组件：四页签布局（信息/日志/文件/变更）+ 产物查看弹窗；折叠为裁切式收零动画、隐藏即停轮询。 */
+/** Retain pane state while the changes dialog opens; hidden sidebars close their portals. */
 export default function RightBar() {
   const { t } = useTranslation();
   const rightBarOpen = useUi((s) => s.rightBarOpen);
@@ -352,42 +179,59 @@ export default function RightBar() {
   const { rightBar: rightBarWidth } = useDisplayWidths();
   const tab = useActiveTab();
   const sessionId = tab?.sessionId ?? null;
+  const [lastPane, setLastPane] = useState(rbTab === "changes" ? "info" : rbTab);
+  const [changesOwner, setChangesOwner] = useState(sessionId);
+  const previous = useRef({ sessionId, rightBarOpen, rbTab });
+  const contentTab = rbTab === "changes" ? lastPane : rbTab;
+  const changesOpen = rightBarOpen && rbTab === "changes" && changesOwner === sessionId;
+  useEffect(() => {
+    const old = previous.current;
+    previous.current = { sessionId, rightBarOpen, rbTab };
+    if (rbTab === "changes" && old.rbTab !== "changes") setChangesOwner(sessionId);
+    else if (rbTab === "changes" && (old.sessionId !== sessionId || (old.rightBarOpen && !rightBarOpen))) setRbTab(lastPane);
+    if (rbTab !== "changes") setLastPane(rbTab);
+  }, [sessionId, rightBarOpen, rbTab, lastPane, setRbTab]);
   // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：隐藏时传 null——面板关闭期间产物列表停止刷新
   const { files, refresh } = useSessionFiles(rightBarOpen ? sessionId : null);
-  const [viewing, setViewing] = useState<string | null>(null);
+  const changes = useWorkspaceChanges(sessionId, rightBarOpen && (rbTab === "info" || rbTab === "changes"));
+  const [viewing, setViewing] = useState<{ sessionId: string | null; path: string } | null>(null);
+  const viewFile = (path: string) => setViewing({ sessionId, path });
   // 查看弹窗随面板一起关闭（评审 🟢2）：其 Portal 渲染到 <body>，会逃出外壳的 visibility:hidden
   // 悬浮在隐藏面板之上；[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的隐藏即卸载曾恰好掩盖了这一点。
   useEffect(() => {
-    if (!rightBarOpen && viewing) setViewing(null);
-  }, [rightBarOpen, viewing]);
+    if ((!rightBarOpen || rbTab === "changes") && viewing) setViewing(null);
+  }, [rightBarOpen, rbTab, viewing]);
+  // A viewer belongs to the session from which it was opened.
+  useEffect(() => { setViewing(null); }, [sessionId]);
+
+  const items = [
+    { key: "info", label: t("rightbar.tabInfo"), children: <RightBarInfo visible={rightBarOpen && rbTab === "info"} files={files} changes={changes} onView={viewFile} /> },
+    { key: "logs", label: t("rightbar.tabLogs"), children: <Card className="rb-panel-card"><LogPanel visible={rightBarOpen && rbTab === "logs"} /></Card> },
+    { key: "files", label: files.length ? t("rightbar.tabFilesWithCount", { n: files.length }) : t("rightbar.tabFiles"), children: <Card className="rb-panel-card"><FilesPanel sessionId={sessionId} files={files} onView={viewFile} onRefresh={refresh} /></Card> },
+  ];
 
   // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：隐藏时保持挂载——类名翻转为 .right-bar-closed（width/padding 经 0.2s 缓动收零、
   // visibility 待动画结束后隐藏）；顶栏切换按钮是唯一开合入口
   return (
+    <ConfigProvider theme={{ components: { Card: { borderRadiusLG: 20, bodyPadding: 20 }, Collapse: { borderRadiusLG: 0, headerPadding: "18px 0", contentPadding: "0 0 18px" }, Segmented: { borderRadius: 12, borderRadiusSM: 10 } } }}>
     <div
       className={rightBarOpen ? "right-bar" : "right-bar right-bar-closed"}
       aria-hidden={!rightBarOpen}
       style={{ "--rb-width": `${rightBarWidth}px` } as CSSProperties}
     >
       <Tabs
+        id="rightbar-views"
         size="small"
         className="rb-tabs"
-        activeKey={rbTab}
+        activeKey={contentTab}
         onChange={setRbTab}
-        items={[
-          { key: "info", label: t("rightbar.tabInfo"), children: <InfoPanel visible={rightBarOpen && rbTab === "info"} /> },
-          { key: "logs", label: t("rightbar.tabLogs"), children: <LogPanel visible={rightBarOpen && rbTab === "logs"} /> },
-          {
-            key: "files",
-            label: files.length ? t("rightbar.tabFilesWithCount", { n: files.length }) : t("rightbar.tabFiles"),
-            children: (
-              <FilesPanel sessionId={sessionId} files={files} onView={setViewing} onRefresh={refresh} />
-            ),
-          },
-          { key: "changes", label: t("rightbar.tabChanges"), children: <ChangesPanel visible={rightBarOpen && rbTab === "changes"} /> },
-        ]}
+        renderTabBar={() => <Segmented block className="rb-view-switcher" aria-label={t("rightbar.views")} value={contentTab} onChange={value => setRbTab(String(value))}
+          options={items.map(item => ({ value: item.key, title: item.label, label: <span id={"rightbar-views-tab-" + item.key}>{item.label}</span> }))} />}
+        items={items}
       />
-      <FileViewerModal sessionId={sessionId} path={viewing} onClose={() => setViewing(null)} />
+      <ChangesModal open={changesOpen} sessionId={sessionId} changes={changes} onClose={() => setRbTab(lastPane)} />
+      <FileViewerModal sessionId={sessionId} path={rightBarOpen && rbTab !== "changes" && viewing?.sessionId === sessionId ? viewing.path : null} onClose={() => setViewing(null)} />
     </div>
+    </ConfigProvider>
   );
 }

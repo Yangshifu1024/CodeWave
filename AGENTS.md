@@ -81,7 +81,7 @@
 
 - `ipc/client.ts` 是唯一 invoke 入口；`ipc/types.ts` 为前后端契约类型
 - zustand 5 store：`run.ts`（每 Tab 运行态，immer 中间件做流式高频更新）、`activity.ts`（当前进程会话与子代理总览快照）、`sessions.ts`（Tab/项目/会话）、`settings.ts`、`ui.ts`、`tasks.ts`（计划任务列表单一数据源）、`updater.ts`（更新状态机）
-- `features/`：chat / shell（ProjectNav 导航：临时会话区 + 项目→会话树 + 任务区；RightBar 常驻右边栏，4 页签 info / logs / files / changes，Git 已收进「变更」页签，数据目录与会话信息在设置页「关于」）/ panels（设置 10 页 3 组：外观与模型 / 安全与能力 / 诊断与其他；TasksPage 为覆盖式全屏页、TokenStatsModal 为统计弹框）/ files（文件面板与查看器、表格与 PDF 预览）/ tools（ask 面板、工具卡、组件预览）/ workspace（仅 ChangesPanel：工作区 vs HEAD 聚合 diff）/ subagent / quota
+- `features/`：chat / shell（ProjectNav 导航：临时会话区 + 项目→会话树 + 任务区；RightBar 常驻右边栏，圆角分段导航保留 info / logs / files 三视图，信息概览中的变更入口打开宽弹窗，数据目录与会话信息在设置页「关于」）/ panels（设置 10 页 3 组：外观与模型 / 安全与能力 / 诊断与其他；TasksPage 为覆盖式全屏页、TokenStatsModal 为统计弹框）/ files（文件面板与查看器、表格与 PDF 预览）/ tools（ask 面板、工具卡、组件预览）/ workspace（ChangesModal + useWorkspaceChanges：工作区 vs HEAD 聚合 diff 弹窗与共享数据源）/ subagent / quota
 - 左侧导航是一切会话/项目入口；顶栏只有 Tab 条与功能按钮（无「选择工作区」「新 Tab」）
 
 ## 契约锚点（改前必读）

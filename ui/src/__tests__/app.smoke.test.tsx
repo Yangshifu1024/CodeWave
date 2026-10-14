@@ -183,10 +183,10 @@ afterEach(() => {
 });
 
 describe("App 渲染冒烟", () => {
-  it("主窗口：左下角状态区 + 右栏四页签 + 左侧导航分区渲染", async () => {
+  it("主窗口：左下角状态区 + 右栏三视图 + 左侧导航分区渲染", async () => {
     await mountApp();
     const text = document.body.textContent ?? "";
-    // The four topbar buttons moved out (changes → RightBar tab; tasks/stats/settings → bottom-left footer); the topbar must no longer contain "Settings"
+    // Changes opens from the sidebar overview; tasks/stats/settings live in the bottom-left footer.
     expect(document.querySelector(".toolbar")?.textContent ?? "").not.toContain("设置");
     expect(document.querySelector(".toolbar")?.textContent ?? "").not.toContain("统计");
     // Topbar tab strip removed ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)): session switching/closing consolidated into the left nav + shortcuts
@@ -200,12 +200,9 @@ describe("App 渲染冒烟", () => {
     for (const label of ["任务", "统计", "设置"]) {
       expect(document.querySelector(`.sider-footer button[aria-label="${label}"]`)).toBeTruthy();
     }
-    // RightBar four tabs (reordered in [docs/chat-and-interface](../../../docs/chat-and-interface.md)): Info first and default; Changes (migrated from the old topbar entry) moved last
-    const rbTabs = Array.from(document.querySelectorAll(".rb-tabs .ant-tabs-tab")).map((x) => x.textContent?.trim());
-    expect(rbTabs[0]).toBe("信息");
-    for (const label of ["日志", "文件", "变更"]) {
-      expect(rbTabs).toContain(label);
-    }
+    // RightBar retains three views; the overview contains the changes entry.
+    const rbTabs = Array.from(document.querySelectorAll(".rb-view-switcher .ant-segmented-item-label")).map((x) => x.textContent?.trim());
+    expect(rbTabs).toEqual(["信息", "日志", "文件"]);
     // Custom titlebar ([docs/chat-and-interface](../../../docs/chat-and-interface.md)): the drag layer covers the topbar with a drag-region marker; once active, html is marked custom
     const dragZone = document.querySelector(".titlebar-drag-zone") as HTMLElement;
     expect(dragZone).toBeTruthy();

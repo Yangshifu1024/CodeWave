@@ -706,7 +706,8 @@ describe("额度段：刷新时机", () => {
     respond = fiveKinds;
     seed();
     renderBar();
-    const row = (await screen.findByText("额度与余额")).closest(".rb-label-row")!;
+    await waitFor(() => expect(document.querySelector(".rb-quota-updated")).toBeTruthy());
+    const row = document.querySelector(".rb-quota .rb-label-row")!;
     const stamp = row.querySelector(".rb-quota-updated") as HTMLElement;
     const refresh = row.querySelector("button") as HTMLElement;
     expect(stamp.textContent).toMatch(/更新$/);
