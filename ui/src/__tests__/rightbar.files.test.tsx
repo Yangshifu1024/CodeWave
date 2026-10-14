@@ -1,7 +1,7 @@
 // RightBar Files tab ([docs/sessions-and-projects](../../../docs/sessions-and-projects.md)): count always visible / list rendering / click opens the viewer / deleted files greyed out and unclickable;
 // plus the run store's writeTick write signal (incremented on create/edit success, not on failure or other tools)
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // RightBar mounted standalone must init i18next explicitly (collapse button aria-label goes through t(), docs/chat-and-interface)
 import RightBar from "../features/shell/RightBar";
@@ -112,10 +112,11 @@ it("Files 标签页：tab 计数常显 + 列表渲染（未激活也拉取计数
   // Defaults to the info tab, but the count is already fetched (tab label always visible)
   await waitFor(() => expect(screen.getByText("文件 3")).toBeTruthy());
   openFilesTab();
-  expect(await screen.findByText("requirement.md")).toBeTruthy();
-  expect(screen.getByText("架构图.png")).toBeTruthy();
-  expect(screen.getByText("old-note.md")).toBeTruthy();
-  expect(screen.getByText("共 3 个")).toBeTruthy();
+  const panel = within(screen.getByRole("tabpanel"));
+  expect(await panel.findByText("requirement.md")).toBeTruthy();
+  expect(panel.getByText("架构图.png")).toBeTruthy();
+  expect(panel.getByText("old-note.md")).toBeTruthy();
+  expect(panel.getByText("共 3 个")).toBeTruthy();
 });
 
 it("点击 md 文件：走文本通道并在弹窗内渲染 markdown", async () => {

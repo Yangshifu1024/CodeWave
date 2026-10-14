@@ -628,6 +628,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
   "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
   "shell/RightBar.tsx": ["common.", "rightbar."], // 目标段已随目标模式整体删除移除
+  "shell/RightBarInfo.tsx": ["common.", "rightbar.", "titlebar.", "files.", "subagent."],
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "settings.", "tasks.", "dashboard.", "titlebar."], // 顶栏：app.* 折叠动作；titlebar.* 会话胶囊；覆盖页标题见 CROSS_SEGMENT_BORROWINGS
   "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
@@ -635,7 +636,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
   "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
-  "workspace/ChangesPanel.tsx": ["app.", "diff."], // diff.* 变更面板；app.retry 通用重试
+  "workspace/ChangesModal.tsx": ["diff.", "rightbar."],
 };
 
 /**
@@ -643,6 +644,12 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
  * 否则「允许段清单」会变成一张谁都可以往上加段的橡皮图章。
  */
 const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
+  "shell/RightBarInfo.tsx": {
+    "titlebar.": "临时会话标题与标题栏显示同一会话类型，复用 titlebar.tempSession",
+    "files.": "概览展示的就是文件页签的同一份会话产物及空态和已删除状态",
+    "subagent.": "概览与过程抽屉共享当前会话子代理的运行和收尾状态文案",
+  },
+  "workspace/ChangesModal.tsx": { "rightbar.": "变更弹窗共享右栏概览的刷新动作及无会话提示，同一数据源同一文案" },
   "shell/AppShell.tsx": {
     "dashboard.": "固定总览入口复用总览页标题 dashboard.title，两处显示同一页面名称",
   },

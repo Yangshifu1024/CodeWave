@@ -52,7 +52,17 @@ describe("侧栏折叠样式契约（docs/chat-and-interface）", () => {
     expect(appCss).toMatch(/\.rb-tabs\s*\{[^}]*min-width:\s*300px/);
   });
 
-  it(".right-bar 背景：var(--ws-bg-main)（docs/chat-and-interface 侧栏分色，亮色 #f8f8f8 / 暗色回自动）", () => {
-    expect(appCss).toMatch(/\.right-bar\s*\{[^}]*background:\s*var\(--ws-bg-main\)/);
+  it(".right-bar 使用布局底色承托 antd 卡片，亮暗由主题桥统一驱动", () => {
+    expect(appCss).toMatch(/\.right-bar\s*\{[^}]*background:\s*var\(--ws-bg\)/);
+  });
+
+  it("卡片包裹层不切断页签的高度与滚动约束，计划完成态不再使用删除线", () => {
+    expect(appCss).toMatch(/\.rb-panel-card\s*\{[^}]*height:\s*100%[^}]*min-height:\s*0[^}]*display:\s*flex/);
+    expect(appCss).toMatch(/\.rb-panel-card > \.ant-card-body\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0[^}]*overflow:\s*hidden/);
+    expect(appCss).toMatch(/\.changes-layout\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0/);
+    expect(appCss).toMatch(/\.changes-diff > \.code-block\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto[^}]*white-space:\s*pre/);
+    const completed = appCss.match(/\.rb-todo-done\s*\{([^}]*)\}/)?.[1];
+    expect(completed).toBeDefined();
+    expect(completed).not.toContain("line-through");
   });
 });

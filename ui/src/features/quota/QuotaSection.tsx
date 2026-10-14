@@ -53,6 +53,8 @@ const CONFIG_DEBOUNCE_MS = 500;
 interface Props {
   /** 右栏展开且停在信息页签（隐藏即停轮询） */
   visible: boolean;
+  /** The enclosing overview collapse already provides the section title and divider. */
+  compact?: boolean;
 }
 
 /** 风险等级 → 进度条包裹类（颜色走 app.css 的 --ws-warn/--ws-err token，不在这里硬编码） */
@@ -279,7 +281,7 @@ function UnsupportedRow({ snapshot, title }: { snapshot: QuotaSnapshot; title: s
   );
 }
 
-export default function QuotaSection({ visible }: Props) {
+export default function QuotaSection({ visible, compact = false }: Props) {
   const { t } = useTranslation();
   const config = useSettings((s) => s.config);
   const tab = useActiveTab();
@@ -395,9 +397,9 @@ export default function QuotaSection({ visible }: Props) {
   const updated = relativeUpdatedAt(snapshots, now);
 
   return (
-    <div className="rb-section rb-quota">
+    <div className={compact ? "rb-quota rb-quota-compact" : "rb-section rb-quota"}>
       <div className="rb-label-row">
-        <div className="rb-label">{t("rightbar.quota")}</div>
+        {!compact && <div className="rb-label">{t("rightbar.quota")}</div>}
         {/* 更新时间贴在刷新按钮左侧（同一标签行，不再沉到列表底部）。
             `.rb-quota-updated` 的 font-size 仍取自样式表；其 margin-top 是按「底部独立行」设计的，
             行内改用后必须内联归零（内联优先级高于样式表），否则文字会比按钮低 4px。 */}
