@@ -637,8 +637,11 @@ describe("设置全屏页：逐页脏标记与深链", () => {
     expect(navDotCount()).toBe(1);
 
     fireEvent.click(buttonByText("保存"));
-    await waitFor(() => expect(document.querySelector(".settings-dirty-dot")).toBeFalsy());
-    expect(useUi.getState().settingsDirty).toBe(false);
+    // DOM 在 commit 时更新，store 由 effect 同步；同时等待两个保存后条件。
+    await waitFor(() => {
+      expect(document.querySelector(".settings-dirty-dot")).toBeFalsy();
+      expect(useUi.getState().settingsDirty).toBe(false);
+    });
   });
 
   it("即时生效项不打点：切界面语言不产生未保存状态", async () => {
