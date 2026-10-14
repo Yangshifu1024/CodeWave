@@ -3,7 +3,7 @@
 // unsupported > 3 家折叠、标题消歧、窗口状态标签、灰行「去设置」跳转、空态文案、配置变化 debounce 重拉、
 // 可见性门控，以及全部纯函数（风险分级 / 摘要 / 倒计时 / 消歧 / 折叠判定 / 状态归一 / 相对时间）。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n";
 import RightBar from "../features/shell/RightBar";
@@ -220,6 +220,7 @@ const blockOf = (el: HTMLElement): HTMLElement =>
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   calls.length = 0;
   respond = () => [];
   fail = false;
@@ -702,18 +703,55 @@ describe("额度段：刷新时机", () => {
     await waitFor(() => expect(quotaCalls().length).toBeGreaterThan(before));
   });
 
-  it("「X 分钟前更新」贴在刷新按钮左侧（同一标签行）", async () => {
+  it("更新时间与刷新按钮位于额度标题行，刷新不改变折叠状态", async () => {
     respond = fiveKinds;
     seed();
     renderBar();
     await waitFor(() => expect(document.querySelector(".rb-quota-updated")).toBeTruthy());
-    const row = document.querySelector(".rb-quota .rb-label-row")!;
+    const row = screen.getByText("额度与余额").closest<HTMLElement>(".ant-collapse-header")!;
     const stamp = row.querySelector(".rb-quota-updated") as HTMLElement;
     const refresh = row.querySelector("button") as HTMLElement;
     expect(stamp.textContent).toMatch(/更新$/);
     expect(refresh.getAttribute("aria-label")).toBe("刷新额度");
     expect(stamp.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(document.querySelectorAll(".rb-quota-updated")).toHaveLength(1);
+    expect(document.querySelector(".rb-quota .rb-label-row")).toBeNull();
+
+    const before = quotaCalls().length;
+    fireEvent.keyDown(refresh, { key: "Enter" });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(refresh);
+    await waitFor(() => expect(quotaCalls()).toHaveLength(before + 1));
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.keyDown(refresh, { key: "Enter" });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(refresh);
+    await waitFor(() => expect(quotaCalls()).toHaveLength(before + 2));
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("额度折叠后标题时间继续推进，切回信息页立即对时且不触发查询", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    respond = () => [snapshot({ provider_id: P.deepseek, display_name: "DeepSeek" })];
+    seed();
+    renderBar();
+    const row = screen.getByText("额度与余额").closest<HTMLElement>(".ant-collapse-header")!;
+    await within(row).findByText("刚刚更新");
+    fireEvent.click(row);
+    const before = quotaCalls().length;
+
+    act(() => { vi.advanceTimersByTime(5 * 60_000); });
+    expect(within(row).getByText("5 分钟前更新")).toBeTruthy();
+    expect(quotaCalls()).toHaveLength(before);
+
+    fireEvent.click(screen.getByRole("radio", { name: "日志" }));
+    act(() => { vi.advanceTimersByTime(5 * 60_000); });
+    fireEvent.click(screen.getByRole("radio", { name: "信息" }));
+    expect(within(row).getByText("10 分钟前更新")).toBeTruthy();
+    expect(quotaCalls()).toHaveLength(before);
   });
 });
 

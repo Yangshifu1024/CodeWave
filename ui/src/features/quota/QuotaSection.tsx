@@ -14,6 +14,7 @@
 // 前端不再自己记忆——否则重启/换机后回显就与磁盘事实不一致。该行是否出现只由**数据**（有无 `last_ok_at`）
 // 决定，不按行态白名单，见 QuotaRow 里的 `showTimeRow`。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Button, Progress, Tooltip } from "antd";
 import { ReloadOutlined, SettingOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -51,10 +52,12 @@ const TICK_MS = 60 * 1000;
 const CONFIG_DEBOUNCE_MS = 500;
 
 interface Props {
-  /** 右栏展开且停在信息页签（隐藏即停轮询） */
+  /** The quota body is expanded on the visible information tab; hidden bodies stop polling. */
   visible: boolean;
-  /** The enclosing overview collapse already provides the section title and divider. */
-  compact?: boolean;
+  /** The header remains visible when the quota body is collapsed. */
+  headerVisible: boolean;
+  /** Let the overview place the controls in its collapse header and the rows in its body. */
+  children: (headerActions: ReactNode, content: ReactNode) => ReactNode;
 }
 
 /** 风险等级 → 进度条包裹类（颜色走 app.css 的 --ws-warn/--ws-err token，不在这里硬编码） */
@@ -281,7 +284,7 @@ function UnsupportedRow({ snapshot, title }: { snapshot: QuotaSnapshot; title: s
   );
 }
 
-export default function QuotaSection({ visible, compact = false }: Props) {
+export default function QuotaSection({ visible, headerVisible, children }: Props) {
   const { t } = useTranslation();
   const config = useSettings((s) => s.config);
   const tab = useActiveTab();
@@ -372,10 +375,11 @@ export default function QuotaSection({ visible, compact = false }: Props) {
 
   // 仅文本 ticker：刷新「X 分钟前更新」与倒计时，不发请求
   useEffect(() => {
-    if (!visible) return;
+    if (!headerVisible) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(timer);
-  }, [visible]);
+  }, [headerVisible]);
 
   const toggle = (providerId: string) => {
     setExpanded((prev) => {
@@ -396,32 +400,24 @@ export default function QuotaSection({ visible, compact = false }: Props) {
   const titleOf = (snapshot: QuotaSnapshot) => titles.get(snapshot.provider_id) ?? snapshot.display_name;
   const updated = relativeUpdatedAt(snapshots, now);
 
-  return (
-    <div className={compact ? "rb-quota rb-quota-compact" : "rb-section rb-quota"}>
-      <div className="rb-label-row">
-        {!compact && <div className="rb-label">{t("rightbar.quota")}</div>}
-        {/* 更新时间贴在刷新按钮左侧（同一标签行，不再沉到列表底部）。
-            `.rb-quota-updated` 的 font-size 仍取自样式表；其 margin-top 是按「底部独立行」设计的，
-            行内改用后必须内联归零（内联优先级高于样式表），否则文字会比按钮低 4px。 */}
-        <div className="rb-label-actions">
-          {updated && (
-            <span className="rb-dim rb-quota-updated" style={{ marginTop: 0 }}>
-              {t(updated.key, updated.params)}
-            </span>
-          )}
-          <Button
-            className="rb-open-dir-btn"
-            type="text"
-            size="small"
-            loading={loading}
-            icon={<ReloadOutlined />}
-            title={t("rightbar.quotaRefresh")}
-            aria-label={t("rightbar.quotaRefresh")}
-            onClick={() => void refresh()}
-          />
-        </div>
-      </div>
+  const headerActions = (
+    <div className="rb-label-actions" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+      {updated && <span className="rb-dim rb-quota-updated">{t(updated.key, updated.params)}</span>}
+      <Button
+        className="rb-open-dir-btn"
+        type="text"
+        size="small"
+        loading={loading}
+        icon={<ReloadOutlined />}
+        title={t("rightbar.quotaRefresh")}
+        aria-label={t("rightbar.quotaRefresh")}
+        onClick={() => void refresh()}
+      />
+    </div>
+  );
 
+  const content = (
+    <div className="rb-quota">
       {loading && snapshots.length === 0 && <div className="rb-dim">{t("rightbar.quotaLoading")}</div>}
 
       {!loading && error && (
@@ -470,4 +466,5 @@ export default function QuotaSection({ visible, compact = false }: Props) {
       )}
     </div>
   );
+  return children(headerActions, content);
 }
