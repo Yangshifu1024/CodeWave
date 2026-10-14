@@ -1,5 +1,15 @@
 import type { ToolView } from "../../stores/run.types";
 
+export interface ToolOrigin { key: string; sig: string; createdAt?: string }
+
+export function toolTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const value = Date.parse(iso);
+  if (!Number.isFinite(value)) return "";
+  const date = new Date(value);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map(part => String(part).padStart(2, "0")).join(":");
+}
+
 export function toolArgs(tool: ToolView): Record<string, unknown> {
   try {
     const args: unknown = JSON.parse(tool.argsPreview ?? "{}");

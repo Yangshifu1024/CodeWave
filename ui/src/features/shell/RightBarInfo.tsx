@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { App, Button, Card, Collapse, Tooltip, Typography, theme } from "antd";
+import { App, Button, Card, Collapse, Tooltip, Typography } from "antd";
 import { CheckOutlined, FileOutlined, FolderOpenOutlined, ForkOutlined, LoadingOutlined, RightOutlined, RobotOutlined, WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
@@ -28,7 +28,6 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
-  const { token } = theme.useToken();
   const tab = useActiveTab();
   const sessionId = tab?.sessionId ?? null;
   const projects = useSessions(s => s.projects);
@@ -56,7 +55,8 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
   }, [sessionId]);
 
   const project = tab?.projectId ? projects.find(p => p.id === tab.projectId) : null;
-  const directory = project?.directory ?? tab?.workspace ?? "";
+  const hasProject = !!tab?.projectId;
+  const directory = hasProject ? project?.directory ?? tab?.workspace ?? "" : "";
   const sections: CollapsibleSection[] = [...(todos.length ? ["plan" as const] : []), "quota", "skills"];
   const openSections = sections.filter(id => !collapsed.has(id));
   const statuses = { running: 0, done: 0, attention: 0, error: 0 };
@@ -70,22 +70,24 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
 
   return (
     <div className="rb-info-scroll">
-      <Card className="rb-overview-card" role="region" aria-label={t("rightbar.overview")} style={{ boxShadow: token.boxShadowTertiary }}>
+      <Card className="rb-overview-card" role="region" aria-label={t("rightbar.overview")}>
         <div className="rb-section rb-project">
           <div className="rb-project-heading">
             <Typography.Title level={5} ellipsis={{ tooltip: true }} className="rb-project-name">
               {project?.name ?? (tab ? t("titlebar.tempSession") : "CodeWave")}
             </Typography.Title>
-            <div className="rb-label-actions">
-              {directory && <Button type="text" size="small" className="rb-open-dir-btn" icon={<FolderOpenOutlined />}
+            {directory && <div className="rb-label-actions">
+              <Button type="text" size="small" className="rb-open-dir-btn" icon={<FolderOpenOutlined />}
                 title={t("rightbar.openInFileManager")} aria-label={t("rightbar.openInFileManager")}
-                onClick={() => void ipc.openDir(directory).catch(error => message.error(`${t("rightbar.openDirFailed")}\n${String(error).replace(/^Error[:\s]*/i, "")}`))} />}
+                onClick={() => void ipc.openDir(directory).catch(error => message.error(`${t("rightbar.openDirFailed")}\n${String(error).replace(/^Error[:\s]*/i, "")}`))} />
               <OpenInEditorSelect dir={directory} />
-            </div>
+            </div>}
           </div>
-          <div className="rb-label">{t("rightbar.projectDir")}</div>
-          <div className="rb-path" title={directory || undefined}>{directory || "—"}</div>
-          {tab && !project && <div className="rb-dim">{t("rightbar.freeSession")}</div>}
+          {hasProject && <>
+            <div className="rb-label">{t("rightbar.projectDir")}</div>
+            <div className="rb-path" title={directory || undefined}>{directory || "—"}</div>
+          </>}
+          {tab && !hasProject && <div className="rb-dim">{t("rightbar.freeSession")}</div>}
         </div>
 
         <Tooltip title={changes.error || t("rightbar.viewChanges")}>
@@ -94,14 +96,14 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
             <span className="rb-change-counts">
               {!sessionId ? t("rightbar.noChangesSession") : changes.loading ? <LoadingOutlined spin aria-label={t("rightbar.changesLoading")} />
                 : changes.error ? <span className="rb-summary-error">{t("rightbar.changesUnavailable")}</span>
-                  : totals ? <><span className="rb-change-added">+{totals.additions}</span><span className="rb-change-deleted">−{totals.deletions}</span></> : "—"}
+                  : totals ? (changes.files?.length === 0 ? t("rightbar.noChanges") : <><span className="rb-change-added">+{totals.additions}</span><span className="rb-change-deleted">−{totals.deletions}</span></>) : "—"}
             </span><RightOutlined />
           </Button>
         </Tooltip>
 
         <section className="rb-section rb-overview-agents" aria-label={t("rightbar.subagents")}>
-          <div className="rb-section-heading"><span>{t("rightbar.subagents")}</span>{subs.length > 0 && <Typography.Text type="secondary">{t("rightbar.subagentCount", { n: subs.length })}</Typography.Text>}</div>
-          {subs.length === 0 ? <Typography.Text type="secondary">{t("rightbar.noSubagents")}</Typography.Text> : <>
+          <div className="rb-section-heading"><span>{t("rightbar.subagents")}</span><Typography.Text type="secondary">{t("rightbar.subagentCount", { n: subs.length })}</Typography.Text></div>
+          {subs.length === 0 ? <div className="rb-empty"><RobotOutlined /><Typography.Text type="secondary">{t("rightbar.noSubagents")}</Typography.Text></div> : <>
             <div className="rb-agent-summary">{Object.entries(statuses).filter(([, n]) => n > 0).map(([status, n]) => <span key={status} className={`rb-agent-status ${status}`}>{n} {labels[status as keyof typeof labels]}</span>)}</div>
             {subs.map(sub => {
               const status = subStatus(sub);
@@ -120,7 +122,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
 
         <section className="rb-section" aria-label={t("rightbar.sessionFiles")}>
           <div className="rb-section-heading"><span>{t("rightbar.sessionFiles")}</span><Typography.Text type="secondary">{t("rightbar.fileCount", { n: files.length })}</Typography.Text></div>
-          {!sessionId ? <Typography.Text type="secondary">{t("files.noActiveSession")}</Typography.Text> : recentFiles.length === 0 ? <Typography.Text type="secondary">{t("files.emptySession")}</Typography.Text>
+          {!sessionId ? <Typography.Text type="secondary">{t("files.noActiveSession")}</Typography.Text> : recentFiles.length === 0 ? <div className="rb-empty"><FileOutlined /><Typography.Text type="secondary">{t("files.emptySession")}</Typography.Text></div>
             : recentFiles.map(file => {
               const name = file.path.split(/[\\/]/).pop() || file.path;
               return <Tooltip key={file.path} title={file.path}>
@@ -132,7 +134,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
           {sessionId && files.length > 0 && <Button type="text" size="small" className="rb-view-all" icon={<RightOutlined />} aria-label={t("rightbar.viewAll")} onClick={() => setRbTab("files")}>{t("rightbar.viewAll")}</Button>}
         </section>
 
-        <Collapse ghost className="rb-collapse" expandIconPlacement="end" activeKey={openSections}
+        <Collapse ghost className="rb-collapse" expandIconPlacement="start" activeKey={openSections}
           onChange={keys => {
             const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
             const next = new Set(collapsed);
@@ -148,7 +150,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
             { key: "quota", label: t("rightbar.quota"), forceRender: true, children: <QuotaSection compact visible={visible && openSections.includes("quota")} /> },
             { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>
               {skills.length === 0 && <div className="rb-dim">{t("rightbar.noSkills")}</div>}
-              {skills.map(skill => <Tooltip key={skill.name} title={[skill.description, skill.origin === "<builtin>" ? "" : skill.origin].filter(Boolean).join("\n")}>
+              {skills.map(skill => <Tooltip key={skill.name} title={[skill.name, skill.description, skill.origin === "<builtin>" ? "" : skill.origin].filter(Boolean).join("\n")}>
                 <Button type="text" block className="rb-skill-line rb-skill-clickable" onClick={() => setDetail({ sessionId, skill })}>
                   <span className="rb-skill-name">{skill.name}</span><span className="rb-skill-origin">{skill.origin === "<builtin>" ? t("common.builtin") : originLabel(skill.origin)}</span>
                 </Button>

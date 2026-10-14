@@ -5,6 +5,11 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import "../i18n"; // 独立挂载 FileViewerModal 必须先初始化 i18next（文案全走 t()）
 import FileViewerModal, { VIEWER_WIDTH_TABLE, VIEWER_WIDTH_TEXT } from "../features/files/FileViewerModal";
 import { useRun } from "../stores/run";
+import { upgradeDiagrams } from "../utils/diagrams";
+
+// These cases verify placeholders and the viewer's upgrade entry. Real async
+// rendering is covered in diagrams.streaming; keep its lazy imports out of teardown.
+vi.mock("../utils/diagrams", () => ({ upgradeDiagrams: vi.fn(async () => {}) }));
 
 const mocks = vi.hoisted(() => ({
   calls: [] as { cmd: string; args: unknown[] }[],
@@ -36,6 +41,7 @@ afterEach(() => {
   mocks.preview.mockReset();
   mocks.readFile.mockReset();
   mocks.readBase64.mockReset();
+  vi.mocked(upgradeDiagrams).mockClear();
   // zustand store 是模块级单例：清掉残留的 tab 运行态，避免跨用例串味
   useRun.setState((s) => {
     s.tabs = {};
@@ -223,6 +229,7 @@ describe("预览弹框内的图表占位符可达性", () => {
     });
     render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
     await waitFor(() => expect(document.querySelector(".viewer-md.md .ws-diagram")).toBeTruthy());
+    await waitFor(() => expect(upgradeDiagrams).toHaveBeenCalledWith(document.querySelector(".viewer-md.md > .md")));
   });
 
   it("块级公式渲染成 .ws-math 占位并落在 .viewer-md.md 内", async () => {
@@ -232,5 +239,6 @@ describe("预览弹框内的图表占位符可达性", () => {
     });
     render(<FileViewerModal sessionId="s1" path="/ws/plan.md" onClose={() => {}} />);
     await waitFor(() => expect(document.querySelector(".viewer-md.md .ws-math")).toBeTruthy());
+    await waitFor(() => expect(upgradeDiagrams).toHaveBeenCalledWith(document.querySelector(".viewer-md.md > .md")));
   });
 });

@@ -141,6 +141,52 @@ describe("Composer 历史消息召回（↑↓）", () => {
     expect(ta.value).toBe("hello2");
   });
 
+  it("skips internal approval/mode/tag instructions while browsing existing history", () => {
+    seedEnv([
+      { kind: "user", text: "我的第一条请求" },
+      { kind: "user", text: "[system] 权限模式已变更为 完全访问模式" },
+      { kind: "user", text: "我的第二条请求 @report.xlsx" },
+      { kind: "user", text: "[system] 方案已获批准，会话已切换到自动编辑模式。请立即按方案开始执行，无需再次询问。" },
+      { kind: "user", text: "<continue-notice>请继续。</continue-notice>" },
+    ]);
+    mountComposer();
+    const ta = getTextarea();
+    fireKey(ta, "ArrowUp");
+    expect(ta.value).toBe("我的第二条请求");
+    expect(refChipTitles()).toEqual(["report.xlsx"]);
+    fireKey(ta, "ArrowUp");
+    expect(ta.value).toBe("我的第一条请求");
+    fireKey(ta, "ArrowDown");
+    expect(ta.value).toBe("我的第二条请求");
+    fireKey(ta, "ArrowDown");
+    expect(ta.value).toBe("");
+    expect(refChipTitles()).toEqual([]);
+  });
+
+  it("does not enter recall mode when the only entries are internal instructions", () => {
+    seedEnv([{ kind: "user", text: "[system] 方案已获批准，会话已切换到完全访问模式。请立即按方案开始执行，无需再次询问。" }]);
+    mountComposer();
+    const ta = getTextarea();
+    fireKey(ta, "ArrowUp");
+    expect(ta.value).toBe("");
+    expect(document.querySelector(".attach-chip")).toBeNull();
+  });
+
+  it("keeps genuine system-prefixed text and attached user messages recallable", () => {
+    const text = "[system] 方案已获批准，会话已切换到自动编辑模式。请立即按方案开始执行，无需再次询问。";
+    seedEnv([
+      { kind: "user", text: "[system] 这是我输入的示例" },
+      { kind: "user", text, images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }] },
+    ]);
+    mountComposer();
+    const ta = getTextarea();
+    fireKey(ta, "ArrowUp");
+    expect(ta.value).toBe(text);
+    expect(document.querySelector(".attach-chip img")?.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
+    fireKey(ta, "ArrowUp");
+    expect(ta.value).toBe("[system] 这是我输入的示例");
+  });
+
   it("H2 浏览态 ↑ 前翻（hello2→hello1），最旧处停留不回绕", () => {
     seedEnv(TWO());
     mountComposer();

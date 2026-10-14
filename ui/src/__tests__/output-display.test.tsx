@@ -4,6 +4,7 @@ import "../i18n";
 import { useUi } from "../stores/ui";
 import { OUTPUT_DISPLAY_KEY, readStoredOutputDisplay } from "../utils/outputDisplay";
 import OutputDisplaySelect from "../features/tools/OutputDisplaySelect";
+import { AppearanceSettings } from "../features/panels/FontSettings";
 import ToolCallCard from "../features/tools/ToolCallCard";
 import { canGroupTool } from "../features/tools/toolPresentation";
 import { TimelineSegsView } from "../features/chat/segments";
@@ -34,13 +35,14 @@ describe("output display preference", () => {
     expect(readStoredOutputDisplay()).toBe("detailed");
   });
 
-  it("shares an immediate, persisted preference across both selectors", () => {
-    render(<><OutputDisplaySelect /><OutputDisplaySelect /></>);
-    fireEvent.click(screen.getAllByText("简洁")[0]);
+  it("keeps an immediate, persisted selector in appearance settings", () => {
+    render(<AppearanceSettings />);
+    expect(document.querySelectorAll(".output-display-select")).toHaveLength(1);
+    fireEvent.click(screen.getByText("简洁"));
     expect(useUi.getState().outputDisplay).toBe("compact");
     expect(readStoredOutputDisplay()).toBe("compact");
-    expect(document.querySelectorAll('.ant-segmented-item-selected').length).toBe(2);
-    fireEvent.click(screen.getAllByText("详细")[1]);
+    expect(document.querySelectorAll('.ant-segmented-item-selected').length).toBe(1);
+    fireEvent.click(screen.getByText("详细"));
     expect(useUi.getState().outputDisplay).toBe("detailed");
     expect(readStoredOutputDisplay()).toBe("detailed");
   });
@@ -172,6 +174,29 @@ describe("completed tool aggregation", () => {
 });
 
 describe("output reading anchor", () => {
+  it.each([
+    ["summary round trip", 110, "none", 110],
+    ["first child round trip", 150, "none", 150],
+    ["first child folded into summary", 250, "fold", 100],
+    ["summary changed to detailed card", 110, "detail", 134],
+  ] as const)("distinguishes matching summary/child keys: %s", (_, scroll, change, expected) => {
+    const container = document.createElement("div");
+    container.innerHTML = '<div data-key="message"><button data-output-key="tool:x" data-output-group="[&quot;tool:x&quot;]"></button><div class="body"><div data-output-key="tool:x"></div></div></div>';
+    document.body.append(container);
+    Object.defineProperties(container, { scrollTop: { value: scroll, writable: true }, scrollHeight: { value: 1200 }, clientHeight: { value: 200 } });
+    container.getBoundingClientRect = () => ({ top: 0, height: 200 } as DOMRect);
+    const summary = container.querySelector<HTMLElement>("button")!;
+    const child = container.querySelector<HTMLElement>(".body > div")!;
+    summary.getBoundingClientRect = () => ({ top: 100 - container.scrollTop, bottom: 132 - container.scrollTop, height: 32 } as DOMRect);
+    child.getBoundingClientRect = () => ({ top: 134 - container.scrollTop, bottom: 334 - container.scrollTop, height: 200 } as DOMRect);
+    const anchor = captureOutputAnchor(container);
+    if (change === "fold") container.querySelector<HTMLElement>(".body")!.hidden = true;
+    if (change === "detail") summary.remove();
+    restoreOutputAnchor(container, anchor);
+    expect(container.scrollTop).toBe(expected);
+    container.remove();
+  });
+
   it("anchors the second visible child of an expanded group, then finds it in detailed mode", () => {
     const container = document.createElement("div");
     container.innerHTML = '<div data-key="message"><div class="tool-activity-group"><button data-output-key="tool:a"></button><div data-output-key="tool:a"></div><div data-output-key="tool:b"></div></div></div>';

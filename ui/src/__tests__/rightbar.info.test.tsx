@@ -1,7 +1,7 @@
 // 右栏信息页结构变更（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // ① 数据目录行移除；② 「会话」段（开始时间）移除；③ 技能/当前计划可折叠且折叠态记得住。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n";
 import RightBar from "../features/shell/RightBar";
@@ -58,6 +58,26 @@ afterEach(() => {
 });
 
 describe("右栏信息页：数据目录行与会话段移除", () => {
+  it("切换临时会话时隐藏项目目录与打开入口，回到项目会话恢复", async () => {
+    seed();
+    const projectTab = useSessions.getState().tabs[0];
+    useSessions.setState({ tabs: [projectTab, { ...projectTab, key: "temp", sessionId: "temp", projectId: null, workspace: "/tmp/codewave-global" }] });
+    renderBar();
+    await screen.findByText("D:/demo/project");
+    expect(screen.getByRole("button", { name: "在文件管理器中打开" })).toBeTruthy();
+    act(() => useSessions.setState({ activeKey: "temp" }));
+    const info = document.querySelector(".rb-info-scroll")!;
+    expect(info.querySelector(".rb-path")).toBeNull();
+    expect(info.querySelector(".rb-project .rb-label-actions")).toBeNull();
+    expect(info.textContent).not.toContain("项目目录");
+    expect(info.textContent).not.toContain("/tmp/codewave-global");
+    expect(info.textContent).toContain("临时会话");
+    expect(info.textContent).toContain("会话文件");
+    act(() => useSessions.setState({ activeKey: "s1" }));
+    expect(screen.getByText("D:/demo/project")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "在文件管理器中打开" })).toBeTruthy();
+  });
+
   it("项目目录段只剩主目录路径，不渲染数据目录行", async () => {
     seed();
     renderBar();
@@ -118,7 +138,7 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
     expect(screen.queryByText("当前计划")).toBeNull();
   });
 
-  it("折叠标题与信息页其他标题同款：文本类是 antd 6 的 .ant-collapse-title，箭头在行末", async () => {
+  it("折叠标题使用 antd 6 的 .ant-collapse-title，展开箭头与工具记录同在行首", async () => {
     seed();
     renderBar();
     await screen.findByText("技能");
@@ -126,8 +146,7 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
     // 样式表钉的是 .ant-collapse-title；antd 6 已废弃 -header-text（写成它 = 死规则，字号回默认 14px）
     expect(collapse.querySelector(".ant-collapse-title")).toBeTruthy();
     expect(collapse.querySelector(".ant-collapse-header-text")).toBeNull();
-    // 箭头在行末 → 标题文字与「项目目录 / 额度与余额」左对齐
-    expect(collapse.className).toContain("icon-placement-end");
+    expect(collapse.className).toContain("icon-placement-start");
     expect(collapse.querySelector(".ant-collapse-expand-icon")).toBeTruthy();
   });
 });

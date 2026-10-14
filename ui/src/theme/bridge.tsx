@@ -13,11 +13,14 @@ export default function ThemeBridge() {
     const dark = isDarkBase(token.colorBgBase);
     s.setProperty("--ws-bg", token.colorBgLayout);
     s.setProperty("--ws-panel", token.colorBgContainer);
-    // 侧栏分色（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：左栏导航 #ececee、中右栏 #f8f8f8（仅亮色生效；暗色回退默认容器/布局色，与改动前观感一致）
-    s.setProperty("--ws-bg-nav", dark ? token.colorBgContainer : "#eef4f9");
+    // Coordinated chrome surfaces; dark appearance remains owned by antd.
+    s.setProperty("--ws-bg-nav", dark ? token.colorBgContainer : "#eef2f5");
     s.setProperty("--ws-bg-main", dark ? token.colorBgLayout : "#FFFFFF");
     s.setProperty("--ws-code-bg", token.colorFillQuaternary);
     s.setProperty("--ws-border", token.colorBorderSecondary);
+    s.setProperty("--ws-radius", `${token.borderRadius}px`);
+    s.setProperty("--ws-radius-lg", `${token.borderRadiusLG}px`);
+    s.setProperty("--ws-shadow", token.boxShadowTertiary);
     s.setProperty("--ws-hover", token.colorFillTertiary);
     s.setProperty("--ws-text-1", token.colorText);
     s.setProperty("--ws-text-2", token.colorTextSecondary);

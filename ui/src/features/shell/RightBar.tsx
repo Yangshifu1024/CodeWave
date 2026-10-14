@@ -213,7 +213,7 @@ export default function RightBar() {
   // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：隐藏时保持挂载——类名翻转为 .right-bar-closed（width/padding 经 0.2s 缓动收零、
   // visibility 待动画结束后隐藏）；顶栏切换按钮是唯一开合入口
   return (
-    <ConfigProvider theme={{ components: { Card: { borderRadiusLG: 20, bodyPadding: 20 }, Collapse: { borderRadiusLG: 0, headerPadding: "18px 0", contentPadding: "0 0 18px" }, Segmented: { borderRadius: 12, borderRadiusSM: 10 } } }}>
+    <ConfigProvider theme={{ components: { Card: { borderRadiusLG: 12, bodyPadding: 16 }, Collapse: { borderRadiusLG: 0, headerPadding: "14px 0", contentPadding: "0 0 14px" } } }}>
     <div
       className={rightBarOpen ? "right-bar" : "right-bar right-bar-closed"}
       aria-hidden={!rightBarOpen}

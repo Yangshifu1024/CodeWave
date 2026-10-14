@@ -493,8 +493,8 @@ export default function AppShell() {
         >
           {/* 左栏开合入口收口到标题栏 Logo（悬停同位交换箭头，docs/chat-and-interface）；侧栏内不再有开关按钮 */}
           <div className="sider-body">
-            <Button style={{ margin: "12px 12px 0", flex: "none" }} icon={<DashboardOutlined />}
-              type={dashboardOpen ? "primary" : "default"} aria-pressed={dashboardOpen}
+            <Button className="sider-overview" icon={<DashboardOutlined />}
+              type="text" aria-pressed={dashboardOpen}
               onClick={() => {
                 useRun.getState().closeSubDrawer(activeKey);
                 useUi.setState({ dashboardOpen: true });

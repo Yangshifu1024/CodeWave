@@ -999,7 +999,6 @@ export default function Composer() {
               </Dropdown>
               <Button
                 className="send-btn"
-                shape="circle"
                 danger={stopActive}
                 type="primary"
                 disabled={!active.running && !hasDraft}
@@ -1012,6 +1011,10 @@ export default function Composer() {
           </div>
           </div>
         </BorderBeam>
+      </div>
+      <div className="composer-hints">
+        <span className="composer-trigger-hints"><span><kbd>/</kbd> {t("composer.hintSkills")}</span><span><kbd>@</kbd> {t("composer.hintFiles")}</span><span><kbd>$</kbd> {t("composer.hintSubagents")}</span></span>
+        <span>{t("composer.hintKeys")}</span>
       </div>
 
       {/* 拖入提示条：只在拖拽悬停时出现，落下即消失（实际处理在 addPaths） */}

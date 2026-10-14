@@ -85,19 +85,20 @@ export function closeOpenThinking(timeline: TimelineSeg[]) {
 }
 
 /** 追加 text/thinking delta：同类合并进尾段，异类新开分段（保持穿插顺序）；
- *  异类新段前先收尾进行中的 thinking 分段；新 thinking 分段记录开始时间（思考计时器/跑马灯） */
-export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", text: string) {
+ *  Live deltas freeze the preceding thinking and record its start time.
+ *  Restored content preserves order and text without inventing historical timing. */
+export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", text: string, timing: "live" | "restored" = "live") {
   if (!text) return;
   const last = timeline[timeline.length - 1];
   if (last && last.kind === kind) {
     last.text += text;
     return;
   }
-  closeOpenThinking(timeline);
+  if (timing === "live") closeOpenThinking(timeline);
   timeline.push(
     kind === "text"
       ? { kind: "text", text }
-      : { kind: "thinking", text, startedAt: Date.now() },
+      : { kind: "thinking", text, ...(timing === "live" ? { startedAt: Date.now() } : {}) },
   );
 }
 
@@ -434,9 +435,9 @@ export function messagesToSubStream(msgs: Message[], settleRunning = false): { t
     if (m.role !== "assistant") continue;
     for (const c of m.content) {
       if (c.type === "text") {
-        appendDelta(timeline, "text", (c as any).text ?? "");
+        appendDelta(timeline, "text", (c as any).text ?? "", "restored");
       } else if (c.type === "thinking") {
-        appendDelta(timeline, "thinking", (c as any).text ?? "");
+        appendDelta(timeline, "thinking", (c as any).text ?? "", "restored");
       } else if (c.type === "tool_use") {
         const callKey = (c as any).id as string;
         const tool: ToolView = { callKey, tool: (c as any).name ?? "?", status: "running", progressTail: "" };

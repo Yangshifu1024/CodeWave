@@ -1,6 +1,6 @@
 // 辅助信息可见性版式契约（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
 // happy-dom 不做布局，故与 ask.style.test.ts / chat.style.test.ts 同路——直接断言源码 CSS。
-// 这里钉两类不变量：① 辅助信息不许被 auto margin 推到看不见处；② 颜色只走 --ws-* token，不硬编码色值。
+// Keep long names shrinkable and source labels readable; colors follow theme tokens.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,11 +18,14 @@ function ruleBody(selector: string): string {
 }
 
 describe("辅助信息可见性：版式契约", () => {
-  it("右栏技能来源紧跟技能名（不再 auto margin 推到行尾），字号与设置页同一档", () => {
+  it("右栏技能名可收缩，来源拥有固定可读槽位并保留溢出省略", () => {
     const body = ruleBody(".rb-skill-origin");
-    expect(body).not.toMatch(/margin-left:\s*auto/);
+    expect(ruleBody(".rb-skill-name")).toMatch(/flex:\s*1;\s*min-width:\s*0/);
+    expect(body).toMatch(/width:\s*\d+px/);
+    expect(body).toMatch(/text-align:\s*right/);
+    expect(body).toContain("text-overflow: ellipsis");
     expect(body).toContain("font-size: calc(11px + var(--ws-font-size-sans-offset))");
-    expect(body).toMatch(/color:\s*var\(--ws-dim\)/);
+    expect(body).toMatch(/color:\s*var\(--ws-text-2\)/);
   });
 
   it("设置·关于的自动更新说明位于共享表单标签，不被行尾边距推走", () => {
