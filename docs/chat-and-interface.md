@@ -172,7 +172,20 @@ read/batch_read/edit 一次批量调用本来就是一张卡。头部展示全�
 
 排查「是不是合并了调用」时查看会话日志：一条执行记录、files 数组多项表示正常批量；多条执行记录才是多个调用。恢复按 provider id 配对，重复/空 id 的处理属于历史修复和协议层问题，不可通过拆 UI 卡掩盖。批量读取的错误策略见[工具与安全](./tools-and-safety.md)。
 
+### 5.2.x 简洁与详细展示
+
+聊天区顶部与设置「界面 → 输出展示」共用全局偏好 `ws_output_display`；默认「详细」，缺失/非法值也回落详细。切换即时生效并保存到 localStorage，不参与设置脏点，也不改回复正文、provider 请求、权限或历史。详细沿用原工具卡；简洁使用 antd 按钮承载中性单行摘要，长命令省略但完整内容可展开，运行中保留加载指示，思考默认收起且省去标题走马灯。
+
+- 简洁只聚合相邻且无警告的成功 read/batch_read/grep/list_files，以及退出码明确为 0 的 command；不跨正文、思考、子代理、等待或错误边界。聚合仅在渲染层发生，不改变工具调用身份。打开详情的工具独立保留，展开态按 `callKey` 留在时间线，完成或来回切换模式不自动关闭。
+- edit/create 逐文件显示最短可区分后缀及完整路径提示。成功结果可增 `data.line_changes`（数组元素为 `path/added/removed`），由写锁内真实前后内容进行行级 diff；统计是本次操作的净变化，不是传入 patch 行数或相对 HEAD 的工作区变化。CRLF/LF 归一后统计，空文件没有虚构末行；create 的原件不可读或非 UTF-8 时省略统计，失败结果不附统计。旧历史缺统计就不显示数字，不新增迁移或摘要存档。
+- ask 题干与答案、等待审批、真实错误、警告及 widget 预览保持可见；用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好与工具结果回填。
+- 切换前捕获当前可见段/工具与所属消息，提交后恢复该段内阅读偏移；折叠工具组只以摘要行作锚点，打开组后各子卡仍有独立锚点。主聊天校验 session，过程抽屉校验 subId；原来贴底则继续贴底，上滚阅读则暂停跟随。
+
+实现：[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。
+
 ### 5.3 HTML 小组件
+
+展示偏好与 HTML 预览独立，简洁模式也保留预览按钮及批准后的自动预览。
 
 `render_html` 接受 1–50,000 个 Unicode 字符，工具卡头部「预览」打开大弹框，卡内不再嵌一个默认约 150px 高 iframe。没有可恢复 html 的旧卡显示不可用说明，不提供坏入口。
 

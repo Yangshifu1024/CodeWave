@@ -61,6 +61,10 @@ export default {
   // `about` 段已随批④ 整体迁入 settings.about*（理由：注册表引用闭包只扫 settings.* 前缀，
   // 迁入后这些键才受契约测试守护）——[docs/settings-guide](../../../docs/settings-guide.md)
   tools: {
+    outputDisplay: "输出展示", displayCompact: "简洁", displayDetailed: "详细",
+    compactRead: "已读取", compactEdit: "已编辑", compactCreate: "已创建", compactCommand: "已运行", compactSearch: "已搜索",
+    groupRead: "已读取 {{n}} 个文件", groupReadUnknown: "已读取文件", groupCommand: "已运行 {{n}} 条命令",
+    groupSearch: "已搜索 {{n}} 次", groupList: "已列目录 {{n}} 次",
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
     command: "命令", grep: "搜索", ask: "提问", web_fetch: "抓取网页", http_request: "HTTP 请求",
     service: "后台服务", wait: "等待", suggest: "建议", plan: "计划", batch_read: "批量读取",
@@ -111,6 +115,7 @@ export default {
     fullAccessRiskSep: "；",
   },
   settings: {
+    outputDisplay: "输出展示", outputDisplayHint: "简洁：工具过程显示为可展开的单行摘要；详细：保持完整工具卡。即时生效，全局记忆，回复正文不变。",
     title: "设置",
     // 10 页（[docs/settings-guide](../../../docs/settings-guide.md)）：页名键 + 左导航三组标题。
     // 旧页名键 general / appearance / security / network 与 settings.accent 已随重划零引用删除；

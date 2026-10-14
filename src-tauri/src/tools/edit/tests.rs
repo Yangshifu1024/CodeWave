@@ -225,6 +225,48 @@ fn fresh_fixture(
     (ws, core, rt, roots)
 }
 
+#[tokio::test]
+async fn line_counts_are_per_file_net_changes_not_patch_sizes() {
+    let (ws, core, rt, _roots) = fresh_fixture("line-counts");
+    let ctx = test_ctx(core, rt);
+    std::fs::write(ws.path().join("a.txt"), "same\r\nold\r\n").unwrap();
+    std::fs::write(ws.path().join("b.txt"), "original\n").unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            serde_json::json!({"files": [
+                {"path": "a.txt", "changes": [{"oldText": "old", "newText": "new\nextra"}]},
+                {"path": "b.txt", "changes": [
+                    {"oldText": "original", "newText": "temporary"},
+                    {"oldText": "temporary", "newText": "original"}
+                ]}
+            ]}),
+        )
+        .await;
+    assert!(out.ok, "{out:?}");
+    assert_eq!(
+        out.data["line_changes"],
+        serde_json::json!([
+            {"path": "a.txt", "added": 2, "removed": 1},
+            {"path": "b.txt", "added": 0, "removed": 0}
+        ])
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("a.txt")).unwrap(),
+        "same\r\nnew\r\nextra\r\n"
+    );
+    let failed = EditTool
+        .run(
+            &ctx,
+            serde_json::json!({"files": [
+                {"path": "a.txt", "changes": [{"oldText": "missing", "newText": "new"}]}
+            ]}),
+        )
+        .await;
+    assert!(!failed.ok);
+    assert!(failed.data.get("line_changes").is_none());
+}
+
 /// CRLF 文件 + 多行 LF oldText：归一后命中，写回保持 CRLF。
 #[tokio::test]
 async fn crlf_file_edited_with_lf_oldtext_roundtrip() {

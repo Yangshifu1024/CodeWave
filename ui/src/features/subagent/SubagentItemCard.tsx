@@ -2,6 +2,7 @@ import { CheckOutlined, CloseOutlined, ExclamationCircleOutlined, LoadingOutline
 import { useTranslation } from "react-i18next";
 import { useActiveRun, useRun } from "../../stores/run";
 import type { SubView } from "../../stores/run.types";
+import { useUi } from "../../stores/ui";
 
 /** token 数缩写：千位以上显示为一位小数的 k 值（如 12.3k），其余原样。 */
 function fmtTokens(n: number): string {
@@ -38,6 +39,7 @@ function endedWarnLabel(ended: SubView["ended"]): string {
  *  运行中时右侧有停止按钮（单独停止该子代理，不打开抽屉）。 */
 export default function SubagentItemCard({ subId }: { subId: string }) {
   const { t } = useTranslation();
+  const compact = useUi((s) => s.outputDisplay === "compact");
   const sub = useActiveRun().subs.find((x) => x.subId === subId);
   if (!sub) return null;
   const stop = () => void useRun.getState().stopSubagent(null, sub.subId);
@@ -45,7 +47,8 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
   const warnKey = abnormal ? endedWarnLabel(sub.ended) : null;
   return (
     <div
-      className={`sub-card st-${sub.status}`}
+      className={`sub-card st-${sub.status}${compact ? " sub-compact" : ""}`}
+      data-output-key={`sub:${subId}`}
       role="button"
       tabIndex={0}
       title={sub.task || sub.description}

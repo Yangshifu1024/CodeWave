@@ -98,6 +98,12 @@ impl Tool for CreateTool {
         // 不再需要写前基线 / 差集 / 就绪判据。
         let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
         let target = super::validation::WriteTarget::new(resolved.clone(), args.path.clone());
+        // 持写锁读取本次写入前的内容；不可读或非 UTF-8 基线时省略统计，不阻止原有写入。
+        let before = match std::fs::read(&resolved) {
+            Ok(bytes) => String::from_utf8(bytes).ok(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+            Err(_) => None,
+        };
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
                 // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：产物登记（子代理归属主会话；路径规范化，
@@ -126,6 +132,13 @@ impl Tool for CreateTool {
                     super::validation::run(ctx, &settings, std::slice::from_ref(&target)).await;
                 let mut out =
                     ToolOutcome::ok(json!({ "path": args.path, "bytes": args.content.len() }));
+                if let Some(before) = before {
+                    out.data["line_changes"] = json!([super::line_changes::count(
+                        &args.path,
+                        &before,
+                        &args.content
+                    )]);
+                }
                 if let Some(first) = checks.into_iter().next() {
                     out.data["check"] =
                         serde_json::to_value(&first.check).unwrap_or(serde_json::Value::Null);
@@ -293,6 +306,50 @@ mod tests {
         let (ctx, _ws, _dd) = setup("t4");
         let out = CreateTool.run(&ctx, json!({"path": 123})).await;
         assert_eq!(out.error.unwrap().code, "E_ARGS");
+    }
+
+    #[tokio::test]
+    async fn line_counts_cover_new_overwritten_empty_and_non_utf8_baselines() {
+        let (ctx, ws, _dd) = setup("line-counts");
+        let out = CreateTool
+            .run(&ctx, json!({"path": "a.txt", "content": "same\nold\n"}))
+            .await;
+        assert!(out.ok);
+        assert_eq!(
+            out.data["line_changes"],
+            json!([{ "path": "a.txt", "added": 2, "removed": 0 }])
+        );
+        let out = CreateTool
+            .run(
+                &ctx,
+                json!({"path": "a.txt", "content": "same\nnew\n", "overwrite": true}),
+            )
+            .await;
+        assert!(out.ok);
+        assert_eq!(out.data["line_changes"][0]["added"], json!(1));
+        assert_eq!(out.data["line_changes"][0]["removed"], json!(1));
+        let out = CreateTool
+            .run(
+                &ctx,
+                json!({"path": "a.txt", "content": "", "overwrite": true}),
+            )
+            .await;
+        assert_eq!(out.data["line_changes"][0]["added"], json!(0));
+        assert_eq!(out.data["line_changes"][0]["removed"], json!(2));
+        std::fs::write(ws.path().join("binary.txt"), [0xff, 0xfe, 0x00]).unwrap();
+        let out = CreateTool
+            .run(
+                &ctx,
+                json!({"path": "binary.txt", "content": "new", "overwrite": true}),
+            )
+            .await;
+        assert!(out.ok);
+        assert!(out.data.get("line_changes").is_none());
+        let out = CreateTool
+            .run(&ctx, json!({"path": "a.txt", "content": "new"}))
+            .await;
+        assert!(!out.ok);
+        assert!(out.data.get("line_changes").is_none());
     }
 
     /// 写入后检查的接线（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：

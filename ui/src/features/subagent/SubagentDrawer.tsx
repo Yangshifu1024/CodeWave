@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Drawer, Tag, Tooltip } from "antd";
 import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -8,6 +8,7 @@ import { useUi } from "../../stores/ui";
 import { bottomScrollTarget, isAtBottom, isSelfScroll } from "../../utils/scrollAnchor";
 import { renderCached, TimelineSegsView } from "../chat/segments";
 import { renderUserMarkdown } from "../../utils/markdown";
+import { captureOutputAnchor, restoreOutputAnchor, type OutputAnchor } from "../../utils/outputAnchor";
 
 /** 子代理过程抽屉（[docs/subagents](../../../../docs/subagents.md)）：右侧滑入、默认常显（首个子代理启动即弹出）。
  *  关闭只置 open=false 不销毁——流式数据留存于 subStreams，可经聊天卡 / Composer 指示器重进；
@@ -16,6 +17,8 @@ export default function SubagentDrawer() {
   const { t } = useTranslation();
   const active = useActiveRun();
   const dashboardOpen = useUi((s) => s.dashboardOpen);
+  const outputDisplay = useUi((s) => s.outputDisplay);
+  const outputAnchor = useRef<{ subId: string | null; anchor: OutputAnchor } | null>(null);
   const { open, subId } = active.subDrawer;
   const sub = (subId && active.subs.find((x) => x.subId === subId)) || null;
   const stream = (subId && active.subStreams[subId]) || null;
@@ -59,6 +62,24 @@ export default function SubagentDrawer() {
     stick.current = false;
     progUntil.current = 0;
   }, []);
+  useEffect(() => useUi.subscribe((state, previous) => {
+    if (state.outputDisplay === previous.outputDisplay || !open || !bodyRef.current) return;
+    outputAnchor.current = { subId, anchor: captureOutputAnchor(bodyRef.current) };
+    suspendFollow();
+  }), [open, subId, suspendFollow]);
+  useLayoutEffect(() => {
+    const previous = outputAnchor.current;
+    outputAnchor.current = null;
+    const el = bodyRef.current;
+    if (!previous || !el || previous.subId !== subId) return;
+    restoreOutputAnchor(el, previous.anchor);
+    progTarget.current = el.scrollTop;
+    progUntil.current = Date.now() + 150;
+    if (previous.anchor.atBottom) {
+      stick.current = true;
+      scrollToBottom();
+    }
+  }, [outputDisplay, subId, scrollToBottom]);
   // 视口钳制兜底（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：CSS 滚动链（wrapper > section > antd body > 本滚动容器）项目侧
   // 已全部钉死，但「抽屉随内容长高、什么都不滚」已复发两次
   // （[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 的 .rb-tabs，然后 e766796）。此钳制不信任任何祖先：以视口减头部为界约束滚动容器。

@@ -1,5 +1,5 @@
 import { fontSizeCss } from "../../utils/fonts";
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, Button, Divider, Image, Tooltip } from "antd";
 import {
   CheckOutlined,
@@ -36,6 +36,8 @@ import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/ui
 import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
 import ChatScrollbar from "./ChatScrollbar";
+import OutputDisplaySelect from "../tools/OutputDisplaySelect";
+import { captureOutputAnchor, restoreOutputAnchor, type OutputAnchor } from "../../utils/outputAnchor";
 
 // 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 缺陷修复）
 function ts(iso: string | undefined): string {
@@ -205,6 +207,8 @@ const SMOOTH_SCROLL_MS = 700;
 export default function ChatMessages() {
   const { t } = useTranslation();
   const active = useActiveRun();
+  const outputDisplay = useUi((s) => s.outputDisplay);
+  const displayAnchor = useRef<{ sessionId: string | null; anchor: OutputAnchor } | null>(null);
   const hasSession = useSessions((s) => !!s.activeKey);
   const scroller = useRef<HTMLDivElement>(null);
   // 2.4：是否贴底（贴底 -> 自动下滚；未贴底 -> 显示「回到底部」按钮）
@@ -292,6 +296,21 @@ export default function ChatMessages() {
 
   // 2.9：发送消息后强制滚到底部（items 增长且最后一条是新的用户消息）
   const activeKey = useSessions((s) => s.activeKey);
+  // store 通知在 DOM 更新前捕获锚点，设置页与聊天入口共用此保护。
+  useEffect(() => useUi.subscribe((state, previous) => {
+    if (state.outputDisplay === previous.outputDisplay || !scroller.current) return;
+    displayAnchor.current = { sessionId: useSessions.getState().activeKey, anchor: captureOutputAnchor(scroller.current) };
+    suspendFollow();
+  }), [suspendFollow]);
+  useLayoutEffect(() => {
+    const anchor = displayAnchor.current;
+    displayAnchor.current = null;
+    const el = scroller.current;
+    if (!anchor || !el || anchor.sessionId !== activeKey) return;
+    restoreOutputAnchor(el, anchor.anchor);
+    markProgScroll(el, el.scrollTop);
+    if (anchor.anchor.atBottom) jumpToBottom(el);
+  }, [outputDisplay, activeKey, jumpToBottom, markProgScroll]);
   // ---------- 自动弹预览（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)） ----------
   // 批准门选「先看预览」→ AskPanel 置位一次性信号；run store 在本 run 第一张合格 widget 落地时
   // 把它转成目标 callKey，这里只负责透传给工具卡（卡片自己判有没有 html、弹不改它的本地 state）。
@@ -602,6 +621,7 @@ export default function ChatMessages() {
 
   return (
     <div className="chat-body" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
+      {hasSession && <div className="chat-display-toolbar"><OutputDisplaySelect showLabel /></div>}
       <div ref={scroller} className="chat-messages" onScroll={onScroll} onWheel={onWheel}>
         {/* 自定义 overlay 滚动条：仿 MiniMax Code / Slack 范式，native 滚动条已隐藏（见 app.css） */}
         <ChatScrollbar target={scroller} />

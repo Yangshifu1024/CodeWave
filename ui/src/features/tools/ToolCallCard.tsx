@@ -1,6 +1,7 @@
 import { fontSizeCss } from "../../utils/fonts";
 import { memo, useEffect, useMemo, useState } from "react";
 import { Button, Tag } from "antd";
+import { CodeOutlined, EditOutlined, FileAddOutlined, FileTextOutlined, GlobalOutlined, LoadingOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ToolView } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
@@ -10,6 +11,8 @@ import { shortestUniqueLabels } from "../../utils/path";
 import CodeBlock from "../../components/CodeBlock";
 import { askAnswerRows } from "./askAnswerRows";
 import WidgetPreviewModal from "./WidgetPreviewModal";
+import type { OutputDisplay } from "../../utils/outputDisplay";
+import { toolFilePaths, toolLineChanges } from "./toolPresentation";
 
 // 工具名 -> i18n 键映射（内置工具；mcp__ 前缀的工具名原样展示）
 const VERBS: Record<string, string> = {
@@ -21,6 +24,7 @@ const VERBS: Record<string, string> = {
 };
 
 interface EditFileView { path: string; diff: { type: string; text: string }[] }
+export interface ToolExpansion { expanded: boolean; path: string | null }
 
 /** 出错时降级为中性展示的错误码 → 文案键（docs/plan-and-approval.md 的展示层配套）：
  *  后端把「忽略 / 取消」按 err 返回是模型侧硬信号（防误读为默许），运行/子代理结束时仍在途的工具卡也带 err，
@@ -46,6 +50,9 @@ function ToolCallCardImpl({
   onToggle,
   autoOpenCallKey,
   onConsumeAutoOpen,
+  display = "detailed",
+  expansion,
+  onExpansionChange,
 }: {
   tool: ToolView;
   onToggle?: () => void;
@@ -53,9 +60,14 @@ function ToolCallCardImpl({
   autoOpenCallKey?: string | null;
   /** 卡片已消费该信号（弹框已自动打开）后回抛；不传 = 只自动弹、不通知上层 */
   onConsumeAutoOpen?: (callKey: string) => void;
+  display?: OutputDisplay;
+  expansion?: ToolExpansion;
+  onExpansionChange?: (callKey: string, expansion: ToolExpansion) => void;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
+  const [localExpansion, setLocalExpansion] = useState<ToolExpansion>({ expanded: false, path: null });
+  const { expanded, path: selectedPath } = expansion ?? localExpansion;
+  const compact = display === "compact";
   // render_html 的弹框预览开关（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
   // 卡片内不再内嵌渲染 HTML，只留头部入口；状态放卡片本地——卡片卸载（切 Tab/会话、历史重建）即关闭，
   // 不必为它动 ui store（也避开 store 单例在测试间残留的坑）
@@ -214,12 +226,33 @@ function ToolCallCardImpl({
     const label = key ? t(key) : tool.tool === "?" ? "" : tool.tool.replace(/^mcp__/, "[mcp] ");
     if (neutralErrKey) return label ? `${t(neutralErrKey)} ${label}` : t(neutralErrKey);
     // waiting = 审批 / 范围确认门等待中（橙点 + 需注意语义），必须在 running 之前判定
+    if (compact && tool.status === "ok" && ["read", "batch_read", "edit", "create", "command", "grep"].includes(tool.tool)) {
+      return tool.tool === "read" || tool.tool === "batch_read" ? t("tools.compactRead")
+        : tool.tool === "edit" ? t("tools.compactEdit") : tool.tool === "create" ? t("tools.compactCreate")
+          : tool.tool === "command" ? t("tools.compactCommand") : t("tools.compactSearch");
+    }
     const prefix =
       tool.status === "waiting" ? t("tools.waiting")
         : tool.status === "running" ? t("tools.running")
           : tool.status === "error" ? t("tools.failed") : t("tools.used");
     return label ? `${prefix} ${label}` : prefix;
   })();
+  const paths = compact && isEditLike ? toolFilePaths(tool) : [];
+  const pathLabels = shortestUniqueLabels(paths);
+  const ToolIcon = tool.tool === "command" || tool.tool === "service" ? CodeOutlined
+    : tool.tool === "edit" ? EditOutlined : tool.tool === "create" ? FileAddOutlined
+      : tool.tool === "read" || tool.tool === "batch_read" ? FileTextOutlined
+        : tool.tool === "grep" || tool.tool === "list_files" ? SearchOutlined
+          : tool.tool === "web_fetch" || tool.tool === "http_request" ? GlobalOutlined : ToolOutlined;
+
+  function togglePath(path: string | null) {
+    updateExpansion({ expanded: path === selectedPath ? !expanded : true, path });
+    onToggle?.();
+  }
+  function updateExpansion(next: ToolExpansion) {
+    setLocalExpansion(next);
+    onExpansionChange?.(tool.callKey, next);
+  }
 
   async function stopService() {
     const sessionId = useSessions.getState().activeKey;
@@ -230,11 +263,32 @@ function ToolCallCardImpl({
   }
 
   return (
-    <div className={`tool-card st-${neutralErr ? "neutral" : tool.status}`}>
+    <div data-output-key={`tool:${tool.callKey}`} className={`tool-card st-${neutralErr ? "neutral" : tool.status}${compact ? " tool-compact" : ""}`}>
+      {compact ? (
+        <>
+          {(paths.length ? paths : [null]).map((path, i) => {
+            const stats = path ? toolLineChanges(tool, path) : null;
+            const open = expanded && path === selectedPath;
+            return <Button key={path ?? "summary"} type="text" block className="tool-compact-head" aria-expanded={open} onClick={() => togglePath(path)}>
+              <span className="tool-compact-content">
+                {tool.status === "running" ? <LoadingOutlined spin /> : <ToolIcon />}
+                <span className="verb">{verbLabel}</span>
+                <span className="summary" title={path ?? (commandLine || summary)}>{path ? pathLabels[i] : tool.tool === "command" || tool.tool === "service" ? commandLine || summary : summary}</span>
+                {stats && <span className="line-count">+{stats.added} −{stats.removed}</span>}
+                <span className="chev">{open ? "▾" : "▸"}</span>
+              </span>
+            </Button>;
+          })}
+          {hasWidget && <Button size="small" onClick={() => setWidgetOpen(true)}>{t("tools.preview")}</Button>}
+          {restoredPlaceholder && <span className="dim">{t("tools.previewUnavailable")}</span>}
+          {tool.outcome?.error && !neutralErr && <div className="err">{tool.outcome.error.code}: {tool.outcome.error.message}</div>}
+          {!expanded && (tool.outcome?.warnings ?? []).map((w: string, i: number) => <div className="warn" key={i}>{w}</div>)}
+        </>
+      ) : (
       <div
         className="tool-head"
         onClick={() => {
-          setExpanded(!expanded);
+          updateExpansion({ expanded: !expanded, path: null });
           onToggle?.(); // 展开/收起 = 阅读意图：暂停自动跟随
         }}
       >
@@ -259,6 +313,7 @@ function ToolCallCardImpl({
         {tool.durationMs != null && <span className="dur">{(tool.durationMs / 1000).toFixed(1)}s</span>}
         <span className="chev">{expanded ? "▾" : "▸"}</span>
       </div>
+      )}
 
       {/* ask：问答行始终显示（题干一行、答案一行；不省略、不需展开） */}
       {askRows.length > 0 && (
@@ -279,7 +334,7 @@ function ToolCallCardImpl({
       )}
 
       {/* 进度尾迹只在真正执行时展示（waiting = 审批/范围确认门等待中，还没有任何输出；已中断/已结束的卡 tail 已被 store 清空） */}
-      {tool.status === "running" && tool.progressTail && <pre className="tail">{tool.progressTail}</pre>}
+      {tool.status === "running" && tool.progressTail && (!compact || expanded) && <pre className="tail">{tool.progressTail}</pre>}
 
       {expanded && (
         <div className="tool-body">
@@ -297,7 +352,7 @@ function ToolCallCardImpl({
             </>
           ) : isEditLike ? (
             <>
-              {editFiles.map((file, i) => (
+              {editFiles.filter((file) => !compact || !selectedPath || file.path === selectedPath || tool.argsPreview?.includes("_args_truncated")).map((file, i) => (
                 <div className="block" key={i}>
                   <div className="file-line">{file.path}</div>
                   {file.diff.map((ln, j) => (
@@ -396,7 +451,7 @@ function ToolCallCardImpl({
 
           {/* E_INTERRUPTED 的 message 为空（store 落定形态）：渲染成「E_INTERRUPTED: 」是纯噪声，
               verb 已表达「已中断」——故不渲染错误行；ask 两类的中性化行为保持不变。 */}
-          {tool.outcome?.error && errCode !== "E_INTERRUPTED" && (
+          {tool.outcome?.error && errCode !== "E_INTERRUPTED" && (!compact || neutralErr) && (
             <div className={neutralErr ? "err err-neutral" : "err"}>
               {tool.outcome.error.code}: {tool.outcome.error.message}
             </div>

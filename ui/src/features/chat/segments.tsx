@@ -4,6 +4,10 @@ import { useTranslation } from "react-i18next";
 import { renderMarkdown } from "../../utils/markdown";
 import type { TimelineSeg, ToolView } from "../../stores/run";
 import ToolCallCard from "../tools/ToolCallCard";
+import type { ToolExpansion } from "../tools/ToolCallCard";
+import ToolActivityGroup from "../tools/ToolActivityGroup";
+import { canGroupTool } from "../tools/toolPresentation";
+import { useUi } from "../../stores/ui";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 
 // markdown 渲染缓存：定稿的历史消息在流式期间不重复解析（容量上限防止长会话无限增长）
@@ -129,16 +133,18 @@ function TypewriterText({
   text,
   active,
   diagramPending,
+  anchorKey,
 }: {
   text: string;
   active: boolean;
   diagramPending?: string;
+  anchorKey: string;
 }) {
   // active 由 true 翻 false 即收尾（定稿 / 用户中断）：此时按 FINISH_BUDGET_MS 快速追平后直出。
   const revealed = useTypewriter(text, active);
   const visible = sliceRevealed(text, revealed);
   const html = renderMarkdown(visible, diagramPending);
-  return <div className="md" data-streaming={active || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="md" data-output-key={anchorKey} data-streaming={active || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /**
@@ -302,11 +308,13 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   startedAt,
   durationMs,
   onToggle,
+  compact = false,
 }: {
   text: string;
   startedAt?: number;
   durationMs?: number;
   onToggle?: () => void;
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const active = durationMs === undefined && startedAt !== undefined; // 活跃中：尚未收尾且有开始时间
@@ -343,7 +351,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     <Collapse
       size="small"
       ghost
-      className="thinking-block"
+      className={compact ? "thinking-block thinking-compact" : "thinking-block"}
       onChange={(keys) => {
         const exp = Array.isArray(keys) ? keys.includes("1") : keys === "1";
         setExpanded(exp);
@@ -356,7 +364,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           label: (
             <span className="thinking-label">
               <span className="thinking-title">{label}</span>
-              {active && <ThinkingMarquee text={text} />}
+              {active && !compact && <ThinkingMarquee text={text} />}
             </span>
           ),
           children: (
@@ -396,6 +404,28 @@ export function TimelineSegsView({
   onConsumeAutoOpen?: (callKey: string) => void;
 }) {
   const { t } = useTranslation();
+  const display = useUi((s) => s.outputDisplay);
+  // callKey 所属时间线持有展开态，父结构/模式改变也不丢失正在阅读的详情。
+  const [expansions, setExpansions] = useState<Record<string, ToolExpansion>>({});
+  const updateExpansion = useCallback((callKey: string, expansion: ToolExpansion) => {
+    setExpansions((previous) => ({ ...previous, [callKey]: expansion }));
+  }, []);
+  const groups = new Map<number, ToolView[]>();
+  const grouped = new Set<number>();
+  if (display === "compact") {
+    for (let i = 0; i < timeline.length; i++) {
+      const first = i;
+      const tools: ToolView[] = [];
+      while (i < timeline.length) {
+        const seg = timeline[i];
+        const tool = seg.kind === "tool" ? toolsMap[seg.callKey] : undefined;
+        if (!canGroupTool(tool) || expansions[tool.callKey]?.expanded) break;
+        tools.push(tool);
+        grouped.add(i++);
+      }
+      if (tools.length) { groups.set(first, tools); i--; }
+    }
+  }
   // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
   let tailIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
@@ -409,8 +439,11 @@ export function TimelineSegsView({
   return (
     <>
       {timeline.map((seg, i) => {
+        const group = groups.get(i);
+        if (group) return <ToolActivityGroup key={`group:${group[0].callKey}`} tools={group} onToggle={onUserToggle} onExpansionChange={updateExpansion} />;
+        if (grouped.has(i)) return null;
         if (seg.kind === "thinking") {
-          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} />;
+          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} />;
         }
         if (seg.kind === "tool") {
           const tool = toolsMap[seg.callKey];
@@ -431,6 +464,9 @@ export function TimelineSegsView({
             <ToolCallCard
               key={seg.callKey}
               tool={tool}
+              display={display}
+              expansion={expansions[tool.callKey]}
+              onExpansionChange={updateExpansion}
               onToggle={onUserToggle}
               autoOpenCallKey={autoOpenCallKey}
               onConsumeAutoOpen={onConsumeAutoOpen}
@@ -455,12 +491,13 @@ export function TimelineSegsView({
               text={text}
               active={streaming}
               diagramPending={diagramPending}
+              anchorKey={`text:${i}`}
             />
           );
         }
         const html = renderCached(text, diagramPending);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
-        return <div key={i} className="md" data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
+        return <div key={i} className="md" data-output-key={`text:${i}`} data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}
     </>
   );

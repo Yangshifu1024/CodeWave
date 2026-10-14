@@ -62,6 +62,10 @@ export default {
   // scans the settings.* prefix, so only after the move are these keys guarded by the contract test.
   // See [docs/settings-guide](../../../docs/settings-guide.md)
   tools: {
+    outputDisplay: "Output display", displayCompact: "Concise", displayDetailed: "Detailed",
+    compactRead: "Read", compactEdit: "Edited", compactCreate: "Created", compactCommand: "Ran", compactSearch: "Searched",
+    groupRead: "Read {{n}} files", groupReadUnknown: "Read files", groupCommand: "Ran {{n}} commands",
+    groupSearch: "Searched {{n}} times", groupList: "Listed directories {{n}} times",
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
     command: "Command", grep: "Search", ask: "Ask", web_fetch: "Web fetch", http_request: "HTTP request",
     service: "Service", wait: "Wait", suggest: "Suggest", plan: "Plan", batch_read: "Batch read",
@@ -111,6 +115,7 @@ export default {
     fullAccessRiskSep: " — ",
   },
   settings: {
+    outputDisplay: "Output display", outputDisplayHint: "Concise: expandable, single-line tool summaries. Detailed: existing tool cards. Applies immediately and is remembered globally. Reply text stays unchanged.",
     title: "Settings",
     // 10 pages ([docs/settings-guide](../../../docs/settings-guide.md)): page-name keys + the three nav group titles.
     // Retired page-name keys (general / appearance / security / network) and settings.accent are gone (zero references);
