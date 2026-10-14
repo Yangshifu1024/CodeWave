@@ -1,5 +1,5 @@
 import { fontSizeCss } from "../../utils/fonts";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Divider, Image, Tooltip } from "antd";
 import {
   CheckOutlined,
@@ -36,8 +36,14 @@ import { getScrollAnchor, scheduleAnchor, setScrollAnchor } from "../../utils/ui
 import SubagentItemCard from "../subagent/SubagentItemCard";
 import { TimelineSegsView } from "./segments";
 import ChatScrollbar from "./ChatScrollbar";
-import OutputDisplaySelect from "../tools/OutputDisplaySelect";
 import { captureOutputAnchor, restoreOutputAnchor, type OutputAnchor } from "../../utils/outputAnchor";
+import { compactTranscript } from "./compactTranscript";
+import type { ToolOrigin } from "../tools/toolPresentation";
+import type { ToolExpansion } from "../tools/ToolCallCard";
+
+type ExpansionState = Record<string, Record<string, ToolExpansion>>;
+type GroupExpansionState = Record<string, Record<string, boolean>>;
+const expansionScope = (sessionKey: string | null, messageKey: string) => JSON.stringify([sessionKey, messageKey]);
 
 // 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 缺陷修复）
 function ts(iso: string | undefined): string {
@@ -141,6 +147,13 @@ const AssistantMessage = memo(function AssistantMessage({
   anchorSig,
   autoOpenCallKey,
   onConsumeAutoOpen,
+  compact,
+  origins,
+  expansionState,
+  groupExpansionState,
+  sessionKey,
+  onToolExpansionChange,
+  onGroupExpansionChange,
 }: {
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
@@ -149,12 +162,58 @@ const AssistantMessage = memo(function AssistantMessage({
   autoOpenCallKey?: string | null;
   /** 卡片已消费该信号后回抛（清 store，保证一次性、不重放） */
   onConsumeAutoOpen?: (callKey: string) => void;
+  compact: boolean;
+  origins?: Record<string, ToolOrigin>;
+  expansionState: ExpansionState;
+  groupExpansionState: GroupExpansionState;
+  sessionKey: string | null;
+  onToolExpansionChange: (messageKey: string, callKey: string, expansion: ToolExpansion) => void;
+  onGroupExpansionChange: (messageKey: string, callKey: string, expanded: boolean) => void;
 } & AnchorAttrs) {
+  const toolExpansions = useMemo(() => {
+    const out: Record<string, ToolExpansion> = {};
+    for (const callKey of Object.keys(item.toolsMap)) {
+      const owner = origins?.[callKey]?.key ?? anchorKey;
+      const value = expansionState[expansionScope(sessionKey, owner)]?.[callKey];
+      if (value) out[callKey] = value;
+    }
+    return out;
+  }, [item.toolsMap, origins, anchorKey, expansionState, sessionKey]);
+  const updateToolExpansion = useCallback((callKey: string, expansion: ToolExpansion) => {
+    onToolExpansionChange(origins?.[callKey]?.key ?? anchorKey, callKey, expansion);
+  }, [origins, anchorKey, onToolExpansionChange]);
+  const groupExpansions = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const callKey of Object.keys(item.toolsMap)) {
+      const owner = origins?.[callKey]?.key ?? anchorKey;
+      out[callKey] = !!groupExpansionState[expansionScope(sessionKey, owner)]?.[callKey];
+    }
+    return out;
+  }, [item.toolsMap, origins, anchorKey, groupExpansionState, sessionKey]);
+  const updateGroupExpansion = useCallback((callKey: string, expanded: boolean) => {
+    onGroupExpansionChange(origins?.[callKey]?.key ?? anchorKey, callKey, expanded);
+  }, [origins, anchorKey, onGroupExpansionChange]);
+  let tailIndex = item.timeline.length - 1;
+  while (tailIndex >= 0) {
+    const segment = item.timeline[tailIndex];
+    if (segment.kind === "text" && !segment.text.trim()) { tailIndex--; continue; }
+    if (segment.kind === "tool") {
+      const tool = item.toolsMap[segment.callKey];
+      // Match TimelineSegsView's missing-tool and successful-subagent filtering.
+      if (!tool || (tool.tool === "subagent" && tool.status !== "error")) { tailIndex--; continue; }
+    }
+    break;
+  }
+  const tail = item.timeline[tailIndex];
+  const processTail = compact && (tail?.kind === "tool" || tail?.kind === "thinking");
+  const processOnly = processTail
+    && item.timeline.every(seg => seg.kind === "tool" || seg.kind === "thinking" || (seg.kind === "text" && !seg.text.trim()));
+  const fullTime = ts(item.createdAt);
   return (
-    <div className="msg assistant" data-key={anchorKey} data-sig={anchorSig}>
+    <div className={`msg assistant${processOnly ? " process-only" : ""}${processTail ? " process-tail" : ""}`} data-key={anchorKey} data-sig={anchorSig}>
       <div className="role">
-        <span>CodeWave</span>
-        <span className="ts">{ts(item.createdAt)}</span>
+        <span className="role-name">CodeWave</span>
+        <span className="ts" title={fullTime}>{compact ? (processOnly ? fullTime.slice(-8) : fullTime.slice(-8, -3)) : fullTime}</span>
       </div>
       {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagents 抽取至 segments.tsx） */}
       <TimelineSegsView
@@ -164,6 +223,11 @@ const AssistantMessage = memo(function AssistantMessage({
         onUserToggle={onUserToggle}
         autoOpenCallKey={autoOpenCallKey}
         onConsumeAutoOpen={onConsumeAutoOpen}
+        toolOrigins={origins}
+        toolExpansions={toolExpansions}
+        onToolExpansionChange={updateToolExpansion}
+        groupExpansions={groupExpansions}
+        onGroupExpansionChange={updateGroupExpansion}
       />
       {/* 等待指示（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：antd 加载图标，
           样式类承载颜色/字号（theme/app.css 的 .ws-streaming-indicator）；位置仍在末尾、状态判定不变 */}
@@ -208,6 +272,8 @@ export default function ChatMessages() {
   const { t } = useTranslation();
   const active = useActiveRun();
   const outputDisplay = useUi((s) => s.outputDisplay);
+  const [toolExpansions, setToolExpansions] = useState<ExpansionState>({});
+  const [groupExpansions, setGroupExpansions] = useState<GroupExpansionState>({});
   const displayAnchor = useRef<{ sessionId: string | null; anchor: OutputAnchor } | null>(null);
   const hasSession = useSessions((s) => !!s.activeKey);
   const scroller = useRef<HTMLDivElement>(null);
@@ -523,13 +589,27 @@ export default function ChatMessages() {
   /** 压缩边界分隔线的落点（批2 P2）：由稳定键的段号现算（见 boundaryAtIndexes）——
    *  前翻把更早段插到头部后位置自然跟随，store 侧不存任何下标。 */
   const boundaryAt = boundaryAtIndexes(keys, active.boundaries);
+  const protectedKeys = new Set(keys.filter(key => Object.values(toolExpansions[expansionScope(activeKey, key)] ?? {}).some(expansion => expansion.expanded)));
+  // Keep an opened group's root stable when earlier history is prepended.
+  const groupRoots = new Set(keys.filter(key => Object.values(groupExpansions[expansionScope(activeKey, key)] ?? {}).some(Boolean)));
+  const entries = outputDisplay === "compact"
+    ? compactTranscript(active.items, keys, boundaryAt, protectedKeys, groupRoots)
+    : active.items.map((item, index) => ({ item, index, key: keys[index], members: [] }));
+  const updateToolExpansion = useCallback((messageKey: string, callKey: string, expansion: ToolExpansion) => {
+    const scope = expansionScope(activeKey, messageKey);
+    setToolExpansions(previous => ({ ...previous, [scope]: { ...previous[scope], [callKey]: expansion } }));
+  }, [activeKey]);
+  const updateGroupExpansion = useCallback((messageKey: string, callKey: string, expanded: boolean) => {
+    const scope = expansionScope(activeKey, messageKey);
+    setGroupExpansions(previous => ({ ...previous, [scope]: { ...previous[scope], [callKey]: expanded } }));
+  }, [activeKey]);
 
   /** 渲染一条转录项。`itemKey` = 稳定键（AC-14）：既作 React key，也打给 DOM 供滚动锚点定位——
    *  用数组下标作 key 时，分页前插会让所有节点错位（同一条消息被重挂、局部状态丢失）。 */
-  const renderItem = (item: UiItem, itemKey: string) => {
+  const renderItem = (item: UiItem, itemKey: string, origins?: Record<string, ToolOrigin>, originalItem: UiItem = item) => {
     // 锚点定位依据：scrollAnchor.collectNodes 按 data-key（主）+ data-sig（指纹兜底）收集；
     // 两者都是字符串，memo 组件按值比较不受影响（不传对象，避免身份每次变化击穿 memo）。
-    const anchorSig = itemSig(item);
+    const anchorSig = itemSig(originalItem);
     if (item.kind === "user") {
       return (
         <UserMessage
@@ -553,6 +633,13 @@ export default function ChatMessages() {
           anchorSig={anchorSig}
           autoOpenCallKey={autoOpenCallKey}
           onConsumeAutoOpen={consumeAutoOpen}
+          compact={outputDisplay === "compact"}
+          origins={origins}
+          expansionState={toolExpansions}
+          groupExpansionState={groupExpansions}
+          sessionKey={activeKey}
+          onToolExpansionChange={updateToolExpansion}
+          onGroupExpansionChange={updateGroupExpansion}
         />
       );
     }
@@ -621,7 +708,6 @@ export default function ChatMessages() {
 
   return (
     <div className="chat-body" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
-      {hasSession && <div className="chat-display-toolbar"><OutputDisplaySelect showLabel /></div>}
       <div ref={scroller} className="chat-messages" onScroll={onScroll} onWheel={onWheel}>
         {/* 自定义 overlay 滚动条：仿 MiniMax Code / Slack 范式，native 滚动条已隐藏（见 app.css） */}
         <ChatScrollbar target={scroller} />
@@ -672,13 +758,13 @@ export default function ChatMessages() {
             )}
           </div>
         )}
-        {active.items.map((item, i) => (
+        {entries.map(entry => (
           // Fragment 只作分组（DOM 上不产生节点）：分隔线要与它那条消息同组，稳定键打在分组上
-          <Fragment key={keys[i]}>
-            {(boundaryAt.get(i) ?? []).map((b) => (
+          <Fragment key={entry.key}>
+            {(boundaryAt.get(entry.index) ?? []).map((b) => (
               <CompactionDivider key={`bd:${b.seq}:${b.source ?? "compact"}`} seq={b.seq} source={b.source} />
             ))}
-            {renderItem(item, keys[i])}
+            {renderItem(entry.item, entry.key, "origins" in entry ? entry.origins : undefined, entry.members[0]?.item ?? entry.item)}
           </Fragment>
         ))}
 

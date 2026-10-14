@@ -24,7 +24,7 @@ describe("真实 antd 主题桥", () => {
 
     rerender(<ConfigProvider><ThemeBridge /></ConfigProvider>);
     await waitFor(() => expect(style.getPropertyValue("--ws-bg-main")).toBe("#FFFFFF"));
-    expect(style.getPropertyValue("--ws-bg-nav")).toBe("#eef4f9");
+    expect(style.getPropertyValue("--ws-bg-nav")).toBe("#eef2f5");
     expect(style.getPropertyValue("--ws-text-1")).toBe(light.colorText);
     expect(style.getPropertyValue("--ws-code-block-text")).toBe("#1f2328");
   });

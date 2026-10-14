@@ -61,6 +61,9 @@ export default function App() {
         fontFamilyCode: "var(--ws-font-mono)",
         fontSize: fontSizeSans,
         colorPrimary: effectiveDark ? "#424242" : "#1f1f1f",
+        ...(effectiveDark ? {} : { colorBgLayout: "#f5f7f9" }),
+        borderRadius: 6,
+        borderRadiusLG: 12,
         // 聚焦外晕（controlOutline 2px 外圈）会在墨色边框外再画一圈浅灰，视觉上像双重描边；
         // 全局去掉后聚焦态收敛为单圈墨色边框（[docs/chat-and-interface](../../docs/chat-and-interface.md)）
         controlOutline: "transparent",

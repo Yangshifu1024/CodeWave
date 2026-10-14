@@ -636,7 +636,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
   "tools/ToolActivityGroup.tsx": ["tools."], // 已完成工具的展示摘要
-  "tools/OutputDisplaySelect.tsx": ["tools."], // 聊天和设置共用的展示选择器
+  "tools/OutputDisplaySelect.tsx": ["tools."], // 设置内的展示选择器
   "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   "workspace/ChangesModal.tsx": ["diff.", "rightbar."],
 };

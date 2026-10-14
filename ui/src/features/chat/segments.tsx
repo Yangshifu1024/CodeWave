@@ -6,7 +6,7 @@ import type { TimelineSeg, ToolView } from "../../stores/run";
 import ToolCallCard from "../tools/ToolCallCard";
 import type { ToolExpansion } from "../tools/ToolCallCard";
 import ToolActivityGroup from "../tools/ToolActivityGroup";
-import { canGroupTool } from "../tools/toolPresentation";
+import { canGroupTool, type ToolOrigin } from "../tools/toolPresentation";
 import { useUi } from "../../stores/ui";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 
@@ -19,7 +19,7 @@ export function renderCached(text: string, diagramPending?: string): string {
   const key = `${diagramPending ?? ""}\u0000${text}`;
   const hit = mdCache.get(key);
   if (hit !== undefined) return hit;
-  const html = renderMarkdown(text, diagramPending);
+  const html = renderMarkdown(text, diagramPending, { repairAssistantBlocks: true });
   if (mdCache.size >= MD_CACHE_MAX) {
     const first = mdCache.keys().next().value;
     if (first !== undefined) mdCache.delete(first);
@@ -143,7 +143,7 @@ function TypewriterText({
   // active 由 true 翻 false 即收尾（定稿 / 用户中断）：此时按 FINISH_BUDGET_MS 快速追平后直出。
   const revealed = useTypewriter(text, active);
   const visible = sliceRevealed(text, revealed);
-  const html = renderMarkdown(visible, diagramPending);
+  const html = renderMarkdown(visible, diagramPending, { repairAssistantBlocks: true });
   return <div className="md" data-output-key={anchorKey} data-streaming={active || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -309,15 +309,17 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   durationMs,
   onToggle,
   compact = false,
+  streaming = false,
 }: {
   text: string;
   startedAt?: number;
   durationMs?: number;
   onToggle?: () => void;
   compact?: boolean;
+  streaming?: boolean;
 }) {
   const { t } = useTranslation();
-  const active = durationMs === undefined && startedAt !== undefined; // 活跃中：尚未收尾且有开始时间
+  const active = streaming && durationMs === undefined && startedAt !== undefined;
   // 展开态 + 内部 tail-follow 开关（用户在思考体内上滚即暂停，回到底部恢复）
   const [expanded, setExpanded] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -340,13 +342,13 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     if (!el) return;
     tailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
   }
-  const elapsed = active && startedAt ? Date.now() - startedAt : durationMs ?? 0;
+  const elapsed = active && startedAt !== undefined ? Date.now() - startedAt : durationMs ?? 0;
   const secs = Math.max(1, Math.floor(elapsed / 1000));
   const secondsLabel = `${secs}s`;
 
-  const label = active
-    ? t("chat.thinkingActive", { seconds: secondsLabel })
-    : t("chat.thinkingDone", { seconds: secondsLabel });
+  const label = active ? t("chat.thinkingActive", { seconds: secondsLabel })
+    : durationMs !== undefined ? t("chat.thinkingDone", { seconds: secondsLabel })
+      : t("chat.thinking");
   return (
     <Collapse
       size="small"
@@ -388,6 +390,11 @@ export function TimelineSegsView({
   stripReport = false,
   autoOpenCallKey,
   onConsumeAutoOpen,
+  toolOrigins,
+  toolExpansions,
+  onToolExpansionChange,
+  groupExpansions,
+  onGroupExpansionChange,
 }: {
   timeline: TimelineSeg[];
   toolsMap: Record<string, ToolView>;
@@ -402,14 +409,21 @@ export function TimelineSegsView({
   autoOpenCallKey?: string | null;
   /** 卡片已消费该信号后回抛（清掉 store 里的信号，保证一次性、不重放） */
   onConsumeAutoOpen?: (callKey: string) => void;
+  toolOrigins?: Record<string, ToolOrigin>;
+  toolExpansions?: Record<string, ToolExpansion>;
+  onToolExpansionChange?: (callKey: string, expansion: ToolExpansion) => void;
+  groupExpansions?: Record<string, boolean>;
+  onGroupExpansionChange?: (callKey: string, expanded: boolean) => void;
 }) {
   const { t } = useTranslation();
   const display = useUi((s) => s.outputDisplay);
   // callKey 所属时间线持有展开态，父结构/模式改变也不丢失正在阅读的详情。
-  const [expansions, setExpansions] = useState<Record<string, ToolExpansion>>({});
+  const [localExpansions, setExpansions] = useState<Record<string, ToolExpansion>>({});
+  const expansions = toolExpansions ?? localExpansions;
   const updateExpansion = useCallback((callKey: string, expansion: ToolExpansion) => {
-    setExpansions((previous) => ({ ...previous, [callKey]: expansion }));
-  }, []);
+    if (onToolExpansionChange) onToolExpansionChange(callKey, expansion);
+    else setExpansions((previous) => ({ ...previous, [callKey]: expansion }));
+  }, [onToolExpansionChange]);
   const groups = new Map<number, ToolView[]>();
   const grouped = new Set<number>();
   if (display === "compact") {
@@ -418,6 +432,10 @@ export function TimelineSegsView({
       const tools: ToolView[] = [];
       while (i < timeline.length) {
         const seg = timeline[i];
+        if (seg.kind === "text" && !seg.text.trim() && tools.length > 0) {
+          grouped.add(i++);
+          continue;
+        }
         const tool = seg.kind === "tool" ? toolsMap[seg.callKey] : undefined;
         if (!canGroupTool(tool) || expansions[tool.callKey]?.expanded) break;
         tools.push(tool);
@@ -437,13 +455,13 @@ export function TimelineSegsView({
     }
   }
   return (
-    <>
+    <div className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
       {timeline.map((seg, i) => {
         const group = groups.get(i);
-        if (group) return <ToolActivityGroup key={`group:${group[0].callKey}`} tools={group} onToggle={onUserToggle} onExpansionChange={updateExpansion} />;
+        if (group) return <ToolActivityGroup key={`group:${group[0].callKey}`} tools={group} origins={toolOrigins} onToggle={onUserToggle} onExpansionChange={updateExpansion} expanded={groupExpansions ? !!groupExpansions[group[0].callKey] : undefined} onGroupExpansionChange={onGroupExpansionChange} />;
         if (grouped.has(i)) return null;
         if (seg.kind === "thinking") {
-          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} />;
+          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} />;
         }
         if (seg.kind === "tool") {
           const tool = toolsMap[seg.callKey];
@@ -464,6 +482,7 @@ export function TimelineSegsView({
             <ToolCallCard
               key={seg.callKey}
               tool={tool}
+              origin={toolOrigins?.[tool.callKey]}
               display={display}
               expansion={expansions[tool.callKey]}
               onExpansionChange={updateExpansion}
@@ -479,6 +498,7 @@ export function TimelineSegsView({
         // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由。
         // 注意：剥离必须在打字机切片**之前** —— 切片会把 <report> 切成两片，破坏剥离的完整性前提。
         const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
+        if (display === "compact" && !text.trim()) return null;
         // mermaid 占位提示的文案走 i18n（写死在 CSS / HTML 里的中文在英文界面会露馅）
         const diagramPending = t("chat.diagramPending");
         // 流式尾段走打字机（逐字揭示）；其余段（定稿 / 历史 / 中间段）完全走原 renderCached，一字不改。
@@ -499,6 +519,6 @@ export function TimelineSegsView({
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
         return <div key={i} className="md" data-output-key={`text:${i}`} data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}
-    </>
+    </div>
   );
 }

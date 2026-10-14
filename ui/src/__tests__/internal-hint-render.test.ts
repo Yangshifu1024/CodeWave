@@ -90,6 +90,30 @@ afterEach(() => {
 });
 
 describe("内部提示恢复：渲染为 notice 而非 user 气泡（§8.4）", () => {
+  it.each(["逐项确认模式", "自动编辑模式", "计划模式", "完全访问模式"])("restores exact runtime system instructions as notices: %s", mode => {
+    const messages = [
+      userMsg("实际用户请求"),
+      userMsg(`[system] 方案已获批准，会话已切换到${mode}。请立即按方案开始执行，无需再次询问。`),
+      userMsg(`[system] 权限模式已变更为 ${mode}`),
+    ];
+    const original = JSON.stringify(messages);
+    const items = restore(messages);
+    expect(kinds(items)).toEqual(["user", "notice", "notice"]);
+    expect(userTexts(items)).toEqual(["实际用户请求"]);
+    expect(JSON.stringify(messages)).toBe(original);
+  });
+
+  it("retains user quotations, unknown system-prefixed text and attached messages", () => {
+    const hint = "[system] 方案已获批准，会话已切换到自动编辑模式。请立即按方案开始执行，无需再次询问。";
+    const ordinary = ["[system] 这是用户输入的示例", `请解释这段提示：${hint}`, `${hint}\n这是什么意思？`, `\`${hint}\``];
+    expect(userTexts(restore(ordinary.map(userMsg)))).toEqual(ordinary);
+    const attached = userMsg(hint);
+    attached.content.push({ type: "image", media_type: "image/png", data: "test-base64" });
+    const items = restore([attached]);
+    expect(kinds(items)).toEqual(["user"]);
+    expect(items[0].kind === "user" && items[0].images).toEqual([{ mediaType: "image/png", data: "test-base64" }]);
+  });
+
   it("全部七个标签各自命中 → notice，且文案是 i18n 的通用说明（不泄漏 XML 原文）", () => {
     for (const body of HINT_BODIES) {
       const items = restore([userMsg(body)]);

@@ -59,19 +59,16 @@ describe("RightBar 项目目录·文件管理器按钮", () => {
     });
   });
 
-  it("临时会话：点击图标按钮派发 open_dir，目标为工作区 tab.workspace", async () => {
+  it("临时会话：不显示项目目录或文件管理器入口", async () => {
     seedTab(null);
     render(
       <AntApp>
         <RightBar />
       </AntApp>,
     );
-    const btn = await screen.findByRole("button", { name: "在文件管理器中打开" });
-    fireEvent.click(btn);
-    await waitFor(() => {
-      const call = invoked.find((c) => c.cmd === "open_dir");
-      expect(call).toBeTruthy();
-      expect(call!.args.path).toBe("/tmp/ws");
-    });
+    await screen.findByText("临时会话");
+    expect(screen.queryByRole("button", { name: "在文件管理器中打开" })).toBeNull();
+    expect(document.querySelector(".rb-path")).toBeNull();
+    expect(invoked.some(call => call.cmd === "open_dir")).toBe(false);
   });
 });

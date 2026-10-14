@@ -8,6 +8,7 @@ import { useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import type { PendingImage } from "./useComposerAttachments";
 import { recoverRefs } from "./composerRefs";
+import { isInternalHint } from "../../utils/internalHints";
 
 /** Composer 历史召回 hook：提供 ↑↓ 浏览态管理（histIdx + 草稿快照 draftRef）与
  *  召回序列/应用/退出三个动作；文本、引用与图片一起还原，退出未浏览过则只复位指针。 */
@@ -41,7 +42,10 @@ export function useComposerHistory(opts: {
     const items = useRun.getState().tabs[key]?.items ?? [];
     const hist: { text: string; images: { mediaType: string; data: string }[] }[] = [];
     for (const it of items) {
-      if (it.kind === "user") hist.push({ text: it.text, images: it.images ?? [] });
+      // Also protect already-loaded transcripts from older UI reconstruction.
+      if (it.kind === "user" && !isInternalHint(it.text, !!it.images?.length)) {
+        hist.push({ text: it.text, images: it.images ?? [] });
+      }
     }
     return hist;
   }

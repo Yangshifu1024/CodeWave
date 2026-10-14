@@ -2,7 +2,7 @@
 // 按钮恒显示通用编辑器图标（CodeOutlined）+ caret（CaretDownOutlined），不展示当前选中编辑器名称；
 // 点击展开 Dropdown 列出候选编辑器，单击即用该编辑器打开当前目录并记忆为新默认；
 // 一个编辑器都没检测到则不渲染控件（文件管理器按钮仍在）。
-// 顶部对齐修复后行为零变化（编辑器按钮挂在右栏，与标题栏无关）。
+// 临时会话不提供项目目录及编辑器入口。
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -28,7 +28,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   }),
 }));
 
-function seed() {
+function seed(projectId: string | null = "p1") {
   useSessions.setState({
     tabs: [
       {
@@ -36,13 +36,13 @@ function seed() {
         sessionId: "s1",
         workspace: "D:/demo/project",
         title: "编辑器按钮",
-        projectId: null,
+        projectId,
         createdAt: "2026-09-08T00:00:00Z",
         prefs: { approval_mode: "auto_edit", model_id: null, reasoning_effort: null },
       },
     ],
     activeKey: "s1",
-    projects: [],
+    projects: projectId ? [{ id: projectId, name: "demo", directory: "D:/demo/project", data_dir: null, created_at: "2026-09-08T00:00:00Z" }] : [],
   });
   useUi.setState({ rightBarOpen: true, rbTab: "info" });
 }
@@ -75,6 +75,15 @@ afterEach(() => {
 });
 
 describe("右栏「在编辑器中打开」按钮", () => {
+  it("临时会话即使检测到编辑器，也不显示打开目录入口", async () => {
+    seed(null);
+    renderBar();
+    await screen.findByText("临时会话");
+    expect(document.querySelector(".rb-editor-btn")).toBeNull();
+    expect(screen.queryByLabelText("在文件管理器中打开")).toBeNull();
+    expect(calls.some(call => call.cmd === "open_in_editor")).toBe(false);
+  });
+
   it("按钮恒显示通用编辑器图标 + caret（不含任何编辑器名），且不自动打开", async () => {
     seed();
     renderBar();

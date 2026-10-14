@@ -132,11 +132,11 @@ describe("service 卡片状态（running 权威，不再拿 tail 当存活代理
   it("点停止按钮不会顺带展开/收起卡片（按钮冒泡被截断）", () => {
     render(<ToolCallCard tool={serviceCard({ id: "svc-7", pid: 4242, running: true })} />);
     expand();
-    const chevron = () => document.querySelector(".tool-card .chev")?.textContent;
-    expect(chevron()).toBe("▾"); // 展开态
+    const body = () => document.querySelector(".tool-card .tool-body");
+    expect(body()).not.toBeNull();
 
     fireEvent.click(stopButton()!);
-    expect(chevron()).toBe("▾"); // 仍是展开态：点按钮不该把卡片折叠回去
+    expect(body()).not.toBeNull(); // Stopping the service must not collapse its details.
   });
 
   it("running 缺失（未知态）：停止按钮仍可见——防僵尸服务无收手入口", () => {

@@ -178,10 +178,23 @@ export function pickTarget(nodes: AnchorNode[], anchor: ScrollAnchor): AnchorNod
 export function collectNodes(el: HTMLElement): AnchorNode[] {
   const base = el.getBoundingClientRect().top - el.scrollTop;
   const out: AnchorNode[] = [];
-  for (const node of Array.from(el.querySelectorAll<HTMLElement>("[data-key]"))) {
+  const seen = new Set<string>();
+  for (const node of Array.from(el.querySelectorAll<HTMLElement>("[data-key], [data-anchor-aliases]"))) {
+    if (node.closest("[hidden]")) continue;
     // top 相对「滚动内容顶部」：元素视口位置 - 容器视口位置 + 当前滚动量
     const top = node.getBoundingClientRect().top - base;
-    out.push({ key: node.dataset.key ?? "", sig: node.dataset.sig ?? "", top });
+    if (node.dataset.key && !seen.has(node.dataset.key)) {
+      out.push({ key: node.dataset.key, sig: node.dataset.sig ?? "", top });
+      seen.add(node.dataset.key);
+    }
+    try {
+      const aliases: unknown = JSON.parse(node.dataset.anchorAliases ?? "[]");
+      if (Array.isArray(aliases)) for (const alias of aliases) {
+        if (!alias || typeof alias.key !== "string" || typeof alias.sig !== "string" || seen.has(alias.key)) continue;
+        out.push({ key: alias.key, sig: alias.sig, top });
+        seen.add(alias.key);
+      }
+    } catch { /* A malformed display alias never affects the original anchor. */ }
   }
   return out;
 }

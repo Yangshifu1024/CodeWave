@@ -430,7 +430,7 @@ describe("App 渲染冒烟", () => {
     await waitFor(() => expect(screen.getByText("冒烟会话")).toBeTruthy());
     // fixture session has no project_id → grouped under temp sessions
     expect(document.body.textContent).toContain("临时会话");
-    expect(document.body.textContent).toContain("还没有任务");
+    expect(document.body.textContent).toContain("暂无任务");
   });
 
   it("侧栏折叠（docs/chat-and-interface + docs/chat-and-interface 开合入口收口到标题栏 Logo；docs/chat-and-interface 左栏折叠 0 宽完全隐藏 + 右栏裁切折叠动画）：仅顶栏按钮开合，localStorage 记忆", async () => {

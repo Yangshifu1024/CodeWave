@@ -12,8 +12,9 @@
 - 顶栏左段是与左栏同宽同色的背景带；右段承载 Logo 左栏开关、当前会话标题、目录与分支胶囊、右栏开关。目录胶囊显示工作目录 basename，悬停显示完整路径；临时会话显示对应标记；分支胶囊只读。旧的会话历史前进/后退按钮、双栈和 `Alt+←/→` 已移除。
 - 设置、任务和运行总览打开时，标题反映覆盖页而非后台会话。设置页隐藏工作区两侧栏开关。工作区仍保持挂载，覆盖页的详情见各主题指南。
 - 左栏和右栏折叠宽度均为 **0**，没有窄轨。左栏保留 antd `Sider` 外壳和内容，右栏保留 Tabs 实例；以宽度过渡裁切，避免折叠时把布局从横向变成纵向或销毁面板状态。右栏隐藏同时关闭其 Portal 查看弹框，防止弹框逃出隐藏外壳。
-- 右栏顶部使用 antd Segmented 圆角分段导航，顺序固定为「信息 / 日志 / 文件」，默认「信息」，切换保留挂载的 Tabs 内容。「变更」只保留信息概览中的入口，打开宽弹窗，关闭后回到之前的视图；`showChanges()` / `rbTab="changes"` 的现有外部调用仍有效。栏底使用 antd 布局色，内容由 antd Card 承载大圆角与轻阴影；大圆角只作用于 Card，折叠区为零圆角的直线分隔。信息页顶部显示项目名、主目录及文件管理器/编辑器入口，下方为变更、当前会话子代理、会话文件摘要；计划、额度与余额、技能为可折叠区。技能和计划保留原展开偏好，新增额度区默认展开并记忆折叠状态；计划仅在有 todo 时出现。数据目录入口仍在设置「关于」。
+- 右栏顶部使用 antd Segmented 分段导航，顺序固定为「信息 / 日志 / 文件」，默认「信息」，切换保留挂载的 Tabs 内容。「变更」只保留信息概览中的入口，打开宽弹窗，关闭后回到之前的视图；`showChanges()` / `rbTab="changes"` 的现有外部调用仍有效。栏底使用 antd 布局色，内容由 antd Card 承载 12px 圆角与边框，卡片内边距 16px；折叠区为零圆角的直线分隔，展开箭头放在标题前，与聊天工具和思考入口一致。信息页顶部显示项目名、主目录及文件管理器/编辑器入口，下方为变更、当前会话子代理、会话文件摘要；计划、额度与余额、技能为可折叠区。技能和计划保留原展开偏好，额度区默认展开并记忆折叠状态；计划仅在有 todo 时出现。技能名占可收缩的主列，来源在固定宽度槽位对齐；悬停保留完整技能名、说明及来源路径。数据目录入口仍在设置「关于」。
 - 变更摘要与 [ChangesModal](../ui/src/features/workspace/ChangesModal.tsx) 共用 [useWorkspaceChanges](../ui/src/features/workspace/useWorkspaceChanges.ts) 的同一份 `git_diff` 结果；只有右栏展开且位于信息或请求查看变更时才读取，信息→弹窗不重复查询。进入/切会话及手动刷新会查询，不增加持续轮询；请求单飞，隐藏、换会话或卸载后的迟到响应被丢弃。初次加载与失败不显示虚构的 `+0/−0`，同会话刷新失败保留上次成功结果并明确报错，切换会话同步屏蔽旧摘要。
+- 临时会话以 `Tab.projectId` 缺失判定，信息页隐藏「项目目录」标签、路径及文件管理器 / 编辑器目录入口，保留临时会话身份与说明；不能把全局工作区当作项目目录展示。切回项目会话恢复目录区域，其余右栏功能不受影响。
 - 变更弹窗宽度为 `min(1200px, 视口宽度−48px)`，左侧按根目录分组选择文件，右侧只渲染选中文件的完整文本 diff；长行保留原始换行并支持横向滚动，文件列表与 diff 各自有界滚动。空变更、无会话、没有文本 patch、加载、失败与后端 `truncated` 标记分别显示对应状态，不把没有文本 patch 伪装成无变更。关闭后同会话保留文件选择；换会话清空选择并关闭弹窗，隐藏右栏也关闭弹窗且不在重开时复活。原来的窄栏全量 diff 展示已移除。
 - 子代理摘要仅消费当前 Tab 的 `subs`，不另拉跨会话运行总览。点击条目调用原 `openSubDrawer(sessionId, subId)`；`partial` 单独标记需注意，`budget/no_report` 与 error 标为异常结束，不能混入正常完成数。error 桶仍包含现有聊天态未区分的失败/停止，详见[子代理](./subagents.md#ended-四象限)。会话文件摘要与文件页签共用产物边车列表，显示最近三项及查看全部入口；原地引用附件不属于该列表，不新增上传/来源管理。删除项不可预览，文件页签的文档回退入口保留；文件与技能查看弹层均绑定打开时的会话，并随换会话/隐藏右栏关闭，打开变更弹窗时关闭其他右栏查看弹层。
 - git 身份是本地只读配置读取，仓库配置优先、失败回退全局配置；头像由邮箱/名字本地生成，不请求远程头像服务。不要把该入口扩展成隐式 git 写操作。
@@ -28,7 +29,7 @@
 
 主题有「跟随系统 / 亮色 / 暗色」三档，偏好同步读 localStorage；`App.tsx` 的 `effectiveDark` 是 antd 算法、前景 token 和根元素 `dark` class 的统一来源。应用 chrome 的主色保持中性墨色：亮 `#1f1f1f`、暗 `#424242`；`--ws-accent` 取 **`colorPrimaryText`**，适用于文字、图标、边框和流光，不能直接当作暗色白字按钮的背景。
 
-当前亮色导航底是 `#eef4f9`，主内容底是 `#FFFFFF`；右栏底消费布局 token `--ws-bg`，卡片背景由 antd 容器 token 管理，亮暗随同一主题算法变化。不要复用旧报告中的 `#ececee`、`#f8f8f8`。亮度判定集中在 [colors.ts](../ui/src/theme/colors.ts)，必须同时接受 `#000`/`#fff` 与六位 hex；主题桥、代码高亮和 HTML 预览须同判据，避免暗色文字配亮色背景。
+当前亮色导航底是 `#eef2f5`，主内容底是 `#FFFFFF`；右栏底消费布局 token `--ws-bg`（亮色 `#f5f7f9`），卡片背景由 antd 容器 token 管理，暗色随同一主题算法变化。不要复用旧报告中的 `#ececee`、`#f8f8f8`。通用控件 / 导航选中态使用 6px 圆角，卡片与 Composer 使用 12px；自定义容器通过主题桥的 `--ws-radius` / `--ws-radius-lg` / `--ws-shadow` 消费 antd token。亮度判定集中在 [colors.ts](../ui/src/theme/colors.ts)，必须同时接受 `#000`/`#fff` 与六位 hex；主题桥、代码高亮和 HTML 预览须同判据，避免暗色文字配亮色背景。
 
 - 字体分为界面、内容、代码三槽，分别消费 `--ws-font-sans` / `--ws-font-content` / `--ws-font-mono`；antd 的 `fontFamily` / `token.fontSize` 跟随界面槽，`fontFamilyCode` 接代码槽。用户字体名经过清洗，再与各自默认回退链组合。字号默认 **14 / 14 / 12px**；antd 6 的 `font-size: 0` 容器问题见下节，保存与失败边界见[设置指南](./settings-guide.md)。
 - 控件由 antd 6 接管；自定义样式消费主题桥的 `--ws-*`，不要重新引入默认蓝主色或多套调色板。菜单选中底使用中性半透明填充，悬停选中再加深；`controlOutline: transparent` 去除输入控件双重外晕，聚焦仍以边框等既有反馈表示。
@@ -76,8 +77,10 @@ chip/图片不在 textarea 文本中，任何覆盖链路只调用 `setText` 都
 ### 2.2 快捷键和光标触发
 
 - `Enter` 发送，`Shift+Enter` 换行。运行中有正文或引用时提交入队；运行中空输入的按钮是「停止」。当前 `send()` 要求合成正文非空，因此**只有图片、没有正文或引用时不能发送**。
+- 输入框 placeholder 仅说明用途；`/` 技能、`@` 文件、`$` 子代理和发送 / 换行快捷说明常驻输入卡片下方，窄栏可换行。附件、权限菜单、子代理运行入口、上下文进度圈、速率、模型、力度以及发送 / 停止控件继续保留；模型仍显示真实名称，空间不足时省略且悬停保留供应商与完整名称。
 - `Shift+Tab` 只在输入框内循环：**计划 → 逐项确认 → 自动编辑 → 完全访问 → 计划**，与权限菜单顺序一致，菜单打开也可切换。走 `updatePrefs` 乐观更新及失败回滚。权限与运行中切档的安全语义见[计划与批准](./plan-and-approval.md)。
 - 纯文本空输入按 `↑` 进入已发送用户消息历史；浏览中 `↑/↓` 翻页，最旧处不环回，越过最新或 `Esc` 恢复进入前草稿。编辑召回内容会退出浏览，失焦不退出，避免点发送前文本被还原。
+- 召回与历史恢复共用 [internalHints.ts](../ui/src/utils/internalHints.ts) 判定内部提示：完整保留的提示标签、运行器逐字生成的 `[system]` 批准 / 权限切档消息不作为用户草稿召回；恢复时显示为 notice，已加载的旧 user 项也在召回入口过滤。只有纯文本的完整模板命中才过滤，普通 `[system]` 文本、引用提示的提问及带图用户消息保留；不删除落盘消息、不修改 provider 内容或权限状态。
 - 菜单打开时 `↑/↓` 导航、`Enter` 选中；`Tab` 选中目前只接在 `@` 和 `$` 菜单，不能笼统写三个菜单都支持 Tab。
 - IME 组合期优先放行，守卫包含 `isComposing`、`keyCode === 229`、composition 事件记录；特别防 WKWebView 的中文确认 Enter 被误当发送。
 
@@ -141,8 +144,10 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 - 思考默认收起，展开状态不持久化。运行中标题旁展示最新非空行：先左对齐停留、溢出才向左移动，只有真正换行才上翻，同行增量不重新翻页；减弱动效下静态显示。展开思考或工具卡视作阅读意图，暂停外层自动跟随。
 - 子代理 `<report>` 标记仅在子代理显示路径剥离，先合并/剥离再逐字切片；不能对主聊天所有正文全局清除，用户可能正在讨论该标记。
 - 用户气泡使用保守 Markdown：数学保留可见源串、mermaid 当代码显示；助手/计划/文件 Markdown 才进入图表与公式升级。外部链接统一经 `open_url` 打开系统浏览器，避免 WebView 的 `_blank` 无动作。
+- 聊天和子代理正文对「短纯文本标题粘连 `1. **条目标题**`，后面紧接相同编号标记的第 2 条有序列表」补上块间换行。修正基于 block tokens 确认后重解析，仅改变展示；原历史、provider 内容、用户消息和文件预览不改。代码围栏、缩进代码、引用示例、合法版本号和没有后续列表的歧义文本不推断修复，原始 HTML 仍关闭。回归：[markdown.repair.test.ts](../ui/src/__tests__/markdown.repair.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)。
 - 宽表由 Markdown renderer 实际生成 `.table-wrap`，CSS 赋横向滚动；测试必须同时守 DOM 与 CSS，不能只测试一段无人消费的样式。文件预览使用独立 `.viewer-md.md`，不能套聊天 `.assistant` 的裁切/行长约束；详见[文档指南](./documents.md)。
 - 围栏代码块由 renderer 的 `fence` 规则在完整 `<pre><code>` 外包一层 `.code-wrap`，复制按钮与唯一的 `pre` 同级；不能在 `highlight` 回调中返回以 `div` 开头的包装，否则 markdown-it 会再套一层 `pre/code`。mermaid/数学围栏直接生成独立占位块，不进入代码框；高亮与原文转义、复制载荷保持一致。
+- 代码块保留原生横向滚动与拖动；`.code-wrap > pre` / `.code-block` / `pre.hljs` 使用薄滚动条、透明轨道和主题滑块，悬停增强对比，WebKit 宽高为 6px。规则不覆盖主聊天 overlay 或思考正文的隐藏滚动条，也不修改长行、代码复制或 diff 的 `white-space: pre`。系统「始终显示滚动条」偏好与跨平台实际厚度、拖动行为仍需人工验收。
 - 聊天正文最大宽度 960px，窄窗口左右各留 24px；正文、Composer、审批区和消息队列共用 `--ws-chat-gutter` 保持对齐。段落与列表间距保留阅读停顿，紧凑列表也继承正文行高；行内代码用 antd 淡填充 token `--ws-code-bg`，代码框颜色使用主题桥的 `--ws-code-block-*`。这些样式不改变数据或分页语义。流式图表占位文案走 i18n，渲染缓存键包含语言相关提示文案。
 
 实现入口：[segments.tsx](../ui/src/features/chat/segments.tsx)、[markdown.ts](../ui/src/utils/markdown.ts)、[throttle.rs](../src-tauri/src/util/throttle.rs)、[dto.rs](../src-tauri/src/provider/dto.rs)。
@@ -150,6 +155,8 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 ### 4.3 时间、工具出参与文本 ask
 
 消息首次进入转录时才盖 `created_at` UTC RFC3339 时间，保存/重载不能为旧消息补当前时间。UI 显示本地时间；缺失或不可解析则留空。历史恢复不重播逐字动画。
+
+思考计时仅适用于当前仍在 streaming 的时间线尾段；已记录的 `durationMs` 保持定格，结束或恢复后不能继续增长。主会话与子代理历史重建使用 `appendDelta` 的 `restored` 分支，只合并文本、不写入 `startedAt` 或伪造 `durationMs`。当前历史 thinking 仅持久化文本，真实耗时无法从恢复时刻推算，故缺失耗时显示静态「思考过程」；遗留内存中的 `startedAt` 也不能绕过 streaming 判据。回归入口：[thinking.history.test.tsx](../ui/src/__tests__/thinking.history.test.tsx) 与 [run.interleave.test.ts](../ui/src/__tests__/run.interleave.test.ts)。
 
 历史模型侧工具文本可能已瘦身；无法解析的出参通过完整 `ToolOutcome` sidecar 批量回填。持久键是 **provider `tool_use.id`**，不是实时 `{batch}:{index}`。主工具卡、子代理卡及子代理过程流共用回填判据；内容不能写回模型历史或再次出网。子代理恢复卡从合成 key 改成真实 sub id 后才能继续打开过程流。存储、回填与删除细节见[会话与项目](./sessions-and-projects.md)。
 
@@ -177,14 +184,19 @@ read/batch_read/edit 一次批量调用本来就是一张卡。头部展示全�
 
 ### 5.2.x 简洁与详细展示
 
-聊天区顶部与设置「界面 → 输出展示」共用全局偏好 `ws_output_display`；默认「详细」，缺失/非法值也回落详细。切换即时生效并保存到 localStorage，不参与设置脏点，也不改回复正文、provider 请求、权限或历史。详细沿用原工具卡；简洁使用 antd 按钮承载中性单行摘要，长命令省略但完整内容可展开，运行中保留加载指示，思考默认收起且省去标题走马灯。
+「简洁 / 详细」仅在设置「界面 → 输出展示」提供切换入口，聊天区不另放控件；全局偏好为 `ws_output_display`，默认「详细」，缺失/非法值也回落详细。切换即时生效并保存到 localStorage，不参与设置脏点，也不改回复正文、provider 请求、权限或历史。详细沿用原工具卡；简洁使用 antd 按钮承载中性单行摘要，长命令省略但完整内容可展开，运行中保留加载指示，思考默认收起且省去标题走马灯。
 
-- 简洁只聚合相邻且无警告的成功 read/batch_read/grep/list_files，以及退出码明确为 0 的 command；不跨正文、思考、子代理、等待或错误边界。聚合仅在渲染层发生，不改变工具调用身份。打开详情的工具独立保留，展开态按 `callKey` 留在时间线，完成或来回切换模式不自动关闭。
+简洁模式中，仅含工具 / 思考与空白正文的助手记录将时间放在行尾，省去重复身份行；正常正文与混合记录保留身份。简洁正文时间显示时分、过程显示时分秒，完整日期时间保留在悬停提示，详细模式仍完整展示。落盘记录不合并、不删除；跨消息汇总为源消息的 `data-key` / `data-sig` 保留定位映射，展开态按原会话 / 消息 / 调用身份保存。缺失时间继续留空，不用当前时间补造。辅助时间与空状态使用次级文字色，正常可点击工具摘要保持可读，等待 / 失败仍使用原有语义色。
+
+简洁时间线用单一 flex 容器管理 4px 过程行间距；汇总、单工具和思考头部共用最小行高（至少 32px，随界面字号增长），不叠加各自的外边距。按钮的透明边框也计入行高，避免与无边框的思考头部相差 2px。混合消息的最后可见段若是工具 / 思考，也使用同一过程底距；过程后接正文消息仍保留阅读留白。空白正文只在展示层跳过，真实正文与代码缩进不 trim，过滤成功 subagent 工具或缺失工具时不把隐藏段误判为可见尾段；展开组的 `[hidden]` 不能被 flex 布局覆盖。详细展示、正文行高、消息身份与滚动锚点保持原语义。
+
+- 简洁只聚合相邻且无警告的成功 read/batch_read/grep/list_files，以及退出码明确为 0 的 command；允许从一条已结束助手消息的成功工具尾，延伸到下一条纯成功工具助手消息。空白正文不分隔可见工具；真实正文、思考、子代理、用户消息、通知、压缩分界、等待或错误仍分隔。运行中消息、含警告调用、重复调用 id 或正在阅读详情的消息不参与跨消息聚合。汇总按真实工具调用统计，不累加已有摘要文字；展开后保留顺序、完整命令、出参与每次调用所属消息的时间。聚合仅在渲染层发生，不改变工具调用身份。打开详情的工具独立保留，展开态按会话 / 原消息键 / `callKey` 留在界面，完成或来回切换模式不自动关闭。
 - edit/create 逐文件显示最短可区分后缀及完整路径提示。成功结果可增 `data.line_changes`（数组元素为 `path/added/removed`），由写锁内真实前后内容进行行级 diff；统计是本次操作的净变化，不是传入 patch 行数或相对 HEAD 的工作区变化。CRLF/LF 归一后统计，空文件没有虚构末行；create 的原件不可读或非 UTF-8 时省略统计，失败结果不附统计。旧历史缺统计就不显示数字，不新增迁移或摘要存档。
 - ask 题干与答案、等待审批、真实错误、警告及 widget 预览保持可见；用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好与工具结果回填。
-- 切换前捕获当前可见段/工具与所属消息，提交后恢复该段内阅读偏移；折叠工具组只以摘要行作锚点，打开组后各子卡仍有独立锚点。主聊天校验 session，过程抽屉校验 subId；原来贴底则继续贴底，上滚阅读则暂停跟随。
+- 切换前捕获当前可见段/工具与所属消息，提交后恢复该段内阅读偏移；折叠工具组只以摘要行作锚点，打开组后各子卡仍有独立锚点。组展开态按会话 / 原首消息键 / 首调用键保存；前翻不会把已打开组的根并入新增历史，保留展开态和阅读位置。单调用不设置组展开边界，关闭详情后仍可重新聚合。主聊天校验 session，过程抽屉校验 subId；原来贴底则继续贴底，上滚阅读则暂停跟随。
+- 汇总头与首子卡可能共用输出键，定位同时记录 summary / content 类型；恢复优先匹配同类型。子卡回落到汇总头时清零卡内偏移，避免深层偏移把视口落到后续消息。
 
-实现：[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。
+实现：[compactTranscript.ts](../ui/src/features/chat/compactTranscript.ts)、[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[compactTranscript.test.ts](../ui/src/__tests__/compactTranscript.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)、[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。
 
 ### 5.3 HTML 小组件
 

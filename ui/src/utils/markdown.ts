@@ -32,6 +32,32 @@ function createMd() {
       return `<pre class="hljs"><code>${md.utils.escapeHtml(code)}</code></pre>`;
     },
   });
+  // Repair only a confirmed heading/list collision in assistant output. Parsing first
+  // keeps fences, quoted examples and ordinary inline numbers out of this rule.
+  md.core.ruler.after("block", "assistant_heading_list", (state) => {
+    if (!state.env?.repairAssistantBlocks) return;
+    const lines = state.src.split("\n");
+    let repaired = false;
+    for (let i = 0; i + 3 < state.tokens.length; i++) {
+      const heading = state.tokens[i];
+      const list = state.tokens[i + 3];
+      if (heading.type !== "heading_open" || heading.level !== 0 || !heading.map
+        || list.type !== "ordered_list_open" || list.level !== 0 || String(list.attrGet("start")) !== "2" || !list.map) continue;
+      const line = heading.map[0];
+      if (!lines.slice(heading.map[1], list.map[0]).every(value => !value.trim())) continue;
+      // A short plain heading, a glued first item with a bold label, and a real
+      // following item 2 are required; do not guess from a number alone.
+      const match = /^( {0,3}#{1,6})[ \t]+([^`*_[\]\\\d\n]{1,60}?)1([.)])[ \t]+(\*\*[^*\n]+\*\*.*)$/.exec(lines[line]);
+      if (!match || !match[2].trim() || list.markup !== match[3]) continue;
+      lines[line] = `${match[1]} ${match[2].trimEnd()}\n\n1${match[3]} ${match[4]}`;
+      repaired = true;
+    }
+    if (repaired) {
+      state.src = lines.join("\n");
+      state.tokens = [];
+      state.md.block.parse(state.src, state.md, state.env, state.tokens);
+    }
+  });
   // highlight output must start with <pre> to suppress markdown-it's default pre/code wrapper.
   // Wrap the completed fence instead; diagram/math placeholders are standalone block elements.
   const defaultFence = md.renderer.rules.fence!;
@@ -191,9 +217,10 @@ export const md = createMd();
  * `diagramPending`：流式期间 mermaid 占位提示的文案（i18n 由调用方传入）。它写进占位符的
  * `data-pending`，由 app.css 的 ::after 取用（CSS 里写死中文会漏译，见版式审计）。
  * 不传 = 不写该属性（非流式调用与子代理汇报不需要它）。
+ * `repairAssistantBlocks` 仅由聊天/子代理正文开启；文件预览等保持严格的源文语义。
  */
-export function renderMarkdown(src: string, diagramPending?: string): string {
-  const html = md.render(src ?? "");
+export function renderMarkdown(src: string, diagramPending?: string, options?: { repairAssistantBlocks?: boolean }): string {
+  const html = md.render(src ?? "", { repairAssistantBlocks: !!options?.repairAssistantBlocks });
   if (!diagramPending) return html;
   const attr = md.utils.escapeHtml(diagramPending);
   return html.replace(/<div class="ws-diagram"/g, `<div class="ws-diagram" data-pending="${attr}"`);

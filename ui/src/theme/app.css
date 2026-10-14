@@ -6,6 +6,11 @@
   --ws-titlebar-h: 50px;
   /* Shared by transcript, Composer, approvals and queue; percentages resolve against the middle column. */
   --ws-chat-gutter: max(24px, calc((100% - 960px) / 2));
+  --ws-radius: 6px;
+  --ws-radius-lg: 12px;
+  --ws-shadow: none;
+  --ws-process-row-height: max(32px, calc(var(--ws-font-size-sans) * 1.6 + 10px));
+  --ws-process-row-gap: 4px;
   /* 全局高亮色：所有 hover / active / 选中态统一走此色。
      从左栏背景 --ws-bg-nav 派生「深一点点」的色（与 --ws-text-1 混 12%）。
      亮色模式下确实稍深；暗色模式下文字色翻浅、效果翻为「与底色反相更强」——同样达成高亮意图。
@@ -91,7 +96,7 @@ html[data-titlebar-mode="native"] .tb-left-seg.tb-left-closed { padding-left: 0;
 /* 胶囊（纯展示）：工作目录 / Git 分支 */
 .tb-pill {
   flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px;
-  padding: 0 10px; border-radius: 12px; background: var(--ws-bg-nav);
+  padding: 0 10px; border-radius: var(--ws-radius); background: var(--ws-bg-nav);
   border: 1px solid var(--ws-border); font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-1);
   max-width: 220px; overflow: hidden; white-space: nowrap;
 }
@@ -159,9 +164,23 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .chat-empty-guide .guide-title { font-size: calc(17px + var(--ws-font-size-sans-offset)); font-weight: 600; color: var(--ws-text-1); }
 .chat-empty-guide .guide-desc { font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); margin-bottom: 10px; }
 .chat-empty-guide .guide-actions { display: flex; gap: 12px; }
-.msg { margin-bottom: 14px; min-width: 0; }
-.msg .role { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); margin-bottom: 3px; display: flex; gap: 8px; align-items: baseline; }
-.msg .role .ts { font-size: calc(10.5px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); opacity: 0.75; letter-spacing: 0.02em; }
+.msg { margin-bottom: 20px; min-width: 0; }
+.msg .role { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.msg .role .role-name { color: var(--ws-text-1); font-weight: 500; }
+.msg .role .ts { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); font-variant-numeric: tabular-nums; }
+/* Keep each transcript anchor; process-only items use an inline time slot. */
+.msg.assistant.process-only { position: relative; padding-right: calc(76px + var(--ws-font-size-sans-offset) * 5); margin-bottom: var(--ws-process-row-gap); }
+.msg.assistant.process-only > .role { position: absolute; right: 0; top: 0; min-height: var(--ws-process-row-height); align-items: center; margin-bottom: 0; }
+.msg.assistant.process-only .role-name { display: none; }
+.msg.assistant.process-tail { margin-bottom: var(--ws-process-row-gap); }
+.msg.assistant.process-tail + .msg.assistant:not(.process-only) { margin-top: 16px; }
+.timeline-segs { min-width: 0; }
+.timeline-compact { display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
+.timeline-compact > .md { margin: 8px 0; }
+.timeline-compact > .md:first-child { margin-top: 0; }
+.timeline-compact > .md:last-child { margin-bottom: 0; }
+.timeline-compact > .md > :first-child { margin-top: 0; }
+.timeline-compact > .md > :last-child { margin-bottom: 0; }
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .msg.user .role { text-align: right; justify-content: flex-end; }
 .user-bubble {
@@ -249,6 +268,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) code { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); color: inherit; }
 .code-block.viewer-text { font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); }
+/* Keep native scrolling and dragging while reducing the persistent track. */
+:is(.code-wrap > pre, .code-block, pre.hljs) { scrollbar-width: thin; scrollbar-color: var(--ws-border) transparent; }
+:is(.code-wrap > pre, .code-block, pre.hljs):hover { scrollbar-color: var(--ws-dim) transparent; }
+:is(.code-wrap > pre, .code-block, pre.hljs)::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+:is(.code-wrap > pre, .code-block, pre.hljs)::-webkit-scrollbar-track,
+:is(.code-wrap > pre, .code-block, pre.hljs)::-webkit-scrollbar-corner { background: transparent; }
+:is(.code-wrap > pre, .code-block, pre.hljs)::-webkit-scrollbar-thumb { background: var(--ws-border); border-radius: 3px; }
+:is(.code-wrap > pre, .code-block, pre.hljs):hover::-webkit-scrollbar-thumb { background: var(--ws-dim); }
 /* Subtle antd fill distinguishes inline code without fragmenting a paragraph. */
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) :not(pre) > code { background: var(--ws-code-bg); padding: 0 3px; border-radius: 3px; color: var(--ws-text-1); }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre .hljs-comment { color: var(--ws-hl-comment); }
@@ -312,13 +339,15 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 思考块：antd Collapse ghost 面板（默认收起）；样式微调仍走 token */
 .thinking-block.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
-  padding: 2px 0; font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-dim);
+  padding: 5px 0; font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2);
   /* 2.8 修复：antd header 默认 flex align-center 且不限宽，nowrap 内容会撑爆容器 → 强制收窄 */
   display: flex !important; align-items: center; min-width: 0; max-width: 100%; overflow: hidden;
 }
-.thinking-block .ant-collapse-header-text { flex: 1; min-width: 0; overflow: hidden; display: flex; }
+.thinking-block .ant-collapse-title { flex: 1; min-width: 0; overflow: hidden; display: flex; }
+.thinking-compact.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header { min-height: var(--ws-process-row-height); font-size: var(--ws-font-size-sans); line-height: 1.6; padding: 5px 0; }
+.thinking-compact .ant-collapse-expand-icon { font-size: 11px; padding-inline-end: 8px; }
 .thinking-block .thinking-body {
-  font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); color: var(--ws-dim); white-space: pre-wrap; word-break: break-word;
+  font-family: var(--ws-font-content); font-size: var(--ws-font-size-content); color: var(--ws-text-2); white-space: pre-wrap; word-break: break-word;
   border-left: 2px solid var(--ws-border); padding: 2px 8px;
   max-height: 240px; overflow-y: auto;
   /* 隐藏内层滚动条：展开时「live tailing」自动跟随最新内容（上滚回看；回到底部恢复 tailing） */
@@ -374,7 +403,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   font-size: 0.9em; line-height: 1;
   width: 1em; height: 1em; flex: none;
 }
-/* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef4f9 / 暗色 antd 容器色）。
+/* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef2f5 / 暗色 antd 容器色）。
    列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/chat-and-interface]）。
    容器与列表项交换色：色块是上下文（建议区）= 工具调用同款面板色；卡片是单项可点元素 = 左栏背景色（前景）。 */
 .chips { display: flex; flex-direction: column; gap: 0; margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--ws-panel); }
@@ -433,12 +462,15 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer .composer-card {
   position: relative; /* BorderBeam 层的定位上下文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)） */
   flex: 1; min-width: 0;
-  border: 1px solid var(--ws-border); border-radius: 14px;
+  border: 1px solid var(--ws-border); border-radius: var(--ws-radius-lg);
   background: var(--ws-panel);
   padding: 6px 10px 4px;
   /* 阴影：与面板色配合的极淡阴影——给输入框视觉重量，不抢焦点（BorderBeam 是聚焦时的反馈） */
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--ws-shadow);
 }
+.composer-hints { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin: 0 var(--ws-chat-gutter) 10px; font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
+.composer-trigger-hints { display: flex; flex-wrap: wrap; gap: 10px; }
+.composer-hints kbd { font-family: var(--ws-font-sans); padding: 0 3px; border-radius: 3px; background: var(--ws-code-bg); }
 /* 输入框自身无边框（含 focus/hover 态）：浏览器 UA 的 focus outline 不受 antd borderless 管辖，
    必须显式压制；聚焦反馈由流光边框承担（[docs/chat-and-interface](../../../docs/chat-and-interface.md)：原 :focus-within 强调色边框取消，
    流光仅在输入框聚焦或任务进行中时出现；BorderBeam 恒挂载、经 className 显隐） */
@@ -481,13 +513,17 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .composer-card[data-narrow="narrow"] .tb-model-provider { display: none; }
 .composer-card[data-narrow="narrow"] .tb-mode-text,
 .composer-card[data-narrow="narrow"] .tb-effort-text { display: none; }
-.composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; }
-.composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.composer-toolbar .toolbar-left { display: flex; align-items: center; gap: 2px; flex: none; }
+.composer-toolbar .toolbar-right { display: flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0; flex: 1; justify-content: flex-end; }
+.composer-toolbar .tb-model-select { min-width: 0; flex: 0 1 auto; }
+.composer-toolbar .tb-effort-select, .composer-toolbar .ctx-progress-wrap, .composer-toolbar .send-btn { flex: none; }
+.composer-toolbar .tb-chev { font-size: 10px; flex: none; }
 .composer-toolbar .ant-btn-text { color: var(--ws-text-2); padding-inline: 8px; }
 .composer-toolbar .ant-btn-text:hover { color: var(--ws-text-1) !important; background: var(--ws-highlight) !important; }
 .composer-toolbar .tb-label {
   /* 完整展示模型名（不限宽）；省略号只是窄窗口空间不足时的兜底，按钮 title 中有全名 */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
   margin: 0 2px 0 6px; font-size: calc(13px + var(--ws-font-size-sans-offset));
 }
 /* 权限胶囊不再按档染色：text + icon + chev 全部走中性墨色（[docs/chat-and-interface] 的强调色契约）。
@@ -538,7 +574,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .ctx-popover-meta { flex: none; color: var(--ws-dim); font-size: calc(11.5px + var(--ws-font-size-sans-offset)); }
 .ctx-popover-empty { display: flex; align-items: center; gap: 12px; color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); padding: 2px 0; }
 .ctx-popover-empty .ctx-popover-compact-btn.ant-btn { margin-left: auto; }
-.composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; }
+.composer-toolbar .send-btn { width: 32px; height: 32px; margin-left: 4px; border-radius: var(--ws-radius); }
 /* 富下拉条目：标题 + 描述（权限档 / 力度默认项） */
 .menu-item-rich { display: flex; flex-direction: column; min-width: 220px; padding: 3px 0; }
 .menu-item-rich .desc { font-size: calc(11.5px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); }
@@ -576,7 +612,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .tool-name { color: var(--ws-accent); white-space: nowrap; font-family: var(--ws-font-sans); font-size: calc(12.5px + var(--ws-font-size-sans-offset)); }
 .tool-card .summary { color: var(--ws-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .tool-card .dur { color: var(--ws-dim); font-size: calc(11px + var(--ws-font-size-sans-offset)); }
-.tool-card .chev { color: var(--ws-dim); }
+.tool-card .chev { color: var(--ws-text-2); font-size: 11px; }
 .tool-card .tail {
   margin: 0; padding: 8px 10px; background: var(--ws-code-bg);
   font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono);
@@ -610,18 +646,22 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 
 /* 简洁展示仅调整工具的布局，交互控件仍由 antd 接管。 */
 .output-display-select { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.chat-display-toolbar { display: flex; justify-content: flex-end; flex: none; padding: 6px 16px; }
-.tool-card.tool-compact { border: 0; border-radius: 0; background: transparent; margin: 2px 0; }
-.tool-compact-content { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--ws-dim); font-family: var(--ws-font-sans); }
+.tool-card.tool-compact { border: 0; border-radius: 0; background: transparent; margin: 0; }
+.tool-compact-head.ant-btn { height: auto; min-height: var(--ws-process-row-height); padding: 4px 0; }
+.tool-compact-content { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--ws-text-2); font-family: var(--ws-font-sans); font-size: var(--ws-font-size-sans); line-height: 1.6; }
 .tool-compact-content .verb, .tool-compact-content .chev, .tool-compact-content .line-count { flex: none; }
-.tool-compact-content .summary { color: var(--ws-dim); flex: 1; min-width: 0; }
+.tool-compact-content .verb { color: var(--ws-text-1); }
+.tool-compact-content .summary { color: var(--ws-text-1); flex: 1; min-width: 0; }
 .tool-compact-content .line-count { font-variant-numeric: tabular-nums; }
-.tool-compact.st-error .tool-compact-content, .tool-compact.st-error .verb { color: var(--ws-err); }
-.tool-compact.st-waiting .tool-compact-content, .tool-compact.st-waiting .verb { color: var(--ws-warn); }
-.tool-activity-group { margin: 4px 0; min-width: 0; }
-.tool-group-toggle { max-width: 100%; }
-.tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ws-dim); }
-.tool-group-body { padding-left: 12px; border-left: 1px solid var(--ws-border); }
+.tool-compact-content .tool-time { flex: none; color: var(--ws-text-2); font-size: calc(11px + var(--ws-font-size-sans-offset)); font-variant-numeric: tabular-nums; }
+.tool-compact.st-error .tool-compact-content, .tool-compact.st-error .verb, .tool-compact.st-error .summary { color: var(--ws-err); }
+.tool-compact.st-waiting .tool-compact-content, .tool-compact.st-waiting .verb, .tool-compact.st-waiting .summary { color: var(--ws-warn); }
+.tool-activity-group { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
+.tool-group-toggle { max-width: 100%; width: 100%; justify-content: flex-start; height: auto; min-height: var(--ws-process-row-height); padding: 4px 0; line-height: 1.6; }
+.tool-group-toggle > .anticon:first-child { font-size: 11px; color: var(--ws-text-2); }
+.tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ws-text-1); text-align: left; }
+.tool-group-body { padding-left: 18px; margin-left: 5px; border-left: 1px solid var(--ws-border); }
+.tool-group-body:not([hidden]) { display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
 .sub-card.sub-compact { border: 0; border-radius: 0; background: transparent; }
 
 /* ---------- render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
@@ -907,12 +947,14 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
    Sider 外壳仍须保留，因为 antd has-sider 只认真实 Sider 子组件（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 缺陷修复） */
 .sider-body { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .sider-nav { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 8px; }
-.nav-section-title { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); padding: 2px 4px 6px 8px; }
+.sider-overview.ant-btn { margin: 12px 12px 0; flex: none; justify-content: flex-start; font-weight: 500; }
+.sider-overview.ant-btn[aria-pressed="true"] { background: var(--ws-highlight); }
+.nav-section-title { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); font-weight: 500; padding: 2px 4px 6px 8px; }
 /* 项目区头行：大标题 + 折叠 caret + 右侧管理/新建图标（按截图定稿） */
 .nav-header { display: flex; align-items: center; padding: 0 4px 6px 8px; }
 .nav-header-title {
   flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0;
-  font-size: calc(13.5px + var(--ws-font-size-sans-offset)); font-weight: 600; color: var(--ws-text-1); cursor: pointer; user-select: none;
+  font-size: calc(12px + var(--ws-font-size-sans-offset)); font-weight: 500; color: var(--ws-text-2); cursor: pointer; user-select: none;
 }
 .nav-header-title .caret { font-size: 10px; color: var(--ws-dim); transition: transform 0.15s; }
 .nav-header-title .caret.collapsed { transform: rotate(-90deg); }
@@ -924,11 +966,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .proj-field { display: flex; flex-direction: column; gap: 6px; }
 .proj-field .proj-label { font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
 .proj-field .proj-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.nav-empty { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); padding: 2px 10px 6px; }
+.nav-empty { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); padding: 2px 10px 6px; }
 .project-group { margin-bottom: 6px; }
 .project-row {
   display: flex; align-items: center; gap: 6px; padding: 4px 8px;
-  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: 8px;
+  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: var(--ws-radius);
   cursor: pointer; user-select: none;
 }
 .project-row .project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -938,11 +980,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .session-nav-row {
   position: relative; display: flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 8px 0 12px; /* 定高：悬停前后行高一致（缺陷修复）；左缩进 12px 与项目行拉开层级 */
-  font-size: var(--ws-font-size-sans); color: var(--ws-text-2); cursor: pointer; border-radius: 8px; min-width: 0;
+  font-size: var(--ws-font-size-sans); color: var(--ws-text-2); cursor: pointer; border-radius: var(--ws-radius); min-width: 0;
 }
 /* 会话行高亮走 --ws-highlight（与全站统一），见 :root 定义 */
 .session-nav-row:hover { background: var(--ws-highlight); }
-.session-nav-row.active { background: var(--ws-highlight); color: var(--ws-text-1); }
+.session-nav-row.active { background: var(--ws-highlight); color: var(--ws-text-1); font-weight: 500; }
 /* 运行指示定槽：恒渲染的占位保证每行标题对齐 */
 .session-nav-row .session-run-slot {
   flex: none; width: 12px; height: 12px;
@@ -966,7 +1008,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .session-nav-row:hover .session-time { opacity: 0; }
 .project-row {
   position: relative; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px;
-  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: 8px;
+  font-size: var(--ws-font-size-sans); font-weight: 400; color: var(--ws-text-1); border-radius: var(--ws-radius);
 }
 .project-row .row-action {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
@@ -978,7 +1020,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .show-more:hover { color: var(--ws-accent); }
 .task-nav-row {
   display: flex; align-items: center; gap: 8px; padding: 5px 8px;
-  font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); cursor: pointer; border-radius: 8px;
+  font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); cursor: pointer; border-radius: var(--ws-radius);
 }
 .task-nav-row:hover { background: var(--ws-highlight); }
 .task-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-dim); flex: none; }
@@ -1245,7 +1287,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .settings-pane-inner { box-sizing: border-box; width: 50%; max-width: 100%; margin: 0 auto; }
 /* Section 卡片工具类（参考 IDE 设置页视觉，[docs/settings-guide](../../../docs/settings-guide.md)）：一组相关设置项共享
    一个圆角浅灰容器，section 标题（如"浅色主题"）与单卡片组留在卡片外。颜色与左导航同色
-   （--ws-bg-nav，亮色 #eef4f9 / 暗色 antd 容器色），统一观感。 */
+   （--ws-bg-nav，亮色 #eef2f5 / 暗色 antd 容器色），统一观感。 */
 .settings-section-card {
   background: var(--ws-bg-nav);
   border-radius: 12px;
@@ -1363,11 +1405,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 }
 .rb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .rb-cell { min-width: 0; }
-.rb-label { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); margin-bottom: 4px; } /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：去 letter-spacing + 提到 11px，中文标签不再显松散 */
+.rb-label { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); margin-bottom: 4px; }
 /* 行级取值统一两档（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 排版 + [docs/chat-and-interface](../../../docs/chat-and-interface.md)）：标签 11px dim、取值行 12px text-2；加粗分支行已移除（rb-value 退役） */
 .rb-dim { color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-mono { font-family: var(--ws-font-mono); font-size: var(--ws-font-size-mono); }
-.rb-section { border-top: 1px solid var(--ws-border); padding: 18px 0; }
+.rb-section { border-top: 1px solid var(--ws-border); padding: 14px 0; }
 .rb-path {
   /* [docs/chat-and-interface](../../../docs/chat-and-interface.md)：路径改走 sans 槽——mono 字族无中文字形，含中文目录的路径曾逐字回退成乱排混排；字号与正文统一 12px */
   font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2);
@@ -1386,15 +1428,12 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-todo-dot.in_progress { color: var(--ws-accent); }
 .rb-todo-dot.completed { color: var(--ws-dim); }
 .rb-todo-done { color: var(--ws-dim); }
-/* 右栏「技能」段：只读展示，来源短标签**紧跟技能名**（与设置页 .skill-origin 同形态）、限宽省略，
-   悬浮显示 description + 完整路径。
-   注：早期这里用 margin-left:auto 把来源右对齐，但它被 45% 限宽 + 10.5px + dim 三重弱化后又推到行尾，
-   实际上没人会去最右侧读它（版式审计）；与设置页同一信息统一为「紧跟名称」。 */
+/* Fixed, readable source slot; full names and origins remain in the row tooltip. */
 .rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
 /* Clickable skills share the overview row's inset; antd owns the hover appearance. */
 .rb-skill-line.rb-skill-clickable { justify-content: flex-start; height: auto; padding-block: 8px; white-space: normal; }
-.rb-skill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-skill-origin { padding-left: 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); }
+.rb-skill-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
+.rb-skill-origin { padding-left: 8px; width: 64px; max-width: 35%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
 /* [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：右栏运行日志 */
 .rb-log-head { cursor: pointer; user-select: none; }
 .rb-log-tools { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
@@ -1491,14 +1530,13 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
    中性墨色，不引入彩色。data-active 由 OpenInEditorSelect 在 picked 非空时挂上。 */
 .rb-editor-btn[data-active="true"] .rb-editor-btn-caret { color: var(--ws-accent); opacity: 1; }
 
-/* 折叠段标题与信息页其他标题（项目目录 / 额度与余额）同款：11px + dim 色 + 无多余内边距。
+/* Collapse titles share the overview section hierarchy.
    注意 antd 6 的标题文本类是 `.ant-collapse-title`（旧版 `-header-text` 已不存在，写成它等于死规则，
-   字号会回默认 14px）；标题文字与其他标题的左对齐由 RightBar 的 `expandIconPlacement="end"` 保证。 */
+   字号会回默认 14px）。 */
 .rb-collapse .ant-collapse-item { border-top: 1px solid var(--ws-border); }
 .rb-collapse .ant-collapse-header { align-items: center; }
-.rb-collapse .ant-collapse-title { font-size: calc(13px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); font-weight: normal; line-height: 1.7; }
-/* 箭头是唯一的可折叠提示，保留但收到标签同尺寸（行末、dim） */
-.rb-collapse .ant-collapse-expand-icon { font-size: 10px; color: var(--ws-dim); }
+.rb-collapse .ant-collapse-title { font-size: calc(13px + var(--ws-font-size-sans-offset)); color: var(--ws-text-1); font-weight: 500; line-height: 1.7; }
+.rb-collapse .ant-collapse-expand-icon { font-size: 11px; color: var(--ws-text-2); }
 
 /* Card chrome comes from antd; these rules only arrange its contents and bounded scroll chain. */
 .rb-info-scroll { min-width: 0; padding-bottom: 8px; }
@@ -1508,10 +1546,12 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
 .rb-project.rb-section { border-top: 0; padding: 0 0 14px; }
 .rb-project-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .rb-project-name.ant-typography { flex: 1; min-width: 0; margin: 0; font-size: calc(18px + var(--ws-font-size-sans-offset)); font-weight: 500; }
-.rb-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--ws-text-2); font-size: calc(13px + var(--ws-font-size-sans-offset)); }
+.rb-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 9px; color: var(--ws-text-1); font-size: calc(13px + var(--ws-font-size-sans-offset)); font-weight: 500; }
+.rb-empty { display: flex; align-items: center; gap: 7px; color: var(--ws-text-2); font-size: calc(12px + var(--ws-font-size-sans-offset)); }
+.rb-empty .ant-typography { font-size: inherit; }
 .rb-section-heading > .ant-typography, .rb-collapse .ant-collapse-extra .ant-typography { font-size: calc(11px + var(--ws-font-size-sans-offset)); }
 .rb-overview-changes.ant-btn { height: auto; padding-block: 10px; margin-bottom: 8px; gap: 10px; justify-content: flex-start; white-space: normal; }
-.rb-summary-title { font-size: calc(15px + var(--ws-font-size-sans-offset)); font-weight: 500; }
+.rb-summary-title { font-size: calc(13px + var(--ws-font-size-sans-offset)); font-weight: 500; }
 .rb-change-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; font-size: calc(12px + var(--ws-font-size-sans-offset)); font-variant-numeric: tabular-nums; }
 .rb-change-added { color: var(--ws-ok); }
 .rb-change-deleted, .rb-summary-error { color: var(--ws-err); }

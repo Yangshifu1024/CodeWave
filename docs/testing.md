@@ -126,6 +126,7 @@ Rust ignored 的完整名称：
 - Composer 测试应明确 `selectionStart`；点击与方向键不会经过 onChange。替换草稿同时检查 text/refs/images，不能只检查输入框文本。
 - 多 Tab、迟到 IPC、重复打开、关闭重开、StrictMode effect 重放和 ask 切换都要覆盖；构建通过不能代替完整组件挂载。
 - Markdown 安全用结构断言：原始 HTML 不执行、`javascript:` 不可点击、外链安全属性正确；动态图表和数学升级另测，不以字符串存在代替渲染结果。
+- 只验证图表 / 数学占位符的组件用例应隔离异步升级器，并断言组件把真实容器交给升级入口；渲染、流式、缓存与去重由 [diagrams.streaming.test.ts](../ui/src/__tests__/diagrams.streaming.test.ts) 单独守护。不要让无关 lazy import 与渲染在用例结束后继续产生日志或修改 DOM。
 
 ## 已知验证边界与待核实事项
 

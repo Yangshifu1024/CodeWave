@@ -114,6 +114,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - 构建环境与代码组织：[development](./development.md)
 - 门禁、回归策略与已知验证边界：[testing](./testing.md)
 - 安装包、签名、公证与更新：[release](./release.md)
+- 外部 Agent 协议与 codeg 接入设计：[acp-integration](./acp-integration.md)（待批准，未实施；现行桌面架构不因此获得 ACP 能力）
 - 全部主题导航：[0-README](./0-README.md)
 
 维护本文时逐字保留 D1–D8，只更新跨层事实和必要摘要；具体状态机、问题排查和边界放在对应主题。不要重新加入完成计划、一次性验收数字、旧目录全表或“全部交付/全绿”快照。

@@ -1,7 +1,7 @@
 import { fontSizeCss } from "../../utils/fonts";
 import { memo, useEffect, useMemo, useState } from "react";
 import { Button, Tag } from "antd";
-import { CodeOutlined, EditOutlined, FileAddOutlined, FileTextOutlined, GlobalOutlined, LoadingOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
+import { CodeOutlined, DownOutlined, EditOutlined, FileAddOutlined, FileTextOutlined, GlobalOutlined, LoadingOutlined, RightOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ToolView } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
@@ -12,7 +12,7 @@ import CodeBlock from "../../components/CodeBlock";
 import { askAnswerRows } from "./askAnswerRows";
 import WidgetPreviewModal from "./WidgetPreviewModal";
 import type { OutputDisplay } from "../../utils/outputDisplay";
-import { toolFilePaths, toolLineChanges } from "./toolPresentation";
+import { toolFilePaths, toolLineChanges, toolTime, type ToolOrigin } from "./toolPresentation";
 
 // 工具名 -> i18n 键映射（内置工具；mcp__ 前缀的工具名原样展示）
 const VERBS: Record<string, string> = {
@@ -53,6 +53,7 @@ function ToolCallCardImpl({
   display = "detailed",
   expansion,
   onExpansionChange,
+  origin,
 }: {
   tool: ToolView;
   onToggle?: () => void;
@@ -63,6 +64,7 @@ function ToolCallCardImpl({
   display?: OutputDisplay;
   expansion?: ToolExpansion;
   onExpansionChange?: (callKey: string, expansion: ToolExpansion) => void;
+  origin?: ToolOrigin;
 }) {
   const { t } = useTranslation();
   const [localExpansion, setLocalExpansion] = useState<ToolExpansion>({ expanded: false, path: null });
@@ -263,7 +265,7 @@ function ToolCallCardImpl({
   }
 
   return (
-    <div data-output-key={`tool:${tool.callKey}`} className={`tool-card st-${neutralErr ? "neutral" : tool.status}${compact ? " tool-compact" : ""}`}>
+    <div data-output-key={`tool:${tool.callKey}`} data-output-message-key={origin?.key} data-anchor-aliases={origin ? JSON.stringify([origin]) : undefined} className={`tool-card st-${neutralErr ? "neutral" : tool.status}${compact ? " tool-compact" : ""}`}>
       {compact ? (
         <>
           {(paths.length ? paths : [null]).map((path, i) => {
@@ -271,11 +273,12 @@ function ToolCallCardImpl({
             const open = expanded && path === selectedPath;
             return <Button key={path ?? "summary"} type="text" block className="tool-compact-head" aria-expanded={open} onClick={() => togglePath(path)}>
               <span className="tool-compact-content">
+                <span className="chev">{open ? <DownOutlined /> : <RightOutlined />}</span>
                 {tool.status === "running" ? <LoadingOutlined spin /> : <ToolIcon />}
                 <span className="verb">{verbLabel}</span>
                 <span className="summary" title={path ?? (commandLine || summary)}>{path ? pathLabels[i] : tool.tool === "command" || tool.tool === "service" ? commandLine || summary : summary}</span>
                 {stats && <span className="line-count">+{stats.added} −{stats.removed}</span>}
-                <span className="chev">{open ? "▾" : "▸"}</span>
+                {origin && toolTime(origin.createdAt) && <span className="tool-time" title={origin.createdAt}>{toolTime(origin.createdAt)}</span>}
               </span>
             </Button>;
           })}
@@ -292,6 +295,7 @@ function ToolCallCardImpl({
           onToggle?.(); // 展开/收起 = 阅读意图：暂停自动跟随
         }}
       >
+        <span className="chev">{expanded ? <DownOutlined /> : <RightOutlined />}</span>
         <span className="dot" />
         <span className="verb">{verbLabel}</span>
         {tool.tool !== "?" && <code className="tool-name">{displayName}</code>}
@@ -311,7 +315,6 @@ function ToolCallCardImpl({
         )}
         {restoredPlaceholder && <span className="dim">{t("tools.previewUnavailable")}</span>}
         {tool.durationMs != null && <span className="dur">{(tool.durationMs / 1000).toFixed(1)}s</span>}
-        <span className="chev">{expanded ? "▾" : "▸"}</span>
       </div>
       )}
 

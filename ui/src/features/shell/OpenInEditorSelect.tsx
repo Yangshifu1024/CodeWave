@@ -5,7 +5,7 @@
 //
 // 选项来自后端 `list_editors`（候选顺序：VS Code → Cursor → Windsurf → Zed → Sublime Text →
 // Notepad++ → JetBrains 组），**默认 = 第一个检测到的**，用户改选后写 localStorage 并为新默认；
-// 选定即用该编辑器打开当前目录（项目会话 = 主目录，临时会话 = 工作区）。
+// 选定即用该编辑器打开项目主目录；临时会话的信息页不提供目录入口。
 // 一个编辑器都没检测到 → 整个控件不渲染（保持面板干净，文件管理器按钮仍在）。
 import { useEffect, useState } from "react";
 import { App as AntApp, Button, Dropdown } from "antd";

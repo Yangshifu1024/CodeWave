@@ -3,6 +3,7 @@ import { configSnapshot } from "./configFixtures";
 // mock 结构对齐 app.smoke.test.tsx；matchMedia 垫片可编程控制 OS 亮暗（setup.ts 的静态垫片对本文件不够用）。
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
+import { theme } from "antd";
 
 // ---------- Tauri IPC mock（App 挂载最小依赖面） ----------
 const fixtureConfig = {
@@ -151,9 +152,14 @@ describe("主题偏好 store（localStorage ws_theme）", () => {
 describe("effectiveDark 派生与 html.dark 同步", () => {
   it("跟随系统：OS 亮→暗实时切换，dark class 即时出现", async () => {
     await mountApp();
+    const style = document.documentElement.style;
+    const dark = theme.getDesignToken({ algorithm: theme.darkAlgorithm });
+    expect(style.getPropertyValue("--ws-bg")).toBe("#f5f7f9");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     act(() => setOsDark(true));
     await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
+    await waitFor(() => expect(style.getPropertyValue("--ws-bg")).toBe(dark.colorBgLayout));
+    expect(style.getPropertyValue("--ws-bg-main")).toBe(dark.colorBgLayout);
   });
 
   it("固定亮色：OS 切暗界面保持亮色", async () => {
@@ -168,6 +174,7 @@ describe("effectiveDark 派生与 html.dark 同步", () => {
     useUi.setState({ theme: "dark" });
     await mountApp();
     expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--ws-bg")).toBe(theme.getDesignToken({ algorithm: theme.darkAlgorithm }).colorBgLayout);
   });
 });
 

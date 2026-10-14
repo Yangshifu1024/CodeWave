@@ -4,6 +4,7 @@ export interface OutputAnchor {
   fallback: ScrollAnchor;
   messageKey: string | null;
   segmentKey: string | null;
+  segmentType?: "summary" | "content";
   offset: number;
   atBottom: boolean;
 }
@@ -24,7 +25,8 @@ export function captureOutputAnchor(container: HTMLElement): OutputAnchor {
   const node = segments.find((el) => el.getBoundingClientRect().bottom > top);
   if (node) {
     result.segmentKey = node.dataset.outputKey ?? null;
-    result.messageKey = node.closest<HTMLElement>("[data-key]")?.dataset.key ?? null;
+    result.segmentType = node.dataset.outputGroup ? "summary" : "content";
+    result.messageKey = node.dataset.outputMessageKey ?? node.closest<HTMLElement>("[data-key]")?.dataset.key ?? null;
     result.offset = top - node.getBoundingClientRect().top;
   }
   return result;
@@ -33,17 +35,29 @@ export function captureOutputAnchor(container: HTMLElement): OutputAnchor {
 export function restoreOutputAnchor(container: HTMLElement, anchor: OutputAnchor): void {
   if (anchor.segmentKey) {
     const nodes = visibleSegments(container);
-    const node = nodes.find((el) => {
-      if ((el.closest<HTMLElement>("[data-key]")?.dataset.key ?? null) !== anchor.messageKey) return false;
-      if (el.dataset.outputKey === anchor.segmentKey) return true;
-      // 简洁模式可能将当前的已完成工具压入一组；落在该组摘要上。
-      try {
-        const keys: unknown = JSON.parse(el.dataset.outputGroup ?? "[]");
-        return Array.isArray(keys) && keys.includes(anchor.segmentKey);
-      } catch { return false; }
+    const ownedNodes = nodes.filter((el) => {
+      const owner = el.dataset.outputMessageKey ?? el.closest<HTMLElement>("[data-key]")?.dataset.key ?? null;
+      if (owner !== anchor.messageKey) {
+        try {
+          const owners: unknown = JSON.parse(el.dataset.outputMessageKeys ?? "[]");
+          if (!Array.isArray(owners) || !owners.includes(anchor.messageKey)) return false;
+        } catch { return false; }
+      }
+      return true;
     });
+    // The summary shares its first child's key; preserve which one was being read.
+    const capturedSummary = anchor.segmentType === "summary";
+    const node = ownedNodes.find(el => el.dataset.outputKey === anchor.segmentKey && !!el.dataset.outputGroup === capturedSummary)
+      ?? ownedNodes.find(el => el.dataset.outputKey === anchor.segmentKey)
+      ?? ownedNodes.find(el => {
+        // 简洁模式可能将当前的已完成工具压入一组；落在该组摘要上。
+        try {
+          const keys: unknown = JSON.parse(el.dataset.outputGroup ?? "[]");
+          return Array.isArray(keys) && keys.includes(anchor.segmentKey);
+        } catch { return false; }
+      });
     if (node) {
-      const offset = node.dataset.outputKey === anchor.segmentKey ? anchor.offset : 0;
+      const offset = node.dataset.outputKey === anchor.segmentKey && !!node.dataset.outputGroup === capturedSummary ? anchor.offset : 0;
       container.scrollTop += node.getBoundingClientRect().top - container.getBoundingClientRect().top + offset;
       return;
     }
