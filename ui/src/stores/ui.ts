@@ -5,6 +5,7 @@ import { clampNavWidth, clampRightBarWidth, NAV_W_DEFAULT, RB_W_DEFAULT } from "
 // 设置页页 key 归一（旧页 key 别名 / 非法值回退）与默认页都住在注册表里（纯数据模块，无 React/store 依赖，
 // 所以 store 反向引用它不构成循环：[docs/settings-guide](../../../docs/settings-guide.md)）
 import { DEFAULT_PAGE, normalizePageKey, type PageKey } from "../features/panels/settingsRegistry";
+import { OUTPUT_DISPLAY_KEY, readStoredOutputDisplay, type OutputDisplay } from "../utils/outputDisplay";
 // 树展开/折叠态的落盘链路（uiState → ipc.setUiState）。本文件与 utils/uiState 互为引用（那边要读 useUi），
 // 但双方都只在函数体内取用对方的绑定，模块顶层互不触达，ESM 活绑定足以支撑这个环。
 import {
@@ -33,6 +34,8 @@ interface UiState {
   language: Lang;
   /** 主题偏好档位（设置 → 外观选择；localStorage 持久化，即时生效） */
   theme: ThemePref;
+  outputDisplay: OutputDisplay;
+  setOutputDisplay(display: OutputDisplay): void;
   settingsOpen: boolean;
   /** 设置页当前页（8 页重划后的 PageKey；提升进 store 以便外部调用方（认证错误引导等）指定页打开
    *  （[docs/providers-and-network](../../../docs/providers-and-network.md)）；深链语义见 showSettings
@@ -119,6 +122,12 @@ interface UiState {
 export const useUi = create<UiState>((set, get) => ({
   language: (localStorage.getItem("ws_lang") as Lang) || "zh-CN",
   theme: readStoredTheme(),
+  outputDisplay: readStoredOutputDisplay(),
+  setOutputDisplay(display) {
+    // 展示立即生效；存储不可用时仍允许本次进程切换。
+    try { localStorage.setItem(OUTPUT_DISPLAY_KEY, display); } catch { /* 本地存储不可用 */ }
+    set({ outputDisplay: display });
+  },
   settingsOpen: false,
   settingsTab: DEFAULT_PAGE,
   settingsHit: null,

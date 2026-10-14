@@ -1200,7 +1200,7 @@ describe("设置页：搜索与进阶折叠（批③）", () => {
   it("↑/↓ 只动结果列表（两端停住），未选中时 Enter 不动作，焦点始终留在搜索框", async () => {
     await mountWithSession();
     await openPage("日志");
-    await search("详细");
+    await search("会话详细"); // 单结果夹取；“详细”也能命中新加入的输出展示。
     expect(resultRows().length).toBe(1);
 
     const input = searchBox();

@@ -42,7 +42,7 @@
 |---|---|
 | 主配置草稿 | 顶部提交页级草稿与 `page_version`、操作 UUID、显式凭据意图，后端强制保留即时字段，成功后留在设置页。供应商、网络、审批、技能启停、写入后检查、Shell/提示词/压缩、保留期和日志等走此路径 |
 | 供应商弹框 | 新增与编辑均先保存弹框局部表单，确认/完成才合并到主草稿；取消丢弃局部改动，不等于已经落盘。模型编辑复用同一弹框，不叠第二层 Modal |
-| 即时偏好 | 界面语言、主题、三组字体与字号与自动检查更新独立生效，不参与脏点；取消主配置草稿不回滚它们 |
+| 即时偏好 | 界面语言、主题、输出展示、三组字体与字号与自动检查更新独立生效，不参与脏点；取消主配置草稿不回滚它们 |
 | 子代理模型覆盖 | `set_subagent_model` 只 patch 单角色，携带角色版本；同角色在途禁用，错误保留重试选择，顶部保存/取消均不覆盖已提交角色值 |
 | MCP 配置 | 独立 `mcp.json`，通过编辑弹框的“保存并重连”调用 `mcpSaveConfig`；顶部主配置保存不覆盖它 |
 | 操作与只读信息 | 技能重扫/删除、清理、连接操作、打开目录与检查更新走各自 IPC；`app.*` 注册项没有落盘字段 |
@@ -107,6 +107,8 @@
 源码：[SettingsPage.tsx](../ui/src/features/panels/SettingsPage.tsx) 的 `saveMcp/deleteMcpEntry/runMcpAction/testMcpServer/readMcpStatus`、[McpKvTable.tsx](../ui/src/features/panels/McpKvTable.tsx)、[McpStatusTable.tsx](../ui/src/features/panels/McpStatusTable.tsx)、[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。
 
 ## 新增或移动设置项
+
+「界面 → 输出展示」注册为 `ui.output_display`，与聊天区顶部切换器共用 store 和 localStorage 偏好；默认详细，切换即时生效，不修改模型回复长度。简洁的聚合/文件统计/预览与历史边界由[聊天与界面](./chat-and-interface.md#52x-简洁与详细展示)主维护。
 
 1. 在 `SETTINGS_ITEMS` 登记唯一 `id`、双语 `labelKey`、所属页、必要的分组及中英搜索词。`keywords` 是直字符串，不是 i18n 键。
 2. 普通配置字段加入 `SettingFieldPath` / `PAGE_FIELDS`，并核对 `fieldSlice` 缺省折叠及实际保存路径。即时项加入 `INSTANT_APPLY_FIELD_IDS`；动作/只读信息使用 `app.*`，不进入 `PAGE_FIELDS`。已有复合项如 `subagentModels` 须同时核对真实字段和独立保存行为，不能只靠注册名推断。

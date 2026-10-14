@@ -16,6 +16,7 @@ pub mod encoding;
 mod fuzz;
 pub mod grep;
 pub mod http_request;
+mod line_changes;
 pub mod list_files;
 pub mod net;
 pub mod pathutil;

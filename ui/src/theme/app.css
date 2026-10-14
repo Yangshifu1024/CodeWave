@@ -608,6 +608,22 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-card .err-neutral { color: var(--ws-dim); opacity: 0.85; }
 .tool-card .warn { padding: 2px 10px 6px; color: var(--ws-warn); }
 
+/* 简洁展示仅调整工具的布局，交互控件仍由 antd 接管。 */
+.output-display-select { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chat-display-toolbar { display: flex; justify-content: flex-end; flex: none; padding: 6px 16px; }
+.tool-card.tool-compact { border: 0; border-radius: 0; background: transparent; margin: 2px 0; }
+.tool-compact-content { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--ws-dim); font-family: var(--ws-font-sans); }
+.tool-compact-content .verb, .tool-compact-content .chev, .tool-compact-content .line-count { flex: none; }
+.tool-compact-content .summary { color: var(--ws-dim); flex: 1; min-width: 0; }
+.tool-compact-content .line-count { font-variant-numeric: tabular-nums; }
+.tool-compact.st-error .tool-compact-content, .tool-compact.st-error .verb { color: var(--ws-err); }
+.tool-compact.st-waiting .tool-compact-content, .tool-compact.st-waiting .verb { color: var(--ws-warn); }
+.tool-activity-group { margin: 4px 0; min-width: 0; }
+.tool-group-toggle { max-width: 100%; }
+.tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ws-dim); }
+.tool-group-body { padding-left: 12px; border-left: 1px solid var(--ws-border); }
+.sub-card.sub-compact { border: 0; border-radius: 0; background: transparent; }
+
 /* ---------- render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
    卡片内不再内嵌渲染（那里只有浏览器 iframe 默认的 150px 高、宽度还被聊天列挤压），改由工具卡头部入口打开本弹框；
    弹框主体铺满（90vw × 85vh 里的可用区），iframe 占满剩余高度，滚动交给 iframe 自身；

@@ -393,6 +393,7 @@ impl Tool for EditTool {
         // version 不匹配不再硬失败：记录 stale 后继续；若变更仍能在最新内容上唯一应用，
         // 则附警告放行；只有应用失败（真实内容冲突）才返回 E_VERSION_STALE 要求重新 read。
         let mut prepared: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let mut line_changes = Vec::with_capacity(args.files.len());
         let mut stale_warnings: Vec<String> = Vec::new();
         let mut fuzzy_warnings: Vec<String> = Vec::new();
         for (f, resolved) in args.files.iter().zip(&resolved) {
@@ -452,6 +453,7 @@ impl Tool for EditTool {
                     f.path
                 ));
             }
+            line_changes.push(crate::tools::line_changes::count(&f.path, &norm, &new_text));
             let out_text = if eol == "\r\n" {
                 new_text.replace('\n', "\r\n")
             } else {
@@ -535,6 +537,7 @@ impl Tool for EditTool {
         let mut out = ToolOutcome::ok(json!({
             "edited": args.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
             "count": written.len(),
+            "line_changes": line_changes,
             "checks": checks.iter().map(|c| c.to_json()).collect::<Vec<_>>(),
         }));
         for w in stale_warnings {

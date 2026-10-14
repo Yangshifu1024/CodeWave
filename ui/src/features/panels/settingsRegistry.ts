@@ -114,6 +114,7 @@ export type SettingWidth = "narrow" | "mid" | "wide";
 export const SETTINGS_ITEMS: SettingItem[] = [
   // ---------- 界面 ----------
   { id: "ui.theme", labelKey: "settings.theme", page: "appearance", width: "narrow", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
+  { id: "ui.output_display", labelKey: "settings.outputDisplay", page: "appearance", width: "narrow", keywords: ["output", "display", "compact", "detailed", "输出", "展示", "简洁", "详细"] },
   { id: "ui.font_sans", labelKey: "settings.uiFont", page: "appearance", keywords: ["font", "sans", "字体", "界面字体"] },
   { id: "ui.font_size_sans", labelKey: "settings.uiFontSize", page: "appearance", width: "narrow", keywords: ["font size", "sans", "字号", "界面字号"] },
   { id: "ui.font_content", labelKey: "settings.contentFont", page: "appearance", keywords: ["font", "content", "字体", "内容字体", "正文字体"] },
@@ -259,6 +260,7 @@ export const INSTANT_APPLY_FIELD_IDS: string[] = [
   "subagentModels", // Backend-owned, versioned per-role patch.
   "ui.language", // 界面语言：useUi.setLanguage
   "ui.theme", // 主题：localStorage ws_theme
+  "ui.output_display", // 展示密度：localStorage ws_output_display
   "ui.font_sans", // 界面字体：localStorage 缓存 + 后端 config.ui.font_sans（set_font_prefs）
   "ui.font_content", // 独立的内容字体，与另外两槽一起提交。
   "ui.font_mono", // 等宽字体：同上
@@ -271,6 +273,7 @@ export const INSTANT_APPLY_FIELD_IDS: string[] = [
 /** 页拥有的配置字段路径（SettingFieldPath 联合类型把拼写错误挡在编译期） */
 export type SettingFieldPath =
   | "ui.theme"
+  | "ui.output_display"
   | "ui.font_sans"
   | "ui.font_content"
   | "ui.font_mono"
@@ -313,7 +316,7 @@ export type SettingFieldPath =
 export const PAGE_FIELDS: Record<PageKey, SettingFieldPath[]> = {
   // 界面页：主题与双字体槽是 localStorage 偏好、界面语言是即时生效项 ——
   // 本页没有可保存的改动，故**永不亮脏点**（有意为之，见 docs/settings-guide.md）。
-  appearance: ["ui.theme", "ui.font_sans", "ui.font_size_sans", "ui.font_content", "ui.font_size_content", "ui.font_mono", "ui.font_size_mono", "ui.language"],
+  appearance: ["ui.theme", "ui.output_display", "ui.font_sans", "ui.font_size_sans", "ui.font_content", "ui.font_size_content", "ui.font_mono", "ui.font_size_mono", "ui.language"],
   providers: ["providers", "active_model_id", "ui.ai_language", "subagentModels"],
   network: ["network.proxy", "network.allow_private_network"],
   security: [
@@ -386,6 +389,7 @@ export const SHELL_SETTING_KEYS: string[] = [
   "themeSystem", // → ui.theme 选项
   "themeLight", // → ui.theme 选项
   "themeDark", // → ui.theme 选项
+  "outputDisplayHint", // → ui.output_display 展示说明
   "fontHint", // → ui.font_sans / ui.font_mono 的输入说明
   "fontReset", // → 字体槽的「恢复默认」按钮
   "fontSizeHint", // → 字号 Select 说明（v2）；选项只显 px 数字，不再用 i18n 档位文案

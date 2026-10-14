@@ -10,6 +10,7 @@ import { ipc } from "../../ipc/client";
 import { i18n } from "../../i18n";
 import { configErrorMessage, reconcileConfigOperation, useSettings } from "../../stores/settings";
 import { useUi, type ThemePref } from "../../stores/ui";
+import OutputDisplaySelect from "../tools/OutputDisplaySelect";
 import {
   commitFontSizeSlot, commitFontSlot, DEFAULT_FONT_LEADS, DEFAULT_FONT_SIZE_LEVEL, FONT_SIZE_LEVELS,
   levelToPx, previewFontFamily, readStoredFonts, sanitizeFontList, useFontPreferences,
@@ -73,6 +74,13 @@ export function AppearanceSettings({ draft, patchDraft }: {
                 </Radio>
               ))}
             </Radio.Group>
+          </div>
+        </SettingsFormItem>
+      </SettingsSection>
+      <SettingsSection title={t("settings.outputDisplay")}>
+        <SettingsFormItem label={t("settings.outputDisplay")} settingDescription={t("settings.outputDisplayHint")}>
+          <div className="setting-anchor w-narrow" data-setting-id="ui.output_display">
+            <OutputDisplaySelect />
           </div>
         </SettingsFormItem>
       </SettingsSection>
