@@ -139,7 +139,8 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 - 子代理 `<report>` 标记仅在子代理显示路径剥离，先合并/剥离再逐字切片；不能对主聊天所有正文全局清除，用户可能正在讨论该标记。
 - 用户气泡使用保守 Markdown：数学保留可见源串、mermaid 当代码显示；助手/计划/文件 Markdown 才进入图表与公式升级。外部链接统一经 `open_url` 打开系统浏览器，避免 WebView 的 `_blank` 无动作。
 - 宽表由 Markdown renderer 实际生成 `.table-wrap`，CSS 赋横向滚动；测试必须同时守 DOM 与 CSS，不能只测试一段无人消费的样式。文件预览使用独立 `.viewer-md.md`，不能套聊天 `.assistant` 的裁切/行长约束；详见[文档指南](./documents.md)。
-- 聊天区当前左右各留 15% 中栏宽度；具体视觉上限属于样式，不改变数据或分页语义。Markdown 高亮随主题桥更新；流式图表占位文案走 i18n，渲染缓存键包含语言相关提示文案。
+- 围栏代码块由 renderer 的 `fence` 规则在完整 `<pre><code>` 外包一层 `.code-wrap`，复制按钮与唯一的 `pre` 同级；不能在 `highlight` 回调中返回以 `div` 开头的包装，否则 markdown-it 会再套一层 `pre/code`。mermaid/数学围栏直接生成独立占位块，不进入代码框；高亮与原文转义、复制载荷保持一致。
+- 聊天正文最大宽度 960px，窄窗口左右各留 24px；正文、Composer、审批区和消息队列共用 `--ws-chat-gutter` 保持对齐。段落与列表间距保留阅读停顿，紧凑列表也继承正文行高；行内代码用 antd 淡填充 token `--ws-code-bg`，代码框颜色使用主题桥的 `--ws-code-block-*`。这些样式不改变数据或分页语义。流式图表占位文案走 i18n，渲染缓存键包含语言相关提示文案。
 
 实现入口：[segments.tsx](../ui/src/features/chat/segments.tsx)、[markdown.ts](../ui/src/utils/markdown.ts)、[throttle.rs](../src-tauri/src/util/throttle.rs)、[dto.rs](../src-tauri/src/provider/dto.rs)。
 

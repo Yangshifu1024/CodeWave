@@ -172,14 +172,12 @@ describe("Composer 工具条上下文进度圈样式契约", () => {
     expect(appCss).not.toMatch(re);
   });
 
-  it(".queue-panel 与 .composer 同公式的 15% 边距（[fix/queue-panel-width-and-drag]）", () => {
-    // 规则：.queue-panel { margin: 0 15% 8px; }—— 与 .composer 0 15% 同公式，宽度字面同步。
-    // 拒“0 16px”这种与 composer 不同公式的写法（窗口越宽越错位）。
-    const queuePanelBody = ruleBody(".queue-panel");
-    expect(queuePanelBody).toMatch(/margin:\s*0\s+15%\s+8px/);
-    // 反向钉死：不得出现以前那套“固定 16px”边距
-    const oldForm = /\.queue-panel\s*\{[^}]*margin:\s*0\s+16px/;
-    expect(appCss).not.toMatch(oldForm);
+  it("消息队列、Composer、审批区与正文共用响应式边距", () => {
+    // All four consumers must use the same variable so sidebar resizing cannot misalign them.
+    for (const selector of [".queue-panel", ".composer", ".ask-wrap"]) {
+      expect(ruleBody(selector)).toMatch(/margin:\s*0\s+var\(--ws-chat-gutter\)/);
+    }
+    expect(ruleBody(".chat-messages")).toMatch(/padding:\s*16px\s+var\(--ws-chat-gutter\)/);
   });
 });
 
