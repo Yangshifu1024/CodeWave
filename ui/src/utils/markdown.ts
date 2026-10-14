@@ -22,25 +22,30 @@ function createMd() {
     linkify: true,
     breaks: true,
     highlight(code: string, lang: string): string {
-      if (lang === "mermaid") {
-        return `<div class="ws-diagram" data-kind="mermaid">${md.utils.escapeHtml(code)}</div>`;
-      }
-      if (MATH_LANGS.has(lang)) {
-        return `<div class="ws-math" data-kind="block">${md.utils.escapeHtml(code)}</div>`;
-      }
       if (lang && hljs.getLanguage(lang)) {
         try {
-          return wrapCodeBlock(
-            `<pre class="hljs"><code>${hljs.highlight(code, { language: lang, ignoreIllegals: true }).value}</code></pre>`,
-            code,
-          );
+          return `<pre class="hljs"><code>${hljs.highlight(code, { language: lang, ignoreIllegals: true }).value}</code></pre>`;
         } catch {
           /* 高亮失败则降级为转义输出 */
         }
       }
-      return wrapCodeBlock(`<pre class="hljs"><code>${md.utils.escapeHtml(code)}</code></pre>`, code);
+      return `<pre class="hljs"><code>${md.utils.escapeHtml(code)}</code></pre>`;
     },
   });
+  // highlight output must start with <pre> to suppress markdown-it's default pre/code wrapper.
+  // Wrap the completed fence instead; diagram/math placeholders are standalone block elements.
+  const defaultFence = md.renderer.rules.fence!;
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const lang = md.utils.unescapeAll(token.info).trim().split(/\s+/)[0];
+    if (lang === "mermaid") {
+      return `<div class="ws-diagram" data-kind="mermaid">${md.utils.escapeHtml(token.content)}</div>\n`;
+    }
+    if (MATH_LANGS.has(lang)) {
+      return `<div class="ws-math" data-kind="block">${md.utils.escapeHtml(token.content)}</div>\n`;
+    }
+    return wrapCodeBlock(defaultFence(tokens, idx, options, env, self), token.content) + "\n";
+  };
   // 外部链接新窗口打开
   const defLink = md.renderer.rules.link_open;
   md.renderer.rules.link_open = (tokens, idx, options, env, self) => {

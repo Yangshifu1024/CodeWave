@@ -41,8 +41,8 @@ describe("markdown 主题感（docs/chat-and-interface）", () => {
     expect(html).not.toContain('<div class="table-wrap"><div class="table-wrap">');
   });
 
-  // 预览弹框容器此前是 .assistant，被 860px 行长上限 + overflow-x:hidden 裁掉宽表格
-  it("共享组包含 .viewer-md.md（文件预览弹框正文），且不吃聊天区 860px 行长上限", () => {
+  // File previews need an independent container, even when chat column widths change.
+  it("共享组包含 .viewer-md.md（文件预览弹框正文），且不吃聊天区的宽度约束", () => {
     expect(appCss).toMatch(/:is\([^*]+?\.viewer-md\.md[^*]+?\)/);
     expect(appCss).toMatch(/\.viewer-md\.md\s*\{[^}]*max-width:\s*100%/);
   });
@@ -76,6 +76,13 @@ describe("markdown 主题感（docs/chat-and-interface）", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+p\s*\{[^}]*line-height:\s*1\.7/);
   });
 
+  it("行内代码使用 antd 淡填充，代码框跟随亮暗主题", () => {
+    expect(appCss).toMatch(/:is\([^*]+?\)\s+:not\(pre\) > code\s*\{[^}]*background:\s*var\(--ws-code-bg\)/);
+    for (const token of ["bg", "border", "text"]) {
+      expect(appCss).toContain(`var(--ws-code-block-${token})`);
+    }
+  });
+
   it("blockquote 左侧 accent 条 + dim 文字", () => {
     expect(appCss).toMatch(/:is\([^*]+?\)\s+blockquote\s*\{[^}]*border-left:\s*3px solid var\(--ws-accent\)/);
     expect(appCss).toMatch(/:is\([^*]+?\)\s+blockquote\s*\{[^}]*color:\s*var\(--ws-text-2\)/);
@@ -100,7 +107,7 @@ describe("markdown 主题感（docs/chat-and-interface）", () => {
   it(".user-bubble.md 含基础 markdown 元素（h1-h3 / ul / blockquote / a / strong / em / code）", () => {
     expect(appCss).toMatch(/\.user-bubble\.md\s*:is\(h1,\s*h2,\s*h3,\s*h4,\s*h5,\s*h6\)\s*\{[^}]*font-weight:\s*600/);
     expect(appCss).toMatch(/\.user-bubble\.md\s*blockquote\s*\{[^}]*border-left:\s*3px solid var\(--ws-accent\)/);
-    expect(appCss).toMatch(/\.user-bubble\.md\s*:not\(pre\)\s*>\s*code\s*\{[^}]*background:\s*var\(--ws-bg-nav\)/);
+    expect(appCss).toMatch(/\.user-bubble\.md\s*:not\(pre\)\s*>\s*code\s*\{[^}]*background:\s*var\(--ws-code-bg\)/);
     expect(appCss).toMatch(/\.user-bubble\.md\s*a\s*\{[^}]*color:\s*var\(--ws-accent\)/);
   });
 

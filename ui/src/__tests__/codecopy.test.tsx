@@ -1,9 +1,42 @@
 // Code block copy button pipeline (markdown.ts wrapCodeBlock + codecopy.ts delegation)
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderMarkdown } from "../utils/markdown";
+import { renderMarkdown, renderUserMarkdown } from "../utils/markdown";
 import { bindCodeCopyDelegate } from "../utils/codecopy";
 
 describe("markdown 代码块包装（复制按钮）", () => {
+  it.each(["rust", "text", "unknown-language", ""])("%s 围栏只生成一个代码框，保留原文与复制载荷", (language) => {
+    const code = 'let s = "你好 <script>&";\n';
+    for (const render of [renderMarkdown, renderUserMarkdown]) {
+      const container = document.createElement("div");
+      container.innerHTML = render("```" + language + "\n" + code + "```");
+      expect(container.querySelectorAll("pre")).toHaveLength(1);
+      expect(container.querySelectorAll(".code-wrap")).toHaveLength(1);
+      expect(container.querySelector(".code-wrap")?.parentElement).toBe(container);
+      expect(container.querySelector(".code-wrap > pre > code")?.textContent).toBe(code);
+      expect(container.querySelector("pre pre, pre button, code div, script")).toBeNull();
+      expect(decodeURIComponent(container.querySelector(".code-copy")!.getAttribute("data-code")!)).toBe(code);
+      if (language === "rust") expect(container.querySelector(".hljs-keyword")).not.toBeNull();
+    }
+  });
+
+  it("列表里的代码框和相邻代码框保持独立，空围栏保留空复制载荷", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown("- 示例\n\n  ```text\n  first\n  ```\n\n```\n```\n\n```text\nlast\n```");
+    expect(container.querySelectorAll("pre")).toHaveLength(3);
+    expect(container.querySelectorAll(".code-wrap > pre")).toHaveLength(3);
+    expect(container.querySelector("li > .code-wrap > pre > code")?.textContent).toBe("first\n");
+    expect([...container.querySelectorAll(".code-copy")].map((button) => decodeURIComponent(button.getAttribute("data-code")!)))
+      .toEqual(["first\n", "", "last\n"]);
+  });
+
+  it.each(["mermaid", "math", "katex", "latex", "tex"])("%s 占位符在正文中，不进入代码框", (language) => {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown("```" + language + "\nsource <tag>\n```");
+    expect(container.querySelector("pre, code, .code-wrap, .code-copy")).toBeNull();
+    expect(container.firstElementChild?.matches(".ws-diagram, .ws-math")).toBe(true);
+    expect(container.firstElementChild?.textContent).toBe("source <tag>\n");
+  });
+
   it("fence 代码块产出 .code-wrap + .code-copy 按钮，data-code 为 URI 编码原文", () => {
     const html = renderMarkdown("```rust\nlet s = \"你好\";\n```");
     expect(html).toContain('class="code-wrap"');
