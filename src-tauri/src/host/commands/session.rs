@@ -1,5 +1,6 @@
 use super::util::{Core, err};
 use crate::core::agent::Frame;
+use crate::core::sessions::run_display::{RunDisplay, load_for_messages};
 use crate::core::sessions::{
     HistoryBoundary, HistoryFormat, HistoryLoad, SessionStore, persist, segments,
 };
@@ -158,6 +159,8 @@ pub struct SessionPaging {
 /// `load_session` 的返回形态（首屏）。
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadSessionPayload {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_runs: Vec<RunDisplay>,
     /// 首屏消息：**最近一段**（display 口径：完整、不 trim）；legacy 回落整份
     pub messages: Vec<Message>,
     /// 压缩 / 改写边界（**只含本次覆盖段范围内**：前端按 `seq` 与已加载项对齐画分隔线）
@@ -169,6 +172,8 @@ pub struct LoadSessionPayload {
 /// `load_session_earlier` 的返回形态。
 #[derive(Debug, Clone, Serialize)]
 pub struct EarlierPage {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_runs: Vec<RunDisplay>,
     /// 严格早于 `before_seq` 的**最近一段**的 message 记录（display 口径；无更早段时空数组）
     pub messages: Vec<Message>,
     /// 本次返回的段序号（0 = 没有更早的段，此时 `has_more` 必为 false）
@@ -286,6 +291,7 @@ fn first_page(store: &SessionStore, id: &str, legacy: Option<&HistoryLoad>) -> L
     // 旧格式（`.json.gz`）没有段：整份照旧给出（与旧行为一致），没有更早内容
     if let Some(full) = legacy {
         return LoadSessionPayload {
+            task_runs: load_for_messages(store, id, &full.display),
             messages: full.display.clone(),
             boundaries: Vec::new(),
             paging: SessionPaging {
@@ -318,8 +324,10 @@ fn first_page(store: &SessionStore, id: &str, legacy: Option<&HistoryLoad>) -> L
     match segment {
         Some(seg) => {
             let seq = seg.info.seq;
+            let messages = persist::from_persisted(store, id, seg.messages);
             LoadSessionPayload {
-                messages: persist::from_persisted(store, id, seg.messages),
+                task_runs: load_for_messages(store, id, &messages),
+                messages,
                 boundaries,
                 paging: meta(
                     seq,
@@ -331,6 +339,7 @@ fn first_page(store: &SessionStore, id: &str, legacy: Option<&HistoryLoad>) -> L
         // 目录存在却一个可读段都没有（新建后即崩溃 / 全是坏段）：空首屏，
         // 如实报「没有更早内容」+ 本次跳过的坏段数（界面据此提示，plan §5-P2）
         None => LoadSessionPayload {
+            task_runs: Vec::new(),
             messages: Vec::new(),
             boundaries,
             paging: meta(0, false, bad_segments),
@@ -349,6 +358,7 @@ fn earlier_page(store: &SessionStore, id: &str, before_seq: u32) -> EarlierPage 
     // 旧格式（此刻新格式不是权威数据源）没有段可分页；新目录缺失同理：没有更早内容
     if !store.reads_new_format(id) {
         return EarlierPage {
+            task_runs: Vec::new(),
             messages: Vec::new(),
             from_seq: 0,
             has_more: false,
@@ -364,8 +374,10 @@ fn earlier_page(store: &SessionStore, id: &str, before_seq: u32) -> EarlierPage 
     match segment {
         Some(seg) => {
             let seq = seg.info.seq;
+            let messages = persist::from_persisted(store, id, seg.messages);
             EarlierPage {
-                messages: persist::from_persisted(store, id, seg.messages),
+                task_runs: load_for_messages(store, id, &messages),
+                messages,
                 from_seq: seq,
                 has_more: segments::has_readable_segments_before(&dir, seq),
                 boundaries,
@@ -373,6 +385,7 @@ fn earlier_page(store: &SessionStore, id: &str, before_seq: u32) -> EarlierPage 
             }
         }
         None => EarlierPage {
+            task_runs: Vec::new(),
             messages: Vec::new(),
             from_seq: 0,
             has_more: false,

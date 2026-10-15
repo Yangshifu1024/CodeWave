@@ -20,7 +20,7 @@ function safeToolOnly(item: AssistantItem): boolean {
   return !item.streaming && item.timeline.some(seg => seg.kind === "tool" || seg.kind === "thinking")
     && item.timeline.every(seg => seg.kind === "thinking"
       ? true
-      : seg.kind === "text" ? !seg.text.trim()
+      : seg.kind === "text" ? seg.deferred || !seg.text.trim()
         : seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]));
 }
 
@@ -28,7 +28,7 @@ function safeToolOnly(item: AssistantItem): boolean {
 function safeTail(item: AssistantItem): boolean {
   for (let i = item.timeline.length - 1; i >= 0; i--) {
     const seg = item.timeline[i];
-    if (seg.kind === "text" && !seg.text.trim()) continue;
+    if (seg.kind === "text" && (seg.deferred || !seg.text.trim())) continue;
     return seg.kind === "thinking" || (seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]));
   }
   return false;

@@ -71,6 +71,8 @@ export function canJoinProcessGroup(
   if (seg.kind === "thinking") return true;
   if (seg.kind !== "tool") return false;
   const tool: ToolView | undefined = toolsMap[seg.callKey];
+  // Subagents have their own timeline cards. Grouping must not bypass that deduplication.
+  if (tool?.tool === "subagent") return false;
   if (canGroupTool(tool)) return true;
   // 运行中的工具同样留在组内：跑批期间也保持一行，摘要带加载指示。
   // 只放 running（正在等审批的 waiting 与失败的 error 必须独立成行，不能藏进摘要）。

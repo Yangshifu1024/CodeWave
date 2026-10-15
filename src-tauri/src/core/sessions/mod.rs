@@ -6,6 +6,7 @@ pub mod cleanup;
 pub mod interrupt;
 pub mod repair;
 // 工具结果原样 sidecar（历史里只有模型侧瘦身文本，恢复需要完整出参）
+pub mod run_display;
 pub mod tool_results;
 // 图片外置存储与历史落盘 DTO（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
 // 历史文件里只留 blob 引用，base64 原文落到 `sessions/<owner>.imgblob/`

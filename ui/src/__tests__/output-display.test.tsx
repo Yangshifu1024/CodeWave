@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "../i18n";
 import { useUi } from "../stores/ui";
 import { OUTPUT_DISPLAY_KEY, readStoredOutputDisplay } from "../utils/outputDisplay";
@@ -25,6 +25,7 @@ afterEach(() => {
   localStorage.removeItem(OUTPUT_DISPLAY_KEY);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("output display preference", () => {
@@ -291,10 +292,61 @@ describe("completed tool aggregation", () => {
       ]}
       toolsMap={{ a: tool({ callKey: "a" }) }} streaming />);
     expect(container.querySelector(".tool-group-label")!.textContent).toContain("7s");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(container.querySelector(".tool-group-label")!.textContent).toContain("8s");
+    expect(container.querySelector(".anticon-loading")).toBeNull();
   });
 });
 
 describe("output reading anchor", () => {
+  it("describes running tools without claiming completion, then updates to completed counts", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const timeline: TimelineSeg[] = [{ kind: "tool", callKey: "a" }, { kind: "tool", callKey: "b" }];
+    const { container, rerender } = render(<TimelineSegsView timeline={timeline} toolsMap={{
+      a: tool({ callKey: "a", status: "running", outcome: undefined }),
+      b: tool({ callKey: "b", tool: "command", status: "running", outcome: undefined }),
+    }} />);
+    expect(container.querySelector(".tool-group-label")?.textContent).toBe("正在运行 2 项工具");
+    expect(container.querySelector(".tool-group-label")?.textContent).not.toContain("已读取");
+    expect(container.querySelector(".tool-group-label")?.textContent).not.toContain("已运行");
+    rerender(<TimelineSegsView timeline={timeline} toolsMap={{
+      a: tool({ callKey: "a" }),
+      b: tool({ callKey: "b", tool: "command", outcome: { ok: true, data: { exit_code: 0 } } }),
+    }} />);
+    expect(container.querySelector(".tool-group-label")?.textContent).toContain("已读取 1 个文件");
+    expect(container.querySelector(".tool-group-label")?.textContent).toContain("已运行 1 条命令");
+    expect(container.querySelector(".tool-group-label")?.textContent).not.toContain("正在运行");
+    expect(container.querySelector(".anticon-loading")).toBeNull();
+  });
+
+  it("keeps unknown running tool groups readable with a static status", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const { container } = render(<TimelineSegsView timeline={[
+      { kind: "tool", callKey: "a" }, { kind: "tool", callKey: "b" },
+    ]} toolsMap={{ a: tool({ callKey: "a", tool: "?", status: "running", outcome: undefined }),
+      b: tool({ callKey: "b", tool: "?", status: "running", outcome: undefined }) }} />);
+    expect(container.querySelector(".tool-group-label")?.textContent).toBe("正在运行 2 项工具");
+    expect(container.querySelector(".anticon-loading")).toBeNull();
+  });
+
+  it("keeps running groups and their expanded tool rows static with trailing disclosure arrows", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const { container } = render(<TimelineSegsView timeline={[
+      { kind: "tool", callKey: "a" }, { kind: "tool", callKey: "b" },
+    ]} toolsMap={Object.fromEntries(["a", "b"].map(callKey => [callKey,
+      tool({ callKey, tool: "command", status: "running", outcome: undefined }),
+    ]))} />);
+    const toggle = container.querySelector<HTMLElement>(".tool-group-toggle")!;
+    expect(toggle.querySelectorAll(".anticon-loading")).toHaveLength(0);
+    expect(toggle.querySelector(".anticon-file-search")).not.toBeNull();
+    expect(toggle.lastElementChild?.classList.contains("tool-group-chevron")).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle.querySelectorAll(".anticon-loading")).toHaveLength(0);
+    expect(container.querySelectorAll(".tool-group-body .anticon-loading")).toHaveLength(0);
+    expect(container.querySelectorAll(".tool-group-body .anticon-code")).toHaveLength(2);
+    for (const row of container.querySelectorAll(".tool-compact-content")) expect(row.lastElementChild?.classList.contains("chev")).toBe(true);
+  });
+
   it.each([
     ["summary round trip", 110, "none", 110],
     ["first child round trip", 150, "none", 150],

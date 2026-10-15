@@ -51,32 +51,34 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
       data-output-key={`sub:${subId}`}
       role="button"
       tabIndex={0}
-      title={sub.task || sub.description}
+      title={compact ? [sub.task || sub.description, `${sub.step}/${sub.maxSteps} · ${fmtTokens(sub.tokens)} tok`].filter(Boolean).join("\n") : sub.task || sub.description}
       onClick={() => void useRun.getState().openSubDrawer(null, sub.subId)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") void useRun.getState().openSubDrawer(null, sub.subId);
       }}
     >
       <RobotOutlined className="sub-card-robot" />
-      <span className="sub-card-label">{t("subagent.label")}</span>
+      {!compact && <span className="sub-card-label">{t("subagent.label")}</span>}
       <span className="sub-card-role">{sub.name || sub.role}</span>
+      {compact && !abnormal && <span className="sub-card-status">{sub.status === "running" ? t("subagent.statusRunning") : sub.status === "done" ? t("subagent.statusDone") : t("subagent.statusError")}</span>}
       {sub.description && <span className="sub-card-desc">· {sub.description}</span>}
       <span className="sub-card-meta">
-        {sub.status === "running" && <LoadingOutlined spin />}
-        {sub.status === "done" && !abnormal && <CheckOutlined />}
+        {!compact && sub.status === "running" && <LoadingOutlined spin />}
+        {!compact && sub.status === "done" && !abnormal && <CheckOutlined />}
         {sub.status === "done" && abnormal && (
           // 异常收尾警示：橙色（需注意），颜色取主题桥的 antd colorWarning，不硬编码色值；不用红色（红在本项目 = 危险）
           <ExclamationCircleOutlined style={{ color: "var(--ws-warn)" }} />
         )}
-        {sub.status === "error" && <CloseOutlined />}
-        {sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok
-        {warnKey && <span className="sub-card-warn">· {t(warnKey)}</span>}
+        {!compact && sub.status === "error" && <CloseOutlined />}
+        {!compact && <>{sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok</>}
+        {warnKey && <span className="sub-card-warn">{!compact && "· "}{t(warnKey)}</span>}
       </span>
       {/* 停止按钮（仅运行中）：stopPropagation 防止误开抽屉；点击 = 单独停止该子代理 */}
       {sub.status === "running" && (
         <span
           className="sub-card-stop"
           role="button"
+          tabIndex={0}
           aria-label={t("subagent.stop")}
           title={t("subagent.stop")}
           onClick={(e) => {

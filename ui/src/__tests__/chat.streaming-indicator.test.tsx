@@ -3,7 +3,7 @@
 //  ② 子代理过程抽屉的运行中流同样渲染加载图标（两处共用同一个语义化类名 .ws-streaming-indicator）；
 //  ③ 非输出状态（streaming 为假 / 子代理非 running）不渲染该指示。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, act } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // 直接挂载的组件必须自行初始化 i18next（否则 t() 返回原始 key）
 
@@ -18,6 +18,7 @@ import ChatMessages from "../features/chat/ChatMessages";
 import SubagentDrawer from "../features/subagent/SubagentDrawer";
 import { useRun, type SubStream, type SubView } from "../stores/run";
 import { useSessions } from "../stores/sessions";
+import { useUi } from "../stores/ui";
 
 /** 聊天消息里的等待指示（样式与语义都在这个类名上） */
 const indicator = () => document.querySelector(".ws-streaming-indicator");
@@ -90,9 +91,88 @@ afterEach(() => {
   cleanup();
   useRun.setState({ tabs: {}, drafts: {} });
   useSessions.setState({ tabs: [], activeKey: null, projects: [] });
+  useUi.setState({ outputDisplay: "detailed" });
 });
 
 describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-and-interface）", () => {
+  it.each(["compact", "detailed"] as const)("%s: shows each running subagent once without group or message loading duplicates", (outputDisplay) => {
+    seedChat(true);
+    useUi.setState({ outputDisplay });
+    useRun.setState(state => {
+      const tab = state.tabs.s1;
+      tab.subs = [subView(), subView({ subId: "sub_2" })];
+      tab.items = [{ kind: "assistant", streaming: true,
+        timeline: [
+          { kind: "thinking", text: "已完成思考", durationMs: 5000 },
+          { kind: "tool", callKey: "a" }, { kind: "tool", callKey: "b" },
+          { kind: "sub", subId: "sub_1" }, { kind: "sub", subId: "sub_2" },
+        ],
+        toolsMap: Object.fromEntries(["a", "b"].map(callKey => [callKey, {
+          callKey, tool: "subagent", status: "running" as const, progressTail: "",
+        }])),
+      }];
+    });
+    const { container } = render(<ChatMessages />);
+    expect(container.querySelectorAll(".sub-card")).toHaveLength(2);
+    expect(container.querySelectorAll(".tool-card")).toHaveLength(0);
+    expect(container.querySelectorAll(".tool-group-toggle")).toHaveLength(0);
+    expect(container.querySelectorAll(".anticon-loading")).toHaveLength(outputDisplay === "compact" ? 0 : 2);
+    expect(container.querySelectorAll(".ws-streaming-status")).toHaveLength(outputDisplay === "compact" ? 1 : 0);
+    expect(indicator()).toBeNull();
+
+    act(() => useRun.setState(state => {
+      for (const sub of state.tabs.s1.subs) sub.status = "done";
+    }));
+    // The main agent is still streaming: show its waiting indicator again.
+    if (outputDisplay === "compact") expect(container.querySelector(".ws-streaming-status")?.textContent).toBe("正在思考");
+    else expect(spinner()).not.toBeNull();
+    act(() => useRun.setState(state => {
+      const item = state.tabs.s1.items[0];
+      if (item.kind === "assistant") item.streaming = false;
+    }));
+    expect(container.querySelectorAll(".anticon-loading")).toHaveLength(0);
+    expect(container.querySelector(".ws-streaming-status")).toBeNull();
+  });
+
+  it("compact: uses a single static activity line for reply, thinking and approval waiting", () => {
+    seedChat(true);
+    useUi.setState({ outputDisplay: "compact" });
+    const { container } = render(<ChatMessages />);
+    const status = () => container.querySelector(".ws-streaming-status")?.textContent;
+    expect(status()).toBe("正在回复");
+    act(() => useRun.setState(state => {
+      state.tabs.s1.items = [{ kind: "assistant", streaming: true, timeline: [], toolsMap: {} }];
+    }));
+    expect(status()).toBe("正在思考");
+    act(() => useRun.setState(state => {
+      state.tabs.s1.items = [{ kind: "assistant", streaming: true,
+        timeline: [{ kind: "tool", callKey: "approve" }], toolsMap: {
+          approve: { callKey: "approve", tool: "command", status: "waiting", progressTail: "" },
+        },
+      }];
+    }));
+    expect(status()).toBe("等待确认");
+    expect(container.querySelectorAll(".ws-streaming-status")).toHaveLength(1);
+    expect(container.querySelectorAll(".anticon-loading")).toHaveLength(0);
+  });
+
+  it("keeps a failed subagent tool visible when spawn never produced a dedicated card", () => {
+    seedChat(false);
+    useUi.setState({ outputDisplay: "compact" });
+    useRun.setState(state => {
+      state.tabs.s1.items = [{ kind: "assistant", streaming: false,
+        timeline: [{ kind: "tool", callKey: "failed" }], toolsMap: {
+          failed: { callKey: "failed", tool: "subagent", status: "error", progressTail: "",
+            outcome: { ok: false, error: { code: "E_SUBAGENT_BUSY", message: "No available slot" } } },
+        },
+      }];
+    });
+    const { container } = render(<ChatMessages />);
+    expect(container.querySelectorAll(".tool-card.st-error")).toHaveLength(1);
+    expect(container.textContent).toContain("E_SUBAGENT_BUSY");
+    expect(container.querySelectorAll(".anticon-loading")).toHaveLength(0);
+  });
+
   it("正在输出：末条助手消息渲染 .anticon-loading，且旧类名 .cursor 已不存在", () => {
     seedChat(true);
     render(<ChatMessages />);
@@ -124,6 +204,16 @@ describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-and-interf
 });
 
 describe("子代理过程抽屉：同一套等待指示（docs/chat-and-interface）", () => {
+  it("compact: shows one static working line instead of a spinner", () => {
+    seedDrawer("running");
+    useUi.setState({ outputDisplay: "compact" });
+    const { container } = render(<AntApp><SubagentDrawer /></AntApp>);
+    const stream = container.querySelector(".sub-drawer-stream") ?? document.querySelector(".sub-drawer-stream")!;
+    expect(stream.querySelectorAll(".ws-streaming-status")).toHaveLength(1);
+    expect(stream.querySelector(".ws-streaming-status")?.textContent).toBe("正在处理");
+    expect(stream.querySelector(".anticon-loading")).toBeNull();
+  });
+
   it("流运行中：过程流末尾渲染 .anticon-loading", () => {
     seedDrawer("running");
     render(

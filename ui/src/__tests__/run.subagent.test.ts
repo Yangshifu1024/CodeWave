@@ -1,5 +1,5 @@
 // Subagent interaction batch ([docs/subagents](../../../docs/subagents.md)) store-level tests:
-// envelope frame routing / first subagent auto-opens the drawer / archive preserved across runs / subagent tool result backfill / restore recognition and process history rebuild.
+// Envelope frame routing / manual-only drawer / archive preserved across runs / subagent tool result backfill / restore recognition and process history rebuild.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFrameToTab } from "../stores/runFrames";
 import { useRun, type TimelineSeg } from "../stores/run";
@@ -70,22 +70,31 @@ describe("子代理交互（docs/subagents）", () => {
     seedTab(session);
   });
 
-  it("sub:spawn 首个子代理自动弹出抽屉并初始化消息流；多个不再切换", () => {
+  it("sub:spawn 只初始化消息流，不自动打开或切换手动选择的抽屉", async () => {
     const h = handlers();
     useRun.setState((s) => {
       s.tabs[session]!.items.push({ kind: "assistant", timeline: [], toolsMap: {}, streaming: true });
     });
     h["sub:spawn"]({ session, sub_id: "sub_1", role: "explore", name: "explore", task: "调研任务", description: "探索代码", max_steps: 10 });
     let t = tabOf(session);
-    expect(t.subDrawer).toEqual({ open: true, subId: "sub_1" });
+    expect(t.subDrawer).toEqual({ open: false, subId: null });
     expect(t.subs[0]).toMatchObject({ name: "explore", task: "调研任务", status: "running" });
     expect(t.subStreams.sub_1.status).toBe("running");
 
-    // second subagent starts: drawer keeps the current view, no interruption
+    // Spawning additional agents leaves the drawer closed.
     h["sub:spawn"]({ session, sub_id: "sub_2", role: "backend-dev", description: "实现", max_steps: 5 });
     t = tabOf(session);
-    expect(t.subDrawer).toEqual({ open: true, subId: "sub_1" });
+    expect(t.subDrawer).toEqual({ open: false, subId: null });
     expect(t.subs.filter((x) => x.status === "running")).toHaveLength(2);
+
+    await useRun.getState().openSubDrawer(session, "sub_1");
+    h["sub:spawn"]({ session, sub_id: "sub_3", role: "tester", description: "验证", max_steps: 5 });
+    expect(tabOf(session).subDrawer).toEqual({ open: true, subId: "sub_1" });
+
+    useRun.getState().closeSubDrawer(session);
+    for (const sub_id of ["sub_1", "sub_2", "sub_3"]) h["sub:done"]({ session, sub_id });
+    h["sub:spawn"]({ session, sub_id: "sub_4", role: "tester", description: "复查", max_steps: 5 });
+    expect(tabOf(session).subDrawer.open).toBe(false);
   });
 
   it("信封帧路由进独立消息流，不污染主流；收口后迟到帧不入流", () => {

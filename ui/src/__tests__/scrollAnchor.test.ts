@@ -304,6 +304,27 @@ describe("pickTarget 定位锚点目标", () => {
 });
 
 describe("collectNodes 收集可锚定节点", () => {
+  it("preserves the original anchor and valid escaped aliases while skipping malformed members", () => {
+    const el = makeScroller({ scrollTop: 250, scrollHeight: 1000, clientHeight: 400,
+      nodes: [{ key: "source", sig: "original", top: 120 }] });
+    const node = el.querySelector<HTMLElement>("[data-key]")!;
+    const sig = '用户原文含"引号"\n换行、反斜线\\和 🚀';
+    node.dataset.anchorAliases = JSON.stringify([null, {}, { key: 42, sig },
+      { key: "source", sig: "must not replace original" }, { key: "alias", sig }]);
+    expect(collectNodes(el)).toEqual([
+      { key: "source", sig: "original", top: 120 },
+      { key: "alias", sig, top: 120 },
+    ]);
+    expect(restoreAnchor(el, { kind: "item", key: "alias", sig, offset: 20 })).toBe(true);
+    expect(el.scrollTop).toBe(140);
+    for (const raw of ["{", "null", "{}", "[null]"]) {
+      node.dataset.anchorAliases = raw;
+      expect(collectNodes(el)).toEqual([{ key: "source", sig: "original", top: 120 }]);
+      expect(restoreAnchor(el, { kind: "item", key: "source", sig: "original", offset: 20 })).toBe(true);
+      expect(el.scrollTop).toBe(140);
+    }
+  });
+
   it("只收带 data-key 的节点，未打标项（子代理卡）自然跳过；top 相对内容顶部，与当前 scrollTop 无关", () => {
     const el = makeScroller({
       scrollTop: 250,

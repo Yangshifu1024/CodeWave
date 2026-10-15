@@ -274,6 +274,11 @@ pub fn session_log_candidates(data_dir: &Path, meta: &SessionMeta) -> Vec<PathBu
 /// 历史两种形态都存在时**都要删**（读兼容期不迁移，不做二选一）。
 /// 宁可删不掉也不让脏值变成目录穿越。
 pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &SessionMeta) -> bool {
+    let _guard = store.save_guard();
+    delete_session_files_locked(store, data_dir, meta)
+}
+
+fn delete_session_files_locked(store: &SessionStore, data_dir: &Path, meta: &SessionMeta) -> bool {
     if !is_safe_session_id(&meta.id) {
         tracing::warn!("会话编号非法（{}），跳过该会话的清理", meta.id);
         return false;
@@ -310,6 +315,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     // 工具结果原样 sidecar（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     // 目录随会话级联删除（与子代理过程历史同范式：路径由编号拼出、不做登记边车）
     ok &= remove_dir_if_exists(&store.tool_results_dir(&meta.id));
+    ok &= remove_dir_if_exists(&store.task_runs_dir(&meta.id));
     // 图片 blob（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：同上
     ok &= remove_dir_if_exists(&store.image_blobs_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
@@ -344,6 +350,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
 /// 按「id 不在索引」判定会误删正在使用中的数据。不碰 `index.json`（含 `.corrupt` 备份）
 /// 与 `sessions/subs/` 目录。
 pub fn remove_orphan_files(store: &SessionStore, cutoff: DateTime<Utc>) -> usize {
+    let _guard = store.save_guard();
     let mut removed = 0usize;
     for path in orphan_candidates(store, cutoff) {
         // 目录（sessions/<id>.toolres/）递归删，文件按文件删：两者共用同一份候选与预览口径
@@ -443,7 +450,8 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = name
                 .strip_suffix(".toolres")
-                .or_else(|| name.strip_suffix(".imgblob"));
+                .or_else(|| name.strip_suffix(".imgblob"))
+                .or_else(|| name.strip_suffix(".runs"));
             let Some(id) = id else {
                 continue;
             };
@@ -648,11 +656,12 @@ pub fn execute(
     days: u32,
     candidates: &[SessionMeta],
 ) -> CleanupOutcome {
+    let save_guard = store.save_guard();
     let now = Utc::now();
     let mut ok_ids: Vec<String> = Vec::new();
     let mut failed = 0u32;
     for meta in candidates {
-        if delete_session_files(store, data_dir, meta) {
+        if delete_session_files_locked(store, data_dir, meta) {
             ok_ids.push(meta.id.clone());
         } else {
             failed += 1;
@@ -666,7 +675,7 @@ pub fn execute(
     // 索引写入失败不能按「删了 0 个」报：文件已删、索引行还在，受影响的会话要计入失败
     //（下次清理会再次命中，重删文件视为成功——自愈）。
     let mut index_written = true;
-    let removed = match store.remove_many(&ok_ids) {
+    let removed = match store.remove_many_locked(&ok_ids) {
         Ok(removed) => removed,
         Err(e) => {
             index_written = false;
@@ -686,6 +695,7 @@ pub fn execute(
         );
     }
 
+    drop(save_guard);
     let orphans = remove_orphan_files(store, cutoff_at(now, days));
 
     let outcome = CleanupOutcome {
@@ -1211,6 +1221,33 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("with-toolres.toolres"))
         );
+    }
+
+    #[test]
+    fn run_display_dirs_removed_with_session_and_as_orphans() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        store.upsert_meta(meta("retained", &ago(1))).unwrap();
+        let dir = store.task_runs_dir("with-runs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("r.json"), b"{}").unwrap();
+        assert!(delete_session_files(
+            &store,
+            dd.path(),
+            &meta("with-runs", &ago(30 * 24 * 3600))
+        ));
+        assert!(!dir.exists());
+        let ghost = store.task_runs_dir("ghost-runs");
+        std::fs::create_dir_all(&ghost).unwrap();
+        let mtime: DateTime<Utc> = std::fs::metadata(&ghost)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .into();
+        let cutoff = mtime + chrono::Duration::seconds(1);
+        assert!(orphan_candidates(&store, cutoff).contains(&ghost));
+        assert_eq!(remove_orphan_files(&store, cutoff), 1);
+        assert!(!ghost.exists());
     }
 
     /// 图片 blob 目录（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：

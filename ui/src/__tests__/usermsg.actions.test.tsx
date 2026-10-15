@@ -121,30 +121,30 @@ describe("用户消息悬停操作（复制/修改）", () => {
   });
 });
 
-describe("消息时间戳恢复（旧档案留空，不伪造当前时刻）", () => {
-  function tsTexts(): (string | undefined)[] {
-    return [...document.querySelectorAll(".msg .role .ts")].map((e) => e.textContent ?? "");
-  }
-
-  it("restoreFromMessages：无 created_at 的旧消息时间行留空", () => {
+describe("移除消息身份行", () => {
+  it("restoreFromMessages：旧消息直接显示正文，不渲染身份行", () => {
     useSessions.setState({ activeKey: "s1" });
     useRun.getState().restoreFromMessages("s1", [
       { role: "user", content: [{ type: "text", text: "旧问题" }] },
       { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
     ] as any);
     renderMsgs();
-    const texts = tsTexts();
-    expect(texts.length).toBe(2);
-    for (const t of texts) expect(t).toBe(""); // never falls back to Date.now() impersonating "now"
+    expect(document.querySelector(".msg .role")).toBeNull();
+    expect(document.querySelector(".user-bubble")?.textContent).toContain("旧问题");
+    expect(document.querySelector(".assistant .md")?.textContent).toContain("旧回答");
   });
 
-  it("restoreFromMessages：带 created_at 的新档案显示真实时间", () => {
+  it("restoreFromMessages：保留时间数据但不渲染身份行", () => {
     useSessions.setState({ activeKey: "s1" });
     useRun.getState().restoreFromMessages("s1", [
       { role: "user", content: [{ type: "text", text: "新问题" }], created_at: "2025-01-01T10:00:00Z" },
+      { role: "assistant", content: [{ type: "text", text: "新回答" }], created_at: "2025-01-01T10:00:44Z" },
     ] as any);
     renderMsgs();
-    const texts = tsTexts();
-    expect(texts[0]).toContain("2025-01-01");
+    expect(document.querySelector(".msg .role")).toBeNull();
+    expect(document.querySelector(".user-bubble")?.textContent).toContain("新问题");
+    expect(document.querySelector(".assistant .md")?.textContent).toContain("新回答");
+    expect(useRun.getState().tabs.s1.items.map(item => "createdAt" in item ? item.createdAt : undefined))
+      .toEqual(["2025-01-01T10:00:00Z", "2025-01-01T10:00:44Z"]);
   });
 });

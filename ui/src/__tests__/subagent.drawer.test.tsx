@@ -1,4 +1,4 @@
-// Subagent interaction batch ([docs/subagents](../../../docs/subagents.md)) component-level tests: chat card single-row clickable / process drawer render and close-without-destroy / Composer run indicator.
+// Subagent interaction batch ([docs/subagents](../../../docs/subagents.md)) component-level tests: manual chat card entry / process drawer render and close-without-destroy / no Composer run indicator.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
@@ -269,7 +269,7 @@ describe("SubagentDrawer（docs/subagents）", () => {
   });
 });
 
-describe("Composer 子代理运行指示器（docs/subagents）", () => {
+describe("Composer 不显示子代理运行控件（docs/subagents）", () => {
   function seedComposerEnv(subs: SubView[]) {
     useSettings.setState({
       config: {
@@ -299,46 +299,21 @@ describe("Composer 子代理运行指示器（docs/subagents）", () => {
     seedTab("s1", subs, Object.fromEntries(subs.map((s) => [s.subId, subStream({ status: s.status })])), { open: false, subId: null });
   }
 
-  it("无运行中子代理时指示器隐藏", () => {
-    seedComposerEnv([subView({ status: "done" })]);
+  it.each([
+    { state: "无子代理", subs: [] },
+    { state: "单个运行中", subs: [subView()] },
+    { state: "多个运行中", subs: [subView(), subView({ subId: "sub_2", role: "backend-dev" })] },
+    { state: "全部结束", subs: [subView({ status: "done" }), subView({ subId: "sub_2", status: "error" })] },
+  ])("$state 时不显示指示器或子代理菜单", ({ subs }) => {
+    seedComposerEnv(subs);
     render(
       <AntApp>
         <Composer />
       </AntApp>,
     );
     expect(document.querySelector(".subs-indicator")).toBeNull();
-  });
-
-  it("单个运行中：显示机器人 + 数量 1，点击直达抽屉", () => {
-    seedComposerEnv([subView()]);
-    render(
-      <AntApp>
-        <Composer />
-      </AntApp>,
-    );
-    const btn = document.querySelector(".subs-indicator") as HTMLElement;
-    expect(btn).not.toBeNull();
-    expect(btn.textContent).toContain("1");
-    fireEvent.click(btn);
-    expect(useRun.getState().tabs["s1"]!.subDrawer).toEqual({ open: true, subId: "sub_1" });
-  });
-
-  it("多个运行中：数量为 2，向上菜单选择后打开对应抽屉", () => {
-    seedComposerEnv([subView(), subView({ subId: "sub_2", role: "backend-dev", name: "backend-dev", description: "实现功能" })]);
-    render(
-      <AntApp>
-        <Composer />
-      </AntApp>,
-    );
-    const btn = document.querySelector(".subs-indicator") as HTMLElement;
-    expect(btn.textContent).toContain("2");
-    fireEvent.click(btn);
-    // antd Dropdown menu mounts on body (pitfall list: find menu-item by text, then click)
-    const items = document.querySelectorAll(".ant-dropdown-menu-item");
-    expect(items.length).toBe(2);
-    const dev = Array.from(items).find((el) => el.textContent?.includes("dev"));
-    fireEvent.click(dev!);
-    expect(useRun.getState().tabs["s1"]!.subDrawer).toEqual({ open: true, subId: "sub_2" });
+    expect(document.querySelector(".subs-menu-item")).toBeNull();
+    expect(useRun.getState().tabs["s1"]!.subDrawer.open).toBe(false);
   });
 });
 

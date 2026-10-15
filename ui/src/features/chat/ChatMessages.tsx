@@ -1,6 +1,6 @@
 import { fontSizeCss } from "../../utils/fonts";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Divider, Image, Tooltip } from "antd";
+import { Alert, Button, Collapse, Divider, Image, Tooltip, Typography } from "antd";
 import {
   CheckOutlined,
   CloseOutlined,
@@ -31,6 +31,7 @@ import {
   isSelfScroll,
   itemKeysOf,
   itemSig,
+  parseAnchorAliases,
   restoreAnchor,
 } from "../../utils/scrollAnchor";
 import type { ScrollAnchor } from "../../utils/scrollAnchor";
@@ -40,22 +41,14 @@ import { TimelineSegsView } from "./segments";
 import ChatScrollbar from "./ChatScrollbar";
 import { captureOutputAnchor, restoreOutputAnchor, type OutputAnchor } from "../../utils/outputAnchor";
 import { compactTranscript } from "./compactTranscript";
+import type { TranscriptEntry } from "./compactTranscript";
+import { taskDuration, taskTranscript } from "./taskTranscript";
 import type { ToolOrigin } from "../tools/toolPresentation";
 import type { ToolExpansion } from "../tools/ToolCallCard";
 
 type ExpansionState = Record<string, Record<string, ToolExpansion>>;
 type GroupExpansionState = Record<string, Record<string, boolean>>;
 const expansionScope = (sessionKey: string | null, messageKey: string) => JSON.stringify([sessionKey, messageKey]);
-
-// 消息时间戳：无时间则留空（旧存档 / 恢复期间）；绝不用当前时间伪造（[docs/chat-and-interface](../../../../docs/chat-and-interface.md) 缺陷修复）
-function ts(iso: string | undefined): string {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const d = new Date(t);
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
 
 // 最后一条 item 的 kind（effect 依赖只挂 kind，避免依赖整个数组）
 function lastItem_kind(items: UiItem[]): string {
@@ -72,13 +65,11 @@ interface AnchorAttrs {
 /** 用户消息：文本气泡 + 图片缩略（可预览）；悬停操作提供复制与「修改」（经 ws:composer-fill 回填 Composer，不自动发送）。 */
 const UserMessage = memo(function UserMessage({
   text,
-  createdAt,
   images,
   anchorKey,
   anchorSig,
 }: {
   text: string;
-  createdAt?: string;
   images?: { mediaType: string; data: string }[];
 } & AnchorAttrs) {
   const { t } = useTranslation();
@@ -101,10 +92,6 @@ const UserMessage = memo(function UserMessage({
   };
   return (
     <div className="msg user" data-key={anchorKey} data-sig={anchorSig}>
-      <div className="role">
-        <span className="ts">{ts(createdAt)}</span>
-        <span>{t("chat.you")}</span>
-      </div>
       {text && <div className="bubble user-bubble md" dangerouslySetInnerHTML={{ __html: renderUserMarkdown(text) }} />}
       {text && (
         <div className="user-msg-actions">
@@ -140,9 +127,43 @@ const UserMessage = memo(function UserMessage({
   );
 });
 
+const FinalAnswerCopy = memo(function FinalAnswerCopy({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const [copyState, setCopyState] = useState<"idle" | "done" | "fail">("idle");
+  const attempt = useRef(0);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => {
+    attempt.current++;
+    clearTimeout(resetTimer.current);
+  }, []);
+  const doCopy = async () => {
+    const current = ++attempt.current;
+    clearTimeout(resetTimer.current);
+    setCopyState("idle");
+    const ok = await copyText(text).catch(() => false);
+    if (current !== attempt.current) return;
+    setCopyState(ok ? "done" : "fail");
+    resetTimer.current = setTimeout(() => setCopyState("idle"), 1200);
+  };
+  const feedback = copyState === "done" ? t("chat.copied") : copyState === "fail" ? t("chat.copyAnswerFailed") : undefined;
+  return (
+    <div className="final-answer-actions" style={{ marginTop: 8 }}>
+      <Tooltip title={feedback ?? t("chat.copyAnswer")}>
+        <Button type="text" size="small" aria-label={t("chat.copyAnswer")}
+          style={{ color: "var(--ws-text-2)" }}
+          icon={copyState === "done" ? <CheckOutlined /> : copyState === "fail" ? <CloseOutlined /> : <CopyOutlined />}
+          onClick={() => { void doCopy(); }}
+        >{feedback}</Button>
+      </Tooltip>
+    </div>
+  );
+});
+
 const AssistantMessage = memo(function AssistantMessage({
   item,
   streaming,
+  hasPendingProcess,
+  waitingForApproval,
   onUserToggle,
   anchorKey,
   anchorSig,
@@ -155,9 +176,15 @@ const AssistantMessage = memo(function AssistantMessage({
   sessionKey,
   onToolExpansionChange,
   onGroupExpansionChange,
+  finalRevealKey,
+  onFinalRevealProgress,
+  onFinalRevealComplete,
+  finalAnswer,
 }: {
   item: Extract<UiItem, { kind: "assistant" }>;
   streaming: boolean;
+  hasPendingProcess: boolean;
+  waitingForApproval: boolean;
   onUserToggle?: () => void;
   /** 自动弹预览信号（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：透传到工具卡，命中即弹框 */
   autoOpenCallKey?: string | null;
@@ -170,7 +197,12 @@ const AssistantMessage = memo(function AssistantMessage({
   sessionKey: string | null;
   onToolExpansionChange: (messageKey: string, callKey: string, expansion: ToolExpansion) => void;
   onGroupExpansionChange: (messageKey: string, callKey: string, expanded: boolean) => void;
+  finalRevealKey?: string;
+  onFinalRevealProgress?: (finished: boolean, root: HTMLElement | null) => void;
+  onFinalRevealComplete?: () => void;
+  finalAnswer?: string;
 } & AnchorAttrs) {
+  const { t } = useTranslation();
   const toolExpansions = useMemo(() => {
     const out: Record<string, ToolExpansion> = {};
     for (const callKey of Object.keys(item.toolsMap)) {
@@ -204,7 +236,7 @@ const AssistantMessage = memo(function AssistantMessage({
   let tailIndex = item.timeline.length - 1;
   while (tailIndex >= 0) {
     const segment = item.timeline[tailIndex];
-    if (segment.kind === "text" && !segment.text.trim()) { tailIndex--; continue; }
+    if (segment.kind === "text" && (segment.deferred || !segment.text.trim())) { tailIndex--; continue; }
     if (segment.kind === "tool") {
       const tool = item.toolsMap[segment.callKey];
       // Match TimelineSegsView's missing-tool and successful-subagent filtering.
@@ -213,16 +245,12 @@ const AssistantMessage = memo(function AssistantMessage({
     break;
   }
   const tail = item.timeline[tailIndex];
+  const hasDeferredText = item.timeline.some(seg => seg.kind === "text" && seg.deferred);
   const processTail = compact && (tail?.kind === "tool" || tail?.kind === "thinking");
   const processOnly = processTail
-    && item.timeline.every(seg => seg.kind === "tool" || seg.kind === "thinking" || (seg.kind === "text" && !seg.text.trim()));
-  const fullTime = ts(item.createdAt);
+    && item.timeline.every(seg => seg.kind === "tool" || seg.kind === "thinking" || (seg.kind === "text" && (seg.deferred || !seg.text.trim())));
   return (
     <div className={`msg assistant${processOnly ? " process-only" : ""}${processTail ? " process-tail" : ""}`} data-key={anchorKey} data-sig={anchorSig}>
-      <div className="role">
-        <span className="role-name">CodeWave</span>
-        <span className="ts" title={fullTime}>{compact ? (processOnly ? fullTime.slice(-8) : fullTime.slice(-8, -3)) : fullTime}</span>
-      </div>
       {/* 按 timeline 顺序穿插渲染各段（与子代理过程抽屉共用同一段渲染；docs/subagents 抽取至 segments.tsx） */}
       <TimelineSegsView
         timeline={item.timeline}
@@ -236,10 +264,20 @@ const AssistantMessage = memo(function AssistantMessage({
         onToolExpansionChange={updateToolExpansion}
         groupExpansions={groupExpansions}
         onGroupExpansionChange={updateGroupExpansion}
+        finalRevealKey={finalRevealKey}
+        onFinalRevealProgress={onFinalRevealProgress}
+        onFinalRevealComplete={onFinalRevealComplete}
       />
-      {/* 等待指示（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：antd 加载图标，
-          样式类承载颜色/字号（theme/app.css 的 .ws-streaming-indicator）；位置仍在末尾、状态判定不变 */}
-      {streaming && (
+      {finalAnswer && <FinalAnswerCopy text={finalAnswer} />}
+      {streaming && compact && (
+        <Typography.Text type="secondary" className="ws-streaming-status" role="status">
+          {waitingForApproval ? t("chat.activityWaiting") : hasPendingProcess ? t("chat.activityProcessing")
+            : hasDeferredText || tail?.kind === "text" ? t("chat.activityResponding") : t("chat.activityThinking")}
+        </Typography.Text>
+      )}
+      {/* Detailed display keeps a fallback indicator when concrete process state is absent. */}
+      {streaming && !compact && hasDeferredText && !hasPendingProcess && <Typography.Text type="secondary" role="status">{t("chat.activityResponding")}</Typography.Text>}
+      {streaming && !compact && !hasDeferredText && !hasPendingProcess && !(tail?.kind === "thinking" && tail.startedAt !== undefined && tail.durationMs === undefined) && (
         <span className="ws-streaming-indicator">
           <LoadingOutlined spin />
         </span>
@@ -277,11 +315,13 @@ const SMOOTH_SCROLL_MS = 700;
  *  瞬时跳底只豁免落点，平滑动画才用 from→target 区间，防止自家跳转被误判为用户滚动
  *  （[docs/chat-and-interface](../../../../docs/chat-and-interface.md)、[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。 */
 export default function ChatMessages() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const active = useActiveRun();
   const outputDisplay = useUi((s) => s.outputDisplay);
   const [toolExpansions, setToolExpansions] = useState<ExpansionState>({});
   const [groupExpansions, setGroupExpansions] = useState<GroupExpansionState>({});
+  const [taskExpansions, setTaskExpansions] = useState<Record<string, boolean>>({});
+  const taskAnchor = useRef<{ sessionId: string | null; anchor: OutputAnchor } | null>(null);
   const displayAnchor = useRef<{ sessionId: string | null; anchor: OutputAnchor } | null>(null);
   const hasSession = useSessions((s) => !!s.activeKey);
   const scroller = useRef<HTMLDivElement>(null);
@@ -340,6 +380,14 @@ export default function ChatMessages() {
     },
     [markProgScroll],
   );
+  const onFinalRevealProgress = useCallback((finished: boolean, root: HTMLElement | null) => {
+    const el = scroller.current;
+    const sessionId = useSessions.getState().activeKey;
+    if (stickBottom.current) jumpToBottom(el);
+    if (finished) void upgradeDiagrams(root).catch(() => {}).then(() => {
+      if (stickBottom.current && scroller.current === el && useSessions.getState().activeKey === sessionId) jumpToBottom(el);
+    });
+  }, [jumpToBottom]);
 
   /** 按真实几何同步「贴底/跟随」态：阈值沿用 scrollAnchor.isAtBottom（BOTTOM_EPS=40，与 onScroll 的 <40 同源，
    *  不另发明一套判定） */
@@ -370,6 +418,29 @@ export default function ChatMessages() {
 
   // 2.9：发送消息后强制滚到底部（items 增长且最后一条是新的用户消息）
   const activeKey = useSessions((s) => s.activeKey);
+  useEffect(() => useRun.subscribe((state, previous) => {
+    const sessionId = useSessions.getState().activeKey;
+    if (!sessionId || (state.tabs[sessionId]?.taskRuns === previous.tabs[sessionId]?.taskRuns
+      && state.tabs[sessionId]?.pendingFinals === previous.tabs[sessionId]?.pendingFinals
+      && state.tabs[sessionId]?.finalReveals === previous.tabs[sessionId]?.finalReveals) || !scroller.current) return;
+    taskAnchor.current = { sessionId, anchor: captureOutputAnchor(scroller.current) };
+  }), []);
+  useLayoutEffect(() => {
+    const saved = taskAnchor.current;
+    taskAnchor.current = null;
+    const el = scroller.current;
+    if (saved && el && saved.sessionId === activeKey && !saved.anchor.atBottom) {
+      // A hidden process member now maps to the summary header; its old deep offset is no longer meaningful.
+      if (saved.anchor.fallback.kind === "item") {
+        const key = saved.anchor.fallback.key;
+        const hidden = Array.from(el.querySelectorAll<HTMLElement>(".task-process [data-anchor-aliases]"))
+          .some(node => parseAnchorAliases(node.dataset.anchorAliases).some(alias => alias.key === key));
+        if (hidden) saved.anchor = { ...saved.anchor, segmentKey: null, fallback: { ...saved.anchor.fallback, offset: 0 } };
+      }
+      restoreOutputAnchor(el, saved.anchor);
+      markProgScroll(el, el.scrollTop);
+    }
+  }, [active.taskRuns, active.pendingFinals, active.finalReveals, taskExpansions, activeKey, markProgScroll]);
   // store 通知在 DOM 更新前捕获锚点，设置页与聊天入口共用此保护。
   useEffect(() => useUi.subscribe((state, previous) => {
     if (state.outputDisplay === previous.outputDisplay || !scroller.current) return;
@@ -520,6 +591,8 @@ export default function ChatMessages() {
     active.subs.length,
     streamCount, // done/error/cancelled 是三条翻 streaming 的收尾路径——必须触发补渲染
     contentLen,
+    active.pendingFinals,
+    active.finalReveals,
     jumpToBottom,
   ]);
 
@@ -603,6 +676,47 @@ export default function ChatMessages() {
   const entries = outputDisplay === "compact"
     ? compactTranscript(active.items, keys, boundaryAt, protectedKeys, groupRoots)
     : active.items.map((item, index) => ({ item, index, key: keys[index], members: [] }));
+  const taskEntries = taskTranscript(entries, active.taskRuns ?? [], active.subs);
+  // Commit collapsed process first. Two animation frames guarantee a browser paint before final text.
+  useEffect(() => {
+    if (!activeKey) return;
+    const pending = Object.keys(active.pendingFinals ?? {});
+    if (!pending.length) return;
+    if (document.hidden) {
+      for (const runId of pending) useRun.getState().revealFinal(activeKey, runId, false);
+      return;
+    }
+    const ready = new Set(taskEntries.flatMap(entry => "kind" in entry && entry.finalKey ? [entry.run.run_id] : []));
+    for (const runId of pending) if (!ready.has(runId)) useRun.getState().revealFinal(activeKey, runId, false);
+    const staged = pending.filter(runId => ready.has(runId));
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        for (const runId of staged) useRun.getState().revealFinal(activeKey, runId);
+      });
+    });
+    return () => { cancelAnimationFrame(firstFrame); if (secondFrame) cancelAnimationFrame(secondFrame); };
+    // taskRuns and pendingFinals are published together by the terminal reducer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, active.pendingFinals]);
+  useEffect(() => {
+    const sessionId = activeKey;
+    return () => {
+      if (!sessionId) return;
+      for (const runId of Object.keys(useRun.getState().tabs[sessionId]?.pendingFinals ?? {})) useRun.getState().revealFinal(sessionId, runId, false);
+      for (const runId of Object.keys(useRun.getState().tabs[sessionId]?.finalReveals ?? {})) useRun.getState().finishFinalReveal(sessionId, runId);
+    };
+  }, [activeKey]);
+  useEffect(() => {
+    const finishHidden = () => {
+      if (!document.hidden || !activeKey) return;
+      const tab = useRun.getState().tabs[activeKey];
+      for (const runId of Object.keys(tab?.pendingFinals ?? {})) useRun.getState().revealFinal(activeKey, runId, false);
+      for (const runId of Object.keys(tab?.finalReveals ?? {})) useRun.getState().finishFinalReveal(activeKey, runId);
+    };
+    document.addEventListener("visibilitychange", finishHidden);
+    return () => document.removeEventListener("visibilitychange", finishHidden);
+  }, [activeKey]);
   const updateToolExpansion = useCallback((messageKey: string, callKey: string, expansion: ToolExpansion) => {
     const scope = expansionScope(activeKey, messageKey);
     setToolExpansions(previous => ({ ...previous, [scope]: { ...previous[scope], [callKey]: expansion } }));
@@ -614,7 +728,7 @@ export default function ChatMessages() {
 
   /** 渲染一条转录项。`itemKey` = 稳定键（AC-14）：既作 React key，也打给 DOM 供滚动锚点定位——
    *  用数组下标作 key 时，分页前插会让所有节点错位（同一条消息被重挂、局部状态丢失）。 */
-  const renderItem = (item: UiItem, itemKey: string, origins?: Record<string, ToolOrigin>, originalItem: UiItem = item) => {
+  const renderItem = (item: UiItem, itemKey: string, origins?: Record<string, ToolOrigin>, originalItem: UiItem = item, finalRunId?: string, finalAnswer?: string) => {
     // 锚点定位依据：scrollAnchor.collectNodes 按 data-key（主）+ data-sig（指纹兜底）收集；
     // 两者都是字符串，memo 组件按值比较不受影响（不传对象，避免身份每次变化击穿 memo）。
     const anchorSig = itemSig(originalItem);
@@ -623,7 +737,6 @@ export default function ChatMessages() {
         <UserMessage
           key={itemKey}
           text={item.text}
-          createdAt={item.createdAt}
           images={item.images}
           anchorKey={itemKey}
           anchorSig={anchorSig}
@@ -636,6 +749,11 @@ export default function ChatMessages() {
           key={itemKey}
           item={item}
           streaming={item.streaming}
+          hasPendingProcess={item.timeline.some(seg => seg.kind === "sub"
+            ? active.subs.some(sub => sub.subId === seg.subId && sub.status === "running")
+            : seg.kind === "tool" && item.toolsMap[seg.callKey]?.tool !== "subagent"
+              && ["running", "waiting"].includes(item.toolsMap[seg.callKey]?.status ?? ""))}
+          waitingForApproval={item.timeline.some(seg => seg.kind === "tool" && item.toolsMap[seg.callKey]?.status === "waiting")}
           onUserToggle={suspendFollow}
           anchorKey={itemKey}
           anchorSig={anchorSig}
@@ -648,6 +766,10 @@ export default function ChatMessages() {
           sessionKey={activeKey}
           onToolExpansionChange={updateToolExpansion}
           onGroupExpansionChange={updateGroupExpansion}
+          finalRevealKey={finalRunId && active.finalReveals?.[finalRunId] ? `${activeKey}:${finalRunId}` : undefined}
+          onFinalRevealProgress={onFinalRevealProgress}
+          onFinalRevealComplete={finalRunId && activeKey ? () => useRun.getState().finishFinalReveal(activeKey, finalRunId) : undefined}
+          finalAnswer={finalAnswer}
         />
       );
     }
@@ -714,6 +836,15 @@ export default function ChatMessages() {
     }
   };
 
+  const renderEntry = (entry: TranscriptEntry, finalRunId?: string, finalAnswer?: string) => (
+    <Fragment key={entry.key}>
+      {(boundaryAt.get(entry.index) ?? []).map(b => (
+        <CompactionDivider key={`bd:${b.seq}:${b.source ?? "compact"}`} seq={b.seq} source={b.source} />
+      ))}
+      {renderItem(entry.item, entry.key, entry.origins, entry.members[0]?.item ?? entry.item, finalRunId, finalAnswer)}
+    </Fragment>
+  );
+
   return (
     <div className="chat-body" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
       <div ref={scroller} className="chat-messages" onScroll={onScroll} onWheel={onWheel}>
@@ -766,17 +897,64 @@ export default function ChatMessages() {
             )}
           </div>
         )}
-        {entries.map(entry => (
-          // Fragment 只作分组（DOM 上不产生节点）：分隔线要与它那条消息同组，稳定键打在分组上
-          <Fragment key={entry.key}>
-            {(boundaryAt.get(entry.index) ?? []).map((b) => (
-              <CompactionDivider key={`bd:${b.seq}:${b.source ?? "compact"}`} seq={b.seq} source={b.source} />
-            ))}
-            {renderItem(entry.item, entry.key, "origins" in entry ? entry.origins : undefined, entry.members[0]?.item ?? entry.item)}
-          </Fragment>
-        ))}
+        {taskEntries.map(entry => {
+          if (!("kind" in entry)) return renderEntry(entry);
+          const scope = expansionScope(activeKey, entry.run.run_id);
+          const expanded = !entry.canCollapse || (taskExpansions[scope] ?? entry.run.status !== "done");
+          const label = t("chat.taskProcess", { duration: taskDuration(entry.run.duration_ms, i18n.language) });
+          const statusLabel = entry.run.status === "done" ? ""
+            : ` · ${entry.run.status === "error" ? t("chat.taskStatus.error") : t("chat.taskStatus.cancelled")}`;
+          const aliases = entry.process.flatMap(part => part.members.length
+            ? part.members.map(member => ({ key: member.key, sig: itemSig(member.item) }))
+            : [{ key: part.key, sig: itemSig(active.items[part.index] ?? part.item) }]);
+          const processKeys = entry.process.flatMap(part => part.item.kind === "assistant"
+            ? part.item.timeline.flatMap((seg, index) => {
+              if (seg.kind === "tool") return [seg.callKey];
+              if (seg.kind === "sub") return [`sub:${seg.subId}`];
+              if (seg.kind !== "thinking" && seg.kind !== "text") return [];
+              const owner = part.origins?.[`${seg.kind}:${index}`]?.key ?? part.key;
+              const source = active.items[keys.indexOf(owner)];
+              const sourceIndex = source?.kind === "assistant" ? source.timeline.indexOf(seg) : -1;
+              // Both the expanded projection and the original live stream can be the captured reader position.
+              return [`${seg.kind}:${index}`, ...(seg.kind === "text" && seg.outputKey ? [seg.outputKey] : []),
+                ...(sourceIndex >= 0 ? [`${seg.kind}:${sourceIndex}`] : [])];
+            }) : []);
+          const messageKeys = [...new Set(entry.process.flatMap(part => [part.key, ...Object.values(part.origins ?? {}).map(origin => origin.key)]))];
+          return (
+            <Fragment key={entry.key}>
+              {entry.process.length > 0 ? (
+                <Collapse className="task-process" ghost activeKey={expanded ? [entry.key] : []}
+                  expandIconPlacement="end"
+                  styles={{
+                    root: { marginBottom: 12 },
+                    header: { paddingInline: 0, borderBottom: "1px solid var(--ws-border)", color: "var(--ws-text-2)" },
+                    title: { flex: "0 1 auto", marginInlineEnd: 0 },
+                    body: { padding: 0 },
+                  }}
+                  onChange={next => {
+                    if (scroller.current) taskAnchor.current = { sessionId: activeKey, anchor: captureOutputAnchor(scroller.current) };
+                    suspendFollow();
+                    setTaskExpansions(previous => ({ ...previous, [scope]: next.includes(entry.key) }));
+                  }}
+                  items={[{ key: entry.key,
+                    collapsible: entry.canCollapse ? undefined : "disabled",
+                    label: <span data-anchor-aliases={!expanded ? JSON.stringify(aliases) : undefined}
+                      data-output-key={!expanded ? entry.key : undefined}
+                      data-output-group={!expanded ? JSON.stringify(processKeys) : undefined}
+                      data-output-message-keys={!expanded ? JSON.stringify(messageKeys) : undefined}
+                    >{label}{statusLabel}</span>,
+                    children: <div hidden={!expanded}>{entry.process.map(part => renderEntry(part))}</div>,
+                  }]} />
+              ) : <div className="notice-line dim" style={{ margin: "8px 0" }}>{label}{statusLabel}</div>}
+              {entry.visible.filter(part => !active.pendingFinals?.[entry.run.run_id] || part.key !== entry.finalKey).map(part => renderEntry(part,
+                part.key === entry.finalKey ? entry.run.run_id : undefined,
+                part.key === entry.finalKey && !active.finalReveals?.[entry.run.run_id] ? entry.run.final_answer ?? undefined : undefined))}
+              {active.pendingFinals?.[entry.run.run_id] && <Typography.Text type="secondary" role="status">{t("chat.activityResponding")}</Typography.Text>}
+            </Fragment>
+          );
+        })}
 
-        {active.suggestions.length > 0 && !active.running && (
+        {active.suggestions.length > 0 && !active.running && !Object.keys(active.pendingFinals ?? {}).length && !Object.keys(active.finalReveals ?? {}).length && (
           <div className="chips">
             <div className="chips-label">
               <ThunderboltOutlined /> {t("chat.suggestions")}

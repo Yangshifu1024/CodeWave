@@ -5,7 +5,7 @@ import {
   ArrowUpOutlined, BulbOutlined, CheckCircleOutlined, CloseOutlined,
   DownOutlined, ExclamationCircleOutlined, FileAddOutlined, FileExcelOutlined,
   FileOutlined, FilePdfOutlined, FileTextOutlined, FileWordOutlined,
-  PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
+  PlusOutlined, SafetyCertificateOutlined,
   SettingOutlined, StopOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -38,7 +38,7 @@ const { TextArea } = Input;
 // plan（最安全）→ confirm_each（询问）→ auto_edit（自动）→ full_access（完全）
 const MODE_ORDER: ApprovalMode[] = ["plan", "confirm_each", "auto_edit", "full_access"];
 
-/** Composer：底部输入区 + 工具条（左：+/权限/子代理 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
+/** Composer：底部输入区 + 工具条（左：+/权限 ｜ 中：上下文/命中/速率 ｜ 右：压缩/模型/力度/发送）。
  *  键盘契约：Enter 发送、Shift+Enter 换行、Shift+Tab 循环权限档、空输入 ↑ 进入历史浏览、
  *  / 触发技能菜单、$ 触发子代理菜单、@ 触发提及菜单（↑↓ 导航、Enter/Tab 选中）；
  *  IME 组合期按键全部放行。ask 弹出时提问卡整体覆盖本组件与队列面板，回答后原样恢复
@@ -47,8 +47,6 @@ export default function Composer() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const active = useActiveRun();
-  // [docs/subagents](../../../../docs/subagents.md)：运行中的子代理（Composer 指示器的计数与菜单数据源）
-  const runningSubs = active.subs.filter((s) => s.status === "running");
   const tab = useActiveTab();
   const contextPct = useContextPct();
   const compactThreshold = useSettings((s) => s.config?.compact_threshold ?? 0.6);
@@ -856,51 +854,6 @@ export default function Composer() {
                   <DownOutlined className="tb-chev" />
                 </Button>
               </Dropdown>
-              {/* docs/subagents：运行中子代理指示器（计数 = 运行中子代理数，0 隐藏）。
-                  单个时点击直达过程抽屉；多个时弹向上菜单、选中后打开。 */}
-              {runningSubs.length === 1 && (
-                <Button
-                  type="text"
-                  className="subs-indicator"
-                  title={t("subagent.runningCount", { n: 1 })}
-                  icon={<RobotOutlined />}
-                  onClick={() => void useRun.getState().openSubDrawer(null, runningSubs[0].subId)}
-                >
-                  <span className="tb-label">{runningSubs.length}</span>
-                </Button>
-              )}
-              {runningSubs.length > 1 && (
-                <Dropdown
-                  trigger={["click"]}
-                  placement="topLeft"
-                  menu={{
-                    items: runningSubs.map((s) => ({
-                      key: s.subId,
-                      label: (
-                        <span className="subs-menu-item">
-                          <RobotOutlined />
-                          <span className="subs-menu-role">{s.name || s.role}</span>
-                          {s.description && <span className="subs-menu-desc">· {s.description}</span>}
-                          <span className={`subs-menu-st st-${s.status}`}>
-                            {s.status === "running" ? "●" : s.status === "error" ? "✕" : "✓"}
-                          </span>
-                        </span>
-                      ),
-                    })),
-                    onClick: ({ key }) => void useRun.getState().openSubDrawer(null, key),
-                  }}
-                >
-                  <Button
-                    type="text"
-                    className="subs-indicator"
-                    title={t("subagent.runningCount", { n: runningSubs.length })}
-                    icon={<RobotOutlined />}
-                  >
-                    <span className="tb-label">{runningSubs.length}</span>
-                    <DownOutlined className="tb-chev" />
-                  </Button>
-                </Dropdown>
-              )}
             </div>
             {/* 信息段独立成块（.toolbar-info）：上下文 / 命中 / 速率原先住在 .toolbar-right 内，
                 被 margin-left:auto 推到最右并与模型/力度/发送挤在一起，用户反馈看不到（版式审计）。

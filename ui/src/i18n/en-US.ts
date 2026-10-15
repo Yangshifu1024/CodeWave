@@ -65,6 +65,7 @@ export default {
     outputDisplay: "Output display", displayCompact: "Concise", displayDetailed: "Detailed",
     compactRead: "Read", compactEdit: "Edited", compactCreate: "Created", compactCommand: "Ran", compactSearch: "Searched",
     groupRead: "Read {{n}} files", groupReadUnknown: "Read files", groupCommand: "Ran {{n}} commands",
+    groupRunning: "Running {{n}} tools",
     groupSearch: "Searched {{n}} times", groupList: "Listed directories {{n}} times",
     groupThinking: "Thought {{n}} times", groupThinkingActive: "Thinking……({{seconds}})",
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
@@ -355,6 +356,10 @@ export default {
     searchEmptyHint: "Provider / model, MCP server and skill entries live on their own pages, not in search",
   },
   chat: { thinking: "Thinking", thinkingActive: "Thinking… ({{seconds}})", thinkingDone: "Thought for {{seconds}}", scrollToBottom: "Scroll to bottom", suggestions: "Suggested next steps", copy: "Copy", editInComposer: "Edit", copied: "Copied", copyFailed: "Failed", you: "You", attachment: "Attachment", diagramPending: "⏳ Diagram renders once the reply is finalized",
+    copyAnswer: "Copy response", copyAnswerFailed: "Copy failed",
+    taskProcess: "Task process · Total time {{duration}}",
+    taskStatus: { error: "Failed", cancelled: "Stopped" },
+    activityThinking: "Thinking", activityProcessing: "Working", activityResponding: "Responding", activityWaiting: "Waiting for confirmation",
     // Segmented history paging (batch 2 P3): load-earlier entry, oldest-end state, browse cap, collapse
     loadEarlier: "Load earlier messages", earliest: "You've reached the oldest messages", loadEarlierCap: "Reached the browse limit for this session ({{pages}} segments)", collapseEarlier: "Collapse earlier",
     // Compaction-boundary divider and bad-segment notice (batch 2 P2)
@@ -512,12 +517,11 @@ export default {
     taskLabel: "Assigned task",
     reportLabel: "Final report",
     noProcess: "Process details not recorded; showing task and final report only",
-    runningCount: "{{n}} subagent(s) running",
     stop: "Stop this subagent",
     endedEarly: "Ended early",
     endedBudget: "Budget exhausted",
     /* partial = report handed in only after the step budget ran out: results in hand, work possibly unfinished */
-    endedPartial: "Budget hit · incomplete",
+    endedPartial: "Budget hit (incomplete)",
     /* Drawer header mode line ([docs/plan-and-approval]): mode = label from composer.mode* keys */
     modeLine: "Permission mode: {{mode}}",
     modeInherited: " (inherited from the main session)",

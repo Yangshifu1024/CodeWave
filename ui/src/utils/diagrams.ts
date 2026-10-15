@@ -55,7 +55,8 @@ let seq = 0;
 /** 扫描 root 下未处理的 .ws-math / .ws-diagram 占位符并渲染。幂等，可随每次流式渲染反复调用。 */
 export async function upgradeDiagrams(root: HTMLElement | null): Promise<void> {
   if (!root) return;
-  const maths = root.querySelectorAll<HTMLElement>(".ws-math:not([data-done])");
+  const maths = [...root.querySelectorAll<HTMLElement>(".ws-math:not([data-done])")]
+    .filter(el => !el.closest(".md[data-final-revealing]"));
   if (maths.length > 0) {
     const katex = await loadKatex();
     for (const el of maths) {

@@ -6,6 +6,10 @@
 
 主会话 runtime 是运行真值，UI 事件是通知通道，两者不能互相替代。[runtime.rs](../src-tauri/src/core/agent/runtime.rs) 的 `RunSnapshot` 同时包含 `running/run_id/terminal`；终态包括 `done/error/cancelled` 及完整收尾载荷。发布终态和释放运行槽位必须收敛为一致快照，不能分别读取多个原子值拼出“空闲但无终态”的偶然组合。
 
+主 run 的终态事件与快照可携带 `task_run`，作为[整轮过程折叠](./chat-and-interface.md#44-任务完成后的整轮过程折叠)的同一份真实计时与展示边界。`run:start` 提供起始用户消息时间，成功、错误和取消保留各自状态；旧 run 的迟到回执不能覆写新一轮，重复终态不能重复插入任务入口。总耗时使用单调时钟计量，包含等待与重试；它不是 `usage.duration_ms` 的生成耗时总和。持久化与缺失降级规则见[会话与项目](./sessions-and-projects.md#任务轮次展示元数据)。
+
+主会话 Channel 的 `step_start` 帧标记真实 LLM 步骤开始，供界面暂存当前步骤的候选正文并在正常收尾时先折叠、后显示总结。上一 step 的残余片段与新边界串行发送；重试沿用原有代次与 `run:retry`，不发新的步骤边界。它不改变驱动的结束判定，不增加具名事件键；完整展示契约由[聊天与界面](./chat-and-interface.md#44-任务完成后的整轮过程折叠)维护。
+
 [drive.rs](../src-tauri/src/core/agent/drive.rs) 正常/失败/取消路径统一收尾；`RunCleanupGuard` 负责 panic 或任务异常退出时取消子任务、关闭 inject 接纳、清询问 responder、发布错误终态。旧 run 的结束不能覆写新 run。
 
 前端 [runHandlers.ts](../ui/src/stores/runHandlers.ts) 的共享 `settleRun` 清理运行标志、流式正文、运行/等待工具卡、残留子代理及 AskPanel。只有清工具卡而不清 ask，会留下输入区被询问永久覆盖的假卡死。
