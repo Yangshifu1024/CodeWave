@@ -23,6 +23,7 @@
     "core:window:allow-outer-position",
     "decoration:default",
     "notification:default",
-    "updater:default"
+    "updater:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

@@ -102,7 +102,7 @@ export default {
     keyHintSingle: "单选：点选或数字键选中；选项互斥；回车 = 提交",
     /* 缺陷修复：补充说明输入框内现在也能回车提交，明示以免用户误以为只能鼠标点提交 */
     noteHint: "回车 = 下一题 / 提交；Shift + 回车换行",
-    planTitle: "计划", copyPlan: "复制计划全文", viewFullPlan: "查看方案", proceedPlan: "是否按上述计划执行？",
+    planTitle: "计划", copyPlan: "复制计划全文", planCopied: "计划已复制", planCopyFailed: "复制失败", viewFullPlan: "查看方案", proceedPlan: "是否按上述计划执行？",
     viewPreview: "查看预览", previewUnavailable: "当前方案暂不可预览，请等待新的方案询问。",
     previewFailed: "预览请求失败，请重试：{{error}}", submitFailed: "回答提交失败，请重试：{{error}}",
     prevPage: "上一题", nextPage: "下一题",
@@ -650,7 +650,7 @@ export default {
     newSessionInProject: "在此项目下新建会话", showMore: "显示更多", showLess: "收起",
     unreadReply: "有未读回复", waitingConfirm: "等待确认", deleteSessionConfirm: "删除该会话？",
     editProjectTip: "编辑目录/重命名",
-    copySessionId: "复制会话 ID", copiedSessionId: "已复制会话 ID",
+    copySessionId: "复制会话 ID", copiedSessionId: "已复制会话 ID", copySessionIdFailed: "复制失败",
     interruptedCrash: "上次运行时被中断（异常退出）",
     interruptedQuit: "上次运行时被中断（正常退出前中止）",
     clearInterrupt: "清除中断标记",

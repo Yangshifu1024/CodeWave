@@ -3,6 +3,7 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { Alert, Button, Divider, Image, Tooltip } from "antd";
 import {
   CheckOutlined,
+  CloseOutlined,
   CopyOutlined,
   EditOutlined,
   MessageOutlined,
@@ -17,6 +18,7 @@ import { MAX_PAGED_PAGES, useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { useUi } from "../../stores/ui";
 import { upgradeDiagrams } from "../../utils/diagrams";
+import { copyText } from "../../utils/clipboard";
 import { renderUserMarkdown } from "../../utils/markdown";
 import type { UiItem } from "../../stores/run";
 // 滚动锚点（会话保存与恢复优化 · 批1）：锚点读写与现场态落盘的调用链见本文件「滚动锚点」一节。
@@ -80,17 +82,16 @@ const UserMessage = memo(function UserMessage({
   images?: { mediaType: string; data: string }[];
 } & AnchorAttrs) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  // 复制进剪贴板：成功后短暂切换为 ✓ 反馈
+  // 复制反馈三态：idle 未点 / done 成功 / fail 失败——失败必须有区别于成功的可见反馈，
+  // 否则又会退回「点了没反应」（旧代码 .catch(() => {}) 吞错即此病灶）。
+  const [copyState, setCopyState] = useState<"idle" | "done" | "fail">("idle");
+  // 统一走 utils/clipboard.ts（原生插件主路径，见该文件头注释）
   const doCopy = () => {
     if (!text) return;
-    void navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      })
-      .catch(() => {});
+    void copyText(text).then((ok) => {
+      setCopyState(ok ? "done" : "fail");
+      setTimeout(() => setCopyState("idle"), 1200);
+    });
   };
   // 「修改」：内容经 ws:composer-fill 回填 Composer（覆盖当前草稿，与队列「编辑」同语义）；Composer 自行聚焦，不直接发送。
   // 附件一并携带：带图消息点修改图片回显，无图消息覆盖清空现有附件
@@ -112,7 +113,7 @@ const UserMessage = memo(function UserMessage({
               type="text"
               size="small"
               aria-label={t("chat.copy")}
-              icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+              icon={copyState === "done" ? <CheckOutlined /> : copyState === "fail" ? <CloseOutlined /> : <CopyOutlined />}
               onClick={doCopy}
             />
           </Tooltip>
