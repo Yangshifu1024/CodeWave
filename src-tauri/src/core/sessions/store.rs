@@ -773,6 +773,7 @@ impl SessionStore {
 
     /// 删除会话：索引条目、历史文件与全部边车（含两个按会话分桶的托管目录）。
     pub fn remove(&self, id: &str) -> anyhow::Result<()> {
+        let _guard = self.save_lock.lock().unwrap_or_else(|e| e.into_inner());
         self.mutate_index(|idx| idx.sessions.retain(|s| s.id != id))?;
         // 水位缓存先丢弃（纯缓存；留着会让「删后同名重建」沿用旧水位）
         self.drop_watermark(&self.sub_histories_dir(id));
@@ -795,7 +796,31 @@ impl SessionStore {
         // 与 cleanup 路径口径不一致 → 这两个目录会永久泄漏
         let _ = std::fs::remove_dir_all(self.tool_results_dir(id));
         let _ = std::fs::remove_dir_all(self.image_blobs_dir(id));
+        let _ = std::fs::remove_dir_all(self.task_runs_dir(id));
         Ok(())
+    }
+
+    pub(crate) fn task_runs_dir(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.runs"))
+    }
+
+    /// UI 元数据与删除共用保存锁；删除标记必须在取得锁之后再检查。
+    pub(crate) fn save_task_run(
+        &self,
+        id: &str,
+        run: &super::run_display::RunDisplay,
+        zombie: &std::sync::atomic::AtomicBool,
+    ) {
+        let _guard = self.save_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if zombie.load(std::sync::atomic::Ordering::SeqCst)
+            || !is_safe_session_id(id)
+            || self.get(id).is_none()
+        {
+            return;
+        }
+        if let Err(e) = super::run_display::save(self, id, run) {
+            tracing::warn!("会话 {id} 任务展示元数据保存失败：{e}");
+        }
     }
 
     /// 历史保存：sanitize → repair → **分段 append-only JSONL**（**不再 trim**、不再整份改写）。

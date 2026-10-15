@@ -7,6 +7,7 @@ import type {
   HistorySaveReport,
   HistoryStatus,
   McpStatusPayload,
+  RunDisplay,
   SubagentEvent,
 } from "../ipc/types";
 import type { WritableDraft } from "immer";
@@ -16,7 +17,7 @@ import { titleOf, useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { useTasks } from "./tasks";
 import { i18n } from "../i18n";
-import { blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, hasRunningTools, nextRunEpoch, stripRecoveredInTab } from "./runFrames";
+import { appendDelta, blank, closeRunningTools, closeStreamingAssistantItems, currentAssistantIm, discardDeferredStep, hasRunningTools, nextRunEpoch, releaseDeferredText, stripRecoveredInTab } from "./runFrames";
 import type { RunStore } from "./run";
 import type { TabRunState, UiItem } from "./run.types";
 
@@ -24,6 +25,51 @@ import type { TabRunState, UiItem } from "./run.types";
 type SetFn = (fn: (s: WritableDraft<RunStore>) => void) => void;
 /** 读取当前 store 快照 */
 type GetFn = () => RunStore;
+
+/** 只接纳通过 run 身份守卫的终态。校准乐观用户时间，恢复与实时共用相同轮次定位。 */
+function recordTaskRun(t: TabRunState, run: RunDisplay | undefined, stageFinal = false) {
+  if (!run) return;
+  // The event and Channel transports can deliver done before its last delta. The terminal is
+  // authoritative: complete a matching candidate prefix, otherwise preserve it and append the final.
+  if ((t.running || t.stepTextDeferred) && run.status === "done" && run.final_answer && run.final_answer_created_at) {
+    let previous: Extract<UiItem, { kind: "assistant" }> | undefined;
+    for (let index = t.items.length - 1; index >= 0; index--) {
+      const item = t.items[index];
+      if (item.kind === "user") break;
+      if (item.kind === "assistant") { previous = item; break; }
+    }
+    const allText = previous?.timeline.flatMap(seg => seg.kind === "text" ? [seg.text] : []).join("") ?? "";
+    if (!allText.endsWith(run.final_answer)) {
+      const assistant = currentAssistantIm(t);
+      const candidate = t.stepTextDeferred
+        ? assistant.timeline.flatMap(seg => seg.kind === "text" && seg.deferred ? [seg.text] : []).join("")
+        : assistant.timeline.flatMap(seg => seg.kind === "text" ? [seg.text] : []).join("");
+      const matchesPrefix = run.final_answer.startsWith(candidate);
+      const missing = matchesPrefix ? run.final_answer.slice(candidate.length) : run.final_answer;
+      if (missing) appendDelta(assistant.timeline, "text", missing, "live", { deferred: t.stepTextDeferred, forceNew: !matchesPrefix });
+    }
+  }
+  const user = t.runUserCreatedAt ? t.items.find(item => item.kind === "user" && item.createdAt === t.runUserCreatedAt) : undefined;
+  if (user?.kind === "user") user.createdAt = run.user_created_at;
+  t.runUserCreatedAt = undefined;
+  if (run.final_answer_created_at) {
+    for (let index = t.items.length - 1; index >= 0; index--) {
+      const item = t.items[index];
+      if (item.kind !== "assistant") continue;
+      const text = item.timeline.filter(seg => seg.kind === "text").map(seg => seg.text);
+      // A live UI item spans multiple LLM steps; the authoritative final answer is its suffix.
+      if (run.final_answer && text.join("").endsWith(run.final_answer)) {
+        item.createdAt = run.final_answer_created_at;
+        if (stageFinal && t.stepTextDeferred && run.status === "done"
+          && t.items.some(it => it.kind === "user" && it.createdAt === run.user_created_at)) {
+          (t.pendingFinals ??= {})[run.run_id] = true;
+        }
+      }
+      break;
+    }
+  }
+  t.taskRuns = [...(t.taskRuns ?? []).filter(previous => previous.run_id !== run.run_id), run];
+}
 
 let notifyReady = false;
 // 系统通知：项目会话后端优先（Windows/macOS 原生直驱，点击 → notify:activate → 回跳会话），失败回退插件；临时会话（无 session）直接走插件
@@ -124,7 +170,7 @@ function hasTrailingNoticeText(items: readonly UiItem[], text: string): boolean 
 /** 子代理卡兜底收尾（[docs/subagents](../../../docs/subagents.md)）：
  *  主 run 收尾时，仍停在 `running` 的子代理卡一律落定——`sub:done` / `sub:error` 是子代理卡**唯一**的
  *  收尾途径（主会话工具有 `closeRunningTools` 兜底，子代理侧此前没有），一旦那一帧丢了，卡片就永久转圈、
- *  composer 的运行中计数也永久不归零（[docs/subagents](../../../docs/subagents.md)）。
+ *  右栏的运行中计数也永久不归零（[docs/subagents](../../../docs/subagents.md)）。
  *
  *  为什么可以在这里无条件收敛：主 run 收尾时，子代理要么已完成（终态事件先到，无影响）、要么已随主 run 级联
  *  取消（后端 `parent_cancel` 传递），不存在「仍在跑」的真子代理——故不会误杀。
@@ -165,6 +211,7 @@ export function settleRun(t: TabRunState): void {
   t.widgetAutoOpen = null;
   // 生命周期与对账统一在这里置空闲，先推进 epoch，避免旧查询复活或旧 channel 写入。
   t.running = false;
+  releaseDeferredText(t);
   // 兜底收尾：不能只翻末项的等待指示——notice 插队（run:inject / run:retry / sub:error）后旧流式项可能不在末位，
   // 漏网的 streaming 项就是聊天里那个永久残留的等待指示（见 runFrames.currentAssistantIm 的不变量注释）。
   closeStreamingAssistantItems(t);
@@ -244,10 +291,13 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         //
         // 下面那道 `lastDoneRunId` 守卫**刻意不加**：它命中时新 run 已乐观把 running 置回 true，
         // 此时收敛会误杀正在跑的新 run。
-        if (before && hasUnsettledRunState(before)) {
+        if (before && (hasUnsettledRunState(before) || p.task_run)) {
           set((s) => {
             const t = s.tabs[p.session];
-            if (t) settleRun(t);
+            if (t) {
+              recordTaskRun(t, p.task_run, useSessions.getState().activeKey === p.session);
+              settleRun(t);
+            }
           });
         }
         return;
@@ -258,6 +308,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return;
+        recordTaskRun(t, p.task_run, useSessions.getState().activeKey === p.session);
         if (p?.run_id) t.lastDoneRunId = p.run_id;
         t.queueResumeAfterInjection = t.queue.some((q) => q.injecting);
         // 文本形态 ask 的待剥状态只在本轮有效（[docs/chat-and-interface]）：清空后下一轮的增量不再被剥
@@ -299,6 +350,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.queueResumeAfterInjection = false;
+        recordTaskRun(t, p.task_run);
         // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：失败路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
         t.pendingItemId = null; // docs/plan-and-approval：同 done，防止残留标记在后续手动停止时插队
@@ -317,6 +369,7 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         const t = s.tabs[p.session];
         if (!t) return;
         t.queueResumeAfterInjection = false;
+        recordTaskRun(t, p.task_run);
         // [docs/plan-and-approval](../../../docs/plan-and-approval.md)：取消路径同样作废待弹预览（同 run:done，不跨轮补弹）
         t.widgetAutoOpen = null;
         // 收敛体同 run:done（docs/runtime-and-scheduling）；必须在 push notice 之前，保证语义清晰
@@ -352,9 +405,16 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
       set((s) => {
         const t = s.tabs[p.session];
         if (!t) return;
+        if (!t.running || (p?.run_id && ((t.runId && p.run_id !== t.runId) || (t.startPending && !t.runId)))) return;
+        if (typeof p?.gen === "number" && (p.gen < t.streamGen
+          || (t.stepTextDeferred && t.lastStepDeltaGen === p.gen))) return;
         t.items.push({ kind: "notice", text: i18n.t("notice.retryAttempt", { n: p?.attempt ?? 1 }) });
         // 后端在本事件前已重置：低于新代际的在途帧会被 applyFrameToTab 丢弃（review C2）
         if (typeof p?.gen === "number") t.streamGen = p.gen;
+        if (t.stepTextDeferred) {
+          discardDeferredStep(t);
+          return;
+        }
         // 从尾部找最近的流式 assistant 项并清空（不与 notice 序列位置耦合，review M1）
         for (let i = t.items.length - 1; i >= 0; i--) {
           const it = t.items[i];
@@ -553,9 +613,6 @@ export function subHandlers(set: SetFn): Record<string, (p: any) => void> {
         }
         // 把子代理卡锚进当前流式项的 timeline（与工具卡同机制，按调用位置穿插）
         currentAssistantIm(t).timeline.push({ kind: "sub", subId: p.sub_id });
-        // [docs/subagents](../../../docs/subagents.md)：首个子代理启动自动打开过程抽屉（常显语义）；后续子代理不打断当前视图
-        const runningCount = t.subs.filter((x) => x.status === "running").length;
-        if (runningCount === 1) t.subDrawer = { open: true, subId: p.sub_id };
       });
     },
     "sub:step": (p: SubagentEvent) => {

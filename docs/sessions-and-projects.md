@@ -42,6 +42,7 @@
 | `sessions/<id>.prefs.json` | 显式模型选择与思考力度；不保存权限档 |
 | `sessions/<id>.artifacts.json` | 文件写入归属和计划文件登记 |
 | `sessions/<root>.toolres/<call_id>.json` | 仅用于界面恢复的完整工具结果 |
+| `sessions/<id>.runs/` | 每轮任务的展示边界、终态、真实总耗时与最终答复；不进入模型上下文 |
 | `sessions/<owner>.imgblob/<hash>` | 图片外置内容；子历史 owner 为 `<parent>__<sub>` |
 | `ui-state.json` | Tab、草稿、队列、滚动锚点及面板/树等现场态 |
 | `running.marker` | 上次进程是否异常退出的标记 |
@@ -113,6 +114,14 @@
 - 主工具卡、子代理卡、子代理抽屉内工具卡共用 `lossyToolKeys/backfillToolOutcomes`。子代理恢复先用 `restored:<callKey>` 时，回填必须将 timeline、subs、subStreams 同步改名为真实 `sub_id`，否则无法拉过程历史。
 - 缺结果或 `[interrupted]` 恢复为中性 `E_INTERRUPTED`，真实失败还原错误码；不能把所有历史工具卡显示成成功。
 - `duration_ms` 字段已预留，但批次写入仍传 `None`，历史卡耗时不保证恢复。读图工具省略的 `data_url` 仍可能依赖原路径；这不同于用户附件图片的 blob。
+
+### 任务轮次展示元数据
+
+主会话 run 的展示信息由 [run_display.rs](../src-tauri/src/core/sessions/run_display.rs) 独立保存在 `sessions/<id>.runs/`，每轮一份记录，包含 `run_id`、开始/结束时间、单调时钟测得的 `duration_ms`、真实终态和起始用户消息的 `created_at`。最终答复只在后端确认本轮最终输出时登记，同时记录其消息时间，不把任意中途说明猜成总结。总耗时包含审批等待、重试和工具执行；并行子代理无需逐个相加。
+
+该边车只供[整轮过程折叠](./chat-and-interface.md#44-任务完成后的整轮过程折叠)使用，永不写入 `rt.history`、模型 wire 或文件产物清单，不改变 append-only JSONL、图片 blob 和工具结果备份的契约。轮次元数据随会话及保留期清理删除；删除中的 zombie 会话不能被迟到收尾重新创建。
+
+首屏和前翻只解析与当前页时间范围相关的轮次记录，不读取全部转录来推断任务边界；目录枚举仍随轮次文件数增长。单条记录上限 2 MiB，超限不写入、读取时跳过，完整转录仍由原历史保存。缺失、坏记录或不完整跨页轮次降级为普通历史展示，不影响转录打开，也不使用恢复时刻或消息时间差伪造总耗时。进程异常退出且没有终态记录时不补造成功记录。
 
 ## 5. 现场、偏好与中断恢复
 

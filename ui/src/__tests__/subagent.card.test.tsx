@@ -2,7 +2,7 @@
 // ended 只要不是 "report" 就视为异常收尾（橙色警示），ended 缺省 / "report" 保持绿勾（旧数据向后兼容）。
 // 判定必须是**反向式**（非 report 即警示），白名单式会在后端新增枚举值时静默漏判——partial 即这样一度落回绿勾。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import "../i18n"; // directly mounted components must explicitly init i18next (no global entry outside App.tsx)
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import SubagentItemCard from "../features/subagent/SubagentItemCard";
 import { useRun, type SubView } from "../stores/run";
 import { useSessions } from "../stores/sessions";
+import { useUi } from "../stores/ui";
 
 function subView(over: Partial<SubView> = {}): SubView {
   return {
@@ -60,11 +61,13 @@ function card(over: Partial<SubView> = {}): HTMLElement {
 describe("SubagentItemCard 收尾原因徽标", () => {
   beforeEach(() => {
     useRun.setState({ tabs: {}, drafts: {} });
+    useUi.setState({ outputDisplay: "detailed" });
   });
 
   afterEach(() => {
     cleanup();
     useRun.setState({ tabs: {}, drafts: {} });
+    useUi.setState({ outputDisplay: "detailed" });
   });
 
   it("ended: no_report → 橙色警示图标 + 「提前结束」文案（不再显示绿勾）", () => {
@@ -147,5 +150,41 @@ describe("SubagentItemCard 收尾原因徽标", () => {
     expect(c.querySelector(".anticon-check")).toBeNull();
     expect(c.querySelector(".anticon-exclamation-circle")).toBeNull();
     expect(c.querySelector(".sub-card-warn")).toBeNull();
+  });
+
+  it("compact running cards show a static name/status, retain task context, and keep stop usable", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const stop = vi.spyOn(useRun.getState(), "stopSubagent").mockResolvedValue(undefined);
+    const c = card({ status: "running" });
+    expect(c.querySelector(".anticon-loading")).toBeNull();
+    expect(c.querySelector(".sub-card-label")).toBeNull();
+    expect(c.querySelector(".sub-card-role")?.textContent).toBe("frontend-dev");
+    expect(c.querySelector(".sub-card-status")?.textContent).toBe("运行中");
+    expect(c.textContent).toContain("实现卡片");
+    expect(c.textContent).not.toContain("22/80");
+    expect(c.textContent).not.toContain("tok");
+    expect(c.title).toContain("22/80 · 1.2k tok");
+    const button = c.querySelector<HTMLElement>(".sub-card-stop")!;
+    expect(button.tabIndex).toBe(0);
+    fireEvent.click(button);
+    expect(stop).toHaveBeenCalledWith(null, "sub_1");
+    expect(useRun.getState().tabs.s1.subDrawer.open).toBe(false);
+    stop.mockRestore();
+  });
+
+  it("compact completed cards retain abnormal warnings without claiming completion", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const c = card({ ended: "partial" });
+    expect(c.querySelector(".anticon-loading")).toBeNull();
+    expect(c.querySelector(".sub-card-status")).toBeNull();
+    expect(c.querySelector(".sub-card-warn")?.textContent).toContain("预算耗尽·未完成");
+    expect(c.querySelector(".anticon-exclamation-circle")).not.toBeNull();
+  });
+
+  it("compact normal completion has a plain completed label", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const c = card({ ended: "report" });
+    expect(c.querySelector(".sub-card-status")?.textContent).toBe("已完成");
+    expect(c.querySelector(".anticon-check")).toBeNull();
   });
 });

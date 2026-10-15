@@ -87,19 +87,41 @@ export function closeOpenThinking(timeline: TimelineSeg[]) {
 /** 追加 text/thinking delta：同类合并进尾段，异类新开分段（保持穿插顺序）；
  *  Live deltas freeze the preceding thinking and record its start time.
  *  Restored content preserves order and text without inventing historical timing. */
-export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", text: string, timing: "live" | "restored" = "live") {
+export function appendDelta(timeline: TimelineSeg[], kind: "text" | "thinking", text: string, timing: "live" | "restored" = "live", presentation?: { deferred?: boolean; forceNew?: boolean }) {
   if (!text) return;
   const last = timeline[timeline.length - 1];
-  if (last && last.kind === kind) {
+  if (last && last.kind === kind && !presentation?.forceNew
+    && (last.kind !== "text" || !!last.deferred === !!presentation?.deferred)) {
     last.text += text;
     return;
   }
   if (timing === "live") closeOpenThinking(timeline);
   timeline.push(
     kind === "text"
-      ? { kind: "text", text }
+      ? { kind: "text", text, ...(presentation?.deferred ? { deferred: true } : {}) }
       : { kind: "thinking", text, ...(timing === "live" ? { startedAt: Date.now() } : {}) },
   );
+}
+
+/** Release confirmed process text at a new step, or all text on every terminal fallback. */
+export function releaseDeferredText(t: TabRunState) {
+  for (const item of t.items) {
+    if (item.kind !== "assistant") continue;
+    delete item.deferredStepStart;
+    for (const seg of item.timeline) if (seg.kind === "text" && seg.deferred) delete seg.deferred;
+  }
+  t.stepTextDeferred = false;
+}
+
+/** A retry is another attempt of the same step. Preserve prior steps and discard only its candidate output. */
+export function discardDeferredStep(t: TabRunState) {
+  for (const item of t.items) {
+    if (item.kind !== "assistant" || item.deferredStepStart === undefined) continue;
+    // Tool/sub events use a different channel and may arrive after the next step boundary.
+    // They represent executed work; only this attempt's model output can be discarded.
+    item.timeline.splice(item.deferredStepStart, item.timeline.length - item.deferredStepStart,
+      ...item.timeline.slice(item.deferredStepStart).filter(seg => seg.kind === "tool" || seg.kind === "sub"));
+  }
 }
 
 /** 剥一次「文本形态 ask」的协议原文（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
@@ -258,11 +280,28 @@ export function applyFrameToTab(t: TabRunState, frame: Frame) {
     return;
   }
   if (!t.running) return; // review C1：运行结束后的迟到帧不得重建流式项（幽灵等待指示）
+  if (frame.type === "step_start") {
+    if (frame.gen < t.streamGen) return;
+    t.streamGen = frame.gen;
+    releaseDeferredText(t);
+    t.stepTextDeferred = true;
+    const assistant = currentAssistantIm(t);
+    closeOpenThinking(assistant.timeline);
+    assistant.deferredStepStart = assistant.timeline.length;
+    return;
+  }
   if (frame.type === "delta_text" || frame.type === "delta_thinking") {
     if (frame.gen < t.streamGen) return; // review C2：run:retry 清场后，丢弃旧尝试的半帧
+    if (t.stepTextDeferred && frame.gen > t.streamGen) discardDeferredStep(t);
     t.streamGen = frame.gen;
+    if (t.stepTextDeferred) t.lastStepDeltaGen = frame.gen;
     // 帧到达顺序 = 展示顺序：text/thinking 按到达顺序追加进 timeline
-    appendDelta(currentAssistantIm(t).timeline, frame.type === "delta_text" ? "text" : "thinking", frame.text || "");
+    const assistant = currentAssistantIm(t);
+    if (t.stepTextDeferred) assistant.deferredStepStart ??= assistant.timeline.length;
+    appendDelta(assistant.timeline, frame.type === "delta_text" ? "text" : "thinking", frame.text || "", "live", {
+      deferred: t.stepTextDeferred,
+      forceNew: t.stepTextDeferred && assistant.deferredStepStart === assistant.timeline.length,
+    });
     // 文本形态 ask 兜底（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：被恢复的协议原文
     // 常在本帧才补齐（64ms 节流把块切到两帧），故每帧文本落库后都补剥一次（幂等；待剥字符串见 TabRunState.textRecovered）
     if (frame.type === "delta_text") stripRecoveredInTab(t);

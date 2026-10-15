@@ -64,6 +64,7 @@ export default {
     outputDisplay: "输出展示", displayCompact: "简洁", displayDetailed: "详细",
     compactRead: "已读取", compactEdit: "已编辑", compactCreate: "已创建", compactCommand: "已运行", compactSearch: "已搜索",
     groupRead: "已读取 {{n}} 个文件", groupReadUnknown: "已读取文件", groupCommand: "已运行 {{n}} 条命令",
+    groupRunning: "正在运行 {{n}} 项工具",
     groupSearch: "已搜索 {{n}} 次", groupList: "已列目录 {{n}} 次",
     groupThinking: "思考 {{n}} 次", groupThinkingActive: "思考中……（{{seconds}}）",
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
@@ -352,6 +353,10 @@ export default {
     searchEmptyHint: "供应商 / 模型、MCP 服务器、技能等条目请在各自页面内查找",
   },
   chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染",
+    copyAnswer: "复制答复", copyAnswerFailed: "复制失败",
+    taskProcess: "任务过程 · 总耗时 {{duration}}",
+    taskStatus: { error: "失败", cancelled: "已停止" },
+    activityThinking: "正在思考", activityProcessing: "正在处理", activityResponding: "正在回复", activityWaiting: "等待确认",
     // 分段历史分页（批2 P3）：逐段向前加载的入口、最早段终态、浏览上限与收起
     loadEarlier: "加载更早的消息", earliest: "已到最早的消息", loadEarlierCap: "已达单次浏览上限（{{pages}} 段）", collapseEarlier: "收起更早的",
     // 合并压缩边界的分隔线与坏段提示（批2 P2）
@@ -505,7 +510,6 @@ export default {
     taskLabel: "分配的任务",
     reportLabel: "最终汇报",
     noProcess: "未记录过程详情，仅显示任务与最终汇报",
-    runningCount: "{{n}} 个子智能体运行中",
     stop: "停止该子代理",
     endedEarly: "提前结束",
     endedBudget: "预算耗尽",

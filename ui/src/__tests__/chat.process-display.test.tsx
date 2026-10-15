@@ -79,15 +79,13 @@ describe("compact process metadata", () => {
     const process = container.querySelector('[data-key="process"]')!;
     expect(process.classList.contains("process-only")).toBe(true);
     expect(container.querySelector('[data-key="answer"]')?.classList.contains("process-only")).toBe(false);
-    const timestamp = process.querySelector<HTMLElement>(".ts")!;
-    expect(timestamp.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-    expect(timestamp.title).toContain("2026-10-14");
+    expect(container.querySelector(".msg .role")).toBeNull();
     fireEvent.click(process.querySelector(".tool-compact-head")!);
     expect(process.textContent).toContain("original file content");
     act(() => useUi.getState().setOutputDisplay("detailed"));
     expect(useUi.getState().outputDisplay).toBe("detailed");
     expect(process.classList.contains("process-only")).toBe(false);
-    expect(process.querySelector(".ts")?.textContent).toBe(timestamp.title);
+    expect(container.querySelector(".msg .role")).toBeNull();
     expect(process.textContent).toContain("original file content");
     expect(useRun.getState().tabs[sessionId].items).toBe(originalItems);
   });
@@ -102,7 +100,7 @@ describe("compact process metadata", () => {
     const { container } = render(<App><ChatMessages /></App>);
     expect(container.querySelector(".process-only")).toBeNull();
     expect(container.querySelector(".md")?.textContent).toContain("正在核对源码");
-    expect(container.querySelector(".ts")?.textContent).toBe("");
+    expect(container.querySelector(".msg .role")).toBeNull();
   });
 
   it("uses process spacing for mixed messages ending in a tool, without empty text rows", () => {

@@ -310,6 +310,7 @@ pub fn delete_session_files(store: &SessionStore, data_dir: &Path, meta: &Sessio
     // 工具结果原样 sidecar（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
     // 目录随会话级联删除（与子代理过程历史同范式：路径由编号拼出、不做登记边车）
     ok &= remove_dir_if_exists(&store.tool_results_dir(&meta.id));
+    ok &= remove_dir_if_exists(&store.task_runs_dir(&meta.id));
     // 图片 blob（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：同上
     ok &= remove_dir_if_exists(&store.image_blobs_dir(&meta.id));
     for p in session_log_candidates(data_dir, meta) {
@@ -443,7 +444,8 @@ fn orphan_candidates(store: &SessionStore, cutoff: DateTime<Utc>) -> Vec<PathBuf
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = name
                 .strip_suffix(".toolres")
-                .or_else(|| name.strip_suffix(".imgblob"));
+                .or_else(|| name.strip_suffix(".imgblob"))
+                .or_else(|| name.strip_suffix(".runs"));
             let Some(id) = id else {
                 continue;
             };
@@ -1211,6 +1213,33 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("with-toolres.toolres"))
         );
+    }
+
+    #[test]
+    fn run_display_dirs_removed_with_session_and_as_orphans() {
+        let dd = tempfile::tempdir().unwrap();
+        let store = store_in(dd.path());
+        store.upsert_meta(meta("retained", &ago(1))).unwrap();
+        let dir = store.task_runs_dir("with-runs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("r.json"), b"{}").unwrap();
+        assert!(delete_session_files(
+            &store,
+            dd.path(),
+            &meta("with-runs", &ago(30 * 24 * 3600))
+        ));
+        assert!(!dir.exists());
+        let ghost = store.task_runs_dir("ghost-runs");
+        std::fs::create_dir_all(&ghost).unwrap();
+        let mtime: DateTime<Utc> = std::fs::metadata(&ghost)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .into();
+        let cutoff = mtime + chrono::Duration::seconds(1);
+        assert!(orphan_candidates(&store, cutoff).contains(&ghost));
+        assert_eq!(remove_orphan_files(&store, cutoff), 1);
+        assert!(!ghost.exists());
     }
 
     /// 图片 blob 目录（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：

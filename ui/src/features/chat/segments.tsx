@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { renderMarkdown } from "../../utils/markdown";
 import type { TimelineSeg, ToolView } from "../../stores/run";
@@ -44,8 +44,8 @@ export function stripReportMarkers(text: string): string {
 // 1) 揭示游标只放组件局部 state，**绝不写 store** —— ChatMessages.tsx 的 contentLen 依赖 text
 //    字符总数，若逐帧写 store 会让自动跟随 effect 以 60fps 触发 jumpToBottom + upgradeDiagrams，
 //    撞既有滚动豁免逻辑（onWheel 上滚清窗口），用户上滚会被反复拽回底部。
-// 2) 唯一开关 = 既有的 `streaming && i === tailIdx` —— 会话恢复 / 翻页加载的项恒 streaming:false
-//    （run.ts 的恢复路径），天然整段直出、绝不重播，无需任何额外判断。
+// 2) 网络流仅作用于 `streaming && i === tailIdx`；本次 live 最终答复通过独立 finalRevealKey
+//    复用局部游标。历史 / 翻页 / Tab 返回没有该标记，全文直出而不重播。
 // 3) report 标记先剥离再切片 —— 切片会把 <report> 切成两片，破坏 stripReportMarkers 的完整性前提。
 // 4) 不加闪烁光标 —— .cursor 类名与 CSS cursor 属性同名冲突，是历史误伤点（app.css 明确警告）。
 
@@ -58,6 +58,14 @@ const SILENT_THRESHOLD_MS = 800;
 /** 首帧基础配额（字）：首帧就不能是 0 —— 否则会闪一下空白，且同步断言 / 辅助技术读不到内容。
 首帧给一小段，之后由 rAF 逐帧推进，观感仍是逐字。 */
 const FIRST_FRAME_CHARS = 12;
+const FINAL_CPS = 500;
+const FINAL_MAX_MS = 1200;
+
+/** Local final-answer animation: a small first frame, at least 500 chars/s, at most 1.2s. */
+export function advanceFinalReveal(prev: number, len: number, elapsedMs: number): number {
+  const rate = Math.max(FINAL_CPS, Math.max(0, len - FIRST_FRAME_CHARS) * 1000 / FINAL_MAX_MS);
+  return clampReveal(Math.max(prev, FIRST_FRAME_CHARS + Math.floor(rate * Math.max(0, elapsedMs) / 1000)), len);
+}
 
 /** 游标收敛到 [0, len]：目标变短（如 report 剥离后）不越界，也不倒退。 */
 export function clampReveal(v: number, len: number): number {
@@ -108,19 +116,19 @@ export function advanceReveal(
 
 /** 按游标切片（纯函数）：revealed 恒在 [0, text.length] 内。 */
 export function sliceRevealed(text: string, revealed: number): string {
-  const n = clampReveal(revealed, text.length);
+  let n = clampReveal(revealed, text.length);
+  if (n > 0 && n < text.length && /[\uD800-\uDBFF]/.test(text[n - 1]) && /[\uDC00-\uDFFF]/.test(text[n])) n--;
   return n >= text.length ? text : text.slice(0, n);
 }
 
 /** 是否处于"减弱动态效果"偏好（读一次即缓存：系统级设置，运行期不会变）。 */
 let reducedMotionCache: boolean | null = null;
+function currentReducedMotion(): boolean {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
+}
 export function prefersReducedMotion(): boolean {
   if (reducedMotionCache !== null) return reducedMotionCache;
-  try {
-    reducedMotionCache = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    reducedMotionCache = false;
-  }
+  reducedMotionCache = currentReducedMotion();
   return reducedMotionCache;
 }
 
@@ -140,7 +148,7 @@ function TypewriterText({
   diagramPending?: string;
   anchorKey: string;
 }) {
-  // active 由 true 翻 false 即收尾（定稿 / 用户中断）：此时按 FINISH_BUDGET_MS 快速追平后直出。
+  // 网络流 active 翻 false 即直出；已完成最终答复使用 TimelineSegsView 的独立统一预算。
   const revealed = useTypewriter(text, active);
   const visible = sliceRevealed(text, revealed);
   const html = renderMarkdown(visible, diagramPending, { repairAssistantBlocks: true });
@@ -160,16 +168,20 @@ function TypewriterText({
 function useTypewriter(
   text: string,
   active: boolean,
-  opts?: { finishing?: boolean },
+  opts?: { finishing?: boolean; final?: boolean },
 ): number {
   const len = text.length;
+  const final = !!opts?.final;
+  const reducedMotion = final ? currentReducedMotion() : prefersReducedMotion();
   const [revealed, setRevealed] = useState(() =>
-    active && !prefersReducedMotion() ? Math.min(len, FIRST_FRAME_CHARS) : len,
+    active && !reducedMotion ? Math.min(len, FIRST_FRAME_CHARS) : len,
   );
+  const cursorRef = useRef(revealed);
   const rafRef = useRef(0);
   const lastTsRef = useRef(0);
   const silentRef = useRef(0);
   const finishingRef = useRef(false);
+  const startedRef = useRef(performance.now());
 
   useEffect(() => {
     finishingRef.current = opts?.finishing ?? false;
@@ -177,39 +189,35 @@ function useTypewriter(
 
   // 非流式 / reduced-motion：直出，且不留 rAF
   useEffect(() => {
-    if (!active || prefersReducedMotion()) {
+    if (!active || reducedMotion) {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
       }
       setRevealed(len);
+      cursorRef.current = len;
       return;
     }
     // 目标变短（report 剥离等）：先收敛，绝不越界
-    setRevealed((r) => clampReveal(r, len));
-  }, [active, len]);
+    cursorRef.current = clampReveal(cursorRef.current, len);
+    setRevealed(cursorRef.current);
+  }, [active, len, reducedMotion]);
 
   const tick = useCallback(() => {
     const dt = lastTsRef.current ? Math.max(0, performance.now() - lastTsRef.current) : 0;
     lastTsRef.current = performance.now();
-    setRevealed((prev) => {
-      const next = advanceReveal(prev, len, dt, {
-        silentMs: silentRef.current,
-        finishing: finishingRef.current,
-      });
-      // 追平即停：不再排下一帧
-      if (next >= len) {
-        rafRef.current = 0;
-        return len;
-      }
-      rafRef.current = requestAnimationFrame(tick);
-      return next;
+    const next = final ? advanceFinalReveal(cursorRef.current, len, performance.now() - startedRef.current) : advanceReveal(cursorRef.current, len, dt, {
+      silentMs: silentRef.current,
+      finishing: finishingRef.current,
     });
-  }, [len]);
+    cursorRef.current = next;
+    setRevealed(next);
+    rafRef.current = next >= len ? 0 : requestAnimationFrame(tick);
+  }, [len, final]);
 
   // 启动 / 续跑 rAF 循环（仅在 active 且未追平时）
   useEffect(() => {
-    if (!active || prefersReducedMotion()) return;
+    if (!active || reducedMotion) return;
     if (revealed >= len) return;
     if (rafRef.current) return;
     lastTsRef.current = performance.now();
@@ -221,9 +229,9 @@ function useTypewriter(
         rafRef.current = 0;
       }
     };
-  }, [active, revealed, len, tick]);
+  }, [active, revealed, len, tick, reducedMotion]);
 
-  return active && !prefersReducedMotion() ? clampReveal(revealed, len) : len;
+  return active && !reducedMotion ? clampReveal(revealed, len) : len;
 }
 
 
@@ -242,6 +250,9 @@ export function TimelineSegsView({
   onToolExpansionChange,
   groupExpansions,
   onGroupExpansionChange,
+  finalRevealKey,
+  onFinalRevealProgress,
+  onFinalRevealComplete,
 }: {
   timeline: TimelineSeg[];
   toolsMap: Record<string, ToolView>;
@@ -261,9 +272,46 @@ export function TimelineSegsView({
   onToolExpansionChange?: (callKey: string, expansion: ToolExpansion) => void;
   groupExpansions?: Record<string, boolean>;
   onGroupExpansionChange?: (callKey: string, expanded: boolean) => void;
+  finalRevealKey?: string;
+  onFinalRevealProgress?: (finished: boolean, root: HTMLElement | null) => void;
+  onFinalRevealComplete?: () => void;
 }) {
   const { t } = useTranslation();
   const display = useUi((s) => s.outputDisplay);
+  const finalText = timeline.flatMap(seg => seg.kind === "text" ? [stripReport ? stripReportMarkers(seg.text) : seg.text] : []).join("");
+  const finalBudget = useTypewriter(finalText, !!finalRevealKey, { final: true });
+  const finalAnimating = !!finalRevealKey && finalBudget < finalText.length;
+  const revealRoot = useRef<HTMLDivElement>(null);
+  const progressRef = useRef(onFinalRevealProgress);
+  const completeRef = useRef(onFinalRevealComplete);
+  const completedFor = useRef<string | undefined>(undefined);
+  progressRef.current = onFinalRevealProgress;
+  completeRef.current = onFinalRevealComplete;
+  useLayoutEffect(() => {
+    if (!finalRevealKey) {
+      // History, a Tab return, or an interrupted local animation already renders full text.
+      if (completeRef.current) progressRef.current?.(true, revealRoot.current);
+      return;
+    }
+    if (completedFor.current === finalRevealKey) return;
+    const finished = finalBudget >= finalText.length;
+    progressRef.current?.(finished, revealRoot.current);
+    if (finished) { completedFor.current = finalRevealKey; completeRef.current?.(); }
+  }, [finalRevealKey, finalBudget, finalText.length]);
+  useEffect(() => {
+    if (!finalRevealKey) return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const finish = () => {
+      if (media.matches && completedFor.current !== finalRevealKey && completeRef.current) {
+        completedFor.current = finalRevealKey;
+        completeRef.current();
+      }
+    };
+    finish();
+    media.addEventListener?.("change", finish);
+    return () => media.removeEventListener?.("change", finish);
+  }, [finalRevealKey]);
+  let finalOffset = 0;
   // callKey 所属时间线持有展开态，父结构/模式改变也不丢失正在阅读的详情。
   const [localExpansions, setExpansions] = useState<Record<string, ToolExpansion>>({});
   const expansions = toolExpansions ?? localExpansions;
@@ -282,7 +330,7 @@ export function TimelineSegsView({
       while (i < timeline.length) {
         const seg = timeline[i];
         // 空白正文不分隔可见过程（只在本组已有成员时吸收，否则留给正文渲染分支）
-        if (seg.kind === "text" && !seg.text.trim() && members.length > 0) {
+        if (seg.kind === "text" && (seg.deferred || !seg.text.trim()) && members.length > 0) {
           grouped.add(i++);
           continue;
         }
@@ -308,8 +356,9 @@ export function TimelineSegsView({
     }
   }
   return (
-    <div className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
+    <div ref={revealRoot} className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
       {timeline.map((seg, i) => {
+        if (seg.kind === "text" && seg.deferred) return null;
         const group = groups.get(i);
         if (group) {
           const rootKey = processGroupKey(group);
@@ -324,7 +373,7 @@ export function TimelineSegsView({
         }
         if (grouped.has(i)) return null;
         if (seg.kind === "thinking") {
-          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} />;
+          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} anchorKey={`thinking:${i}`} messageKey={toolOrigins?.[`thinking:${i}`]?.key} />;
         }
         if (seg.kind === "tool") {
           const tool = toolsMap[seg.callKey];
@@ -360,13 +409,16 @@ export function TimelineSegsView({
         }
         // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由。
         // 注意：剥离必须在打字机切片**之前** —— 切片会把 <report> 切成两片，破坏剥离的完整性前提。
-        const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
+        const fullText = stripReport ? stripReportMarkers(seg.text) : seg.text;
+        const text = finalRevealKey ? sliceRevealed(fullText, finalBudget - finalOffset) : fullText;
+        finalOffset += fullText.length;
+        if (finalRevealKey && !text) return null;
         if (display === "compact" && !text.trim()) return null;
         // mermaid 占位提示的文案走 i18n（写死在 CSS / HTML 里的中文在英文界面会露馅）
         const diagramPending = t("chat.diagramPending");
         // 流式尾段走打字机（逐字揭示）；其余段（定稿 / 历史 / 中间段）完全走原 renderCached，一字不改。
-        // 唯一开关 = 既有的 `streaming && i === tailIdx`：会话恢复与翻页加载的项恒 streaming=false，
-        // 因此天然整段直出、绝不重播（打字机的"老会话不重播"不需要额外判断）。
+        // 网络流只作用于尾段；finalRevealKey 的统一预算已在上面按顺序切片。
+        // 恢复与翻页两者都没有，天然全文直出。
         if (streaming && i === tailIdx) {
           return (
             <TypewriterText
@@ -374,13 +426,13 @@ export function TimelineSegsView({
               text={text}
               active={streaming}
               diagramPending={diagramPending}
-              anchorKey={`text:${i}`}
+              anchorKey={seg.outputKey ?? `text:${i}`}
             />
           );
         }
-        const html = renderCached(text, diagramPending);
+        const html = finalAnimating ? renderMarkdown(text, diagramPending, { repairAssistantBlocks: true }) : renderCached(text, diagramPending);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
-        return <div key={i} className="md" data-output-key={`text:${i}`} data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
+        return <div key={i} className="md" data-output-key={seg.outputKey ?? `text:${i}`} data-streaming={streaming || finalAnimating || undefined} data-final-revealing={finalAnimating || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}
     </div>
   );

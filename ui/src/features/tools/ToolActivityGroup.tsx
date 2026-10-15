@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { Button } from "antd";
-import { FileSearchOutlined, RightOutlined, DownOutlined, LoadingOutlined } from "@ant-design/icons";
+import { FileSearchOutlined, RightOutlined, DownOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { TimelineSeg, ToolView } from "../../stores/run.types";
 import ToolCallCard from "./ToolCallCard";
@@ -37,7 +37,6 @@ function ToolActivityGroupImpl({ entry, timeline, streaming, display, origins, o
   const members = entry.members;
   const rootKey = entry.key;
   const thinkings = members.filter((member): member is Extract<ProcessMember, { kind: "thinking" }> => member.kind === "thinking");
-  const hasRunningTool = entry.tools.some(tool => tool.status === "running");
   // 计时中的思考位置：从尾部回扫、跳过空白正文段（空白段会被吸收进组，不算真实尾部）。
   // 直接用 timeline.length-1 会在末尾拖了空白正文时错判，摘要会从「思考中……Ns」退成「思考 N 次」。
   let tailIndex = timeline.length - 1;
@@ -49,25 +48,28 @@ function ToolActivityGroupImpl({ entry, timeline, streaming, display, origins, o
   // 运行中的思考：只在它位于时间线尾部且消息仍在流式时才算「正在思考」。
   // 恢复的历史段与被中断的段都没有真实耗时 —— 它们的 label 走「思考 N 次」，绝不补 0s。
   const liveThinking = thinkings.find(member => isThinkingActive(member.seg, !!streaming && member.index === tailIndex));
-  const live = !!liveThinking || hasRunningTool;
+  const thinkingActive = !!liveThinking;
   // 运行中摘要要跳秒：以 500ms 心跳驱动，与 ThinkingBlock 的计时口径一致
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!live) return;
+    if (!thinkingActive) return;
     const id = setInterval(() => setTick(n => n + 1), 500);
     return () => clearInterval(id);
-  }, [live]);
+  }, [thinkingActive]);
 
-  const reads = entry.tools.filter(tool => tool.tool === "read" || tool.tool === "batch_read");
+  const completed = entry.tools.filter(tool => tool.status !== "running");
+  const runningCount = entry.tools.length - completed.length;
+  const reads = completed.filter(tool => tool.tool === "read" || tool.tool === "batch_read");
   const paths = new Set(reads.flatMap(toolFilePaths));
-  const commands = entry.tools.filter(tool => tool.tool === "command").length;
-  const searches = entry.tools.filter(tool => tool.tool === "grep").length;
-  const lists = entry.tools.filter(tool => tool.tool === "list_files").length;
+  const commands = completed.filter(tool => tool.tool === "command").length;
+  const searches = completed.filter(tool => tool.tool === "grep").length;
+  const lists = completed.filter(tool => tool.tool === "list_files").length;
   const thinkingLabel = thinkings.length === 0 ? "" : liveThinking
     ? t("tools.groupThinkingActive", { seconds: `${Math.max(1, Math.floor((Date.now() - (liveThinking.seg.startedAt ?? Date.now())) / 1000))}s` })
     : t("tools.groupThinking", { n: thinkings.length });
   const label = [
     thinkingLabel,
+    runningCount ? t("tools.groupRunning", { n: runningCount }) : "",
     reads.length ? (paths.size ? t("tools.groupRead", { n: paths.size }) : t("tools.groupReadUnknown")) : "",
     searches ? t("tools.groupSearch", { n: searches }) : "",
     lists ? t("tools.groupList", { n: lists }) : "",
@@ -93,7 +95,7 @@ function ToolActivityGroupImpl({ entry, timeline, streaming, display, origins, o
   // （docs/chat-and-interface 5.2.x）。思考与工具交替出现时必是 ≥2 个成员，不受此规则影响。
   const renderMember = (member: ProcessMember) => {
     if (member.kind === "thinking") {
-      return <ThinkingBlock key={`thinking:${member.index}`} text={member.seg.text} startedAt={member.seg.startedAt} durationMs={member.seg.durationMs} onToggle={onUserToggle} compact streaming={!!streaming && member.index === tailIndex} />;
+      return <ThinkingBlock key={`thinking:${member.index}`} text={member.seg.text} startedAt={member.seg.startedAt} durationMs={member.seg.durationMs} onToggle={onUserToggle} compact streaming={!!streaming && member.index === tailIndex} anchorKey={`thinking:${member.index}`} messageKey={origins?.[`thinking:${member.index}`]?.key} />;
     }
     return <ToolCallCard key={member.callKey} tool={member.tool} display={display} origin={origins?.[member.callKey]} onToggle={onToolToggle} onExpansionChange={onExpansionChange} />;
   };
@@ -105,9 +107,9 @@ function ToolActivityGroupImpl({ entry, timeline, streaming, display, origins, o
         onGroupExpansionChange?.(rootKey, !expanded);
         onToggle?.();
       }}>
-        {expanded ? <DownOutlined /> : <RightOutlined />}
-        {live ? <LoadingOutlined spin /> : <FileSearchOutlined />}
+        <FileSearchOutlined />
         <span className="tool-group-label" title={label}>{label}</span>
+        <span className="tool-group-chevron">{expanded ? <DownOutlined /> : <RightOutlined />}</span>
       </Button>
       {/* 保持卡片挂载，收起/追加工具不丢已打开的详情。 */}
       <div hidden={!expanded} className="tool-group-body">

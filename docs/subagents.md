@@ -131,7 +131,8 @@ spawn 固化所属根 run 身份，创建独立 runtime 并注册 core.subs、�
 子代理逐字帧经 `Frame::Sub{sub_id,frame}` 借父 Channel 传递。子帧与 sub:spawn 属两条通路，没有到达顺序保证，前端需惰性建子流。子工具结果的 session 为 sub_id，不在顶层 tabs，必须从 subStreams 找归属；文档/文件写成功同时刷新根会话文件视图。
 
 - 聊天保留每轮子代理卡，下一次 send 不清空过去 subs；卡片点击可回看。
-- Composer 运行指示器：0 隐藏、1 直达、多个弹菜单；运行数 0→1 可自动打开，但总览/覆盖页期间须让位。
+- 子代理启动只更新卡片与过程流，不自动打开抽屉，也不切换用户正在查看的子代理。Composer 不再显示子代理运行指示器、计数或查看菜单；`$` 点名角色的输入菜单继续用于发起委派。
+- 查看过程由用户点击聊天卡、右栏子代理条目或运行总览中的入口；关闭后有新子代理启动也不重新弹出。
 - [SubagentDrawer](../ui/src/features/subagent/SubagentDrawer.tsx) 从右侧打开，宽 `50vw`、随窗口缩放；外部遮罩点击只关闭不透传，内部点击不关闭，`destroyOnHidden=false` 保留内容。关闭不销毁、不停止，可再次打开。
 - drawer 状态 per-Tab，使用与主聊天共用的 timeline/ThinkingBlock/工具卡渲染。自动贴底仅在用户本来位于底部时生效，上翻暂停；过程流与简短活动摘录不可混称。
 - 子历史只在独立过程路径保存，不写主索引；当前为 `histories/subs/<parent>/<sub>/` 的 append-only 段，旧 gzip 仅回读兼容。

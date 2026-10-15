@@ -88,6 +88,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   onToggle,
   compact = false,
   streaming = false,
+  anchorKey,
+  messageKey,
 }: {
   text: string;
   startedAt?: number;
@@ -95,6 +97,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   onToggle?: () => void;
   compact?: boolean;
   streaming?: boolean;
+  anchorKey?: string;
+  messageKey?: string;
 }) {
   const { t } = useTranslation();
   const active = streaming && durationMs === undefined && startedAt !== undefined;
@@ -132,6 +136,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       size="small"
       ghost
       className={compact ? "thinking-block thinking-compact" : "thinking-block"}
+      data-output-key={anchorKey}
+      data-output-message-key={messageKey}
       onChange={(keys) => {
         const exp = Array.isArray(keys) ? keys.includes("1") : keys === "1";
         setExpanded(exp);
