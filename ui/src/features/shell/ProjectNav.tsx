@@ -20,6 +20,7 @@ import { i18n } from "../../i18n";
 import { ipc } from "../../ipc/client";
 import type { ProjectEntry, ScheduledTask, SessionMeta } from "../../ipc/types";
 import { MANAGED_DIR_NAME, baseName } from "../../utils/path";
+import { copyText } from "../../utils/clipboard";
 import { useSessions } from "../../stores/sessions";
 import { useRun } from "../../stores/run";
 import { useUi } from "../../stores/ui";
@@ -493,12 +494,12 @@ function SessionRow({
   // [docs/chat-and-interface](../../../../docs/chat-and-interface.md)：会话结束未读点（run done/error 且用户不在时置位；进入时由 store 订阅清除）
   const unread = useSessions((s) => !!s.unread[meta.id]);
   const { message } = App.useApp();
-  // 复制会话 ID：右键菜单入口，写剪贴板后轻反馈（与 ChatMessages doCopy 同模式）
+  // 复制会话 ID：右键菜单入口，写剪贴板后轻反馈（统一走 utils/clipboard.ts，原生插件主路径）
   const copyId = () => {
-    void navigator.clipboard
-      ?.writeText(meta.id)
-      .then(() => message.success(t("nav.copiedSessionId")))
-      .catch(() => {});
+    void copyText(meta.id).then((ok) => {
+      if (ok) message.success(t("nav.copiedSessionId"));
+      else message.error(t("nav.copySessionIdFailed"));
+    });
   };
 
   // 清除中断标记（会话保存与恢复优化 · 批1）：后端落盘清掉后本地就地撤徽标——

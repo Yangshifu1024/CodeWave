@@ -152,6 +152,18 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 
 实现入口：[segments.tsx](../ui/src/features/chat/segments.tsx)、[markdown.ts](../ui/src/utils/markdown.ts)、[throttle.rs](../src-tauri/src/util/throttle.rs)、[dto.rs](../src-tauri/src/provider/dto.rs)。
 
+#### 4.2.x 复制到剪贴板
+
+复制是**跨界面全仓统一行为**，入口只有 `copyText`（[clipboard.ts](../ui/src/utils/clipboard.ts)），任何复制按钮都不得自写 `navigator.clipboard`。
+
+三级链路逐级降级，最终返回布尔：原生插件（[ipc/clipboard.ts](../ui/src/ipc/clipboard.ts)，Tauri 主路径）→ 浏览器 `navigator.clipboard.writeText`（vite dev / 单测环境）→ 隐藏 `textarea` + `document.execCommand("copy")` 末级兜底。
+
+**为什么主路径不能是浏览器接口**：打包版前端跑在 `tauri://localhost` 自定义协议下，该来源下 `navigator.clipboard` 不可靠。这是「用户消息复制按钮点击无反应」的根因。旧的五处写法（`navigator.clipboard?.writeText(t).then(...).catch(() => {})`）在 clipboard 缺失时 `?.` 短路得到 `undefined`，紧接的 `.then` **同步**抛 `TypeError`，而空 `.catch` 又把它吃掉——两条失败路径在界面上都表现为「点了没反应」，无任何痕迹。
+
+**两条反模式不得重犯**：① `navigator.clipboard?.writeText(t)` 后直接 `return true`——`await undefined` 会被当作成功，于是既没写入又报成功，把失败伪装成成功；正确做法是先取 `clipboard` 判存在再写。② 失败后空 `catch`／`.catch(() => {})` 静默——**失败必须有区别于成功的可见反馈**（用户消息与代码块切失败图标，toast 类入口给 error 提示）。
+
+后端依赖 `tauri-plugin-clipboard-manager`，`lib.rs` 注册插件，`capabilities/default.json` 只授 `clipboard-manager:allow-write-text`；官方默认权限集为空，读/图片/html/secret 一律不开。回归：[clipboard.util.test.ts](../ui/src/__tests__/clipboard.util.test.ts)（含全仓 `navigator.clipboard` 唯一性守护）、[codecopy.test.tsx](../ui/src/__tests__/codecopy.test.tsx)、[usermsg.actions.test.tsx](../ui/src/__tests__/usermsg.actions.test.tsx)。真实 WebView 下的剪贴板行为与三平台差异需在**打包版**手工验收，`tauri dev` 通过不算数。
+
 ### 4.3 时间、工具出参与文本 ask
 
 消息首次进入转录时才盖 `created_at` UTC RFC3339 时间，保存/重载不能为旧消息补当前时间。UI 显示本地时间；缺失或不可解析则留空。历史恢复不重播逐字动画。

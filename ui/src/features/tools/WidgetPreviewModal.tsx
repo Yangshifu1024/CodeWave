@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Modal, Segmented, theme } from "antd";
 import { useTranslation } from "react-i18next";
 import { isDarkBase } from "../../theme/colors";
+import { copyText } from "../../utils/clipboard";
 
 /** 复制反馈复位延时（与 utils/codecopy.ts 的 1.5s 同口径）。 */
 const COPY_FLASH_MS = 1500;
@@ -49,13 +50,8 @@ export default function WidgetPreviewModal({
 
   async function copyHtml() {
     window.clearTimeout(copyTimer.current);
-    try {
-      await navigator.clipboard.writeText(html);
-      setCopyState("done");
-    } catch {
-      // 剪贴板不可用（权限被拒 / 非安全上下文）不静默：按钮显式给失败反馈
-      setCopyState("fail");
-    }
+    // 统一走 utils/clipboard.ts；失败显式给失败反馈，不静默（剪贴板不可用时用户需要知道）。
+    setCopyState((await copyText(html)) ? "done" : "fail");
     copyTimer.current = window.setTimeout(() => setCopyState("idle"), COPY_FLASH_MS);
   }
 

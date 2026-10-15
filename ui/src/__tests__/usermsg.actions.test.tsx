@@ -14,6 +14,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const writeText = vi.fn(async () => {});
 Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+// 原生插件封装（ipc/clipboard.ts）：单测环境非 Tauri，真函数会返回 false 自然降级到浏览器接口，
+// 故 mock 插件包让 invoke 不报错即可，不改变这条「插件不可用 → 浏览器接口」的真实降级路径。
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: vi.fn(async () => {}),
+}));
 
 function seedItems(items: any[]) {
   useSessions.setState({ activeKey: "s1" });
@@ -36,12 +41,18 @@ function renderMsgs() {
 
 afterEach(() => {
   cleanup();
-  writeText.mockClear();
+  writeText.mockReset();
+  writeText.mockImplementation(async () => {});
   useSessions.setState({ activeKey: null });
   useRun.setState((s) => {
     s.tabs = {}; s.drafts = {};
   });
 });
+
+/** copyText 先 await 插件探测再写浏览器接口，断言前需把微任务队列排空。 */
+async function flush() {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
 
 describe("用户消息悬停操作（复制/修改）", () => {
   it("文本消息渲染复制与修改按钮", () => {
@@ -51,11 +62,32 @@ describe("用户消息悬停操作（复制/修改）", () => {
     expect(document.querySelector('button[aria-label="修改"]')).toBeTruthy();
   });
 
-  it("复制：内容写入剪贴板", () => {
+  it("复制：内容写入剪贴板", async () => {
     seedItems([{ kind: "user", text: "复制我" }]);
     renderMsgs();
     fireEvent.click(document.querySelector('button[aria-label="复制"]')!);
+    await flush();
     expect(writeText).toHaveBeenCalledWith("复制我");
+  });
+
+  it("复制：写入失败时按钮显失败态，不静默（回归钉子）", async () => {
+    writeText.mockRejectedValueOnce(new Error("NotAllowedError"));
+    seedItems([{ kind: "user", text: "复制失败我" }]);
+    renderMsgs();
+    fireEvent.click(document.querySelector('button[aria-label="复制"]')!);
+    // 三级链路全失败 → 返回 false → 显失败图标，而不是静默无事发生
+    await vi.waitFor(() => {
+      expect(document.querySelector(".user-msg-actions .anticon-close")).toBeTruthy();
+    });
+  });
+
+  it("复制：navigator.clipboard 不存在时不抛未捕获异常（旧写法的病根）", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    seedItems([{ kind: "user", text: "无 clipboard" }]);
+    renderMsgs();
+    expect(() => fireEvent.click(document.querySelector('button[aria-label="复制"]')!)).not.toThrow();
+    await flush();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
   });
 
   it("修改：派发 ws:composer-fill 携带原文与附件（Composer 侧监听回填）", () => {

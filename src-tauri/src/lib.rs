@@ -80,6 +80,10 @@ pub fn run() {
     let channels = Arc::new(ChannelRegistry::default());
 
     tauri::Builder::default()
+        // 剪贴板（[docs/chat-and-interface](../../docs/chat-and-interface.md)）：打包版跑在 tauri://localhost 下，
+        // 浏览器 navigator.clipboard 在该来源不可靠，用户消息「复制」按钮点击无响应即由此而来，改走原生插件。
+        // 权限最小集在 capabilities/default.json（只 allow-write-text）。
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
