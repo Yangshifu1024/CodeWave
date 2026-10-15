@@ -327,6 +327,9 @@ pub struct SessionStore {
     watermarks: std::sync::Mutex<std::collections::HashMap<PathBuf, segments::SaveState>>,
     /// M8：索引读-改-写互斥（并发 checkpoint/delete/rename 不得丢条目）
     index_lock: std::sync::Mutex<()>,
+    /// 最近成功提交的精确成员集合；None 为尚未装载/读取失败，不能当作空集合。
+    /// 写入只在 index_lock 内发布；普通 load_index 成功读取不发布，避免旧快照覆盖新提交。
+    index_members: std::sync::Mutex<Option<std::collections::HashSet<String>>>,
     /// [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)：产物边车读-改-写互斥（并发工具写不得丢条目）
     artifacts_lock: std::sync::Mutex<()>,
     /// 进程内「运行中」会话 id 集合：索引 `running` 字段的唯一事实源。
@@ -340,6 +343,8 @@ pub struct SessionStore {
     /// 仅测试构建存在，不参与序列化也不影响生产路径。
     #[cfg(test)]
     index_writes: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    index_reads: std::sync::atomic::AtomicUsize,
 }
 
 impl SessionStore {
@@ -350,11 +355,14 @@ impl SessionStore {
             save_lock: std::sync::Mutex::new(()),
             watermarks: std::sync::Mutex::new(std::collections::HashMap::new()),
             index_lock: std::sync::Mutex::new(()),
+            index_members: std::sync::Mutex::new(None),
             artifacts_lock: std::sync::Mutex::new(()),
             running: std::sync::Mutex::new(std::collections::HashSet::new()),
             history_limits: HistoryLimits::default(),
             #[cfg(test)]
             index_writes: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            index_reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -429,18 +437,29 @@ impl SessionStore {
 
     /// 读索引；缺失回默认；损坏先备份为 index.json.corrupt 保全证据再回默认（M8）。
     pub fn load_index(&self) -> SessionIndex {
+        self.read_index().unwrap_or_default()
+    }
+
+    fn read_index(&self) -> Option<SessionIndex> {
+        #[cfg(test)]
+        self.index_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let bytes = match std::fs::read(self.index_path()) {
             Ok(b) => b,
-            Err(_) => return SessionIndex::default(),
+            Err(_) => {
+                *self.index_members.lock().unwrap() = None;
+                return None;
+            }
         };
         match serde_json::from_slice(&bytes) {
-            Ok(idx) => idx,
+            Ok(idx) => Some(idx),
             Err(e) => {
+                *self.index_members.lock().unwrap() = None;
                 // M8：损坏索引先备份保全证据，再回默认（否则下次写会静默覆写）
                 let backup = self.corrupt_index_backup_path();
                 let _ = std::fs::rename(self.index_path(), &backup);
                 tracing::warn!("会话索引损坏，已备份到 {}：{e}", backup.display());
-                SessionIndex::default()
+                None
             }
         }
     }
@@ -480,7 +499,7 @@ impl SessionStore {
     }
 
     /// 保存索引（超过条目上限先按 updated_at LRU 淘汰），原子写。
-    pub fn save_index(&self, idx: &SessionIndex) -> anyhow::Result<()> {
+    fn save_index(&self, idx: &SessionIndex) -> anyhow::Result<()> {
         // LRU：超过上限淘汰最旧条目（gz 保留，可再发现）
         let mut idx = idx.clone();
         if idx.sessions.len() > MAX_INDEX_ENTRIES {
@@ -489,6 +508,8 @@ impl SessionStore {
         }
         let bytes = serde_json::to_vec_pretty(&idx)?;
         atomic_write(&self.index_path(), &bytes)?;
+        *self.index_members.lock().unwrap() =
+            Some(idx.sessions.iter().map(|m| m.id.clone()).collect());
         #[cfg(test)]
         self.index_writes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -724,6 +745,7 @@ impl SessionStore {
     /// 存量修复：checkpoint 曾把子代理/任务运行 upsert 进主索引（untitled 幽灵会话），
     /// 本方法在应用启动时一次性清扫；真会话 id 为 uuid，不与两类前缀冲突。幂等。
     pub fn purge_non_session_entries(&self) -> usize {
+        let _guard = self.save_guard();
         let mut removed_ids: Vec<String> = Vec::new();
         let _ = self.mutate_index(|idx| {
             let mut kept = Vec::with_capacity(idx.sessions.len());
@@ -747,6 +769,7 @@ impl SessionStore {
             // 两个按会话分桶的托管目录（工具结果 sidecar / 图片 blob）：
             // 与 cleanup 路径同口径，幽灵条目不得留下目录
             let _ = std::fs::remove_dir_all(self.tool_results_dir(id));
+            let _ = std::fs::remove_dir_all(self.task_runs_dir(id));
             let _ = std::fs::remove_dir_all(self.image_blobs_dir(id));
             // 子历史的 blob 目录（sessions/<父>__<sub>.imgblob/）：owner 带父会话前缀，
             // 上面的 image_blobs_dir(id) 覆盖不到——目录列必须先读（ghost 条目的子历史同为死数据）。
@@ -804,6 +827,26 @@ impl SessionStore {
         self.sessions_dir().join(format!("{id}.runs"))
     }
 
+    pub(super) fn save_guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.save_lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 调用方已持 save_lock；冷启动只在 index_lock 内初始化一次，删除提交与成员查询互斥。
+    fn has_index_member(&self, id: &str) -> bool {
+        let _guard = self.index_lock.lock().unwrap();
+        if let Some(members) = self.index_members.lock().unwrap().as_ref() {
+            return members.contains(id);
+        }
+        let Some(idx) = self.read_index() else {
+            return false;
+        };
+        let members: std::collections::HashSet<String> =
+            idx.sessions.into_iter().map(|m| m.id).collect();
+        let hit = members.contains(id);
+        *self.index_members.lock().unwrap() = Some(members);
+        hit
+    }
+
     /// UI 元数据与删除共用保存锁；删除标记必须在取得锁之后再检查。
     pub(crate) fn save_task_run(
         &self,
@@ -814,7 +857,7 @@ impl SessionStore {
         let _guard = self.save_lock.lock().unwrap_or_else(|e| e.into_inner());
         if zombie.load(std::sync::atomic::Ordering::SeqCst)
             || !is_safe_session_id(id)
-            || self.get(id).is_none()
+            || !self.has_index_member(id)
         {
             return;
         }
@@ -1475,6 +1518,12 @@ impl SessionStore {
     /// 索引写入失败返回 `Err` 而不是吞掉：此时文件已删、索引行还在，调用方必须把受影响的
     /// 会话计入失败（下次清理会再次命中，重删文件视为成功——自愈）。
     pub fn remove_many(&self, ids: &[String]) -> anyhow::Result<Vec<String>> {
+        let _guard = self.save_guard();
+        self.remove_many_locked(ids)
+    }
+
+    /// 保留期清理持 save_lock 覆盖删文件到索引提交，不能在两者之间让侧车重新创建。
+    pub(super) fn remove_many_locked(&self, ids: &[String]) -> anyhow::Result<Vec<String>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -1496,6 +1545,9 @@ impl SessionStore {
             }
             idx.sessions = kept;
         })?;
+        for id in ids.iter().filter(|id| is_safe_session_id(id)) {
+            let _ = std::fs::remove_dir_all(self.task_runs_dir(id));
+        }
         Ok(removed)
     }
 }

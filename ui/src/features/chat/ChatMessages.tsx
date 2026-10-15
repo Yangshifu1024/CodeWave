@@ -31,6 +31,7 @@ import {
   isSelfScroll,
   itemKeysOf,
   itemSig,
+  parseAnchorAliases,
   restoreAnchor,
 } from "../../utils/scrollAnchor";
 import type { ScrollAnchor } from "../../utils/scrollAnchor";
@@ -433,7 +434,7 @@ export default function ChatMessages() {
       if (saved.anchor.fallback.kind === "item") {
         const key = saved.anchor.fallback.key;
         const hidden = Array.from(el.querySelectorAll<HTMLElement>(".task-process [data-anchor-aliases]"))
-          .some(node => (JSON.parse(node.dataset.anchorAliases ?? "[]") as { key: string }[]).some(alias => alias.key === key));
+          .some(node => parseAnchorAliases(node.dataset.anchorAliases).some(alias => alias.key === key));
         if (hidden) saved.anchor = { ...saved.anchor, segmentKey: null, fallback: { ...saved.anchor.fallback, offset: 0 } };
       }
       restoreOutputAnchor(el, saved.anchor);

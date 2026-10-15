@@ -190,7 +190,7 @@ mod tests {
         assert!(store.task_runs_dir("s").exists());
         store.remove("s").unwrap();
         assert!(!store.task_runs_dir("s").exists());
-        store.save_task_run("s", &run, &AtomicBool::new(true));
+        store.save_task_run("s", &run, &AtomicBool::new(false));
         assert!(!store.task_runs_dir("s").exists());
     }
 }

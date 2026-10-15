@@ -1521,9 +1521,39 @@ fn sse_body(chunks: &[&str]) -> Vec<u8> {
 const SSE_STOP: &str = r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
 
 /// 新边界测试专用：调用方持有 listener 到用例结束，读干请求头后优雅关闭写端。
-async fn step_start_server(
-    script: Vec<Vec<u8>>,
-) -> (Arc<tokio::net::TcpListener>, tokio::task::JoinHandle<()>) {
+struct TestSseServer {
+    listener: Arc<tokio::net::TcpListener>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl TestSseServer {
+    fn port(&self) -> u16 {
+        self.listener.local_addr().unwrap().port()
+    }
+
+    async fn finish(&mut self) -> Result<(), String> {
+        self.finish_with_timeout(std::time::Duration::from_secs(5))
+            .await
+    }
+
+    async fn finish_with_timeout(&mut self, limit: std::time::Duration) -> Result<(), String> {
+        match tokio::time::timeout(limit, &mut self.task).await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => {
+                self.task.abort();
+                Err("SSE 测试服务未在限时内结束".to_owned())
+            }
+        }
+    }
+}
+
+impl Drop for TestSseServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn step_start_server(script: Vec<Vec<u8>>) -> TestSseServer {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
     let owned = listener.clone();
@@ -1541,7 +1571,34 @@ async fn step_start_server(
             socket.shutdown().await.unwrap();
         }
     });
-    (listener, handle)
+    TestSseServer {
+        listener,
+        task: handle,
+    }
+}
+
+#[tokio::test]
+async fn step_start_server_guard_aborts_pending_accept_on_timeout() {
+    let mut server = step_start_server(vec![text_only_sse_turn("unrequested")]).await;
+    let listener = server.listener.clone();
+    let abort = server.task.abort_handle();
+    assert!(
+        server
+            .finish_with_timeout(std::time::Duration::from_millis(10))
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !abort.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        listener.local_addr().is_ok(),
+        "服务结束后测试仍持有端口，避免被并发用例重用"
+    );
 }
 
 #[tokio::test]
@@ -1557,15 +1614,14 @@ async fn step_start_root_flushes_previous_step_and_keeps_retries_inside_step() {
             "name":"read","arguments":serde_json::json!({"files":[{"path":"sample.txt"}]}).to_string()
         }}]
     }}]}).to_string();
-    let (listener, server) = step_start_server(vec![
+    let mut server = step_start_server(vec![
         bad,
         error,
         sse_body(&[&tool, SSE_STOP]),
         text_only_sse_turn("<report>总结与建议</report>"),
     ])
     .await;
-    let (core, rt, sink, ws, _dd) =
-        scripted_core_recording(listener.local_addr().unwrap().port(), "step-root");
+    let (core, rt, sink, ws, _dd) = scripted_core_recording(server.port(), "step-root");
     std::fs::write(ws.path().join("sample.txt"), "sample").unwrap();
     let params = DriveParams {
         main_session: true,
@@ -1579,7 +1635,7 @@ async fn step_start_root_flushes_previous_step_and_keeps_retries_inside_step() {
     .await
     .unwrap();
     assert_eq!(result.unwrap(), "<report>总结与建议</report>");
-    server.await.unwrap();
+    server.finish().await.unwrap();
     let frames = sink.1.lock().unwrap();
     let starts: Vec<_> = frames
         .iter()
@@ -1608,13 +1664,12 @@ async fn step_start_root_flushes_previous_step_and_keeps_retries_inside_step() {
 
 #[tokio::test]
 async fn step_start_is_not_emitted_for_subagent_or_task_runtime() {
-    let (listener, server) = step_start_server(vec![
+    let mut server = step_start_server(vec![
         text_only_sse_turn("<report>子代理完成</report>"),
         text_only_sse_turn("<report>计划任务完成</report>"),
     ])
     .await;
-    let (core, root, sink, _ws, _dd) =
-        scripted_core_recording(listener.local_addr().unwrap().port(), "nonmain-step");
+    let (core, root, sink, _ws, _dd) = scripted_core_recording(server.port(), "nonmain-step");
     let sub = SessionRuntime::new_sub(&root, "step-sub".into());
     let task = SessionRuntime::new_task(
         "step-task".into(),
@@ -1628,11 +1683,15 @@ async fn step_start_is_not_emitted_for_subagent_or_task_runtime() {
             max_steps: 2,
             ..DriveParams::default()
         };
-        let (result, _, _) =
-            super::drive::drive_agent(&core, &rt, params, "nonmain-step-run").await;
+        let (result, _, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::drive::drive_agent(&core, &rt, params, "nonmain-step-run"),
+        )
+        .await
+        .unwrap();
         assert!(result.is_ok());
     }
-    server.await.unwrap();
+    server.finish().await.unwrap();
     let frames = sink.1.lock().unwrap();
     assert!(frames.iter().any(|f| matches!(f, Frame::DeltaText { .. })));
     assert!(!frames.iter().any(|f| matches!(f, Frame::StepStart { .. })));
@@ -1703,7 +1762,18 @@ async fn run_display_real_run_matches_terminal_event_and_persisted_page() {
         socket.write_all(&response).await.unwrap();
         socket.shutdown().await.unwrap();
     });
+    let mut server = TestSseServer {
+        listener,
+        task: server,
+    };
     let (core, rt, sink, _ws, _dd) = scripted_core_recording(port, "run-display-real");
+    struct CancelRunOnDrop(Arc<SessionRuntime>);
+    impl Drop for CancelRunOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel_active();
+        }
+    }
+    let _cancel_run = CancelRunOnDrop(rt.clone());
     // 避免本例启动并行命名请求；该请求与任务汇报无关。
     rt.history
         .lock()
@@ -1719,7 +1789,7 @@ async fn run_display_real_run_matches_terminal_event_and_persisted_page() {
     })
     .await
     .unwrap();
-    server.await.unwrap();
+    server.finish().await.unwrap();
     let terminal = serde_json::to_value(rt.run_snapshot().terminal.unwrap()).unwrap();
     let done = sink.events("run:done");
     assert_eq!(done.len(), 1);

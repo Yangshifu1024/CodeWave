@@ -292,6 +292,36 @@ describe("step-aware text deferral and painted final handoff", () => {
     } finally { geometry.mockRestore(); }
   });
 
+  it.each(["{", "null", "{}", "[null]", '[{"key":42}]'])("ignores malformed task aliases during final handoff (%s)", async malformed => {
+    const paint = controlledPaints();
+    const { container } = render(<App><ChatMessages /></App>);
+    await act(async () => { await useRun.getState().send("检查改动"); });
+    act(() => { step(); emit(preface); step(1); emit(finalAnswer, 1); });
+    paint();
+    const scroller = container.querySelector<HTMLElement>(".chat-messages")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function(this: HTMLElement) {
+      const logical = this.matches(".task-process [data-anchor-aliases]") || this.closest(".msg.assistant") ? 100 : 0;
+      const top = this === scroller ? 0 : logical - scroller.scrollTop;
+      return { top, bottom: top + 32, height: 32, left: 0, right: 300, width: 300, x: 0, y: top, toJSON: () => ({}) };
+    });
+    try {
+      scroller.scrollTop = 110;
+      fireEvent.wheel(scroller, { deltaY: -50 });
+      fireEvent.scroll(scroller);
+      act(() => useRun.getState().bindGlobalHandlers()["run:done"]({ session, run_id: "r1", task_run: metadata }));
+      const label = container.querySelector<HTMLElement>(".task-process [data-anchor-aliases]")!;
+      label.dataset.anchorAliases = malformed;
+      expect(() => { paint(); paint(); paint(1200); }).not.toThrow();
+      expect(scroller.scrollTop).toBe(100);
+      expect(container.querySelectorAll("h2")).toHaveLength(2);
+      expect(container.querySelectorAll(".final-answer-actions")).toHaveLength(1);
+    } finally { geometry.mockRestore(); }
+  });
+
   it.each(["error", "cancelled", "no final"])("releases all candidate text on %s and can start a fresh step-aware run", async terminal => {
     const { container } = render(<App><ChatMessages /></App>);
     await act(async () => { await useRun.getState().send("检查改动"); });

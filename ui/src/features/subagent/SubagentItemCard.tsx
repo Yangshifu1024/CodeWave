@@ -51,7 +51,7 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
       data-output-key={`sub:${subId}`}
       role="button"
       tabIndex={0}
-      title={compact ? `${sub.task || sub.description}\n${sub.step}/${sub.maxSteps} · ${fmtTokens(sub.tokens)} tok` : sub.task || sub.description}
+      title={compact ? [sub.task || sub.description, `${sub.step}/${sub.maxSteps} · ${fmtTokens(sub.tokens)} tok`].filter(Boolean).join("\n") : sub.task || sub.description}
       onClick={() => void useRun.getState().openSubDrawer(null, sub.subId)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") void useRun.getState().openSubDrawer(null, sub.subId);
@@ -71,7 +71,7 @@ export default function SubagentItemCard({ subId }: { subId: string }) {
         )}
         {!compact && sub.status === "error" && <CloseOutlined />}
         {!compact && <>{sub.step}/{sub.maxSteps} · {fmtTokens(sub.tokens)} tok</>}
-        {warnKey && <span className="sub-card-warn">· {t(warnKey)}</span>}
+        {warnKey && <span className="sub-card-warn">{!compact && "· "}{t(warnKey)}</span>}
       </span>
       {/* 停止按钮（仅运行中）：stopPropagation 防止误开抽屉；点击 = 单独停止该子代理 */}
       {sub.status === "running" && (

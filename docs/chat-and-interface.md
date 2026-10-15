@@ -275,7 +275,7 @@ iframe 使用 `sandbox="allow-scripts"`、不授予 `allow-same-origin`；资源
 
 ### 6.3 子代理抽屉的高度链
 
-子代理抽屉仅由用户通过聊天卡、右栏或运行总览主动打开；子代理启动不再自动弹出或切换当前查看对象。Composer 不显示子代理运行计数及查看菜单，`$` 点名角色的输入菜单仍可使用。状态与过程恢复契约见[子代理](./subagents.md#6-实时过程抽屉与恢复)。
+子代理过程抽屉仅由用户通过聊天卡或右栏主动打开；运行总览提供独立的摘要与报告详情抽屉，可从中返回父会话，不直接打开过程流。子代理启动不再自动弹出或切换当前查看对象。Composer 不显示子代理运行计数及查看菜单，`$` 点名角色的输入菜单仍可使用。状态与过程恢复契约见[子代理](./subagents.md#6-实时过程抽屉与恢复)。
 
 唯一滚动体是 `.sub-drawer-body`。wrapper/section 必须有界，中间 `.ant-drawer-body` 是 `min-height:0` 的透传层且 overflow hidden；滚动体直接子项 `flex-shrink:0`，否则带 overflow hidden 的流块会被压扁到视口内，DOM 仍有内容却永不溢出。
 

@@ -173,6 +173,15 @@ export function pickTarget(nodes: AnchorNode[], anchor: ScrollAnchor): AnchorNod
   );
 }
 
+/** Display aliases are optional: malformed JSON or members must never break the original anchor. */
+export function parseAnchorAliases(raw: string | undefined): Pick<AnchorNode, "key" | "sig">[] {
+  try {
+    const aliases: unknown = JSON.parse(raw ?? "[]");
+    return Array.isArray(aliases) ? aliases.filter((alias): alias is Pick<AnchorNode, "key" | "sig"> =>
+      alias !== null && typeof alias === "object" && typeof alias.key === "string" && typeof alias.sig === "string") : [];
+  } catch { return []; }
+}
+
 /** 从滚动容器读消息节点：消息根元素由 ChatMessages 打上 data-key / data-sig；
  *  未打标的项（子代理卡、错误行等外部组件）自然被跳过，锚点落到其上一条消息，位置仍然正确。 */
 export function collectNodes(el: HTMLElement): AnchorNode[] {
@@ -187,14 +196,11 @@ export function collectNodes(el: HTMLElement): AnchorNode[] {
       out.push({ key: node.dataset.key, sig: node.dataset.sig ?? "", top });
       seen.add(node.dataset.key);
     }
-    try {
-      const aliases: unknown = JSON.parse(node.dataset.anchorAliases ?? "[]");
-      if (Array.isArray(aliases)) for (const alias of aliases) {
-        if (!alias || typeof alias.key !== "string" || typeof alias.sig !== "string" || seen.has(alias.key)) continue;
-        out.push({ key: alias.key, sig: alias.sig, top });
-        seen.add(alias.key);
-      }
-    } catch { /* A malformed display alias never affects the original anchor. */ }
+    for (const alias of parseAnchorAliases(node.dataset.anchorAliases)) {
+      if (seen.has(alias.key)) continue;
+      out.push({ key: alias.key, sig: alias.sig, top });
+      seen.add(alias.key);
+    }
   }
   return out;
 }

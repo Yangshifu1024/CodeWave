@@ -4,6 +4,165 @@ use crate::core::types::{Content, Role};
 // 这同时钉住重导出存在——包 Y 的 checkpoint 返回值就靠它
 use crate::core::sessions::{HistoryStatus, SaveReport};
 
+mod task_run_membership {
+    use super::*;
+    use crate::core::sessions::run_display::{RunDisplay, RunDisplayStatus};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+
+    fn run() -> RunDisplay {
+        RunDisplay {
+            run_id: "run".into(),
+            started_at: "2026-10-15T01:00:00Z".into(),
+            finished_at: "2026-10-15T01:00:01Z".into(),
+            user_created_at: "2026-10-15T01:00:00Z".into(),
+            duration_ms: 1000,
+            status: RunDisplayStatus::Done,
+            final_answer: None,
+            final_answer_created_at: None,
+        }
+    }
+
+    #[test]
+    fn cached_saves_do_not_read_index_and_cold_start_initializes_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().into());
+        store.upsert_meta(meta("s")).unwrap();
+        let reads = store.index_reads.load(Ordering::SeqCst);
+        for _ in 0..3 {
+            store.save_task_run("s", &run(), &AtomicBool::new(false));
+        }
+        assert_eq!(store.index_reads.load(Ordering::SeqCst), reads);
+        assert!(store.task_runs_dir("s").is_dir());
+        let cold = SessionStore::new(dir.path().into());
+        cold.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert_eq!(
+            cold.index_reads.load(Ordering::SeqCst),
+            1,
+            "冷启动必须从真实索引初始化"
+        );
+        cold.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert_eq!(cold.index_reads.load(Ordering::SeqCst), 1);
+        cold.remove("s").unwrap();
+        let reads = cold.index_reads.load(Ordering::SeqCst);
+        cold.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert_eq!(cold.index_reads.load(Ordering::SeqCst), reads);
+        assert!(
+            !cold.task_runs_dir("s").exists(),
+            "删除后 zombie=false 也不能复活"
+        );
+    }
+
+    #[test]
+    fn failed_index_reads_invalidate_members_and_do_not_poison_cold_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().into());
+        store.upsert_meta(meta("s")).unwrap();
+        let original = std::fs::read(store.index_path()).unwrap();
+        std::fs::write(store.index_path(), b"broken").unwrap();
+        assert!(store.load_index().sessions.is_empty());
+        store.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert!(!store.task_runs_dir("s").exists());
+        assert!(store.index_members.lock().unwrap().is_none());
+        std::fs::write(store.index_path(), original).unwrap();
+        store.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert!(
+            store.task_runs_dir("s").is_dir(),
+            "恢复后不能被失败读取缓存成永久不存在"
+        );
+        std::fs::remove_dir_all(store.task_runs_dir("s")).unwrap();
+        std::fs::remove_file(store.index_path()).unwrap();
+        store.load_index();
+        store.save_task_run("s", &run(), &AtomicBool::new(false));
+        assert!(!store.task_runs_dir("s").exists());
+    }
+
+    #[test]
+    fn membership_matches_actual_lru_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().into());
+        store
+            .mutate_index(|idx| {
+                let mut old = meta("evicted");
+                old.updated_at = "0000".into();
+                idx.sessions.push(old);
+                for n in 0..MAX_INDEX_ENTRIES {
+                    idx.sessions.push(meta(&format!("s-{n}")));
+                }
+            })
+            .unwrap();
+        let reads = store.index_reads.load(Ordering::SeqCst);
+        store.save_task_run("evicted", &run(), &AtomicBool::new(false));
+        assert!(!store.task_runs_dir("evicted").exists());
+        store.save_task_run("s-0", &run(), &AtomicBool::new(false));
+        assert!(store.task_runs_dir("s-0").exists());
+        assert_eq!(store.index_reads.load(Ordering::SeqCst), reads);
+    }
+
+    #[test]
+    fn concurrent_single_batch_and_cleanup_deletes_never_resurrect_sidecars() {
+        for operation in ["single", "batch", "cleanup"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(SessionStore::new(dir.path().into()));
+            let entry = meta("s");
+            store.upsert_meta(entry.clone()).unwrap();
+            // 先占保存锁，让 writer 与三种真实删除入口同时排队。
+            let guard = store.save_guard();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let writer_done = done_tx.clone();
+            let writer_store = store.clone();
+            let writer = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                writer_store.save_task_run("s", &run(), &AtomicBool::new(false));
+                writer_done.send(()).unwrap();
+            });
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+            let delete_store = store.clone();
+            let data_dir = dir.path().to_path_buf();
+            let deletion = std::thread::spawn(move || {
+                match operation {
+                    "single" => delete_store.remove("s").unwrap(),
+                    "batch" => {
+                        delete_store.remove_many(&["s".into()]).unwrap();
+                    }
+                    _ => {
+                        assert_eq!(
+                            crate::core::sessions::cleanup::execute(
+                                &delete_store,
+                                &data_dir,
+                                30,
+                                &[entry]
+                            )
+                            .deleted,
+                            1
+                        );
+                    }
+                };
+                done_tx.send(()).unwrap();
+            });
+            let blocked = matches!(
+                done_rx.recv_timeout(std::time::Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            drop(guard);
+            for _ in 0..2 {
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+            writer.join().unwrap();
+            deletion.join().unwrap();
+            assert!(blocked, "{operation} 删除与写入都必须等待同一保存锁");
+            store.save_task_run("s", &run(), &AtomicBool::new(false));
+            assert!(!store.task_runs_dir("s").exists(), "{operation}");
+            assert!(store.get("s").is_none());
+        }
+    }
+}
+
 fn meta(id: &str) -> SessionMeta {
     SessionMeta {
         id: id.into(),

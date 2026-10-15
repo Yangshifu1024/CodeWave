@@ -89,6 +89,28 @@ describe("fast final-answer reveal", () => {
     expect(container.querySelector("svg")?.textContent).toBe("DIAGRAM");
   });
 
+  it.each(["compact", "detailed"] as const)("counts only visible text in the final budget (%s)", display => {
+    useUi.setState({ outputDisplay: display });
+    const done = vi.fn();
+    const timeline = [
+      { kind: "text" as const, text: "隐藏候选".repeat(1000), deferred: true },
+      { kind: "text" as const, text: "A".repeat(40) },
+      { kind: "text" as const, text: "隐藏中段".repeat(1000), deferred: true },
+      { kind: "text" as const, text: "B".repeat(80) },
+    ];
+    const { container } = render(<TimelineSegsView timeline={timeline} toolsMap={{}} finalRevealKey="visible-only" onFinalRevealComplete={done} />);
+    const visible = () => [...container.querySelectorAll(".md p")].map(node => node.textContent).join("");
+    expect(visible()).toBe("A".repeat(12));
+    paint(100);
+    expect(visible()).toBe("A".repeat(40) + "B".repeat(22));
+    expect(done).not.toHaveBeenCalled();
+    paint(116);
+    expect(visible()).toBe("A".repeat(40) + "B".repeat(80));
+    expect(done).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("[data-final-revealing]")).toBeNull();
+    expect(container.textContent).not.toContain("隐藏");
+  });
+
   it("shows reduced-motion finals immediately and completes only once in StrictMode", () => {
     vi.spyOn(window, "matchMedia").mockImplementation(query => ({ matches: query.includes("prefers-reduced-motion"), media: query,
       onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));

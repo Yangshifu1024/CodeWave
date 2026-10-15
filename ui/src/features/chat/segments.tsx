@@ -278,7 +278,7 @@ export function TimelineSegsView({
 }) {
   const { t } = useTranslation();
   const display = useUi((s) => s.outputDisplay);
-  const finalText = timeline.flatMap(seg => seg.kind === "text" ? [stripReport ? stripReportMarkers(seg.text) : seg.text] : []).join("");
+  const finalText = timeline.flatMap(seg => seg.kind === "text" && !seg.deferred ? [stripReport ? stripReportMarkers(seg.text) : seg.text] : []).join("");
   const finalBudget = useTypewriter(finalText, !!finalRevealKey, { final: true });
   const finalAnimating = !!finalRevealKey && finalBudget < finalText.length;
   const revealRoot = useRef<HTMLDivElement>(null);
