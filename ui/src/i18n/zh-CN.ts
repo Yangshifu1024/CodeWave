@@ -65,6 +65,7 @@ export default {
     compactRead: "已读取", compactEdit: "已编辑", compactCreate: "已创建", compactCommand: "已运行", compactSearch: "已搜索",
     groupRead: "已读取 {{n}} 个文件", groupReadUnknown: "已读取文件", groupCommand: "已运行 {{n}} 条命令",
     groupSearch: "已搜索 {{n}} 次", groupList: "已列目录 {{n}} 次",
+    groupThinking: "思考 {{n}} 次", groupThinkingActive: "思考中……（{{seconds}}）",
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
     command: "命令", grep: "搜索", ask: "提问", web_fetch: "抓取网页", http_request: "HTTP 请求",
     service: "后台服务", wait: "等待", suggest: "建议", plan: "计划", batch_read: "批量读取",

@@ -635,7 +635,8 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
-  "tools/ToolActivityGroup.tsx": ["tools."], // 已完成工具的展示摘要
+  "tools/ToolActivityGroup.tsx": ["tools."], // 过程组摘要行（思考 + 工具合并为一行）
+  "chat/thinkingBlock.tsx": ["chat."], // 思考折叠块（自 segments.tsx 抽出，供过程组复用以断开循环依赖）
   "tools/OutputDisplaySelect.tsx": ["tools."], // 设置内的展示选择器
   "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   "workspace/ChangesModal.tsx": ["diff.", "rightbar."],

@@ -185,9 +185,16 @@ const AssistantMessage = memo(function AssistantMessage({
   }, [origins, anchorKey, onToolExpansionChange]);
   const groupExpansions = useMemo(() => {
     const out: Record<string, boolean> = {};
+    // 键空间必须覆盖组根的全部可能取值：工具 callKey 与 `thinking:<段下标>`
+    // （纯思考组没有工具，只按 toolsMap 遍历会读不到它的展开态）。
+    // 读侧按需查表，这里直接登记两类键。
     for (const callKey of Object.keys(item.toolsMap)) {
       const owner = origins?.[callKey]?.key ?? anchorKey;
       out[callKey] = !!groupExpansionState[expansionScope(sessionKey, owner)]?.[callKey];
+    }
+    for (const [segKey, owner] of Object.entries(origins ?? {})) {
+      if (!segKey.startsWith("thinking:")) continue;
+      out[segKey] = !!groupExpansionState[expansionScope(sessionKey, owner.key)]?.[segKey];
     }
     return out;
   }, [item.toolsMap, origins, anchorKey, groupExpansionState, sessionKey]);
