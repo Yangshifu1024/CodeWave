@@ -6,9 +6,10 @@ import { OUTPUT_DISPLAY_KEY, readStoredOutputDisplay } from "../utils/outputDisp
 import OutputDisplaySelect from "../features/tools/OutputDisplaySelect";
 import { AppearanceSettings } from "../features/panels/FontSettings";
 import ToolCallCard from "../features/tools/ToolCallCard";
-import { canGroupTool } from "../features/tools/toolPresentation";
+import { canGroupTool, type ToolOrigin } from "../features/tools/toolPresentation";
+import { compactTranscript } from "../features/chat/compactTranscript";
 import { TimelineSegsView } from "../features/chat/segments";
-import type { TimelineSeg, ToolView } from "../stores/run.types";
+import type { AssistantItem, TimelineSeg, ToolView } from "../stores/run.types";
 import { captureOutputAnchor, restoreOutputAnchor } from "../utils/outputAnchor";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null), Channel: class {} }));
@@ -170,6 +171,126 @@ describe("completed tool aggregation", () => {
     expect(document.querySelector(".tool-group-toggle")).toBeNull();
     expect(screen.getByText("是否执行？")).toBeTruthy();
     expect(screen.getByRole("button", { name: /预\s*览/ })).toBeTruthy();
+  });
+
+  it("folds alternating thinking and tools into one row, keeping original order when expanded", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const timeline: TimelineSeg[] = [
+      { kind: "thinking", text: "先看看入口", durationMs: 6000 },
+      { kind: "tool", callKey: "a" },
+      { kind: "thinking", text: "再确认参数", durationMs: 8000 },
+      { kind: "tool", callKey: "b" },
+    ];
+    render(<TimelineSegsView timeline={timeline} toolsMap={{
+      a: tool({ callKey: "a", argsPreview: JSON.stringify({ files: [{ path: "src/a.ts" }] }), outcome: { ok: true, data: { files: [{ path: "src/a.ts" }] } } }),
+      b: tool({ callKey: "b", argsPreview: JSON.stringify({ files: [{ path: "src/b.ts" }] }), outcome: { ok: true, data: { files: [{ path: "src/b.ts" }] } } }),
+    }} />);
+    const groups = document.querySelectorAll(".tool-group-toggle");
+    expect(groups).toHaveLength(1);
+    // 摘要按真实段数统计思考次数，不编造耗时
+    expect(groups[0].textContent).toContain("思考 2 次");
+    expect(groups[0].textContent).toContain("已读取 2 个文件");
+    // 折叠时组内思考块随组体一起隐藏（保持挂载，不丢已打开的详情）
+    expect(document.querySelector(".tool-group-body")?.hasAttribute("hidden")).toBe(true);
+    fireEvent.click(groups[0]);
+    const bodies = [...document.querySelectorAll(".tool-group-body > *")];
+    expect(bodies).toHaveLength(4);
+    expect(bodies[0].className).toContain("thinking-block");
+    expect(bodies[2].className).toContain("thinking-block");
+    // 思考块本身默认收起（antd Collapse），标题显示定稿耗时
+    expect(bodies[0].querySelector(".thinking-title")?.textContent).toBe("思考完成（6s）");
+    fireEvent.click(bodies[0].querySelector(".ant-collapse-header")!);
+    expect(bodies[0].textContent).toContain("先看看入口");
+    expect(bodies[3].textContent).toContain("b.ts");
+  });
+
+  it("keeps a group whose members come from three messages, with every source anchored", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const member = (key: string): AssistantItem => ({
+      kind: "assistant", streaming: false,
+      timeline: [{ kind: "thinking", text: "推理" }, { kind: "tool", callKey: key }],
+      toolsMap: { [key]: tool({ callKey: key }) },
+    });
+    const entries = compactTranscript(
+      [member("a"), member("b"), member("c")], ["m0", "m1", "m2"], new Map(), new Set());
+    expect(entries).toHaveLength(1);
+    const { container } = render(<TimelineSegsView
+      timeline={entries[0].item.kind === "assistant" ? entries[0].item.timeline : []}
+      toolsMap={entries[0].item.kind === "assistant" ? entries[0].item.toolsMap : {}}
+      toolOrigins={entries[0].origins} />);
+    const toggle = container.querySelector<HTMLElement>(".tool-group-toggle")!;
+    expect(JSON.parse(toggle.dataset.outputGroup!)).toEqual(["thinking:0", "tool:a", "thinking:2", "tool:b", "thinking:4", "tool:c"]);
+    // 折叠态的定位别名必须覆盖全部三条源消息
+    expect(JSON.parse(toggle.dataset.anchorAliases!).map((o: ToolOrigin) => o.key)).toEqual(["m0", "m1", "m2"]);
+  });
+
+  it("never invents a duration for restored thinking in the folded summary", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    // 恢复的历史思考：既无 startedAt 也无 durationMs —— 摘要只能报次数，绝不出现「思考完成（0s）」
+    const { container } = render(<TimelineSegsView
+      timeline={[{ kind: "thinking", text: "已完成的推理" }, { kind: "tool", callKey: "a" }]}
+      toolsMap={{ a: tool({ callKey: "a" }) }} />);
+    const label = container.querySelector(".tool-group-label")!.textContent!;
+    expect(label).toContain("思考 1 次");
+    expect(label).not.toContain("0s");
+    expect(container.textContent).not.toContain("思考完成（0s）");
+  });
+
+  it("still separates prose and approval from the folded process", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    const toolsMap = {
+      a: tool({ callKey: "a" }),
+      wait: tool({ callKey: "wait", tool: "wait", status: "waiting", outcome: undefined }),
+      b: tool({ callKey: "b" }),
+    };
+    const timeline: TimelineSeg[] = [
+      { kind: "thinking", text: "推理", durationMs: 1000 },
+      { kind: "tool", callKey: "a" },
+      { kind: "text", text: "中间结论" },
+      { kind: "tool", callKey: "wait" },
+      { kind: "tool", callKey: "b" },
+    ];
+    const { container } = render(<TimelineSegsView timeline={timeline} toolsMap={toolsMap} />);
+    // 正文把过程切开 => 第一组（思考 + a）画摘要行；审批等待独立可见，不藏进摘要；
+    // b 独自跟在后面，单成员组不画摘要行，直接内联
+    expect(document.querySelectorAll(".tool-group-toggle")).toHaveLength(1);
+    expect(container.querySelector('[data-output-key="tool:wait"]')?.textContent).toContain("等待确认");
+    expect(container.querySelector('[data-output-key="tool:b"]')).not.toBeNull();
+    expect(container.querySelector(".md")?.textContent).toContain("中间结论");
+  });
+
+  it("lets a thinking-only group open, since it has no tool origin to key its state", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    // 同一消息里的两个思考段（中间只隔空白正文）：组内无工具 => 没有 origins 可供索引
+    const { container } = render(<TimelineSegsView
+      timeline={[
+        { kind: "thinking", text: "先想想", durationMs: 3000 },
+        { kind: "text", text: "\n  " },
+        { kind: "thinking", text: "再想想", durationMs: 4000 },
+      ]}
+      toolsMap={{}} />);
+    const toggle = container.querySelector<HTMLElement>(".tool-group-toggle")!;
+    expect(toggle.textContent).toContain("思考 2 次");
+    expect(container.querySelector(".tool-group-body")?.hasAttribute("hidden")).toBe(true);
+    fireEvent.click(toggle);
+    // 回归：受控展开值不能把本地 state 盖死，否则点开无反应
+    expect(container.querySelector(".tool-group-body")?.hasAttribute("hidden")).toBe(false);
+    expect(container.querySelectorAll(".tool-group-body .thinking-block")).toHaveLength(2);
+  });
+
+  it("keeps a tail thinking segment live when only blank prose follows it", () => {
+    const now = 1_800_000_000_000;
+    vi.useFakeTimers(); vi.setSystemTime(now);
+    useUi.setState({ outputDisplay: "compact" });
+    // 尾部拖了空白正文时，计时中的思考仍应跳秒，不能退化成「思考 N 次」
+    const { container } = render(<TimelineSegsView
+      timeline={[
+        { kind: "tool", callKey: "a" },
+        { kind: "thinking", text: "推理中", startedAt: now - 7_000 },
+        { kind: "text", text: "\n  " },
+      ]}
+      toolsMap={{ a: tool({ callKey: "a" }) }} streaming />);
+    expect(container.querySelector(".tool-group-label")!.textContent).toContain("7s");
   });
 });
 

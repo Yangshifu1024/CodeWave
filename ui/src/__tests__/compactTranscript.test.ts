@@ -35,15 +35,29 @@ describe("cross-message compact tool projection", () => {
     expect(project(items)[0].item).toBe(entries[0].item);
   });
 
-  it("does not cross user, prose, thinking, subagent, error or notice boundaries", () => {
+  it("does not cross user, prose, subagent, error or notice boundaries", () => {
     const separators: UiItem[] = [
       { kind: "user", text: "新请求" }, { kind: "notice", text: "注入" }, { kind: "error", text: "失败" },
       { kind: "sub", subId: "child" },
       { ...command("middle"), timeline: [{ kind: "text", text: "结论" }] },
-      { ...command("middle"), timeline: [{ kind: "thinking", text: "推理" }] },
     ];
     for (const separator of separators) expect(project([command("a"), separator, command("b")])).toHaveLength(3);
     expect(project([command("a"), command("b")], new Map([[1, true]]))).toHaveLength(2);
+  });
+
+  it("keeps thinking in the group instead of splitting it (concise fold, docs 5.2.x)", () => {
+    // 思考不再作分隔符：三条含思考的消息应并成一条
+    const withThinking = (key: string) => ({
+      ...command(key), timeline: [{ kind: "thinking" as const, text: "推理" }, { kind: "tool" as const, callKey: key }],
+    });
+    const entries = project([withThinking("a"), withThinking("b"), withThinking("c")]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].item.kind === "assistant" && entries[0].item.timeline.map(seg => seg.kind))
+      .toEqual(["thinking", "tool", "thinking", "tool", "thinking", "tool"]);
+    // 思考段也要带源消息映射，否则跨消息组的滚动定位会掉回上一条消息
+    expect(entries[0].origins?.["thinking:0"]?.key).toBe("message-0");
+    expect(entries[0].origins?.["thinking:2"]?.key).toBe("message-1");
+    expect(entries[0].origins?.["thinking:4"]?.key).toBe("message-2");
   });
 
   it("keeps running, waiting, failed, warned and open-detail calls separate", () => {

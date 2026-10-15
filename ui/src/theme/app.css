@@ -662,6 +662,9 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ws-text-1); text-align: left; }
 .tool-group-body { padding-left: 18px; margin-left: 5px; border-left: 1px solid var(--ws-border); }
 .tool-group-body:not([hidden]) { display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
+/* 组内思考块与工具卡同级：折叠行的间距由 .tool-group-body 的 gap 统一管，
+   antd Collapse 自带的 header 下边距会叠加出行距差，这里只归零不改变其最小行高。 */
+.tool-group-body > .thinking-block.ant-collapse-ghost { margin-bottom: 0; }
 .sub-card.sub-compact { border: 0; border-radius: 0; background: transparent; }
 
 /* ---------- render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：

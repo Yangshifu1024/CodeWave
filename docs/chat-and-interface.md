@@ -190,13 +190,19 @@ read/batch_read/edit 一次批量调用本来就是一张卡。头部展示全�
 
 简洁时间线用单一 flex 容器管理 4px 过程行间距；汇总、单工具和思考头部共用最小行高（至少 32px，随界面字号增长），不叠加各自的外边距。按钮的透明边框也计入行高，避免与无边框的思考头部相差 2px。混合消息的最后可见段若是工具 / 思考，也使用同一过程底距；过程后接正文消息仍保留阅读留白。空白正文只在展示层跳过，真实正文与代码缩进不 trim，过滤成功 subagent 工具或缺失工具时不把隐藏段误判为可见尾段；展开组的 `[hidden]` 不能被 flex 布局覆盖。详细展示、正文行高、消息身份与滚动锚点保持原语义。
 
-- 简洁只聚合相邻且无警告的成功 read/batch_read/grep/list_files，以及退出码明确为 0 的 command；允许从一条已结束助手消息的成功工具尾，延伸到下一条纯成功工具助手消息。空白正文不分隔可见工具；真实正文、思考、子代理、用户消息、通知、压缩分界、等待或错误仍分隔。运行中消息、含警告调用、重复调用 id 或正在阅读详情的消息不参与跨消息聚合。汇总按真实工具调用统计，不累加已有摘要文字；展开后保留顺序、完整命令、出参与每次调用所属消息的时间。聚合仅在渲染层发生，不改变工具调用身份。打开详情的工具独立保留，展开态按会话 / 原消息键 / `callKey` 留在界面，完成或来回切换模式不自动关闭。
+- 简洁把**连续的思考 + 可入组工具**折叠为一行摘要（如 `思考 8 次 · 已读取 12 个文件 · 已搜索 4 次 · 已运行 3 条命令`），点开才展开。摘要计数按真实段数/调用数统计，不累加已有摘要文字。
+- 折叠规则：思考段与运行中的工具都可入组（跑批期间也保持一行，摘要每 500ms 刷新并带加载指示）；成功无警告的 read/batch_read/grep/list_files 与退出码明确为 0 的 command 入组；空白正文不分隔可见过程。**仍分隔**：真实正文、子代理卡、审批等待、失败与警告、用户消息、通知、压缩分界、正在阅读详情的工具。
+- 思考时长口径：组内有正在计时（位于尾部且消息仍流式）的思考段时显示 `思考中……（Ns）`；否则只报次数 `思考 N 次`。恢复的历史思考与被中断的思考都没有真实耗时（`appendDelta` 的 restored 分支不记 `startedAt`），**绝不补 0 秒**。
+- 锚点：组摘要行的 `data-output-key` 取根键对应成员（优先组内首个工具的 `callKey`，纯思考组用 `thinking:<段下标>`），`data-output-group` 含全部成员键；跨消息组为**每个成员（含思考段）**记源消息映射，`data-anchor-aliases` 覆盖全部源消息，否则滚动定位会掉回上一条消息。展开态按会话 / 原消息键 / 根键保存，来回切换模式不自动关闭；键读不到时回退到组内本地 state（纯思考组无工具即无 origins 可索引，若传受控 false 会把本地展开盖死、点开无反应）。
+- 根键稳定性：含工具的组根键是 provider 侧 `tool_use.id`，跨消息摊平后仍稳定；纯思考组的根键是段下标，跨消息摊平后下标仍稳定，但一旦因 sidecar 回填或新成员并入而变成含工具组，根键会从 `thinking:N` 变成某个 callKey，已展开的组会随之收敛。
+- 单成员组不画摘要行，直接内联渲染那一个成员（本来就是一行，再包一层只会平白多一次点击）。
+- 恢复路径的既有行为：工具出参先以 `{restored:true}` 占位时，`command` 拿不到 `exit_code` 故暂不入组，sidecar 回填后可能重新入组或被踢出独立成行——切换展示模式时同样会重算，本就不新增跳变。
 - edit/create 逐文件显示最短可区分后缀及完整路径提示。成功结果可增 `data.line_changes`（数组元素为 `path/added/removed`），由写锁内真实前后内容进行行级 diff；统计是本次操作的净变化，不是传入 patch 行数或相对 HEAD 的工作区变化。CRLF/LF 归一后统计，空文件没有虚构末行；create 的原件不可读或非 UTF-8 时省略统计，失败结果不附统计。旧历史缺统计就不显示数字，不新增迁移或摘要存档。
-- ask 题干与答案、等待审批、真实错误、警告及 widget 预览保持可见；用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好与工具结果回填。
+- ask 题干与答案、等待审批、真实错误、警告及 widget 预览保持可见；用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好、同一折叠规则与工具结果回填。
 - 切换前捕获当前可见段/工具与所属消息，提交后恢复该段内阅读偏移；折叠工具组只以摘要行作锚点，打开组后各子卡仍有独立锚点。组展开态按会话 / 原首消息键 / 首调用键保存；前翻不会把已打开组的根并入新增历史，保留展开态和阅读位置。单调用不设置组展开边界，关闭详情后仍可重新聚合。主聊天校验 session，过程抽屉校验 subId；原来贴底则继续贴底，上滚阅读则暂停跟随。
 - 汇总头与首子卡可能共用输出键，定位同时记录 summary / content 类型；恢复优先匹配同类型。子卡回落到汇总头时清零卡内偏移，避免深层偏移把视口落到后续消息。
 
-实现：[compactTranscript.ts](../ui/src/features/chat/compactTranscript.ts)、[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[compactTranscript.test.ts](../ui/src/__tests__/compactTranscript.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)、[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。
+实现：[compactTranscript.ts](../ui/src/features/chat/compactTranscript.ts)、[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[thinkingBlock.tsx](../ui/src/features/chat/thinkingBlock.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[compactTranscript.test.ts](../ui/src/__tests__/compactTranscript.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)、[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx)、[thinking.history.test.tsx](../ui/src/__tests__/thinking.history.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。`thinkingBlock.tsx` 从 `segments.tsx` 抽出：过程组要按原位渲染组内思考段，两者互相 import 会成环。
 
 ### 5.3 HTML 小组件
 

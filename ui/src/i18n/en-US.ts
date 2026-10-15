@@ -66,6 +66,7 @@ export default {
     compactRead: "Read", compactEdit: "Edited", compactCreate: "Created", compactCommand: "Ran", compactSearch: "Searched",
     groupRead: "Read {{n}} files", groupReadUnknown: "Read files", groupCommand: "Ran {{n}} commands",
     groupSearch: "Searched {{n}} times", groupList: "Listed directories {{n}} times",
+    groupThinking: "Thought {{n}} times", groupThinkingActive: "Thinking……({{seconds}})",
     read: "Read", edit: "Edit", create: "Create", delete: "Delete", list_files: "List files",
     command: "Command", grep: "Search", ask: "Ask", web_fetch: "Web fetch", http_request: "HTTP request",
     service: "Service", wait: "Wait", suggest: "Suggest", plan: "Plan", batch_read: "Batch read",

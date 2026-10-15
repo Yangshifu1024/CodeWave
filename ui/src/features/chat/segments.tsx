@@ -1,12 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Collapse } from "antd";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { renderMarkdown } from "../../utils/markdown";
 import type { TimelineSeg, ToolView } from "../../stores/run";
 import ToolCallCard from "../tools/ToolCallCard";
 import type { ToolExpansion } from "../tools/ToolCallCard";
-import ToolActivityGroup from "../tools/ToolActivityGroup";
-import { canGroupTool, type ToolOrigin } from "../tools/toolPresentation";
+import ToolActivityGroup, { type ProcessGroupEntry } from "../tools/ToolActivityGroup";
+import { ThinkingBlock } from "./thinkingBlock";
+import { canJoinProcessGroup, processGroupKey, type ProcessMember, type ToolOrigin } from "../tools/toolPresentation";
 import { useUi } from "../../stores/ui";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 
@@ -227,159 +227,6 @@ function useTypewriter(
 }
 
 
-// 思考标题右侧占满余下头部空间的通栏走马灯（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：显示思考文本的最新一行。
-// 一行先锚定在左缘；溢出通栏后自右向左爬行、最新内容钉在右缘（tail-follow）；只有流真正
-// 换到新的一行（来了 "\n"）才翻转上滚——原行内增长绝不重触发滚动。
-const MARQUEE_DWELL_MS = 700; // 一行在左缘静置片刻后才开始爬行
-const MARQUEE_TICK_MS = 150; // 爬行采样间隔；CSS 过渡把阶梯平滑成连续爬行
-const MARQUEE_ROLL_MS = 300; // 与 app.css 的 thinking-roll-up 动画时长保持同步
-/** 思考走马灯：单行展示最新思考内容，溢出时 tail-follow 爬行、换行时上滚翻转；
- *  prefers-reduced-motion 下退化为静态左锚定。 */
-function ThinkingMarquee({ text }: { text: string }) {
-  const boxRef = useRef<HTMLSpanElement>(null);
-  const lineRef = useRef<HTMLSpanElement>(null);
-  const lines = useMemo(() => text.split("\n"), [text]);
-  const latestLine = lines[lines.length - 1] ?? "";
-  const [curr, setCurr] = useState(""); // 当前展示的行
-  const [prev, setPrev] = useState<string | null>(null); // 上滚翻转中的旧行
-  const [x, setX] = useState(0); // 展示行的水平偏移（tail-follow 爬行）
-  const appearAt = useRef(0);
-  const lineCountRef = useRef(lines.length); // 已见行数；只有计数增加才算真正换行
-
-  useEffect(() => {
-    const t = latestLine.trim();
-    if (!t || t === curr) return;
-    // 行数超过已处理行数即视为出现真正的新行（"\n" 之后短暂的空白瞬间不推进 ref 跳过，
-    // 迟到的字符仍会计入「新行」）
-    if (lines.length > lineCountRef.current && curr) {
-      setX(0);
-      appearAt.current = Date.now();
-      setPrev(curr); // 翻转上滚；翻转中新到的行只是给进行中的动画换目标
-    }
-    setCurr(t);
-    lineCountRef.current = lines.length;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestLine, curr, prev]);
-
-  // 翻转结束后释放旧行（用超时而非 animationend，保证 prefers-reduced-motion 禁用
-  // CSS 动画时滚动同样能完成）
-  useEffect(() => {
-    if (prev === null) return;
-    const id = setTimeout(() => setPrev(null), MARQUEE_ROLL_MS + 20);
-    return () => clearTimeout(id);
-  }, [prev]);
-
-  // tail-follow 爬行：行溢出（且静置期已过）后保持行尾可见于右缘；对仍在增长的行，
-  // 溢出量持续增加，逐 tick 重定位读起来就是连续的自右向左爬行。
-  // reduced-motion 用户得到静态左锚定的行。
-  useEffect(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const id = setInterval(() => {
-      const box = boxRef.current;
-      const line = lineRef.current;
-      if (!box || !line) return;
-      const overflow = Math.ceil(line.scrollWidth - box.clientWidth);
-      if (overflow <= 2) {
-        setX(0);
-        return;
-      }
-      if (reduced || Date.now() - appearAt.current < MARQUEE_DWELL_MS) return;
-      setX(-overflow);
-    }, MARQUEE_TICK_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <span className="thinking-marquee" ref={boxRef} aria-hidden>
-      <span className={prev !== null ? "thinking-roll rolling" : "thinking-roll"}>
-        {prev !== null && <span className="thinking-roll-line out">{prev || "\u00A0"}</span>}
-        <span className="thinking-roll-line in" ref={lineRef} style={{ transform: `translateX(${x}px)` }}>
-          {curr || "\u00A0"}
-        </span>
-      </span>
-    </span>
-  );
-}
-
-/** 思考折叠块：头部为耗时标签 + 走马灯，展开后思考体 live tail-follow；
- *  展开/收起即阅读意图信号，经 onToggle 通知外层暂停自动跟随。 */
-export const ThinkingBlock = memo(function ThinkingBlock({
-  text,
-  startedAt,
-  durationMs,
-  onToggle,
-  compact = false,
-  streaming = false,
-}: {
-  text: string;
-  startedAt?: number;
-  durationMs?: number;
-  onToggle?: () => void;
-  compact?: boolean;
-  streaming?: boolean;
-}) {
-  const { t } = useTranslation();
-  const active = streaming && durationMs === undefined && startedAt !== undefined;
-  // 展开态 + 内部 tail-follow 开关（用户在思考体内上滚即暂停，回到底部恢复）
-  const [expanded, setExpanded] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const tailRef = useRef(true);
-  // 活跃期间以 500ms 心跳刷新耗时计时（完成后无 interval，时间定格）
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setTick((n) => n + 1), 500);
-    return () => clearInterval(id);
-  }, [active]);
-  // live tail-follow：展开且用户未上滚时，思考体始终滚到底部（tail -f）
-  useEffect(() => {
-    if (!expanded || !tailRef.current) return;
-    const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [expanded, text]);
-  function onBodyScroll() {
-    const el = bodyRef.current;
-    if (!el) return;
-    tailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
-  }
-  const elapsed = active && startedAt !== undefined ? Date.now() - startedAt : durationMs ?? 0;
-  const secs = Math.max(1, Math.floor(elapsed / 1000));
-  const secondsLabel = `${secs}s`;
-
-  const label = active ? t("chat.thinkingActive", { seconds: secondsLabel })
-    : durationMs !== undefined ? t("chat.thinkingDone", { seconds: secondsLabel })
-      : t("chat.thinking");
-  return (
-    <Collapse
-      size="small"
-      ghost
-      className={compact ? "thinking-block thinking-compact" : "thinking-block"}
-      onChange={(keys) => {
-        const exp = Array.isArray(keys) ? keys.includes("1") : keys === "1";
-        setExpanded(exp);
-        if (exp) tailRef.current = true; // 重新展开即恢复 tail-follow
-        onToggle?.(); // 展开/收起 = 阅读意图：外层暂停自动跟随，思考体切换为 live tail-follow
-      }}
-      items={[
-        {
-          key: "1",
-          label: (
-            <span className="thinking-label">
-              <span className="thinking-title">{label}</span>
-              {active && !compact && <ThinkingMarquee text={text} />}
-            </span>
-          ),
-          children: (
-            <div className="thinking-body" ref={bodyRef} onScroll={onBodyScroll}>
-              {text}
-            </div>
-          ),
-        },
-      ]}
-    />
-  );
-});
-
 /** timeline 段渲染（[docs/subagents](../../../../docs/subagents.md) 自 ChatMessages 抽取共享）：思考折叠面板 / 工具卡 /
  *  子代理卡 / markdown 正文；主聊天与子代理过程抽屉共用同一视觉。 */
 export function TimelineSegsView({
@@ -424,24 +271,30 @@ export function TimelineSegsView({
     if (onToolExpansionChange) onToolExpansionChange(callKey, expansion);
     else setExpansions((previous) => ({ ...previous, [callKey]: expansion }));
   }, [onToolExpansionChange]);
-  const groups = new Map<number, ToolView[]>();
+  // 简洁模式的过程分组：连续的思考 + 可入组工具合并为一行摘要（docs/chat-and-interface 5.2.x）。
+  // 仍分隔的：真实正文、子代理卡、已打开详情的工具、审批等待与失败。
+  const groups = new Map<number, ProcessMember[]>();
   const grouped = new Set<number>();
   if (display === "compact") {
     for (let i = 0; i < timeline.length; i++) {
       const first = i;
-      const tools: ToolView[] = [];
+      const members: ProcessMember[] = [];
       while (i < timeline.length) {
         const seg = timeline[i];
-        if (seg.kind === "text" && !seg.text.trim() && tools.length > 0) {
+        // 空白正文不分隔可见过程（只在本组已有成员时吸收，否则留给正文渲染分支）
+        if (seg.kind === "text" && !seg.text.trim() && members.length > 0) {
           grouped.add(i++);
           continue;
         }
-        const tool = seg.kind === "tool" ? toolsMap[seg.callKey] : undefined;
-        if (!canGroupTool(tool) || expansions[tool.callKey]?.expanded) break;
-        tools.push(tool);
+        // 正在阅读详情的工具独立保留：不能被卷进组，否则点开它会连带展开同组其它工具
+        if (seg.kind === "tool" && expansions[seg.callKey]?.expanded) break;
+        if (!canJoinProcessGroup(seg, toolsMap, { includeRunning: true })) break;
+        // 谓词已确认非 thinking 段必为 tool 且能在 toolsMap 里取到；显式分流让 TS 看得见
+        if (seg.kind === "thinking") members.push({ kind: "thinking", index: i, seg });
+        else if (seg.kind === "tool") members.push({ kind: "tool", index: i, callKey: seg.callKey, tool: toolsMap[seg.callKey] });
         grouped.add(i++);
       }
-      if (tools.length) { groups.set(first, tools); i--; }
+      if (members.length) { groups.set(first, members); i--; }
     }
   }
   // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
@@ -458,7 +311,17 @@ export function TimelineSegsView({
     <div className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
       {timeline.map((seg, i) => {
         const group = groups.get(i);
-        if (group) return <ToolActivityGroup key={`group:${group[0].callKey}`} tools={group} origins={toolOrigins} onToggle={onUserToggle} onExpansionChange={updateExpansion} expanded={groupExpansions ? !!groupExpansions[group[0].callKey] : undefined} onGroupExpansionChange={onGroupExpansionChange} />;
+        if (group) {
+          const rootKey = processGroupKey(group);
+          if (!rootKey) return null;
+          const tools = group.filter(member => member.kind === "tool").map(member => member.tool);
+          const entry: ProcessGroupEntry = { key: rootKey, tools, members: group };
+          // 展开态回退：键不存在时传 undefined，让组用本地 state。
+          // 不能恒传 !!groupExpansions[rootKey] —— 纯思考组（组内无工具）在单消息里
+          // 不生成 origins，键永远读不到，受控值会恒为 false 把本地 state 完全盖掉，点开无反应。
+          const expanded = groupExpansions && rootKey in groupExpansions ? groupExpansions[rootKey] : undefined;
+          return <ToolActivityGroup key={`group:${rootKey}`} entry={entry} timeline={timeline} streaming={streaming} display={display} origins={toolOrigins} onToggle={onUserToggle} onUserToggle={onUserToggle} onExpansionChange={updateExpansion} expanded={expanded} onGroupExpansionChange={onGroupExpansionChange} />;
+        }
         if (grouped.has(i)) return null;
         if (seg.kind === "thinking") {
           return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} />;
