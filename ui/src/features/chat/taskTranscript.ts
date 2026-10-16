@@ -107,12 +107,10 @@ export function taskTranscript(entries: readonly TranscriptEntry[], runs: readon
       if (item.kind !== "assistant") { process.push(entry); continue; }
       const finalText = suffix && i === range.length - 1 ? suffix.answer : [];
       const source = suffix && i === range.length - 1 ? suffix.process : item.timeline.map((seg, index) => ({ seg, index }));
+      // Tool failures and warnings belong to the execution process too. Extracting them
+      // here leaves a separate row for every failed attempt after the task is collapsed.
       const exposed = source.filter(({ seg }) => seg.kind === "sub"
-        ? attention({ kind: "sub", subId: seg.subId }, subs)
-        : seg.kind === "tool" && (() => {
-        const tool = item.toolsMap[seg.callKey];
-        return tool?.status === "error" || !!tool?.outcome?.warnings?.length;
-      })());
+        && attention({ kind: "sub", subId: seg.subId }, subs));
       const kept = new Set(exposed);
       const hidden = source.filter(part => !kept.has(part));
       if (hidden.length) process.push(splitEntry(entry, hidden, finalText.length || exposed.length ? ":process" : ""));

@@ -121,6 +121,9 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
     // 计划段不受影响
     expect(header("当前计划").getAttribute("aria-expanded")).toBe("true");
     expect(JSON.parse(localStorage.getItem(COLLAPSED_SECTIONS_KEY)!)).toEqual(["skills"]);
+    fireEvent.click(header("会话文件"));
+    expect(header("会话文件").getAttribute("aria-expanded")).toBe("false");
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_SECTIONS_KEY)!)).toEqual(["skills", "files"]);
 
     unmount();
     renderBar();
@@ -129,6 +132,7 @@ describe("右栏信息页：技能 / 当前计划折叠", () => {
         screen.getByText("技能").closest(".ant-collapse-header")!.getAttribute("aria-expanded"),
       ).toBe("false"),
     );
+    expect(header("会话文件").getAttribute("aria-expanded")).toBe("false");
   });
 
   it("无计划时只渲染技能一段（不做「折叠了不存在的段」）", async () => {
@@ -161,8 +165,8 @@ describe("右栏偏好读盘容错", () => {
     localStorage.setItem(COLLAPSED_SECTIONS_KEY, "not-json");
     expect([...readCollapsedSections()]).toEqual([]);
     // 合法元素保留、非法元素剔除
-    localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify(["skills", 42, null, "plan"]));
-    expect([...readCollapsedSections()].sort()).toEqual(["plan", "skills"]);
+    localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify(["skills", 42, null, "plan", "files"]));
+    expect([...readCollapsedSections()].sort()).toEqual(["files", "plan", "skills"]);
     // 非数组 / 非字符串都不得让额度家展开态崩掉
     localStorage.setItem(EXPANDED_QUOTA_KEY, JSON.stringify("nope"));
     expect([...readExpandedQuotaProviders()]).toEqual([]);

@@ -24,6 +24,17 @@ const process: UiItem = { kind: "assistant", streaming: false, createdAt: starte
   timeline: [{ kind: "text", text: "正在检查源码" }, { kind: "thinking", text: "详细推理" }] };
 const answer: UiItem = { kind: "assistant", streaming: false, createdAt: finished, toolsMap: {},
   timeline: [{ kind: "thinking", text: "最后核查" }, { kind: "text", text: run.final_answer! }] };
+const failedTools = ["command", "command", "ask", "ask", "read", "edit", "edit"].map((tool, index) => ({
+  callKey: `failed-${index}`, tool, status: "error" as const, progressTail: "",
+  argsPreview: JSON.stringify(tool === "command" ? { command: `which aliyun-${index}` } : {}),
+  outcome: { ok: false, data: null, error: { code: `E_TEST_${index}`, message: `失败详情 ${index}` },
+    ...(index === 0 ? { warnings: ["检查失败警告"] } : {}),
+  },
+}));
+const failures: UiItem = { kind: "assistant", streaming: false, createdAt: started,
+  timeline: failedTools.map(tool => ({ kind: "tool", callKey: tool.callKey })),
+  toolsMap: Object.fromEntries(failedTools.map(tool => [tool.callKey, tool])),
+};
 const entries = (items: UiItem[]): TranscriptEntry[] => items.map((item, index) => ({ key: `k${index}`, index, item, members: [] }));
 const project = (items: UiItem[], runs = [run]) => taskTranscript(entries(items), runs, []);
 
@@ -182,15 +193,32 @@ describe("task process projection", () => {
     expect(result[2]).toEqual(entries([user, process, inject, answer, nextUser])[4]);
   });
 
-  it("keeps tool errors and warnings plus incomplete subagent results outside the collapsed process", () => {
+  it("keeps tool warnings in the process while leaving incomplete subagent results visible", () => {
     const warning: UiItem = { kind: "assistant", streaming: false,
       timeline: [{ kind: "tool", callKey: "w" }, { kind: "sub", subId: "partial" }],
       toolsMap: { w: { callKey: "w", tool: "command", status: "ok", progressTail: "", outcome: { warnings: ["检查失败"] } } } };
     const result = taskTranscript(entries([user, warning, answer]), [run], [{ subId: "partial", role: "tester", description: "verify", step: 1, maxSteps: 1, tokens: 0, lastTools: [], status: "done", ended: "partial" }]);
     const task = result[1];
     if (!("kind" in task)) throw new Error("missing task");
-    expect(task.visible[0].item.kind === "assistant" && task.visible[0].item.timeline).toHaveLength(2);
+    expect(task.visible[0].item.kind === "assistant" && task.visible[0].item.timeline).toEqual([{ kind: "sub", subId: "partial" }]);
+    expect(JSON.stringify(task.process)).toContain('"callKey":"w"');
     expect(JSON.stringify(task.process)).not.toContain('"subId":"partial"');
+  });
+
+  it("keeps all failed calls inside the task process in source order, including calls next to the final answer", () => {
+    const mixed: UiItem = { ...answer, toolsMap: failures.toolsMap,
+      timeline: [...failures.timeline.slice(3), ...answer.timeline] };
+    const source = [user, { ...failures, timeline: failures.timeline.slice(0, 3) }, mixed];
+    const original = JSON.stringify(source);
+    const task = project(source)[1];
+    if (!("kind" in task)) throw new Error("missing task");
+    const calls = task.process.flatMap(part => part.item.kind === "assistant"
+      ? part.item.timeline.flatMap(seg => seg.kind === "tool" ? [seg.callKey] : []) : []);
+    expect(calls).toEqual(failedTools.map(tool => tool.callKey));
+    expect(plainText(task.visible)).toBe(run.final_answer);
+    expect(task.visible).toHaveLength(1);
+    expect(task.visible[0].item.kind === "assistant" && task.visible[0].item.timeline.every(seg => seg.kind === "text")).toBe(true);
+    expect(JSON.stringify(source)).toBe(original);
   });
 
   it("uses wall duration directly with bilingual hour/minute/second formatting", () => {
@@ -207,6 +235,34 @@ describe("task process UI and lifecycle", () => {
       state.tabs[sid].taskRuns = [metadata];
     });
   }
+  it.each(["compact", "detailed"] as const)("folds every failed tool into the completed task in %s mode", display => {
+    useUi.setState({ outputDisplay: display });
+    // Restored histories can have one assistant item per tool call.
+    const separate = failedTools.map(tool => ({ ...failures,
+      timeline: [{ kind: "tool" as const, callKey: tool.callKey }], toolsMap: { [tool.callKey]: tool },
+    }));
+    seed([user, ...separate, answer]);
+    const { container } = render(<App><ChatMessages /></App>);
+    const task = container.querySelector(".task-process")!;
+    const toggle = task.querySelector(".ant-collapse-header")!;
+    const visibleFailures = () => [...container.querySelectorAll(".tool-card.st-error")]
+      .filter(card => !card.closest("[hidden]"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(visibleFailures()).toHaveLength(0);
+    expect(container.querySelectorAll("h2")).toHaveLength(2);
+    fireEvent.click(toggle);
+    expect(visibleFailures()).toHaveLength(failedTools.length);
+    for (const card of visibleFailures()) expect(task.contains(card)).toBe(true);
+    const card = visibleFailures()[0];
+    fireEvent.click(card.querySelector(display === "compact" ? ".tool-compact-head" : ".tool-head")!);
+    expect(card.textContent).toContain("E_TEST_0: 失败详情 0");
+    fireEvent.click(toggle);
+    expect(visibleFailures()).toHaveLength(0);
+    expect(container.querySelectorAll("h2")).toHaveLength(2);
+    fireEvent.click(toggle);
+    expect(visibleFailures()).toHaveLength(failedTools.length);
+    expect(visibleFailures()[0].textContent).toContain("E_TEST_0: 失败详情 0");
+  });
   it("collapses completed process, keeps summary/recommendations visible, and retains expansion across mode and Tab changes", () => {
     seed();
     const { container } = render(<App><ChatMessages /></App>);
@@ -227,12 +283,41 @@ describe("task process UI and lifecycle", () => {
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("defaults failed and cancelled processes to expanded and shows their true status", () => {
-    seed([user, process, { kind: "error", text: "网络断开" }], { ...run, status: "error", final_answer: undefined });
+  it("moves failed calls into the collapsed process when a live task finishes", () => {
+    useUi.setState({ outputDisplay: "compact" });
+    useRun.setState(state => {
+      state.tabs[sid].items = [user, { ...failures, streaming: true }];
+      state.tabs[sid].running = true;
+    });
     const { container } = render(<App><ChatMessages /></App>);
-    expect(container.querySelector(".ant-collapse-header")?.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("失败");
-    expect(container.textContent).toContain("网络断开");
+    expect(container.querySelectorAll(".tool-card.st-error")).toHaveLength(failedTools.length);
+    act(() => {
+      seed([user, failures, answer]);
+      useRun.setState(state => { state.tabs[sid].running = false; });
+    });
+    const task = container.querySelector(".task-process")!;
+    expect(task.querySelector(".ant-collapse-header")?.getAttribute("aria-expanded")).toBe("false");
+    for (const card of container.querySelectorAll(".tool-card.st-error")) {
+      expect(task.contains(card)).toBe(true);
+      expect(card.closest("[hidden]")).not.toBeNull();
+    }
+    expect(container.querySelectorAll("h2")).toHaveLength(2);
+  });
+
+  it.each(["error", "cancelled"] as const)("defaults a %s process to expanded and keeps its terminal notice visible after folding", status => {
+    const terminal: UiItem = status === "error" ? { kind: "error", text: "网络断开" } : { kind: "notice", text: "运行已取消" };
+    seed([user, failures, terminal], { ...run, status, final_answer: undefined });
+    const { container } = render(<App><ChatMessages /></App>);
+    const task = container.querySelector(".task-process")!;
+    const toggle = task.querySelector(".ant-collapse-header")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain(terminal.text);
+    expect(task.querySelectorAll(".tool-card.st-error")).toHaveLength(failedTools.length);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    for (const card of task.querySelectorAll(".tool-card.st-error")) expect(card.closest("[hidden]")).not.toBeNull();
+    expect(container.textContent).toContain(terminal.text);
+    expect(task.textContent).not.toContain(terminal.text);
   });
 
   it("preserves a pure text answer and shows duration without an empty collapse control", () => {
