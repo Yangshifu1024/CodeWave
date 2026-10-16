@@ -39,6 +39,9 @@ use super::process::build_stdio_wrap;
 use super::tools::{McpTool, McpToolDef, build_tool_defs, filter_tools, normalize_schema};
 use super::trust::{LaunchPermit, LaunchRegistry, LaunchStatus, ProbeChallenge, untrusted};
 
+#[cfg(all(test, unix))]
+#[path = "native_tests.rs"]
+mod native_tests;
 #[cfg(test)]
 #[path = "persistent_tests.rs"]
 mod persistent_tests;

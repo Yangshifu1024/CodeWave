@@ -60,6 +60,7 @@ async function baseInvoke(cmd: string, args?: any) {
     case "list_available_shells": return [];
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
+    case "inspect_instruction_resources": return { resources: [], issues: [] };
     case "inspect_skills": return inspection(args?.reload);
     case "delete_skill": deleted = true; return null;
     default: throw new Error(`unmocked command: ${cmd}`);

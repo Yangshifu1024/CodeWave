@@ -146,6 +146,8 @@ POSIX shell 的 `-c`（含 `-lc` 等组合）只扫描首个脚本，后续 argv
 
 两个工具仅允许 HTTP(S)，拒绝 URL 内嵌凭据，关闭自动重定向，最多跟随 10 跳；要求本地解析的路由每跳重新解析并校验全部目标地址，以该地址集合构造本跳客户端，保持原域名用于 Host/TLS 校验，不能二次解析成其它连接目标。允许内网时，远端 DNS 代理保持代理解析，不先要求本地 DNS 成功。每 host 最少 1 秒节流。两工具的 `timeoutSeconds` 默认 60、范围 1–120，统一总预算覆盖代理探测、DNS、节流、全部跳转和正文读取；取消优先，取消返回 `E_CANCELLED`，超时返回 `E_NETWORK`。macOS 显式系统代理探测为可取消子进程；默认原生系统探测及其它平台探测在阻塞工作线程执行，请求取消后原生查询可能继续结束。这不等于批次层已有任意工具的统一总时限，也不包括正文 Readability 的同步 CPU 处理。
 
+本地 DNS SOCKS4/5 的连接器只使用首个解析地址，因此执行器按已校验顺序逐个尝试候选；仅连接阶段错误（包括TLS握手失败）才推进下一地址。每次仍用同一代理快照和原URL/域名，不重新解析、不改IPv4优先、不静默直连。所有候选共享上述总预算/取消并逐次节流。HTTP请求已发出后的断流、状态码失败或正文读取错误均不触发地址重放，避免重复POST副作用。真实SOCKS协议、TLS握手及不重放回归见[socks_tests.rs](../src-tauri/src/tools/net/socks_tests.rs)；这不是对任意请求失败的通用重试。
+
 两工具均使用 `read_body_limited` 对**解压后的流式正文**实施 50 MiB 硬上限，无 Content-Length/分块响应同样受限；声明长度超限则提前拒绝。web_fetch 的 HTML 用 Readability，失败退化剥标签，默认 maxChars=60,000、范围 1,000–500,000，目前不支持 markdown 格式参数或图片内容通道；新增 `final_url` 标明实际取回地址，原 `url` 保留用户输入。
 
 http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS；JSON 预览 24 Ki 字符、文本 96 Ki 字符，二进制只报体积和 MIME；响应头只对 set-cookie/www-authenticate 做脱敏。body 是 JSON 值，字符串也按 JSON 字符串发送；query 的名称和值均编码。Host、Content-Length、Transfer-Encoding 和 Proxy-Authorization 不允许由 caller 头覆盖。

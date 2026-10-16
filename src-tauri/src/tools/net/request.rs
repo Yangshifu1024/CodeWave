@@ -213,6 +213,53 @@ fn pinned_client(
         .map_err(|_| error("E_NETWORK", "无法建立受保护的 HTTP 客户端"))
 }
 
+async fn send_pinned(
+    request: &HttpRequest,
+    addresses: &[SocketAddr],
+    proxy: Option<Intercept>,
+    allow_private: bool,
+    throttle: &super::HostThrottle,
+) -> Result<reqwest::Response, HopError> {
+    // reqwest's local-DNS SOCKS connector uses only the first resolved IP.
+    // Keep the vetted order and proxy snapshot, advancing only on connection
+    // errors (including TLS setup), before an HTTP request can be sent.
+    let socks_fallback = addresses.len() > 1
+        && proxy
+            .as_ref()
+            .is_some_and(|proxy| matches!(proxy.uri().scheme_str(), Some("socks4" | "socks5")));
+    let mut index = 0;
+    loop {
+        let candidates = if socks_fallback {
+            &addresses[index..index + 1]
+        } else {
+            addresses
+        };
+        let client = pinned_client(&request.url, candidates, proxy.clone(), allow_private)?;
+        throttle
+            .wait(request.url.host_str().unwrap_or_default())
+            .await;
+        let mut outgoing = client
+            .request(request.method.clone(), request.url.clone())
+            .header(reqwest::header::USER_AGENT, crate::util::USER_AGENT)
+            .headers(request.headers.clone());
+        if let Some(body) = &request.body {
+            outgoing = outgoing.json(body);
+        }
+        match outgoing.send().await {
+            Ok(response) => return Ok(response),
+            Err(err) if socks_fallback && err.is_connect() && index + 1 < addresses.len() => {
+                index += 1;
+            }
+            Err(err) => {
+                return Err(error(
+                    "E_NETWORK",
+                    format!("HTTP 请求失败：{}", err.without_url()),
+                ));
+            }
+        }
+    }
+}
+
 fn redirect(request: &mut HttpRequest, status: StatusCode, next: Url) -> Result<(), HopError> {
     validate_url(&next)?;
     if request.url.scheme() == "https" && next.scheme() == "http" {
@@ -293,25 +340,14 @@ async fn execute_with_throttle(
                 } else {
                     resolve(&request.url, cfg.network.allow_private_network).await?
                 };
-            let client = pinned_client(
-                &request.url,
+            let response = send_pinned(
+                &request,
                 &addresses,
                 proxy,
                 cfg.network.allow_private_network,
-            )?;
-            throttle
-                .wait(request.url.host_str().unwrap_or_default())
-                .await;
-            let mut outgoing = client
-                .request(request.method.clone(), request.url.clone())
-                .header(reqwest::header::USER_AGENT, crate::util::USER_AGENT)
-                .headers(request.headers.clone());
-            if let Some(body) = &request.body {
-                outgoing = outgoing.json(body);
-            }
-            let response = outgoing.send().await.map_err(|err| {
-                error("E_NETWORK", format!("HTTP 请求失败：{}", err.without_url()))
-            })?;
+                throttle,
+            )
+            .await?;
             let status = response.status();
             if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 if hop == MAX_REDIRECTS {
@@ -351,6 +387,9 @@ async fn execute_with_throttle(
     }
 }
 
+#[cfg(test)]
+#[path = "socks_tests.rs"]
+mod socks_tests;
 #[cfg(test)]
 #[path = "request_tests.rs"]
 mod tests;

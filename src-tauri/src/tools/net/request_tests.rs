@@ -36,6 +36,127 @@ fn local_config() -> ConfigState {
     }
 }
 
+/// Explicit environment probe; deterministic proxy/redirect/security cases below
+/// remain the normal gate. No user config, cookies or provider keys are loaded.
+#[tokio::test]
+#[ignore = "Real public HTTPS and native proxy discovery: explicitly run native_https_routes with --ignored; sends credential-free GETs to example.com"]
+async fn native_https_routes() {
+    let url = Url::parse("https://example.com/").unwrap();
+    let mut failures = Vec::new();
+    for (mode, proxy) in [
+        (
+            "direct",
+            Some(ProxyConfig {
+                mode: ProxyMode::None,
+                url: String::new(),
+            }),
+        ),
+        ("automatic", None),
+        (
+            "system",
+            Some(ProxyConfig {
+                mode: ProxyMode::System,
+                url: String::new(),
+            }),
+        ),
+    ] {
+        let cfg = ConfigState {
+            proxy,
+            network: crate::core::config::NetworkConfig {
+                allow_private_network: false,
+            },
+            ..ConfigState::default()
+        };
+        let matcher = tokio::time::timeout(Duration::from_secs(5), proxy_matcher(&cfg))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        let mut proxy_tcp_reachable = None;
+        let selected = if let Some(matcher) = matcher {
+            let proxy = matcher.intercept(&url.as_str().parse().unwrap());
+            if let Some(proxy) = &proxy
+                && let (Some(host), Some(port)) = (proxy.uri().host(), proxy.uri().port_u16())
+            {
+                proxy_tcp_reachable = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    tokio::net::TcpStream::connect((host.trim_matches(['[', ']']), port)),
+                )
+                .await
+                .ok()
+                .map(|result| result.is_ok());
+            }
+            let denied = check_proxy_target(&url, proxy.as_ref(), false)
+                .err()
+                .map(|error| error.code);
+            Some((
+                proxy.is_some(),
+                proxy
+                    .as_ref()
+                    .and_then(|proxy| proxy.uri().scheme_str().map(str::to_owned)),
+                denied,
+            ))
+        } else {
+            None
+        };
+        let expected_denial = selected.as_ref().and_then(|snapshot| snapshot.2);
+        let request = HttpRequest {
+            url: url.clone(),
+            method: Method::GET,
+            headers: HeaderMap::new(),
+            body: None,
+        };
+        let result = execute(
+            &cfg,
+            request,
+            &CancellationToken::new(),
+            Duration::from_secs(15),
+        )
+        .await;
+        match result {
+            Ok(response) => {
+                let valid = response.status.is_success()
+                    && response.url.scheme() == "https"
+                    && !response.body.is_empty()
+                    && selected.is_some()
+                    && expected_denial.is_none();
+                eprintln!(
+                    "{}",
+                    json!({"mode":mode,"proxy_selected":selected.as_ref().map(|snapshot|snapshot.0),
+                    "proxy_tcp_reachable":proxy_tcp_reachable,
+                    "proxy_kind":selected.as_ref().and_then(|snapshot|snapshot.1.as_ref()),
+                    "status":response.status.as_u16(),"bytes":response.body.len(),"tls_verified":valid})
+                );
+                if !valid {
+                    failures.push(format!("{mode}: unexpected HTTPS response"));
+                }
+            }
+            Err(error) => {
+                // Proxy endpoints may contain credentials. Never print config,
+                // environment, URLs or the raw reqwest error in this probe.
+                let policy_blocked = expected_denial == Some(error.code);
+                let lower = error.message.to_ascii_lowercase();
+                eprintln!(
+                    "{}",
+                    json!({"mode":mode,"proxy_selected":selected.as_ref().map(|snapshot|snapshot.0),
+                    "proxy_tcp_reachable":proxy_tcp_reachable,
+                    "proxy_kind":selected.as_ref().and_then(|snapshot|snapshot.1.as_ref()),
+                    "error_code":error.code,"policy_blocked":policy_blocked,"tls_verified":false,
+                    "certificate_error_hint":lower.contains("certificate"),
+                    "connection_refused_hint":lower.contains("refused")})
+                );
+                if !policy_blocked {
+                    failures.push(format!("{mode}: {}", error.code));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "native HTTPS environment probe incomplete: {}",
+        failures.join(", ")
+    );
+}
+
 #[test]
 fn redirects_apply_method_rules_and_remove_discarded_body_headers() {
     for (status, method, expected) in [

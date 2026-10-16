@@ -1,6 +1,5 @@
 use super::drive::run_chat;
 use crate::core::config::ConfigState;
-use crate::core::context::ContextBreakdown;
 use crate::core::sessions::SessionStore;
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::tools::registry::ToolRegistry;
@@ -209,8 +208,6 @@ pub struct SessionRuntime {
     pub(super) stream_emission_lock: Mutex<()>,
     /// 当前 run 的取消 token（空闲为 None）
     pub active_cancel: Mutex<Option<CancellationToken>>,
-    /// breakdown 结果缓存（30s）
-    pub breakdown_cache: Mutex<Option<(std::time::Instant, ContextBreakdown)>>,
     /// 路径清单缓存（30s）
     pub paths_cache: Mutex<Option<(std::time::Instant, Vec<String>)>>,
     /// 本 run 是否已注入计划瞬态快照（每 run 复位）
@@ -278,6 +275,7 @@ pub struct SessionRuntime {
     /// 防 run 中途文件变更（如 agent 自己编辑 AGENTS.md）打穿 provider 前缀缓存，同时省每步 10+ 文件重读；
     /// drive_agent 每个 run 清空——文件变更从「下一步生效」变「下一条用户消息生效」（与子代理 spawn 冻结一致）
     pub system_frozen: Mutex<Option<String>>,
+    pub instruction_usage: Mutex<Vec<crate::core::instruction_resources::ResourceUse>>,
     /// Anthropic 历史代际断点锚点（req.messages 下标；滞回前移，见 prompt-caching-hardening 批次），
     /// drive_agent 每个 run 清空
     pub cache_gen_anchor: Mutex<Option<usize>>,
@@ -421,7 +419,6 @@ impl SessionRuntime {
             stream: Arc::new(ThrottledStream::new()),
             stream_emission_lock: Mutex::new(()),
             active_cancel: Mutex::new(None),
-            breakdown_cache: Mutex::new(None),
             paths_cache: Mutex::new(None),
             injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool::new(false),
             reasoning_rejected: AtomicBool::new(false),
@@ -444,6 +441,7 @@ impl SessionRuntime {
             step_count: std::sync::atomic::AtomicUsize::new(0),
             last_input_tokens: std::sync::atomic::AtomicU64::new(0),
             system_frozen: Mutex::new(None),
+            instruction_usage: Mutex::new(Vec::new()),
             cache_gen_anchor: Mutex::new(None),
             run_timing: Mutex::new(crate::core::stats::UsageTiming::default()),
         })
@@ -564,6 +562,7 @@ pub struct AgentCore {
     pub services: crate::tools::service::ServiceTable,
     /// 技能索引（TTL 缓存）
     pub skills: crate::skills::SkillIndex,
+    pub instructions: crate::core::instruction_resources::InstructionTrust,
     /// 多 key 池（健康表按 provider 隔离）
     pub key_pool: crate::provider::keys::KeyPool,
     /// MCP 客户端管理器
@@ -614,6 +613,7 @@ impl AgentCore {
             data_dir: data_dir.clone(),
             services: crate::tools::service::ServiceTable::default(),
             skills: crate::skills::SkillIndex::new(),
+            instructions: crate::core::instruction_resources::InstructionTrust::default(),
             key_pool: crate::provider::keys::KeyPool::default(),
             mcp: std::sync::Arc::new(crate::mcp::McpManager::default()),
             stats: std::sync::Arc::new(crate::core::stats::StatsCollector::new(data_dir.clone())),

@@ -124,6 +124,7 @@ fn audit_get_and_list_share_cached_bytes_until_explicit_reload() {
         "before",
     );
     let index = SkillIndex {
+        home: None,
         cache: Mutex::new(None),
         ttl: Duration::from_secs(3600),
     };

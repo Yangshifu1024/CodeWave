@@ -9,6 +9,7 @@ pub mod agent;
 pub mod config;
 pub mod config_commit;
 pub mod context;
+pub mod instruction_resources;
 pub mod logging;
 pub mod openers;
 pub mod prefs;

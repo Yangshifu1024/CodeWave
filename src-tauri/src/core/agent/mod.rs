@@ -14,6 +14,8 @@ mod supervise;
 mod text_ask;
 
 #[cfg(test)]
+mod evaluation_fixtures;
+#[cfg(test)]
 pub mod test_support;
 #[cfg(test)]
 mod tests;

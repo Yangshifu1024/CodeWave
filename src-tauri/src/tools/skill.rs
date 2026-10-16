@@ -62,30 +62,63 @@ impl Tool for SkillTool {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
         };
-        let cfg = ctx.core.cfg.read().unwrap().clone();
-        let index = &ctx.core.skills;
-        let Some(s) = index.get(
-            &ctx.rt.workspace,
-            &ctx.rt.data_dir,
-            &cfg.disabled_skills,
-            ctx.rt.project_dir.as_deref(),
-            &args.skill,
-        ) else {
-            let names: Vec<String> = index
-                .list(
-                    &ctx.rt.workspace,
-                    &ctx.rt.data_dir,
-                    &cfg.disabled_skills,
-                    ctx.rt.project_dir.as_deref(),
-                )
+        if ctx.cancel.is_cancelled() {
+            return ToolOutcome::err("E_CANCELLED", "Skill loading cancelled");
+        }
+        let scope = crate::core::instruction_resources::ResourceScope::runtime(&ctx.rt);
+        let snapshot = crate::core::instruction_resources::collect(&ctx.core, &scope);
+        let selected = snapshot.resources.into_iter().find(|resource| {
+            resource.kind == crate::core::instruction_resources::InstructionKind::Skill
+                && resource.name == args.skill
+        });
+        let Some(resource) = selected else {
+            let admitted = crate::core::instruction_resources::admit_with_cancel(
+                &ctx.core,
+                &scope,
+                &ctx.cancel,
+            )
+            .await;
+            let names: Vec<_> = admitted
+                .resources
                 .iter()
-                .map(|m| m.name.clone())
+                .filter_map(|resource| resource.skill.as_ref().map(|skill| skill.meta.name.clone()))
                 .collect();
             return ToolOutcome::err(
                 "E_SKILL_NOT_FOUND",
                 format!("skill `{}` 不存在。可用：{}", args.skill, names.join(", ")),
             );
         };
+        if ctx.cancel.is_cancelled() {
+            return ToolOutcome::err("E_CANCELLED", "Skill loading cancelled");
+        }
+        let status = ctx
+            .core
+            .instructions
+            .status_with_cancel(&scope, &resource, &ctx.cancel)
+            .await;
+        if !status.trusted {
+            return ToolOutcome::err(
+                "E_RESOURCE_UNTRUSTED",
+                format!(
+                    "Skill `{}` requires review of version {} in Settings → Skills. {}",
+                    resource.name,
+                    resource.origin.version,
+                    status.error.unwrap_or_default()
+                ),
+            );
+        }
+        let current = crate::core::instruction_resources::collect(&ctx.core, &scope);
+        if !current
+            .resources
+            .iter()
+            .any(|entry| entry.id == resource.id && entry.origin == resource.origin)
+        {
+            return ToolOutcome::err(
+                "E_RESOURCE_CHANGED",
+                "Skill source, content or enabled state changed; review the current version",
+            );
+        }
+        let s = resource.skill.expect("skill resource");
         let mut body = format!("<skill-loaded name=\"{}\">\n{}", s.meta.name, s.body);
         if let Some(a) = &args.args {
             body.push_str(&format!("\n\n<caller-context>{a}</caller-context>"));
@@ -105,7 +138,7 @@ mod tests {
     use super::*;
 
     /// 在 `.codewave/skills`（data_dir 托管路径）安装了 `demo` 技能的全新 core + 工作区。
-    fn setup() -> (ToolCtx, tempfile::TempDir, tempfile::TempDir) {
+    async fn setup() -> (ToolCtx, tempfile::TempDir, tempfile::TempDir) {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let skill_dir = dd.path().join("skills/demo");
@@ -138,12 +171,38 @@ mod tests {
             call_key: "b:0".into(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
+        permit(&ctx).await;
         (ctx, ws, dd)
+    }
+
+    async fn permit(ctx: &ToolCtx) {
+        use crate::core::instruction_resources::{ResourceScope, collect, review};
+        let scope = ResourceScope::runtime(&ctx.rt);
+        let resource = collect(&ctx.core, &scope)
+            .resources
+            .into_iter()
+            .find(|resource| resource.name == "demo")
+            .unwrap();
+        let review = review::prepare(
+            &ctx.core,
+            Some(&ctx.rt.id),
+            &resource.id,
+            &resource.origin.version,
+            review::Action::Once,
+        )
+        .await
+        .unwrap();
+        assert!(
+            review::confirm(&ctx.core, Some(&ctx.rt.id), &review.id)
+                .await
+                .unwrap()
+                .confirmed
+        );
     }
 
     #[tokio::test]
     async fn loads_skill_body_wrapped_in_skill_loaded() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["skill"], "demo");
@@ -177,13 +236,14 @@ mod tests {
     /// CRLF 写法的 SKILL.md 不得把 YAML 头注入 <skill-loaded> 正文（Windows 用户实测场景）。
     #[tokio::test]
     async fn injected_body_excludes_frontmatter() {
-        let (ctx, _ws, dd) = setup();
+        let (ctx, _ws, dd) = setup().await;
         let skill_dir = dd.path().join("skills/demo");
         std::fs::write(
             skill_dir.join("SKILL.md"),
             "---\r\nname: demo\r\ndescription: test skill\r\n---\r\nCRLF BODY LINE",
         )
         .unwrap();
+        permit(&ctx).await;
         let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
         assert!(out.ok, "{out:?}");
         let content = out.data["content"].as_str().unwrap();
@@ -194,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn caller_context_is_appended_when_args_given() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let out = SkillTool
             .run(&ctx, json!({"skill": "demo", "args": "extra ctx"}))
             .await;
@@ -205,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn ask_interaction_norm_is_appended_to_every_load() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
         assert!(out.ok, "{out:?}");
         let content = out.data["content"].as_str().unwrap();
@@ -216,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn norm_block_sits_between_caller_context_and_closing_tag() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let out = SkillTool
             .run(&ctx, json!({"skill": "demo", "args": "extra ctx"}))
             .await;
@@ -245,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_skill_lists_available_names() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let out = SkillTool.run(&ctx, json!({"skill": "nope"})).await;
         let err = out.error.unwrap();
         assert_eq!(err.code, "E_SKILL_NOT_FOUND");
@@ -256,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_skill_is_not_found() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         ctx.core
             .cfg
             .write()
@@ -270,7 +330,7 @@ mod tests {
     /// A configuration change must revoke a cached skill immediately, without waiting for TTL.
     #[tokio::test]
     async fn disabled_after_load_should_invalidate_within_ttl() {
-        let (ctx, _ws, _dd) = setup();
+        let (ctx, _ws, _dd) = setup().await;
         let ok = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
         assert!(ok.ok);
         ctx.core

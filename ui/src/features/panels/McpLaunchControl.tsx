@@ -134,6 +134,7 @@ export default function McpLaunchControl({ name, scope, sessionId, source, launc
     const requestResource = resourceOwner;
     let reviewId: string | null = null;
     let submitted = false;
+    let received = false;
     try {
       if (action === "revoke" && !launch.remembered) {
         if (!await confirm("revoke", name, source, launch.version, config)) return;
@@ -151,13 +152,14 @@ export default function McpLaunchControl({ name, scope, sessionId, source, launc
       if (!mounted.current || identity.current !== requestOwner) return;
       submitted = true;
       const receipt = await ipc.mcpConfirmLaunch(scope, name, review.id, sessionId ?? undefined);
+      received = true;
       if (mounted.current && resourceIdentity.current === requestResource) {
         receive(receipt, requestResource);
         await onChanged();
       }
     } catch (error) {
       if (mounted.current && resourceIdentity.current === requestResource) {
-        if (submitted && reviewId) setOperation({ id: reviewId, owner: requestResource });
+        if (submitted && !received && reviewId) setOperation({ id: reviewId, owner: requestResource });
         message.error(String(error));
         // A rejected revocation can still have stopped the local process.
         await onChanged().catch((refreshError) => { message.error(String(refreshError)); });

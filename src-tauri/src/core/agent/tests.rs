@@ -769,41 +769,6 @@ async fn dirty_history_messages_stay_byte_stable() {
 }
 
 #[tokio::test]
-async fn system_prompt_frozen_within_run() {
-    // [docs/providers-and-network]：run 内 system 稳定主块冻结——文件变更不穿透当前 run
-    //（保 provider 前缀缓存），新 run（drive_agent 起点清空冻结）才重新组装纳入新内容
-    let ws = tempfile::tempdir().unwrap();
-    let dd = tempfile::tempdir().unwrap();
-    let roots = crate::tools::pathutil::WriteRoots {
-        project_dir: None,
-        workspace: std::fs::canonicalize(ws.path()).unwrap(),
-        extra: vec![],
-        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
-    };
-    std::fs::write(ws.path().join("AGENTS.md"), "rule-v1").unwrap();
-    let core = test_support::make_core(&roots);
-    let rt = core.get_or_create_session(
-        "freeze-test",
-        roots.workspace.clone(),
-        None,
-        vec![],
-        None,
-        vec![],
-    );
-    let params = DriveParams::default();
-    let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert!(r1.system_core.contains("rule-v1"));
-    // run 中途改文件：冻结生效，system 主块字节不变
-    std::fs::write(ws.path().join("AGENTS.md"), "rule-v2").unwrap();
-    let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert_eq!(r1.system_core, r2.system_core, "run 内冻结：文件变更不穿透");
-    // 新 run：清空冻结（drive_agent 同款操作）→ 重新组装
-    *rt.system_frozen.lock().unwrap() = None;
-    let (_, r3) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert!(r3.system_core.contains("rule-v2"), "新 run 重新组装");
-}
-
-#[tokio::test]
 async fn cache_gen_anchor_hysteresis() {
     // [docs/providers-and-network]：代际断点锚点滞回——漂移未超 1/4 保持不动（命中刷新
     // TTL），超阈值才前移（触发一次段重写）；历史不足 16 条不启用

@@ -5,6 +5,7 @@
 mod activity;
 mod agents;
 mod git;
+mod instruction_resources;
 mod logs;
 mod mcp;
 mod openers;
@@ -23,6 +24,7 @@ mod workspace;
 pub use activity::*;
 pub use agents::*;
 pub use git::*;
+pub use instruction_resources::*;
 pub use logs::*;
 pub use mcp::*;
 pub use openers::*;

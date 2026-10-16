@@ -896,6 +896,7 @@ pub async fn drive_agent(
     // 每 run 重置：system 冻结与历史代际断点锚点只在单个 run 内有效
     //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
     *rt.system_frozen.lock().unwrap() = None;
+    rt.instruction_usage.lock().unwrap().clear();
     *rt.cache_gen_anchor.lock().unwrap() = None;
     // 文本形态 ask 的待剥标注同样只在一个 run 内有效（[docs/chat-and-interface]）：
     // 正常路径由 AskTool 打开卡片时 take 走；但若兜底命中后该调用没走到工具（例如用户在

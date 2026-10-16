@@ -572,7 +572,7 @@ export interface GitLogEntry { short_id: string; summary: string; author: string
 
 /** 内容版本及规范身份；只记录来源，不授予资源运行权限。 */
 export interface ResourceOrigin {
-  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "global_managed" | "project_managed";
+  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "workspace_file" | "global_managed" | "project_managed";
   identity: string;
   version: string;
 }
@@ -583,6 +583,17 @@ export interface SkillInspection { entries: SkillAuditEntry[]; issues: { path: s
 
 /** 技能完整内容（get_skill 返回；body = SKILL.md 正文） */
 export interface SkillFull { meta: SkillMeta; body: string }
+
+export type InstructionReviewAction = "once" | "remember" | "revoke";
+export interface InstructionResource {
+  available: boolean;
+  id: string; name: string; kind: "instruction" | "context" | "skill" | "memory"; origin: ResourceOrigin;
+  status: { trusted: boolean; remembered: boolean; revision: number | null; error: string | null };
+  active_versions: { id: string; version: string }[];
+}
+export interface InstructionInspection { resources: InstructionResource[]; issues: string[] }
+export interface InstructionChallenge { id: string; resource_id: string; name: string; origin: ResourceOrigin; text: string; action: InstructionReviewAction }
+export interface InstructionReceipt { operation_id: string; confirmed: boolean; resolved: boolean; error: string | null }
 
 /** 内置子代理角色摘要（list_agents 返回；后端注册表剔除内部 title 角色，不含 body 正文） */
 export interface AgentMeta { name: string; description: string; resource?: ResourceOrigin }

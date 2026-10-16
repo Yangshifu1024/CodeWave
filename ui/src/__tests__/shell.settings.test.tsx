@@ -48,6 +48,7 @@ async function baseInvoke(cmd: string, _args?: any) {
     case "list_available_shells": return JSON.parse(JSON.stringify(fixtureShells));
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
+    case "inspect_instruction_resources": return { resources: [], issues: [] };
     case "inspect_skills": return { entries: [], issues: [] };
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);

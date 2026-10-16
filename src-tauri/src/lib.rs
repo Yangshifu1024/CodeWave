@@ -167,9 +167,11 @@ pub fn run() {
                 core::sessions::interrupt::InterruptWatchSink::new(tauri_sink, store.clone()),
             );
             let mut agent = AgentCore::new(cfg, sink, store, client, data_dir.clone());
+            let resource_authority = Arc::new(core::trust::TrustStore::new(data_dir.clone(), Arc::new(host::trust::SystemTrustBackend)));
+            agent.instructions = core::instruction_resources::InstructionTrust::with_store(resource_authority.clone());
             agent.mcp = Arc::new(mcp::McpManager::with_authority(
                 mcp::DEFAULT_MAX_SERVERS,
-                Arc::new(core::trust::TrustStore::new(data_dir.clone(), Arc::new(host::trust::SystemTrustBackend))),
+                resource_authority,
             ));
             let core = Arc::new(agent);
             let authority_watch = Arc::downgrade(&core.mcp);
@@ -441,6 +443,11 @@ pub fn run() {
             host::commands::list_agents,
             host::commands::list_skills,
             host::commands::inspect_skills,
+            host::commands::inspect_instruction_resources,
+            host::commands::prepare_instruction_review,
+            host::commands::confirm_instruction_review,
+            host::commands::instruction_review_operation,
+            host::commands::discard_instruction_review,
             host::commands::get_skill,
             host::commands::toggle_skill,
             host::commands::reload_skills,

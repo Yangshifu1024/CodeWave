@@ -54,7 +54,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "git_user_info": return { name: null, email: null };
       case "get_token_breakdown": return null;
       case "mcp_status": return [];
-      case "inspect_skills": return { entries: [], issues: [] };
+      case "inspect_instruction_resources": return { resources: [], issues: [] };
+    case "inspect_skills": return { entries: [], issues: [] };
       case "list_skills": return [];
       case "notify_system": return "native";
       default: return null;

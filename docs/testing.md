@@ -40,6 +40,30 @@ pnpm prepr
 
 比较优化效果时，先记录同一依赖树、工具链和 runner image 的 main 基线，再在获准发布的 PR 上记录第一次与后续热缓存运行。首次运行可能已恢复 main 缓存，必须按日志标注 exact/partial/miss，不能把“首次”直接写成“冷缓存”。若必须做严格冷缓存 A/B，应另获授权后使用隔离缓存 key，不清空共享缓存。两次都记录排队、整个 workflow 关键路径、各 job/步骤、Rust 编译/套件、缓存传输和总 runner 分钟，并核对通过/ignored/doctest 数。拆分增加 checkout/install 和 runner 启动开销，账户并发不足可能变成排队；只有真实数据能判断 wall-clock 收益，不能只报单步骤节省。
 
+## 固定失败语料与评测隔离基线
+
+[runtime_failures.json](../src-tauri/tests/fixtures/runtime_failures.json) 定义固定输入和场景，[evaluation_fixtures.rs](../src-tauri/src/core/agent/evaluation_fixtures.rs) 将它们装入临时 workspace、data 和兼容 home，调用真实请求构建、read/create/skill、报告解析、子代理收尾及空转监督。入口是在 `src-tauri/` 执行：
+
+```bash
+cargo test --workspace evaluation_ -- --nocapture
+```
+
+每例输出场景、输入指纹和 `blocked` / `detected` / `known_gap`，并明确标注组件/工具覆盖。报告/预算判定直接调用生产分类器，空转用实际读取结果驱动监督器，均未驱动完整父/子 run。这里的 blocked 只表示指定入口拒绝了该操作，**不等于端到端运行阻断或整个任务具备交付验收**。假完成场景当前故意登记为 known_gap：实际读取确认产物缺失，但带 report 的正文仍可结束运行。测试通过只说明缺口被准确复现；S1 的完成门实施后，应同时更新生产行为与此基线，不能把它当成功交付或静默删除场景。
+
+基线保存完整配置和各输入域的内容哈希，使用逻辑相对路径排序，另绑定语料版本；workspace、记忆、lessons、兼容技能或配置变化会拒绝沿用基线。每个案例重新物化输入，不复用上例写入。技能索引的不可变 home 注入同时用于 fresh、缓存查询/审计和删除；不通过修改进程 HOME 隔离，不加载真实用户目录、配置、凭据或持久信任。配置提交器注入禁止访问的凭据 fake，误触访问直接使测试失败；本组不调用 provider、压缩等仍需宿主凭据适配的路径。对照作用域的输入保持不变，评测写入只落临时目录。
+
+这只是开发回归基线，不是无界面评测产品、模型效果测量或可续跑评测调度器。没有调用真实模型，没有自主学习任务；冻结的记忆与 lessons 是学习输入基线。网络、MCP 和凭据边界仍由各自真实协议/事务夹具覆盖，不能从这里的测试推导其平台或系统钥匙串验收。未来评测入口复用这些基线时，还需冻结模型参数、工具链与预算，并验证 checkpoint、成本去重和真实环境。
+
+原生信任存储由 [host/trust.rs](../src-tauri/src/host/trust.rs) 的 `native_trust_roundtrip` 显式验证：在 `src-tauri/` 执行 `cargo test --workspace native_trust_roundtrip -- --ignored --nocapture`。该用例默认忽略，因为会实际创建并清理系统钥匙串合成账户及启动子测试进程；独立临时 profile 和 UUID owner 避免接触现有授权。它覆盖首次读取、记住、重开存储准入、内容变化拒绝、父持锁时子进程按期限Busy、释放后另一子进程读取并撤销、父重开确认revision及旧CAS冲突，最后删除并回读确认缺失。子进程通过phase/owner回执证明实际执行，不以零用例退出0冒充通过；超时先终止并回收子进程，再进入父清理。不可用或清理未确认会失败，不自动转跳过。单平台通过不证明完整应用重启/跨实例MCP回收、钥匙串锁定/拒绝、GUI 或其他平台通过。
+
+[native_tests.rs](../src-tauri/src/mcp/native_tests.rs) 的 `native_mcp_cross_process_revoke` 是Unix测试构建下默认ignored的原生纵向验收，显式运行 `cargo test --lib mcp::manager::native_tests::native_mcp_cross_process_revoke -- --exact --ignored --nocapture`。父进程经正式prepare/confirm服务记住唯一临时profile的MCP许可，新OS进程从真实钥匙串恢复并启动仓库Node fixture，实际list/echo；父进程经同一服务撤销后，子进程检查旧binding拒绝、工具清空、Stopped、真实Node退出及重warm不启动。账户仅由父持有清理责任，删除后回读NoEntry；不读取已有模型配置或用户凭据。
+
+子进程通过nonce/phase回执证明实际执行，正常和异常均先请求协作abort并确认回收子测试进程，再最终检查Node和清理账户。异常兜底只在live命令的唯一nonce、完整fixture脚本和独立进程组身份匹配时回收Node；无法确认子测试进程已回收时保留profile/合成账户及诊断，禁止自动删除账户造成竞态。真实钥匙串需要宿主可访问环境，沙箱拒绝记为失败，不能偷偷改用内存backend。该用例不覆盖桌面App重启、定时watcher投递、GUI、真实锁定/拒绝交互或Windows；Linux Secret Service必须在该平台另验。
+
+[request_tests.rs](../src-tauri/src/tools/net/request_tests.rs) 的 `native_https_routes` 是默认ignored的外部环境探针，显式运行 `cargo test --workspace native_https_routes -- --ignored --nocapture`。独立默认配置关闭内网，不加载应用配置或模型凭据，对固定公开HTTPS目标分别采用直连、自动发现和显式系统代理；不改系统设置。代理诊断5秒、TCP可达性3秒、实际请求15秒各有期限。日志只含协议/布尔状态、响应状态及错误类别，不输出代理地址、认证、环境或原始错误。
+
+该探针将正常TLS响应与按既有SSRF政策阻断分开：`policy_blocked=true`仍是`tls_verified=false`，不证明代理连通；如预期阻断却得到响应，探针失败。其他网络失败保持失败，不能为过门禁自动直连或关闭TLS校验。诊断与请求分别获取代理快照，运行时应保持环境稳定；日志快照不构成物理路由的严格证明。外部服务/系统代理不可用是未验收，不是通过或自动skip；默认门禁不执行此探针，其结果与普通回归分别记录。
+
 ## 可靠性修复自动验证记录（2026-10-12）
 
 本记录仅对应 [`6c3a205e312778bffce39c9df60935d55247f40f`（v0.11.0）](https://github.com/Yangshifu1024/CodeWave/commit/6c3a205e312778bffce39c9df60935d55247f40f)，不承诺后续 checkout 沿用此结果。R01–R11 的实现、实际回归入口及剩余人工验收见[专项方案](./reliability-remediation-plan.md#实施与验收状态2026-10-12)。

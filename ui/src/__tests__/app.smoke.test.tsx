@@ -82,7 +82,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "get_mcp_config": return "{}";
       case "mcp_status": return [];
       case "list_scheduled_tasks": return []; // 任务列表：左栏任务区与任务页都从这里取（stores/tasks）
-      case "inspect_skills": return { entries: [{ name: fixtureSkill.name, disabled: false,
+      case "inspect_instruction_resources": return { resources: [], issues: [] };
+    case "inspect_skills": return { entries: [{ name: fixtureSkill.name, disabled: false,
         candidates: [{ meta: fixtureSkill, selected: true }] }], issues: [] };
       case "list_skills": return [fixtureSkill];
       case "list_agents": return [{ name: "backend-dev", description: "后端实现" }];

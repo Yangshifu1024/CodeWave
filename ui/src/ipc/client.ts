@@ -10,6 +10,11 @@ import type { Channel } from "@tauri-apps/api/core";
 import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillInspection, SkillMeta } from "./types";
 
 export const ipc = {
+  inspectInstructionResources: (sessionId: string | null) => invoke<import("./types").InstructionInspection>("inspect_instruction_resources", { sessionId }),
+  prepareInstructionReview: (sessionId: string | null, resourceId: string, expectedVersion: string, action: import("./types").InstructionReviewAction) => invoke<import("./types").InstructionChallenge>("prepare_instruction_review", { sessionId, resourceId, expectedVersion, action }),
+  confirmInstructionReview: (sessionId: string | null, confirmation: string) => invoke<import("./types").InstructionReceipt>("confirm_instruction_review", { sessionId, confirmation }),
+  instructionReviewOperation: (sessionId: string | null, operationId: string) => invoke<import("./types").InstructionReceipt>("instruction_review_operation", { sessionId, operationId }),
+  discardInstructionReview: (confirmation: string) => invoke<void>("discard_instruction_review", { confirmation }),
   ping: () => invoke<string>("ping"),
   getActivitySnapshot: () => invoke<ActivitySnapshot>("get_activity_snapshot"),
   getActivityAsk: (sessionId: string, runId: string, askId: string) =>
