@@ -417,6 +417,8 @@ pub fn run() {
             host::commands::mcp_disconnect,
             host::commands::mcp_reconnect,
             host::commands::mcp_test,
+            host::commands::mcp_prepare_test,
+            host::commands::mcp_set_launch_trust,
             host::commands::mcp_snapshot,
             host::commands::list_agents,
             host::commands::list_skills,

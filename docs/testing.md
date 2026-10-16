@@ -111,6 +111,8 @@ Rust ignored 的完整名称：
 
 ### Rust、网络与系统资源
 
+使用非阻塞 listener 轮询的标准库 HTTP 夹具，accept 后要显式 `stream.set_nonblocking(false)` 再使用阻塞读取和 socket timeout：macOS 的原生 accept 会继承 O_NONBLOCK。不得把 `WouldBlock` 或读错误当作完整空请求并消费响应，否则会出现提前响应、POST RST 和重定向请求错位；读错误/提前 EOF 应让夹具明确失败。
+
 - mock TCP server 要持有 listener 直到测试结束、读完请求头再优雅关闭写半部；直接丢弃带未读数据的 socket 在 Windows 会变成 RST，提前释放临时端口还可能被并发测试复用。`midstream_disconnect_maps_to_network` 的偶发失败不能未经调查就归为代理问题。
 - 真实 keyring 是机器级资源，相关测试串行且清理自己的条目；无 Secret Service 时验证明确的安全失败、旧配置保留和无新增明文，不伪造迁移成功或恢复明文回退。
 - 定时等待用 Tokio 虚拟时钟测临界点和取消，进程退出/OS 信号等真实调度边界仍需集成测试。

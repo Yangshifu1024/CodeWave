@@ -25,9 +25,17 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 
 作用域先合并，再按 `enabled` 过滤连接项：项目同名配置即使 `enabled:false` 仍覆盖全局项，不会回落连接全局服务器。
 
+### 启动信任
+
+stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先在服务器卡片「批准启动」。许可只存在当前 CodeWave 进程内，绑定 `(scope, project_id, name, canonical_config_path, configuration_hash)`；配置文件中的 enabled/read_only/always_allow 不授予启动权限，也不能自行声明 trusted。确认框列出来源、版本及实际启动摘要（command/args/cwd 或脱敏 URL）；env/header 仅展示键名，已识别的敏感参数和 URL 凭据隐藏。
+
+自动 warm、显式连接/重连、保存后的差量应用及直接 ensure 共用启动门；许可不存在时保留停止状态且不产生进程或连接。正式批准在提交锁内重读当前磁盘配置，版本失配拒绝，不把旧批准用于新目标。保存后删除、禁用或修改条目会使旧许可失效；不变条目和其他来源保持原授权。现阶段没有外部文件监控，外部编辑在后续重读/差量接纳时检查，不能宣称磁盘修改会立即回收所有在途连接。
+
+「撤销启动授权」清除正式许可、待确认及活跃 probe，撤下工具并取消握手/服务；迟到 Ready 和旧 binding 不再可用。「断开」只释放连接，不撤销本次进程许可，重连仍可复用原许可。已经发生的外部副作用不会回滚。普通配置切换仍保留已接纳调用在原 peer 上最多 5 秒排空、不重放的契约。持久信任、技能/角色统一来源与项目提示信任尚未交付，不能把 MCP 启动门等同完整项目信任。
+
 ## 2. 连接池、运行态与事件
 
-[manager.rs](../src-tauri/src/mcp/manager.rs) 的 pool key 是 `(scope, project_id, name, canonical_config_path)`（路径身份只在宿主内部使用）；会话持有其可见 server 集合。warm 先登记引用再并行连接，IPC 返回只表示接收请求，不表示所有 server 已 Ready。
+[manager.rs](../src-tauri/src/mcp/manager.rs) 的 pool key 是 `(scope, project_id, name, canonical_config_path)`；会话持有其可见 server 集合，设置页读取来源路径和启动许可版本用于确认。warm 先登记引用再为已获许可的配置并行连接，IPC 返回只表示接收请求，不表示所有 server 已 Ready。
 
 状态为 Starting / Ready / Stopped / Evicted / Error；错误序列化形态与前端类型保持一致。`mcp:status` 是增量通知，载荷含 scope/name、工具数量与详情、过滤数、pid/error/note；恢复或发现丢事件时用 snapshot 取权威快照，不能靠最后一个事件重建整个池。
 
@@ -37,13 +45,15 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 - [process.rs](../src-tauri/src/mcp/process.rs) 在 Unix 使用进程组，Windows 使用 Job Object/隐藏窗口与退出清理；不能只杀启动器而留下 server 子进程。
 - test 使用当前条目草稿的独立临时连接，不读磁盘同名配置，不改变正式池/工具/pid；详情见下节。
 
-当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
+当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_set_launch_trust`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_prepare_test`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
 
 保存通过同一提交锁协调文件版本检查、原子写与完整会话可见集差量接纳。`mcp_list_config` 返回不含原文的 `version`；`mcp_save_config` 必须回传 `expected_version`，冲突时保留草稿并要求重新读取。格式化/键序变化不重启连接，项目修改只触及真正读取该配置路径的 runtime；同项目 id 不同路径保持独立。全局变更不会重建被项目同名项覆盖的连接，disabled 项目覆盖继续遮蔽全局项。
 
 保存回执的 `saved / issues / version / apply_revision / affected_servers` 表示文件已保存、差量计划已接纳，**不代表连接 Ready**。连接失败保留新配置并在目标条目显示 Error，其它 key 不受影响；UI 保存后只读取 snapshot，不再额外全量 connect。普通保存不调用 disconnect_all，该接口仅用于明确的全停。受影响 key 的已发出调用保留原 peer，最多排空 5 秒后取消；外部副作用可能已经发生，不自动重放，也不宣称取消能撤销远端操作。
 
 ### 当前草稿测试
+
+测试先经 `mcp_prepare_test` 取得绑定来源、项目和完整草稿版本的单次票据；准备不执行命令或网络操作。用户审阅启动摘要并确认后，`mcp_test` 才消费票据建立临时连接。票据五分钟过期，错误配置/项目消费也使其失效；待确认与正在运行的 probe 合计最多 64。测试不继承正式许可，也不授予正式许可。取消确认或编辑草稿后不发起测试；已确认开始的测试仍按下述预算回收。
 
 编辑器通过与保存共用的 `serializeMcpServer` 发送 `name + config`，包含 args（含空串/空格）、env/headers 多行原值、cwd、显式 transport、timeout、过滤、信任标记和未知字段。空名、重名、重复键、非法 timeout 在启动前阻断；不以静默丢字段使非法草稿看似有效。新建/重命名/disabled 条目无需保存即可测试；project 仅校验当前项目上下文，不读取合并后的同名 global 条目。
 
@@ -116,6 +126,7 @@ R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价�
 `v0.11.0` 对应提交的完整三平台 CI 已通过，包含真实 Node stdio/HTTP fixture 与宿主后端测试；各平台结果和跳过边界见[自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本地 Linux 云环境仍缺 GLib/GTK/WebKit/DBus 等系统依赖，不能写成本地完整门禁通过，也不能将 CI/headless 结果写成 GUI 已验收。会话释放进程树回收已有三平台自动证据；初始化/tools-list 期间 probe 取消回收为 Unix 专属测试，Windows 对应边界仍待补验。
 
 手工清单（尚未执行）：
+0. 重启后未批准服务器不启动；分别批准 stdio/HTTP，核对摘要、来源和本次进程有效期；取消确认零启动。撤销 Ready/正在握手的服务，工具消失且进程回收；刷新只重读状态与授权元数据，不覆盖未保存草稿。修改配置后须重新批准，其他来源授权不变。
 1. A/B 两项目与临时会话共用 global MCP，B 发起长 echo 时保存 A 私有配置；B/global pid 与工具保持不变。
 2. 同一 server 请求等待批准时修改 endpoint 或作用域；批准旧请求应得到“配置已变”，新 endpoint 收到零请求。
 3. 编辑已保存可用命令为不存在的命令，不保存直接测试应失败；取消后正式连接保持原 pid。新建/重命名草稿也能测试。

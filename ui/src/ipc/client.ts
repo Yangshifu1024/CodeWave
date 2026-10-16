@@ -179,9 +179,14 @@ export const ipc = {
   /** 重连单个 server（含被淘汰条目，绕过防抖立即重拉） */
   mcpReconnect: (sessionId: string, name: string) =>
     invoke<void>("mcp_reconnect", { sessionId, name }),
-  /** 临时测试连接：起 → tools/list → 立即回收，**不并入连接池、不改正式状态** */
-  mcpTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
-    invoke<McpTestResult>("mcp_test", { scope, name, config, sessionId: sessionId ?? null }),
+  mcpSetLaunchTrust: (scope: McpScope, name: string, expectedVersion: string, trusted: boolean, sessionId?: string) =>
+    invoke<import("./types").McpLaunchStatus>("mcp_set_launch_trust", { scope, name, expectedVersion, trusted, sessionId: sessionId ?? null }),
+  /** Prepare a single-use confirmation for the exact draft; this never connects. */
+  mcpPrepareTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
+    invoke<import("./types").McpProbeChallenge>("mcp_prepare_test", { scope, name, config, sessionId: sessionId ?? null }),
+  /** Confirmed temporary probe; never joins or authorizes the persistent pool. */
+  mcpTest: (scope: McpScope, name: string, config: Record<string, unknown>, confirmation: string, sessionId?: string) =>
+    invoke<McpTestResult>("mcp_test", { scope, name, config, confirmation, sessionId: sessionId ?? null }),
   /** 某会话的状态快照（断开 / 淘汰 / 批量停止后拉全量） */
   mcpSnapshot: (sessionId: string) => invoke<McpSnapshot>("mcp_snapshot", { sessionId }),
 

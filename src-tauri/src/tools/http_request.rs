@@ -257,6 +257,9 @@ mod tests {
                         Err(error) => panic!("HTTP fixture accept failed: {error}"),
                     }
                 };
+                // macOS accept can inherit O_NONBLOCK from the polling listener.
+                // The request reader below uses blocking I/O and socket timeouts.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();
@@ -295,13 +298,12 @@ mod tests {
                     return String::from_utf8_lossy(&buf).into_owned();
                 }
             }
-            let n = match stream.read(&mut tmp) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            };
+            let n = stream
+                .read(&mut tmp)
+                .expect("HTTP fixture request read failed");
+            assert_ne!(n, 0, "HTTP fixture received an incomplete request");
             buf.extend_from_slice(&tmp[..n]);
         }
-        String::from_utf8_lossy(&buf).into_owned()
     }
 
     fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -572,7 +574,7 @@ mod tests {
         assert!(out.ok, "{out:?}");
         let reqs = received.lock().unwrap();
         assert_eq!(reqs.len(), 2, "redirect must be followed hop by hop");
-        assert!(reqs[0].starts_with("GET /start"));
+        assert!(reqs[0].starts_with("GET /start"), "raw requests: {reqs:?}");
         assert!(
             reqs[1].starts_with("GET /final?x=1"),
             "Location must be joined onto the base URL"

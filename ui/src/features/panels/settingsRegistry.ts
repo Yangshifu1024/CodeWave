@@ -541,6 +541,11 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpConfigPath", // → mcp 页：当前作用域 mcp.json 路径回显
   "mcpSavedApplying",
   "mcpProbeWarning",
+  // Launch approval actions and confirmation details belong to app.mcp_status.
+  "mcpApproveLaunch", "mcpRevokeLaunch", "mcpRunProbe",
+  "mcpConfirmLaunch", "mcpConfirmProbe", "mcpConfirmRevoke",
+  "mcpLaunchLifetime", "mcpProbeLaunchHint", "mcpLaunchRevokeHint",
+  "mcpLaunchVersion", "mcpLaunchDefaultCwd",
   "mcpTest", // → 动作：单 server 临时测试连接
   "mcpTestOk", // → mcp 页：测试成功结果
   "mcpTestFail", // → mcp 页：测试失败结果

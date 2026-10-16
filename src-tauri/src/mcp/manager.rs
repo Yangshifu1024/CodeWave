@@ -37,6 +37,11 @@ use super::config::{McpServerConfig, McpTransport, Scope};
 use super::error::McpError;
 use super::process::build_stdio_wrap;
 use super::tools::{McpTool, McpToolDef, build_tool_defs, filter_tools, normalize_schema};
+use super::trust::{LaunchPermit, LaunchRegistry, LaunchStatus, ProbeChallenge, untrusted};
+
+#[cfg(test)]
+#[path = "trust_integration_tests.rs"]
+mod trust_integration_tests;
 
 /// 连接 + initialize + list_tools 的总超时。
 pub const INIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -155,6 +160,7 @@ pub type StatusSink = Arc<dyn Fn(&str, &McpStatusPayload) + Send + Sync>;
 /// 池内条目。
 struct ServerEntry {
     cfg: McpServerConfig,
+    launch: Option<LaunchPermit>,
     state: McpState,
     error: Option<McpError>,
     tools: Vec<McpTool>,
@@ -174,7 +180,7 @@ struct ServerEntry {
     /// 最近一次使用序号（LRU）
     last_used: u64,
     note: Option<String>,
-    /// `tools/list_changed` 脏标记（run 边界消费）
+    /// `tools/list_changed` 脏标记（LLM step 边界消费）
     dirty: Option<Arc<AtomicBool>>,
     /// 最近一次被淘汰的时刻（重拉防抖）
     last_evict: Option<Instant>,
@@ -212,6 +218,14 @@ fn changed_error() -> McpError {
     )
 }
 
+fn entry_ready(key: &PoolKey, entry: &ServerEntry) -> bool {
+    entry.state == McpState::Ready
+        && entry
+            .launch
+            .as_ref()
+            .is_some_and(|permit| permit.check(key, &entry.cfg).is_ok())
+}
+
 fn validate_binding(inner: &Inner, session: &str, binding: &CallBinding) -> Result<(), McpError> {
     if !inner
         .sessions
@@ -222,6 +236,9 @@ fn validate_binding(inner: &Inner, session: &str, binding: &CallBinding) -> Resu
     }
     let e = inner.entries.get(&binding.key).ok_or_else(changed_error)?;
     if e.state != McpState::Ready
+        || e.launch
+            .as_ref()
+            .is_none_or(|permit| permit.check(&binding.key, &e.cfg).is_err())
         || e.generation != binding.generation
         || e.config_revision != binding.config_revision
         || e.policy_revision != binding.policy_revision
@@ -233,8 +250,12 @@ fn validate_binding(inner: &Inner, session: &str, binding: &CallBinding) -> Resu
     }
     let tools: Vec<_> = inner.sessions[session]
         .iter()
-        .filter_map(|key| inner.entries.get(key))
-        .filter(|e| e.state == McpState::Ready)
+        .filter_map(|key| {
+            inner
+                .entries
+                .get(key)
+                .filter(|entry| entry_ready(key, entry))
+        })
         .flat_map(|e| e.tools.iter().cloned())
         .collect();
     let (_, index) = build_tool_defs(&tools);
@@ -283,6 +304,7 @@ impl Drop for ProbeGuard {
 /// MCP 连接管理器。
 pub struct McpManager {
     inner: Mutex<Inner>,
+    launch: LaunchRegistry,
     max_servers: usize,
     tick: AtomicU64,
     sink: RwLock<Option<StatusSink>>,
@@ -296,8 +318,7 @@ impl Default for McpManager {
 
 /// 订阅 `tools/list_changed`：**只置脏标记**，绝不改共享状态。
 ///
-/// 工具集变更由 [`McpManager::tool_defs_for`] 在 **run 边界**消费——若在通知回调里直接改，
-/// 一次 run 进行到一半工具集就变了，模型会拿旧 schema 去调新工具。
+/// 工具集变更在下一次工具快照/定义读取时消费；通知回调不直接修改共享 schema。
 #[derive(Clone)]
 struct ToolListWatcher {
     dirty: Arc<AtomicBool>,
@@ -323,7 +344,7 @@ struct Ready {
     service: ClientService,
     peer: Peer<RoleClient>,
     pid: Option<u32>,
-    /// `tools/list_changed` 脏标记（run 边界消费）
+    /// `tools/list_changed` 脏标记（LLM step 边界消费）
     dirty: Arc<AtomicBool>,
 }
 
@@ -370,6 +391,7 @@ fn payload_of(key: &PoolKey, e: &ServerEntry) -> McpStatusPayload {
 }
 
 fn clear_connection(e: &mut ServerEntry) {
+    e.launch = None;
     e.handshake_cancel.cancel();
     e.handshake_cancel = CancellationToken::new();
     e.connecting = false;
@@ -386,6 +408,7 @@ impl McpManager {
     /// 新建管理器（`max_servers` = 连接池上限）。
     pub fn new(max_servers: usize) -> Self {
         McpManager {
+            launch: LaunchRegistry::default(),
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
                 sessions: HashMap::new(),
@@ -429,6 +452,60 @@ impl McpManager {
 
     pub fn next_revision(&self) -> u64 {
         self.tick()
+    }
+
+    pub fn launch_status(&self, key: &PoolKey, cfg: &McpServerConfig) -> LaunchStatus {
+        self.launch.status(key, cfg)
+    }
+
+    /// Called only after the host has checked the user's current source/version.
+    pub async fn set_launch_trust(
+        &self,
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+        version: &str,
+        trusted: bool,
+    ) -> Result<(), McpError> {
+        if super::launch_version(cfg) != version || (trusted && !cfg.enabled) {
+            return Err(untrusted());
+        }
+        let mut inner = self.inner.lock().await;
+        if trusted {
+            return self.launch.grant(key, cfg, version);
+        }
+        self.launch.revoke(key);
+        let retired = inner.entries.get_mut(key).map(|entry| {
+            let service = entry.service.take();
+            clear_connection(entry);
+            entry.state = McpState::Stopped;
+            entry.error = None;
+            entry.note = Some(untrusted().message);
+            (service, payload_of(key, entry))
+        });
+        drop(inner);
+        if let Some((service, payload)) = retired {
+            if let Some(service) = service {
+                tokio::spawn(close_service(service));
+            }
+            self.emit_key(key, "", &payload).await;
+        }
+        Ok(())
+    }
+
+    pub fn prepare_probe(
+        &self,
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+    ) -> Result<ProbeChallenge, McpError> {
+        self.launch.prepare_probe(key, cfg)
+    }
+
+    pub fn invalidate_launch_source(
+        &self,
+        source: &std::path::Path,
+        servers: &[(String, McpServerConfig)],
+    ) {
+        self.launch.invalidate_source(source, servers);
     }
 
     fn tick(&self) -> u64 {
@@ -603,6 +680,9 @@ impl McpManager {
                         e.sessions.insert(session.clone());
                         let changed = e.cfg != *cfg;
                         if changed {
+                            if !self.launch.status(key, cfg).trusted {
+                                self.launch.revoke(key);
+                            }
                             affected.insert(format!("{}:{}", key.scope_str(), key.name));
                             if let Some(svc) = e.service.take() {
                                 retired.push((svc, e.in_flight.clone()));
@@ -828,8 +908,32 @@ impl McpManager {
         session: &str,
         expected_generation: Option<u64>,
     ) -> Result<usize, McpError> {
+        let permit = match self.launch.connection(key, &cfg) {
+            Ok(permit) => permit,
+            Err(error) => {
+                let payload = {
+                    let mut inner = self.inner.lock().await;
+                    inner.entries.get_mut(key).and_then(|entry| {
+                        if entry.cfg != cfg
+                            || expected_generation.is_some_and(|g| g != entry.generation)
+                        {
+                            return None;
+                        }
+                        entry.state = McpState::Stopped;
+                        entry.error = None;
+                        entry.note = Some(error.message.clone());
+                        Some(payload_of(key, entry))
+                    })
+                };
+                if let Some(payload) = payload {
+                    self.emit_key(key, session, &payload).await;
+                }
+                return Err(error);
+            }
+        };
         let (generation, handshake_cancel) = {
             let mut inner = self.inner.lock().await;
+            permit.check(key, &cfg)?;
             if let Some(e) = inner.entries.get_mut(key) {
                 // Queued generation-owned work belongs to the key, not its initiating session.
                 // A surviving shared reference may complete it after the initiator closes.
@@ -857,6 +961,7 @@ impl McpManager {
                     ));
                 }
                 e.generation = e.generation.wrapping_add(1);
+                e.launch = Some(permit.clone());
                 e.connecting = true;
                 (e.generation, e.handshake_cancel.clone())
             } else {
@@ -872,7 +977,7 @@ impl McpManager {
         let connected = tokio::select! {
             biased;
             _ = handshake_cancel.cancelled() => Err(changed_error()),
-            result = Self::spawn_connect(key, &cfg, http) => result,
+            result = Self::spawn_connect(key, &cfg, http, &permit) => result,
         };
         match connected {
             Ok(ready) => {
@@ -931,7 +1036,11 @@ impl McpManager {
         let payload = {
             let mut inner = self.inner.lock().await;
             inner.entries.get_mut(key).and_then(|e| {
-                if e.generation != generation {
+                if e.generation != generation
+                    || e.launch
+                        .as_ref()
+                        .is_none_or(|permit| permit.check(key, &e.cfg).is_err())
+                {
                     return None;
                 }
                 e.tools = tools;
@@ -986,10 +1095,24 @@ impl McpManager {
         key: &PoolKey,
         cfg: &McpServerConfig,
         http: reqwest::Client,
+        permit: &LaunchPermit,
+    ) -> Result<Ready, McpError> {
+        permit.check(key, cfg)?;
+        tokio::select! {
+            biased;
+            _ = permit.cancel.cancelled() => Err(untrusted()),
+            ready = Self::connect_transport(key, cfg, http) => ready,
+        }
+    }
+
+    async fn connect_transport(
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+        http: reqwest::Client,
     ) -> Result<Ready, McpError> {
         let transport = cfg.resolve_transport()?;
         let name = key.name.clone();
-        // tools/list_changed 只置位；实际刷新发生在 run 边界（tool_defs_for）
+        // tools/list_changed only marks dirty; refresh before taking tool definitions.
         let dirty = Arc::new(AtomicBool::new(false));
         let connect = async {
             match transport {
@@ -1104,8 +1227,7 @@ impl McpManager {
                 .get(session)
                 .map(|s| s.iter().cloned().collect())
                 .unwrap_or_default();
-            // 先把**所有**脏标记取走（含不在本会话可见集里的，否则永远清不掉），
-            // 再挑出本会话可见且已就绪的条目去刷新。
+            // Consume only this session's dirty entries; other sessions own their refresh.
             let mut dirty = Vec::new();
             for (k, e) in inner.entries.iter_mut() {
                 if !keys.contains(k) {
@@ -1115,13 +1237,13 @@ impl McpManager {
                     .dirty
                     .as_ref()
                     .is_some_and(|d| d.swap(false, Ordering::SeqCst));
-                if flagged && e.state == McpState::Ready && keys.contains(k) {
+                if flagged && entry_ready(k, e) && keys.contains(k) {
                     dirty.push((k.clone(), e.cfg.clone()));
                 }
             }
             (keys, dirty)
         };
-        // run 边界刷新：工具集变更只在这里生效，绝不在通知回调里改共享状态
+        // Refresh at the step snapshot boundary, never inside the notification callback.
         for (key, cfg) in dirty {
             self.refresh_tools(&key, &cfg).await;
         }
@@ -1131,7 +1253,7 @@ impl McpManager {
             let mut tools = Vec::new();
             for k in &keys {
                 if let Some(e) = inner.entries.get_mut(k)
-                    && e.state == McpState::Ready
+                    && entry_ready(k, e)
                 {
                     e.last_used = tick;
                     tools.extend(e.tools.iter().cloned());
@@ -1150,8 +1272,7 @@ impl McpManager {
         let keys = inner.sessions.get(session).cloned().unwrap_or_default();
         let tools: Vec<_> = keys
             .iter()
-            .filter_map(|k| inner.entries.get(k))
-            .filter(|e| e.state == McpState::Ready)
+            .filter_map(|k| inner.entries.get(k).filter(|entry| entry_ready(k, entry)))
             .flat_map(|e| e.tools.iter().cloned())
             .collect();
         let (defs, index) = build_tool_defs(&tools);
@@ -1226,6 +1347,9 @@ impl McpManager {
             .get_mut(&binding.key)
             .ok_or_else(changed_error)?;
         entry.cfg.always_allow = true;
+        self.launch
+            .rebind_policy(&binding.key, &binding.cfg, &entry.cfg);
+        entry.launch = Some(self.launch.connection(&binding.key, &entry.cfg)?);
         entry.policy_revision += 1;
         let mut updated = binding.clone();
         updated.cfg = entry.cfg.clone();
@@ -1233,7 +1357,7 @@ impl McpManager {
         Ok(updated)
     }
 
-    /// 重新列某条目的工具（`tools/list_changed` 后由 run 边界调用）。
+    /// 重新列某条目的工具（`tools/list_changed` 后由工具快照/定义读取调用）。
     ///
     /// 失败只 `warn` 并保留旧列表——刷新失败不该把可用连接打成错误态。
     async fn refresh_tools(&self, key: &PoolKey, cfg: &McpServerConfig) {
@@ -1242,6 +1366,7 @@ impl McpManager {
             inner
                 .entries
                 .get(key)
+                .filter(|entry| entry_ready(key, entry))
                 .and_then(|e| e.peer.clone().map(|p| (p, e.generation)))
         };
         let Some((peer, generation)) = peer else {
@@ -1413,13 +1538,19 @@ impl McpManager {
 
     /// 临时测试连接：起 → `tools/list` → **立即回收**，不并入连接池、不改正式状态。
     pub async fn test_connection(
+        &self,
+        key: &PoolKey,
         cfg: McpServerConfig,
+        confirmation: &str,
         http: reqwest::Client,
     ) -> Result<usize, McpError> {
-        let key = PoolKey::global("__test__");
-        let ready = tokio::time::timeout(PROBE_TIMEOUT, Self::spawn_connect(&key, &cfg, http))
-            .await
-            .map_err(|_| McpError::handshake("Draft probe timed out (60s total budget)"))??;
+        let lease = self.launch.confirm_probe(confirmation, key, &cfg)?;
+        let ready = tokio::time::timeout(
+            PROBE_TIMEOUT,
+            Self::spawn_connect(key, &cfg, http, &lease.permit),
+        )
+        .await
+        .map_err(|_| McpError::handshake("Draft probe timed out (60s total budget)"))??;
         let n = ready.tools.len();
         close_service(ready.service).await;
         Ok(n)
@@ -1443,6 +1574,7 @@ pub struct McpCallOutput {
 
 fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
     ServerEntry {
+        launch: None,
         cfg: cfg.clone(),
         state: McpState::Starting,
         error: None,
@@ -1468,8 +1600,8 @@ fn blank_entry(cfg: &McpServerConfig, tick: u64) -> ServerEntry {
 
 /// rmcp 的服务错误 → 结构化分类。
 ///
-/// **只有** `TransportSend` / `TransportClosed` 判为连接类（可重连 + 只重放只读调用）；
-/// 协议错与超时一律 `Call`（可能已有副作用，绝不重放）。
+/// Only transport failures are classified as connection errors. Classification does
+/// not trigger reconnection or replay; every failed call may already have had effects.
 fn classify_service_error(e: rmcp::service::ServiceError) -> McpError {
     use rmcp::service::ServiceError as E;
     match e {
@@ -1557,6 +1689,45 @@ mod tests {
 
     type StatusLog = Arc<StdMutex<Vec<(String, McpStatusPayload)>>>;
 
+    impl McpManager {
+        pub(super) async fn warm_approved(
+            self: &Arc<Self>,
+            session: &str,
+            visible: Vec<(PoolKey, McpServerConfig)>,
+            http: reqwest::Client,
+        ) {
+            for (key, cfg) in &visible {
+                self.set_launch_trust(key, cfg, &super::super::launch_version(cfg), true)
+                    .await
+                    .unwrap();
+            }
+            self.warm(session, visible, http).await;
+        }
+    }
+
+    async fn probe_approved(
+        cfg: McpServerConfig,
+        http: reqwest::Client,
+    ) -> Result<usize, McpError> {
+        let manager = McpManager::default();
+        let key = PoolKey::global("__test__");
+        let challenge = manager.prepare_probe(&key, &cfg)?;
+        manager
+            .test_connection(&key, cfg, &challenge.id, http)
+            .await
+    }
+
+    async fn spawn_approved(
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+        http: reqwest::Client,
+    ) -> Result<Ready, McpError> {
+        let registry = LaunchRegistry::default();
+        registry.grant(key, cfg, &super::super::launch_version(cfg))?;
+        let permit = registry.connection(key, cfg)?;
+        McpManager::spawn_connect(key, cfg, http, &permit).await
+    }
+
     /// 收集状态事件的 sink。
     fn collector() -> (StatusSink, StatusLog) {
         let log: StatusLog = Arc::new(StdMutex::new(Vec::new()));
@@ -1610,7 +1781,7 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/mcp-test-server.mjs")
     }
 
-    fn node_cfg() -> McpServerConfig {
+    pub(super) fn node_cfg() -> McpServerConfig {
         serde_json::from_value(json!({
             "command": "node",
             "args": [test_server_script().to_string_lossy()],
@@ -1625,13 +1796,13 @@ mod tests {
         );
         let manager = Arc::new(McpManager::default());
         manager
-            .warm(session, vec![(key, cfg)], reqwest::Client::new())
+            .warm_approved(session, vec![(key, cfg)], reqwest::Client::new())
             .await;
         wait_ready(&manager, session, 1).await;
         manager
     }
 
-    async fn wait_ready(manager: &McpManager, session: &str, count: usize) {
+    pub(super) async fn wait_ready(manager: &McpManager, session: &str, count: usize) {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let status = manager.status_for(session).await;
@@ -1864,7 +2035,7 @@ mod tests {
                 pidfile.display().to_string(),
             );
             cfg.env.insert(phase.into(), "30000".into());
-            let handle = tokio::spawn(McpManager::test_connection(cfg, reqwest::Client::new()));
+            let handle = tokio::spawn(probe_approved(cfg, reqwest::Client::new()));
             tokio::time::timeout(Duration::from_secs(5), async {
                 while !pidfile.exists() {
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1900,14 +2071,14 @@ mod tests {
         let cfg = node_cfg();
         let manager = ready_manager("a", global.clone(), cfg.clone()).await;
         manager
-            .warm(
+            .warm_approved(
                 "a",
                 vec![(global.clone(), cfg.clone()), (a.clone(), cfg.clone())],
                 reqwest::Client::new(),
             )
             .await;
         manager
-            .warm(
+            .warm_approved(
                 "b",
                 vec![(global.clone(), cfg.clone()), (b.clone(), cfg.clone())],
                 reqwest::Client::new(),
@@ -1952,8 +2123,19 @@ mod tests {
             assert_eq!(old.pid, new.pid);
             assert_eq!(old.generation, new.generation);
         }
-        wait_ready(&manager, "a", 2).await;
         let current_cfg = manager.inner.lock().await.entries[&a].cfg.clone();
+        assert!(!manager.launch_status(&a, &current_cfg).trusted);
+        manager
+            .warm_approved(
+                "a",
+                vec![
+                    (global.clone(), cfg.clone()),
+                    (a.clone(), current_cfg.clone()),
+                ],
+                reqwest::Client::new(),
+            )
+            .await;
+        wait_ready(&manager, "a", 2).await;
         let no_op = manager
             .reconcile(
                 vec![("a".into(), vec![(global, cfg), (a, current_cfg)])],
@@ -1971,12 +2153,17 @@ mod tests {
         let key = PoolKey::global("server");
         let cfg = bogus_cfg();
         manager
+            .set_launch_trust(&key, &cfg, &super::super::launch_version(&cfg), true)
+            .await
+            .unwrap();
+        manager
             .register_session("s", &[(key.clone(), cfg.clone())])
             .await;
         {
             let mut inner = manager.inner.lock().await;
             let entry = inner.entries.get_mut(&key).unwrap();
             entry.state = McpState::Ready;
+            entry.launch = Some(manager.launch.connection(&key, &cfg).unwrap());
             entry.tools = vec![McpTool {
                 server: "server".into(),
                 name: "echo".into(),
@@ -2045,6 +2232,12 @@ mod tests {
         let a = PoolKey::global("a");
         let b = PoolKey::global("b");
         let visible = vec![(a.clone(), node_cfg()), (b.clone(), node_cfg())];
+        for (key, cfg) in &visible {
+            manager
+                .set_launch_trust(key, cfg, &super::super::launch_version(cfg), true)
+                .await
+                .unwrap();
+        }
         manager
             .connect_named("s", visible.clone(), &["a".into()], reqwest::Client::new())
             .await;
@@ -2150,6 +2343,15 @@ mod tests {
             .await;
         assert_eq!(pending[0].1.len(), 1);
         assert!(pending[1].1.is_empty());
+        manager
+            .set_launch_trust(
+                &key,
+                &changed,
+                &super::super::launch_version(&changed),
+                true,
+            )
+            .await
+            .unwrap();
         let generation = manager.inner.lock().await.entries[&key].generation;
         manager.release_session("initiator").await;
         manager
@@ -2216,7 +2418,7 @@ mod tests {
         assert_eq!(c.text, "boom");
     }
 
-    /// `tools/list_changed` 的脏标记必须在 **run 边界**被取走。
+    /// `tools/list_changed` 的脏标记必须在工具定义读取时被取走。
     ///
     /// 这里用一个起不来的 server（状态 Error）验证「标记照样清掉」——
     /// 若只在就绪条目上清，坏连接的标记会永久残留、下次就绪时被误当成刚变更。
@@ -2224,7 +2426,7 @@ mod tests {
     async fn run_boundary_clears_tool_list_dirty_flag() {
         let mgr = Arc::new(McpManager::default());
         let key = PoolKey::global("a");
-        mgr.warm(
+        mgr.warm_approved(
             "s",
             vec![(key.clone(), bogus_cfg())],
             reqwest::Client::new(),
@@ -2277,7 +2479,8 @@ mod tests {
             let mgr = Arc::new(McpManager::default());
             // 会话 A 可见 fs；会话 B 完全看不到任何 MCP
             let visible = vec![(PoolKey::global("fs"), bogus_cfg())];
-            mgr.warm("sA", visible, reqwest::Client::new()).await;
+            mgr.warm_approved("sA", visible, reqwest::Client::new())
+                .await;
             // 等 warm 的内部任务跑完
             tokio::time::sleep(Duration::from_millis(300)).await;
             let cancel = CancellationToken::new();
@@ -2306,7 +2509,7 @@ mod tests {
             let mgr = Arc::new(McpManager::default());
             let (sink, log) = collector();
             mgr.set_status_sink(sink).await;
-            mgr.warm(
+            mgr.warm_approved(
                 "s1",
                 vec![(PoolKey::global("a"), bogus_cfg())],
                 reqwest::Client::new(),
@@ -2358,7 +2561,7 @@ mod tests {
         }
         let mgr = Arc::new(McpManager::default());
         let key = PoolKey::global("test");
-        mgr.warm("s", vec![(key.clone(), node_cfg())], reqwest::Client::new())
+        mgr.warm_approved("s", vec![(key.clone(), node_cfg())], reqwest::Client::new())
             .await;
         let pid = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -2408,7 +2611,7 @@ mod tests {
                 .insert("s".to_string(), HashSet::from([key.clone()]));
             1
         };
-        let ready = McpManager::spawn_connect(&key, &cfg, reqwest::Client::new())
+        let ready = spawn_approved(&key, &cfg, reqwest::Client::new())
             .await
             .expect("test server should connect");
         let pid = ready.pid.expect("stdio PID");
@@ -2433,7 +2636,7 @@ mod tests {
             let mgr = Arc::new(McpManager::default());
             for i in 0..5 {
                 let s = format!("s{i}");
-                mgr.warm(
+                mgr.warm_approved(
                     &s,
                     vec![(PoolKey::global("a"), bogus_cfg())],
                     reqwest::Client::new(),
@@ -2458,7 +2661,7 @@ mod tests {
             let (sink, log) = collector();
             mgr.set_status_sink(sink).await;
             for i in 0..4 {
-                mgr.warm(
+                mgr.warm_approved(
                     &format!("s{i}"),
                     vec![(PoolKey::global(format!("srv{i}")), bogus_cfg())],
                     reqwest::Client::new(),
@@ -2471,7 +2674,7 @@ mod tests {
                 mgr.release_session(&format!("s{i}")).await;
             }
             // 第 5 个条目触发淘汰
-            mgr.warm(
+            mgr.warm_approved(
                 "sx",
                 vec![(PoolKey::global("srv-new"), bogus_cfg())],
                 reqwest::Client::new(),
@@ -2491,7 +2694,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let mgr = Arc::new(McpManager::new(2));
-            mgr.warm(
+            mgr.warm_approved(
                 "s0",
                 vec![(PoolKey::global("srv0"), bogus_cfg())],
                 reqwest::Client::new(),
@@ -2500,7 +2703,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(200)).await;
             // 再塞 3 个新键：池上限 2，但 srv0 被引用，不得淘汰
             for i in 1..4 {
-                mgr.warm(
+                mgr.warm_approved(
                     &format!("s{i}"),
                     vec![(PoolKey::global(format!("srv{i}")), bogus_cfg())],
                     reqwest::Client::new(),
@@ -2533,7 +2736,7 @@ mod tests {
         let mgr = Arc::new(McpManager::default());
         let (sink, log) = collector();
         mgr.set_status_sink(sink).await;
-        mgr.warm(
+        mgr.warm_approved(
             "s-main",
             vec![(PoolKey::global("wavetest.proxy"), node_cfg())],
             reqwest::Client::new(),
@@ -2591,7 +2794,7 @@ mod tests {
             return;
         }
         let mgr = Arc::new(McpManager::default());
-        mgr.warm(
+        mgr.warm_approved(
             "s",
             vec![(PoolKey::global("t"), node_cfg())],
             reqwest::Client::new(),
@@ -2649,7 +2852,7 @@ mod tests {
         let cfg: McpServerConfig =
             serde_json::from_value(json!({ "url": format!("http://127.0.0.1:{port}/mcp") }))
                 .unwrap();
-        mgr.warm(
+        mgr.warm_approved(
             "s",
             vec![(PoolKey::global("h"), cfg)],
             reqwest::Client::new(),
@@ -2684,7 +2887,7 @@ mod tests {
             eprintln!("skip：node 不可用");
             return;
         }
-        let n = McpManager::test_connection(node_cfg(), reqwest::Client::new())
+        let n = probe_approved(node_cfg(), reqwest::Client::new())
             .await
             .expect("临时测试连接应成功");
         assert!(n >= 2, "应发现 echo / add 两个工具，实际 {n}");
@@ -2692,7 +2895,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_connection_reports_spawn_failure() {
-        let e = McpManager::test_connection(bogus_cfg(), reqwest::Client::new())
+        let e = probe_approved(bogus_cfg(), reqwest::Client::new())
             .await
             .unwrap_err();
         assert_eq!(e.kind, McpErrorKind::Spawn);
@@ -2784,7 +2987,7 @@ setInterval(()=>{}, 1000);
         }))
         .unwrap();
         let mgr = Arc::new(McpManager::default());
-        mgr.warm(
+        mgr.warm_approved(
             "s",
             vec![(PoolKey::global("t"), cfg)],
             reqwest::Client::new(),

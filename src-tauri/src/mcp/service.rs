@@ -7,6 +7,86 @@ use super::{
 use crate::core::agent::{AgentCore, SessionRuntime};
 use serde::Serialize;
 
+pub fn launch_key(
+    core: &AgentCore,
+    source: &ScopeRef,
+    session_id: Option<&str>,
+    name: &str,
+) -> Result<PoolKey, McpError> {
+    let key = match source.scope {
+        Scope::Global => PoolKey::global(name),
+        Scope::Project => {
+            let rt = session_id
+                .and_then(|id| core.session(id))
+                .ok_or_else(|| McpError::config("Project session closed"))?;
+            if rt.zombie.load(std::sync::atomic::Ordering::SeqCst)
+                || !rt.project_dir.as_deref().is_some_and(|path| {
+                    source_identity(&project_scope(path).path) == source_identity(&source.path)
+                })
+            {
+                return Err(McpError::config("Project source changed"));
+            }
+            PoolKey::project(rt.project_id.clone().unwrap_or_default(), name)
+        }
+    };
+    Ok(key.with_source(&source.path))
+}
+
+/// A host action, separate from enabled/read_only/always_allow and scope-file contents.
+pub async fn set_launch_trust(
+    core: &AgentCore,
+    source: &ScopeRef,
+    session_id: Option<&str>,
+    name: &str,
+    expected: &str,
+    trusted: bool,
+) -> Result<super::LaunchStatus, McpError> {
+    let _commit = CONFIG_COMMIT.lock().await;
+    let key = launch_key(core, source, session_id, name)?;
+    let doc = load_scope(source);
+    let cfg = doc
+        .servers
+        .iter()
+        .find(|(server, _)| server == name)
+        .map(|(_, cfg)| cfg)
+        .ok_or_else(|| McpError::config("MCP server no longer exists"))?;
+    if doc.issues.iter().any(|issue| {
+        issue.level == IssueLevel::Error
+            && issue.server.as_deref().is_none_or(|server| server == name)
+    }) {
+        return Err(McpError::config(
+            "MCP configuration must be corrected before launch approval",
+        ));
+    }
+    core.mcp
+        .set_launch_trust(&key, cfg, expected, trusted)
+        .await?;
+    if trusted {
+        let sessions: Vec<_> = core
+            .sessions
+            .iter()
+            .filter_map(|entry| {
+                let rt = entry.value();
+                if rt.zombie.load(std::sync::atomic::Ordering::SeqCst) {
+                    return None;
+                }
+                let visible = visible_servers(rt);
+                visible
+                    .iter()
+                    .any(|(visible, _)| *visible == key)
+                    .then(|| (rt.id.clone(), visible))
+            })
+            .collect();
+        let http = core.client.read().unwrap().clone();
+        for (session, visible) in sessions {
+            core.mcp
+                .connect_named(&session, visible, &[name.into()], http.clone())
+                .await;
+        }
+    }
+    Ok(core.mcp.launch_status(&key, cfg))
+}
+
 pub fn visible_servers(rt: &SessionRuntime) -> Vec<(PoolKey, McpServerConfig)> {
     let global = global_scope(&rt.data_dir);
     let project = rt.project_dir.as_deref().map(project_scope);
@@ -92,6 +172,8 @@ pub async fn save_configuration(
     crate::util::atomic::atomic_write(&source.path, text.as_bytes()).map_err(|_| {
         McpError::config("MCP configuration could not be saved; existing connections unchanged")
     })?;
+    core.mcp
+        .invalidate_launch_source(&source_identity(&source.path), &parsed.servers);
     // Only runtimes actually reading this file are affected. The canonical path distinguishes relocated projects.
     let identity = source_identity(&source.path);
     let sessions = core
@@ -123,6 +205,55 @@ mod tests {
     use super::*;
     use crate::core::agent::test_support::make_core;
     use crate::tools::pathutil::WriteRoots;
+
+    #[tokio::test]
+    async fn launch_approval_rereads_disk_and_saves_revoke_old_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = make_core(&WriteRoots {
+            workspace: dir.path().to_path_buf(),
+            data_dir: dir.path().to_path_buf(),
+            extra: vec![],
+        });
+        let source = global_scope(dir.path());
+        let original = r#"{"mcpServers":{"saved":{"command":"fixture","read_only":true,"always_allow":true}}}"#;
+        std::fs::write(&source.path, original).unwrap();
+        let cfg = load_scope(&source).servers.remove(0).1;
+        let key = launch_key(&core, &source, None, "saved").unwrap();
+        let version = super::super::launch_version(&cfg);
+        assert!(!core.mcp.launch_status(&key, &cfg).trusted);
+        set_launch_trust(&core, &source, None, "saved", &version, true)
+            .await
+            .unwrap();
+        assert!(core.mcp.launch_status(&key, &cfg).trusted);
+        assert!(
+            core.mcp.all_status().await.is_empty(),
+            "approval without a visible session must not start a process"
+        );
+        let changed = r#"{"mcpServers":{"saved":{"command":"replacement"}}}"#;
+        std::fs::write(&source.path, changed).unwrap();
+        assert!(
+            set_launch_trust(&core, &source, None, "saved", &version, true)
+                .await
+                .is_err()
+        );
+        let changed_cfg = load_scope(&source).servers.remove(0).1;
+        assert!(!core.mcp.launch_status(&key, &changed_cfg).trusted);
+        set_launch_trust(
+            &core,
+            &source,
+            None,
+            "saved",
+            &super::super::launch_version(&changed_cfg),
+            true,
+        )
+        .await
+        .unwrap();
+        save_configuration(&core, &source, original, &scope_version(changed))
+            .await
+            .unwrap();
+        assert!(!core.mcp.launch_status(&key, &changed_cfg).trusted);
+        assert!(!core.mcp.launch_status(&key, &cfg).trusted);
+    }
 
     #[tokio::test]
     async fn invalid_or_conflicting_save_never_changes_disk_or_creates_validation_files() {

@@ -22,6 +22,7 @@ mod manager;
 mod process;
 mod service;
 mod tools;
+mod trust;
 
 pub use config::{
     CONFIG_COMMIT, ConfigIssue, DEFAULT_TIMEOUT_MS, IssueLevel, McpServerConfig, McpTransport,
@@ -40,4 +41,5 @@ pub use tools::{
 
 pub(crate) use process::wrap_process_tree;
 
-pub use service::{SaveReceipt, save_configuration, visible_servers};
+pub use service::{SaveReceipt, launch_key, save_configuration, set_launch_trust, visible_servers};
+pub use trust::{LaunchStatus, ProbeChallenge, launch_version};

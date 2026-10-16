@@ -40,6 +40,7 @@ import { useDisplayWidths } from "../shell/useDisplayWidths";
 import { SettingsForm, SettingsFormItem, SettingsSection, SettingsThemeProvider, SettingsThemeScope } from "./settings/SettingsTheme";
 import { AboutSettings } from "./AboutSettings";
 import McpStatusTable, { mcpStatusRow, type McpStatusRow } from "./McpStatusTable";
+import { useMcpLaunchConfirmation } from "./McpLaunchControl";
 import {
   draftTransport,
   emptyDraft,
@@ -323,6 +324,8 @@ function SettingsPageController() {
   const [mcpRaw, setMcpRaw] = useState("");
   const [mcpVersion, setMcpVersion] = useState("");
   const mcpIdentity = useRef(0);
+  const confirmMcpLaunch = useMcpLaunchConfirmation(mcpIdentity.current);
+  const [mcpLaunchServers, setMcpLaunchServers] = useState<McpServerView[]>([]);
   const mcpPendingIdentity = useRef<number | null>(null);
   const [mcpTesting, setMcpTesting] = useState(false);
   const [mcpSaving, setMcpSaving] = useState(false);
@@ -344,6 +347,7 @@ function SettingsPageController() {
       setMcpOriginal("");
       setMcpVersion("");
       setMcpEffective([]);
+      setMcpLaunchServers([]);
       setMcpPath("");
       setMcpProjectPath(null);
       void loadMcp("global");
@@ -1013,6 +1017,9 @@ function SettingsPageController() {
       setMcpEditing(false);
       setMcpEditorIndex(null);
       setMcpCreating(false);
+      const launchDoc = await ipc.mcpListConfig(mcpScope, sessionId ?? undefined);
+      if (identity !== mcpIdentity.current) return;
+      setMcpLaunchServers(launchDoc.servers ?? []);
       // 保存只接纳应用计划；此处只刷新状态，不重复建连。
       if (sessionId) {
         const snapshotRequest = ++latestMcpSnapshotRequest;
@@ -1156,6 +1163,7 @@ function SettingsPageController() {
     setMcpIssues(doc?.issues ?? []);
     setMcpPath(doc?.path ?? "");
     setMcpEffective(doc?.effective ?? []);
+    setMcpLaunchServers(doc?.servers ?? []);
     setMcpTests({});
   }
 
@@ -1206,7 +1214,11 @@ function SettingsPageController() {
       mcpPendingIdentity.current = identity;
       setMcpTesting(true);
       setMcpTests({});
-      const res = await ipc.mcpTest(mcpScope, name, config, sessionId ?? undefined);
+      const confirmation = await ipc.mcpPrepareTest(mcpScope, name, config, sessionId ?? undefined);
+      if (identity !== mcpIdentity.current || mcpPendingIdentity.current !== identity) return;
+      if (!await confirmMcpLaunch("probe", name, mcpPath, confirmation.version, config)) return;
+      if (identity !== mcpIdentity.current || mcpPendingIdentity.current !== identity) return;
+      const res = await ipc.mcpTest(mcpScope, name, config, confirmation.id, sessionId ?? undefined);
       if (identity !== mcpIdentity.current || mcpPendingIdentity.current !== identity) return;
       setMcpTests({ [name]: res.ok
         ? { ok: true, text: t("settings.mcpTestOk", { n: res.tools }) }
@@ -1249,11 +1261,17 @@ function SettingsPageController() {
   async function refreshMcpStatus() {
     setMcpRefreshing(true);
     const snapshotRequest = ++latestMcpSnapshotRequest;
+    const identity = mcpIdentity.current;
     try {
       // 失败保留旧值：整份替成 [] 会把「一次 IPC 抖动」伪装成「所有服务器都没连接」，
       // 而「未连接」在本页是**正常态**文案（见状态表下方的说明），误导性最强
-      const st = await readMcpStatus();
+      const [st, configuration] = await Promise.all([
+        readMcpStatus(),
+        ipc.mcpListConfig(mcpScope, sessionId ?? undefined).catch(() => null),
+      ]);
       if (snapshotRequest !== latestMcpSnapshotRequest || useSessions.getState().activeKey !== sessionId) return;
+      // Refresh launch policy without overwriting an editor draft or its save baseline.
+      if (identity === mcpIdentity.current) setMcpLaunchServers(configuration?.servers ?? []);
       if (st) applyMcpSnapshot(st);
       else message.error(t("settings.mcpStatusRefreshFailed"));
     } finally {
@@ -1869,6 +1887,10 @@ function SettingsPageController() {
             hasSession={!!sessionId}
             onDisconnect={(n) => void runMcpAction(n, "disconnect")}
             onReconnect={(n) => void runMcpAction(n, "reconnect")}
+            launchServers={mcpLaunchServers}
+            sessionId={sessionId}
+            launchDisabled={mcpDirty || mcpSaving || mcpTesting}
+            onLaunchChanged={async () => { await loadMcp(mcpScope); await refreshMcpStatus(); }}
           />
           {mcpEditing && <Modal
             className="settings-dialog settings-mcp-editor-modal"

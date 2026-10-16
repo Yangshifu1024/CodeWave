@@ -809,7 +809,12 @@ export interface McpServerView {
   source: McpScope;
   /** 被它覆盖掉的下层（无则 null） */
   overridden: McpScope | null;
+  source_path: string;
+  launch: McpLaunchStatus;
 }
+
+export interface McpLaunchStatus { version: string; trusted: boolean }
+export interface McpProbeChallenge { id: string; version: string }
 
 /** 一条配置问题 */
 export interface McpConfigIssue {
