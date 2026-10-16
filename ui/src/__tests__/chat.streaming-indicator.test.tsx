@@ -3,7 +3,7 @@
 //  ② 子代理过程抽屉的运行中流同样渲染加载图标（两处共用同一个语义化类名 .ws-streaming-indicator）；
 //  ③ 非输出状态（streaming 为假 / 子代理非 running）不渲染该指示。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
+import { render, cleanup, act, fireEvent } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // 直接挂载的组件必须自行初始化 i18next（否则 t() 返回原始 key）
 
@@ -169,6 +169,9 @@ describe("聊天窗口：等待指示 = antd 加载图标（docs/chat-and-interf
     });
     const { container } = render(<ChatMessages />);
     expect(container.querySelectorAll(".tool-card.st-error")).toHaveLength(1);
+    expect(container.textContent).toContain("失败");
+    expect(container.textContent).not.toContain("E_SUBAGENT_BUSY");
+    fireEvent.click(container.querySelector(".tool-card.st-error .tool-compact-head")!);
     expect(container.textContent).toContain("E_SUBAGENT_BUSY");
     expect(container.querySelectorAll(".anticon-loading")).toHaveLength(0);
   });

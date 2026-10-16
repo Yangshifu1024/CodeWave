@@ -5,7 +5,7 @@
   /* 标题栏高度：.toolbar 与 AppShell 内容 calc 的唯一来源（[docs/testing](../../../docs/testing.md)#13——此前两处各写字面量 50px） */
   --ws-titlebar-h: 50px;
   /* Shared by transcript, Composer, approvals and queue; percentages resolve against the middle column. */
-  --ws-chat-gutter: max(24px, calc((100% - 960px) / 2));
+  --ws-chat-gutter: 5%;
   --ws-radius: 6px;
   --ws-radius-lg: 12px;
   --ws-shadow: none;
@@ -1426,11 +1426,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .rb-todo-dot.in_progress { color: var(--ws-accent); }
 .rb-todo-dot.completed { color: var(--ws-dim); }
 .rb-todo-done { color: var(--ws-dim); }
-/* Fixed, readable source slot; full names and origins remain in the row tooltip. */
+/* Fixed, readable source slot; click the row to view full skill details. */
 .rb-skill-line { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
 /* Clickable skills share the overview row's inset; antd owns the hover appearance. */
 .rb-skill-line.rb-skill-clickable { justify-content: flex-start; height: auto; padding-block: 8px; white-space: normal; }
-.rb-skill-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
+.rb-skill-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-text-1); }
 .rb-skill-origin { padding-left: 8px; width: 64px; max-width: 35%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }
 /* [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：右栏运行日志 */
 .rb-log-head { cursor: pointer; user-select: none; }
@@ -1560,12 +1560,10 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
 .rb-overview-row.ant-btn { justify-content: flex-start; height: auto; min-height: 34px; padding-block: 8px; gap: 8px; }
 .rb-overview-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; white-space: nowrap; font-size: calc(12px + var(--ws-font-size-sans-offset)); }
 .rb-overview-row .rb-agent-status { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
-.rb-view-all.ant-btn { color: var(--ws-text-2); margin-top: 6px; }
 /* Extend the hit surface into the card's existing gutter while keeping text aligned. */
 .rb-overview-changes.ant-btn,
 .rb-overview-row.ant-btn,
-.rb-skill-line.rb-skill-clickable,
-.rb-view-all.ant-btn {
+.rb-skill-line.rb-skill-clickable {
   padding-inline: var(--rb-row-padding);
   margin-inline: calc(0px - var(--rb-row-padding));
 }

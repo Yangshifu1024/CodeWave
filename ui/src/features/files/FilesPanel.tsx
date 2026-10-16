@@ -3,19 +3,12 @@
 import { fontSizeCss } from "../../utils/fonts";
 import { useState } from "react";
 import { Alert, App, Button, Modal, Radio, Tooltip } from "antd";
-import {
-  FileImageOutlined,
-  FileMarkdownOutlined,
-  FileOutlined,
-  FileTextOutlined,
-  ReloadOutlined,
-  RollbackOutlined,
-} from "@ant-design/icons";
+import { ReloadOutlined, RollbackOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { i18n } from "../../i18n";
 import { ipc } from "../../ipc/client";
 import type { DocumentBackupEntry, SessionFileEntry } from "../../ipc/types";
-import { isImagePath } from "./FileViewerModal";
+import SessionFileIcon from "./SessionFileIcon";
 
 /** 能回退的扩展名：与 edit_document 支持的保真修改范围一致（只有它会产生备份）。 */
 const RESTORABLE_EXTS = new Set(["xlsx", "xlsm", "docx"]);
@@ -47,15 +40,6 @@ function sizeLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** 按路径类型选择图标：图片/markdown 用强调色，文本类用默认文件图标。 */
-function TypeIcon({ entry }: { entry: SessionFileEntry }) {
-  const p = entry.path.toLowerCase();
-  if (isImagePath(entry.path)) return <FileImageOutlined style={{ color: "var(--ws-accent)" }} />;
-  if (p.endsWith(".md") || p.endsWith(".markdown")) return <FileMarkdownOutlined style={{ color: "var(--ws-accent)" }} />;
-  if (p.endsWith(".txt") || p.endsWith(".log") || p.endsWith(".rst")) return <FileTextOutlined />;
-  return <FileOutlined />;
 }
 
 /** 待回退的目标：路径 + 后端给的备份清单（清单在打开弹框时才拉，不给每一行都去问一次）。 */
@@ -134,7 +118,7 @@ export default function FilesPanel({
                 onClick={f.exists ? () => onView(f.path) : undefined}
               >
                 <span className="rb-file-icon">
-                  <TypeIcon entry={f} />
+                  <SessionFileIcon path={f.path} />
                 </span>
                 <span className="rb-file-name">{baseName(f.path)}</span>
                 <span className="rb-file-meta">
