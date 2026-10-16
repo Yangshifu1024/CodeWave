@@ -82,12 +82,40 @@ describe("compact tool rows", () => {
     expect(document.querySelector(".line-count")).toBeNull();
   });
 
-  it("keeps failures and warnings visible without expanding", () => {
-    render(<ToolCallCard display="compact" tool={tool({ status: "error",
-      outcome: { ok: false, data: null, error: { code: "E_IO", message: "failed to read" }, warnings: ["check path"] },
+  it.each(["compact", "detailed"] as const)("folds error details in %s mode while retaining the failure status", (display) => {
+    render(<ToolCallCard display={display} tool={tool({ tool: "command", status: "error",
+      argsPreview: '{"command":"which aliyun"}',
+      outcome: { ok: false, data: null, error: { code: "E_PLAN_READONLY", message: "计划模式只读拦截" }, warnings: ["check path"] },
     })} />);
-    expect(screen.getByText("E_IO: failed to read")).toBeTruthy();
+    const header = document.querySelector(display === "compact" ? ".tool-compact-head" : ".tool-head")!;
+    expect(header.textContent).toContain("失败");
+    expect(document.querySelector(".tool-card.st-error")).toBeTruthy();
+    expect(screen.queryByText("E_PLAN_READONLY: 计划模式只读拦截")).toBeNull();
+    if (display === "compact") expect(screen.getByText("check path")).toBeTruthy();
+    fireEvent.click(header);
+    expect(screen.getAllByText("E_PLAN_READONLY: 计划模式只读拦截")).toHaveLength(1);
     expect(screen.getByText("check path")).toBeTruthy();
+    fireEvent.click(header);
+    expect(screen.queryByText("E_PLAN_READONLY: 计划模式只读拦截")).toBeNull();
+  });
+
+  it("keeps error details folded when a running command fails", () => {
+    const running = tool({ tool: "command", status: "running", outcome: undefined,
+      argsPreview: '{"command":"which aliyun"}',
+    });
+    const { rerender } = render(<ToolCallCard display="compact" tool={running} />);
+    const failed = { ...running, status: "error" as const,
+      outcome: { ok: false, data: null, error: { code: "E_EXIT_CODE", message: "命令退出码 1" } },
+    };
+    rerender(<ToolCallCard display="compact" tool={failed} />);
+    const header = screen.getByRole("button");
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("E_EXIT_CODE: 命令退出码 1")).toBeNull();
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByText("E_EXIT_CODE: 命令退出码 1")).toHaveLength(1);
+    fireEvent.click(header);
+    expect(screen.queryByText("E_EXIT_CODE: 命令退出码 1")).toBeNull();
   });
 
   it("hides a running command tail until expanded while preserving full command", () => {
@@ -152,6 +180,10 @@ describe("completed tool aggregation", () => {
     expect(groups.length).toBe(1);
     expect(groups[0].textContent).toContain("已运行 1 条命令");
     expect(screen.getByText("等待确认 读取")).toBeTruthy();
+    const failure = document.querySelector(".tool-card.st-error")!;
+    expect(failure.textContent).toContain("失败");
+    expect(screen.queryByText("E_IO: failure")).toBeNull();
+    fireEvent.click(failure.querySelector(".tool-compact-head")!);
     expect(screen.getByText("E_IO: failure")).toBeTruthy();
     expect(document.querySelectorAll(".md")[0].textContent?.trim()).toBe("before");
     expect(document.querySelectorAll(".md")[1].textContent?.trim()).toBe("after");
