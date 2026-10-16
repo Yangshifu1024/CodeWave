@@ -132,15 +132,15 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 
 ### 4.1 顺序、等待指示与重试
 
-正文、思考、工具与子代理锚点按 timeline 顺序显示。后端 64ms 节流以有序 `Text/Reasoning` 段缓存，同 kind 相邻合并，跨 kind 不重排；不能退回两条无序字符串再让前端猜时序。主会话的步骤正文先作为候选保留，按[整轮过程折叠](#44-任务完成后的整轮过程折叠)的确认顺序释放；思考、工具、询问和子代理状态仍即时显示。装配与落盘保留块序，保存路径保留 thinking；各协议是否回传 thinking 由供应商层决定。
+正文、思考、工具与子代理锚点按 timeline 顺序显示。后端 64ms 节流以有序 `Text/Reasoning` 段缓存，同 kind 相邻合并，跨 kind 不重排；不能退回两条无序字符串再让前端猜时序。装配与落盘保留块序，保存路径保留 thinking；各协议是否回传 thinking 由供应商层决定。
 
-同一 Tab **至多一个 streaming assistant 项**，且位于当前列表末尾。notice 插队后新建流式项前必须关闭此前所有流式项；done/error/cancelled 和终态对账必须扫全 Tab 收尾，不只关闭最后一项。简洁展示在消息末尾保留一处次级文字活动提示，按真实状态显示「正在思考 / 正在处理 / 正在回复 / 等待确认」；工具、过程组和子代理使用静态图标与状态词，不再逐层转圈。详细展示的 `LoadingOutlined` 仅在当前消息没有明确的工具、子代理或思考状态时兜底，表示仍在输出而非进度百分比；禁止重新引入全局 `.cursor` 闪烁类。
+同一 Tab **至多一个 streaming assistant 项**，且位于当前列表末尾。notice 插队后新建流式项前必须关闭此前所有流式项；done/error/cancelled 和终态对账必须扫全 Tab 收尾，不只关闭最后一项。等待指示是 `LoadingOutlined`，表示仍在输出而非进度百分比；禁止重新引入全局 `.cursor` 闪烁类。
 
 重试通过 `streamGen` 隔离旧 attempt；旧代次帧不能回填已清场的时间线。Tab/run 生命周期另有 `runEpoch` 与 run 身份守卫，不能与 provider 流代次混为一个计数。迟到 delta 不得在结束后重建流式项，usage 则遵守上一节的独立计数规则。终态丢失恢复与队列调度详见[运行与调度](./runtime-and-scheduling.md)。
 
 ### 4.2 正文、思考与 Markdown
 
-- 已释放的正文只有当前末尾流式文本段逐字揭示，游标留在组件局部 state，绝不按动画帧写 store；未确认的步骤候选正文不提前渲染。历史、非尾段、结束/取消和减弱动效下直接显示全文；当前会话刚完成的权威最终答复使用下一节的快速揭示。这样不会把聊天滚动和图表升级推到 60fps。实现中的速度追赶是显示效果，不改变保存文本或 provider 内容。
+- 正文只有当前末尾流式文本段逐字揭示，游标留在组件局部 state，绝不按动画帧写 store；历史、非尾段、结束/取消和减弱动效下直接显示全文。这样不会把聊天滚动和图表升级推到 60fps。实现中的速度追赶是显示效果，不改变保存文本或 provider 内容。
 - 思考默认收起，展开状态不持久化。运行中标题旁展示最新非空行：先左对齐停留、溢出才向左移动，只有真正换行才上翻，同行增量不重新翻页；减弱动效下静态显示。展开思考或工具卡视作阅读意图，暂停外层自动跟随。
 - 子代理 `<report>` 标记仅在子代理显示路径剥离，先合并/剥离再逐字切片；不能对主聊天所有正文全局清除，用户可能正在讨论该标记。
 - 用户气泡使用保守 Markdown：数学保留可见源串、mermaid 当代码显示；助手/计划/文件 Markdown 才进入图表与公式升级。外部链接统一经 `open_url` 打开系统浏览器，避免 WebView 的 `_blank` 无动作。
@@ -152,53 +152,15 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 
 实现入口：[segments.tsx](../ui/src/features/chat/segments.tsx)、[markdown.ts](../ui/src/utils/markdown.ts)、[throttle.rs](../src-tauri/src/util/throttle.rs)、[dto.rs](../src-tauri/src/provider/dto.rs)。
 
-#### 4.2.x 复制到剪贴板
-
-复制是**跨界面全仓统一行为**，入口只有 `copyText`（[clipboard.ts](../ui/src/utils/clipboard.ts)），任何复制按钮都不得自写 `navigator.clipboard`。
-
-三级链路逐级降级，最终返回布尔：原生插件（[ipc/clipboard.ts](../ui/src/ipc/clipboard.ts)，Tauri 主路径）→ 浏览器 `navigator.clipboard.writeText`（vite dev / 单测环境）→ 隐藏 `textarea` + `document.execCommand("copy")` 末级兜底。
-
-**为什么主路径不能是浏览器接口**：打包版前端跑在 `tauri://localhost` 自定义协议下，该来源下 `navigator.clipboard` 不可靠。这是「用户消息复制按钮点击无反应」的根因。旧的五处写法（`navigator.clipboard?.writeText(t).then(...).catch(() => {})`）在 clipboard 缺失时 `?.` 短路得到 `undefined`，紧接的 `.then` **同步**抛 `TypeError`，而空 `.catch` 又把它吃掉——两条失败路径在界面上都表现为「点了没反应」，无任何痕迹。
-
-**两条反模式不得重犯**：① `navigator.clipboard?.writeText(t)` 后直接 `return true`——`await undefined` 会被当作成功，于是既没写入又报成功，把失败伪装成成功；正确做法是先取 `clipboard` 判存在再写。② 失败后空 `catch`／`.catch(() => {})` 静默——**失败必须有区别于成功的可见反馈**（用户消息与代码块切失败图标，toast 类入口给 error 提示）。
-
-后端依赖 `tauri-plugin-clipboard-manager`，`lib.rs` 注册插件，`capabilities/default.json` 只授 `clipboard-manager:allow-write-text`；官方默认权限集为空，读/图片/html/secret 一律不开。回归：[clipboard.util.test.ts](../ui/src/__tests__/clipboard.util.test.ts)（含全仓 `navigator.clipboard` 唯一性守护）、[codecopy.test.tsx](../ui/src/__tests__/codecopy.test.tsx)、[usermsg.actions.test.tsx](../ui/src/__tests__/usermsg.actions.test.tsx)。真实 WebView 下的剪贴板行为与三平台差异需在**打包版**手工验收，`tauri dev` 通过不算数。
-
 ### 4.3 时间、工具出参与文本 ask
 
-消息首次进入转录时才盖 `created_at` UTC RFC3339 时间，保存/重载不能为旧消息补当前时间。用户与助手消息均移除整条身份行（「你」「CodeWave」及日期时间），正文直接显示，不保留空行或时间悬停提示；时间数据继续用于轮次边界与阅读锚点。任务过程保留总耗时，工具与思考保留各自耗时。历史恢复不重播逐字动画。
+消息首次进入转录时才盖 `created_at` UTC RFC3339 时间，保存/重载不能为旧消息补当前时间。UI 显示本地时间；缺失或不可解析则留空。历史恢复不重播逐字动画。
 
 思考计时仅适用于当前仍在 streaming 的时间线尾段；已记录的 `durationMs` 保持定格，结束或恢复后不能继续增长。主会话与子代理历史重建使用 `appendDelta` 的 `restored` 分支，只合并文本、不写入 `startedAt` 或伪造 `durationMs`。当前历史 thinking 仅持久化文本，真实耗时无法从恢复时刻推算，故缺失耗时显示静态「思考过程」；遗留内存中的 `startedAt` 也不能绕过 streaming 判据。回归入口：[thinking.history.test.tsx](../ui/src/__tests__/thinking.history.test.tsx) 与 [run.interleave.test.ts](../ui/src/__tests__/run.interleave.test.ts)。
 
 历史模型侧工具文本可能已瘦身；无法解析的出参通过完整 `ToolOutcome` sidecar 批量回填。持久键是 **provider `tool_use.id`**，不是实时 `{batch}:{index}`。主工具卡、子代理卡及子代理过程流共用回填判据；内容不能写回模型历史或再次出网。子代理恢复卡从合成 key 改成真实 sub id 后才能继续打开过程流。存储、回填与删除细节见[会话与项目](./sessions-and-projects.md)。
 
 文本 ask 兜底只接受主会话、ask 可用、当前回合无真实调用、每 run 一次，并要求末尾独占完整块、非代码围栏、结构有效；安全语义完全复用正常 AskTool，详见[计划与批准](./plan-and-approval.md)。后端剥掉历史中的块后，前端仍需在 `ask:opened.text_recovered` 到达时及每个后续 text delta 后幂等剥离，因为节流尾帧可能晚于 ask 事件。跨 thinking 段拆开的块不拼接剥除；块外端点控制 token 不猜测清洗。当前 `settleRun` 在正常、错误、取消及终态恢复路径统一清 `textRecovered`，旧文的错误/取消残留事项已关闭。**不得把该兜底推广到 command/edit 等写工具。**
-
-### 4.4 任务完成后的整轮过程折叠
-
-一次任务以 **run** 为单位：运行中保留实时过程，正常结束后将本轮中途正文、思考、工具和子代理过程放入默认收起的「任务过程 · 总耗时」入口，最终答复留在下方。每轮分别展示；运行中注入属于当前轮，排队后新启动的消息属于下一轮。纯文本答复也必须完整可见。收尾 prompt 要求先总结完成内容、验证结果与未完成事项，再给有实际价值的建议；没有建议可以省略，不额外调用模型生成总结。
-
-展示顺序为**先折叠过程，再显示最终总结**。主会话在每个 LLM step 请求前发送 Channel 帧 `step_start`（携带 `gen`）；只有收到该帧的实时 run 启用候选正文暂存。新步骤开始时，上一候选才确认属于过程并释放；当前步骤的正文仍完整保留在 timeline 中，暂不渲染，不靠「总结」标题、有无工具或用户消息时间差猜测最终答复。纯问答的正文同样等待步骤结束；思考、工具进度、AskPanel 与子代理状态不被正文暂存阻塞。
-
-正常终态通过 `task_run.final_answer` 确认最终正文后，当前会话先提交已收起的过程入口，再经过一次绘制机会显示最终正文。候选暂存与交接状态仅用于实时展示，不新增模型调用、不改变模型内容或落盘历史；重开历史直接显示折叠结果，不重播交接。终态事件与 Channel 没有跨通道到达顺序保证：匹配当前实时 run 的权威最终正文可补齐尚未到达的候选尾部，原过程保留，后到旧帧由生命周期守卫拒绝，不能重复追加最终答复。即使终态先于首个 `step_start`，也不能丢失权威最终答复；此时沿用未启用步骤协议的直接展示。失败、取消、缺失可靠最终正文或元数据时释放收到的全部正文并保留原有降级，不能让候选永久隐藏。终态快照对账复用同一收尾，跨 Tab、下一 run 和旧代次帧不能串用交接状态；旧后端未发送 `step_start` 时仍按原流式转录展示。
-
-折叠交接后的实时最终答复使用快速打字机效果：首帧最多显示 12 个字符，以约 500 字符/秒揭示，长答复自适应提高速率，目标在 1.2 秒内完整显示；多段 text 共用一个按原顺序推进的预算，切片不劈开 UTF-16 代理对。游标只在组件局部更新，播放身份按会话与 run 隔离，开始和结束才更新展示标记，不改变真实运行状态、总耗时、模型内容或历史。重开历史、切走再返回、页面隐藏、开始下一轮、减弱动效或播放完成后的普通重渲染均直接显示全文，不重播。揭示期间贴底才跟随，上滚或展开详情后保留阅读位置；图表升级和代码复制入口等待全文就绪，跟进建议 chip 也在本会话的最终答复揭示完成后出现。错误、取消和没有确认最终答复的降级不播放成功总结动画。
-
-步骤边界与节流输出使用同一串行发送边界：先完整发出上一 step 的残余片段，再重置 generation 并发送新 `step_start`，ticker 已取出的片段也不能越过它。重试仍使用原有 `run:retry` 和 `gen` 守卫，不把重试当成新步骤来释放候选正文。`step_start` 属于 Channel 帧，不增加具名事件的 29 键契约面。
-
-每条已确认的最终答复在正文左下方提供一个次级灰色「复制答复」图标，等折叠交接和整条答复的打字机播放结束后才出现；历史恢复直接展示全文时即可复制。复制内容严格取对应 `task_run.final_answer` 的完整原文（包含总结、建议、Markdown、代码与换行），不从 DOM 或逐字揭示的前缀提取，也不混入过程、耗时或其他轮次。复制统一调用 `copyText`；成功短暂显示「已复制」，返回失败或异常时显示「复制失败」并可重试，异步反馈按原答复隔离。未确认的候选正文与过程不新增入口。
-
-正常结束但没有可确认的最终正文时，保留按原顺序展开的任务过程与真实总耗时，不自动收起，也不猜测总结。已经登记最终正文、但当前页尚未找到对应消息时仍按普通转录显示，等待完整分页数据后再聚合。
-
-总耗时由后端记录 run 开始至终态的实际经过时间，包含模型、工具、重试和审批等待，并行子代理不重复累加。它与生成速率的 `runMetrics.genMs`、单工具耗时各有口径，不能相互替代。待回答、待审批均不是完成；失败和取消默认展开过程，保留真实状态与排障信息，不生成成功总结。
-
-折叠只改变展示投影，不删除历史、不回填模型上下文；展开后仍支持工具详情、复制、预览和子代理过程抽屉。过程标题文字与总结正文左对齐，展开箭头紧跟总耗时文字，标题行下方使用主题边框色分隔线；通过 antd Collapse 语义样式取消标题和过程正文的横向内边距，不额外嵌套缩进。展开状态按会话和 run 隔离，用户主动展开后不会被普通重渲染反复收起；折叠变化须保留阅读意图，不能无条件抢回底部。错误和告警不得因过程收起而静默消失。
-
-实时转录的一条 assistant 项可以跨越多次 LLM step，不能假定中途正文与最终答复各占一条消息。终态按后端确认的最终消息时间与完整 `final_answer` 精确定位正文后缀；后缀落在同一 text 段内部时也须拆分展示，前缀保留在过程，最终答复仅在折叠外出现一次，原转录不变。轮次在该最终消息处结束，不用 `Date.parse(finished_at)` 猜测后续用户消息是否属于本轮；同毫秒、缺失或非法时间均不得把下一条提问收进过程。注入消息在起始消息与权威最终消息之间时仍归本轮；没有最终消息身份的异常或空答复轮次遇下一条用户消息即停止归组。
-
-重开历史按独立保存的轮次元数据恢复；只有可靠的轮次边界、终态与真实计时才支持整轮折叠。旧记录、缺失或损坏的元数据、尚未加载完整的跨页轮次保留普通转录，不从消息时间差或恢复时刻估算耗时。持久化边界见[会话与项目](./sessions-and-projects.md#任务轮次展示元数据)。真实 WebView 下的折叠、滚动、工具弹层与跨 Tab 行为仍须手动验收，自动测试不能替代。
-
-实现入口：[taskTranscript.ts](../ui/src/features/chat/taskTranscript.ts)、[ChatMessages.tsx](../ui/src/features/chat/ChatMessages.tsx)；投影与边界回归：[task-process.test.tsx](../ui/src/__tests__/task-process.test.tsx)，真实 send / Channel / 工具事件 / 终态与快照 / 渲染链路回归：[run.task-transcript.test.tsx](../ui/src/__tests__/run.task-transcript.test.tsx)，快速总结的预算、格式与动效回归：[final-typewriter.test.tsx](../ui/src/__tests__/final-typewriter.test.tsx)。
 
 ## 5. 工具卡与预览
 
@@ -224,24 +186,17 @@ read/batch_read/edit 一次批量调用本来就是一张卡。头部展示全�
 
 「简洁 / 详细」仅在设置「界面 → 输出展示」提供切换入口，聊天区不另放控件；全局偏好为 `ws_output_display`，默认「详细」，缺失/非法值也回落详细。切换即时生效并保存到 localStorage，不参与设置脏点，也不改回复正文、provider 请求、权限或历史。详细沿用原工具卡；简洁使用 antd 按钮承载中性单行摘要，长命令省略但完整内容可展开，运行中保留加载指示，思考默认收起且省去标题走马灯。
 
-简洁和详细模式均移除用户与助手的整条消息身份行；简洁过程记录也不预留行尾时间槽。落盘记录不合并、不删除；跨消息汇总为源消息的 `data-key` / `data-sig` 保留定位映射，展开态按原会话 / 消息 / 调用身份保存。空状态使用次级文字色，正常可点击工具摘要保持可读，等待 / 失败仍使用原有语义色。
+简洁模式中，仅含工具 / 思考与空白正文的助手记录将时间放在行尾，省去重复身份行；正常正文与混合记录保留身份。简洁正文时间显示时分、过程显示时分秒，完整日期时间保留在悬停提示，详细模式仍完整展示。落盘记录不合并、不删除；跨消息汇总为源消息的 `data-key` / `data-sig` 保留定位映射，展开态按原会话 / 消息 / 调用身份保存。缺失时间继续留空，不用当前时间补造。辅助时间与空状态使用次级文字色，正常可点击工具摘要保持可读，等待 / 失败仍使用原有语义色。
 
-简洁时间线用单一 flex 容器管理 4px 过程行间距；汇总、单工具和思考头部共用最小行高（至少 32px，随界面字号增长），不叠加各自的外边距。按钮的透明边框也计入行高，避免与无边框的思考头部相差 2px。混合消息的最后可见段若是工具 / 思考，也使用同一过程底距；过程后接正文消息仍保留阅读留白。空白正文只在展示层跳过，真实正文与代码缩进不 trim，过滤成功 subagent 工具或缺失工具时不把隐藏段误判为可见尾段；展开组的 `[hidden]` 不能被 flex 布局覆盖。详细工具展示、正文行高与滚动锚点保持原语义。
+简洁时间线用单一 flex 容器管理 4px 过程行间距；汇总、单工具和思考头部共用最小行高（至少 32px，随界面字号增长），不叠加各自的外边距。按钮的透明边框也计入行高，避免与无边框的思考头部相差 2px。混合消息的最后可见段若是工具 / 思考，也使用同一过程底距；过程后接正文消息仍保留阅读留白。空白正文只在展示层跳过，真实正文与代码缩进不 trim，过滤成功 subagent 工具或缺失工具时不把隐藏段误判为可见尾段；展开组的 `[hidden]` 不能被 flex 布局覆盖。详细展示、正文行高、消息身份与滚动锚点保持原语义。
 
-- 简洁把**连续的思考 + 可入组工具**折叠为一行摘要（如 `思考 8 次 · 已读取 12 个文件 · 已搜索 4 次 · 已运行 3 条命令`），点开才展开。摘要计数按真实段数/调用数统计，不累加已有摘要文字。
-- 折叠规则：思考段与运行中的普通工具都可入组（跑批期间也保持一行，思考计时每 500ms 刷新）；成功无警告的 read/batch_read/grep/list_files 与退出码明确为 0 的 command 入组；空白正文不分隔可见过程。subagent 通用工具必须在分组前排除，统一由专属子代理卡承载，不能让 running 兜底绕过隐藏重复卡的规则；spawn 前失败的调用仍显示错误卡。**仍分隔**：真实正文、子代理卡、审批等待、失败与警告、用户消息、通知、压缩分界、正在阅读详情的工具。
-- 简洁过程使用次级文字色、静态工具图标和末尾展开箭头，展开组内成员保持扁平列表；运行中工具单列真实运行数量，完成计数不包含它们。子代理简洁行显示名称、状态与任务摘要，步骤/token 放在悬停说明，停止入口和异常收尾警告保留。它们不重复绘制 spinner；活动状态统一留在当前消息末尾，正文与总结保持正常阅读权重。
-- 思考时长口径：组内有正在计时（位于尾部且消息仍流式）的思考段时显示 `思考中……（Ns）`；否则只报次数 `思考 N 次`。恢复的历史思考与被中断的思考都没有真实耗时（`appendDelta` 的 restored 分支不记 `startedAt`），**绝不补 0 秒**。
-- 锚点：组摘要行的 `data-output-key` 取根键对应成员（优先组内首个工具的 `callKey`，纯思考组用 `thinking:<段下标>`），`data-output-group` 含全部成员键；跨消息组为**每个成员（含思考段）**记源消息映射，`data-anchor-aliases` 覆盖全部源消息，否则滚动定位会掉回上一条消息。展开态按会话 / 原消息键 / 根键保存，来回切换模式不自动关闭；键读不到时回退到组内本地 state（纯思考组无工具即无 origins 可索引，若传受控 false 会把本地展开盖死、点开无反应）。
-- 根键稳定性：含工具的组根键是 provider 侧 `tool_use.id`，跨消息摊平后仍稳定；纯思考组的根键是段下标，跨消息摊平后下标仍稳定，但一旦因 sidecar 回填或新成员并入而变成含工具组，根键会从 `thinking:N` 变成某个 callKey，已展开的组会随之收敛。
-- 单成员组不画摘要行，直接内联渲染那一个成员（本来就是一行，再包一层只会平白多一次点击）。
-- 恢复路径的既有行为：工具出参先以 `{restored:true}` 占位时，`command` 拿不到 `exit_code` 故暂不入组，sidecar 回填后可能重新入组或被踢出独立成行——切换展示模式时同样会重算，本就不新增跳变。
+- 简洁只聚合相邻且无警告的成功 read/batch_read/grep/list_files，以及退出码明确为 0 的 command；允许从一条已结束助手消息的成功工具尾，延伸到下一条纯成功工具助手消息。空白正文不分隔可见工具；真实正文、思考、子代理、用户消息、通知、压缩分界、等待或错误仍分隔。运行中消息、含警告调用、重复调用 id 或正在阅读详情的消息不参与跨消息聚合。汇总按真实工具调用统计，不累加已有摘要文字；展开后保留顺序、完整命令、出参与每次调用所属消息的时间。聚合仅在渲染层发生，不改变工具调用身份。打开详情的工具独立保留，展开态按会话 / 原消息键 / `callKey` 留在界面，完成或来回切换模式不自动关闭。
 - edit/create 逐文件显示最短可区分后缀及完整路径提示。成功结果可增 `data.line_changes`（数组元素为 `path/added/removed`），由写锁内真实前后内容进行行级 diff；统计是本次操作的净变化，不是传入 patch 行数或相对 HEAD 的工作区变化。CRLF/LF 归一后统计，空文件没有虚构末行；create 的原件不可读或非 UTF-8 时省略统计，失败结果不附统计。旧历史缺统计就不显示数字，不新增迁移或摘要存档。
-- ask 题干与答案、等待审批、真实错误、警告及 widget 预览保持可见；用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好、同一折叠规则与工具结果回填。
+- ask 题干与答案、等待审批、失败状态、警告及 widget 预览保持可见；错误码与完整错误信息随工具详情展开/收起，简洁模式也不在收起的卡片外重复展示。失败调用仍独立显示红色摘要，不并入成功工具组。用户取消/中断沿用中性状态。子代理卡保持状态、提前结束警告、停止和现有过程抽屉，抽屉使用同一展示偏好与工具结果回填。
 - 切换前捕获当前可见段/工具与所属消息，提交后恢复该段内阅读偏移；折叠工具组只以摘要行作锚点，打开组后各子卡仍有独立锚点。组展开态按会话 / 原首消息键 / 首调用键保存；前翻不会把已打开组的根并入新增历史，保留展开态和阅读位置。单调用不设置组展开边界，关闭详情后仍可重新聚合。主聊天校验 session，过程抽屉校验 subId；原来贴底则继续贴底，上滚阅读则暂停跟随。
 - 汇总头与首子卡可能共用输出键，定位同时记录 summary / content 类型；恢复优先匹配同类型。子卡回落到汇总头时清零卡内偏移，避免深层偏移把视口落到后续消息。
 
-实现：[compactTranscript.ts](../ui/src/features/chat/compactTranscript.ts)、[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[thinkingBlock.tsx](../ui/src/features/chat/thinkingBlock.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[compactTranscript.test.ts](../ui/src/__tests__/compactTranscript.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)、[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx)、[thinking.history.test.tsx](../ui/src/__tests__/thinking.history.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。`thinkingBlock.tsx` 从 `segments.tsx` 抽出：过程组要按原位渲染组内思考段，两者互相 import 会成环。
+实现：[compactTranscript.ts](../ui/src/features/chat/compactTranscript.ts)、[toolPresentation.ts](../ui/src/features/tools/toolPresentation.ts)、[ToolActivityGroup.tsx](../ui/src/features/tools/ToolActivityGroup.tsx)、[outputAnchor.ts](../ui/src/utils/outputAnchor.ts)、[line_changes.rs](../src-tauri/src/tools/line_changes.rs)。回归：[compactTranscript.test.ts](../ui/src/__tests__/compactTranscript.test.ts)、[chat.process-display.test.tsx](../ui/src/__tests__/chat.process-display.test.tsx)、[output-display.test.tsx](../ui/src/__tests__/output-display.test.tsx) 与 create/edit 行数测试。仍需手验重启偏好、浅深主题/字体/窄窗口、长消息中部切换、工具完成时保持详情、真实审批与自动预览、历史和子代理抽屉恢复。
 
 ### 5.3 HTML 小组件
 
@@ -274,8 +229,6 @@ iframe 使用 `sandbox="allow-scripts"`、不授予 `allow-same-origin`；资源
 主聊天现在隐藏原生滚动条，使用 [ChatScrollbar.tsx](../ui/src/features/chat/ChatScrollbar.tsx) 的 overlay：滚动/悬停显示，停止约 1 秒后淡出，支持点轨道与拖 thumb，内容不溢出时不显示 thumb。它只是 scrollTop 的可视化入口，不能另建一套滚动状态或绕过阅读意图判定。
 
 ### 6.3 子代理抽屉的高度链
-
-子代理过程抽屉仅由用户通过聊天卡或右栏主动打开；运行总览提供独立的摘要与报告详情抽屉，可从中返回父会话，不直接打开过程流。子代理启动不再自动弹出或切换当前查看对象。Composer 不显示子代理运行计数及查看菜单，`$` 点名角色的输入菜单仍可使用。状态与过程恢复契约见[子代理](./subagents.md#6-实时过程抽屉与恢复)。
 
 唯一滚动体是 `.sub-drawer-body`。wrapper/section 必须有界，中间 `.ant-drawer-body` 是 `min-height:0` 的透传层且 overflow hidden；滚动体直接子项 `flex-shrink:0`，否则带 overflow hidden 的流块会被压扁到视口内，DOM 仍有内容却永不溢出。
 
