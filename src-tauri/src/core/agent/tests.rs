@@ -8,6 +8,27 @@ use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[test]
+fn read_shorthand_is_canonical_in_history_and_execution_including_alias() {
+    for name in ["read", "batch_read"] {
+        let mut assembled = Assembled::default();
+        assembled.tool_calls.push(AssembledToolCall {
+            index: 0,
+            id: "read-call".into(),
+            name: name.into(),
+            args_raw: r#"{"path":"src/main.rs","startLine":3,"endLine":7}"#.into(),
+        });
+        assembled.blocks.push(AsmBlock::Tool(0));
+        let (message, calls, rejected) = build_assistant_message(&assembled);
+        assert!(rejected.is_empty());
+        let args = serde_json::json!({"files":[{"path":"src/main.rs","startLine":3,"endLine":7}]});
+        assert_eq!(calls[0].args, args);
+        assert!(
+            matches!(&message.content[0], Content::ToolUse { args: historical, .. } if *historical == args)
+        );
+    }
+}
+
 /// [docs/subagents](../../../../docs/subagents.md)：子代理帧信封的序列化形态（前端 types.ts Frame 联合类型的 serde 锚点）。
 #[test]
 fn frame_sub_envelope_serialization_shape() {
@@ -2135,6 +2156,301 @@ fn text_only_sse_turn(text: &str) -> Vec<u8> {
     sse_body(&[chunk.as_str(), SSE_STOP])
 }
 
+#[tokio::test]
+async fn explicit_skip_stops_before_any_next_llm_request_even_on_the_last_step() {
+    for max_steps in [1, 5] {
+        let tool = serde_json::json!({"choices":[{"delta":{"tool_calls":[{
+            "index":0,"id":"skip-ask","type":"function","function":{
+                "name":"ask","arguments":serde_json::json!({"questions":[{"id":"q","question":"Continue?"}]}).to_string()
+            }
+        }]}}]}).to_string();
+        let mut server = step_start_server(vec![sse_body(&[&tool, SSE_STOP])]).await;
+        let (core, rt, sink, _ws, _dd) = scripted_core_recording(server.port(), "explicit-skip");
+        let run_core = core.clone();
+        let run_rt = rt.clone();
+        let running = tokio::spawn(async move {
+            super::drive::drive_agent(
+                &run_core,
+                &run_rt,
+                DriveParams {
+                    main_session: true,
+                    max_steps,
+                    ..DriveParams::default()
+                },
+                "skip-run",
+            )
+            .await
+        });
+        let ask_id = wait_for_ask(&rt).await;
+        assert!(rt.resolve_ask(&ask_id, serde_json::json!({"action":"skip"})));
+        let (result, _, _) = tokio::time::timeout(std::time::Duration::from_secs(5), running)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(crate::provider::ProviderError::Cancelled)),
+            "{result:?}"
+        );
+        server.finish().await.unwrap();
+        assert_eq!(rt.step_count.load(Ordering::SeqCst), 1);
+        assert!(rt.history.lock().unwrap().iter().any(|m| m.content.iter().any(|c| matches!(c,
+            Content::ToolResult { tool_use_id, content, .. } if tool_use_id == "skip-ask" && content.contains("E_ASK_SKIPPED")
+        ))));
+        assert!(sink.events("ask:closed").len() == 1);
+    }
+}
+
+#[tokio::test]
+async fn skipped_chat_can_restart_with_saved_progress_and_no_stale_waiters() {
+    use crate::tools::plan::TodoStatus;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn wait_terminal(sink: &EventRecorder, event: &str, run_id: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !sink.events(event).iter().any(|p| p["run_id"] == run_id) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let tool_turn = |id: &str, name: &str, args: serde_json::Value| {
+        let chunk = serde_json::json!({"choices":[{"delta":{"tool_calls":[{
+            "index":0,"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}
+        }]}}]}).to_string();
+        sse_body(&[&chunk, SSE_STOP])
+    };
+    let script = vec![
+        tool_turn(
+            "progress-initial-plan",
+            "plan",
+            serde_json::json!({"todos":[
+                {"title":"first","status":"completed"},{"title":"second","status":"in_progress"}
+            ]}),
+        ),
+        tool_turn(
+            "progress-create",
+            "create",
+            serde_json::json!({"path":"progress.txt","content":"step one\n"}),
+        ),
+        tool_turn(
+            "progress-ask",
+            "ask",
+            serde_json::json!({"questions":[{"id":"q","question":"Continue?"}]}),
+        ),
+        tool_turn(
+            "progress-resume",
+            "create",
+            serde_json::json!({"path":"progress.txt","content":"step one\nstep two\n","overwrite":true}),
+        ),
+        tool_turn(
+            "progress-plan",
+            "plan",
+            serde_json::json!({"todos":[
+                {"title":"first","status":"completed"},{"title":"second","status":"completed"}
+            ]}),
+        ),
+        text_only_sse_turn("Continued from existing progress"),
+    ];
+    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let captured = requests.clone();
+    let owned = listener.clone();
+    let task = tokio::spawn(async move {
+        for response in script {
+            let (mut socket, _) = owned.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 8192];
+            let header_end = loop {
+                let n = socket.read(&mut buffer).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buffer[..n]);
+                assert!(request.len() < 2 * 1024 * 1024);
+                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let length: usize = String::from_utf8_lossy(&request[..header_end])
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            assert!(length < 2 * 1024 * 1024);
+            while request.len() < header_end + length {
+                let n = socket.read(&mut buffer).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buffer[..n]);
+            }
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&request[header_end..header_end + length]).unwrap());
+            socket.write_all(&response).await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+    });
+    let mut server = TestSseServer { listener, task };
+    let (mut core, rt, sink, ws, _dd) = scripted_core_recording(server.port(), "skip-then-resume");
+    // Match host assembly too: terminal events must clear the persisted running marker.
+    let watched_sink = Arc::new(crate::core::sessions::interrupt::InterruptWatchSink::new(
+        core.sink.clone(),
+        core.store.clone(),
+    ));
+    Arc::get_mut(&mut core).unwrap().sink = watched_sink;
+    struct CancelOnDrop(Arc<SessionRuntime>);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel_active();
+        }
+    }
+    let _cleanup = CancelOnDrop(rt.clone());
+    // Seed an earlier message to avoid a concurrent title-generation request in this fixture.
+    rt.history
+        .lock()
+        .unwrap()
+        .push(Message::user_text("Existing task").stamped());
+    rt.set_prefs(crate::core::prefs::SessionPrefs {
+        approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+        ..Default::default()
+    });
+    let first = core
+        .start_chat(rt.clone(), "准备继续任务".into(), vec![])
+        .unwrap();
+    core.store.mark_running(&rt.id, true).unwrap();
+    let ask_id = wait_for_ask(&rt).await;
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("progress.txt")).unwrap(),
+        "step one\n"
+    );
+    assert!(rt.resolve_ask(&ask_id, serde_json::json!({"action":"skip"})));
+    wait_terminal(&sink, "run:cancelled", &first).await;
+    assert!(!rt.running.load(Ordering::SeqCst));
+    assert!(rt.active_cancel.lock().unwrap().is_none());
+    assert!(rt.asks.lock().unwrap().is_empty());
+    assert!(
+        !core
+            .store
+            .list()
+            .iter()
+            .find(|meta| meta.id == rt.id)
+            .unwrap()
+            .running
+    );
+    assert!(!rt.resolve_ask(&ask_id, serde_json::json!({"answers":{}})));
+    assert!(
+        core.activity
+            .snapshot()
+            .sessions
+            .iter()
+            .all(|s| s.session_id != rt.id)
+    );
+    assert_eq!(requests.lock().unwrap().len(), 3);
+    assert_eq!(core.store.load_todos(&rt.id), *rt.todos.lock().unwrap());
+    let saved = core.store.load_history(&rt.id).unwrap();
+    assert!(saved.iter().any(|m| m.content.iter().any(|c| matches!(c,
+        Content::ToolResult { content, .. } if content.contains("E_ASK_SKIPPED")
+    ))));
+    let second = core
+        .start_chat(rt.clone(), "从已有进度继续".into(), vec![])
+        .unwrap();
+    core.store.mark_running(&rt.id, true).unwrap();
+    assert_ne!(first, second);
+    wait_terminal(&sink, "run:done", &second).await;
+    server.finish().await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("progress.txt")).unwrap(),
+        "step one\nstep two\n"
+    );
+    assert!(
+        rt.todos
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|todo| todo.status == TodoStatus::Completed)
+    );
+    assert!(!rt.running.load(Ordering::SeqCst));
+    assert!(rt.active_cancel.lock().unwrap().is_none());
+    assert!(rt.asks.lock().unwrap().is_empty());
+    assert!(
+        !core
+            .store
+            .list()
+            .iter()
+            .find(|meta| meta.id == rt.id)
+            .unwrap()
+            .running
+    );
+    assert!(
+        core.activity
+            .snapshot()
+            .sessions
+            .iter()
+            .all(|s| s.session_id != rt.id)
+    );
+    assert!(matches!(
+        rt.run_snapshot().terminal.unwrap().kind,
+        super::runtime::RunTerminalKind::Done
+    ));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 6);
+    let resumed_history = requests[3]["messages"].to_string();
+    for expected in ["step one", "E_ASK_SKIPPED", "从已有进度继续"] {
+        assert!(
+            resumed_history.contains(expected),
+            "Missing continuation context: {expected}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_response_logs_attempt_evidence_and_retry_reason_then_recovers() {
+    let mut server =
+        step_start_server(vec![sse_body(&[SSE_STOP]), text_only_sse_turn("Recovered")]).await;
+    let (core, rt, sink, _ws, _dd) = scripted_core_recording(server.port(), "empty-diagnostic");
+    let (result, _, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        super::drive::drive_agent(
+            &core,
+            &rt,
+            DriveParams {
+                main_session: true,
+                max_steps: 2,
+                ..DriveParams::default()
+            },
+            "empty-diagnostic-run",
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap(), "Recovered");
+    server.finish().await.unwrap();
+    let retries = sink.events("run:retry");
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0]["reason"], "empty_response");
+    let log = std::fs::read_to_string(crate::core::session_log::file_for(&rt).unwrap()).unwrap();
+    let line = log
+        .lines()
+        .find(|line| line.contains("空响应诊断 "))
+        .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(line.split_once("空响应诊断 ").unwrap().1).unwrap();
+    assert_eq!(value["run_id"], "empty-diagnostic-run");
+    assert_eq!(value["attempt"], 1);
+    assert_eq!(value["evidence"], "no_content_observed");
+    assert_eq!(value["stream"]["http_status"], 200);
+    assert_eq!(value["assembled"]["tool_calls"], 0);
+    assert!(value["usage"].is_object());
+    assert!(
+        !rt.history
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| message.text_joined().contains("空响应诊断"))
+    );
+}
+
 /// 轮询等待 ask 挂起（工具已 emit `ask:opened`、正阻塞在应答通道上），返回 ask_id。
 async fn wait_for_ask(rt: &Arc<SessionRuntime>) -> String {
     for _ in 0..500 {
@@ -2763,6 +3079,29 @@ async fn collect_deltas_without_deltas_reports_no_ttft() {
     let (asm, ttft_ms) = super::stream::collect_deltas(rx, stream, std::time::Instant::now()).await;
     assert!(asm.is_empty());
     assert_eq!(ttft_ms, None, "无增量 = 无 TTFT 样本");
+}
+
+#[tokio::test]
+async fn diagnostic_metadata_is_not_content_or_a_first_token() {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(crate::provider::StreamDelta::Diagnostics {
+        summary: Box::new(crate::provider::diagnostics::StreamDiagnostics {
+            http_status: 200,
+            completed: true,
+            ..Default::default()
+        }),
+    })
+    .await
+    .unwrap();
+    drop(tx);
+    let stream = Arc::new(crate::util::throttle::ThrottledStream::new());
+    let (asm, ttft_ms) = super::stream::collect_deltas(rx, stream, std::time::Instant::now()).await;
+    assert!(asm.is_empty());
+    assert_eq!(ttft_ms, None);
+    assert_eq!(asm.diagnostics.as_ref().unwrap().http_status, 200);
+    let (message, calls, _) = build_assistant_message(&asm);
+    assert!(message.content.is_empty());
+    assert!(calls.is_empty());
 }
 
 /// 同 `scripted_core`，但 core.sink 换成可捕获帧的 sink（usage 帧字段断言用）。

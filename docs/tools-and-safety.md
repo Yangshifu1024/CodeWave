@@ -20,6 +20,10 @@
 
 `ToolOutcome = ok + data + error + warnings + extra_model_content` 有两条消费通道：前端收完整结构化结果，模型经 [compact_for_model](../src-tauri/src/tools/compact.rs) 收文本。
 
+参数只对确定的结构做容错，模型侧 schema 仍要求标准形态：read / batch_read 缺失 `files`、顶层只有非空字符串 `path` 与可选 `startLine/endLine` 时自动包装单元素 files，行区间与路径原样保留；主循环在保存 ToolUse 与执行前共用同一归一化，工具直调也复用它。已有 files（包括空、null、类型错误）、混合/未知字段或无有效 path 时不猜测、不合并，按原错误路径处理，空 files 的错误带正确示例。归一化后仍走读取根、二进制/文档、图片与行数预算等检查。
+
+ask 仅为**缺失**的问题/选项 `id` 按位置生成确定的中性关联 id，避开已有 id 与选项 label，保留已有 id、原始选项和 mode；显式 null、空白、类型错误、同级重复 id 不覆盖。问题最多 5 题、每题最多 6 项。发生补齐时宿主下发 `explicit_mode_only=true`：前后端均关闭 id/label 批准兼容匹配及“有效回答→自动编辑”轻量通道，只有用户选中原输入明确带 mode 的选项才可切到该档，预览仍不批准、不切档。此标记不能由模型覆写；关联 id 补齐不生成 approve/revise/preview 语义，不推断、补写或默认批准选项与权限档位。完整合法输入保留既有兼容路径；计划门与编辑匹配检查继续生效。
+
 - command 在工具内部裁剪，因此不再二次头尾截断；非零退出仍把 error 与 data.output/exit_code 一起交给模型。
 - read/batch_read 保持文本行号与完整所选窗口；图片条目剥去 data_url，禁止把 base64 作为普通文本送模型烧 token。图片经出网副本的 `route_tool_images` 放到紧随的 User 消息，受模型 vision 设置控制，历史不改写。
 - 其他成功工具只序列化 data，保留头 4 KiB + 尾 8 KiB。截断后不再是可靠完整 JSON；失败通常只剩错误行。

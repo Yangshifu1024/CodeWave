@@ -31,6 +31,7 @@ export interface ToolExpansion { expanded: boolean; path: string | null }
  *  但用户视角只是「没完成」。渲染层按错误码降为中性灰 + 各自的措辞，其余错误仍红色「失败」。
  *  store 三路（实时/历史恢复/子代理流）共用本组件，一处修复全覆盖；模型侧语义零改动。 */
 const NEUTRAL_ERR_KEYS: Record<string, string> = {
+  E_ASK_SKIPPED: "tools.skipped",
   E_ASK_CANCELLED: "tools.cancelled",
   E_ASK_NOT_ANSWERED: "tools.notAnswered",
   E_INTERRUPTED: "tools.interrupted",

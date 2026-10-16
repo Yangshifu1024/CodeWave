@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Args {
+    /// Host-only provenance: repairing IDs never authorizes legacy implicit mode changes.
+    #[serde(skip)]
+    ids_repaired: bool,
     /// 问题列表（1–5 题）。
     questions: Vec<Question>,
     /// G2 豁免：轻量路径声明（跳过分析产物校验；todos 非空硬要求不变）。schema key 是 camelCase，rename_all 必须保持对齐
@@ -73,11 +76,168 @@ pub struct Option2 {
 /// 计划文本自动落盘为计划文件供前端卡片查看。
 pub struct AskTool;
 
+/// Fill absent correlation IDs only; explicit invalid IDs and ambiguous duplicates fail closed.
+fn parse_args(mut value: Value) -> Result<Args, String> {
+    let mut repaired = false;
+    if let Some(questions) = value.get_mut("questions").and_then(Value::as_array_mut) {
+        if questions.len() > 5 {
+            return Err("questions 最多 5 题".into());
+        }
+        repaired |= fill_ids(questions, "__cw_q", "questions", &Default::default())?;
+        let reserved_options = questions
+            .iter()
+            .filter_map(|q| q.get("options").and_then(Value::as_array))
+            .flatten()
+            .flat_map(|o| {
+                [
+                    o.get("id").and_then(Value::as_str),
+                    o.get("label").and_then(Value::as_str),
+                ]
+            })
+            .flatten()
+            .map(str::to_string)
+            .collect();
+        for (qi, question) in questions.iter_mut().enumerate() {
+            if let Some(options) = question.get_mut("options").and_then(Value::as_array_mut) {
+                if options.len() > 6 {
+                    return Err(format!("questions[{qi}].options 最多 6 项"));
+                }
+                repaired |= fill_ids(
+                    options,
+                    &format!("__cw_q{}_option", qi + 1),
+                    &format!("questions[{qi}].options"),
+                    &reserved_options,
+                )?;
+            }
+        }
+    }
+    let mut args: Args = serde_json::from_value(value).map_err(|e| format!("参数解析失败：{e}"))?;
+    args.ids_repaired = repaired;
+    Ok(args)
+}
+
+fn fill_ids(
+    items: &mut [Value],
+    prefix: &str,
+    path: &str,
+    reserved: &std::collections::HashSet<String>,
+) -> Result<bool, String> {
+    let mut used = std::collections::HashSet::new();
+    for (index, item) in items.iter().enumerate() {
+        if let Some(id) = item.get("id") {
+            let id = id
+                .as_str()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| {
+                    format!("{path}[{index}].id 必须是非空字符串；只自动补齐缺失字段")
+                })?;
+            if !used.insert(id.to_string()) {
+                return Err(format!("{path}[{index}].id 重复：请为每项提供唯一 id"));
+            }
+        }
+    }
+    // Selection parsing has a label fallback; generated IDs must not collide with any label.
+    used.extend(reserved.iter().cloned());
+    let mut repaired = false;
+    for (index, item) in items.iter_mut().enumerate() {
+        if let Some(object) = item.as_object_mut()
+            && !object.contains_key("id")
+        {
+            let base = format!("{prefix}_{}", index + 1);
+            let mut id = base.clone();
+            let mut suffix = 1;
+            while used.contains(&id) {
+                id = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            used.insert(id.clone());
+            object.insert("id".into(), Value::String(id));
+            repaired = true;
+        }
+    }
+    Ok(repaired)
+}
+
+#[cfg(test)]
+mod argument_diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn missing_ids_are_neutral_deterministic_and_preserve_explicit_modes() {
+        let value = json!({"questions":[{"question":"Proceed?", "options":[
+            {"label":"Approve"}, {"label":"Full access", "mode":"full_access"}
+        ]}]});
+        let args = parse_args(value.clone()).unwrap();
+        let again = parse_args(value).unwrap();
+        assert!(args.ids_repaired);
+        let q = &args.questions[0];
+        assert_eq!(q.id, "__cw_q_1");
+        assert_eq!(q.options[0].id, "__cw_q1_option_1");
+        assert_eq!(q.options[0].mode, None);
+        assert_eq!(
+            q.options[1].mode,
+            Some(crate::core::prefs::ApprovalMode::FullAccess)
+        );
+        assert_eq!(
+            serde_json::to_value(&args.questions).unwrap(),
+            serde_json::to_value(&again.questions).unwrap()
+        );
+    }
+
+    #[test]
+    fn generated_ids_avoid_existing_ids_and_labels_including_other_questions() {
+        let args = parse_args(json!({"questions":[
+            {"question":"First", "options":[{"label":"A"},{"id":"custom","label":"__cw_q1_option_1"}]},
+            {"id":"__cw_q_1","question":"Second", "options":[{"label":"B"},{"id":"__cw_q1_option_1_1","label":"C"}]}
+        ]})).unwrap();
+        assert_eq!(args.questions[0].id, "__cw_q_1_1");
+        assert_eq!(args.questions[0].options[0].id, "__cw_q1_option_1_2");
+        assert_eq!(args.questions[0].options[1].id, "custom");
+        assert_ne!(
+            args.questions[0].options[0].id,
+            args.questions[1].options[0].id
+        );
+    }
+
+    #[test]
+    fn explicit_invalid_or_duplicate_ids_and_unknown_modes_are_not_repaired() {
+        for id in [json!(null), json!(""), json!("  "), json!(42)] {
+            assert!(parse_args(json!({"questions":[{"id":id,"question":"?"}]})).is_err());
+        }
+        assert!(
+            parse_args(
+                json!({"questions":[{"id":"same","question":"?"},{"id":"same","question":"?"}]})
+            )
+            .is_err()
+        );
+        assert!(
+            parse_args(
+                json!({"questions":[{"question":"?","options":[{"label":"A","mode":"guess"}]}]})
+            )
+            .is_err()
+        );
+        assert!(parse_args(json!({"questions":[{"question":"?","options":[{"id":"same","label":"A"},{"id":"same","label":"B"}]}]})).is_err());
+    }
+
+    #[test]
+    fn model_cannot_override_repair_provenance() {
+        let args = parse_args(
+            json!({"ids_repaired":false,"explicit_mode_only":false,"questions":[{"question":"?"}]}),
+        )
+        .unwrap();
+        assert!(args.ids_repaired);
+        let args = parse_args(json!({"questions":[{"id":"original","question":"?"}]})).unwrap();
+        assert!(!args.ids_repaired);
+    }
+}
+
 /// UI 动作使用独立载荷，不能与 questions 的 answers 混用。
 /// 未知动作、额外字段以及非字符串备注都必须失败关闭，不能回落到批准/轻量切档路径。
 #[derive(Deserialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 enum AskAction {
+    #[serde(rename = "skip")]
+    Skip {},
     #[serde(rename = "preview_plan")]
     PreviewPlan {
         #[serde(default)]
@@ -179,9 +339,9 @@ impl Tool for AskTool {
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
         let run_id = ctx.rt.run_snapshot().run_id;
-        let args: Args = match serde_json::from_value(args) {
+        let args: Args = match parse_args(args) {
             Ok(a) => a,
-            Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
+            Err(e) => return ToolOutcome::err("E_ARGS", e),
         };
         if args.questions.is_empty() {
             return ToolOutcome::err("E_ARGS", "至少一个问题");
@@ -208,20 +368,26 @@ impl Tool for AskTool {
         );
         // 固定 UI 入口只取决于本次询问与真实正文，不依赖模型是否声明 preview 选项、
         // 当前权限档位或计划文件是否成功落盘；应答时沿用此快照，不能重读运行态推断能力。
-        let can_preview_plan = approval_shape(&args.questions) && usable.is_some();
+        let approval = if args.ids_repaired {
+            args.questions.len() == 1 && args.questions[0].options.iter().any(is_approve_class)
+        } else {
+            approval_shape(&args.questions)
+        };
+        let can_preview_plan = approval && usable.is_some();
         let plan_file = usable.as_deref().and_then(|body| save_plan_file(ctx, body));
         let mut ask_opened = json!({
             "session": ctx.rt.id, "run_id": run_id, "ask_id": ask_id, "kind": "ask",
+            "explicit_mode_only": args.ids_repaired,
             "questions": args.questions,
             // arch 批准闸标记（附加字段，不新增事件键）：前端用它批准后同步权限胶囊
-            "switch_to_auto_edit": arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
+            "switch_to_auto_edit": !args.ids_repaired && arch_gate_shape(&args.questions) && args.switch_to_autoedit.unwrap_or(false),
             // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：计划文件路径（计划卡「查看完整计划」按钮打开；落盘失败或无可用方案时为 None）
             "plan_file": plan_file,
             // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形标记（后端宽松检测 = 单一事实源）；
             // 前端据此渲染单选 + 批准项直提，不再猜测 id === "approve"
             //（此前 id 自拟会使面板回退为多选切换）
-            "approval": approval_shape(&args.questions),
-            "approve_id": approve_option_id(&args.questions),
+            "approval": approval,
+            "approve_id": if args.ids_repaired { None } else { approve_option_id(&args.questions) },
             "can_preview_plan": can_preview_plan,
         });
         // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
@@ -255,7 +421,7 @@ impl Tool for AskTool {
             return ToolOutcome::err("E_ASK_CANCELLED", "用户取消或未回答");
         };
 
-        // UI 预览动作必须先于忽略、批准匹配、G2/G3 与所有切档路径处理。
+        // Explicit UI actions precede unanswered checks, approval matching and every mode switch.
         // 只要携带 action，就不允许任何错误载荷退回普通 answers 路径。
         if answer.get("action").is_some() {
             let action: AskAction = match serde_json::from_value(answer.clone()) {
@@ -263,17 +429,29 @@ impl Tool for AskTool {
                 Err(_) => {
                     return ToolOutcome::err(
                         "E_ASK_INVALID_ACTION",
-                        "询问动作无效：只接受 {action: 'preview_plan', note?: string}，不得混入 answers 或批准选项。方案未获批准，请停下等待用户指示。",
+                        "询问动作无效：只接受 {action: 'skip'} 或 {action: 'preview_plan', note?: string}，不得混入 answers 或批准选项。方案未获批准，请停下等待用户指示。",
                     );
                 }
             };
+            if matches!(action, AskAction::Skip {}) {
+                crate::core::session_log::info(
+                    ctx.rt.as_ref(),
+                    &format!("ask [{ask_id}] 用户明确跳过，停止当前运行（不批准、不切档）"),
+                );
+                return ToolOutcome::err(
+                    "E_ASK_SKIPPED",
+                    "用户明确跳过本次询问，当前运行已停止。保留已有进度，等待用户新指示；不要继续执行、重试或重新询问。",
+                );
+            }
             if !can_preview_plan {
                 return ToolOutcome::err(
                     "E_ASK_PREVIEW_UNAVAILABLE",
                     "本次询问没有可预览的批准方案，预览请求未生效。方案未获批准，请停下等待用户指示。",
                 );
             }
-            let AskAction::PreviewPlan { note } = action;
+            let AskAction::PreviewPlan { note } = action else {
+                unreachable!()
+            };
             crate::core::session_log::info(
                 ctx.rt.as_ref(),
                 &format!("ask [{ask_id}] 用户请求查看预览（不批准、不切档、不改变计划基线）"),
@@ -290,8 +468,8 @@ impl Tool for AskTool {
             }));
         }
 
-        // 忽略检测（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：前端「忽略」= 清空末页直提空载荷
-        //（所有 selections 空 + 所有 note 空）；产品语义是「未回答 / 不作答」。
+        // Legacy empty-answer compatibility: explicit skip now uses its own terminal action.
+        // All-empty selections/notes still mean unanswered, never approval.
         // 此前空载荷仍返回 ToolOutcome::ok（仅尾注「（未回答）」），模型收到成功形态的结果
         // 会误读为「用户已应答 / 默许」而继续推进（真实案例：批准形询问被忽略后模型直接开工）。
         // 必须在工具层显式失败，让「停下等待用户指示」作为硬信号到达模型，
@@ -300,12 +478,12 @@ impl Tool for AskTool {
             crate::core::session_log::warn(
                 ctx.rt.as_ref(),
                 &format!(
-                    "ask [{ask_id}] 用户忽略（全空应答：所有题 selections/note 均空）→ 按 E_ASK_NOT_ANSWERED 返回"
+                    "ask [{ask_id}] 未作答（所有题 selections/note 均空）→ 按 E_ASK_NOT_ANSWERED 返回"
                 ),
             );
             return ToolOutcome::err(
                 "E_ASK_NOT_ANSWERED",
-                "用户忽略了本次询问（未作答）。这不是批准或确认：不要继续执行、不要重发同一询问；请简要说明当前状态或调整方案，然后停下等待用户的进一步指示。",
+                "用户未回答本次询问。这不是批准或确认：不要继续执行、不要重发同一询问；请简要说明当前状态或调整方案，然后停下等待用户的进一步指示。",
             );
         }
 
@@ -346,7 +524,7 @@ impl Tool for AskTool {
                         || s.contains("Approve")
                         || approve_ids.contains(s.as_str()))
             });
-            if approved_hit {
+            if approved_hit && !args.ids_repaired {
                 approved = true;
             }
             let note = ans["note"].as_str().unwrap_or("");
@@ -380,7 +558,11 @@ impl Tool for AskTool {
         // 批准门选档确认（C1-C3）：选中批准类选项（mode 非空）= 批准，且目标档位由该选项声明；
         // mode 是结构化单一事实源，宽松子串匹配（approved_hit）只作旧形态兜底。
         // 预览项不带 mode → selected_mode 天然为 None，故选 preview 不会走到这里。
-        let selected_mode = selected_target_mode(&args.questions, &answer);
+        let selected_mode = if args.ids_repaired {
+            selected_option_mode(&args.questions, &answer, false)
+        } else {
+            selected_target_mode(&args.questions, &answer)
+        };
         if selected_mode.is_some() {
             approved = true;
         }
@@ -389,6 +571,7 @@ impl Tool for AskTool {
         // 切档判定：叠加 `!preview_only_answer` **同时封掉两条通道**（结构化的 selected_mode 路径天然被排除；
         // 这里封的是 valid_answer 轻量通道与 arch_flag —— 否则用户点「先看预览」会被静默批准并按方案开工）。
         let switch = !preview_only_answer
+            && (!args.ids_repaired || selected_mode.is_some())
             && (!gate_shape || approved)
             && wants_mode_switch(
                 mode_at_open,
@@ -605,12 +788,20 @@ pub(super) fn selected_target_mode(
     questions: &[Question],
     answer: &Value,
 ) -> Option<crate::core::prefs::ApprovalMode> {
+    selected_option_mode(questions, answer, true)
+}
+
+fn selected_option_mode(
+    questions: &[Question],
+    answer: &Value,
+    allow_label: bool,
+) -> Option<crate::core::prefs::ApprovalMode> {
     questions.iter().find_map(|q| {
         let sel = answer["answers"][&q.id]["selections"].as_array()?;
         sel.iter().filter_map(|s| s.as_str()).find_map(|s| {
             q.options
                 .iter()
-                .find(|o| o.id == s || o.label == s)
+                .find(|o| o.id == s || (allow_label && o.label == s))
                 .and_then(|o| o.mode)
         })
     })

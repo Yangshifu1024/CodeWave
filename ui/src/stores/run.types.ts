@@ -36,6 +36,8 @@ export type AssistantItem = Extract<UiItem, { kind: "assistant" }>;
 
 /** 询问/审批卡状态（ask:opened 落地，ask:closed 清空） */
 export interface AskState {
+  /** Host repaired missing IDs; only an explicitly declared option mode can authorize a switch. */
+  explicitModeOnly?: boolean;
   askId: string;
   kind: "ask" | "approval";
   title?: string;

@@ -408,7 +408,15 @@ export function runLifecycleHandlers(set: SetFn, get: GetFn): Record<string, (p:
         if (!t.running || (p?.run_id && ((t.runId && p.run_id !== t.runId) || (t.startPending && !t.runId)))) return;
         if (typeof p?.gen === "number" && (p.gen < t.streamGen
           || (t.stepTextDeferred && t.lastStepDeltaGen === p.gen))) return;
-        t.items.push({ kind: "notice", text: i18n.t("notice.retryAttempt", { n: p?.attempt ?? 1 }) });
+        const reasonKeys: Record<string, string> = {
+          empty_response: "notice.retryEmpty", stream_stalled: "notice.retryStalled",
+          network: "notice.retryNetwork", protocol: "notice.retryProtocol",
+          rate_limited: "notice.retryRateLimited", server: "notice.retryServer",
+          request_repaired: "notice.retryRepaired",
+        };
+        const reason = String(p?.reason);
+        const reasonKey = Object.hasOwn(reasonKeys, reason) ? reasonKeys[reason] : undefined;
+        t.items.push({ kind: "notice", text: i18n.t(reasonKey ?? "notice.retryAttempt", { n: p?.attempt ?? 1 }) });
         // 后端在本事件前已重置：低于新代际的在途帧会被 applyFrameToTab 丢弃（review C2）
         if (typeof p?.gen === "number") t.streamGen = p.gen;
         if (t.stepTextDeferred) {
@@ -538,6 +546,7 @@ export function hydrateAsk(set: SetFn, p: AskOpenedEvent): void {
     t.ask = {
       askId: p.ask_id, kind: p.kind, title: p.title, detail: p.detail,
       questions: p.questions, switchToAutoEdit: p.switch_to_auto_edit,
+      explicitModeOnly: p.explicit_mode_only === true,
       allowAlways: p.allow_always, approvalKind: p.approval_kind,
       planFile: p.plan_file ?? null, planBody: p.plan_body ?? null,
       canPreviewPlan: p.can_preview_plan === true, previewPending,
@@ -550,6 +559,12 @@ export function hydrateAsk(set: SetFn, p: AskOpenedEvent): void {
 export function askHandlers(set: SetFn, get: GetFn): Record<string, (p: any) => void> {
   return {
     "ask:opened": (p: AskOpenedEvent) => {
+      const tab = get().tabs[p.session];
+      if (!tab) return;
+      // A settled/previous run must not cover the composer after skip or during a new run.
+      // Before start_chat returns, only the last settled identity is known; accept new identities.
+      if (p.run_id && (p.run_id === tab.lastSettledRunId ||
+        (tab.runId && p.run_id !== tab.runId))) return;
       // M-1：不重建桶——避免无人能应答的幽灵审批。
         // 文本形态 ask 兜底（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：后端剥的是**落盘历史**，
         // 而这段协议原文早已随流式帧进了**当轮气泡**（帧已下发、无法回收）——这里补剥当轮气泡。

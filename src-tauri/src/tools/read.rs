@@ -58,6 +58,24 @@ pub struct FileReq {
 /// 图片文件不走文本通道，而是以 DataURL + 多模态内容双路交付。
 pub struct ReadTool;
 
+/// Repair only the unambiguous single-file shorthand. Never merge competing shapes.
+pub(crate) fn normalize_args(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut()
+        && !object.contains_key("files")
+        && object
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|p| !p.trim().is_empty())
+        && object
+            .keys()
+            .all(|k| matches!(k.as_str(), "path" | "startLine" | "endLine"))
+    {
+        let file = std::mem::take(object);
+        object.insert("files".into(), Value::Array(vec![Value::Object(file)]));
+    }
+    value
+}
+
 /// 按扩展名推断图片 MIME 类型；非图片返回 None。
 pub fn media_type_of(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_string_lossy().to_lowercase();
@@ -219,12 +237,15 @@ impl Tool for ReadTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
-        let args: Args = match serde_json::from_value(args) {
+        let args: Args = match serde_json::from_value(normalize_args(args)) {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
         };
         if args.files.is_empty() || args.files.len() > 20 {
-            return ToolOutcome::err("E_ARGS", "files 必须包含 1–20 个文件");
+            return ToolOutcome::err(
+                "E_ARGS",
+                "files 必须包含 1–20 个文件。使用 files 数组包裹文件请求，例如 {\"files\":[{\"path\":\"src/main.rs\",\"startLine\":1,\"endLine\":100}]}，不要把 path 直接放在顶层。",
+            );
         }
         let roots = ctx.write_roots();
         let mut out_files = Vec::new();
@@ -456,6 +477,66 @@ mod tests {
     fn image_media_type() {
         assert_eq!(media_type_of(Path::new("a/b.PNG")), Some("image/png"));
         assert_eq!(media_type_of(Path::new("a/b.rs")), None);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_missing_files_returns_a_model_visible_fix_example() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let (core, rt) = make_ctx(&ws, &dd);
+        let result = ReadTool
+            .run(
+                &ctx_for(core, rt),
+                json!({"path":"src/main.rs", "unknown":true}),
+            )
+            .await;
+        assert!(!result.ok);
+        assert_eq!(result.error.as_ref().unwrap().code, "E_ARGS");
+        let text =
+            crate::tools::compact::compact_for_model(ToolKind::ReadOnly, "read", &result, false);
+        assert!(text.contains("\"files\":[{\"path\""), "{text}");
+    }
+
+    #[test]
+    fn normalize_only_unambiguous_read_shorthand_and_is_idempotent() {
+        let raw = json!({"path":"src/main.rs","startLine":2,"endLine":8});
+        let normalized = normalize_args(raw.clone());
+        assert_eq!(normalized, json!({"files":[raw]}));
+        assert_eq!(normalize_args(normalized.clone()), normalized);
+        for value in [
+            json!({"files":null,"path":"a"}),
+            json!({"files":[],"path":"a"}),
+            json!({"path":"a","other":true}),
+            json!({"path":42}),
+            json!({"path":""}),
+        ] {
+            assert_eq!(normalize_args(value.clone()), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn shorthand_reads_same_range_and_keeps_read_fence() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("sample.txt"), "first\nsecond\nthird\n").unwrap();
+        std::fs::write(outside.path().join("outside.txt"), "private").unwrap();
+        let (core, rt) = make_ctx(&ws, &dd);
+        let ctx = ctx_for(core, rt);
+        let result = ReadTool
+            .run(&ctx, json!({"path":"sample.txt","startLine":2,"endLine":2}))
+            .await;
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.data["files"][0]["start_line"], 2);
+        let content = result.data["files"][0]["content"].as_str().unwrap();
+        assert!(
+            content.contains("second") && !content.contains("first") && !content.contains("third")
+        );
+        let denied = ReadTool
+            .run(&ctx, json!({"path":outside.path().join("outside.txt")}))
+            .await;
+        assert!(!denied.ok);
+        assert_eq!(denied.error.unwrap().code, "E_PATH_OUTSIDE");
     }
 
     /// 构造（core, 主会话 runtime）：走 get_or_create_session（is_main_session = true）。

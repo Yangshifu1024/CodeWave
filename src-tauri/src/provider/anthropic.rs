@@ -201,6 +201,7 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
 /// 从 `message_start` / `message_delta` 提取 token 用量。
 #[derive(Debug, Default)]
 pub struct AnAccum {
+    pub diagnostics: super::diagnostics::StreamDiagnostics,
     /// block index → 块类型（"text" / "tool_use" / "thinking" 等），用于在块结束时判断是否补发 ToolCallEnd
     block_kinds: std::collections::HashMap<u64, String>,
     /// 已发出 ToolCallEnd 的 block index 集合，保证每块只收尾一次
@@ -220,6 +221,8 @@ pub fn handle_event(
 ) -> Result<bool, ProviderError> {
     let v: Value = serde_json::from_str(data)
         .map_err(|e| ProviderError::Protocol(format!("anthropic event json: {e}")))?;
+
+    acc.diagnostics.event(v["type"].as_str().unwrap_or(""), &v);
 
     match event.unwrap_or("") {
         "ping" => return Ok(true),
@@ -376,9 +379,14 @@ pub async fn stream(
         return Err(ProviderError::from_status(status, &body_text));
     }
 
+    let mut diagnostics = super::diagnostics::StreamDiagnostics::default();
+    diagnostics.set_response(&resp);
     let mut stream = resp.bytes_stream();
     let mut parser = SseParser::new();
-    let mut acc = AnAccum::default();
+    let mut acc = AnAccum {
+        diagnostics,
+        ..Default::default()
+    };
 
     loop {
         let chunk = tokio::select! {
@@ -390,6 +398,7 @@ pub async fn stream(
             },
         };
         // C2：只在 chunk 边界喂入、绝不调用 finish——半行 / 未完结事件必须缓冲到 EOF
+        acc.diagnostics.chunk(chunk.len());
         let mut events: Vec<SseEvent> = Vec::new();
         parser.feed(&chunk, &mut events);
         for ev in events {
@@ -430,6 +439,12 @@ pub async fn stream(
         ));
     }
 
+    acc.diagnostics.completed = acc.finished;
+    tx.send(StreamDelta::Diagnostics {
+        summary: Box::new(acc.diagnostics),
+    })
+    .await
+    .map_err(|_| ProviderError::Cancelled)?;
     Ok(acc.usage)
 }
 

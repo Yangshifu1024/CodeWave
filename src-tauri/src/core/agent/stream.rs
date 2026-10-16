@@ -339,6 +339,10 @@ pub(super) async fn collect_deltas(
     let mut asm = Assembled::default();
     let mut ttft_ms: Option<u64> = None;
     while let Some(d) = rx.recv().await {
+        if let crate::provider::StreamDelta::Diagnostics { summary } = d {
+            asm.diagnostics = Some(summary);
+            continue; // Diagnostic metadata is neither a first token nor stream activity.
+        }
         // 首帧（不论类型，含 ToolCall 增量）即 TTFT：放在 match 之前
         if ttft_ms.is_none() {
             ttft_ms = Some(anchor.elapsed().as_millis() as u64);
@@ -370,6 +374,7 @@ pub(super) async fn collect_deltas(
                 }
             }
             crate::provider::StreamDelta::ToolCallEnd { .. } => {}
+            crate::provider::StreamDelta::Diagnostics { .. } => unreachable!(),
         }
     }
     (asm, ttft_ms)
@@ -388,11 +393,14 @@ pub(super) fn build_assistant_message(
     for (ord, c) in asm.tool_calls.iter().enumerate() {
         match crate::core::sessions::repair::parse_or_salvage(&c.args_raw) {
             Some(v) => {
-                let args = if v.is_object() {
+                let mut args = if v.is_object() {
                     v
                 } else {
                     serde_json::json!({ "value": v })
                 };
+                if matches!(c.name.as_str(), "read" | "batch_read") {
+                    args = crate::tools::read::normalize_args(args);
+                }
                 ord_of.insert(ord, calls.len());
                 calls.push(NormalizedCall {
                     id: c.id.clone(),

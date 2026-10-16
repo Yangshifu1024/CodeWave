@@ -118,6 +118,7 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
 /// Responses SSE 流的累积器：以 call_id 关联 function_call 的 index 与收尾态。
 #[derive(Debug, Default)]
 pub struct OrAccum {
+    pub diagnostics: super::diagnostics::StreamDiagnostics,
     /// function_call call_id → 输出序号（按到达顺序分配）
     call_index: std::collections::HashMap<String, usize>,
     /// 下一个可分配的工具调用序号
@@ -140,9 +141,14 @@ pub fn handle_event(
 ) -> Result<bool, ProviderError> {
     let v: Value = match serde_json::from_str(data) {
         Ok(v) => v,
-        Err(_) => return Ok(true), // 非 JSON 数据（如空行）直接忽略
+        Err(_) => {
+            acc.diagnostics.non_json_events += 1;
+            return Ok(true);
+        } // Record ignored data without retaining it.
     };
     let name = event.unwrap_or_else(|| v["type"].as_str().unwrap_or(""));
+
+    acc.diagnostics.event(name, &v);
 
     match name {
         "response.output_text.delta" => {
@@ -284,9 +290,14 @@ pub async fn stream(
         return Err(ProviderError::from_status(status, &body_text));
     }
 
+    let mut diagnostics = super::diagnostics::StreamDiagnostics::default();
+    diagnostics.set_response(&resp);
     let mut stream = resp.bytes_stream();
     let mut parser = SseParser::new();
-    let mut acc = OrAccum::default();
+    let mut acc = OrAccum {
+        diagnostics,
+        ..Default::default()
+    };
 
     loop {
         let chunk = tokio::select! {
@@ -297,6 +308,7 @@ pub async fn stream(
                 None => break,
             },
         };
+        acc.diagnostics.chunk(chunk.len());
         let mut events: Vec<SseEvent> = Vec::new();
         parser.feed(&chunk, &mut events);
         for ev in events {
@@ -321,6 +333,12 @@ pub async fn stream(
             "SSE 流被截断（未收到 response.completed）".into(),
         ));
     }
+    acc.diagnostics.completed = acc.finished;
+    tx.send(StreamDelta::Diagnostics {
+        summary: Box::new(acc.diagnostics),
+    })
+    .await
+    .map_err(|_| ProviderError::Cancelled)?;
     Ok(acc.usage)
 }
 
