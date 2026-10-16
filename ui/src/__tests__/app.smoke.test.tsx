@@ -303,21 +303,21 @@ describe("App 渲染冒烟", () => {
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-horizontal')).toBeTruthy();
     expect(document.querySelector('[data-testid="settings-page"] .ant-form-vertical')).toBeFalsy();
 
-    // Appearance: language, theme, output display and three independent font/size previews.
+    // Appearance: language, theme, output display and three font slots (one row each).
     expect(document.querySelectorAll('[data-testid="settings-page"] .ant-select').length).toBeGreaterThanOrEqual(1);
-    expect(document.body.textContent ?? "").toContain("界面字体");
-    expect(document.body.textContent ?? "").toContain("内容字体");
-    expect(document.body.textContent ?? "").toContain("代码字体");
-    expect(document.querySelectorAll(".font-preview-row").length).toBe(6);
+    expect(document.body.textContent ?? "").toContain("界面");
+    expect(document.body.textContent ?? "").toContain("内容");
+    expect(document.body.textContent ?? "").toContain("代码");
+    // 三槽合并成三行后，每槽只有一行预览（原字体族/字号各一行、样本完全相同）
+    expect(document.querySelectorAll(".font-preview-row").length).toBe(3);
     expect(Array.from(document.querySelectorAll(".settings-section-title")).map((node) => node.textContent)).toEqual(["界面语言", "主题", "输出展示", "字体"]);
     expect(document.querySelector('[data-setting-id="ui.output_display"]')).toBeTruthy();
-    expect(document.querySelector('[data-setting-id="ui.font_sans"] .font-preview-row')).toBeTruthy();
-    expect(document.querySelector('[data-setting-id="ui.font_mono"] .font-preview-row')).toBeTruthy();
-    expect(document.querySelector('[data-setting-id="ui.font_content"] .font-preview-row')).toBeTruthy();
-    expect(document.querySelector('[data-setting-id="ui.font_size_content"] .font-preview-row')).toBeTruthy();
-    // Each size row also previews its applied family and size.
-    expect(document.querySelector('[data-setting-id="ui.font_size_sans"] .font-preview-row')).toBeTruthy();
-    expect(document.querySelector('[data-setting-id="ui.font_size_mono"] .font-preview-row')).toBeTruthy();
+    // 字体族与字号控件同处一行：各槽两个锚点都在，彼此独立可搜
+    for (const slot of ["sans", "content", "mono"]) {
+      const row = document.querySelector(`[data-setting-id="ui.font_${slot}"]`)!.closest(".settings-font-pair")!;
+      expect(row.querySelector(`[data-setting-id="ui.font_size_${slot}"]`)).toBeTruthy();
+      expect(row.querySelector(".font-preview-row")).toBeTruthy();
+    }
 
     // 模型与供应商页（[docs/providers-and-network](../../../docs/providers-and-network.md)）：列表 + 编辑表单字段 + AI 回复语言
     await clickTab("模型与供应商");

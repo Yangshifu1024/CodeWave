@@ -96,7 +96,9 @@ describe("font sizes in the runtime UI", () => {
     for (const [slot, label, px, family] of [["sans", "17px", "17px", "Saved Sans"], ["content", "16px", "16px", "Saved Content"], ["mono", "19px", "19px", "Saved Mono"]] as const) {
       const sizeField = document.querySelector(`[data-setting-id="ui.font_size_${slot}"]`)!;
       expect(sizeField.querySelector(".ant-select")?.textContent).toContain(label);
-      const preview = sizeField.querySelector<HTMLElement>(".font-preview-row")!;
+      // 预览行已从字号控件内部上移到整行容器（三槽合并后只留一行预览）
+      const preview = sizeField.closest(".settings-font-pair")!
+        .querySelector<HTMLElement>(".font-preview-row")!;
       expect(preview.style.fontSize).toBe(px);
       expect(preview.style.fontFamily).toContain(family);
       expect(document.querySelector<HTMLInputElement>(`[data-setting-id="ui.font_${slot}"] input`)?.value).toBe(family);
@@ -156,7 +158,7 @@ describe("font sizes in the runtime UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "重试・界面字号" }));
     await waitFor(() => expect(useSettings.getState().config?.ui.font_size_sans).toBe(19));
     expect(invoke).toHaveBeenLastCalledWith("set_font_prefs", expect.objectContaining({ fontSizeSans: 19, fontSizeContent: 14, fontSizeMono: 12 }));
-    fireEvent.click(screen.getByRole("button", { name: "恢复默认・界面字号" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认・界面字体 + 界面字号" }));
     expect(screen.getByTestId("app-size").textContent).toBe("14");
     await waitFor(() => expect(useSettings.getState().config?.ui.font_size_sans).toBe(14));
   });

@@ -77,7 +77,7 @@
 - `SETTINGS_VISUAL` 是设置区字号、密度和尺寸入口：内容最大宽度 960px，窄/中/宽控件基准 180/240/360px。使用 `SettingsThemeProvider` 的局部 antd `ConfigProvider` / `App`；Portal 弹框通过 `SettingsThemeScope` 继承公共样式与变量。
 - `SettingsForm`、`SettingsFormItem`、`SettingsSection` 统一左右式行与带边框分组：标题/说明在左，控件在右，校验反馈靠近控件，关闭自动冒号。内容容器宽度不超过 680px 时变成上下排列；MCP 编辑器继续标签在上，窄键值行可堆叠。
 - 宽度类 `.w-narrow` / `.w-mid` / `.w-wide` 都有 `max-width:100%`；局部页体适配由共享 CSS 收口。不要在页体增加像素内联宽度，或重新引入旧“内容只占右栏 50%”/所有表单强制 vertical 的规则。
-- 字体使用 `--ws-font-sans` / `--ws-font-content` / `--ws-font-mono`，颜色走 `--ws-*` 与 antd token，不新增硬编码字体链或彩色强调色。外观页按语言、主题、字体排列；主题使用预览卡，三组分别为界面、内容、代码，默认字号 14/14/12px，各带字体与字号预览和还原入口；作用范围见[界面指南](./chat-and-interface.md#12x-字体与字号三槽)。
+- 字体使用 `--ws-font-sans` / `--ws-font-content` / `--ws-font-mono`，颜色走 `--ws-*` 与 antd token，不新增硬编码字体链或彩色强调色。外观页按语言、主题、字体排列；主题使用预览卡。字体分组三行（界面 / 内容 / 代码），每行左侧只标槽名、与右侧控件垂直居中且取**定宽窄列**（`SETTINGS_VISUAL.fontSlotLabelWidth`，不再是三档宽度档或半行宽），行内并排字体名输入与定宽字号 Select（`fontSizeSelectWidth`）、行末一个 `fontResetWidth` 宽的重置按钮（一按清本槽字体族与字号），下方一行预览。三个控件 `align-items: center` 等高：字号 Select 不得挂 `size="small"`（会比同行 Input 矮一截），重置不得再藏在控件的 suffix / suffixIcon 里。共性说明只写在分段标题右侧一次，不逐项重复。默认字号 14/14/12px；作用范围见[界面指南](./chat-and-interface.md#12x-字体与字号三槽)。
 - 供应商当前是响应式卡片：标题为名称与协议，正文为端点和模型摘要（上下文/输出、图片/视频、active 标记），卡片底部编辑/删除。编辑先在局部表单暂存，不能退回旧“字段变化直接污染页级草稿”行为；字段校验与输出预算见 [供应商与网络](./providers-and-network.md)。
 - 网络代理卡片的 `.proxy-mode-list` 必须显式 `font-size: var(--ws-font-size)`，变量由 theme bridge 桥接 antd fontSize。Radio.Group 自带 font-size:0，单靠 DOM 文本存在不能保证标题肉眼可见。manual 校验只看支持协议前缀，空串允许保存；界面默认显示系统代理不等于后端把 null 自动改为显式配置。
 - MCP 当前是服务器卡片与编辑弹框，支持用户级/项目级、测试、断开/重连和工具说明。状态按作用域及服务器名匹配；刷新只重读状态。结构化编辑须保留未知字段，解析不了时保留原始 JSON 供修复，不能降成空列表覆盖原文。详细界面约束见下一节，后端入口为 [mcp.rs](../src-tauri/src/host/commands/mcp.rs)。
