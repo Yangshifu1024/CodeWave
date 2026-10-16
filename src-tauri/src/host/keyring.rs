@@ -2,7 +2,7 @@
 //! core::config_commit; unavailable keyrings never fall back to plaintext persistence.
 
 use crate::core::config::{KEYRING_PLACEHOLDER, ModelConfig, ProviderConfig};
-/// keyring service 名（本应用所有凭据共用）。
+/// 模型/API 凭据的 service；信任权威记录使用 host::trust 的独立 service。
 pub const SERVICE: &str = "codewave.yangshifu.xyz";
 
 /// 构造 keyring 条目（service + account）；环境不可用时返回可读错误。

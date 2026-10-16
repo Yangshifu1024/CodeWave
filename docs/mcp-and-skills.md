@@ -33,6 +33,16 @@ stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先
 
 「撤销启动授权」清除正式许可、待确认及活跃 probe，撤下工具并取消握手/服务；迟到 Ready 和旧 binding 不再可用。「断开」只释放连接，不撤销本次进程许可，重连仍可复用原许可。已经发生的外部副作用不会回滚。普通配置切换仍保留已接纳调用在原 peer 上最多 5 秒排空、不重放的契约。持久信任、技能/角色统一来源与项目提示信任尚未交付，不能把 MCP 启动门等同完整项目信任。
 
+### 持久权威事务基础（准入接线尚未完成）
+
+[core/trust.rs](../src-tauri/src/core/trust.rs) 提供版本绑定的权威存储和 admission guard；[host/trust.rs](../src-tauri/src/host/trust.rs) 使用独立 `codewave.yangshifu.xyz.trust.v1` 钥匙串 service，模型凭据账户不能跨 service 读取。此库尚未接入 MCP、技能或项目提示的生产许可，设置页仍只有上述进程内许可，不能据此宣称已有“记住授权”。
+
+账户摘要绑定 canonical 全局数据目录与资源类别、用途、canonical 来源、owner 和名字；不同 profile 不共用权威账户，同一 profile 的 canonical 别名共用记录与锁。版本统一接受裸 SHA-256 或来源审计的 `sha256:` 格式并归一。每资源小记录保存 schema、版本、decision、revision 和 operation id；撤销保留 tombstone，CAS 冲突要求重新审阅，同一操作仅在原前置版本与内容一致时重放回执。写入后回读核验，不将系统钥匙串调用返回成功等同于提交确认。
+
+事务在 blocking pool 中持有进程内锁与 `<data_dir>/trust/authority.lock` 的 [OS advisory lock](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock)。锁文件永不作为授权数据。总等待预算为 5 秒；原生调用超时或取消后，后台任务仍持锁直到结束，写入可能已发生时返回 `TrustOutcomeUnknown`，不能自动改用新操作再次授权。`AuthorityGuard` 供后续调用点在短锁内登记 admission 后释放，不得持有它等待用户、网络或长运行进程。NoEntry、不可用、损坏、拒绝、冲突、超时及结果不明分别处理，无 JSON 或明文回退。
+
+生产接线仍需完成真实用户 challenge、配置变更失效、启动/Ready/工具暴露/dispatch 权威重验、撤销及后台连接回收；当前未提供这些跨实例运行保证。相同 OS 用户绕过本应用直接调用钥匙串、替换锁文件或操纵外部进程不属于 OS 沙箱保证。真实钥匙串与三平台锁行为仍待分别验收。
+
 ## 2. 连接池、运行态与事件
 
 [manager.rs](../src-tauri/src/mcp/manager.rs) 的 pool key 是 `(scope, project_id, name, canonical_config_path)`；会话持有其可见 server 集合，设置页读取来源路径和启动许可版本用于确认。warm 先登记引用再为已获许可的配置并行连接，IPC 返回只表示接收请求，不表示所有 server 已 Ready。
