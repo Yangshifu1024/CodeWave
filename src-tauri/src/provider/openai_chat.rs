@@ -164,6 +164,7 @@ fn convert_message(m: &Message, out: &mut Vec<Value>) {
 /// Chat Completions SSE 流的累积器：记录工具调用身份与收尾态，从 usage 帧提取 token 用量。
 #[derive(Debug, Default)]
 pub struct OcAccum {
+    pub diagnostics: super::diagnostics::StreamDiagnostics,
     /// 规范 index → (调用 id, 工具名)，finish_reason=tool_calls 时按此补发 ToolCallEnd
     pub tool_ids: std::collections::HashMap<usize, (String, String)>,
     /// 已补发 ToolCallEnd 的规范 index 集合，保证只收尾一次
@@ -185,11 +186,14 @@ pub fn handle_chunk(
     deltas: &mut Vec<StreamDelta>,
 ) -> Result<bool, ProviderError> {
     if data.trim() == "[DONE]" {
+        acc.diagnostics.event("[DONE]", &Value::Null);
         acc.finished = true;
         return Ok(false);
     }
     let v: Value = serde_json::from_str(data)
         .map_err(|e| ProviderError::Protocol(format!("openai chunk json: {e}")))?;
+
+    acc.diagnostics.event("chat.chunk", &v);
 
     if let Some(err) = v.get("error") {
         return Err(ProviderError::Server(format!(
@@ -327,9 +331,14 @@ pub async fn stream(
         return Err(ProviderError::from_status(status, &body_text));
     }
 
+    let mut diagnostics = super::diagnostics::StreamDiagnostics::default();
+    diagnostics.set_response(&resp);
     let mut stream = resp.bytes_stream();
     let mut parser = SseParser::new();
-    let mut acc = OcAccum::default();
+    let mut acc = OcAccum {
+        diagnostics,
+        ..Default::default()
+    };
 
     loop {
         let chunk = tokio::select! {
@@ -340,6 +349,7 @@ pub async fn stream(
                 None => break,
             },
         };
+        acc.diagnostics.chunk(chunk.len());
         let mut events: Vec<SseEvent> = Vec::new();
         parser.feed(&chunk, &mut events);
         for ev in events {
@@ -366,6 +376,12 @@ pub async fn stream(
         ));
     }
 
+    acc.diagnostics.completed = acc.finished;
+    tx.send(StreamDelta::Diagnostics {
+        summary: Box::new(acc.diagnostics),
+    })
+    .await
+    .map_err(|_| ProviderError::Cancelled)?;
     Ok(acc.usage)
 }
 

@@ -212,7 +212,7 @@ TTFT 认首个任意增量，含 thinking 和工具增量；工具条取本轮�
 
 `tool:start` 提供工具名、args preview、phase；审批/范围门前 `waiting`，通过后 `running`，拒绝直接 error。只读调用只发 running；批层排除、未知工具等硬拒绝不需要先造 start 卡。`tool_progress` 只携带真实输出分片，不能再承担空分片建卡。
 
-主会话的 start、result 和 progress 三条路径都先跨 assistant 项查已有 callKey，找不到才建；notice 插队不能制造第二张卡。已完成卡不能被迟到 start 翻回运行中；run 结束后的 start 不建卡。run 终态把遗留 waiting/running 置 `E_INTERRUPTED`，子代理终态只收其子流。**主会话历史无结果或 repair 的 `[interrupted]` 与子流均显示中性「已中断」**；不能写成「已使用」。`E_ASK_CANCELLED`、`E_ASK_NOT_ANSWERED` 同属中性用户中止；真实失败保留错误信息。
+主会话的 start、result 和 progress 三条路径都先跨 assistant 项查已有 callKey，找不到才建；notice 插队不能制造第二张卡。已完成卡不能被迟到 start 翻回运行中；run 结束后的 start 不建卡。run 终态把遗留 waiting/running 置 `E_INTERRUPTED`，子代理终态只收其子流。**主会话历史无结果或 repair 的 `[interrupted]` 与子流均显示中性「已中断」**；不能写成「已使用」。`E_ASK_CANCELLED`、`E_ASK_NOT_ANSWERED` 同属中性用户中止；`E_ASK_SKIPPED` 显示中性「已跳过」并停止当前任务；真实失败保留错误信息。
 
 waiting 仅表示审批/范围确认，工具信号量和文件写锁排队仍包含在 running 内。当前 start 事件没有 `run_id`，改事件身份时应整体审查生命周期，不能只在渲染侧补一个未可靠传递的字段。
 
@@ -295,7 +295,7 @@ iframe 使用 `sandbox="allow-scripts"`、不授予 `allow-same-origin`；资源
 
 ask 是活跃会话唯一底部输入区域；主 Composer 和队列暂时不显示。选项标题和推荐 chip 同行，说明独占下一行、与标题左对齐、完整折行；整行包括说明都可点击，键盘/ARIA 状态不能因排版容器改变而丢失。长说明不限高，会占更多垂直空间。
 
-补充说明内 `Enter` 走下一题/提交，IME 不提交；`Shift+Enter` 不提交，但当前补充控件是单行 Input，不能承诺它提供可见多行。批准、预览、多选与忽略的决定逻辑以[计划与批准](./plan-and-approval.md)为准；计划卡已展示全文时，单题批准形的题干可精简为确认问句，多题/普通询问不能丢原题信息。
+补充说明内 `Enter` 走下一题/提交，IME 不提交；`Shift+Enter` 不提交，但当前补充控件是单行 Input，不能承诺它提供可见多行。批准、预览、多选与跳过的决定逻辑以[计划与批准](./plan-and-approval.md)为准；「跳过」在任意页明确停止当前任务，不提交答案或自动批准。计划卡已展示全文时，单题批准形的题干可精简为确认问句，多题/普通询问不能丢原题信息。
 
 ### 7.2 自绘标题栏
 

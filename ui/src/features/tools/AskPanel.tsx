@@ -5,7 +5,7 @@
 // **别再新建任何叫 cursor 的类**：它与 CSS 的 cursor 属性同名，是历史误伤高发点。
 // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：询问窗口重构——卡片布局 + 编号选项 + 键盘导航（Tab/方向键移动、数字快选、Enter 确认）。
 // 审批形态：需要权限 + 命令块 + 允许 / 始终允许本项目 / 拒绝 三选项；
-// 询问形态：分页多题作答 + 补充说明 + 忽略/提交；计划批准形态额外渲染「方案」卡
+// 询问形态：分页多题作答 + 补充说明 + 跳过/提交；计划批准形态额外渲染「方案」卡
 // （完整方案 markdown + 复制 + 查看方案 -> FileViewerModal 打开后端落盘的计划文件）。
 // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：批准形渲染（后端判定的单选 + 直提）、复选/单选指示物、
 // 补充说明输入纳入键盘导航环。
@@ -61,7 +61,11 @@ function isLegacyPreviewOption(option: AskOptionPayload): boolean {
   return id === "preview" || label.includes("先看预览") || label.includes("preview first");
 }
 
-/** 询问面板：审批（三选项单选直提）/ 询问（分页多题 + 编号选项 + 键盘导航环含补充输入 + 忽略/提交）
+function optionKey(questionId: string, optionId: string): string {
+  return JSON.stringify([questionId, optionId]);
+}
+
+/** 询问面板：审批（三选项单选直提）/ 询问（分页多题 + 编号选项 + 键盘导航环含补充输入 + 跳过/提交）
  *  两种形态；计划卡对所有 ask 展示（后端一律落盘计划文件）；批准/ConfirmEach 有效应答后本地同步切自动编辑档。 */
 export default function AskPanel() {
   const { t } = useTranslation();
@@ -93,7 +97,7 @@ export default function AskPanel() {
   // 批准类选项 → 目标档位（后端批准门下发的「以 X 档执行」选项）；缺 mode = 非批准类选项
   const modeById = useMemo(() => {
     const m = new Map<string, ApprovalMode>();
-    for (const q of questions) for (const o of q.options ?? []) if (o.mode) m.set(o.id, o.mode);
+    for (const q of questions) for (const o of q.options ?? []) if (o.mode) m.set(optionKey(q.id, o.id), o.mode);
     return m;
   }, [questions]);
 
@@ -199,9 +203,9 @@ export default function AskPanel() {
   // （防契约漏字段导致点选不直提）。
   const approvalShape =
     canPreviewPlan ||
-    ask.approval === true ||
-    modeById.size > 0 ||
-    (questions.length === 1 && (questions[0]?.options ?? []).some((o) => o.id === "approve"));
+    (!ask.explicitModeOnly && (ask.approval === true ||
+      (questions.length === 1 && (questions[0]?.options ?? []).some((o) => o.id === "approve")))) ||
+    modeById.size > 0;
   // 批准闸形状（与后端 arch_gate_shape 同口径：单题 + 含 id="approve"）：该形状上只有选中批准项才动档位——
   // 「补充意见」是「别开工，我要改方案」，不切档（免得前端把胶囊抬到自动编辑档而后端没动，两侧分叉）
   const gateShape =
@@ -210,7 +214,7 @@ export default function AskPanel() {
   const planApprovalSingle = isPlan && questions.length === 1 && approvalShape;
   const approveId = ask.approveId ?? null;
   const approveOptionId =
-    approveId ?? ((questions[0]?.options ?? []).find((o) => o.id === "approve")?.id ?? null);
+    ask.explicitModeOnly ? null : approveId ?? ((questions[0]?.options ?? []).find((o) => o.id === "approve")?.id ?? null);
   // 预览选项（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：批准门的第四选项，语义是「先看预览」——
   // 既不是批准、也不算有效应答（后端 preview_only 同样排除），故既不触发切档，也不能被当成批准项。
   // 只在批准形询问里认（与后端 preview_option_ids 同口径；普通澄清询问里的同名选项不受影响）
@@ -265,7 +269,7 @@ export default function AskPanel() {
     // 预览项提交后不切档（后端 preview_only 排除），只是把「要看预览」这件事交给模型
     const direct =
       approvalShape &&
-      (modeById.has(optId) ||
+      (modeById.has(optionKey(qid, optId)) ||
         (approveOptionId != null && optId === approveOptionId) ||
         (previewOptionId != null && optId === previewOptionId));
     if (direct) {
@@ -279,7 +283,7 @@ export default function AskPanel() {
 
   async function submit() {
     // 空载荷缺陷修复的双保险：提交按钮路径上仍未作答的题回退到推荐选项；
-    // 「忽略」路径（ignoreCurrent 清空后直提）绕开 submit()，保持「未作答」语义不被污染
+    // Explicit skip has its own action and never submits recommended defaults.
     const fallback: Record<string, string[]> = { ...selected };
     for (const q of questions) {
       if ((fallback[q.id] ?? []).length === 0) {
@@ -325,10 +329,10 @@ export default function AskPanel() {
         if (sel.some((s) => s !== previewOptionId)) allPreview = false;
         // 结构化判定（[docs/plan-and-approval]）：选中带 mode 的选项即批准，并记下要切到的档位
         for (const s of sel) {
-          const mode = modeById.get(s);
+          const mode = modeById.get(optionKey(q.id, s));
           if (mode) {
             approved = true;
-            approvedMode = mode;
+            approvedMode ??= mode; // Same first selected explicit mode as the host.
           }
         }
         // Plan 档协议：选中批准选项即在本地把胶囊同步为批准档位（后端在 ask 工具内切档）
@@ -342,6 +346,7 @@ export default function AskPanel() {
         const approveCandidates = previewOptionId == null ? sel : sel.filter((s) => s !== previewOptionId);
         if (
           !approved &&
+          !ask!.explicitModeOnly &&
           (approveCandidates.includes("approve") ||
             approveCandidates.some((s) => /approve|执行方案/i.test(s)) ||
             (approveOptionId != null && approveCandidates.includes(approveOptionId)))
@@ -382,9 +387,9 @@ export default function AskPanel() {
         // 「模型违约给预览项挂 mode」——该载荷下 approved=true，planPath（plan 档或 switchToAutoEdit 标志）
         // 与 modePath（approvedMode 非空）都会单边把胶囊切档，而后端 preview_only_answer 为真、根本不切 →
         // 用户可见结果就是**单边静默提权**。lightPath 已由 answerEffective（含 !previewOnly）封住，无需再乘。
-        const planPath = approved && !previewOnly && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
+        const planPath = !ask!.explicitModeOnly && approved && !previewOnly && (tab?.prefs.approval_mode === "plan" || ask!.switchToAutoEdit);
         const lightPath =
-          tab?.prefs.approval_mode === "confirm_each" && answerEffective && (!gateShape || approved);
+          !ask!.explicitModeOnly && tab?.prefs.approval_mode === "confirm_each" && answerEffective && (!gateShape || approved);
         // [docs/plan-and-approval]：结构化路径（选中的选项带 mode）优先且不看当前档位；
         // 旧形态（无 mode）走既有回落：仅 plan / confirm_each 两条路径同步，档位回落 auto_edit
         const modePath = approvedMode != null && !previewOnly;
@@ -396,25 +401,11 @@ export default function AskPanel() {
     });
   }
 
-  function ignoreCurrent() {
+  function skipAsk() {
     if (isSubmitting || submissionLocks.current.has(submissionKey)) return;
-    if (!cur) return;
-    // setSelected/setNotes 是异步的；直提必须显式传清空后的值，不能依赖 state 时序
-    const clearedSel = { ...selected, [cur.id]: [] };
-    const clearedNotes = { ...notes, [cur.id]: "" };
-    if (page < questions.length - 1) {
-      // 非末页（[docs/plan-and-approval](../../../../docs/plan-and-approval.md) 语义）：清空当前题应答并翻页；不 resolve
-      setSelected(clearedSel);
-      setNotes(clearedNotes);
-      setPage(page + 1);
-      setCursor(0);
-    } else {
-      // 末页（含单题）：忽略 = 清空当前题提交整个 ask（未作答）。
-      // 缺陷修复：此前末页点击既不清空、不翻页、不 resolve 也不反馈——按钮像坏的。
-      setSelected(clearedSel);
-      setNotes(clearedNotes);
-      void submitWith(clearedSel, clearedNotes);
-    }
+    void runSubmission(async () => {
+      await useRun.getState().resolveAsk(ask!.askId, { action: "skip" }, sessionId!);
+    });
   }
 
   // ---------- 键盘（焦点不在输入框内时生效；卡片有焦点即可用；鼠标始终可用） ----------
@@ -684,13 +675,13 @@ export default function AskPanel() {
             <div className="ask-foot">
               <span className="hint">
                 {/* docs/chat-and-interface：ConfirmEach 在提交时切档；明示提示防止静默提权 */}
-                {tabMode === "confirm_each" && <span className="switch-hint">⚠ {t("ask.switchHint")}</span>}
+                {tabMode === "confirm_each" && !ask.explicitModeOnly && <span className="switch-hint">⚠ {t("ask.switchHint")}</span>}
                 {/* docs/plan-and-approval：hint 按形态切换（批准「Enter 确认」/ 多选「Enter 或空格切换」）；
                     单题（互斥）形态有独立提示——选择即替换、重选即清空 */}
                 <span>ⓘ {approvalShape ? t("ask.keyHint") : cur?.single ? t("ask.keyHintSingle") : t("ask.keyHintMulti")}</span>
               </span>
               <span className="foot-btns">
-                <Button disabled={isSubmitting} onClick={ignoreCurrent}>{t("ask.ignore")}</Button>
+                <Button disabled={isSubmitting} onClick={skipAsk} title={t("ask.skipHint")}>{t("ask.skip")}</Button>
                 {/* 多题非末页 = 「下一题」（仅翻页不提交）；末页与单题 = 「提交回答」 */}
                 <Button type="primary" disabled={isSubmitting} onClick={page < questions.length - 1 ? goNextPage : submit}>
                   {page < questions.length - 1 ? t("ask.next") : t("ask.submit")}

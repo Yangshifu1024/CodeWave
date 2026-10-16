@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod diagnostics;
 pub mod dto;
 pub mod headers;
 pub mod keys;

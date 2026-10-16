@@ -476,7 +476,10 @@ export interface AskQuestionPayload {
 
 /** ask:opened payload：询问/审批卡数据 */
 export interface AskOpenedEvent {
+  explicit_mode_only?: boolean;
   session: string; ask_id: string;
+  /** Owning root run; absent only on legacy payloads. */
+  run_id?: string;
   kind: "ask" | "approval";
   /** 问题列表 */
   questions?: AskQuestionPayload[];

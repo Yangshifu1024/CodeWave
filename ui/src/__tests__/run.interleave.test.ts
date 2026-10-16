@@ -42,6 +42,24 @@ describe("思考与工具穿插顺序", () => {
     });
   });
 
+  it.each([
+    ["empty_response", "未收到有效回复"],
+    ["network", "连接或回复流中断"],
+    ["protocol", "回复格式解析异常"],
+    ["stream_stalled", "回复流长时间无进展"],
+    ["rate_limited", "服务暂时限流或超时"],
+    ["server", "服务端返回错误"],
+    ["request_repaired", "已调整请求内容"],
+    [undefined, "正在进行第 2 次重试"],
+    ["future_reason", "正在进行第 2 次重试"],
+    ["constructor", "正在进行第 2 次重试"],
+  ])("retry reason %s displays an accurate notice", (reason, expected) => {
+    useRun.getState().bindGlobalHandlers()["run:retry"]({ session, reason, attempt: 2 });
+    const notice = tabOf(session).items.at(-1);
+    expect(notice).toMatchObject({ kind: "notice", text: expect.stringContaining(expected) });
+    expect((notice as { text: string }).text).not.toContain("半截");
+  });
+
   it("delta_thinking/delta_text 帧按到达序穿插进 timeline", () => {
     useRun.setState((s) => {
       const t = s.tabs[session]!;

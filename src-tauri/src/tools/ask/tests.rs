@@ -2,6 +2,139 @@ use super::*;
 use crate::tools::{Tool, ToolCtx, ToolOutcome};
 use serde_json::{Value, json};
 
+fn missing_id_gate_args() -> Value {
+    json!({"switchToAutoEdit":true,"questions":[{"question":"Choose", "options":[
+        {"label":"Use auto edit","mode":"auto_edit"},
+        {"label":"Use full access","mode":"full_access"},
+        {"label":"补充意见"},
+        {"label":"先看预览"}
+    ]}]})
+}
+
+#[tokio::test]
+async fn explicit_skip_never_approves_switches_or_freezes_a_plan() {
+    use crate::core::prefs::ApprovalMode;
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        let ctx = ask_ctx_mode(mode);
+        let out =
+            drive_ask_with_answer(&ctx, approval_gate_args(true), json!({"action":"skip"})).await;
+        assert_eq!(out.error.unwrap().code, "E_ASK_SKIPPED");
+        assert_eq!(ctx.rt.prefs().approval_mode, mode);
+        assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+        assert!(ctx.rt.history.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn skip_mixed_with_answers_or_permissions_is_rejected() {
+    let ctx = plan_ctx();
+    for answer in [
+        json!({"action":"skip","answers":{}}),
+        json!({"action":"skip","mode":"full_access"}),
+        json!({"action":"skip","note":"continue"}),
+    ] {
+        let out = drive_ask_with_answer(&ctx, approval_gate_args(true), answer).await;
+        assert_eq!(out.error.unwrap().code, "E_ASK_INVALID_ACTION");
+        assert_eq!(
+            ctx.rt.prefs().approval_mode,
+            crate::core::prefs::ApprovalMode::Plan
+        );
+    }
+}
+
+fn repaired_answer(option: &str) -> Value {
+    json!({"answers":{"__cw_q_1":{"selections":[option],"note":"additional context"}}})
+}
+
+#[tokio::test]
+async fn repaired_ids_never_infer_approval_or_mode_from_labels_ids_or_valid_answers() {
+    use crate::core::prefs::ApprovalMode;
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        for args in [
+            json!({"switchToAutoEdit":true,"questions":[{"question":"?","options":[{"id":"approve","label":"批准方案"}]}]}),
+            json!({"switchToAutoEdit":true,"questions":[{"question":"?","options":[{"label":"Approve plan"}]}]}),
+        ] {
+            let ctx = ask_ctx_mode(mode);
+            let selection = if args["questions"][0]["options"][0].get("id").is_some() {
+                "approve"
+            } else {
+                "__cw_q1_option_1"
+            };
+            let out = drive_ask_with_answer(&ctx, args, repaired_answer(selection)).await;
+            assert!(out.ok, "{out:?}");
+            assert_ne!(out.data["plan_approved"], json!(true));
+            assert_eq!(ctx.rt.prefs().approval_mode, mode);
+            assert!(ctx.rt.approved_plan.lock().unwrap().is_none());
+        }
+        for option in ["__cw_q1_option_3", "__cw_q1_option_4"] {
+            let ctx = ask_ctx_mode(mode);
+            let out =
+                drive_ask_with_answer(&ctx, missing_id_gate_args(), repaired_answer(option)).await;
+            assert!(out.ok, "{out:?}");
+            assert_eq!(ctx.rt.prefs().approval_mode, mode);
+            assert_ne!(out.data["plan_approved"], json!(true));
+        }
+    }
+}
+
+#[tokio::test]
+async fn repaired_ids_follow_only_explicit_selected_mode_and_plan_gate_still_applies() {
+    use crate::core::prefs::ApprovalMode;
+    let denied = plan_ctx();
+    let out = drive_ask_with_answer(
+        &denied,
+        missing_id_gate_args(),
+        repaired_answer("__cw_q1_option_2"),
+    )
+    .await;
+    assert_eq!(out.error.unwrap().code, "E_PLAN_TODOS_REQUIRED");
+    assert_eq!(denied.rt.prefs().approval_mode, ApprovalMode::Plan);
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        let ctx = ask_ctx_mode(mode);
+        register_todos(&ctx, &["Work"]);
+        ctx.rt
+            .analysis_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let out = drive_ask_with_answer(
+            &ctx,
+            missing_id_gate_args(),
+            repaired_answer("__cw_q1_option_2"),
+        )
+        .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(ctx.rt.prefs().approval_mode, ApprovalMode::FullAccess);
+    }
+}
+
+#[tokio::test]
+async fn repaired_ids_never_resolve_a_selected_id_through_another_options_label() {
+    use crate::core::prefs::ApprovalMode;
+    let ctx = ask_ctx_mode(ApprovalMode::ConfirmEach);
+    let args = json!({"questions":[{"question":"Choose", "options":[
+        {"id":"full", "label":"revise", "mode":"full_access"},
+        {"id":"revise", "label":"补充意见"}
+    ]}]});
+    let out = drive_ask_with_answer(&ctx, args, repaired_answer("revise")).await;
+    assert!(out.ok);
+    assert_eq!(ctx.rt.prefs().approval_mode, ApprovalMode::ConfirmEach);
+    assert_ne!(out.data["plan_approved"], json!(true));
+}
+
 fn ask_ctx_mode(mode: crate::core::prefs::ApprovalMode) -> ToolCtx {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
@@ -688,7 +821,7 @@ async fn ignored_single_question_returns_err() {
     assert!(!outcome.ok);
     let err = outcome.error.expect("忽略应返回错误");
     assert_eq!(err.code, "E_ASK_NOT_ANSWERED");
-    assert!(err.message.contains("忽略"), "{}", err.message);
+    assert!(err.message.contains("未回答"), "{}", err.message);
     assert!(err.message.contains("不要继续执行"), "{}", err.message);
 }
 

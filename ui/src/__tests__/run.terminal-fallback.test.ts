@@ -184,6 +184,24 @@ describe("run 终态兜底链（docs/runtime-and-scheduling）", () => {
   });
 
   describe("③ reconcileRun 双向对账", () => {
+    it("跳过后的关闭和终态事件都丢失时，对账仍恢复输入并允许续跑", async () => {
+      seedStuck();
+      useRun.setState((s) => { s.tabs[SESSION].runId = "skipped-run"; });
+      sessionRunSnapshot.mockResolvedValue({
+        running: false, run_id: "skipped-run",
+        terminal: { run_id: "skipped-run", kind: "cancelled" },
+      });
+      await useRun.getState().reconcileRun(SESSION);
+      expect(hasUnsettledRunState(tabOf())).toBe(false);
+      expect(tabOf().ask).toBeNull();
+      startChat.mockResolvedValueOnce("resumed-run");
+      expect(await useRun.getState().send("从已有进度继续", [], SESSION)).toBe(true);
+      expect(tabOf().running).toBe(true);
+      expect(tabOf().runId).toBe("resumed-run");
+      handlers()["ask:opened"]({ session: SESSION, run_id: "skipped-run", ask_id: "ask-1", kind: "ask" });
+      expect(tabOf().ask).toBeNull();
+    });
+
     it("A/B收尾后idle迟到Astart不得改身份，Bidle快照保持已收敛", async () => {
       seedStuck();
       useRun.setState((s) => { s.tabs[SESSION].runId = "A"; });

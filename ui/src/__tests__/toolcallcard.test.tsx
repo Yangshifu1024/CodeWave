@@ -136,6 +136,15 @@ describe("ToolCallCard summary", () => {
 });
 
 describe("ToolCallCard ask 未作答中性渲染", () => {
+  it("explicit skip is displayed as neutral skipped, not a failure", () => {
+    render(<ToolCallCard tool={toolView({
+      tool: "ask", status: "error",
+      outcome: { ok: false, data: {}, error: { code: "E_ASK_SKIPPED", message: "用户明确跳过" } },
+    })} />);
+    expect(verbText()).toContain("已跳过");
+    expect(verbText()).not.toContain("失败");
+    expect(document.querySelector(".tool-card.st-neutral")).not.toBeNull();
+  });
   // ask 忽略/取消在后端是刻意 err（防模型误读为默许），但用户视角只是「没回答」——
   // 展示层按错误码降为中性灰（st-neutral），其余错误仍红色失败。
   it("忽略（E_ASK_NOT_ANSWERED）：显示「未回答」且卡片为中性灰，不出现「失败」", () => {
