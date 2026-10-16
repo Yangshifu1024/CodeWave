@@ -821,7 +821,13 @@ export interface McpServerView {
   launch: McpLaunchStatus;
 }
 
-export interface McpLaunchStatus { version: string; trusted: boolean }
+export interface McpLaunchStatus { version: string; trusted: boolean; remembered?: boolean; revision?: number | null; error?: string | null }
+export type McpReviewAction = "once" | "remember" | "revoke";
+export interface McpLaunchReview {
+  id: string; version: string; source: string; name: string; action: McpReviewAction;
+  config: Partial<Pick<McpServerView, "transport" | "command" | "args" | "cwd" | "url" | "env" | "headers">>;
+}
+export interface McpLaunchReviewReceipt { operation_id: string; confirmed: boolean; resolved: boolean; status: McpLaunchStatus | null; error: string | null }
 export interface McpProbeChallenge { id: string; version: string }
 
 /** 一条配置问题 */

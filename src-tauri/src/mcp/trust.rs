@@ -1,13 +1,76 @@
 //! Host-owned launch grants. Configuration files cannot authorize their own execution.
-//! Grants last for this process; probes use bounded, single-use confirmations.
+//! Local tickets are not serialized. Remembered permissions come from the
+//! independent authority store; probes use bounded, single-use confirmations.
 
 use super::{McpError, McpServerConfig, PoolKey};
+use crate::core::trust::{AuthorityGuard, TrustKey, TrustStore};
+
+pub(super) enum AdmissionError {
+    Denied,
+    Trust(crate::core::trust::TrustError),
+    Local(McpError),
+}
+impl AdmissionError {
+    pub fn is_denied(&self) -> bool {
+        matches!(
+            self,
+            Self::Denied | Self::Trust(crate::core::trust::TrustError::Denied)
+        )
+    }
+}
+impl From<crate::core::trust::TrustError> for AdmissionError {
+    fn from(error: crate::core::trust::TrustError) -> Self {
+        Self::Trust(error)
+    }
+}
+impl From<McpError> for AdmissionError {
+    fn from(error: McpError) -> Self {
+        Self::Local(error)
+    }
+}
+impl From<AdmissionError> for McpError {
+    fn from(error: AdmissionError) -> Self {
+        match error {
+            AdmissionError::Denied => untrusted(),
+            AdmissionError::Trust(error) => authority_error(error),
+            AdmissionError::Local(error) => error,
+        }
+    }
+}
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+pub(super) fn authority_key(key: &PoolKey) -> TrustKey {
+    TrustKey {
+        kind: "mcp".into(),
+        purpose: "launch".into(),
+        source: key.source.clone(),
+        owner: format!(
+            "{}:{}",
+            key.scope_str(),
+            key.project_id.as_deref().unwrap_or("")
+        ),
+        name: key.name.clone(),
+    }
+}
+
+pub(super) fn authority_error(error: crate::core::trust::TrustError) -> McpError {
+    McpError::config_hint(
+        error.to_string(),
+        "Review the resource in Settings → MCP. Persistent trust never falls back to a local grant.",
+    )
+}
+
+#[derive(Clone)]
+pub(super) struct AuthorityProof {
+    pub store: Arc<TrustStore>,
+    pub revision: u64,
+}
 
 pub fn launch_version(cfg: &McpServerConfig) -> String {
     fn canonical(value: Value) -> Value {
@@ -30,28 +93,77 @@ pub fn launch_version(cfg: &McpServerConfig) -> String {
 pub(super) fn untrusted() -> McpError {
     McpError::config_hint(
         "MCP launch requires approval for this source and configuration version",
-        "Review this server in Settings → MCP and approve its launch. Grants expire when CodeWave exits.",
+        "Review this server in Settings → MCP and approve once or remember this exact version.",
     )
 }
 
 #[derive(Clone)]
 pub(super) struct LaunchPermit {
+    pub id: String,
     key: PoolKey,
     version: String,
     pub cancel: CancellationToken,
+    pub authority: Option<AuthorityProof>,
 }
 
 impl LaunchPermit {
     fn new(key: &PoolKey, cfg: &McpServerConfig) -> Self {
         Self {
+            id: uuid::Uuid::new_v4().to_string(),
             key: key.clone(),
             version: launch_version(cfg),
             cancel: CancellationToken::new(),
+            authority: None,
         }
     }
 
     pub fn check(&self, key: &PoolKey, cfg: &McpServerConfig) -> Result<(), McpError> {
         if self.key != *key || self.version != launch_version(cfg) || self.cancel.is_cancelled() {
+            return Err(untrusted());
+        }
+        Ok(())
+    }
+
+    pub async fn admit(
+        &self,
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+    ) -> Result<Option<AuthorityGuard>, AdmissionError> {
+        self.check(key, cfg)?;
+        let Some(proof) = &self.authority else {
+            return Ok(None);
+        };
+        let guard = proof
+            .store
+            .admit(
+                &authority_key(key),
+                &self.version,
+                Some(proof.revision),
+                &self.cancel,
+            )
+            .await?;
+        // Cooperating saves take the authority barrier before publishing a new
+        // document. External edits are also rejected when observed here.
+        Self::check_source(key, cfg)?;
+        self.check(key, cfg)?;
+        Ok(Some(guard))
+    }
+
+    pub fn check_source(key: &PoolKey, cfg: &McpServerConfig) -> Result<(), McpError> {
+        let source = super::ScopeRef {
+            scope: key.scope,
+            path: key.source.clone(),
+        };
+        let doc = super::load_scope(&source);
+        if !doc
+            .servers
+            .iter()
+            .any(|(name, current)| name == &key.name && current == cfg && current.enabled)
+            || doc.issues.iter().any(|issue| {
+                issue.level == super::IssueLevel::Error
+                    && issue.server.as_deref().is_none_or(|name| name == key.name)
+            })
+        {
             return Err(untrusted());
         }
         Ok(())
@@ -62,6 +174,9 @@ impl LaunchPermit {
 pub struct LaunchStatus {
     pub version: String,
     pub trusted: bool,
+    pub remembered: bool,
+    pub revision: Option<u64>,
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -111,6 +226,15 @@ impl LaunchRegistry {
         LaunchStatus {
             version: launch_version(cfg),
             trusted: self.connection(key, cfg).is_ok(),
+            remembered: self
+                .connection(key, cfg)
+                .ok()
+                .is_some_and(|permit| permit.authority.is_some()),
+            revision: self
+                .connection(key, cfg)
+                .ok()
+                .and_then(|permit| permit.authority.map(|proof| proof.revision)),
+            error: None,
         }
     }
 
@@ -135,11 +259,12 @@ impl LaunchRegistry {
             return Err(untrusted());
         }
         let mut inner = self.0.lock().unwrap();
-        if inner
-            .grants
-            .get(key)
-            .is_some_and(|permit| permit.check(key, cfg).is_ok())
+        if let Some(permit) = inner.grants.get_mut(key)
+            && permit.check(key, cfg).is_ok()
         {
+            // Only an explicit new host approval calls grant; never use this
+            // path as a fallback when persistent authority cannot be read.
+            permit.authority = None;
             return Ok(());
         }
         if let Some(old) = inner
@@ -151,8 +276,44 @@ impl LaunchRegistry {
         Ok(())
     }
 
+    pub fn grant_persistent(
+        &self,
+        key: &PoolKey,
+        cfg: &McpServerConfig,
+        proof: AuthorityProof,
+    ) -> Result<LaunchPermit, McpError> {
+        let mut inner = self.0.lock().unwrap();
+        if let Some(permit) = inner.grants.get_mut(key)
+            && permit.check(key, cfg).is_ok()
+        {
+            permit.authority = Some(proof);
+            return Ok(permit.clone());
+        }
+        let mut permit = LaunchPermit::new(key, cfg);
+        permit.authority = Some(proof);
+        if let Some(old) = inner.grants.insert(key.clone(), permit.clone()) {
+            old.cancel.cancel();
+        }
+        Ok(permit)
+    }
+
     pub fn revoke(&self, key: &PoolKey) {
         let mut inner = self.0.lock().unwrap();
+        Self::revoke_locked(&mut inner, key);
+    }
+
+    pub fn revoke_if_current(&self, key: &PoolKey, id: &str, revision: Option<u64>) -> bool {
+        let mut inner = self.0.lock().unwrap();
+        if !inner.grants.get(key).is_some_and(|permit| {
+            permit.id == id && permit.authority.as_ref().map(|proof| proof.revision) == revision
+        }) {
+            return false;
+        }
+        Self::revoke_locked(&mut inner, key);
+        true
+    }
+
+    fn revoke_locked(inner: &mut Inner, key: &PoolKey) {
         if let Some(permit) = inner.grants.remove(key) {
             permit.cancel.cancel();
         }

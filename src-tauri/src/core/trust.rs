@@ -237,6 +237,27 @@ impl TrustStore {
         operation_id: &str,
         cancel: &CancellationToken,
     ) -> Result<TrustRecord, TrustError> {
+        let guard = self
+            .compare_exchange_guard(key, expected, version, decision, operation_id, cancel)
+            .await?;
+        Ok(guard
+            .record
+            .as_ref()
+            .expect("committed trust record")
+            .clone())
+    }
+
+    /// Retain the authority lock through the caller's short admission/config
+    /// validation. Never acquire a config/manager lock before awaiting this.
+    pub async fn compare_exchange_guard(
+        &self,
+        key: &TrustKey,
+        expected: Option<u64>,
+        version: &str,
+        decision: Decision,
+        operation_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<AuthorityGuard, TrustError> {
         let digest = self.account(key)?;
         let version = normalize_version(version)?;
         let operation_id = uuid::Uuid::parse_str(operation_id)
@@ -246,7 +267,7 @@ impl TrustStore {
             .to_string();
         let backend = self.backend.clone();
         let stopped = cancel.clone();
-        self.transact(cancel, true, move |_file, _local, deadline| {
+        self.transact(cancel, true, move |file, local, deadline| {
             let current = read(backend.as_ref(), &digest)?;
             if let Some(record) = &current
                 && record.operation_id == operation_id
@@ -255,7 +276,11 @@ impl TrustStore {
                     && record.decision == decision
                     && expected.unwrap_or(0).checked_add(1) == Some(record.revision)
                 {
-                    Ok(record.clone())
+                    Ok(AuthorityGuard {
+                        _file: file,
+                        _local: local,
+                        record: Some(record.clone()),
+                    })
                 } else {
                     Err(TrustError::Conflict)
                 };
@@ -286,10 +311,66 @@ impl TrustStore {
             // than set_password's return alone, determines a confirmed outcome.
             let written = backend.write(&digest, &value);
             match read(backend.as_ref(), &digest) {
-                Ok(Some(actual)) if actual == next => Ok(actual),
+                Ok(Some(actual)) if actual == next => Ok(AuthorityGuard {
+                    _file: file,
+                    _local: local,
+                    record: Some(actual),
+                }),
                 Ok(actual) if actual == current && written.is_err() => Err(TrustError::Unavailable),
                 _ => Err(TrustError::OutcomeUnknown),
             }
+        })
+        .await
+    }
+
+    /// Revoke all affected resources before publishing a configuration change.
+    /// Partial failure is a conservative revocation, never permission to save.
+    /// The returned barrier prevents a concurrent grant between revoke and save.
+    pub async fn revoke_batch(
+        &self,
+        keys: &[TrustKey],
+        cancel: &CancellationToken,
+    ) -> Result<AuthorityGuard, TrustError> {
+        let accounts = keys
+            .iter()
+            .map(|key| self.account(key))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        let backend = self.backend.clone();
+        let stopped = cancel.clone();
+        self.transact(cancel, true, move |file, local, deadline| {
+            for account in accounts {
+                if stopped.is_cancelled() {
+                    return Err(TrustError::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    return Err(TrustError::Busy);
+                }
+                let Some(mut record) = read(backend.as_ref(), &account)? else {
+                    continue;
+                };
+                if record.decision == Decision::Revoke {
+                    continue;
+                }
+                record.revision = record.revision.checked_add(1).ok_or(TrustError::Corrupt)?;
+                record.decision = Decision::Revoke;
+                record.operation_id = uuid::Uuid::new_v4().to_string();
+                let value = serde_json::to_string(&record).map_err(|_| TrustError::Invalid)?;
+                if stopped.is_cancelled() {
+                    return Err(TrustError::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    return Err(TrustError::Busy);
+                }
+                let _ = backend.write(&account, &value);
+                if read(backend.as_ref(), &account).ok().flatten().as_ref() != Some(&record) {
+                    return Err(TrustError::OutcomeUnknown);
+                }
+            }
+            Ok(AuthorityGuard {
+                _file: file,
+                _local: local,
+                record: None,
+            })
         })
         .await
     }

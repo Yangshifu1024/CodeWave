@@ -20,6 +20,7 @@ mod config;
 mod error;
 mod manager;
 mod process;
+mod review_service;
 mod service;
 mod tools;
 mod trust;
@@ -32,8 +33,8 @@ pub use config::{
 };
 pub use error::{McpError, McpErrorKind};
 pub use manager::{
-    DEFAULT_MAX_SERVERS, INIT_TIMEOUT, McpCallOutput, McpManager, McpState, McpStatusPayload,
-    PoolKey, StatusSink,
+    DEFAULT_MAX_SERVERS, INIT_TIMEOUT, LaunchReview, LaunchReviewReceipt, McpCallOutput,
+    McpManager, McpState, McpStatusPayload, PoolKey, ReviewAction, StatusSink,
 };
 pub use tools::{
     McpTool, McpToolDef, normalize_schema, server_function_name, to_provider_tool_defs,
@@ -41,5 +42,6 @@ pub use tools::{
 
 pub(crate) use process::wrap_process_tree;
 
+pub use review_service::{confirm_launch_review, launch_operation, prepare_launch_review};
 pub use service::{SaveReceipt, launch_key, save_configuration, set_launch_trust, visible_servers};
 pub use trust::{LaunchStatus, ProbeChallenge, launch_version};

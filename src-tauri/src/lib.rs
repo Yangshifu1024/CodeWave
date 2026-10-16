@@ -166,7 +166,20 @@ pub fn run() {
             let sink: Arc<dyn core::agent::EventSink> = Arc::new(
                 core::sessions::interrupt::InterruptWatchSink::new(tauri_sink, store.clone()),
             );
-            let core = Arc::new(AgentCore::new(cfg, sink, store, client, data_dir.clone()));
+            let mut agent = AgentCore::new(cfg, sink, store, client, data_dir.clone());
+            agent.mcp = Arc::new(mcp::McpManager::with_authority(
+                mcp::DEFAULT_MAX_SERVERS,
+                Arc::new(core::trust::TrustStore::new(data_dir.clone(), Arc::new(host::trust::SystemTrustBackend))),
+            ));
+            let core = Arc::new(agent);
+            let authority_watch = Arc::downgrade(&core.mcp);
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let Some(manager) = authority_watch.upgrade() else { break; };
+                    manager.revalidate_all_authority().await;
+                }
+            });
             // Complete startup recovery before exposing any model snapshots. I/O stays on the
             // blocking pool and uses exactly the same commit protocol as all later writers.
             let startup_core = core.clone();
@@ -420,6 +433,10 @@ pub fn run() {
             host::commands::mcp_test,
             host::commands::mcp_prepare_test,
             host::commands::mcp_set_launch_trust,
+            host::commands::mcp_prepare_launch,
+            host::commands::mcp_confirm_launch,
+            host::commands::mcp_launch_operation,
+            host::commands::mcp_discard_launch_review,
             host::commands::mcp_snapshot,
             host::commands::list_agents,
             host::commands::list_skills,

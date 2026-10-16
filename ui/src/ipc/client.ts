@@ -181,6 +181,13 @@ export const ipc = {
     invoke<void>("mcp_reconnect", { sessionId, name }),
   mcpSetLaunchTrust: (scope: McpScope, name: string, expectedVersion: string, trusted: boolean, sessionId?: string) =>
     invoke<import("./types").McpLaunchStatus>("mcp_set_launch_trust", { scope, name, expectedVersion, trusted, sessionId: sessionId ?? null }),
+  mcpPrepareLaunch: (scope: McpScope, name: string, expectedVersion: string, action: import("./types").McpReviewAction, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReview>("mcp_prepare_launch", { scope, name, expectedVersion, action, sessionId: sessionId ?? null }),
+  mcpConfirmLaunch: (scope: McpScope, name: string, confirmation: string, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReviewReceipt>("mcp_confirm_launch", { scope, name, confirmation, sessionId: sessionId ?? null }),
+  mcpLaunchOperation: (scope: McpScope, name: string, operationId: string, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReviewReceipt>("mcp_launch_operation", { scope, name, operationId, sessionId: sessionId ?? null }),
+  mcpDiscardLaunchReview: (confirmation: string) => invoke<void>("mcp_discard_launch_review", { confirmation }),
   /** Prepare a single-use confirmation for the exact draft; this never connects. */
   mcpPrepareTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
     invoke<import("./types").McpProbeChallenge>("mcp_prepare_test", { scope, name, config, sessionId: sessionId ?? null }),

@@ -83,8 +83,8 @@ pub struct McpServerView {
     launch: crate::mcp::LaunchStatus,
 }
 
-fn view_of(
-    m: &MergedServer,
+async fn view_of(
+    m: MergedServer,
     core: &AgentCore,
     session_id: Option<&str>,
 ) -> Result<McpServerView, String> {
@@ -114,7 +114,7 @@ fn view_of(
         source: m.source.as_str().to_string(),
         overridden: m.overridden.map(|s| s.as_str().to_string()),
         source_path: key.source.display().to_string(),
-        launch: core.mcp.launch_status(&key, &m.cfg),
+        launch: core.mcp.current_launch_status(&key, &m.cfg).await,
     })
 }
 
@@ -134,7 +134,7 @@ pub struct McpConfigDocPayload {
     issues: Vec<ConfigIssue>,
 }
 
-fn doc_payload(
+async fn doc_payload(
     sref: &ScopeRef,
     doc: &ScopeDoc,
     effective: &[MergedServer],
@@ -146,27 +146,31 @@ fn doc_payload(
         path: sref.path.display().to_string(),
         json: doc.raw.clone(),
         version: crate::mcp::scope_version(&doc.raw),
-        servers: doc
-            .servers
-            .iter()
-            .map(|(name, cfg)| {
-                view_of(
-                    &MergedServer {
-                        name: name.clone(),
-                        cfg: cfg.clone(),
-                        source: sref.scope,
-                        overridden: None,
-                        issues: Vec::new(),
-                    },
-                    core,
-                    session_id,
-                )
-            })
-            .collect::<Result<_, _>>()?,
-        effective: effective
-            .iter()
-            .map(|server| view_of(server, core, session_id))
-            .collect::<Result<_, _>>()?,
+        servers: futures::future::join_all(doc.servers.iter().map(|(name, cfg)| {
+            view_of(
+                MergedServer {
+                    name: name.clone(),
+                    cfg: cfg.clone(),
+                    source: sref.scope,
+                    overridden: None,
+                    issues: Vec::new(),
+                },
+                core,
+                session_id,
+            )
+        }))
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?,
+        effective: futures::future::join_all(
+            effective
+                .iter()
+                .cloned()
+                .map(|server| view_of(server, core, session_id)),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?,
         issues: doc.issues.clone(),
     })
 }
@@ -193,7 +197,75 @@ pub async fn mcp_list_config(
     let sref = scope_ref(&core, session_id.as_deref(), scope)?;
     let doc = load_scope(&sref);
     let effective = effective_servers(&core, session_id.as_deref());
-    doc_payload(&sref, &doc, &effective, &core, session_id.as_deref())
+    doc_payload(&sref, &doc, &effective, &core, session_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn mcp_prepare_launch(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    expected_version: String,
+    action: crate::mcp::ReviewAction,
+) -> Result<crate::mcp::LaunchReview, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    crate::mcp::prepare_launch_review(
+        &core,
+        &source,
+        session_id.as_deref(),
+        &name,
+        &expected_version,
+        action,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mcp_confirm_launch(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    confirmation: String,
+) -> Result<crate::mcp::LaunchReviewReceipt, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    wire_sink(&core).await;
+    crate::mcp::confirm_launch_review(&core, &source, session_id.as_deref(), &name, &confirmation)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mcp_launch_operation(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    operation_id: String,
+) -> Result<crate::mcp::LaunchReviewReceipt, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    crate::mcp::launch_operation(&core, &source, session_id.as_deref(), &name, &operation_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn mcp_discard_launch_review(core: Core<'_>, confirmation: String) {
+    core.mcp.discard_launch_review(&confirmation);
 }
 
 #[tauri::command]

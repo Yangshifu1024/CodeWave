@@ -61,6 +61,26 @@ pub async fn set_launch_trust(
     core.mcp
         .set_launch_trust(&key, cfg, expected, trusted)
         .await?;
+    drop(_commit);
+    if !trusted {
+        let authority = core.mcp.revoke_launch_version(&key, cfg).await?;
+        let _commit = CONFIG_COMMIT.lock().await;
+        if launch_key(core, source, session_id, name)? != key
+            || !load_scope(source)
+                .servers
+                .iter()
+                .any(|(server, current)| server == name && current == cfg)
+        {
+            return Err(McpError::config(
+                "MCP configuration changed during revocation; reload",
+            ));
+        }
+        core.mcp
+            .set_launch_trust(&key, cfg, expected, false)
+            .await?;
+        drop(_commit);
+        drop(authority);
+    }
     if trusted {
         let sessions: Vec<_> = core
             .sessions
@@ -165,6 +185,66 @@ pub async fn save_configuration(
             affected_servers: vec![],
         });
     }
+    let identity_before = source_identity(&source.path);
+    let previous = parse_scope_text(source, &old);
+    let changed: Vec<_> = previous
+        .servers
+        .iter()
+        .filter(|(name, cfg)| {
+            !parsed
+                .servers
+                .iter()
+                .any(|(current, next)| current == name && next == cfg && next.enabled)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let owners: Vec<_> = if source.scope == Scope::Global {
+        vec![None]
+    } else {
+        core.sessions
+            .iter()
+            .filter_map(|entry| {
+                let rt = entry.value();
+                rt.project_dir
+                    .as_deref()
+                    .filter(|path| source_identity(&project_scope(path).path) == identity_before)
+                    .map(|_| Some(rt.project_id.clone().unwrap_or_default()))
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let keys: Vec<_> = owners
+        .iter()
+        .flat_map(|owner| {
+            changed.iter().map(|name| {
+                match owner {
+                    Some(id) => PoolKey::project(id, name),
+                    None => PoolKey::global(name),
+                }
+                .with_source(&identity_before)
+            })
+        })
+        .collect();
+    drop(_commit);
+    let authority = core.mcp.invalidate_persistent(&keys).await?;
+    let _commit = CONFIG_COMMIT.lock().await;
+    if source_identity(&source.path) != identity_before || read_scope_text(source)? != old {
+        return Err(McpError::config(
+            "MCP configuration changed during trust invalidation; reload before saving",
+        ));
+    }
+    if source.scope == Scope::Project
+        && !core.sessions.iter().any(|entry| {
+            let rt = entry.value();
+            !rt.zombie.load(std::sync::atomic::Ordering::SeqCst)
+                && rt.project_dir.as_deref().is_some_and(|path| {
+                    source_identity(&project_scope(path).path) == identity_before
+                })
+        })
+    {
+        return Err(McpError::config("Project context closed before MCP save"));
+    }
     if let Some(parent) = source.path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|_| McpError::config("MCP configuration directory could not be created"))?;
@@ -174,6 +254,8 @@ pub async fn save_configuration(
     })?;
     core.mcp
         .invalidate_launch_source(&source_identity(&source.path), &parsed.servers);
+    drop(_commit);
+    drop(authority);
     // Only runtimes actually reading this file are affected. The canonical path distinguishes relocated projects.
     let identity = source_identity(&source.path);
     let sessions = core

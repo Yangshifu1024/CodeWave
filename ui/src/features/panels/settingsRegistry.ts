@@ -563,6 +563,8 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpConfirmLaunch", "mcpConfirmProbe", "mcpConfirmRevoke",
   "mcpLaunchLifetime", "mcpProbeLaunchHint", "mcpLaunchRevokeHint",
   "mcpLaunchVersion", "mcpLaunchDefaultCwd",
+  "mcpRememberLaunch", "mcpConfirmRemember", "mcpRememberHint", "mcpRemembered",
+  "mcpInspectTrust", "mcpTrustUnknown", "mcpTrustStatusHint",
   "mcpTest", // → 动作：单 server 临时测试连接
   "mcpTestOk", // → mcp 页：测试成功结果
   "mcpTestFail", // → mcp 页：测试失败结果

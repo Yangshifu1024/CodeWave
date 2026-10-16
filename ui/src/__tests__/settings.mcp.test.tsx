@@ -52,6 +52,15 @@ let calls: string[] = [];
 let statusReply: { name: string; state: unknown; tools: number; pid?: number | null; scope?: "global" | "project"; tool_details?: { name: string; description: string }[] }[] = [];
 let effectiveReply: Array<Pick<McpServerView, "name" | "source" | "overridden">> = [];
 let launchReply: McpServerView[] = [];
+const launchReviews = new Map<string, { name: string; action: string }>();
+function launchServer(): McpServerView {
+  return {
+    name: "fs", source: "global", source_path: "C:/u/.codewave/mcp.json", overridden: null,
+    transport: "stdio", transport_inferred: true, enabled: true, read_only: true, always_allow: true,
+    command: "npx", args: ["actual-server", "--token", "option-secret"], env: { API_KEY: "env-secret" }, cwd: "C:/actual/cwd", url: null, headers: {}, timeout_ms: null,
+    tools: { mode: "all", list: [] }, extra_keys: [], launch: { version: "launch-v1", trusted: false },
+  };
+}
 /** mcp_list_config 的 json 字段（默认两个服务器；用例可改成 "{}" / 非法文本测空态与兜底模式） */
 let configReply = MCP_CONFIG;
 let saveAllowed = true;
@@ -82,6 +91,18 @@ async function baseInvoke(cmd: string, args?: any) {
       };
     case "mcp_save_config": return { saved: saveAllowed, issues: [], version: "mcp-v2", apply_revision: 2, affected_servers: ["global:fs"] };
     case "mcp_prepare_test": return { id: `probe-${calls.filter((call) => call.startsWith("mcp_prepare_test:")).length}`, version: "draft-v1" };
+    case "mcp_prepare_launch": {
+      const server = launchReply.find((server) => server.name === args.name)!;
+      const id = `launch-review-${calls.filter((call) => call.startsWith("mcp_prepare_launch:")).length}`;
+      launchReviews.set(id, { name: args.name, action: args.action });
+      return { id, name: args.name, action: args.action, version: server.launch.version, source: server.source_path, config: server };
+    }
+    case "mcp_confirm_launch": {
+      const review = launchReviews.get(args.confirmation)!;
+      launchReply = launchReply.map((server) => server.name === review.name ? { ...server, launch: { ...server.launch, trusted: review.action !== "revoke", remembered: review.action === "remember", revision: review.action === "remember" ? 1 : null } } : server);
+      return { operation_id: args.confirmation, confirmed: true, resolved: true, status: launchReply.find((server) => server.name === review.name)!.launch, error: null };
+    }
+    case "mcp_discard_launch_review": launchReviews.delete(args.confirmation); return;
     case "mcp_set_launch_trust":
       launchReply = launchReply.map((server) => server.name === args.name ? { ...server, launch: { ...server.launch, trusted: args.trusted } } : server);
       return { version: args.expectedVersion, trusted: args.trusted };
@@ -116,6 +137,7 @@ afterEach(async () => {
   statusReply = [];
   effectiveReply = [];
   launchReply = [];
+  launchReviews.clear();
   configReply = MCP_CONFIG;
   testReply = { ok: true, tools: 2, error: null };
   useSessions.setState({ activeKey: null });
@@ -858,12 +880,7 @@ describe("current draft probe identity and save receipts", () => {
   });
 
   it("approves and revokes the displayed saved source/version without letting configuration self-authorize", async () => {
-    launchReply = [{
-      name: "fs", source: "global", source_path: "C:/u/.codewave/mcp.json", overridden: null,
-      transport: "stdio", transport_inferred: true, enabled: true, read_only: true, always_allow: true,
-      command: "npx", args: ["actual-server", "--token", "option-secret"], env: { API_KEY: "env-secret" }, cwd: "C:/actual/cwd", url: null, headers: {}, timeout_ms: null,
-      tools: { mode: "all", list: [] }, extra_keys: [], launch: { version: "launch-v1", trusted: false },
-    }];
+    launchReply = [launchServer()];
     await openMcpTab();
     await waitFor(() => expect(buttonByText("批准启动")).toBeTruthy());
     expect(calls.some((call) => call.startsWith("mcp_set_launch_trust:"))).toBe(false);
@@ -878,13 +895,14 @@ describe("current draft probe identity and save receipts", () => {
     expect(calls.some((call) => call.startsWith("mcp_set_launch_trust:"))).toBe(false);
     fireEvent.click(buttonByText("批准启动"));
     await confirmMcpDialog("批准启动");
-    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_set_launch_trust:"))).toHaveLength(1));
-    expect(JSON.parse(calls.find((call) => call.startsWith("mcp_set_launch_trust:"))!.split("mcp_set_launch_trust:")[1])).toEqual({ scope: "global", name: "fs", expectedVersion: "launch-v1", trusted: true, sessionId: "s1" });
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_confirm_launch:"))).toHaveLength(1));
+    expect(JSON.parse(calls.find((call) => call.startsWith("mcp_confirm_launch:"))!.split("mcp_confirm_launch:")[1])).toEqual({ scope: "global", name: "fs", confirmation: "launch-review-2", sessionId: "s1" });
+    expect(calls.some((call) => call.startsWith("mcp_set_launch_trust:"))).toBe(false);
     await waitFor(() => expect(buttonByText("撤销启动授权")).toBeTruthy());
     fireEvent.click(buttonByText("撤销启动授权"));
     await confirmMcpDialog("撤销启动授权");
-    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_set_launch_trust:"))).toHaveLength(2));
-    expect(JSON.parse(calls.filter((call) => call.startsWith("mcp_set_launch_trust:"))[1].split("mcp_set_launch_trust:")[1]).trusted).toBe(false);
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_set_launch_trust:"))).toHaveLength(1));
+    expect(JSON.parse(calls.find((call) => call.startsWith("mcp_set_launch_trust:"))!.split("mcp_set_launch_trust:")[1]).trusted).toBe(false);
     expect(calls.some((call) => call.startsWith("mcp_connect:"))).toBe(false);
   });
 
@@ -898,6 +916,69 @@ describe("current draft probe identity and save receipts", () => {
     const payload = JSON.parse(calls.find((call) => call.startsWith("mcp_test:"))!.slice("mcp_test:".length));
     expect(payload).toEqual({ scope: "global", name: "new draft", sessionId: "s1", confirmation: "probe-1", config: { command: "missing-command", args: ["-y", "@modelcontextprotocol/server-fs"] } });
     expect(calls.some((call) => call.startsWith("mcp_save_config:"))).toBe(false);
+  });
+
+  it("remembers and revokes a host-reviewed version using opaque single-use tickets", async () => {
+    launchReply = [launchServer()];
+    (await invokeMock()).mockImplementation(async (cmd: string, args?: any) => {
+      const result = await baseInvoke(cmd, args);
+      if (cmd === "mcp_prepare_launch" && result && "config" in result) return { ...result, config: { ...result.config, command: "host-reviewed-command", args: ["host-reviewed-arg"] } };
+      return result;
+    });
+    await openMcpTab();
+    fireEvent.click(buttonByText("记住此版本"));
+    await waitFor(() => expect(document.querySelector(".ant-modal-confirm")?.textContent).toContain("host-reviewed-command"));
+    expect(document.querySelector(".ant-modal-confirm")!.textContent).not.toContain("actual-server");
+    await confirmMcpDialog("记住此版本");
+    await waitFor(() => expect(document.body.textContent).toContain("许可来自已记住版本"));
+    fireEvent.click(buttonByText("撤销启动授权"));
+    await confirmMcpDialog("撤销启动授权");
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_confirm_launch:"))).toHaveLength(2));
+    const actions = calls.filter((call) => call.startsWith("mcp_prepare_launch:")).map((call) => JSON.parse(call.slice("mcp_prepare_launch:".length)).action);
+    expect(actions).toEqual(["remember", "revoke"]);
+    expect(calls.some((call) => call.startsWith("mcp_set_launch_trust:"))).toBe(false);
+  });
+
+  it("keeps unknown-operation inspection through a refreshed authority revision without another approval", async () => {
+    launchReply = [launchServer()];
+    (await invokeMock()).mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "mcp_confirm_launch" || cmd === "mcp_launch_operation") {
+        calls.push(`${cmd}:${JSON.stringify(args)}`);
+        launchReply = launchReply.map((server) => ({ ...server, launch: { ...server.launch, revision: 2, error: "authority-refresh" } }));
+        return { operation_id: args.confirmation ?? args.operationId, confirmed: false, resolved: cmd === "mcp_launch_operation", status: null, error: "review-result" };
+      }
+      return baseInvoke(cmd, args);
+    });
+    await openMcpTab();
+    fireEvent.click(buttonByText("批准启动"));
+    await confirmMcpDialog("批准启动");
+    await waitFor(() => expect(document.body.textContent).toContain("授权状态需核对"));
+    await waitFor(() => expect(buttonByText("检查授权结果")).toBeTruthy());
+    expect((buttonByText("批准启动") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(buttonByText("检查授权结果"));
+    await waitFor(() => expect((buttonByText("批准启动") as HTMLButtonElement).disabled).toBe(false));
+    expect(calls.filter((call) => call.startsWith("mcp_confirm_launch:"))).toHaveLength(1);
+    const inspections = calls.filter((call) => call.startsWith("mcp_launch_operation:"));
+    expect(inspections).toHaveLength(1);
+    expect(JSON.parse(inspections[0].slice("mcp_launch_operation:".length)).operationId).toBe("launch-review-1");
+  });
+
+  it("discards a late prepared review when its settings owner has closed", async () => {
+    launchReply = [launchServer()];
+    let release: (() => void) | undefined;
+    (await invokeMock()).mockImplementation(async (cmd: string, args?: any) => {
+      const result = await baseInvoke(cmd, args);
+      if (cmd === "mcp_prepare_launch") await new Promise<void>((resolve) => { release = resolve; });
+      return result;
+    });
+    await openMcpTab();
+    fireEvent.click(buttonByText("记住此版本"));
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+    cleanup();
+    await act(async () => { release!(); });
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("mcp_discard_launch_review:"))).toHaveLength(1));
+    expect(calls.some((call) => call.startsWith("mcp_confirm_launch:"))).toBe(false);
+    expect(document.querySelector(".ant-modal-confirm")).toBeNull();
   });
 
   it("shows the HTTP draft target and header names without echoing URL or header credentials", async () => {

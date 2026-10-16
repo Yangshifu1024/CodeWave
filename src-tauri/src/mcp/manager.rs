@@ -40,8 +40,18 @@ use super::tools::{McpTool, McpToolDef, build_tool_defs, filter_tools, normalize
 use super::trust::{LaunchPermit, LaunchRegistry, LaunchStatus, ProbeChallenge, untrusted};
 
 #[cfg(test)]
+#[path = "persistent_tests.rs"]
+mod persistent_tests;
+#[cfg(test)]
 #[path = "trust_integration_tests.rs"]
 mod trust_integration_tests;
+
+#[path = "manager_authority.rs"]
+mod authority;
+#[path = "launch_review.rs"]
+mod launch_review;
+pub(crate) use launch_review::PendingReview;
+pub use launch_review::{LaunchReview, LaunchReviewReceipt, ReviewAction};
 
 /// 连接 + initialize + list_tools 的总超时。
 pub const INIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -305,6 +315,8 @@ impl Drop for ProbeGuard {
 pub struct McpManager {
     inner: Mutex<Inner>,
     launch: LaunchRegistry,
+    authority: Option<Arc<crate::core::trust::TrustStore>>,
+    reviews: std::sync::Mutex<HashMap<String, PendingReview>>,
     max_servers: usize,
     tick: AtomicU64,
     sink: RwLock<Option<StatusSink>>,
@@ -409,6 +421,8 @@ impl McpManager {
     pub fn new(max_servers: usize) -> Self {
         McpManager {
             launch: LaunchRegistry::default(),
+            authority: None,
+            reviews: std::sync::Mutex::new(HashMap::new()),
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
                 sessions: HashMap::new(),
@@ -471,9 +485,15 @@ impl McpManager {
         }
         let mut inner = self.inner.lock().await;
         if trusted {
-            return self.launch.grant(key, cfg, version);
+            self.launch.grant(key, cfg, version)?;
+            if let Some(entry) = inner.entries.get_mut(key)
+                && entry.cfg == *cfg
+            {
+                entry.launch = Some(self.launch.connection(key, cfg)?);
+            }
+            return Ok(());
         }
-        self.launch.revoke(key);
+        self.revoke_launch(key);
         let retired = inner.entries.get_mut(key).map(|entry| {
             let service = entry.service.take();
             clear_connection(entry);
@@ -505,6 +525,7 @@ impl McpManager {
         source: &std::path::Path,
         servers: &[(String, McpServerConfig)],
     ) {
+        self.invalidate_review_source(source, servers);
         self.launch.invalidate_source(source, servers);
     }
 
@@ -680,8 +701,9 @@ impl McpManager {
                         e.sessions.insert(session.clone());
                         let changed = e.cfg != *cfg;
                         if changed {
+                            self.invalidate_launch_reviews(key);
                             if !self.launch.status(key, cfg).trusted {
-                                self.launch.revoke(key);
+                                self.revoke_launch(key);
                             }
                             affected.insert(format!("{}:{}", key.scope_str(), key.name));
                             if let Some(svc) = e.service.take() {
@@ -908,9 +930,10 @@ impl McpManager {
         session: &str,
         expected_generation: Option<u64>,
     ) -> Result<usize, McpError> {
-        let permit = match self.launch.connection(key, &cfg) {
-            Ok(permit) => permit,
+        let (permit, authority_guard) = match self.connection_admission(key, &cfg).await {
+            Ok(admission) => admission,
             Err(error) => {
+                let error = McpError::from(error);
                 let payload = {
                     let mut inner = self.inner.lock().await;
                     inner.entries.get_mut(key).and_then(|entry| {
@@ -968,6 +991,7 @@ impl McpManager {
                 return Err(changed_error());
             }
         };
+        drop(authority_guard);
         for p in self.reserve_slot(key).await {
             self.emit(session, &p).await;
         }
@@ -1033,6 +1057,53 @@ impl McpManager {
             dirty,
         } = ready;
         let mut service = Some(service);
+        let original = self
+            .inner
+            .lock()
+            .await
+            .entries
+            .get(key)
+            .and_then(|entry| entry.launch.as_ref())
+            .map(|permit| {
+                (
+                    permit.id.clone(),
+                    permit.authority.as_ref().map(|proof| proof.revision),
+                )
+            });
+        let admission = self.entry_admission(key, Some(generation)).await;
+        if admission.is_err() {
+            let rejected = {
+                let mut inner = self.inner.lock().await;
+                inner
+                    .entries
+                    .get_mut(key)
+                    .filter(|entry| entry.generation == generation)
+                    .map(|entry| {
+                        if entry.launch.as_ref().map(|permit| {
+                            (
+                                permit.id.clone(),
+                                permit.authority.as_ref().map(|proof| proof.revision),
+                            )
+                        }) == original
+                            && let Some((id, revision)) = &original
+                        {
+                            self.retire_launch(key, id, *revision);
+                        }
+                        clear_connection(entry);
+                        entry.state = McpState::Stopped;
+                        entry.error = None;
+                        entry.note = Some("Launch permission changed before Ready".into());
+                        payload_of(key, entry)
+                    })
+            };
+            if let Some(service) = service.take() {
+                tokio::spawn(close_service(service));
+            }
+            if let Some(payload) = rejected {
+                self.emit_key(key, session, &payload).await;
+            }
+            return false;
+        }
         let payload = {
             let mut inner = self.inner.lock().await;
             inner.entries.get_mut(key).and_then(|e| {
@@ -1058,6 +1129,7 @@ impl McpManager {
                 Some(payload_of(key, e))
             })
         };
+        drop(admission);
         let Some(payload) = payload else {
             if let Some(svc) = service.and_then(Arc::into_inner) {
                 let _ = svc.cancel().await;
@@ -1097,7 +1169,10 @@ impl McpManager {
         http: reqwest::Client,
         permit: &LaunchPermit,
     ) -> Result<Ready, McpError> {
-        permit.check(key, cfg)?;
+        let admission = permit.admit(key, cfg).await?;
+        // Admission is ordered before revoke. Already-admitted external effects
+        // cannot be rolled back; never hold a keyring lock across the handshake.
+        drop(admission);
         tokio::select! {
             biased;
             _ = permit.cancel.cancelled() => Err(untrusted()),
@@ -1220,7 +1295,8 @@ impl McpManager {
     /// 只取该会话可见集内 `Ready` 条目的工具——这是「项目 A 的 MCP 工具不出现在
     /// 项目 B 请求里」的落地处。
     pub async fn tool_defs_for(&self, session: &str) -> Vec<McpToolDef> {
-        let (keys, dirty) = {
+        self.revalidate_authority(session).await;
+        let dirty = {
             let mut inner = self.inner.lock().await;
             let keys: Vec<PoolKey> = inner
                 .sessions
@@ -1241,61 +1317,51 @@ impl McpManager {
                     dirty.push((k.clone(), e.cfg.clone()));
                 }
             }
-            (keys, dirty)
+            dirty
         };
         // Refresh at the step snapshot boundary, never inside the notification callback.
         for (key, cfg) in dirty {
             self.refresh_tools(&key, &cfg).await;
         }
-        let tools = {
-            let mut inner = self.inner.lock().await;
-            let tick = self.tick();
-            let mut tools = Vec::new();
-            for k in &keys {
-                if let Some(e) = inner.entries.get_mut(k)
-                    && entry_ready(k, e)
-                {
-                    e.last_used = tick;
-                    tools.extend(e.tools.iter().cloned());
-                }
-            }
-            tools
-        };
+        let tools: Vec<_> = self
+            .authorized_entries(session)
+            .await
+            .into_iter()
+            .flat_map(|(_, tools)| tools)
+            .collect();
         let (defs, _) = build_tool_defs(&tools);
         defs
     }
 
-    /// Capture both wire definitions and private bindings in one lock, after dirty refresh.
+    /// Capture each server's wire definitions and private binding under its
+    /// authority guard and the pool lock, after dirty refresh.
     pub async fn tool_snapshot_for(&self, session: &str) -> Vec<McpToolDef> {
         let _ = self.tool_defs_for(session).await;
-        let mut inner = self.inner.lock().await;
-        let keys = inner.sessions.get(session).cloned().unwrap_or_default();
-        let tools: Vec<_> = keys
+        let captured = self.authorized_entries(session).await;
+        let tools: Vec<_> = captured
             .iter()
-            .filter_map(|k| inner.entries.get(k).filter(|entry| entry_ready(k, entry)))
-            .flat_map(|e| e.tools.iter().cloned())
+            .flat_map(|(_, tools)| tools.iter().cloned())
             .collect();
-        let (defs, index) = build_tool_defs(&tools);
+        let (mut defs, index) = build_tool_defs(&tools);
         let mut bindings = HashMap::new();
         for (function, (server, tool)) in index {
-            if let Some(key) = keys.iter().find(|key| key.name == server)
-                && let Some(e) = inner.entries.get(key)
-            {
+            if let Some((seed, _)) = captured.iter().find(|(seed, _)| seed.key.name == server) {
                 bindings.insert(
                     function.clone(),
                     CallBinding {
                         function,
                         tool,
-                        key: key.clone(),
-                        generation: e.generation,
-                        config_revision: e.config_revision,
-                        policy_revision: e.policy_revision,
-                        tool_schema_revision: e.tool_schema_revision,
-                        cfg: e.cfg.clone(),
+                        ..seed.clone()
                     },
                 );
             }
         }
+        let mut inner = self.inner.lock().await;
+        if !inner.sessions.contains_key(session) {
+            return Vec::new();
+        }
+        bindings.retain(|_, binding| validate_binding(&inner, session, binding).is_ok());
+        defs.retain(|definition| bindings.contains_key(&definition.function_name));
         inner.snapshots.insert(session.into(), bindings);
         defs
     }
@@ -1312,7 +1378,13 @@ impl McpManager {
             .and_then(|snapshot| snapshot.get(function))
             .ok_or_else(changed_error)?;
         validate_binding(&inner, session, binding)?;
-        Ok(binding.clone())
+        let binding = binding.clone();
+        drop(inner);
+        let _admission = self
+            .entry_admission(&binding.key, Some(binding.generation))
+            .await?;
+        validate_binding(&*self.inner.lock().await, session, &binding)?;
+        Ok(binding)
     }
 
     /// Policy-only merge into the latest document; endpoint/source/schema changes never inherit approval.
@@ -1321,6 +1393,36 @@ impl McpManager {
         session: &str,
         binding: &CallBinding,
     ) -> Result<CallBinding, McpError> {
+        let permit = {
+            let inner = self.inner.lock().await;
+            validate_binding(&inner, session, binding)?;
+            inner.entries[&binding.key]
+                .launch
+                .clone()
+                .ok_or_else(untrusted)?
+        };
+        let admission = permit.admit(&binding.key, &binding.cfg).await?;
+        drop(admission);
+        let mut next = binding.cfg.clone();
+        next.always_allow = true;
+        let authority = if let Some(proof) = &permit.authority {
+            Some(
+                proof
+                    .store
+                    .compare_exchange_guard(
+                        &super::trust::authority_key(&binding.key),
+                        Some(proof.revision),
+                        &super::launch_version(&next),
+                        crate::core::trust::Decision::Grant,
+                        &uuid::Uuid::new_v4().to_string(),
+                        &CancellationToken::new(),
+                    )
+                    .await
+                    .map_err(super::trust::authority_error)?,
+            )
+        } else {
+            None
+        };
         let _commit = super::config::CONFIG_COMMIT.lock().await;
         let mut inner = self.inner.lock().await;
         validate_binding(&inner, session, binding)?;
@@ -1347,9 +1449,26 @@ impl McpManager {
             .get_mut(&binding.key)
             .ok_or_else(changed_error)?;
         entry.cfg.always_allow = true;
-        self.launch
-            .rebind_policy(&binding.key, &binding.cfg, &entry.cfg);
-        entry.launch = Some(self.launch.connection(&binding.key, &entry.cfg)?);
+        entry.launch = Some(if let Some(guard) = &authority {
+            let revision = guard.record.as_ref().ok_or_else(untrusted)?.revision;
+            self.launch.grant_persistent(
+                &binding.key,
+                &entry.cfg,
+                super::trust::AuthorityProof {
+                    store: permit
+                        .authority
+                        .as_ref()
+                        .ok_or_else(untrusted)?
+                        .store
+                        .clone(),
+                    revision,
+                },
+            )?
+        } else {
+            self.launch
+                .rebind_policy(&binding.key, &binding.cfg, &entry.cfg);
+            self.launch.connection(&binding.key, &entry.cfg)?
+        });
         entry.policy_revision += 1;
         let mut updated = binding.clone();
         updated.cfg = entry.cfg.clone();
@@ -1361,6 +1480,9 @@ impl McpManager {
     ///
     /// 失败只 `warn` 并保留旧列表——刷新失败不该把可用连接打成错误态。
     async fn refresh_tools(&self, key: &PoolKey, cfg: &McpServerConfig) {
+        let Ok(admission) = self.entry_admission(key, None).await else {
+            return;
+        };
         let peer = {
             let inner = self.inner.lock().await;
             inner
@@ -1372,6 +1494,7 @@ impl McpManager {
         let Some((peer, generation)) = peer else {
             return;
         };
+        drop(admission);
         let raw = match tokio::time::timeout(INIT_TIMEOUT, peer.list_all_tools()).await {
             Ok(Ok(t)) => t,
             other => {
@@ -1391,6 +1514,9 @@ impl McpManager {
             })
             .collect();
         let (tools, filtered) = filter_tools(&cfg.tools, &all);
+        let Ok(_admission) = self.entry_admission(key, Some(generation)).await else {
+            return;
+        };
         let mut inner = self.inner.lock().await;
         if let Some(e) = inner.entries.get_mut(key)
             && e.generation == generation
@@ -1401,33 +1527,6 @@ impl McpManager {
             }
             e.tools = tools;
             e.tools_filtered = filtered;
-        }
-    }
-
-    /// 该次调用是否需要审批：返回 `(server 名, 工具名)`；`read_only` / `always_allow` 声明过则 `None`。
-    #[cfg(test)]
-    pub async fn approval_target(&self, session: &str, function: &str) -> Option<(String, String)> {
-        let inner = self.inner.lock().await;
-        let keys = inner.sessions.get(session)?.clone();
-        let mut tools = Vec::new();
-        for k in &keys {
-            if let Some(e) = inner.entries.get(k)
-                && e.state == McpState::Ready
-            {
-                tools.extend(e.tools.iter().cloned());
-            }
-        }
-        let (_, index) = build_tool_defs(&tools);
-        let (server, tool) = index.get(function)?.clone();
-        let cfg = keys
-            .iter()
-            .filter(|k| k.name == server)
-            .find_map(|k| inner.entries.get(k))
-            .map(|e| e.cfg.clone())?;
-        if cfg.read_only || cfg.always_allow {
-            None
-        } else {
-            Some((server, tool))
         }
     }
 
@@ -1446,6 +1545,9 @@ impl McpManager {
         args: Value,
         cancel: &CancellationToken,
     ) -> Result<McpCallOutput, McpError> {
+        let admission = self
+            .entry_admission(&binding.key, Some(binding.generation))
+            .await?;
         let (peer, tool, timeout, _in_flight) = {
             let mut inner = self.inner.lock().await;
             validate_binding(&inner, session, binding)?;
@@ -1466,6 +1568,7 @@ impl McpManager {
                 InFlight(e.in_flight.clone()),
             )
         };
+        drop(admission);
 
         let mut params = CallToolRequestParams::new(tool.clone());
         if let Some(obj) = args.as_object() {

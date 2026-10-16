@@ -27,21 +27,25 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 
 ### 启动信任
 
-stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先在服务器卡片「批准启动」。许可只存在当前 CodeWave 进程内，绑定 `(scope, project_id, name, canonical_config_path, configuration_hash)`；配置文件中的 enabled/read_only/always_allow 不授予启动权限，也不能自行声明 trusted。确认框列出来源、版本及实际启动摘要（command/args/cwd 或脱敏 URL）；env/header 仅展示键名，已识别的敏感参数和 URL 凭据隐藏。
+stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先在服务器卡片审阅并选择「批准启动」（本次）或「记住此版本」。两者都绑定 `(scope, project_id, name, canonical_config_path, configuration_hash)`；记住许可另绑定全局数据 profile 和权威 revision，存于独立系统钥匙串。配置文件中的 enabled/read_only/always_allow 不授予启动权限，也不能自行声明 trusted。本次批准不新增持久记录，也不撤销已有记住许可；需要降为本次时先撤销原许可。确认框显示宿主返回的快照、来源、版本和启动摘要（command/args/cwd 或脱敏 URL）；env/header 仅展示键名，已识别的敏感参数和 URL 凭据隐藏。
 
-自动 warm、显式连接/重连、保存后的差量应用及直接 ensure 共用启动门；许可不存在时保留停止状态且不产生进程或连接。正式批准在提交锁内重读当前磁盘配置，版本失配拒绝，不把旧批准用于新目标。保存后删除、禁用或修改条目会使旧许可失效；不变条目和其他来源保持原授权。现阶段没有外部文件监控，外部编辑在后续重读/差量接纳时检查，不能宣称磁盘修改会立即回收所有在途连接。
+自动 warm、显式连接/重连、保存后的差量应用及直接 ensure 共用启动门；许可不存在时保留停止状态且不产生进程或连接。`mcp_prepare_launch` 发出五分钟有效、总量上限 64 的宿主票据，绑定用途、来源、完整配置及权威 revision；准备不启动进程。`mcp_confirm_launch` 消费票据，错误、过期或重复确认拒绝，配置/项目变化要求重新审阅。模型 ask、auto_confirm、FullAccess 和 probe 成功都不创建记住许可。旧 bool IPC 只能新增本次许可，撤销仍会撤销匹配版本的持久记录。
 
-「撤销启动授权」清除正式许可、待确认及活跃 probe，撤下工具并取消握手/服务；迟到 Ready 和旧 binding 不再可用。「断开」只释放连接，不撤销本次进程许可，重连仍可复用原许可。已经发生的外部副作用不会回滚。普通配置切换仍保留已接纳调用在原 peer 上最多 5 秒排空、不重放的契约。持久信任、技能/角色统一来源与项目提示信任尚未交付，不能把 MCP 启动门等同完整项目信任。
+持久许可在启动、Ready、工具捕获及最终 dispatch 读取当前权威，使用 guard→CONFIG/manager 短锁顺序，原生钥匙串等待不持 CONFIG/manager 锁。配置保存先撤销受影响版本并保留权威 barrier，再在 CONFIG 锁内二次校验文件版本后写入；冲突可以保守失去许可，但不覆盖较新配置。删除、禁用或修改条目均使旧许可失效，恢复旧文件也不会恢复已撤销许可；不变条目和其他来源保留授权。没有外部文件监控；持久许可在准入重验时检查当前文件，外部编辑的本次许可仍在后续重读/差量接纳时检查。
 
-### 持久权威事务基础（准入接线尚未完成）
+「撤销启动授权」清除正式许可、待确认及活跃 probe，撤下工具并取消握手/服务；已消费但尚未最终接纳的旧批准票据同样失效。持久撤销写入 tombstone，最终提交点再次撤销期间新装入的本次许可。原生写入结果不明时显示「检查授权结果」，该入口不因同一资源的许可状态/revision 刷新而消失。`mcp_launch_operation` 读取原生回执，不重新写入批准；确认原撤销已提交时，只完成一次其本地清理，重复查询不会撤销用户之后新批准的本次许可。钥匙串不可用不自动降级成本次许可；用户仍可显式重新批准本次。「断开」只释放连接，不撤销许可。「始终允许」仅热更新相同目标的政策及对应权威版本，不将它当作新的启动批准。
 
-[core/trust.rs](../src-tauri/src/core/trust.rs) 提供版本绑定的权威存储和 admission guard；[host/trust.rs](../src-tauri/src/host/trust.rs) 使用独立 `codewave.yangshifu.xyz.trust.v1` 钥匙串 service，模型凭据账户不能跨 service 读取。此库尚未接入 MCP、技能或项目提示的生产许可，设置页仍只有上述进程内许可，不能据此宣称已有“记住授权”。
+其它实例在新 admission 时直接检查权威；后台每两秒发起存活许可检查，实际回收延迟还包括钥匙串等待、候选数量与服务关闭，不能承诺固定两秒内停止。已接纳调用、在途握手和服务自主副作用无法追溯回滚；普通配置切换仍保留原 peer 最多五秒排空且不重放。独立管理器/真实 Node fixture 已覆盖恢复、最终调用拒绝和握手晚到；这不代替真实钥匙串、OS 多进程、Windows/Linux 和 GUI 验收。项目提示、技能正文的信任准入仍未接入，不能把 MCP 门等同完整项目信任。
+
+### 持久权威事务与准入
+
+[core/trust.rs](../src-tauri/src/core/trust.rs) 提供版本绑定的权威存储和 admission guard；[host/trust.rs](../src-tauri/src/host/trust.rs) 使用独立 `codewave.yangshifu.xyz.trust.v1` 钥匙串 service，模型凭据账户不能跨 service 读取。桌面在 `lib.rs` 注入此 backend；[manager_authority.rs](../src-tauri/src/mcp/manager_authority.rs) 负责 MCP 准入，[review_service.rs](../src-tauri/src/mcp/review_service.rs) 负责宿主票据确认和回执，均不新增 core→host 依赖。
 
 账户摘要绑定 canonical 全局数据目录与资源类别、用途、canonical 来源、owner 和名字；不同 profile 不共用权威账户，同一 profile 的 canonical 别名共用记录与锁。版本统一接受裸 SHA-256 或来源审计的 `sha256:` 格式并归一。每资源小记录保存 schema、版本、decision、revision 和 operation id；撤销保留 tombstone，CAS 冲突要求重新审阅，同一操作仅在原前置版本与内容一致时重放回执。写入后回读核验，不将系统钥匙串调用返回成功等同于提交确认。
 
 事务在 blocking pool 中持有进程内锁与 `<data_dir>/trust/authority.lock` 的 [OS advisory lock](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock)。锁文件永不作为授权数据。总等待预算为 5 秒；原生调用超时或取消后，后台任务仍持锁直到结束，写入可能已发生时返回 `TrustOutcomeUnknown`，不能自动改用新操作再次授权。`AuthorityGuard` 供后续调用点在短锁内登记 admission 后释放，不得持有它等待用户、网络或长运行进程。NoEntry、不可用、损坏、拒绝、冲突、超时及结果不明分别处理，无 JSON 或明文回退。
 
-生产接线仍需完成真实用户 challenge、配置变更失效、启动/Ready/工具暴露/dispatch 权威重验、撤销及后台连接回收；当前未提供这些跨实例运行保证。相同 OS 用户绕过本应用直接调用钥匙串、替换锁文件或操纵外部进程不属于 OS 沙箱保证。真实钥匙串与三平台锁行为仍待分别验收。
+`compare_exchange_guard` 在提交后保留事务锁供短期准入登记；`revoke_batch` 在配置更新前撤销旧记录并保持 barrier，不能在撤销与文件 CAS 之间释放。相同 OS 用户绕过本应用直接调用钥匙串、替换锁文件或操纵外部进程不属于 OS 沙箱保证。真实钥匙串与三平台锁行为仍待分别验收。
 
 ## 2. 连接池、运行态与事件
 
@@ -55,7 +59,7 @@ stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先
 - [process.rs](../src-tauri/src/mcp/process.rs) 在 Unix 使用进程组，Windows 使用 Job Object/隐藏窗口与退出清理；不能只杀启动器而留下 server 子进程。
 - test 使用当前条目草稿的独立临时连接，不读磁盘同名配置，不改变正式池/工具/pid；详情见下节。
 
-当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_set_launch_trust`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_prepare_test`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
+当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_set_launch_trust`、`mcp_prepare_launch`、`mcp_confirm_launch`、`mcp_launch_operation`、`mcp_discard_launch_review`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_prepare_test`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
 
 保存通过同一提交锁协调文件版本检查、原子写与完整会话可见集差量接纳。`mcp_list_config` 返回不含原文的 `version`；`mcp_save_config` 必须回传 `expected_version`，冲突时保留草稿并要求重新读取。格式化/键序变化不重启连接，项目修改只触及真正读取该配置路径的 runtime；同项目 id 不同路径保持独立。全局变更不会重建被项目同名项覆盖的连接，disabled 项目覆盖继续遮蔽全局项。
 
@@ -75,7 +79,7 @@ stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先
 
 工具定义只来自当前会话可见、Ready、过滤后允许的条目。MCP schema 参与上下文估算，不能只算内置工具。server 的 tools/list_changed 通知仅标 dirty，随后取定义时刷新，不在通知回调里并发改正在消费的集合。
 
-每次 LLM step 通过 `tool_snapshot_for` 在同一管理器锁内取得模型工具定义及私有 `CallBinding`，票据含原始工具、PoolKey/来源、连接/config/policy/schema 代数；不发送给模型。上下文估算调用 `tool_defs_for` 不覆盖模型请求的票据。schema 可在不同 step 变化，run 级 system_frozen 仍只冻结系统提示。
+每次 LLM step 通过 `tool_snapshot_for` 逐 server 在权威 guard 与管理器短锁内同时捕获工具与私有 `CallBinding`，汇合后再校验会话、函数映射和连接/config/policy/schema 代数；票据不发送给模型。上下文估算调用 `tool_defs_for` 不覆盖模型请求的票据。schema 可在不同 step 变化，run 级 system_frozen 仍只冻结系统提示。
 
 审批与真正 dispatch 使用同一票据。dispatch 在锁内重验会话可见性、来源/连接/配置/政策/schema 与函数反向映射，再取得原 peer 并登记在途调用；已变更时明确要求重新发起，不能将旧批准重定向到新 endpoint。read_only/always_allow 无人工审批调用也同样检查。dirty 只被可见会话消费；刷新若晚于连接代数变化则丢弃，工具集合发生变化会推进 schema 代数。
 
@@ -144,7 +148,7 @@ R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价�
 `v0.11.0` 对应提交的完整三平台 CI 已通过，包含真实 Node stdio/HTTP fixture 与宿主后端测试；各平台结果和跳过边界见[自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本地 Linux 云环境仍缺 GLib/GTK/WebKit/DBus 等系统依赖，不能写成本地完整门禁通过，也不能将 CI/headless 结果写成 GUI 已验收。会话释放进程树回收已有三平台自动证据；初始化/tools-list 期间 probe 取消回收为 Unix 专属测试，Windows 对应边界仍待补验。
 
 手工清单（尚未执行）：
-0. 重启后未批准服务器不启动；分别批准 stdio/HTTP，核对摘要、来源和本次进程有效期；取消确认零启动。撤销 Ready/正在握手的服务，工具消失且进程回收；刷新只重读状态与授权元数据，不覆盖未保存草稿。修改配置后须重新批准，其他来源授权不变。
+0. 从无记住记录开始，验证本次批准退出即失效；记住相同来源/版本后重启恢复。分别核对 stdio/HTTP 的宿主摘要与敏感值隐藏，取消确认零启动。撤销 Ready/正在握手的服务，工具消失且进程回收，重启不恢复；修改、禁用、删除以及恢复旧配置后均须重新批准，其他来源授权不变。刷新不覆盖未保存草稿。
 1. A/B 两项目与临时会话共用 global MCP，B 发起长 echo 时保存 A 私有配置；B/global pid 与工具保持不变。
 2. 同一 server 请求等待批准时修改 endpoint 或作用域；批准旧请求应得到“配置已变”，新 endpoint 收到零请求。
 3. 编辑已保存可用命令为不存在的命令，不保存直接测试应失败；取消后正式连接保持原 pid。新建/重命名草稿也能测试。
@@ -152,3 +156,4 @@ R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价�
 5. 两编辑器交错保存，以及设置保存与“始终允许”交错；冲突保留草稿，允许补丁不覆盖新 endpoint 或其它字段。
 6. 在应用内分别验 Windows Job Object 与 Unix 进程组回收，尤其是初始化/tools-list 期间取消 probe；三平台会话释放回归通过不等于 Windows 已覆盖 Unix 专属 probe 取消用例。
 7. 技能页展开同名覆盖，核对来源和版本；禁用保存、重开、重新启用及取消草稿，运行状态与草稿提示应分开。删除最高托管来源后看到正确下层，旧版本确认不得删除新来源；切项目的迟到读取/确认不影响新项目。检查长路径与版本在窄窗/缩放/暗色下可读。GUI 与 Windows 根链接/路径行为仍待人工或对应平台验证。
+8. 锁定/拒绝系统钥匙串时，持久许可失败关闭，记住操作显示失败或结果不明；未知结果只能检查原操作，不自动重发批准。本次许可须由用户重新明确批准。检查旧确认在切项目、改内容、关闭页面、重复提交后均不产生许可，撤销与本次批准交错时最终状态一致。

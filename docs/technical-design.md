@@ -93,7 +93,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - 项目删除取消相关运行并级联会话和托管目录，不删除用户代码主目录；迟到检查点不得复活已删除数据。
 - providers 嵌套 models 是配置形态，`ModelConfig` 是运行时摊平形态；前后端摊平逻辑同步维护，新增字段使用 serde default。
 - API key 通过 `core/config_commit.rs` 统一提交：先写/核验不可变 keyring generation，再一次性替换占位与引用配置；不降级明文。配置写者共用提交锁、字段域版本与操作回执，详情和历史明文/真平台限制见 [供应商与网络](./providers-and-network.md#2-api-key-与-key-池)。
-- 资源持久信任的独立权威事务库使用宿主注入的 backend、专用钥匙串 service 和受保护 OS 协调锁；当前尚未接入运行许可，进程内 MCP 启动门不变，边界见 [MCP 与技能](./mcp-and-skills.md#持久权威事务基础准入接线尚未完成)。
+- 资源持久信任使用宿主注入的 backend、专用钥匙串 service 和受保护 OS 协调锁；MCP 已接入票据确认、版本撤销和各 admission 重验，项目提示/技能正文尚未接入，平台验收边界见 [MCP 与技能](./mcp-and-skills.md#持久权威事务与准入)。
 
 ### 保存、展示与 wire 必须分离
 
