@@ -353,6 +353,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -484,5 +485,18 @@ mod tests {
         assert!(!r.ran, "被围栏拦下的命令不得执行");
         assert_eq!(r.skipped, Some(SkipReason::BlockedByFence));
         assert!(!r.output.is_empty(), "围栏原因应如实带上");
+
+        // A configured check is authorized for ordinary writes, never host state.
+        ctx.rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+            ..Default::default()
+        });
+        let target = ctx.rt.data_dir.join("config.json");
+        std::fs::write(&target, b"unchanged").unwrap();
+        let command = format!("echo replaced > '{}'", target.display());
+        let r = run_command(&ctx, &command, None, 10, 3000).await;
+        assert!(!r.ran);
+        assert_eq!(r.skipped, Some(SkipReason::BlockedByFence));
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
     }
 }

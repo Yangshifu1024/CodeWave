@@ -73,6 +73,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),

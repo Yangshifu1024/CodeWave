@@ -1030,6 +1030,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1098,6 +1099,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1235,6 +1237,7 @@ mod tests {
         let ws = Box::leak(Box::new(tempfile::tempdir().unwrap()));
         let dd = Box::leak(Box::new(tempfile::tempdir().unwrap()));
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1828,6 +1831,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1875,6 +1879,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1982,6 +1987,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -2753,6 +2759,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -2841,6 +2848,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3239,6 +3247,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3308,6 +3317,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3378,6 +3388,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3464,6 +3475,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3530,6 +3542,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3588,6 +3601,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),

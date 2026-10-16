@@ -297,7 +297,7 @@ session/load 或 desktop 打开被其他实例拥有的会话返回 `E_SESSION_B
 
 LRU/保留期清理不淘汰活 owner，会话删除/旧格式清理/blob GC 要求 session owner 或短维护 lease；按既有可读判据与全部保留段引用并集处理。清理无法取得租约则跳过并报告，不强删锁/数据。
 
-当前 write_roots 包含全局 .codewave，必须补“宿主内部状态”保护：config/journal、index/histories/sidecars、locks/instances/credential leases、stats 和项目 project.json/MCP 配置事务文件，普通 create/edit/delete/文档工具不得直接写、删除、rename 或通过目录祖先/符号链接间接修改；业务服务持内部能力经对应事务入口操作。安全策略覆盖桌面与 ACP，不只约束锁模块自身。已允许编辑的 global memories/skills 与项目 memory/lessons 用 canonical 文件资源短事务协调，读取编辑基线后保存还要 CAS，避免两个不同 cwd 的会话丢更新。
+当前 write_roots 包含全局 .codewave；桌面共用写路径已加入[宿主内部状态保护](./tools-and-safety.md#宿主内部状态写保护)，普通 create/edit/delete/文档工具与已识别命令写目标不能直接修改 config/journal、index/histories/sidecars、协调/信任树、stats 和项目配置/调度状态，业务服务经对应入口操作。ACP 必须复用这一层，不能只保护新增锁模块；这项前置保护不代表本方案的 owner、guardian 或跨进程事务已经实施。已允许编辑的 global memories/skills 与项目 memory/lessons 仍须补 canonical 文件资源短事务协调，读取编辑基线后保存还要 CAS，避免两个不同 cwd 的会话丢更新。
 
 shell/MCP 的任意外部副作用仍受既有 fence/信任边界，advisory locks 不是 OS 沙箱。对已识别的内部状态写目标须在 command/service fence 加明确拒绝，不能以 FullAccess 放过 locks 删除；对解释器等未识别写不能声称完备保护。不识别/不合作的进程属于既有非沙箱边界，方案不以未知命令作为修改宿主事务文件的正当入口。
 

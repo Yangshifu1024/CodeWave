@@ -713,9 +713,8 @@ impl Tool for CommandTool {
                     }
                 } else {
                     // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：「始终允许本项目」白名单命中 → 免询问；灾难级永不适用白名单，仍需确认。
-                    // 匹配 key = cwd + 完整命令文本（cwd 是会话固定的 temps/ 目录且随项目走 → 白名单不跨项目）。
-                    // 已知竞态：对 host save_config 的读改写 / 并发「始终允许」写入，后写者胜
-                    // （与 toggle_skill 同为既有模式）；窗口极小，留待将来统一修复。
+                    // 匹配 key = cwd + 完整命令文本；保存经统一配置提交器合并。
+                    // 硬 Block（包括内部宿主状态写入）在此分支之前返回，白名单不能豁免。
                     let is_disaster = matches!(reason, ConfirmReason::Disaster(_));
                     let allow_key = format!("{}\u{1}{}", cwd.display(), args.command.trim());
                     let allowlisted = !is_disaster
@@ -826,6 +825,12 @@ async fn run_process(
     shell: &Shell,
     ctx: &ToolCtx,
 ) -> ToolOutcome {
+    // Approval may have waited while an external writer changed a path or symlink.
+    if let crate::safety::fence::Verdict::Block { code, message } =
+        crate::safety::fence::check_protected_command(command, cwd, &ctx.write_roots())
+    {
+        return ToolOutcome::err(&code, message);
+    }
     let (program, argv) = shell_invocation(shell, command, cwd);
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(&argv);

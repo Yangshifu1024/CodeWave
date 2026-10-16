@@ -6,6 +6,7 @@ fn ask_ctx_mode(mode: crate::core::prefs::ApprovalMode) -> ToolCtx {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -134,6 +135,7 @@ fn args_deserialize_camel_case_skip_analysis() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -177,6 +179,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
     let data_root = std::fs::canonicalize(dd.path()).unwrap();
     // 临时会话：工作区根就是全局数据目录（既有的 workspace == data_dir 场景）
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: data_root.clone(),
         extra: vec![],
         data_dir: data_root.clone(),

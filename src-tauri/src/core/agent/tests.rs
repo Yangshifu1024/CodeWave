@@ -658,6 +658,7 @@ async fn stream_request_bytes_stable_across_calls() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -774,6 +775,7 @@ async fn system_prompt_frozen_within_run() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -808,6 +810,7 @@ async fn cache_gen_anchor_hysteresis() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -862,6 +865,7 @@ async fn running_flag_resets_after_run_ends() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1113,6 +1117,7 @@ async fn new_session_prefs_follow_global_switch() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1139,6 +1144,7 @@ async fn plan_mode_excludes_write_tools() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1176,6 +1182,7 @@ async fn compacting_guard_resets_flag_on_panic_unwind() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1208,6 +1215,7 @@ async fn session_model_override_and_dangling_fallback() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1342,6 +1350,7 @@ fn test_roots() -> crate::tools::pathutil::WriteRoots {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1711,6 +1720,7 @@ fn scripted_core(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -2098,6 +2108,7 @@ fn scripted_core_recording(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -2780,6 +2791,7 @@ fn scripted_core_capturing(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3010,6 +3022,7 @@ async fn subagent_prefs_follow_parent_mode_without_touching_model() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3094,6 +3107,7 @@ async fn subagent_mode_refresh_degrades_when_parent_missing() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),

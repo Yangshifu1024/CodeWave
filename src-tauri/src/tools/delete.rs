@@ -53,6 +53,7 @@ impl Tool for DeleteTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
+        let destination = super::pathutil::canonical_best_effort(&resolved);
         // H2：所有写根本身（含 extra）与各写根下的 .git 都在保护名单内
         let all_roots: Vec<&std::path::Path> = std::iter::once(roots.workspace.as_path())
             .chain(roots.extra.iter().map(|p| p.as_path()))
@@ -87,6 +88,9 @@ impl Tool for DeleteTool {
                 return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
             }
         };
+        if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination) {
+            return ToolOutcome::err(&c, m);
+        }
         let meta = match std::fs::symlink_metadata(&resolved) {
             Ok(m) => m,
             Err(e) => return ToolOutcome::err("E_NOT_FOUND", format!("{}: {e}", args.path)),
@@ -95,6 +99,10 @@ impl Tool for DeleteTool {
             let empty = std::fs::read_dir(&resolved)
                 .map(|mut d| d.next().is_none())
                 .unwrap_or(false);
+            if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination)
+            {
+                return ToolOutcome::err(&c, m);
+            }
             if empty {
                 std::fs::remove_dir(&resolved)
             } else if args.recursive {
@@ -124,6 +132,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt = core.get_or_create_session(

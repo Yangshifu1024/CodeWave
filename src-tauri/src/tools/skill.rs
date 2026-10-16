@@ -116,6 +116,7 @@ mod tests {
         )
         .unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),

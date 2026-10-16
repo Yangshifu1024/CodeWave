@@ -210,6 +210,7 @@ mod tests {
     async fn launch_approval_rereads_disk_and_saves_revoke_old_versions() {
         let dir = tempfile::tempdir().unwrap();
         let core = make_core(&WriteRoots {
+            project_dir: None,
             workspace: dir.path().to_path_buf(),
             data_dir: dir.path().to_path_buf(),
             extra: vec![],
@@ -259,6 +260,7 @@ mod tests {
     async fn invalid_or_conflicting_save_never_changes_disk_or_creates_validation_files() {
         let dir = tempfile::tempdir().unwrap();
         let core = make_core(&WriteRoots {
+            project_dir: None,
             workspace: dir.path().to_path_buf(),
             data_dir: dir.path().to_path_buf(),
             extra: vec![],
@@ -307,6 +309,7 @@ mod tests {
     async fn disk_write_failure_does_not_mutate_manager() {
         let dir = tempfile::tempdir().unwrap();
         let core = make_core(&WriteRoots {
+            project_dir: None,
             workspace: dir.path().to_path_buf(),
             data_dir: dir.path().to_path_buf(),
             extra: vec![],
@@ -327,6 +330,7 @@ mod tests {
     async fn concurrent_editors_have_exactly_one_successful_commit() {
         let dir = tempfile::tempdir().unwrap();
         let core = make_core(&WriteRoots {
+            project_dir: None,
             workspace: dir.path().to_path_buf(),
             data_dir: dir.path().to_path_buf(),
             extra: vec![],

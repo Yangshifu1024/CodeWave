@@ -18,6 +18,7 @@ async fn echo_runs() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = super::super::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -349,7 +350,7 @@ fn describe_contains_name_invocation_and_three_points() {
 #[tokio::test]
 async fn full_output_false_spills_truncated_output() {
     // 28KB 输出：高于模型尾部预算、低于流式落盘阈值 → 命中「凡截断必落盘」盲区修复路径
-    let (_ws, roots) = fresh_roots();
+    let (_ws, _dd, roots) = fresh_roots();
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt =
         core.get_or_create_session("spill", roots.workspace.clone(), None, vec![], None, vec![]);
@@ -383,7 +384,7 @@ async fn full_output_false_spills_truncated_output() {
 #[cfg(unix)]
 #[tokio::test]
 async fn full_output_true_small_output_no_spill() {
-    let (_ws, roots) = fresh_roots();
+    let (_ws, _dd, roots) = fresh_roots();
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt =
         core.get_or_create_session("full", roots.workspace.clone(), None, vec![], None, vec![]);
@@ -430,22 +431,27 @@ fn mode_prefs(m: crate::core::prefs::ApprovalMode) -> crate::core::prefs::Sessio
     }
 }
 
-fn fresh_roots() -> (tempfile::TempDir, crate::tools::pathutil::WriteRoots) {
+fn fresh_roots() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    crate::tools::pathutil::WriteRoots,
+) {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = super::super::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
     };
-    (ws, roots)
+    (ws, dd, roots)
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn approval_modes_gate_inside_writes() {
     use crate::core::prefs::ApprovalMode;
-    let (ws, roots) = fresh_roots();
+    let (ws, _dd, roots) = fresh_roots();
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt =
         core.get_or_create_session("modes", roots.workspace.clone(), None, vec![], None, vec![]);
@@ -488,7 +494,62 @@ async fn approval_modes_gate_inside_writes() {
     assert!(out.ok, "{out:?}");
     assert!(ws.path().join("w3.txt").exists());
 
+    // Internal state is never approved by a mode or a matching command allowlist.
+    let target = roots.data_dir.join("config.json");
+    std::fs::create_dir_all(&roots.data_dir).unwrap();
+    std::fs::write(&target, b"original-config").unwrap();
+    let protected_command = format!("echo changed > '{}'", target.display());
+    core.cfg
+        .write()
+        .unwrap()
+        .approval
+        .command_allowlist
+        .push(format!("{}\u{1}{}", ws.path().display(), protected_command));
+    for mode in [
+        ApprovalMode::Plan,
+        ApprovalMode::ConfirmEach,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::FullAccess,
+    ] {
+        rt.set_prefs(mode_prefs(mode));
+        let ctx = test_ctx(
+            core.clone(),
+            rt.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let out = CommandTool
+            .run(&ctx, serde_json::json!({ "command": protected_command }))
+            .await;
+        assert!(!out.ok, "{mode:?}: {out:?}");
+        assert_eq!(out.error.as_ref().unwrap().code, "E_INTERNAL_STATE");
+        assert_eq!(std::fs::read(&target).unwrap(), b"original-config");
+    }
+
+    rt.set_prefs(mode_prefs(ApprovalMode::FullAccess));
+    let alias = ws.path().join("state-alias");
+    for copy in ["ln", "cp -l", "cp -al"] {
+        let ctx = test_ctx(
+            core.clone(),
+            rt.clone(),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let command = format!(
+            "{copy} '{}' '{}'; echo replaced > '{}'",
+            target.display(),
+            alias.display(),
+            alias.display()
+        );
+        let out = CommandTool
+            .run(&ctx, serde_json::json!({"command": command}))
+            .await;
+        assert!(!out.ok, "{copy}: {out:?}");
+        assert_eq!(out.error.as_ref().unwrap().code, "E_INTERNAL_STATE");
+        assert!(!alias.exists(), "no hard link may be created by {copy}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"original-config");
+    }
+
     // FullAccess：灾难级仍拦截（dd 不会真实执行）
+    rt.set_prefs(mode_prefs(ApprovalMode::FullAccess));
     let ctx = test_ctx(core, rt, tokio_util::sync::CancellationToken::new());
     let out = CommandTool
         .run(
@@ -505,7 +566,7 @@ async fn approval_modes_gate_inside_writes() {
 async fn full_access_skips_high_risk_confirm() {
     // 高危（非灾难；此处是「变量展开写目标」形态，无需联网）：
     // FullAccess 免确认执行；ConfirmEach 需确认（预取消 = 拒绝）。
-    let (ws, roots) = fresh_roots();
+    let (ws, _dd, roots) = fresh_roots();
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt = core.get_or_create_session("fa", roots.workspace.clone(), None, vec![], None, vec![]);
     let probe = ws.path().join("probe.txt");

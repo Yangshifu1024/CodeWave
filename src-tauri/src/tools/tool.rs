@@ -111,6 +111,7 @@ impl ToolCtx {
             self.rt.workspace.clone(),
             self.rt.data_dir.clone(),
         );
+        r.project_dir = self.rt.project_dir.clone();
         r.extra = self
             .rt
             .extra_roots

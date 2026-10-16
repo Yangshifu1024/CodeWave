@@ -354,6 +354,12 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     // 执行 shell 跟随配置 selection（与 command 工具同一拼接事实源；长驻任务不再硬编码 bash）
     let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
     let shell = crate::tools::command::resolve_shell(selection.as_deref());
+    // Recheck internal state after an interactive approval and shell discovery.
+    if let crate::safety::fence::Verdict::Block { code, message } =
+        crate::safety::fence::check_protected_command(&command, &cwd, &ctx.write_roots())
+    {
+        return ToolOutcome::err(&code, message);
+    }
     let (program, argv) = crate::tools::command::shell_invocation(&shell, &command, &cwd);
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(&argv)
@@ -563,6 +569,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -611,6 +618,25 @@ mod tests {
             ws,
             dd,
         )
+    }
+
+    #[tokio::test]
+    async fn internal_state_is_blocked_before_service_registration() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (ctx, _ws, _dd) = captured_ctx(seen.clone());
+        let target = ctx.rt.data_dir.join("config.json");
+        std::fs::write(&target, b"unchanged").unwrap();
+        let out = ServiceTool
+            .run(
+                &ctx,
+                json!({"action": "start", "command": format!("echo replaced > '{}'", target.display())}),
+            )
+            .await;
+        assert!(!out.ok, "{out:?}");
+        assert_eq!(out.error.as_ref().unwrap().code, "E_INTERNAL_STATE");
+        assert!(ctx.core.services.list().is_empty());
+        assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
     }
 
     /// 工具真实启动进程；退出和移除载荷都必须保留末段日志（不依赖 ticker 首拍）。
@@ -759,6 +785,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -819,6 +846,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -899,6 +927,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),

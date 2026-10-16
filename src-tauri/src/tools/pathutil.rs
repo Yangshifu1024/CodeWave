@@ -10,8 +10,10 @@ pub struct WriteRoots {
     pub workspace: PathBuf,
     /// 「始终允许本项目」放行的额外外部目录。
     pub extra: Vec<PathBuf>,
-    /// 本会话托管数据目录（`.codewave/`）。
+    /// 全局数据目录（恒为全局，不是项目 `.codewave/`）。
     pub data_dir: PathBuf,
+    /// 项目托管目录快照；临时会话为 None，不根据目录名猜测项目作用域。
+    pub project_dir: Option<PathBuf>,
 }
 
 impl WriteRoots {
@@ -21,6 +23,7 @@ impl WriteRoots {
             workspace,
             extra: Vec::new(),
             data_dir,
+            project_dir: None,
         }
     }
 
@@ -180,7 +183,25 @@ pub fn resolve_write(roots: &WriteRoots, raw: &str) -> Result<PathBuf, (String, 
     if !inside_any(&canonical, &roots.canonical_roots()) {
         return err("E_PATH_OUTSIDE", format!("路径超出可写边界：{raw}"));
     }
+    crate::core::protected_state::check_write(roots, &cand)?;
     Ok(cand)
+}
+
+/// Repeat the real write boundary under the target lock and before publishing.
+/// An alias changing to another allowed file still invalidates the original lock.
+pub(crate) fn revalidate_write(
+    roots: &WriteRoots,
+    requested: &Path,
+    expected: &Path,
+) -> Result<(), (String, String)> {
+    resolve_write(roots, &requested.to_string_lossy())?;
+    if canonical_best_effort(requested) != expected {
+        return Err((
+            "E_PATH_CHANGED".into(),
+            format!("写入目标路径已改变，请重新读取：{}", requested.display()),
+        ));
+    }
+    Ok(())
 }
 
 /// 危险删除守卫：拒绝文件系统根 / 任一工作区根 / 任一 `.git` / 家目录 / 系统目录。
@@ -245,6 +266,7 @@ mod tests {
             workspace: ws_canon,
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap_or_else(|_| dd.path().to_path_buf()),
+            project_dir: None,
         }
     }
 

@@ -4,17 +4,19 @@ use std::fs;
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, WriteRoots) {
     let ws = tempfile::tempdir().unwrap();
-    let dd = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let data_dir = outside.path().join("agent-data");
+    fs::create_dir(&data_dir).unwrap();
     let ws_canon = fs::canonicalize(ws.path()).unwrap();
-    let dd_canon = fs::canonicalize(dd.path()).unwrap();
+    let dd_canon = fs::canonicalize(&data_dir).unwrap();
     let roots = WriteRoots {
         workspace: ws_canon,
         extra: vec![],
         data_dir: dd_canon,
+        project_dir: None,
     };
     fs::write(ws.path().join("out.txt"), b"old").unwrap();
     fs::write(ws.path().join("in.txt"), b"x").unwrap();
-    let outside = tempfile::tempdir().unwrap();
     fs::write(outside.path().join("f.txt"), b"y").unwrap();
     (ws, outside, roots)
 }
@@ -2010,4 +2012,245 @@ fn rw09_fallback_lexical_hits() {
     expect_confirm_hr(v, "tar -x 词法回退", "解包");
     let v = run("unzip a.zip && echo \"未闭合", &ws, &roots);
     expect_confirm_hr(v, "unzip 词法回退", "解包");
+}
+
+#[test]
+fn protected_state_precedes_confirmation_for_explicit_shell_write_targets() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::Builder::new()
+        .prefix("codewave data with spaces ")
+        .tempdir()
+        .unwrap();
+    let pd = ws.path().join(".codewave");
+    fs::create_dir(&pd).unwrap();
+    fs::write(dd.path().join("config.json"), b"original").unwrap();
+    let roots = WriteRoots {
+        workspace: ws.path().to_path_buf(),
+        data_dir: dd.path().to_path_buf(),
+        extra: vec![],
+        project_dir: Some(pd.clone()),
+    };
+    let data = dd.path().display().to_string().replace('\\', "/");
+    let target = format!("{data}/config.json");
+    let project = pd.display().to_string().replace('\\', "/");
+    let commands = [
+        format!("echo x > '{target}'"),
+        format!("git reset --hard; echo x >> '{target}'"),
+        format!("sudo tee '{target}'"),
+        format!("cp in.txt '{target}'"),
+        format!("ln '{target}' writable-alias"),
+        format!("link '{target}' writable-alias"),
+        format!("cmd /c mklink /H writable-alias '{target}'"),
+        format!("env cmd /c mklink /H writable-alias '{target}'"),
+        format!("pwsh -Command \"echo x > '{target}';\" trailing"),
+        format!("powershell -Command \"echo x > '{target}';\" trailing"),
+        format!("pwsh -Command echo \"x >\" '{target}'"),
+        format!("cmd /c \"mklink /H writable-alias '{target}'\""),
+        format!("fsutil hardlink create writable-alias '{target}'"),
+        format!("cp -l '{target}' writable-alias"),
+        format!("cp --link '{target}' writable-alias"),
+        format!("cp -al '{target}' writable-alias"),
+        format!("cp -as '{target}' writable-alias; echo replaced > writable-alias"),
+        format!("cp --target-directory='{data}' config.json"),
+        format!("mv '{target}' recovered.json"),
+        format!("mv '{data}' moved-state"),
+        format!("Copy-Item -Destination '{target}' -Path in.txt"),
+        format!("Move-Item -Destination recovered.json -LiteralPath '{target}'"),
+        format!("Set-Content -Value harmless -LiteralPath '{target}'"),
+        format!("New-Item -ItemType HardLink -Path writable-alias -Target '{target}'"),
+        format!("New-Item -tArGeT '{target}' -pAtH writable-alias -iTeMtYpE hArDlInK"),
+        format!("New-Item -Value '{target}' -ItemType SymbolicLink -Path writable-alias"),
+        format!("New-Item -Path writable-alias -Target '{data}' -ItemType Junction"),
+        format!("sed -i 's/x/y/' '{target}'"),
+        format!("gzip '{target}'"),
+        format!("tar -cf '{target}' in.txt"),
+        format!("curl --output '{target}' https://example.invalid"),
+        format!("sh -c \"echo x > '{target}'\""),
+        format!("bash -lc \"echo x > '{target}'\""),
+        format!("powershell -Command Set-Content -LiteralPath '{target}' -Value x"),
+        format!("pwsh -Command Set-Content -Value x -LiteralPath '{target}'"),
+        format!("cd '{data}' && echo x > config.json"),
+        format!(
+            "Set-Location -LiteralPath '{data}'; Out-File -FilePath config.json -InputObject harmless"
+        ),
+        format!("cd '{project}' && echo x > mcp.json"),
+        format!("rsync -a --delete emptydir/ '{project}/'"),
+        format!("rsync -a emptydir/ '{data}/'"),
+        format!("rsync --remove-source-files '{target}' recovered.json"),
+        format!("cp -aT replacement/ '{project}/'"),
+        format!("cp -T replacement/ '{project}/'"),
+        format!("cp --no-target-directory replacement/ '{project}/'"),
+        format!("tar -xf archive.tar -C '{data}'"),
+        format!("unzip archive.zip -d '{project}'"),
+        format!("cd '{data}' && tar -xfSomeO"),
+        format!("cd '{data}' && tar -xf archive -- -O"),
+        format!("cd '{data}' && tar -x --file -O archive"),
+        format!("cd '{data}' && unzip archive.zip -- -p"),
+        format!("cd '{data}' && unzip -Pfakep archive.zip"),
+    ];
+    let policies = [
+        FencePolicy {
+            approval_enabled: true,
+            confirm_outside_create: true,
+            confirm_inside_writes: true,
+            plan_readonly: true,
+        },
+        FencePolicy {
+            approval_enabled: true,
+            confirm_outside_create: true,
+            confirm_inside_writes: true,
+            plan_readonly: false,
+        },
+        FencePolicy::legacy(true, true),
+        FencePolicy::legacy(false, false),
+    ];
+    for command in commands {
+        for policy in policies {
+            assert!(
+                matches!(check_command_policy(&command, ws.path(), &roots, policy), Verdict::Block { ref code, .. } if code == "E_INTERNAL_STATE"),
+                "{command}: {policy:?}"
+            );
+        }
+    }
+    assert_eq!(
+        fs::read(dd.path().join("config.json")).unwrap(),
+        b"original"
+    );
+}
+
+#[test]
+fn protected_scan_preserves_reads_strings_normal_artifacts_and_shell_scopes() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = WriteRoots {
+        workspace: ws.path().to_path_buf(),
+        data_dir: dd.path().to_path_buf(),
+        extra: vec![],
+        project_dir: None,
+    };
+    let data = dd.path().display().to_string().replace('\\', "/");
+    fs::write(dd.path().join("config.json"), b"original").unwrap();
+    for command in [
+        format!("cat '{data}/config.json'"),
+        format!("echo '{data}/config.json'"),
+        format!("echo x < '{data}/config.json' > normal.txt"),
+        "echo x > normal.txt 2>&1".into(),
+        format!("mkdir -p '{data}'"),
+        format!("cp harmless.txt '{data}'"),
+        format!("echo x > '{data}/temps/output.json'"),
+        format!("(cd '{data}'; cat config.json); echo x > config.json"),
+        format!("Set-Content -Value '{data}/config.json' -LiteralPath normal.txt"),
+        format!("cd '{data}' && tar -xOf archive"),
+        format!("cd '{data}' && tar -x --to-stdout -f archive"),
+        format!("cd '{data}' && tar --extract --file=SomeO --to-stdout"),
+        format!("cd '{data}' && unzip -p archive.zip"),
+        format!("cd '{data}' && unzip -c archive.zip"),
+        format!("bash -lc 'printf %s \"$1\"' marker \"echo x > '{data}/config.json'\""),
+    ] {
+        assert_eq!(
+            check_protected_command(&command, ws.path(), &roots),
+            Verdict::Allow,
+            "{command}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn protected_scan_preserves_symlink_parent_traversal_for_targets_and_cd() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    fs::create_dir(dd.path().join("subdir")).unwrap();
+    fs::write(dd.path().join("config.json"), b"original").unwrap();
+    std::os::unix::fs::symlink(dd.path().join("subdir"), ws.path().join("link")).unwrap();
+    let roots = WriteRoots {
+        workspace: ws.path().to_path_buf(),
+        data_dir: dd.path().to_path_buf(),
+        extra: vec![],
+        project_dir: None,
+    };
+    for command in [
+        "echo replaced > link/../config.json",
+        "cd link/.. && echo replaced > config.json",
+    ] {
+        assert!(
+            matches!(check_protected_command(command, ws.path(), &roots), Verdict::Block { ref code, .. } if code == "E_INTERNAL_STATE"),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn protected_scan_checks_decompressed_outputs_and_default_extract_directory() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = WriteRoots {
+        workspace: ws.path().to_path_buf(),
+        data_dir: dd.path().to_path_buf(),
+        extra: vec![],
+        project_dir: None,
+    };
+    let target = dd.path().join("mcp.json");
+    fs::write(&target, b"original").unwrap();
+    let target = target.display().to_string().replace('\\', "/");
+    for (program, flags, suffix) in [
+        ("gunzip", "-f", ".gz"),
+        ("gzip", "-df", ".gz"),
+        ("bunzip2", "-f", ".bz2"),
+        ("bzip2", "-df", ".bz2"),
+        ("unxz", "-f", ".xz"),
+        ("xz", "-df", ".xz"),
+        ("unzstd", "-f", ".zst"),
+        ("zstd", "-df", ".zst"),
+        ("unlz4", "-f", ".lz4"),
+        ("lz4", "-df", ".lz4"),
+    ] {
+        fs::write(format!("{target}{suffix}"), b"archive fixture").unwrap();
+        let command = format!("{program} {flags} '{target}{suffix}'");
+        assert!(
+            matches!(check_protected_command(&command, ws.path(), &roots), Verdict::Block { ref code, .. } if code == "E_INTERNAL_STATE"),
+            "{command}"
+        );
+    }
+    for command in ["tar -xf archive.tar", "unzip archive.zip"] {
+        assert!(
+            matches!(check_protected_command(command, dd.path(), &roots), Verdict::Block { ref code, .. } if code == "E_INTERNAL_STATE"),
+            "{command}"
+        );
+        assert_eq!(
+            check_protected_command(command, ws.path(), &roots),
+            Verdict::Allow
+        );
+    }
+    assert_eq!(
+        check_protected_command(
+            &format!("gzip -dc '{target}.gz' > ordinary.txt"),
+            ws.path(),
+            &roots
+        ),
+        Verdict::Allow
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn protected_scan_does_not_confuse_verbatim_prefix_with_a_glob() {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = WriteRoots {
+        workspace: ws.path().to_path_buf(),
+        data_dir: dd.path().to_path_buf(),
+        extra: vec![],
+        project_dir: None,
+    };
+    let target = dd.path().join("config.json");
+    fs::write(&target, b"original").unwrap();
+    let verbatim = fs::canonicalize(target).unwrap();
+    let command = format!(
+        "Set-Content -LiteralPath '{}' -Value replaced",
+        verbatim.display()
+    );
+    assert!(
+        matches!(check_protected_command(&command, ws.path(), &roots), Verdict::Block { ref code, .. } if code == "E_INTERNAL_STATE")
+    );
 }

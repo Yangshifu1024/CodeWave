@@ -126,6 +126,20 @@ gh 不能仅按名字放行，因为远程写不一定命中文件/高危规则�
 
 以上是开放边界，不是鼓励调用方绕过。改进时要先给出反例与判别力测试，再调整分析器，不能只追加宽松白名单。
 
+### 宿主内部状态写保护
+
+[protected_state.rs](../src-tauri/src/core/protected_state.rs) 区分普通产物与宿主维护的事务状态。作用域来自 `WriteRoots` 中的全局 `data_dir` 和会话快照 `project_dir`，不因为某个目录名为 `.codewave` 就将它当成宿主目录；`extra_roots` 不能解除内部状态保护。
+
+全局保护包括配置与凭据提交 journal、MCP 配置、运行标记、界面状态及其已定义备份、项目发现索引，以及 sessions/histories/stats/locks/instances/trust/credential-leases 状态树。项目保护包括 `project.json`、`mcp.json`、内部协调树和 `tasks/` 直属的合法任务 id `.json` 文件（scheduler 状态命名空间）；任务计划/报告 `.md` 和子目录中的普通产物仍可写。memory、skills、lessons、temps、logs 不因位于托管目录就整树封锁。变更宿主状态须走对应设置、计划任务或会话业务入口。
+
+普通文件写路径统一经 `resolve_write`，创建、编辑、删除、Office 写入/保真修改/备份还原在适用锁内及落盘前复验。检查覆盖目标、受保护后代及可替换/删除状态的目录祖先，同时检查词法入口和链接落点，缺失目标也不能通过链接绕过创建保护；普通读取边界保持原规则。命中返回 `E_INTERNAL_STATE`，完全访问档和额外目录授权均不能豁免。
+
+命令围栏在普通 L0/L3 确认早退之前扫描已识别的内部写目标，不能让 FullAccess、命令白名单或用户配置的写后检查把它降为可确认操作。扫描覆盖输出重定向、可识别复制/移动目标及移动源、命名输出参数和部分原地修改形态；字面量目录切换使用有界的可能目录集合，保守检查条件分支，子 shell 不向调用方传播 cwd。command/service 在审批等待及 shell 探测后、启动前再次复验，service 被拒时不登记进程。
+
+POSIX shell 的 `-c`（含 `-lc` 等组合）只扫描首个脚本，后续 argv 仍是数据；PS/CMD 的多参数命令同时扫描脚本片段拼接与保留参数引用的投影，避免含空格路径或“完整脚本 + 后续参数”丢失写目标。PowerShell 字符串 `-Command` 后的参数都属于待执行命令，见 [Microsoft 参数说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_pwsh?view=powershell-7.5)。这仍是保守静态投影，不模拟全部 shell 执行语义。
+
+这不是 OS 沙箱：任意解释器、动态展开、脚本文件、MCP 或不合作的外部进程仍可能有静态分析无法识别的副作用，最终路径检查之后也存在外部换链窗口。明确 `ln` / `cp --link` 等创建受保护源别名的形态会被拒绝，但 canonical 路径不识别外部预先创建的硬链接 inode 别名。macOS 与 Windows 对保留命名空间保守折叠大小写，macOS 大小写敏感卷上的同名变体可能因此被多拦。此保护本身不构成持久授权的真实性证明；持久信任仍需独立权威存储、版本绑定、真实用户确认及撤销事务，不能将普通磁盘 JSON 的 `trusted` 字段当作许可。
+
 ## 5. 网络：逐跳 SSRF 的范围
 
 [net.rs](../src-tauri/src/tools/net.rs) 及其[统一请求执行器](../src-tauri/src/tools/net/request.rs)只用于 web_fetch/http_request；Provider 的用户配置端点与 MCP 网络栈**不自动继承它**。默认拒私网/回环/链路本地/未指定/CGNAT 等已列地址，IPv4-mapped IPv6 先归一；域名解析后任一结果为私网则拒绝。allow_private_network 是显式设置放宽，不是用户在消息中写 localhost 即自动开放。

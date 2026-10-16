@@ -77,10 +77,10 @@ impl LockedTarget {
             pathutil::resolve_write(&self.roots, &candidate.to_string_lossy()).map_err(
                 |(code, msg)| {
                     DocumentWriteError::new(
-                        if code == "E_PATH_OUTSIDE" {
-                            "E_PATH_OUTSIDE"
-                        } else {
-                            "E_DOCUMENT_CHANGED"
+                        match code.as_str() {
+                            "E_PATH_OUTSIDE" => "E_PATH_OUTSIDE",
+                            "E_INTERNAL_STATE" => "E_INTERNAL_STATE",
+                            _ => "E_DOCUMENT_CHANGED",
                         },
                         msg,
                     )

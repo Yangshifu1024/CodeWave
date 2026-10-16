@@ -57,6 +57,7 @@ impl Tool for CreateTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
+        let destination = super::pathutil::canonical_best_effort(&resolved);
         // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 写前认领目标；兄弟任务已认领则拒绝并指引跳过上报
         if crate::tools::claims::requires_file_claim(&ctx.rt)
@@ -82,6 +83,9 @@ impl Tool for CreateTool {
                 return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
             }
         };
+        if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination) {
+            return ToolOutcome::err(&c, m);
+        }
         if resolved.exists() && !args.overwrite {
             return ToolOutcome::err(
                 "E_EXISTS",
@@ -104,6 +108,9 @@ impl Tool for CreateTool {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
             Err(_) => None,
         };
+        if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination) {
+            return ToolOutcome::err(&c, m);
+        }
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
                 // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：产物登记（子代理归属主会话；路径规范化，
@@ -185,6 +192,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
@@ -240,6 +248,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
@@ -422,6 +431,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         {

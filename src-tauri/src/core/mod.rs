@@ -14,6 +14,7 @@ pub mod openers;
 pub mod prefs;
 pub mod projects;
 pub mod prompt;
+pub mod protected_state;
 pub mod quota;
 pub mod scheduler;
 pub mod session_log;

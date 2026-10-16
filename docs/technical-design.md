@@ -69,6 +69,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - 批次统一处理交互排他、写冲突、并发、取消和 panic；`ask/wait` 与 `suggest` 的混批语义不同，不能按枚举一概拒绝或放行。
 - 前端拿完整 `ToolOutcome`，模型拿 `compact_for_model` 的文本。**写入后检查**结论必须进入 `outcome.data.check/checks`；仅写 warnings 模型看不到。未执行检查必须报告跳过原因。
 - 文件工具共用 pathutil，命令共用 fence；plan 下需确认的命令转拒绝，FullAccess 不绕过直接 Block。方案批准和单次操作审批是不同机制，预览不授权。
+- 内部宿主状态由 `core/protected_state` 按真实全局/项目快照分类，普通写工具与已识别命令目标均不可直接修改；业务入口仍走各自事务，不把整个 `.codewave` 变为只读。明确范围、非沙箱边界和回归由[工具与安全](./tools-and-safety.md#宿主内部状态写保护)主维护。
 - web_fetch/http_request 共用逐跳地址固定、代理路由快照、总预算与流式限额；禁止内网时明确拒绝无法固定目标地址的远端 DNS 代理域名请求。该 SSRF 层不覆盖 Provider/MCP，也不宣称约束恶意代理或底层网络路由，详见工具指南。
 - WebView CSP/capabilities、隔离预览和 Rust 工具安全层各有边界，不能互相代替。
 

@@ -19,6 +19,7 @@ async fn edit_registers_artifact_with_root_owner() {
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
     };
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt = core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
@@ -67,6 +68,7 @@ async fn task_runtime_skips_artifact_registration() {
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
     };
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt = crate::core::agent::SessionRuntime::new_task(
@@ -148,6 +150,7 @@ async fn full_edit_flow_with_rollback() {
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
     };
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt = core.get_or_create_session("t", roots.workspace.clone(), None, vec![], None, vec![]);
@@ -219,6 +222,7 @@ fn fresh_fixture(
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
     };
     let core = crate::core::agent::test_support::make_core(&roots);
     let rt = core.get_or_create_session(name, roots.workspace.clone(), None, vec![], None, vec![]);
@@ -616,6 +620,7 @@ async fn edit_puts_post_write_check_into_data_per_file() {
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
     };
     let core = crate::core::agent::test_support::make_core(&roots);
     {

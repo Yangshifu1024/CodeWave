@@ -2435,6 +2435,7 @@ mod tests {
     async fn task_scope_and_logs_share_registered_project_and_do_not_recreate_deletion() {
         let (data, root, _table, item) = fixture();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(root.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(data.path()).unwrap(),
@@ -2479,6 +2480,7 @@ mod tests {
         std::os::unix::fs::symlink(root.path(), &alias).unwrap();
         project(data.path(), &alias, "project");
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(root.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(data.path()).unwrap(),

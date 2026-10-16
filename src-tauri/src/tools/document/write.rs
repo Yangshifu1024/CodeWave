@@ -466,6 +466,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
