@@ -134,8 +134,8 @@ Rust ignored 的完整名称：
 
 | 事项 | 已核实边界 / 后续验证 |
 |---|---|
-| Skills 禁用缓存 | `get/list` 命中 TTL 时不重判 disabled，保存/切换禁用未失效缓存；`disabled_after_load_should_invalidate_within_ttl` 仍 ignored。详见 [mcp-and-skills](./mcp-and-skills.md) |
-| DNS rebinding | 工具先解析校验，reqwest 连接未固定已验证 IP；逐跳校验并不消除二次解析窗口。详见 [tools-and-safety](./tools-and-safety.md) |
+| 技能在途撤销 | get/list 缓存已包含作用域和 disabled 集，撤销探针已启用；已加载进历史或冻结提示的正文不作回收。详见 [mcp-and-skills](./mcp-and-skills.md#缓存与禁用生效) |
+| 网络代理校验 | 工具逐跳固定已校验地址；禁止内网时拒绝无法固定目标的远端 DNS 代理域名请求，不静默直连。真实代理、TLS 与三平台联调仍须另验；不覆盖 Provider/MCP。详见 [tools-and-safety](./tools-and-safety.md) |
 | 长期会话索引 | 索引仍有 2000 条 LRU 上限；索引元数据缺失时恢复会退回单根、无项目归属。完整历史保留不等于元数据无限保留，见 [sessions-and-projects](./sessions-and-projects.md) |
 | 项目提示与命令 cwd | 运行提示中的 temps 描述和工具实际默认 project_dir 存在差异；应以执行代码为准并独立修正/测试，见 [runtime-and-scheduling](./runtime-and-scheduling.md) |
 | 终态事件丢失 | 快照对账修复了展示与续队能力，不证明底层事件丢失原因已定位；需保留日志与 run 身份关联证据 |

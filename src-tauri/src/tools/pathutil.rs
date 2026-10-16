@@ -149,15 +149,18 @@ pub fn resolve_read(roots: &WriteRoots, raw: &str) -> Result<PathBuf, (String, S
     } else {
         let primary = safe_join(&roots.workspace, raw)?;
         if primary.exists() {
-            return Ok(primary);
-        }
-        for extra in &roots.extra {
-            let cand = safe_join(Path::new(extra), raw)?;
-            if cand.exists() {
-                return Ok(cand);
+            primary
+        } else {
+            let mut selected = primary;
+            for extra in &roots.extra {
+                let cand = safe_join(extra, raw)?;
+                if cand.exists() {
+                    selected = cand;
+                    break;
+                }
             }
+            selected
         }
-        primary
     };
     let canonical = canonical_best_effort(&cand);
     if !inside_any(&canonical, &roots.canonical_roots()) {
@@ -327,5 +330,73 @@ mod tests {
                 "E_PATH_OUTSIDE"
             );
         }
+    }
+
+    #[test]
+    fn relative_read_preserves_root_order_and_missing_primary() {
+        let ws = tempfile::tempdir().unwrap();
+        let extra1 = tempfile::tempdir().unwrap();
+        let extra2 = tempfile::tempdir().unwrap();
+        let mut r = roots(&ws);
+        r.extra = vec![extra1.path().to_path_buf(), extra2.path().to_path_buf()];
+        std::fs::write(extra2.path().join("shared.txt"), b"second").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            extra2.path().join("shared.txt")
+        );
+        std::fs::write(extra1.path().join("shared.txt"), b"first").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            extra1.path().join("shared.txt")
+        );
+        std::fs::write(ws.path().join("shared.txt"), b"primary").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            r.workspace.join("shared.txt")
+        );
+        assert_eq!(
+            resolve_read(&r, "missing.txt").unwrap(),
+            r.workspace.join("missing.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_read_checks_symlinks_in_primary_and_extra_roots() {
+        let ws = tempfile::tempdir().unwrap();
+        let extra = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(out.path().join("secret.txt"), b"secret").unwrap();
+        let mut r = roots(&ws);
+        r.extra.push(extra.path().to_path_buf());
+        for root in [&r.workspace, &r.extra[0]] {
+            std::os::unix::fs::symlink(out.path(), root.join("leak")).unwrap();
+            assert_eq!(
+                resolve_read(&r, "leak/secret.txt").unwrap_err().0,
+                "E_PATH_OUTSIDE"
+            );
+            if root == &r.workspace {
+                assert_eq!(
+                    resolve_read(&r, "leak/missing.txt").unwrap_err().0,
+                    "E_PATH_OUTSIDE"
+                );
+            }
+            std::fs::remove_file(root.join("leak")).unwrap();
+        }
+        // A link to another allowed root is readable; lexical paths remain unchanged.
+        std::fs::write(extra.path().join("allowed.txt"), b"allowed").unwrap();
+        std::os::unix::fs::symlink(extra.path(), r.workspace.join("allowed")).unwrap();
+        assert_eq!(
+            resolve_read(&r, "allowed/allowed.txt").unwrap(),
+            r.workspace.join("allowed/allowed.txt")
+        );
+        // An existing primary escape must fail, rather than fall through to a safe extra.
+        std::os::unix::fs::symlink(out.path(), r.workspace.join("leak")).unwrap();
+        std::fs::create_dir(extra.path().join("leak")).unwrap();
+        std::fs::write(extra.path().join("leak/secret.txt"), b"safe").unwrap();
+        assert_eq!(
+            resolve_read(&r, "leak/secret.txt").unwrap_err().0,
+            "E_PATH_OUTSIDE"
+        );
     }
 }

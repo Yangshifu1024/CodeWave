@@ -46,6 +46,9 @@ serde_yaml = "0.9"
 
 # http / llm
 reqwest = { version = "0.13", features = ["json", "socks", "stream", "gzip", "brotli"] }
+# Reuse reqwest's proxy matcher so guarded tool requests snapshot the actual
+# env/system/NO_PROXY route before pinning DNS, without silently going direct.
+hyper-util = { version = "0.1", features = ["client-proxy", "client-proxy-system"] }
 
 # tools & safety
 git2 = { version = "0.21", default-features = false }

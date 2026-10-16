@@ -206,4 +206,4 @@ service ticker 更新活日志；service 退出当前按 Succeeded 表示进程�
 
 重点测试：后端 `core::agent::tests` 的收尾矩阵和脚本化 SSE、runtime 的 run_snapshot/activity、`core::scheduler`、`core::wait_targets`、`tools::wait`、`tools::service`；前端 `run.terminal-fallback`、`run.queue`、`run.service-update`、`toolcard.service-status`、`activity.store`、`activity.navigation`、`activity.dashboard`、`tasks.page`、`stores.tasks`、`schedulePreset`。完整运行方式见[测试指南](./testing.md)。
 
-仍开放：事件投递丢失的实机根因尚未最终证实，`bindEvents` 仍逐键串行 await、单次注册失败可中断后续注册；兜底不等于已定位根因。ask 的部分等待路径仍缺独立 Drop 收口。混合批次被拒调用的 user 反馈、`<report>` 只是包含匹配导致复述误收尾、无界 web_fetch/工具执行超时、服务退出 stop-all/owner 清理、缺 service id 的停止按钮提示，均不能标成已修。本指南只记录边界，本轮不修改运行代码。
+仍开放：事件投递丢失的实机根因尚未最终证实，`bindEvents` 仍逐键串行 await、单次注册失败可中断后续注册；兜底不等于已定位根因。ask 的部分等待路径仍缺独立 Drop 收口。混合批次被拒调用的 user 反馈、`<report>` 只是包含匹配导致复述误收尾、任意工具批次的统一总时限、服务退出 stop-all/owner 清理、缺 service id 的停止按钮提示，均不能标成已修。web_fetch/http_request 的网络 I/O 总预算见[工具与安全](./tools-and-safety.md#5-网络逐跳-ssrf-的范围)，不能外推到全部工具。

@@ -248,9 +248,7 @@ mod tests {
         assert_eq!(out.error.unwrap().code, "E_SKILL_NOT_FOUND");
     }
 
-    /// 疑似潜在缺陷：SkillIndex 的 TTL 缓存（10s）无视禁用列表——成功加载后才被禁用的技能
-    /// 在缓存过期前仍可解析。此处仅记录不设断言（生产流程中应在首次加载前改配置）。
-    #[ignore]
+    /// A configuration change must revoke a cached skill immediately, without waiting for TTL.
     #[tokio::test]
     async fn disabled_after_load_should_invalidate_within_ttl() {
         let (ctx, _ws, _dd) = setup();
@@ -268,5 +266,7 @@ mod tests {
             "E_SKILL_NOT_FOUND",
             "disabled skill must stop resolving immediately"
         );
+        ctx.core.cfg.write().unwrap().disabled_skills.clear();
+        assert!(SkillTool.run(&ctx, json!({"skill": "demo"})).await.ok);
     }
 }

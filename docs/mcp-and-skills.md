@@ -83,9 +83,9 @@ MCP server 的 is_error 返回工具失败；文本和图片进入已有内容�
 
 设置页可删除项目/全局托管技能，不删内置与 `.agents/.claude` 兼容目录。删除路径须在 canonical 后仍位于允许的托管根内；禁用与删除是两件事，不能因为技能已禁用就丢掉安全定位所需的信息。
 
-### 缓存的已知限制
+### 缓存与禁用生效
 
-SkillIndex 的 get/list 缓存 TTL 为 10 秒，key 只有 workspace/project，未包含 disabled 列表。当前 toggle_skill 与 save_config 不主动 invalidate；因此禁用已加载技能可能在 TTL 内仍可被取得。reload/delete 会失效缓存。不能把“设置已禁用”写成即时撤销保证；[tools/skill.rs](../src-tauri/src/tools/skill.rs) 中 `disabled_after_load_should_invalidate_within_ttl` 仍是 ignored 探针，需修复缓存契约后启用。
+SkillIndex 的 get/list 缓存 TTL 为 10 秒；结构化 key 包含 workspace、全局 data_dir、project_dir 和排序去重后的 disabled 集。配置禁用/重新启用发布后，下一次 get/list 不能命中旧政策的缓存，不必等待 TTL 或依赖某个配置入口主动 invalidate；reload/delete 仍强制失效。不同全局数据目录和项目作用域不会串缓存。[tools/skill.rs](../src-tauri/src/tools/skill.rs) 的 `disabled_after_load_should_invalidate_within_ttl` 已启用，覆盖加载后禁用及重新启用。已进入运行历史/冻结系统提示的技能内容不会因此从模型记忆中撤回；这里保证后续获取拒绝，不承诺即时撤销在途步骤。
 
 ## 5. 技能加载、询问规范与输入触发
 

@@ -39,7 +39,7 @@ ask/wait 与其他调用同批时整批 `E_BATCH_POLICY`。suggest 混批时只�
 [WriteRoots/pathutil](../src-tauri/src/tools/pathutil.rs) 是路径处理入口：工作区主目录快照 + 全局数据目录 + 用户授权 extra_roots。相对写路径基于工作区，显式绝对写路径必须规范化后落在根内；safe_join 拒绝 `..`、控制字符及 Windows 保留名。
 
 - 相对读取先查主根，再按 extra_roots 顺序查首个存在文件；绝对读取走 canonical 边界校验。
-- **当前读侧缺口**：相对且已存在的候选分支直接返回，未经过函数尾部 canonical roots 校验；不要宣称该读取路径已完全防住 symlink 指向根外。修改边界时必须覆盖相对链接、绝对路径和额外根三种入口。
+- 相对读取选中首个存在候选后，也须与绝对读取一样通过 canonical roots 校验；主根/额外根中的 symlink 指向根外会返回 `E_PATH_OUTSIDE`，指向另一个已授权根则可读。保持主根优先，不因首候选越界而悄悄改读其它同名文件。路径校验与打开之间仍存在外部进程换链窗口，不是 OS 沙箱保证。
 - 新增项目外目录是显式用户界面流程，授权读/写/列整组能力；不是任意 read/edit 遇到 E_PATH_OUTSIDE 都会自动弹窗扩根。根目录、家目录本身与应用托管数据目录有广度拒绝，详见[文档与外部引用](./documents.md)。
 - FullAccess 不解除文件工具的 roots 校验。shell 的区外新建策略是另一条路径，不能套用到 create/edit。
 - delete 先过 roots 与危险删除守卫，拒绝根目录、任一工作区/extra 根自身、这些根的 `.git`、家目录与系统目录。shell 删除黑名单不允许用确认绕过，应该走专用 delete 工具。
@@ -128,17 +128,19 @@ gh 不能仅按名字放行，因为远程写不一定命中文件/高危规则�
 
 ## 5. 网络：逐跳 SSRF 的范围
 
-[net.rs](../src-tauri/src/tools/net.rs) 只用于 web_fetch/http_request；Provider 的用户配置端点与 MCP 网络栈**不自动继承它**。默认拒私网/回环/链路本地/未指定/CGNAT 等已列地址，IPv4-mapped IPv6 先归一；域名解析后任一结果为私网则拒绝。allow_private_network 是显式设置放宽，不是用户在消息中写 localhost 即自动开放。
+[net.rs](../src-tauri/src/tools/net.rs) 及其[统一请求执行器](../src-tauri/src/tools/net/request.rs)只用于 web_fetch/http_request；Provider 的用户配置端点与 MCP 网络栈**不自动继承它**。默认拒私网/回环/链路本地/未指定/CGNAT 等已列地址，IPv4-mapped IPv6 先归一；域名解析后任一结果为私网则拒绝。allow_private_network 是显式设置放宽，不是用户在消息中写 localhost 即自动开放。
 
-两个工具关闭自动重定向，最多 10 跳，每跳重新 guard_host 与同 host 最少 1 秒节流。web_fetch 明确只允许 HTTP(S)，用流式 read_body_limited 把响应体限制为 50 MiB；HTML 用 Readability，失败退化剥标签，默认 maxChars=60,000、范围 1,000–500,000，目前不支持 markdown 格式参数或图片内容通道。web_fetch 的客户端只有 10 秒连接超时，没有端到端 wall timeout；字节上限不能防止慢速持续响应。http_request 自身有请求超时，command/MCP 也各有超时，仍不能等同于批次层已存在统一工具执行总时限。
+两个工具仅允许 HTTP(S)，拒绝 URL 内嵌凭据，关闭自动重定向，最多跟随 10 跳；要求本地解析的路由每跳重新解析并校验全部目标地址，以该地址集合构造本跳客户端，保持原域名用于 Host/TLS 校验，不能二次解析成其它连接目标。允许内网时，远端 DNS 代理保持代理解析，不先要求本地 DNS 成功。每 host 最少 1 秒节流。两工具的 `timeoutSeconds` 默认 60、范围 1–120，统一总预算覆盖代理探测、DNS、节流、全部跳转和正文读取；取消优先，取消返回 `E_CANCELLED`，超时返回 `E_NETWORK`。macOS 显式系统代理探测为可取消子进程；默认原生系统探测及其它平台探测在阻塞工作线程执行，请求取消后原生查询可能继续结束。这不等于批次层已有任意工具的统一总时限，也不包括正文 Readability 的同步 CPU 处理。
 
-http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS，默认超时 60 秒、范围 1–120；JSON 预览 24 Ki 字符、文本 96 Ki 字符，二进制只报体积和 MIME；响应头只对 set-cookie/www-authenticate 做脱敏。
+两工具均使用 `read_body_limited` 对**解压后的流式正文**实施 50 MiB 硬上限，无 Content-Length/分块响应同样受限；声明长度超限则提前拒绝。web_fetch 的 HTML 用 Readability，失败退化剥标签，默认 maxChars=60,000、范围 1,000–500,000，目前不支持 markdown 格式参数或图片内容通道；新增 `final_url` 标明实际取回地址，原 `url` 保留用户输入。
 
-须明确的网络欠账：
+http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS；JSON 预览 24 Ki 字符、文本 96 Ki 字符，二进制只报体积和 MIME；响应头只对 set-cookie/www-authenticate 做脱敏。body 是 JSON 值，字符串也按 JSON 字符串发送；query 的名称和值均编码。Host、Content-Length、Transfer-Encoding 和 Proxy-Authorization 不允许由 caller 头覆盖。
 
-1. guard_host 的 DNS 检查后，reqwest 建连会再次解析；**地址未绑定，仍有 DNS rebinding/TOCTOU 窗口**，不能写“已彻底阻止重绑定”。
-2. http_request 只用 Content-Length 预检，随后 `resp.bytes()` 全量读取；无长度/分块响应尚无同样的流式硬上限。
-3. http_request 重定向保持原方法、headers 与 JSON body，未按 303/307/308 分派，也未剥跨源敏感头；访问不可信重定向目标可能泄露调用方凭据/数据。
+重定向与代理契约：
+
+1. 只跟随 301/302/303/307/308；301/302 仅 POST 转 GET，303 除 HEAD 外转 GET，转换后清除 body 和实体头；307/308 同源保留方法与 body。跨源（含端口变化）清空**全部 caller 自定义头**，避免漏掉自定义凭据；若仍需重放 body，返回 `E_REDIRECT_UNSAFE`。HTTPS 降级到 HTTP 同样拒绝，已剥头不会在后续跳回原源时恢复。
+2. 每次工具执行使用与 reqwest 同源的 hyper-util matcher 固化系统/环境/NO_PROXY 路由，显式代理保留原决议及回环直连例外。显式地址先校验协议和主机，统一 IDNA 与 SOCKS 缺省端口；不受支持的配置明确报错，不能把 matcher 丢弃配置误认作直连。客户端只使用该快照，构建失败不回退绕开代理的直连。
+3. 直连、本地 DNS SOCKS4/5 使用已校验地址。HTTP/HTTPS CONNECT、SOCKS4a/5h 会在代理端解析域名，不能由 `resolve_to_addrs` 证明实际目标；禁止内网时，对这类代理的域名目标明确返回 `E_SSRF_PROXY_UNSUPPORTED`，不发送、不静默直连。可改用本地 DNS SOCKS，或由用户明确开启 allow_private_network 放宽策略。IP 字面量没有目标 DNS 二次解析。该策略不宣称约束恶意代理或底层网络路由，真实代理联调仍需单独验收。
 4. Network kind 没有统一触网审批，Plan 也未排除 http_request；所以“计划档只读”不能扩展成对任意网络写的完整技术保证。端点访问和授权是不同问题。
 
 ## 6. 写入后检查

@@ -1,8 +1,6 @@
 //! web_fetch：GET + 正文抽取（dom_smoothie Readability），逐跳 SSRF 校验，按主机节流。
 
-use super::net::{
-    HopError, HostThrottle, MAX_BODY_BYTES, MAX_REDIRECTS, guard_host, read_body_limited,
-};
+use super::net::HostThrottle;
 use super::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -17,10 +15,13 @@ pub struct Args {
     /// 返回正文的字符上限，钳制 1k–500k。
     #[serde(default)]
     max_chars: Option<usize>,
+    /// End-to-end budget, including redirects and body streaming.
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
 }
 
 /// web_fetch 工具：抓取网页并抽取主可读内容（标题 + 正文）。
-/// 入参为 url（必填）+ 可选 maxChars；Network 分级，执行前需用户确认。
+/// 入参为 url（必填）+ 可选 maxChars / timeoutSeconds；Network 分级。
 /// 安全语义：手动重定向逐跳 SSRF 校验 + 按主机 1s 节流；HTML 走 Readability 抽取，
 /// 失败退化为粗剥标签；API 调用场景应改用 http_request。
 pub struct WebFetchTool;
@@ -40,73 +41,6 @@ pub fn throttle_pub() -> &'static HostThrottle {
 
 /// 返回正文的默认字符上限。
 pub const DEFAULT_MAX_CHARS: usize = 60_000;
-
-/// 手动重定向的 GET：逐跳 SSRF 校验，跨源重定向剥离 Authorization/Cookie。
-/// `client` 由调用方按 config 构建代理感知的 redirect-none client（build_client_with）。
-pub async fn guarded_get(
-    client: reqwest::Client,
-    url: &str,
-    allow_private: bool,
-) -> Result<reqwest::Response, HopError> {
-    let mut current = url.to_string();
-    for _hop in 0..=MAX_REDIRECTS {
-        let parsed = reqwest::Url::parse(&current).map_err(|e| HopError {
-            code: "E_URL",
-            message: format!("URL 无效：{e}"),
-        })?;
-        let host = parsed.host_str().unwrap_or_default().to_string();
-        let port = parsed.port_or_known_default().unwrap_or(80);
-        let scheme = parsed.scheme().to_string();
-        if scheme != "http" && scheme != "https" {
-            return Err(HopError {
-                code: "E_URL",
-                message: format!("不支持的协议：{scheme}"),
-            });
-        }
-        guard_host(&host, port, allow_private).await?;
-        throttle().wait(&host).await;
-
-        let resp = client
-            .get(&current)
-            .header("User-Agent", crate::util::USER_AGENT)
-            .send()
-            .await
-            .map_err(|e| HopError {
-                code: "E_NETWORK",
-                message: format!("请求失败：{e}"),
-            })?;
-
-        if resp.status().is_redirection() {
-            let loc = resp
-                .headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            match loc {
-                Some(loc) => {
-                    let next = parsed.join(&loc).map_err(|e| HopError {
-                        code: "E_URL",
-                        message: format!("重定向地址无效：{e}"),
-                    })?;
-                    // 跨源重定向不再回显凭据（我们本就从不发送）；直接继续
-                    current = next.to_string();
-                    continue;
-                }
-                None => {
-                    return Err(HopError {
-                        code: "E_URL",
-                        message: "重定向缺少 Location 头".into(),
-                    });
-                }
-            }
-        }
-        return Ok(resp);
-    }
-    Err(HopError {
-        code: "E_REDIRECTS",
-        message: format!("重定向超过 {MAX_REDIRECTS} 次"),
-    })
-}
 
 /// HTML → 纯文本正文（dom_smoothie Readability）。
 pub fn extract_article(html: &str, url: &str) -> Result<(String, String), String> {
@@ -150,7 +84,8 @@ impl Tool for WebFetchTool {
   "required": ["url"],
   "properties": {
     "url": {"type": "string"},
-    "maxChars": {"type": "integer", "description": "默认 60000"}
+    "maxChars": {"type": "integer", "description": "默认 60000"},
+    "timeoutSeconds": {"type": "integer", "description": "总预算秒数，默认 60，范围 1–120"}
   }
 }"#
     }
@@ -167,19 +102,26 @@ impl Tool for WebFetchTool {
             .max_chars
             .unwrap_or(DEFAULT_MAX_CHARS)
             .clamp(1_000, 500_000);
-        // 读锁快照 config → 构建代理感知的 redirect-none client（逐跳 SSRF 校验在本函数内做）
         let cfg = ctx.core.cfg.read().unwrap().clone();
-        let allow_private = cfg.network.allow_private_network;
-        let client =
-            crate::provider::proxy::build_client_with(&cfg, reqwest::redirect::Policy::none());
-
-        let resp = match guarded_get(client, &args.url, allow_private).await {
-            Ok(r) => r,
-            Err(e) => return ToolOutcome::err(e.code, e.message),
+        let url = match reqwest::Url::parse(&args.url) {
+            Ok(url) => url,
+            Err(_) => return ToolOutcome::err("E_URL", "URL 无效"),
         };
-        let status = resp.status();
+        let request = super::net::request::HttpRequest {
+            url,
+            method: reqwest::Method::GET,
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        };
+        let timeout =
+            std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(60).clamp(1, 120));
+        let resp = match super::net::request::execute(&cfg, request, &ctx.cancel, timeout).await {
+            Ok(response) => response,
+            Err(error) => return ToolOutcome::err(error.code, error.message),
+        };
+        let status = resp.status;
         let content_type = resp
-            .headers()
+            .headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
@@ -199,14 +141,10 @@ impl Tool for WebFetchTool {
                 ),
             );
         }
-        let body = match read_body_limited(resp, MAX_BODY_BYTES).await {
-            Ok(b) => b,
-            Err(e) => return ToolOutcome::err(e.code, e.message),
-        };
-        let body_text = String::from_utf8_lossy(&body).into_owned();
+        let body_text = String::from_utf8_lossy(&resp.body).into_owned();
 
         let (title, text) = if content_type.contains("html") || content_type.contains("xhtml") {
-            extract_article(&body_text, &args.url).unwrap_or_else(|e| {
+            extract_article(&body_text, resp.url.as_str()).unwrap_or_else(|e| {
                 let fallback = strip_tags(&body_text);
                 (
                     String::new(),
@@ -221,6 +159,7 @@ impl Tool for WebFetchTool {
         let truncated = text.chars().count() > max_chars;
         ToolOutcome::ok(json!({
             "url": args.url,
+            "final_url": resp.url.as_str(),
             "title": if title.is_empty() { Value::Null } else { json!(title) },
             "content": clipped,
             "chars": clipped.chars().count(),
@@ -252,17 +191,22 @@ mod tests {
 
     #[tokio::test]
     async fn ssrf_blocks_localhost() {
-        let client = reqwest::Client::new();
-        let err = guarded_get(client, "http://127.0.0.1:1/x", false)
-            .await
-            .unwrap_err();
+        let cfg = crate::core::config::ConfigState::default();
+        let request = super::super::net::request::HttpRequest {
+            url: "http://127.0.0.1:1/x".parse().unwrap(),
+            method: reqwest::Method::GET,
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        };
+        let err = super::super::net::request::execute(
+            &cfg,
+            request,
+            &tokio_util::sync::CancellationToken::new(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .err()
+        .expect("private URL must fail");
         assert_eq!(err.code, "E_SSRF_BLOCKED");
-        // 放行开关
-        assert!(
-            !guarded_get(reqwest::Client::new(), "http://127.0.0.1:1/x", true)
-                .await
-                .is_err()
-                || true
-        );
     }
 }

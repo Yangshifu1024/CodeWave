@@ -393,7 +393,7 @@ PDF 里的文字是「用哪个字形画在哪里」，而不是「这段文字�
 }
 
 /// TTL 缓存槽位：(采集时刻, scope key, 以技能名为键的索引)。
-type SkillCache = Mutex<Option<(Instant, String, HashMap<String, Skill>)>>;
+type SkillCache = Mutex<Option<(Instant, SkillCacheKey, HashMap<String, Skill>)>>;
 
 /// 技能索引：带 scope key 的 TTL 缓存，负责扫描/查询/列表。
 pub struct SkillIndex {
@@ -403,15 +403,30 @@ pub struct SkillIndex {
     ttl: Duration,
 }
 
-/// 缓存 scope key：workspace + project_dir 唯一确定一份技能索引。
-fn cache_key(workspace: &Path, project_dir: Option<&Path>) -> String {
-    format!(
-        "{}|{}",
-        workspace.display(),
-        project_dir
-            .map(|p| p.display().to_string())
-            .unwrap_or_default()
-    )
+/// Scope and policy are part of cache identity; policy changes must take effect without TTL delay.
+#[derive(PartialEq, Eq)]
+struct SkillCacheKey {
+    workspace: PathBuf,
+    data_dir: PathBuf,
+    project_dir: Option<PathBuf>,
+    disabled: Vec<String>,
+}
+
+fn cache_key(
+    workspace: &Path,
+    data_dir: &Path,
+    project_dir: Option<&Path>,
+    disabled: &[String],
+) -> SkillCacheKey {
+    let mut disabled = disabled.to_vec();
+    disabled.sort_unstable();
+    disabled.dedup();
+    SkillCacheKey {
+        workspace: workspace.to_path_buf(),
+        data_dir: data_dir.to_path_buf(),
+        project_dir: project_dir.map(Path::to_path_buf),
+        disabled,
+    }
 }
 
 /// 路径归一为正斜杠形态（origin 与目录前缀比较时统一 Windows 反斜杠差异）。
@@ -567,7 +582,7 @@ impl SkillIndex {
         project_dir: Option<&Path>,
         name: &str,
     ) -> Option<Skill> {
-        let key = cache_key(workspace, project_dir);
+        let key = cache_key(workspace, data_dir, project_dir, disabled);
         {
             let g = self.cache.lock().unwrap();
             if let Some((at, cached_key, map)) = g.as_ref()
@@ -592,7 +607,7 @@ impl SkillIndex {
         disabled: &[String],
         project_dir: Option<&Path>,
     ) -> Vec<SkillMeta> {
-        let key = cache_key(workspace, project_dir);
+        let key = cache_key(workspace, data_dir, project_dir, disabled);
         // 路径统一正斜杠后做前缀归类（Windows 反斜杠与 origin 的 display 形态一致化）
         let norm = norm_slash;
         let proj_prefix = project_dir.map(|p| norm(&p.display().to_string()));
@@ -1055,5 +1070,52 @@ mod tests {
                 .iter()
                 .any(|m| m.name == "later")
         );
+    }
+
+    #[test]
+    fn disabled_changes_apply_to_cached_get_and_list_in_both_directions() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let idx = SkillIndex {
+            cache: Mutex::new(None),
+            ttl: Duration::from_secs(3600),
+        };
+        let name = "repo-index";
+        let disabled = vec![name.to_string()];
+        // Exercise both get->list and list->get cache population paths.
+        for populate_with_get in [true, false] {
+            idx.invalidate();
+            if populate_with_get {
+                assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+            } else {
+                assert!(
+                    idx.list(ws.path(), dd.path(), &[], None)
+                        .iter()
+                        .any(|s| s.name == name)
+                );
+            }
+            assert!(
+                idx.get(ws.path(), dd.path(), &disabled, None, name)
+                    .is_none()
+            );
+            assert!(
+                !idx.list(ws.path(), dd.path(), &disabled, None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+            assert!(
+                idx.list(ws.path(), dd.path(), &[], None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            // Also change policy with list as the first reader of the changed configuration.
+            assert!(
+                !idx.list(ws.path(), dd.path(), &disabled, None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+        }
     }
 }
