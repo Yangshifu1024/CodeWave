@@ -18,6 +18,8 @@
 
 `title` 是内部自动命名角色，工具入口硬拒绝经 subagent 委派；它由 title 模块单次零工具调用使用。旧 `dev` 不保留别名，未知角色按通用子代理运行，不能把未知字符串说成已注册专家。规范化支持大小写、空白、下划线；`pm/test` 别名通过注册表同源解析，不另外维护角色判定表。
 
+`AgentMeta.resource` 从实际注册定义的名称、描述、readonly 和正文计算来源版本，身份为 `builtin:agent:<name>`；设置中的角色模型面板展示该身份和版本，子代理成功结果的 `ToolOutcome.data.role_resource` 引用同一模板。这里描述角色基座，不代表运行时权限或最终 prompt 的完整指纹；未知通用角色没有虚构内置来源。当前未加载项目/扩展角色，title 仍不在可委派列表。共用来源字段见 [资源来源](./mcp-and-skills.md#来源版本与覆盖审计)。
+
 工具入参为自包含 `task`、`role`、`maxSteps`，另有短标签 description 与 cleanContext。schema 要求预算，执行层对缺失仍有默认 25 步并夹取 1–1000；兼容 `max_steps/clean_context` 键名。任务/角色为空拒绝，不悄悄执行空任务。
 
 - cleanContext 默认 true；false 仅带父历史最后 6 条作背景，不等于复制全部会话。

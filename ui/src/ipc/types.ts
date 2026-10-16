@@ -570,14 +570,22 @@ export interface GitDiffFile {
 /** 最近提交日志条目（git_recent_log 返回；git 集成只读） */
 export interface GitLogEntry { short_id: string; summary: string; author: string; time: number }
 
-/** 技能元数据（多目录扫描；origin 标记来源，deletable = 托管 .codewave/skills 来源可在设置页删除） */
-export interface SkillMeta { name: string; description: string; whenToUse: string; origin: string; deletable: boolean }
+/** 内容版本及规范身份；只记录来源，不授予资源运行权限。 */
+export interface ResourceOrigin {
+  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "global_managed" | "project_managed";
+  identity: string;
+  version: string;
+}
+/** origin 保留展示路径；deletable 由后端判定；删除还必须提交 resource 的身份和版本。 */
+export interface SkillMeta { name: string; description: string; whenToUse: string; origin: string; deletable: boolean; resource?: ResourceOrigin }
+export interface SkillAuditEntry { name: string; disabled: boolean; candidates: { meta: SkillMeta; selected: boolean }[] }
+export interface SkillInspection { entries: SkillAuditEntry[]; issues: { path: string; message: string }[] }
 
 /** 技能完整内容（get_skill 返回；body = SKILL.md 正文） */
 export interface SkillFull { meta: SkillMeta; body: string }
 
 /** 内置子代理角色摘要（list_agents 返回；后端注册表剔除内部 title 角色，不含 body 正文） */
-export interface AgentMeta { name: string; description: string }
+export interface AgentMeta { name: string; description: string; resource?: ResourceOrigin }
 
 /** 计划 todo 条目（plan:update 事件下发） */
 export interface Todo { title: string; status: "pending" | "in_progress" | "completed" }

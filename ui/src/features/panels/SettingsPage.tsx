@@ -13,7 +13,7 @@ import { fontSizeCss } from "../../utils/fonts";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
-  Alert, App, Button, Empty, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
+  Alert, App, Button, Input, InputNumber, Modal, Popconfirm, Radio, Select, Slider, Switch, Tooltip, Typography,
   Tabs,
 } from "antd";
 import {
@@ -25,10 +25,9 @@ import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { mcpStatusEventRevision } from "../../utils/mcpStatusRevision";
 import { DEFAULT_POST_WRITE_CHECK } from "../../ipc/types";
-import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, ConfigVersion, CredentialEdit, LegacyCleanupPreview, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo, SkillMeta } from "../../ipc/types";
+import type { CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, ConfigVersion, CredentialEdit, LegacyCleanupPreview, McpConfigIssue, McpScope, McpServerView, McpStatusPayload, PostWriteCheckSettings, ShellInfo } from "../../ipc/types";
 // 清理提示的去重口径与启动轻提示共用一份（详见 utils/cleanupNotice.ts）：设置页展示过结果就写记录
 import { markCleanupNoticeSeen } from "../../utils/cleanupNotice";
-import { originLabel } from "../../utils/skills";
 import { fullscreenNavWidth } from "../../utils/layout";
 import { respondExitRequest } from "../../utils/uiState";
 import { useActiveId, useSessions } from "../../stores/sessions";
@@ -58,6 +57,7 @@ import { McpArgTable, McpKvTable } from "./McpKvTable";
 import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import SubagentModelsPanel from "./SubagentModelsPanel";
+import SkillsPanel from "./SkillsPanel";
 import {
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
@@ -304,10 +304,6 @@ function SettingsPageController() {
   const saveAttempt = useRef<{ payload: string; operationId: string } | null>(null);
   const [showAllCommands, setShowAllCommands] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [skills, setSkills] = useState<SkillMeta[]>([]);
-  // 技能区异步操作 loading：reloadSkills 全局、删除按行（Popconfirm 确认按钮 loading）
-  const [skillsBusy, setSkillsBusy] = useState(false);
-  const [deletingName, setDeletingName] = useState<string | null>(null);
   // 受控页：上收到 useUi（[docs/providers-and-network](../../../../docs/providers-and-network.md)），外部可指定页打开设置页；
   // 下方保存校验跳页也走同一 store 状态（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
   const tab = normalizePageKey(useUi((s) => s.settingsTab));
@@ -495,7 +491,6 @@ function SettingsPageController() {
       // 项目层是否可用：探测一次（不可用则该作用域在切换器里禁用并给提示）
       const proj = await ipc.mcpListConfig("project", sessionId ?? undefined).catch(() => null);
       if (useSessions.getState().activeKey === sessionId) setMcpProjectPath(proj?.path ?? null);
-      setSkills(await ipc.listSkills(sessionId).catch(() => []));
       const snapshotRequest = ++latestMcpSnapshotRequest;
       const st = await readMcpStatus();
       if (snapshotRequest === latestMcpSnapshotRequest && useSessions.getState().activeKey === sessionId) {
@@ -547,38 +542,6 @@ function SettingsPageController() {
     const disabledSkills = draft.disabled_skills.filter((s) => s !== name);
     if (disabled) disabledSkills.push(name);
     patchDraft({ disabled_skills: disabledSkills });
-  }
-
-  /** 重新加载技能：后端清空索引缓存重扫（绕过 10s TTL），新放入/修改的技能立即可见。 */
-  async function reloadSkills() {
-    setSkillsBusy(true);
-    try {
-      const list = await ipc.reloadSkills(sessionId);
-      setSkills(list);
-      message.success(t("settings.skillsReloaded", { n: list.length }));
-    } catch (e) {
-      message.error(`${t("settings.skillsReloadFailed")}\n${String(e).replace(/^Error[:\s]*/i, "")}`);
-    } finally {
-      setSkillsBusy(false);
-    }
-  }
-
-  /** 删除托管技能（可删性由后端 deletable 标记 + canonicalize 前缀双重校验；前端只传 name）。 */
-  async function removeSkill(name: string) {
-    setDeletingName(name);
-    try {
-      await ipc.deleteSkill(sessionId, name);
-      message.success(t("settings.deleteSkillSuccess", { name }));
-      setSkills((prev) => prev.filter((s) => s.name !== name));
-      // 顺带清理 draft.disabled_skills 残留名，避免脏名随下次保存持久化
-      if (draft?.disabled_skills.includes(name)) {
-        patchDraft({ disabled_skills: draft.disabled_skills.filter((s) => s !== name) });
-      }
-    } catch (e) {
-      message.error(`${t("settings.deleteSkillFailed")}\n${String(e).replace(/^Error[:\s]*/i, "")}`);
-    } finally {
-      setDeletingName(null);
-    }
   }
 
   // ---------- 会话保留期与清理（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)） ----------
@@ -2077,57 +2040,8 @@ function SettingsPageController() {
       // （技能行：名称 / 来源 / 开关 / 删除）。
       body: draft && (
         <>
-          {/* 技能清单复用设置页的分组标题与卡片，保留搜索锚点及删除权限。 */}
-          <SettingsSection title={t("settings.skillsInstalled")} extra={
-            <Button loading={skillsBusy} onClick={() => void reloadSkills()}>{t("settings.reloadSkills")}</Button>
-          }>
-            <div className="setting-anchor" data-setting-id="disabled_skills">
-              <p className="settings-section-intro">{t("settings.skillsHint")}</p>
-              {skills.length === 0 && <Empty description={t("settings.skillsEmpty")} className="settings-list-empty" />}
-              {skills.map((s) => {
-                const builtin = s.origin === "<builtin>";
-                const label = originLabel(s.origin);
-                return (
-                  <div className="skill-row" key={s.name}>
-                    <div className="skill-info">
-                      <div className="skill-info-head">
-                        <strong className="skill-name" title={s.name}>{s.name}</strong>
-                        {builtin ? (
-                          <span className="skill-origin">{t("common.builtin")}</span>
-                        ) : (
-                          label && <span className="skill-origin" title={s.origin}>{label}</span>
-                        )}
-                      </div>
-                      {s.description && <div className="skill-description" title={s.description}>{s.description}</div>}
-                      {s.whenToUse && <div className="skill-when" title={s.whenToUse}>{t("settings.skillWhen")}{s.whenToUse}</div>}
-                    </div>
-                    <div className="skill-actions">
-                      <Switch
-                        aria-label={t("settings.skillToggle", { name: s.name })}
-                        checked={!draft?.disabled_skills.includes(s.name)}
-                        onChange={(v) => toggleSkill(s.name, !v)}
-                      />
-                      {s.deletable && (
-                        <Popconfirm
-                          title={t("settings.deleteSkillConfirm", { name: s.name })}
-                          description={s.origin}
-                          okButtonProps={{ danger: true, loading: deletingName === s.name }}
-                          onConfirm={() => void removeSkill(s.name)}
-                        >
-                          <Button
-                            type="text"
-                            danger
-                            aria-label={t("settings.deleteSkill")}
-                            icon={<DeleteOutlined />}
-                          >{t("settings.deleteSkill")}</Button>
-                        </Popconfirm>
-                      )}
-                    </div>
-                  </div>
-                );
-            })}
-            </div>
-          </SettingsSection>
+          <SkillsPanel sessionId={sessionId} disabled={draft?.disabled_skills ?? []}
+            savedDisabled={baseline?.disabled_skills ?? []} onToggle={toggleSkill} />
         </>
       ),
     },

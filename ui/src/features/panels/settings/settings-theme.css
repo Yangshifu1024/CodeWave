@@ -204,6 +204,7 @@
 .settings-theme-root .settings-list-empty { margin: 12px 0 24px; }
 .settings-theme-root .skill-row { display: flex; align-items: center; gap: 20px; min-width: 0; padding: 14px 0; }
 .settings-theme-root .skill-info { flex: 1; min-width: 0; }
+.settings-theme-root .resource-provenance { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .settings-theme-root .skill-info-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
 .settings-theme-root .skill-name { min-width: 0; max-width: 100%; overflow: hidden; color: var(--ws-text-1); font-size: var(--settings-field-title-size); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .settings-theme-root .skill-origin { color: var(--ws-text-2); font-size: var(--settings-metadata-size); }

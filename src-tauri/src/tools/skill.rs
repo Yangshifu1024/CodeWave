@@ -94,7 +94,9 @@ impl Tool for SkillTool {
         // 置于 caller-context 之后、闭合标签之前；规范文本自身不得含闭合标签（有测试守护）。
         body.push_str(&format!("\n\n{ASK_INTERACTION_NORM}"));
         body.push_str("\n</skill-loaded>");
-        ToolOutcome::ok(json!({ "skill": s.meta.name, "origin": s.meta.origin, "content": body }))
+        ToolOutcome::ok(
+            json!({ "skill": s.meta.name, "origin": s.meta.origin, "resource": s.meta.resource, "content": body }),
+        )
     }
 }
 
@@ -144,6 +146,22 @@ mod tests {
         let out = SkillTool.run(&ctx, json!({"skill": "demo"})).await;
         assert!(out.ok, "{out:?}");
         assert_eq!(out.data["skill"], "demo");
+        let audit = ctx
+            .core
+            .skills
+            .audit(&ctx.rt.workspace, &ctx.rt.data_dir, &[], None);
+        let resource = &audit
+            .entries
+            .iter()
+            .find(|entry| entry.name == "demo")
+            .unwrap()
+            .candidates[0]
+            .meta
+            .resource;
+        assert_eq!(
+            out.data["resource"],
+            serde_json::to_value(resource).unwrap()
+        );
         let content = out.data["content"].as_str().unwrap();
         assert!(content.contains("<skill-loaded name=\"demo\">"));
         assert!(content.contains("DEMO BODY LINE"));

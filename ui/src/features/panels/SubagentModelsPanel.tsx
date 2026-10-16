@@ -11,12 +11,13 @@
 // - 「继承父会话」= UI 哨兵 `INHERIT_SENTINEL`（绝不可能撞 kebab-case wire id）；
 //   选中后内部翻译回 `null` 写 store（与后端 Option<model_id> 同形）。
 import { useEffect, useMemo, useState } from "react";
-import { App, Button, Flex, Select, Tag } from "antd";
+import { Alert, App, Button, Flex, Select, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 import { ipc } from "../../ipc/client";
 import { useSettings } from "../../stores/settings";
 import { flattenModels, findModel } from "../../utils/models";
 import type { AgentMeta } from "../../ipc/types";
+import { ResourceDetails } from "./SkillsPanel";
 
 /**
  * 只读角色集合：与后端 `agents::DELEGABLE_ROLES` 顺序对齐，剔除内部 title。
@@ -44,14 +45,15 @@ export default function SubagentModelsPanel() {
   const retry = useSettings((s) => s.roleRetry);
   // 后端 list_agents 已经按 DELEGABLE_ROLES 顺序返回；title 角色在 backend 那一侧剔除（agents::delegable）。
   const [agents, setAgents] = useState<AgentMeta[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   // 拉一次：组件挂载时拉，子代理注册表变更需要重启应用生效（与 settings 全量刷新同语义）。
-  // 失败时静默回 []：每个角色下拉降级为「只显示首项继承父会话」，留待用户回到列表可见时排查。
+  // 注册表失败可见，避免空白列表被误认为没有内置角色。
   useEffect(() => {
     let alive = true;
     void ipc.listAgents().then((list) => {
       if (alive) setAgents(list);
-    }).catch(() => {
-      if (alive) setAgents([]);
+    }).catch((e) => {
+      if (alive) setLoadError(String(e));
     });
     return () => { alive = false; };
   }, []);
@@ -103,14 +105,18 @@ export default function SubagentModelsPanel() {
           控件右对齐 w-wide 档）——与同页 .settings-collection-row / .settings-provider-model 同规格。
           勿再在本组件里加内联宽度或 Space 间距，否则会退回「行糊成一片 + 控件贴左」的旧观感。 */}
       <div className="settings-section-intro">{t("settings.subagentModelsHint")}</div>
+      {loadError && <Alert type="error" showIcon title={t("settings.resourceReadFailed")} description={loadError} />}
       {agents.map((agent) => {
         const value = current(agent.name);
         const isReadonly = READONLY_ROLES.has(agent.name);
         return (
           <div key={agent.name} className="subagent-models-row">
-            <Flex className="subagent-models-role" align="center">
-              <strong>{agent.name}</strong>
-              {isReadonly && <Tag className="subagent-models-readonly-tag">{t("settings.subagentReadonly")}</Tag>}
+            <Flex className="subagent-models-role" vertical align="start">
+              <Flex wrap align="center" gap="small">
+                <strong>{agent.name}</strong>
+                {isReadonly && <Tag className="subagent-models-readonly-tag">{t("settings.subagentReadonly")}</Tag>}
+              </Flex>
+              {agent.resource && <ResourceDetails resource={agent.resource} />}
             </Flex>
             <Select
               className="subagent-models-select w-wide"

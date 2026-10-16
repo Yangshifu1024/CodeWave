@@ -21,6 +21,17 @@ pub struct AgentDef {
     pub readonly: bool,
 }
 
+impl AgentDef {
+    pub fn resource(&self) -> crate::resources::ResourceOrigin {
+        crate::resources::ResourceOrigin::builtin(
+            "agent",
+            self.name,
+            &serde_json::to_vec(&(self.name, self.description, self.readonly, self.body))
+                .expect("built-in role is JSON"),
+        )
+    }
+}
+
 /// title 子代理的完整角色定义：会话自动命名的人设。单一事实源——注册表与
 /// core/title.rs 的一次性 LLM 调用共用，防止人设与 prompt 漂移。
 pub const TITLE_BODY: &str = r##"## 角色
@@ -283,11 +294,12 @@ pub fn find(role: &str) -> Option<&'static AgentDef> {
     builtin().iter().find(|d| d.name == key)
 }
 
-/// 前端 composer $ 菜单的子代理条目：name + description 摘要，不含 body 正文。
+/// Delegable role summary with provenance; the body itself is not exposed in this view.
 #[derive(serde::Serialize)]
 pub struct AgentMeta {
     pub name: String,
     pub description: String,
+    pub resource: crate::resources::ResourceOrigin,
 }
 
 /// 可委派角色清单（kebab-case，按 builtin 注册顺序排列，剔除内部 title 角色）。
@@ -311,6 +323,7 @@ pub fn delegable() -> Vec<AgentMeta> {
         .map(|d| AgentMeta {
             name: d.name.to_string(),
             description: d.description.to_string(),
+            resource: d.resource(),
         })
         .collect()
 }
@@ -336,6 +349,7 @@ mod tests {
             assert!(!m.description.is_empty(), "{} 缺 description", m.name);
             // 与 subagent 工具同一查找：delegable 里的名字必须都能命中注册表
             assert!(find(&m.name).is_some(), "{} 应可经 find 命中", m.name);
+            assert_eq!(m.resource, find(&m.name).unwrap().resource());
         }
     }
 

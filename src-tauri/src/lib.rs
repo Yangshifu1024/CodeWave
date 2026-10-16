@@ -11,6 +11,7 @@ mod host;
 pub mod mcp;
 pub mod memory;
 pub mod provider;
+pub mod resources;
 pub mod safety;
 pub mod skills;
 mod tools;
@@ -422,6 +423,7 @@ pub fn run() {
             host::commands::mcp_snapshot,
             host::commands::list_agents,
             host::commands::list_skills,
+            host::commands::inspect_skills,
             host::commands::get_skill,
             host::commands::toggle_skill,
             host::commands::reload_skills,

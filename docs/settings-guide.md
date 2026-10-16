@@ -106,6 +106,14 @@
 
 源码：[SettingsPage.tsx](../ui/src/features/panels/SettingsPage.tsx) 的 `saveMcp/deleteMcpEntry/runMcpAction/testMcpServer/readMcpStatus`、[McpKvTable.tsx](../ui/src/features/panels/McpKvTable.tsx)、[McpStatusTable.tsx](../ui/src/features/panels/McpStatusTable.tsx)、[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。
 
+## 技能来源与覆盖
+
+[SkillsPanel](../ui/src/features/panels/SkillsPanel.tsx) 使用 `inspect_skills` 管理目录，Composer 与模型索引继续使用只含启用最高项的原接口。设置显示来源类别、canonical 身份、完整版本、覆盖候选和诊断；缺文件的禁用名仍可清除禁用状态，不虚构安装路径。
+
+「当前运行启用/禁用」来自后端审计，开关读本页草稿，相对保存基线变化另标待保存；修改开关不立即改变运行策略，保存成功后重读审计，取消恢复草稿。读取失败不伪装空目录。重新加载、切会话和删除均以身份/代数拒收迟到结果，旧确认不能发起新作用域删除。
+
+删除预览携带最高来源身份/版本，确认说明目录技能会连同目录内容删除。成功后重新扫描展示回退，不直接从 UI 移除整个名称；禁用名单不会因删除而自动清除，避免下层回退意外启用。后端边界由 [MCP 与技能](./mcp-and-skills.md#来源版本与覆盖审计) 主维护。
+
 ## 新增或移动设置项
 
 「界面 → 输出展示」注册为 `ui.output_display`，与聊天区顶部切换器共用 store 和 localStorage 偏好；默认详细，切换即时生效，不修改模型回复长度。简洁的聚合/文件统计/预览与历史边界由[聊天与界面](./chat-and-interface.md#52x-简洁与详细展示)主维护。

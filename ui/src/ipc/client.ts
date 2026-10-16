@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ActivitySnapshot, AskOpenedEvent, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillInspection, SkillMeta } from "./types";
 
 export const ipc = {
   ping: () => invoke<string>("ping"),
@@ -197,8 +197,10 @@ export const ipc = {
   toggleSkill: (sessionId: string | null, name: string, disabled: boolean) =>
     invoke<void>("toggle_skill", { sessionId, name, disabled }),
   reloadSkills: (sessionId: string | null) => invoke<SkillMeta[]>("reload_skills", { sessionId }),
-  deleteSkill: (sessionId: string | null, name: string) =>
-    invoke<void>("delete_skill", { sessionId, name }),
+  inspectSkills: (sessionId: string | null, reload = false) =>
+    invoke<SkillInspection>("inspect_skills", { sessionId, reload }),
+  deleteSkill: (sessionId: string | null, name: string, expectedSource: string, expectedVersion: string) =>
+    invoke<void>("delete_skill", { sessionId, name, expectedSource, expectedVersion }),
 
   // 内置子代理角色（composer $ 菜单数据源；后端 agents 注册表剔除内部 title 角色）
   listAgents: () => invoke<AgentMeta[]>("list_agents"),

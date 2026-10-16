@@ -489,6 +489,23 @@ export const SHELL_SETTING_KEYS: string[] = [
   "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
   "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
   "postWriteCommandPh", // → post_write_check.command 输入框占位
+  // 来源审计、覆盖及草稿状态：disabled_skills / subagentModels 的只读说明。
+  "resourceSource_builtin",
+  "resourceSource_user_claude",
+  "resourceSource_user_agents",
+  "resourceSource_workspace_claude",
+  "resourceSource_workspace_agents",
+  "resourceSource_global_managed",
+  "resourceSource_project_managed",
+  "resourceVersion",
+  "resourceReadFailed",
+  "skillRunningDisabled",
+  "skillRunningEnabled",
+  "skillDraftDisabled",
+  "skillDraftEnabled",
+  "skillShadowSources",
+  "skillMissing",
+  "deleteSkillDirectory",
   "skillsInstalled", // → disabled_skills 的列表分组标题
   "skillWhen", // → disabled_skills 条目的适用场景前缀
   "skillToggle", // → disabled_skills 条目的开关 aria-label

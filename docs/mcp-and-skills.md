@@ -91,11 +91,19 @@ MCP server 的 is_error 返回工具失败；文本和图片进入已有内容�
 
 `data_dir` 始终是全局目录；项目路径单独走 project_dir，不能再混为一谈。extra_roots 不自动扫描技能。列表展示顺序与覆盖优先级不同，不可按“列表排在前面”判断生效来源。内置 preview 也允许被同名自定义技能覆盖；同名时应核对实际来源。
 
-设置页可删除项目/全局托管技能，不删内置与 `.agents/.claude` 兼容目录。删除路径须在 canonical 后仍位于允许的托管根内；禁用与删除是两件事，不能因为技能已禁用就丢掉安全定位所需的信息。
+### 来源、版本与覆盖审计
+
+[catalog.rs](../src-tauri/src/skills/catalog.rs) 一次扫描同时生成运行索引与管理候选目录。`list_skills/get_skill/reload_skills` 继续只返回启用的最高优先项；`inspect_skills` 返回全部合法候选、按名禁用状态、缺失来源的禁用名和 IO/解析诊断。最高项排在候选首位并标 selected，禁用按名字整体生效，不会回落到低层技能；设置页可展开被覆盖来源，禁用后重开仍可管理。
+
+[resources.rs](../src-tauri/src/resources.rs) 的来源描述包含类别、canonical 身份和 `sha256:` 内容版本。文件版本来自实际读取的原始字节，CRLF 变化也产生新版本；不是 mtime。审计与 get/list 共用同一个缓存快照，实际 `skill` 的 `ToolOutcome.data.resource` 与该快照对账。来源类别描述发现位置，不证明作者可信，也不授予执行权限。
+
+同一 canonical 文件重复扫描时只保留最高优先级来源，即使无 frontmatter、别名目录会产生不同 fallback 名也只保留最高来源的名字。同层同名冲突按规范化路径、再按原始路径稳定排序，最后一项胜出并提供诊断；这取代原来未定义的 read_dir 顺序。无效 YAML、非 UTF-8、断链及读取错误可见，普通无 SKILL.md 子目录不算错误。
+
+设置页仅允许删除当前最高且可删的项目/全局托管来源，不删 builtin、兼容来源、链接条目或链接技能根。请求必须携带预览的来源身份和内容版本；后端在共享索引锁内重扫、核对当前最高项、重读字节，并复验 canonical 根、目标和链接状态。根级单文件 `skills/SKILL.md` 只删文件，目录技能则删除其目录及附属内容，不能删除整个 skills 根。成功后重新审计，显示真实下层回退；按名禁用状态保留。外部进程仍可能在最终路径检查后换链，这不是 OS 级原子删除或沙箱。
 
 ### 缓存与禁用生效
 
-SkillIndex 的 get/list 缓存 TTL 为 10 秒；结构化 key 包含 workspace、全局 data_dir、project_dir 和排序去重后的 disabled 集。配置禁用/重新启用发布后，下一次 get/list 不能命中旧政策的缓存，不必等待 TTL 或依赖某个配置入口主动 invalidate；reload/delete 仍强制失效。不同全局数据目录和项目作用域不会串缓存。[tools/skill.rs](../src-tauri/src/tools/skill.rs) 的 `disabled_after_load_should_invalidate_within_ttl` 已启用，覆盖加载后禁用及重新启用。已进入运行历史/冻结系统提示的技能内容不会因此从模型记忆中撤回；这里保证后续获取拒绝，不承诺即时撤销在途步骤。
+SkillIndex 的 get/list/audit 缓存 TTL 为 10 秒；结构化 key 包含 workspace、全局 data_dir、project_dir 和排序去重后的 disabled 集。配置禁用/重新启用发布后，下一次 get/list/audit 不能命中旧政策的缓存，不必等待 TTL 或依赖某个配置入口主动 invalidate；reload/delete 仍强制失效。不同全局数据目录和项目作用域不会串缓存。显式提供的已关闭会话返回错误，不回落全局来源。[tools/skill.rs](../src-tauri/src/tools/skill.rs) 的 `disabled_after_load_should_invalidate_within_ttl` 已启用，覆盖加载后禁用及重新启用。已进入运行历史/冻结系统提示的技能内容不会因此从模型记忆中撤回；这里保证后续获取拒绝，不承诺即时撤销在途步骤。
 
 ## 5. 技能加载、询问规范与输入触发
 
@@ -133,3 +141,4 @@ R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价�
 4. 慢 probe 期间改字段、关闭重开或切换会话；旧成功不得出现。关闭后按预算检查临时进程归零。
 5. 两编辑器交错保存，以及设置保存与“始终允许”交错；冲突保留草稿，允许补丁不覆盖新 endpoint 或其它字段。
 6. 在应用内分别验 Windows Job Object 与 Unix 进程组回收，尤其是初始化/tools-list 期间取消 probe；三平台会话释放回归通过不等于 Windows 已覆盖 Unix 专属 probe 取消用例。
+7. 技能页展开同名覆盖，核对来源和版本；禁用保存、重开、重新启用及取消草稿，运行状态与草稿提示应分开。删除最高托管来源后看到正确下层，旧版本确认不得删除新来源；切项目的迟到读取/确认不影响新项目。检查长路径与版本在窄窗/缩放/暗色下可读。GUI 与 Windows 根链接/路径行为仍待人工或对应平台验证。

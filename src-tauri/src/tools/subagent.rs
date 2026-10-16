@@ -666,7 +666,7 @@ impl Tool for SubagentTool {
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
                     // 供会话恢复关联过程历史文件（[docs/subagents](../../../docs/subagents.md)）
-                    json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps,
+                    json!({ "sub_id": sub_id, "role": args.role, "role_resource": agent_def.map(|definition| definition.resource()), "steps_budget": max_steps,
                             "steps_used": steps_used, "ended": ended_str, "report": clean_report,
                             // tokens 同层输出：恢复路径回填卡片 token 数的唯一来源
                             //（[docs/subagents](../../../docs/subagents.md)）
