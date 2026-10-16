@@ -5,8 +5,8 @@ use super::runtime::{
 };
 use super::stream::{ERROR_CAP, VERBOSE_BODY_CAP};
 use super::stream::{
-    build_assistant_message, build_stream_request, collect_deltas, flush_segments,
-    refresh_request_messages, stream_flush_loop,
+    build_assistant_message, build_stream_request, collect_deltas, flush_stream,
+    refresh_request_messages, start_stream_step, stream_flush_loop,
 };
 use super::supervise::{BatchDigest, CallSig, IdlePolicy, SupervisionState, Verdict};
 use super::text_ask;
@@ -14,6 +14,7 @@ use crate::core::context::{self};
 use crate::core::session_log;
 use crate::core::sessions::SaveReport;
 use crate::core::sessions::repair;
+use crate::core::sessions::run_display::{RunDisplay, RunDisplayStatus};
 use crate::core::types::Message;
 use crate::provider::dto::{AsmBlock, Assembled, AssembledToolCall, ProviderError};
 use crate::provider::retry;
@@ -134,13 +135,22 @@ pub async fn run_chat(
     run_id: String,
 ) {
     let sink = core.sink.clone();
+    let user = user.stamped();
     // 覆盖装载/收尾等 drive catch 之外的 panic，以及任务未来被丢弃的退出路径。
-    let _run_cleanup = RunCleanupGuard {
+    let run_cleanup = RunCleanupGuard {
         rt: rt.clone(),
         core: core.clone(),
         run_id: run_id.clone(),
+        user_created_at: user.created_at.clone().unwrap_or_default(),
     };
-    let run_started = std::time::Instant::now();
+    let clock = rt.run_snapshot().clock;
+    let run_started = clock
+        .as_ref()
+        .map(|c| c.instant)
+        .unwrap_or_else(std::time::Instant::now);
+    let started_at = clock
+        .map(|c| c.started_at)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     rt.injected_plan_snapshot_for_run
         .store(false, Ordering::SeqCst);
     // plan 软提醒（batch::maybe_emit_plan_hint）每 run 至多一次：run 起点同模式复位
@@ -176,11 +186,11 @@ pub async fn run_chat(
     } else {
         None
     };
-    rt.history.lock().unwrap().push(user.stamped());
+    rt.history.lock().unwrap().push(user);
     sink.emit(
         &rt.id,
         "run:start",
-        serde_json::json!({ "session": rt.id, "run_id": run_id }),
+        serde_json::json!({ "session": rt.id, "run_id": run_id, "user_created_at": run_cleanup.user_created_at, "started_at": started_at }),
     );
     {
         let first_line: String = rt
@@ -251,7 +261,7 @@ pub async fn run_chat(
         }
     };
     match &result {
-        Ok(_) => {
+        Ok(final_text) => {
             // 保存结果接入 run:done：不干净（拒存 / 剥图 / 丢轮 / P4 的体积告警与熔断）时带 JSON 载荷告知前端
             let save = checkpoint(&core, &rt).await;
             session_log::info(
@@ -267,8 +277,12 @@ pub async fn run_chat(
             // 以此出队）；建议项（如有）并入 payload，取代此前 drive_agent 内部提前
             // 发的 done
             let mut terminal = RunTerminal::new(&run_id, RunTerminalKind::Done);
+            terminal.task_run = run_cleanup.task_run(RunDisplayStatus::Done, Some(final_text));
             terminal.suggestions = suggest_out.clone();
             let mut payload = serde_json::json!({ "session": rt.id, "run_id": run_id });
+            if let Some(task_run) = &terminal.task_run {
+                payload["task_run"] = serde_json::json!(task_run);
+            }
             if let Some(items) = suggest_out {
                 payload["suggestions"] = serde_json::json!(items);
             }
@@ -283,7 +297,7 @@ pub async fn run_chat(
             sink.emit(&rt.id, "run:done", payload);
         }
         Err(ProviderError::Cancelled) => {
-            mark_cancelled(&core, &rt, &run_id).await;
+            mark_cancelled_with_display(&core, &rt, &run_id, Some(&run_cleanup)).await;
             session_log::warn(
                 &rt,
                 &format!(
@@ -296,8 +310,10 @@ pub async fn run_chat(
             let _ = checkpoint(&core, &rt).await;
             session_log::error(&rt, &format!("run {run_id} 失败：{e}"));
             let mut terminal = RunTerminal::new(&run_id, RunTerminalKind::Error);
+            terminal.task_run = run_cleanup.task_run(RunDisplayStatus::Error, None);
             terminal.error = Some(e.to_string());
             terminal.error_kind = Some(e.kind_tag().into());
+            let task_run = terminal.task_run.clone();
             rt.finish_run(terminal);
             sink.emit(
                 &rt.id,
@@ -308,6 +324,7 @@ pub async fn run_chat(
                     "error": e.to_string(),
                     // [docs/providers-and-network](../../../../docs/providers-and-network.md)：结构化类别（前端据 kind 把鉴权/计费问题引导到供应商设置）
                     "kind": e.kind_tag(),
+                    "task_run": task_run,
                 }),
             );
         }
@@ -344,6 +361,68 @@ struct RunCleanupGuard {
     rt: Arc<SessionRuntime>,
     core: Arc<AgentCore>,
     run_id: String,
+    user_created_at: String,
+}
+
+impl RunCleanupGuard {
+    fn task_run(
+        &self,
+        status: RunDisplayStatus,
+        final_text: Option<&String>,
+    ) -> Option<RunDisplay> {
+        let snapshot = self.rt.run_snapshot();
+        if snapshot.run_id.as_deref() != Some(self.run_id.as_str()) || !snapshot.running {
+            return None;
+        }
+        let clock = snapshot.clock?;
+        let mut run = RunDisplay {
+            run_id: self.run_id.clone(),
+            started_at: clock.started_at,
+            finished_at: chrono::Utc::now().to_rfc3339(),
+            duration_ms: clock.instant.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            status,
+            user_created_at: self.user_created_at.clone(),
+            final_answer: None,
+            final_answer_created_at: None,
+        };
+        // 只认驱动返回的最终文本，且它必须属于本轮最后一条 assistant；
+        // 不把 suggest 前较早的旁白或被后来空白回合替代的文本冒充最终答复。
+        if let Some(text) = final_text.filter(|s| !s.trim().is_empty()) {
+            let history = lock_ok(&self.rt.history);
+            if let Some(at) = confirmed_final_answer(&history, &self.user_created_at, text) {
+                run.final_answer = Some(text.clone());
+                run.final_answer_created_at = Some(at);
+            }
+        }
+        if self.rt.is_main_session {
+            self.core
+                .store
+                .save_task_run(&self.rt.id, &run, &self.rt.zombie);
+        }
+        Some(run)
+    }
+}
+
+fn confirmed_final_answer(
+    history: &[Message],
+    user_created_at: &str,
+    final_text: &str,
+) -> Option<String> {
+    let message = history
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, crate::core::types::Role::Assistant))?;
+    let at = message.created_at.as_deref()?;
+    let joined: String = message
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            crate::core::types::Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    (at >= user_created_at && !final_text.trim().is_empty() && joined == final_text)
+        .then(|| at.to_owned())
 }
 
 impl Drop for RunCleanupGuard {
@@ -359,13 +438,15 @@ impl Drop for RunCleanupGuard {
         self.rt.close_injections();
         lock_ok(&self.rt.asks).clear();
         let mut terminal = RunTerminal::new(&self.run_id, RunTerminalKind::Error);
+        terminal.task_run = self.task_run(RunDisplayStatus::Error, None);
+        let task_run = terminal.task_run.clone();
         terminal.error = Some("运行任务异常终止".into());
         self.rt.finish_run(terminal);
         // 外部 sink 若异常，不让 unwind 中的第二次 panic 阻断摘要收尾。
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.core.sink.emit(
             &self.rt.id, "run:error",
-            serde_json::json!({"session": self.rt.id, "run_id": self.run_id, "error": "运行任务异常终止", "kind": "protocol"}),
+            serde_json::json!({"session": self.rt.id, "run_id": self.run_id, "error": "运行任务异常终止", "kind": "protocol", "task_run": task_run}),
         )
         }));
     }
@@ -961,7 +1042,7 @@ pub async fn drive_agent(
                 break 'steps;
             }
         };
-        rt.stream.reset();
+        start_stream_step(&sink, rt, params.main_session);
 
         // [docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 会话级细粒度日志：verbose 记录完整请求（key 已脱敏）；
         // 每轮结果（成功/重试/失败）各占一行
@@ -1426,9 +1507,7 @@ pub async fn drive_agent(
     unwind.armed = false;
     flush_stop.cancel();
     tokio::time::sleep(Duration::from_millis(STREAM_THROTTLE_MS)).await;
-    if let Some(buf) = rt.stream.take_final() {
-        flush_segments(&sink, &rt.id, &buf);
-    }
+    flush_stream(&sink, rt, None);
     *rt.active_cancel.lock().unwrap() = None;
     let result = match outcome {
         Ok(()) => Ok(final_text),
@@ -1725,6 +1804,19 @@ async fn run_llm_turn(
                     // 实测：相隔 2.45s 的两条同文 400，修复从未真正生效）。
                     refresh_request_messages(rt, req, model.vision.unwrap_or(false));
                     rt.stream.reset();
+                    if params.emit_events {
+                        // sanitize 重试立即进行，不消耗普通重试预算；仍需通知 UI 清掉
+                        // 失败尝试的候选正文并接纳新 generation，不能伪造退避等待。
+                        sink.emit(
+                            &rt.id,
+                            "run:retry",
+                            serde_json::json!({
+                                "session": rt.id, "run_id": run_id,
+                                "attempt": attempt.saturating_add(1),
+                                "gen": rt.stream.generation(), "delay_ms": 0,
+                            }),
+                        );
+                    }
                     session_log::warn(
                         rt,
                         &format!(
@@ -2127,6 +2219,52 @@ fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn run_display_final_answer_requires_last_assistant_and_exact_text() {
+        use crate::core::types::{Content, Message, Role};
+        let from = "2026-10-15T01:00:00Z";
+        let at = "2026-10-15T01:01:00Z";
+        let assistant = Message {
+            role: Role::Assistant,
+            created_at: Some(at.into()),
+            content: vec![
+                Content::Thinking {
+                    text: "思考过程".into(),
+                },
+                Content::Text {
+                    text: "<report>总结".into(),
+                },
+                Content::Text {
+                    text: "建议</report>".into(),
+                },
+                Content::ToolUse {
+                    id: "s".into(),
+                    name: "suggest".into(),
+                    args: serde_json::json!({}),
+                },
+            ],
+        };
+        let mut history = vec![assistant];
+        assert_eq!(
+            super::confirmed_final_answer(&history, from, "<report>总结建议</report>"),
+            Some(at.into())
+        );
+        assert!(super::confirmed_final_answer(&history, from, "总结").is_none());
+        history.push(Message {
+            role: Role::Assistant,
+            created_at: Some(at.into()),
+            content: vec![Content::Text {
+                text: "后续正文".into(),
+            }],
+        });
+        assert!(
+            super::confirmed_final_answer(&history, from, "<report>总结建议</report>").is_none()
+        );
+        assert!(
+            super::confirmed_final_answer(&history, "2026-10-15T02:00:00Z", "后续正文").is_none()
+        );
+    }
+
     use super::{
         INJECT_TEXT_PREVIEW_CHARS, NormalizedCall, Reasoning400, batch_digest,
         classify_reasoning_400, stalled, update_reasoning_sticky,
@@ -2733,15 +2871,37 @@ pub(super) fn cancel_session_subagents(core: &Arc<AgentCore>, rt: &Arc<SessionRu
 /// 取消收尾：历史落取消标记 + 检查点 + run:cancelled 事件。
 /// 用户停止 = 本会话整条执行链停下：先取消在跑的子代理（否则界面已显示「已停止」
 /// 而子代理仍在写文件、跑命令），再走既有取消收尾。
+#[cfg(test)]
 pub(super) async fn mark_cancelled(core: &Arc<AgentCore>, rt: &Arc<SessionRuntime>, run_id: &str) {
+    mark_cancelled_with_display(core, rt, run_id, None).await;
+}
+
+async fn mark_cancelled_with_display(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    run_id: &str,
+    display: Option<&RunCleanupGuard>,
+) {
     cancel_session_subagents(core, rt);
     lock_ok(&rt.history).push(Message::user_text("<run-cancelled/>").stamped());
     let _ = checkpoint(core, rt).await;
-    rt.finish_run(RunTerminal::new(run_id, RunTerminalKind::Cancelled));
+    let task_run = display.and_then(|d| d.task_run(RunDisplayStatus::Cancelled, None));
+    finish_cancelled(core, rt, run_id, task_run);
+}
+
+fn finish_cancelled(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    run_id: &str,
+    task_run: Option<RunDisplay>,
+) {
+    let mut terminal = RunTerminal::new(run_id, RunTerminalKind::Cancelled);
+    terminal.task_run = task_run.clone();
+    rt.finish_run(terminal);
     core.sink.emit(
         &rt.id,
         "run:cancelled",
-        serde_json::json!({ "session": rt.id, "run_id": run_id }),
+        serde_json::json!({ "session": rt.id, "run_id": run_id, "task_run": task_run }),
     );
 }
 

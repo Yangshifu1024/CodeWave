@@ -173,6 +173,7 @@ async function doLoadTabContent(tab: Tab, meta: SessionMeta | undefined, epoch: 
       useSessions.getState().sessions.find((m) => m.id === tab.sessionId)?.history_status,
     // 分页游标：首屏段号即起点；缺省（旧后端只回 Message[]）时界面不显示「加载更早的」
     paging: page.paging,
+    task_runs: page.task_runs,
     // 压缩边界（批2 P2）：契约口径是载荷**顶层** `boundaries`；为防后端把它内嵌到 `paging` 里，
     // 两种形态任一存在即取（都缺 = 空 → 界面不渲染分隔线，也不报错）。
     boundaries: page.boundaries ?? page.paging?.boundaries,

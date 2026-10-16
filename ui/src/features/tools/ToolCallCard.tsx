@@ -1,7 +1,7 @@
 import { fontSizeCss } from "../../utils/fonts";
 import { memo, useEffect, useMemo, useState } from "react";
 import { Button, Tag } from "antd";
-import { CodeOutlined, DownOutlined, EditOutlined, FileAddOutlined, FileTextOutlined, GlobalOutlined, LoadingOutlined, RightOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
+import { CodeOutlined, DownOutlined, EditOutlined, FileAddOutlined, FileTextOutlined, GlobalOutlined, RightOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ToolView } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
@@ -273,12 +273,12 @@ function ToolCallCardImpl({
             const open = expanded && path === selectedPath;
             return <Button key={path ?? "summary"} type="text" block className="tool-compact-head" aria-expanded={open} onClick={() => togglePath(path)}>
               <span className="tool-compact-content">
-                <span className="chev">{open ? <DownOutlined /> : <RightOutlined />}</span>
-                {tool.status === "running" ? <LoadingOutlined spin /> : <ToolIcon />}
+                <ToolIcon />
                 <span className="verb">{verbLabel}</span>
                 <span className="summary" title={path ?? (commandLine || summary)}>{path ? pathLabels[i] : tool.tool === "command" || tool.tool === "service" ? commandLine || summary : summary}</span>
                 {stats && <span className="line-count">+{stats.added} −{stats.removed}</span>}
                 {origin && toolTime(origin.createdAt) && <span className="tool-time" title={origin.createdAt}>{toolTime(origin.createdAt)}</span>}
+                <span className="chev">{open ? <DownOutlined /> : <RightOutlined />}</span>
               </span>
             </Button>;
           })}

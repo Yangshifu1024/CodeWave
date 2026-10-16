@@ -616,7 +616,7 @@ const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
 const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "dashboard/RuntimeDashboard.tsx": ["dashboard."], // 总览状态、层级、详情与回跳反馈
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
-  "chat/Composer.tsx": ["app.", "composer.", "settings.", "subagent."], // composer.* 自有；另两段为跨段借用（见下）
+  "chat/Composer.tsx": ["app.", "composer.", "settings."], // composer.* 自有；settings.* 为跨段借用（见下）
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
   "chat/ExternalDirPrompt.tsx": ["composer."], // 项目外目录放行确认框（文案归 composer 段，与附件入口同一处）
   "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
@@ -631,11 +631,12 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/RightBarInfo.tsx": ["common.", "rightbar.", "titlebar.", "files.", "subagent."],
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "settings.", "tasks.", "dashboard.", "titlebar."], // 顶栏：app.* 折叠动作；titlebar.* 会话胶囊；覆盖页标题见 CROSS_SEGMENT_BORROWINGS
-  "subagent/SubagentDrawer.tsx": ["composer.", "subagent."], // 子代理抽屉；composer. 为档位行借用（见下）
+  "subagent/SubagentDrawer.tsx": ["chat.", "composer.", "subagent."], // 同主聊天的活动状态与同 Composer 的档位行（见下）
   "subagent/SubagentItemCard.tsx": ["subagent."], // 子代理卡片
   "tools/AskPanel.tsx": ["ask."], // 审批面板；目标模式已删除，目标相关键不再消费
   "tools/ToolCallCard.tsx": ["tools."], // 工具调用卡
-  "tools/ToolActivityGroup.tsx": ["tools."], // 已完成工具的展示摘要
+  "tools/ToolActivityGroup.tsx": ["tools."], // 过程组摘要行（思考 + 工具合并为一行）
+  "chat/thinkingBlock.tsx": ["chat."], // 思考折叠块（自 segments.tsx 抽出，供过程组复用以断开循环依赖）
   "tools/OutputDisplaySelect.tsx": ["tools."], // 设置内的展示选择器
   "tools/WidgetPreviewModal.tsx": ["tools."], // render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
   "workspace/ChangesModal.tsx": ["diff.", "rightbar."],
@@ -657,7 +658,6 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   },
   "chat/Composer.tsx": {
     "settings.": "既有的跨页借键（早于批④，本批未动）：推理强度控件标题复用模型表单字段名 settings.reasoning",
-    "subagent.": "既有的跨段借键（早于批④）：输入区运行中子代理计数复用 subagent.runningCount",
   },
   "shell/ProjectNav.tsx": {
     "tasks.": "左栏任务区展示的就是计划任务（与任务页共用 stores/tasks 单一数据源），状态/下次触发/历史等文案复用任务页的 tasks.* 段——两处说的是同一件事，另起一段反而会漂移",
@@ -668,6 +668,7 @@ const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
     "dashboard.": "运行总览覆盖工作区时，顶栏复用 dashboard.title，与页面标题及导航入口保持一致",
   },
   "subagent/SubagentDrawer.tsx": {
+    "chat.": "抽屉与主聊天使用相同的简洁活动状态行，共用 chat.activityProcessing 文案",
     "composer.": "抽屉头部档位行（[docs/plan-and-approval]）显示的权限档位与 Composer 胶囊是同一件事：同一档位在两处必须同名，复用 composer.mode* 键，另起 subagent.mode* 会让两套名字漂移",
   },
   "quota/QuotaSection.tsx": {

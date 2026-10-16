@@ -64,7 +64,9 @@ export default {
     outputDisplay: "输出展示", displayCompact: "简洁", displayDetailed: "详细",
     compactRead: "已读取", compactEdit: "已编辑", compactCreate: "已创建", compactCommand: "已运行", compactSearch: "已搜索",
     groupRead: "已读取 {{n}} 个文件", groupReadUnknown: "已读取文件", groupCommand: "已运行 {{n}} 条命令",
+    groupRunning: "正在运行 {{n}} 项工具",
     groupSearch: "已搜索 {{n}} 次", groupList: "已列目录 {{n}} 次",
+    groupThinking: "思考 {{n}} 次", groupThinkingActive: "思考中……（{{seconds}}）",
     read: "读取", edit: "编辑", create: "创建", delete: "删除", list_files: "列出文件",
     command: "命令", grep: "搜索", ask: "提问", web_fetch: "抓取网页", http_request: "HTTP 请求",
     service: "后台服务", wait: "等待", suggest: "建议", plan: "计划", batch_read: "批量读取",
@@ -102,7 +104,7 @@ export default {
     keyHintSingle: "单选：点选或数字键选中；选项互斥；回车 = 提交",
     /* 缺陷修复：补充说明输入框内现在也能回车提交，明示以免用户误以为只能鼠标点提交 */
     noteHint: "回车 = 下一题 / 提交；Shift + 回车换行",
-    planTitle: "计划", copyPlan: "复制计划全文", viewFullPlan: "查看方案", proceedPlan: "是否按上述计划执行？",
+    planTitle: "计划", copyPlan: "复制计划全文", planCopied: "计划已复制", planCopyFailed: "复制失败", viewFullPlan: "查看方案", proceedPlan: "是否按上述计划执行？",
     viewPreview: "查看预览", previewUnavailable: "当前方案暂不可预览，请等待新的方案询问。",
     previewFailed: "预览请求失败，请重试：{{error}}", submitFailed: "回答提交失败，请重试：{{error}}",
     prevPage: "上一题", nextPage: "下一题",
@@ -351,6 +353,10 @@ export default {
     searchEmptyHint: "供应商 / 模型、MCP 服务器、技能等条目请在各自页面内查找",
   },
   chat: { thinking: "思考过程", thinkingActive: "思考中……（{{seconds}}）", thinkingDone: "思考完成（{{seconds}}）", scrollToBottom: "滚动到底部", suggestions: "后续建议", copy: "复制", editInComposer: "修改", copied: "已复制", copyFailed: "失败", you: "你", attachment: "附件", diagramPending: "⏳ 图表将在回复定稿后渲染",
+    copyAnswer: "复制答复", copyAnswerFailed: "复制失败",
+    taskProcess: "任务过程 · 总耗时 {{duration}}",
+    taskStatus: { error: "失败", cancelled: "已停止" },
+    activityThinking: "正在思考", activityProcessing: "正在处理", activityResponding: "正在回复", activityWaiting: "等待确认",
     // 分段历史分页（批2 P3）：逐段向前加载的入口、最早段终态、浏览上限与收起
     loadEarlier: "加载更早的消息", earliest: "已到最早的消息", loadEarlierCap: "已达单次浏览上限（{{pages}} 段）", collapseEarlier: "收起更早的",
     // 合并压缩边界的分隔线与坏段提示（批2 P2）
@@ -504,12 +510,11 @@ export default {
     taskLabel: "分配的任务",
     reportLabel: "最终汇报",
     noProcess: "未记录过程详情，仅显示任务与最终汇报",
-    runningCount: "{{n}} 个子智能体运行中",
     stop: "停止该子代理",
     endedEarly: "提前结束",
     endedBudget: "预算耗尽",
     /* partial = 跑满步数预算才交汇报：拿到了成果但未必做完，不得与「真做完」同档绿勾 */
-    endedPartial: "预算耗尽·未完成",
+    endedPartial: "预算耗尽（未完成）",
     /* 抽屉头部档位行（[docs/plan-and-approval]）：mode = 档位名（复用 composer.mode* 键） */
     modeLine: "权限模式：{{mode}}",
     modeInherited: "（继承自主会话）",
@@ -650,7 +655,7 @@ export default {
     newSessionInProject: "在此项目下新建会话", showMore: "显示更多", showLess: "收起",
     unreadReply: "有未读回复", waitingConfirm: "等待确认", deleteSessionConfirm: "删除该会话？",
     editProjectTip: "编辑目录/重命名",
-    copySessionId: "复制会话 ID", copiedSessionId: "已复制会话 ID",
+    copySessionId: "复制会话 ID", copiedSessionId: "已复制会话 ID", copySessionIdFailed: "复制失败",
     interruptedCrash: "上次运行时被中断（异常退出）",
     interruptedQuit: "上次运行时被中断（正常退出前中止）",
     clearInterrupt: "清除中断标记",

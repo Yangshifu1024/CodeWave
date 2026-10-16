@@ -18,13 +18,14 @@
 //  随后任意一次 prefs 全量写入就把后端档位静默翻回去）；
 // 旧形态（无 mode）保留 approve_id / 正则兼容路径，胶囊回落 auto_edit。
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Input, Tag } from "antd";
+import { Alert, App, Button, Input, Tag } from "antd";
 import { CalendarOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ApprovalMode, AskOptionPayload, AskQuestionPayload } from "../../ipc/types";
 import { useActiveRun, useRun } from "../../stores/run";
 import { useSessions } from "../../stores/sessions";
 import { renderMarkdown } from "../../utils/markdown";
+import { copyText } from "../../utils/clipboard";
 import FileViewerModal from "../files/FileViewerModal";
 import { inferSingle } from "./askShape";
 
@@ -64,6 +65,7 @@ function isLegacyPreviewOption(option: AskOptionPayload): boolean {
  *  两种形态；计划卡对所有 ask 展示（后端一律落盘计划文件）；批准/ConfirmEach 有效应答后本地同步切自动编辑档。 */
 export default function AskPanel() {
   const { t } = useTranslation();
+  const { message } = App.useApp();
   const ask = useActiveRun().ask;
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -516,7 +518,13 @@ export default function AskPanel() {
                 size="small"
                 icon={<CopyOutlined />}
                 title={t("ask.copyPlan")}
-                onClick={() => void navigator.clipboard.writeText(planText).catch(() => {})}
+                onClick={() => {
+                  // 统一走 utils/clipboard.ts（原生插件主路径）；失败必须提示，不得静默。
+                  void copyText(planText).then((ok) => {
+                    if (ok) message.success(t("ask.planCopied"));
+                    else message.error(t("ask.planCopyFailed"));
+                  });
+                }}
               />
             </div>
             <div className="plan-body md" dangerouslySetInnerHTML={{ __html: renderMarkdown(planText) }} />

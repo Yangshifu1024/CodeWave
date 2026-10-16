@@ -1,12 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Collapse } from "antd";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { renderMarkdown } from "../../utils/markdown";
 import type { TimelineSeg, ToolView } from "../../stores/run";
 import ToolCallCard from "../tools/ToolCallCard";
 import type { ToolExpansion } from "../tools/ToolCallCard";
-import ToolActivityGroup from "../tools/ToolActivityGroup";
-import { canGroupTool, type ToolOrigin } from "../tools/toolPresentation";
+import ToolActivityGroup, { type ProcessGroupEntry } from "../tools/ToolActivityGroup";
+import { ThinkingBlock } from "./thinkingBlock";
+import { canJoinProcessGroup, processGroupKey, type ProcessMember, type ToolOrigin } from "../tools/toolPresentation";
 import { useUi } from "../../stores/ui";
 import SubagentItemCard from "../subagent/SubagentItemCard";
 
@@ -44,8 +44,8 @@ export function stripReportMarkers(text: string): string {
 // 1) 揭示游标只放组件局部 state，**绝不写 store** —— ChatMessages.tsx 的 contentLen 依赖 text
 //    字符总数，若逐帧写 store 会让自动跟随 effect 以 60fps 触发 jumpToBottom + upgradeDiagrams，
 //    撞既有滚动豁免逻辑（onWheel 上滚清窗口），用户上滚会被反复拽回底部。
-// 2) 唯一开关 = 既有的 `streaming && i === tailIdx` —— 会话恢复 / 翻页加载的项恒 streaming:false
-//    （run.ts 的恢复路径），天然整段直出、绝不重播，无需任何额外判断。
+// 2) 网络流仅作用于 `streaming && i === tailIdx`；本次 live 最终答复通过独立 finalRevealKey
+//    复用局部游标。历史 / 翻页 / Tab 返回没有该标记，全文直出而不重播。
 // 3) report 标记先剥离再切片 —— 切片会把 <report> 切成两片，破坏 stripReportMarkers 的完整性前提。
 // 4) 不加闪烁光标 —— .cursor 类名与 CSS cursor 属性同名冲突，是历史误伤点（app.css 明确警告）。
 
@@ -58,6 +58,14 @@ const SILENT_THRESHOLD_MS = 800;
 /** 首帧基础配额（字）：首帧就不能是 0 —— 否则会闪一下空白，且同步断言 / 辅助技术读不到内容。
 首帧给一小段，之后由 rAF 逐帧推进，观感仍是逐字。 */
 const FIRST_FRAME_CHARS = 12;
+const FINAL_CPS = 500;
+const FINAL_MAX_MS = 1200;
+
+/** Local final-answer animation: a small first frame, at least 500 chars/s, at most 1.2s. */
+export function advanceFinalReveal(prev: number, len: number, elapsedMs: number): number {
+  const rate = Math.max(FINAL_CPS, Math.max(0, len - FIRST_FRAME_CHARS) * 1000 / FINAL_MAX_MS);
+  return clampReveal(Math.max(prev, FIRST_FRAME_CHARS + Math.floor(rate * Math.max(0, elapsedMs) / 1000)), len);
+}
 
 /** 游标收敛到 [0, len]：目标变短（如 report 剥离后）不越界，也不倒退。 */
 export function clampReveal(v: number, len: number): number {
@@ -108,19 +116,19 @@ export function advanceReveal(
 
 /** 按游标切片（纯函数）：revealed 恒在 [0, text.length] 内。 */
 export function sliceRevealed(text: string, revealed: number): string {
-  const n = clampReveal(revealed, text.length);
+  let n = clampReveal(revealed, text.length);
+  if (n > 0 && n < text.length && /[\uD800-\uDBFF]/.test(text[n - 1]) && /[\uDC00-\uDFFF]/.test(text[n])) n--;
   return n >= text.length ? text : text.slice(0, n);
 }
 
 /** 是否处于"减弱动态效果"偏好（读一次即缓存：系统级设置，运行期不会变）。 */
 let reducedMotionCache: boolean | null = null;
+function currentReducedMotion(): boolean {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
+}
 export function prefersReducedMotion(): boolean {
   if (reducedMotionCache !== null) return reducedMotionCache;
-  try {
-    reducedMotionCache = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    reducedMotionCache = false;
-  }
+  reducedMotionCache = currentReducedMotion();
   return reducedMotionCache;
 }
 
@@ -140,7 +148,7 @@ function TypewriterText({
   diagramPending?: string;
   anchorKey: string;
 }) {
-  // active 由 true 翻 false 即收尾（定稿 / 用户中断）：此时按 FINISH_BUDGET_MS 快速追平后直出。
+  // 网络流 active 翻 false 即直出；已完成最终答复使用 TimelineSegsView 的独立统一预算。
   const revealed = useTypewriter(text, active);
   const visible = sliceRevealed(text, revealed);
   const html = renderMarkdown(visible, diagramPending, { repairAssistantBlocks: true });
@@ -160,16 +168,20 @@ function TypewriterText({
 function useTypewriter(
   text: string,
   active: boolean,
-  opts?: { finishing?: boolean },
+  opts?: { finishing?: boolean; final?: boolean },
 ): number {
   const len = text.length;
+  const final = !!opts?.final;
+  const reducedMotion = final ? currentReducedMotion() : prefersReducedMotion();
   const [revealed, setRevealed] = useState(() =>
-    active && !prefersReducedMotion() ? Math.min(len, FIRST_FRAME_CHARS) : len,
+    active && !reducedMotion ? Math.min(len, FIRST_FRAME_CHARS) : len,
   );
+  const cursorRef = useRef(revealed);
   const rafRef = useRef(0);
   const lastTsRef = useRef(0);
   const silentRef = useRef(0);
   const finishingRef = useRef(false);
+  const startedRef = useRef(performance.now());
 
   useEffect(() => {
     finishingRef.current = opts?.finishing ?? false;
@@ -177,39 +189,35 @@ function useTypewriter(
 
   // 非流式 / reduced-motion：直出，且不留 rAF
   useEffect(() => {
-    if (!active || prefersReducedMotion()) {
+    if (!active || reducedMotion) {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
       }
       setRevealed(len);
+      cursorRef.current = len;
       return;
     }
     // 目标变短（report 剥离等）：先收敛，绝不越界
-    setRevealed((r) => clampReveal(r, len));
-  }, [active, len]);
+    cursorRef.current = clampReveal(cursorRef.current, len);
+    setRevealed(cursorRef.current);
+  }, [active, len, reducedMotion]);
 
   const tick = useCallback(() => {
     const dt = lastTsRef.current ? Math.max(0, performance.now() - lastTsRef.current) : 0;
     lastTsRef.current = performance.now();
-    setRevealed((prev) => {
-      const next = advanceReveal(prev, len, dt, {
-        silentMs: silentRef.current,
-        finishing: finishingRef.current,
-      });
-      // 追平即停：不再排下一帧
-      if (next >= len) {
-        rafRef.current = 0;
-        return len;
-      }
-      rafRef.current = requestAnimationFrame(tick);
-      return next;
+    const next = final ? advanceFinalReveal(cursorRef.current, len, performance.now() - startedRef.current) : advanceReveal(cursorRef.current, len, dt, {
+      silentMs: silentRef.current,
+      finishing: finishingRef.current,
     });
-  }, [len]);
+    cursorRef.current = next;
+    setRevealed(next);
+    rafRef.current = next >= len ? 0 : requestAnimationFrame(tick);
+  }, [len, final]);
 
   // 启动 / 续跑 rAF 循环（仅在 active 且未追平时）
   useEffect(() => {
-    if (!active || prefersReducedMotion()) return;
+    if (!active || reducedMotion) return;
     if (revealed >= len) return;
     if (rafRef.current) return;
     lastTsRef.current = performance.now();
@@ -221,164 +229,11 @@ function useTypewriter(
         rafRef.current = 0;
       }
     };
-  }, [active, revealed, len, tick]);
+  }, [active, revealed, len, tick, reducedMotion]);
 
-  return active && !prefersReducedMotion() ? clampReveal(revealed, len) : len;
+  return active && !reducedMotion ? clampReveal(revealed, len) : len;
 }
 
-
-// 思考标题右侧占满余下头部空间的通栏走马灯（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：显示思考文本的最新一行。
-// 一行先锚定在左缘；溢出通栏后自右向左爬行、最新内容钉在右缘（tail-follow）；只有流真正
-// 换到新的一行（来了 "\n"）才翻转上滚——原行内增长绝不重触发滚动。
-const MARQUEE_DWELL_MS = 700; // 一行在左缘静置片刻后才开始爬行
-const MARQUEE_TICK_MS = 150; // 爬行采样间隔；CSS 过渡把阶梯平滑成连续爬行
-const MARQUEE_ROLL_MS = 300; // 与 app.css 的 thinking-roll-up 动画时长保持同步
-/** 思考走马灯：单行展示最新思考内容，溢出时 tail-follow 爬行、换行时上滚翻转；
- *  prefers-reduced-motion 下退化为静态左锚定。 */
-function ThinkingMarquee({ text }: { text: string }) {
-  const boxRef = useRef<HTMLSpanElement>(null);
-  const lineRef = useRef<HTMLSpanElement>(null);
-  const lines = useMemo(() => text.split("\n"), [text]);
-  const latestLine = lines[lines.length - 1] ?? "";
-  const [curr, setCurr] = useState(""); // 当前展示的行
-  const [prev, setPrev] = useState<string | null>(null); // 上滚翻转中的旧行
-  const [x, setX] = useState(0); // 展示行的水平偏移（tail-follow 爬行）
-  const appearAt = useRef(0);
-  const lineCountRef = useRef(lines.length); // 已见行数；只有计数增加才算真正换行
-
-  useEffect(() => {
-    const t = latestLine.trim();
-    if (!t || t === curr) return;
-    // 行数超过已处理行数即视为出现真正的新行（"\n" 之后短暂的空白瞬间不推进 ref 跳过，
-    // 迟到的字符仍会计入「新行」）
-    if (lines.length > lineCountRef.current && curr) {
-      setX(0);
-      appearAt.current = Date.now();
-      setPrev(curr); // 翻转上滚；翻转中新到的行只是给进行中的动画换目标
-    }
-    setCurr(t);
-    lineCountRef.current = lines.length;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestLine, curr, prev]);
-
-  // 翻转结束后释放旧行（用超时而非 animationend，保证 prefers-reduced-motion 禁用
-  // CSS 动画时滚动同样能完成）
-  useEffect(() => {
-    if (prev === null) return;
-    const id = setTimeout(() => setPrev(null), MARQUEE_ROLL_MS + 20);
-    return () => clearTimeout(id);
-  }, [prev]);
-
-  // tail-follow 爬行：行溢出（且静置期已过）后保持行尾可见于右缘；对仍在增长的行，
-  // 溢出量持续增加，逐 tick 重定位读起来就是连续的自右向左爬行。
-  // reduced-motion 用户得到静态左锚定的行。
-  useEffect(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const id = setInterval(() => {
-      const box = boxRef.current;
-      const line = lineRef.current;
-      if (!box || !line) return;
-      const overflow = Math.ceil(line.scrollWidth - box.clientWidth);
-      if (overflow <= 2) {
-        setX(0);
-        return;
-      }
-      if (reduced || Date.now() - appearAt.current < MARQUEE_DWELL_MS) return;
-      setX(-overflow);
-    }, MARQUEE_TICK_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <span className="thinking-marquee" ref={boxRef} aria-hidden>
-      <span className={prev !== null ? "thinking-roll rolling" : "thinking-roll"}>
-        {prev !== null && <span className="thinking-roll-line out">{prev || "\u00A0"}</span>}
-        <span className="thinking-roll-line in" ref={lineRef} style={{ transform: `translateX(${x}px)` }}>
-          {curr || "\u00A0"}
-        </span>
-      </span>
-    </span>
-  );
-}
-
-/** 思考折叠块：头部为耗时标签 + 走马灯，展开后思考体 live tail-follow；
- *  展开/收起即阅读意图信号，经 onToggle 通知外层暂停自动跟随。 */
-export const ThinkingBlock = memo(function ThinkingBlock({
-  text,
-  startedAt,
-  durationMs,
-  onToggle,
-  compact = false,
-  streaming = false,
-}: {
-  text: string;
-  startedAt?: number;
-  durationMs?: number;
-  onToggle?: () => void;
-  compact?: boolean;
-  streaming?: boolean;
-}) {
-  const { t } = useTranslation();
-  const active = streaming && durationMs === undefined && startedAt !== undefined;
-  // 展开态 + 内部 tail-follow 开关（用户在思考体内上滚即暂停，回到底部恢复）
-  const [expanded, setExpanded] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const tailRef = useRef(true);
-  // 活跃期间以 500ms 心跳刷新耗时计时（完成后无 interval，时间定格）
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setTick((n) => n + 1), 500);
-    return () => clearInterval(id);
-  }, [active]);
-  // live tail-follow：展开且用户未上滚时，思考体始终滚到底部（tail -f）
-  useEffect(() => {
-    if (!expanded || !tailRef.current) return;
-    const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [expanded, text]);
-  function onBodyScroll() {
-    const el = bodyRef.current;
-    if (!el) return;
-    tailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
-  }
-  const elapsed = active && startedAt !== undefined ? Date.now() - startedAt : durationMs ?? 0;
-  const secs = Math.max(1, Math.floor(elapsed / 1000));
-  const secondsLabel = `${secs}s`;
-
-  const label = active ? t("chat.thinkingActive", { seconds: secondsLabel })
-    : durationMs !== undefined ? t("chat.thinkingDone", { seconds: secondsLabel })
-      : t("chat.thinking");
-  return (
-    <Collapse
-      size="small"
-      ghost
-      className={compact ? "thinking-block thinking-compact" : "thinking-block"}
-      onChange={(keys) => {
-        const exp = Array.isArray(keys) ? keys.includes("1") : keys === "1";
-        setExpanded(exp);
-        if (exp) tailRef.current = true; // 重新展开即恢复 tail-follow
-        onToggle?.(); // 展开/收起 = 阅读意图：外层暂停自动跟随，思考体切换为 live tail-follow
-      }}
-      items={[
-        {
-          key: "1",
-          label: (
-            <span className="thinking-label">
-              <span className="thinking-title">{label}</span>
-              {active && !compact && <ThinkingMarquee text={text} />}
-            </span>
-          ),
-          children: (
-            <div className="thinking-body" ref={bodyRef} onScroll={onBodyScroll}>
-              {text}
-            </div>
-          ),
-        },
-      ]}
-    />
-  );
-});
 
 /** timeline 段渲染（[docs/subagents](../../../../docs/subagents.md) 自 ChatMessages 抽取共享）：思考折叠面板 / 工具卡 /
  *  子代理卡 / markdown 正文；主聊天与子代理过程抽屉共用同一视觉。 */
@@ -395,6 +250,9 @@ export function TimelineSegsView({
   onToolExpansionChange,
   groupExpansions,
   onGroupExpansionChange,
+  finalRevealKey,
+  onFinalRevealProgress,
+  onFinalRevealComplete,
 }: {
   timeline: TimelineSeg[];
   toolsMap: Record<string, ToolView>;
@@ -414,9 +272,46 @@ export function TimelineSegsView({
   onToolExpansionChange?: (callKey: string, expansion: ToolExpansion) => void;
   groupExpansions?: Record<string, boolean>;
   onGroupExpansionChange?: (callKey: string, expanded: boolean) => void;
+  finalRevealKey?: string;
+  onFinalRevealProgress?: (finished: boolean, root: HTMLElement | null) => void;
+  onFinalRevealComplete?: () => void;
 }) {
   const { t } = useTranslation();
   const display = useUi((s) => s.outputDisplay);
+  const finalText = timeline.flatMap(seg => seg.kind === "text" && !seg.deferred ? [stripReport ? stripReportMarkers(seg.text) : seg.text] : []).join("");
+  const finalBudget = useTypewriter(finalText, !!finalRevealKey, { final: true });
+  const finalAnimating = !!finalRevealKey && finalBudget < finalText.length;
+  const revealRoot = useRef<HTMLDivElement>(null);
+  const progressRef = useRef(onFinalRevealProgress);
+  const completeRef = useRef(onFinalRevealComplete);
+  const completedFor = useRef<string | undefined>(undefined);
+  progressRef.current = onFinalRevealProgress;
+  completeRef.current = onFinalRevealComplete;
+  useLayoutEffect(() => {
+    if (!finalRevealKey) {
+      // History, a Tab return, or an interrupted local animation already renders full text.
+      if (completeRef.current) progressRef.current?.(true, revealRoot.current);
+      return;
+    }
+    if (completedFor.current === finalRevealKey) return;
+    const finished = finalBudget >= finalText.length;
+    progressRef.current?.(finished, revealRoot.current);
+    if (finished) { completedFor.current = finalRevealKey; completeRef.current?.(); }
+  }, [finalRevealKey, finalBudget, finalText.length]);
+  useEffect(() => {
+    if (!finalRevealKey) return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const finish = () => {
+      if (media.matches && completedFor.current !== finalRevealKey && completeRef.current) {
+        completedFor.current = finalRevealKey;
+        completeRef.current();
+      }
+    };
+    finish();
+    media.addEventListener?.("change", finish);
+    return () => media.removeEventListener?.("change", finish);
+  }, [finalRevealKey]);
+  let finalOffset = 0;
   // callKey 所属时间线持有展开态，父结构/模式改变也不丢失正在阅读的详情。
   const [localExpansions, setExpansions] = useState<Record<string, ToolExpansion>>({});
   const expansions = toolExpansions ?? localExpansions;
@@ -424,24 +319,30 @@ export function TimelineSegsView({
     if (onToolExpansionChange) onToolExpansionChange(callKey, expansion);
     else setExpansions((previous) => ({ ...previous, [callKey]: expansion }));
   }, [onToolExpansionChange]);
-  const groups = new Map<number, ToolView[]>();
+  // 简洁模式的过程分组：连续的思考 + 可入组工具合并为一行摘要（docs/chat-and-interface 5.2.x）。
+  // 仍分隔的：真实正文、子代理卡、已打开详情的工具、审批等待与失败。
+  const groups = new Map<number, ProcessMember[]>();
   const grouped = new Set<number>();
   if (display === "compact") {
     for (let i = 0; i < timeline.length; i++) {
       const first = i;
-      const tools: ToolView[] = [];
+      const members: ProcessMember[] = [];
       while (i < timeline.length) {
         const seg = timeline[i];
-        if (seg.kind === "text" && !seg.text.trim() && tools.length > 0) {
+        // 空白正文不分隔可见过程（只在本组已有成员时吸收，否则留给正文渲染分支）
+        if (seg.kind === "text" && (seg.deferred || !seg.text.trim()) && members.length > 0) {
           grouped.add(i++);
           continue;
         }
-        const tool = seg.kind === "tool" ? toolsMap[seg.callKey] : undefined;
-        if (!canGroupTool(tool) || expansions[tool.callKey]?.expanded) break;
-        tools.push(tool);
+        // 正在阅读详情的工具独立保留：不能被卷进组，否则点开它会连带展开同组其它工具
+        if (seg.kind === "tool" && expansions[seg.callKey]?.expanded) break;
+        if (!canJoinProcessGroup(seg, toolsMap, { includeRunning: true })) break;
+        // 谓词已确认非 thinking 段必为 tool 且能在 toolsMap 里取到；显式分流让 TS 看得见
+        if (seg.kind === "thinking") members.push({ kind: "thinking", index: i, seg });
+        else if (seg.kind === "tool") members.push({ kind: "tool", index: i, callKey: seg.callKey, tool: toolsMap[seg.callKey] });
         grouped.add(i++);
       }
-      if (tools.length) { groups.set(first, tools); i--; }
+      if (members.length) { groups.set(first, members); i--; }
     }
   }
   // 流式等待指示跟随最后一个未定稿的 text 段（其后只有 thinking/tool/sub 时，指示落在空尾）
@@ -455,13 +356,24 @@ export function TimelineSegsView({
     }
   }
   return (
-    <div className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
+    <div ref={revealRoot} className={display === "compact" ? "timeline-segs timeline-compact" : "timeline-segs"}>
       {timeline.map((seg, i) => {
+        if (seg.kind === "text" && seg.deferred) return null;
         const group = groups.get(i);
-        if (group) return <ToolActivityGroup key={`group:${group[0].callKey}`} tools={group} origins={toolOrigins} onToggle={onUserToggle} onExpansionChange={updateExpansion} expanded={groupExpansions ? !!groupExpansions[group[0].callKey] : undefined} onGroupExpansionChange={onGroupExpansionChange} />;
+        if (group) {
+          const rootKey = processGroupKey(group);
+          if (!rootKey) return null;
+          const tools = group.filter(member => member.kind === "tool").map(member => member.tool);
+          const entry: ProcessGroupEntry = { key: rootKey, tools, members: group };
+          // 展开态回退：键不存在时传 undefined，让组用本地 state。
+          // 不能恒传 !!groupExpansions[rootKey] —— 纯思考组（组内无工具）在单消息里
+          // 不生成 origins，键永远读不到，受控值会恒为 false 把本地 state 完全盖掉，点开无反应。
+          const expanded = groupExpansions && rootKey in groupExpansions ? groupExpansions[rootKey] : undefined;
+          return <ToolActivityGroup key={`group:${rootKey}`} entry={entry} timeline={timeline} streaming={streaming} display={display} origins={toolOrigins} onToggle={onUserToggle} onUserToggle={onUserToggle} onExpansionChange={updateExpansion} expanded={expanded} onGroupExpansionChange={onGroupExpansionChange} />;
+        }
         if (grouped.has(i)) return null;
         if (seg.kind === "thinking") {
-          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} />;
+          return <ThinkingBlock key={i} text={seg.text} startedAt={seg.startedAt} durationMs={seg.durationMs} onToggle={onUserToggle} compact={display === "compact"} streaming={!!streaming && i === timeline.length - 1} anchorKey={`thinking:${i}`} messageKey={toolOrigins?.[`thinking:${i}`]?.key} />;
         }
         if (seg.kind === "tool") {
           const tool = toolsMap[seg.callKey];
@@ -497,13 +409,16 @@ export function TimelineSegsView({
         }
         // 剥离发生在渲染时（text 段已合并，标记完整）；见 stripReportMarkers 里关于增量分片的理由。
         // 注意：剥离必须在打字机切片**之前** —— 切片会把 <report> 切成两片，破坏剥离的完整性前提。
-        const text = stripReport ? stripReportMarkers(seg.text) : seg.text;
+        const fullText = stripReport ? stripReportMarkers(seg.text) : seg.text;
+        const text = finalRevealKey ? sliceRevealed(fullText, finalBudget - finalOffset) : fullText;
+        finalOffset += fullText.length;
+        if (finalRevealKey && !text) return null;
         if (display === "compact" && !text.trim()) return null;
         // mermaid 占位提示的文案走 i18n（写死在 CSS / HTML 里的中文在英文界面会露馅）
         const diagramPending = t("chat.diagramPending");
         // 流式尾段走打字机（逐字揭示）；其余段（定稿 / 历史 / 中间段）完全走原 renderCached，一字不改。
-        // 唯一开关 = 既有的 `streaming && i === tailIdx`：会话恢复与翻页加载的项恒 streaming=false，
-        // 因此天然整段直出、绝不重播（打字机的"老会话不重播"不需要额外判断）。
+        // 网络流只作用于尾段；finalRevealKey 的统一预算已在上面按顺序切片。
+        // 恢复与翻页两者都没有，天然全文直出。
         if (streaming && i === tailIdx) {
           return (
             <TypewriterText
@@ -511,13 +426,13 @@ export function TimelineSegsView({
               text={text}
               active={streaming}
               diagramPending={diagramPending}
-              anchorKey={`text:${i}`}
+              anchorKey={seg.outputKey ?? `text:${i}`}
             />
           );
         }
-        const html = renderCached(text, diagramPending);
+        const html = finalAnimating ? renderMarkdown(text, diagramPending, { repairAssistantBlocks: true }) : renderCached(text, diagramPending);
         // data-streaming：流式消息内的 mermaid 占位符推迟到定稿（diagrams.ts 据此跳过），防止滚动风暴
-        return <div key={i} className="md" data-output-key={`text:${i}`} data-streaming={streaming || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
+        return <div key={i} className="md" data-output-key={seg.outputKey ?? `text:${i}`} data-streaming={streaming || finalAnimating || undefined} data-final-revealing={finalAnimating || undefined} dangerouslySetInnerHTML={{ __html: html }} />;
       })}
     </div>
   );

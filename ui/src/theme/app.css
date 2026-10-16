@@ -165,13 +165,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .chat-empty-guide .guide-desc { font-size: calc(12.5px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); margin-bottom: 10px; }
 .chat-empty-guide .guide-actions { display: flex; gap: 12px; }
 .msg { margin-bottom: 20px; min-width: 0; }
+/* The archived subagent report still uses this label; main chat has no role rows. */
 .msg .role { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
-.msg .role .role-name { color: var(--ws-text-1); font-weight: 500; }
-.msg .role .ts { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); font-variant-numeric: tabular-nums; }
-/* Keep each transcript anchor; process-only items use an inline time slot. */
-.msg.assistant.process-only { position: relative; padding-right: calc(76px + var(--ws-font-size-sans-offset) * 5); margin-bottom: var(--ws-process-row-gap); }
-.msg.assistant.process-only > .role { position: absolute; right: 0; top: 0; min-height: var(--ws-process-row-height); align-items: center; margin-bottom: 0; }
-.msg.assistant.process-only .role-name { display: none; }
+/* Keep each transcript anchor and compact process spacing. */
+.msg.assistant.process-only { margin-bottom: var(--ws-process-row-gap); }
 .msg.assistant.process-tail { margin-bottom: var(--ws-process-row-gap); }
 .msg.assistant.process-tail + .msg.assistant:not(.process-only) { margin-top: 16px; }
 .timeline-segs { min-width: 0; }
@@ -182,7 +179,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .timeline-compact > .md > :first-child { margin-top: 0; }
 .timeline-compact > .md > :last-child { margin-bottom: 0; }
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
-.msg.user .role { text-align: right; justify-content: flex-end; }
 .user-bubble {
   font-family: var(--ws-font-content); font-size: var(--ws-font-size-content);
   max-width: 78%; background: var(--ws-user-bubble); color: var(--ws-text-1);
@@ -258,6 +254,7 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .code-copy:hover { color: var(--ws-text-1); border-color: var(--ws-dim); }
 .code-copy-done { color: var(--ws-ok, #1f8f4d); }
 .code-copy-fail { color: var(--ws-err); }
+.md[data-final-revealing] .code-copy { display: none; }
 :is(.assistant .md, .sub-drawer-stream .md, .plan-body.md, .updater-notes-body.md, .skill-body.md, .viewer-md.md) pre,
 .code-block {
   font-family: var(--ws-font-mono);
@@ -402,6 +399,10 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   margin-left: 4px; color: var(--ws-accent);
   font-size: 0.9em; line-height: 1;
   width: 1em; height: 1em; flex: none;
+}
+.ws-streaming-status {
+  display: block; margin-top: 8px;
+  font-family: var(--ws-font-sans); font-size: var(--ws-font-size-sans);
 }
 /* 追问建议区：列表样式（垂直行项）。容器背景 = 工具调用同款 --ws-panel；列表项填充 = 左栏背景 --ws-bg-nav（亮色 #eef2f5 / 暗色 antd 容器色）。
    列表项 = 工具调用同款视觉：1px var(--ws-border) 边框 + 8px 圆角，与 .tool-card 一致（[docs/chat-and-interface]）。
@@ -650,19 +651,21 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
 .tool-compact-head.ant-btn { height: auto; min-height: var(--ws-process-row-height); padding: 4px 0; }
 .tool-compact-content { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left; color: var(--ws-text-2); font-family: var(--ws-font-sans); font-size: var(--ws-font-size-sans); line-height: 1.6; }
 .tool-compact-content .verb, .tool-compact-content .chev, .tool-compact-content .line-count { flex: none; }
-.tool-compact-content .verb { color: var(--ws-text-1); }
-.tool-compact-content .summary { color: var(--ws-text-1); flex: 1; min-width: 0; }
+.tool-compact-content .summary { flex: 1; min-width: 0; }
 .tool-compact-content .line-count { font-variant-numeric: tabular-nums; }
 .tool-compact-content .tool-time { flex: none; color: var(--ws-text-2); font-size: calc(11px + var(--ws-font-size-sans-offset)); font-variant-numeric: tabular-nums; }
 .tool-compact.st-error .tool-compact-content, .tool-compact.st-error .verb, .tool-compact.st-error .summary { color: var(--ws-err); }
 .tool-compact.st-waiting .tool-compact-content, .tool-compact.st-waiting .verb, .tool-compact.st-waiting .summary { color: var(--ws-warn); }
 .tool-activity-group { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
 .tool-group-toggle { max-width: 100%; width: 100%; justify-content: flex-start; height: auto; min-height: var(--ws-process-row-height); padding: 4px 0; line-height: 1.6; }
-.tool-group-toggle > .anticon:first-child { font-size: 11px; color: var(--ws-text-2); }
-.tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ws-text-1); text-align: left; }
-.tool-group-body { padding-left: 18px; margin-left: 5px; border-left: 1px solid var(--ws-border); }
+.tool-group-toggle > .anticon:first-child { color: var(--ws-text-2); }
+.tool-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; color: var(--ws-text-2); text-align: left; font-family: var(--ws-font-sans); font-size: var(--ws-font-size-sans); font-weight: 400; }
+.tool-group-chevron { flex: none; color: var(--ws-text-2); }
+.tool-group-body { padding-left: 18px; }
 .tool-group-body:not([hidden]) { display: flex; flex-direction: column; gap: var(--ws-process-row-gap); }
-.sub-card.sub-compact { border: 0; border-radius: 0; background: transparent; }
+/* 组内思考块与工具卡同级：折叠行的间距由 .tool-group-body 的 gap 统一管，
+   antd Collapse 自带的 header 下边距会叠加出行距差，这里只归零不改变其最小行高。 */
+.tool-group-body > .thinking-block.ant-collapse-ghost { margin-bottom: 0; }
 
 /* ---------- render_html 大弹框预览（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：
    卡片内不再内嵌渲染（那里只有浏览器 iframe 默认的 150px 高、宽度还被聊天列挤压），改由工具卡头部入口打开本弹框；
@@ -854,6 +857,11 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   transition: color 0.15s, background 0.15s;
 }
 .sub-card .sub-card-stop:hover { color: var(--ws-text-1); background: var(--ws-code-bg); }
+.sub-card.sub-compact { border: 0; border-radius: 0; background: transparent; padding: 4px 0; margin: 0; min-height: var(--ws-process-row-height); color: var(--ws-text-2); font-family: var(--ws-font-sans); font-size: var(--ws-font-size-sans); font-weight: 400; }
+.sub-card.sub-compact .sub-card-role { flex: 0 1 auto; min-width: 0; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border-radius: 0; line-height: 1.6; font-size: inherit; font-weight: 400; color: inherit; }
+.sub-card.sub-compact .sub-card-desc, .sub-card.sub-compact .sub-card-meta { font-size: inherit; }
+.sub-card.sub-compact .sub-card-status { flex: none; color: var(--ws-text-2); }
+.sub-card.sub-compact.st-error .sub-card-status { color: var(--ws-err); }
 /* 内部运行摘录 / 最终报告（遗留样式保留：sub:step 摘录仍存在于卡片数据中） */
 .sub-detail {
   margin-top: 6px; padding: 4px 8px; border-left: 2px solid var(--ws-border);
@@ -929,16 +937,6 @@ html[data-titlebar-mode="native"] .tb-main-seg.tb-main-cleared { padding-left: 1
   color: var(--ws-text-2); cursor: pointer;
 }
 .sub-drawer-note { font-size: calc(11.5px + var(--ws-font-size-sans-offset)); margin-top: 8px; }
-
-/* Composer 子代理运行指示器（[docs/subagents](../../../docs/subagents.md)） */
-.composer-toolbar .ant-btn-text.subs-indicator { color: var(--ws-accent); }
-.subs-menu-item { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; }
-.subs-menu-item .anticon { color: var(--ws-text-2); }
-.subs-menu-role { font-weight: 600; }
-.subs-menu-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ws-dim); font-size: calc(12px + var(--ws-font-size-sans-offset)); }
-.subs-menu-st.st-running { color: var(--ws-warn); }
-.subs-menu-st.st-done { color: var(--ws-dim); }
-.subs-menu-st.st-error { color: var(--ws-err); }
 
 /* ---------- 左侧导航：项目/任务区 ---------- */
 /* 侧栏骨架（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：导航占满面板（工作区文件面板已随 [docs/chat-and-interface](../../../docs/chat-and-interface.md) 移除；顶部折叠按钮行
@@ -1574,7 +1572,6 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
 .rb-overview-changes.ant-btn,
 .rb-overview-row.ant-btn,
 .rb-skill-line.rb-skill-clickable { width: calc(100% + var(--rb-row-padding) * 2); }
-.rb-quota-compact > .rb-label-row { justify-content: flex-end; margin-bottom: 8px; }
 
 /* ---------- 信息页签：额度与余额段（行集合 = 供应商配置；色彩强度映射风险等级） ---------- */
 .rb-quota .rb-quota-provider + .rb-quota-provider { margin-top: 6px; }

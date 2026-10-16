@@ -7,7 +7,7 @@ import { createDraftActions, ensureDraftIdentity, type DraftActions, type DraftS
 import { immer } from "zustand/middleware/immer";
 import { Channel } from "@tauri-apps/api/core";
 import { ipc } from "../ipc/client";
-import type { AskOpenedEvent, Breakdown, HistoryBoundary, HistoryStatus, Message, SessionPaging, ToolResultEvent, ToolStartEvent } from "../ipc/types";
+import type { AskOpenedEvent, Breakdown, HistoryBoundary, HistoryStatus, Message, RunDisplay, SessionPaging, ToolResultEvent, ToolStartEvent } from "../ipc/types";
 import { useSessions } from "./sessions";
 import { useUi } from "./ui";
 import { i18n } from "../i18n";
@@ -125,12 +125,15 @@ export interface RunStore extends DraftActions, DraftState {
    *  本地 epoch 屏蔽旧响应与启动窗口；同 run_id 的正常 done 才自动续队，取消/失败保持暂停。 */
   reconcileRun(sessionId: string): Promise<void>;
   closeSubDrawer(sessionId?: string | null): void;
+  revealFinal(sessionId: string, runId: string, animate?: boolean): void;
+  finishFinalReveal(sessionId: string, runId: string): void;
   refreshGit(sessionId?: string | null): Promise<void>;
   bindGlobalHandlers(): Record<string, (p: any) => void>;
 }
 
 /** `restoreFromMessages` 的可选元信息（首屏恢复） */
 export interface RestoreMeta {
+  task_runs?: RunDisplay[];
   /** 历史保存状态（索引侧 `SessionMeta.history_status` 与 `run:done.history_save` 同一枚举） */
   history_status?: HistoryStatus;
   /** 首屏分页信息（`load_session` 的 `paging` 字段）；缺省 = 未分页（旧后端 / 直接调用的测试） */
@@ -578,11 +581,16 @@ export const useRun = create<RunStore>()(
         t.pendingRunTerminals = {};
         t.pendingRunTerminalOverflow = false;
         t.runId = null;
+        t.streamGen = 0;
+        t.finalReveals = undefined; // A new task can finish the prior local animation; its full answer stays visible.
+        t.stepTextDeferred = false;
+        t.lastStepDeltaGen = undefined;
         // 本地回显含图片缩略图（后端落盘由 startChat 负责；重开会话经 restoreFromMessages 恢复）
+        t.runUserCreatedAt = new Date().toISOString();
         t.items.push({
           kind: "user",
           text,
-          createdAt: new Date().toISOString(),
+          createdAt: t.runUserCreatedAt,
           images: images?.length ? images.map((im) => ({ mediaType: im.mime, data: im.data })) : undefined,
         });
         t.running = true;
@@ -961,7 +969,7 @@ export const useRun = create<RunStore>()(
         // 本块位于主会话分支——子代理内部的工具结果已在上面的 !t 早退分支返回，故只认主会话自己的 subagent 调用。
         //
         // 为什么需要第二道：`sub:done` / `sub:error` 是子代理卡唯一的收尾途径（主会话工具有 closeRunningTools
-        // 兜底、子代理侧此前没有），丢一帧即永久「运行中」——composer 运行中计数不归零、停止按钮不消失。
+        // 兜底、子代理侧此前没有），丢一帧即永久「运行中」——卡片状态不归零、停止按钮不消失。
         // 而 `tool:result` 与那三帧**出自同一个 task 的相邻位置**：sub:done 在 tool.run 返回前 emit、
         // tool:result 在 batch 层拿到返回值后 emit（同 batch.rs），是现存第二可靠的收尾信号。
         // 「subagent 工具返回」本身即证明该子代理已结束，故据 outcome 就地收敛，不依赖那三帧。
@@ -1030,6 +1038,10 @@ export const useRun = create<RunStore>()(
         if (!s.tabs[sessionId]) s.tabs[sessionId] = blank();
         const t = s.tabs[sessionId];
         t.items = built.items as any;
+        t.stepTextDeferred = false;
+        t.pendingFinals = undefined;
+        t.finalReveals = undefined;
+        t.taskRuns = meta?.task_runs ?? [];
         // 稳定渲染键（AC-14）：与 items 头部对齐。用数组下标作 key 时，分页前插会让所有节点错位
         t.itemKeys = built.keys;
         // 压缩边界（批2 P2）：只存数据、不存下标——位置由渲染侧按稳定键的段号现算（见 boundaryAtIndexes）。
@@ -1103,6 +1115,7 @@ export const useRun = create<RunStore>()(
           if (!t?.paging) return;
           // 前置：更早一段摆在头部。后端保证严格早于 before_seq（不重复），且整段给出（不丢）
           t.items = [...built.items, ...t.items] as any;
+          t.taskRuns = [...new Map([...(t.taskRuns ?? []), ...(page.task_runs ?? [])].map(run => [run.run_id, run])).values()];
           t.itemKeys = [...built.keys, ...(t.itemKeys ?? [])];
           // 归档子代理卡与过程流：与首屏同一套合并规则（同 subId 不重复注册）
           for (const sv of built.subs) if (!t.subs.some((x) => x.subId === sv.subId)) t.subs.push(sv);
@@ -1241,6 +1254,20 @@ export const useRun = create<RunStore>()(
           t.queueResumeAfterInjection = false;
         }
       });
+    },
+
+    revealFinal(sessionId, runId, animate = true) {
+      if (!get().tabs[sessionId]?.pendingFinals?.[runId]) return;
+      set(s => {
+        const t = s.tabs[sessionId];
+        delete t.pendingFinals?.[runId];
+        if (animate && t.runId === runId && !t.running && !t.startPending) (t.finalReveals ??= {})[runId] = true;
+      });
+    },
+
+    finishFinalReveal(sessionId, runId) {
+      if (!get().tabs[sessionId]?.finalReveals?.[runId]) return;
+      set(s => { delete s.tabs[sessionId]?.finalReveals?.[runId]; });
     },
 
     closeSubDrawer(sessionId) {

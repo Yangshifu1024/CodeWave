@@ -108,6 +108,7 @@
 
 - setup 同步上下文不能 `tokio::spawn` → 用 `tauri::async_runtime::spawn` 或惰性 `OnceLock`
 - tauri-plugin-updater 必须有 `plugins.updater` 配置节点（active: false 也行），否则启动 panic
+- **复制必须走 `ui/src/utils/clipboard.ts` 的 `copyText`，不得自写 `navigator.clipboard`**（`grep -rn "navigator\.clipboard" ui/src/ --exclude-dir=__tests__` 只应命中 `utils/clipboard.ts` 与 `ipc/clipboard.ts`；测试目录必须提到这个字符串来构造用例，故排除在外。有测试钉死）。原因：打包版跑在 `tauri://localhost` 下浏览器剪贴板不可靠；而旧写法 `navigator.clipboard?.writeText(t).then().catch(() => {})` 在 clipboard 缺失时 `?.` 短路得到 `undefined`，紧接的 `.then` **同步**抛 `TypeError` 而空 `catch` 吃掉它——失败与成功在界面上都是「点了没反应」。反模式：① `?.writeText()` 后直接 `return true`（`await undefined` 被当成功，把失败伪装成成功）；② 失败空 `catch` 静默（**失败必须有可见反馈**）。详见[聊天与界面](./docs/chat-and-interface.md)
 - antd 两字按钮会插空格（“保 存”）：测试按文本找按钮先去空白再 includes
 - zustand store 是模块级单例：测试间面板开关残留 → afterEach 重置 settingsOpen / diffOpen / tasksOpen / statsOpen
 - antd `<App>` 包裹层默认 height auto 会令全屏布局塌缩（`.ant-app{height:100%}`）

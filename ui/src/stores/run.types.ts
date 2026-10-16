@@ -1,5 +1,5 @@
 // 每个 Tab 运行态 store 的共享类型（run.ts、runFrames.ts 与 UI 组件共同消费）。
-import type { ApprovalMode, AskQuestionPayload, Breakdown, HistoryBoundary, HistoryFormat, Todo } from "../ipc/types";
+import type { ApprovalMode, AskQuestionPayload, Breakdown, HistoryBoundary, HistoryFormat, RunDisplay, Todo } from "../ipc/types";
 
 /** 工具卡视图模型：timeline 锚点（callKey）+ 卡体数据；progressTail 为流式进度尾迹 */
 export interface ToolView {
@@ -16,7 +16,7 @@ export interface ToolView {
 /** timeline 分段：text/thinking 按到达顺序穿插，tool 为工具卡锚点（卡体存于 toolsMap）。
  *  thinking 计时：startedAt = 分段开始；durationMs = 定格时长（运行中 undefined）。 */
 export type TimelineSeg =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; /** 展示投影拆段后保留源段滚动身份；不写历史/wire。 */ outputKey?: string; deferred?: boolean }
   | { kind: "thinking"; text: string; startedAt?: number; durationMs?: number }
   | { kind: "tool"; callKey: string }
   | { kind: "sub"; subId: string };
@@ -24,7 +24,7 @@ export type TimelineSeg =
 /** 转录 UI 项联合：用户消息 / 助手 timeline / 子代理卡锚点 / 通知 / 错误 */
 export type UiItem =
   | { kind: "user"; text: string; createdAt?: string; images?: { mediaType: string; data: string }[] }
-  | { kind: "assistant"; timeline: TimelineSeg[]; toolsMap: Record<string, ToolView>; streaming: boolean; createdAt?: string }
+  | { kind: "assistant"; timeline: TimelineSeg[]; toolsMap: Record<string, ToolView>; streaming: boolean; createdAt?: string; deferredStepStart?: number }
   | { kind: "sub"; subId: string }
   /** injectedTexts：run:inject 带 texts 时的注入正文（[docs/runtime-and-scheduling](../../../docs/runtime-and-scheduling.md)）；缺省 = 无正文可渲染（ask 批准注入 / 旧后端），仍回落 notice.injected */
   | { kind: "notice"; text: string; injectedTexts?: string[] }
@@ -70,7 +70,7 @@ export interface QueueItem {
   injecting?: boolean;
 }
 
-/** 子代理卡片视图模型（聊天卡与机器人运行指示器的数据源） */
+/** 子代理卡片视图模型（聊天卡与右栏摘要的数据源） */
 export interface SubView {
   subId: string;
   role: string;
@@ -180,6 +180,18 @@ export interface WidgetAutoOpen {
 /** 单个 Tab 的全部运行态（run store 的分桶单元，blank() 给出初值）。
  *  契约：帧 reducer（runFrames.ts）与事件 handler（runHandlers.ts）在此结构上就地变异（immer 草稿）。 */
 export interface TabRunState {
+  /** Only step_start enables candidate text deferral; old backends keep their original streaming behavior. */
+  stepTextDeferred?: boolean;
+  /** Cross-channel retry events may arrive after successful deltas of their generation. */
+  lastStepDeltaGen?: number;
+  /** Completed live runs waiting for a collapsed process commit and one browser paint. Never persisted. */
+  pendingFinals?: Record<string, true>;
+  /** A live final has passed the collapsed-process paint and may animate once. UI only. */
+  finalReveals?: Record<string, true>;
+  /** 后端真实轮次元数据；没有记录的旧历史保持原展示。 */
+  taskRuns?: RunDisplay[];
+  /** 当前乐观 user 的时间身份，用终态权威时间校准；不估算时长。 */
+  runUserCreatedAt?: string;
   /** 转录 UI 项序列（timeline 展示顺序） */
   items: UiItem[];
   /** 是否有运行中的任务 */

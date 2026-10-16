@@ -68,16 +68,24 @@ describe("codecopy 点击委托", () => {
   const writeText = vi.fn(async () => {});
 
   beforeEach(() => {
+    // mockReset + 重置实现：避免上一个用例的 mockRejectedValueOnce 泄漏到下一个用例。
+    writeText.mockReset();
+    writeText.mockImplementation(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    writeText.mockClear();
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
+    document.body.innerHTML = "";
   });
 
   function clickOn(btn: HTMLElement) {
     btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  }
+
+  /** copyText 先 await 插件探测再写，断言前需排空微任务队列（这里用假定时器，不能用 waitFor）。 */
+  async function flush() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
   }
 
   it("点击按钮写剪贴板并反馈已复制，1.5s 复原；非按钮点击不触发", async () => {
@@ -88,9 +96,9 @@ describe("codecopy 点击委托", () => {
     const btn = document.querySelector(".code-copy") as HTMLElement;
 
     clickOn(btn);
+    await flush();
     expect(writeText).toHaveBeenCalledWith("const a = 1;");
-    // Feedback: hint text + done class (visible after a microtask flush)
-    await Promise.resolve();
+    // Feedback: hint text + done class
     expect(btn.className).toContain("code-copy-done");
     expect(btn.querySelector(".code-copy-hint")!.textContent).toBe("已复制");
 
@@ -111,10 +119,10 @@ describe("codecopy 点击委托", () => {
     const btn = document.querySelector(".code-copy") as HTMLElement;
 
     clickOn(btn);
-    await Promise.resolve();
+    await flush();
     vi.advanceTimersByTime(1000);
     clickOn(btn); // second click resets the timer
-    await Promise.resolve();
+    await flush();
     vi.advanceTimersByTime(1000); // 2s since the first click, but only 1s since the reset
     expect(btn.className).toContain("code-copy-done");
     vi.advanceTimersByTime(600);
@@ -122,7 +130,40 @@ describe("codecopy 点击委托", () => {
 
     unbind();
     clickOn(btn);
+    await flush();
     expect(writeText).toHaveBeenCalledTimes(2); // no more increments after unbind
-    document.body.innerHTML = "";
+  });
+
+  it("写入失败时 hint 显「失败」且带 code-copy-fail（不静默，回归钉子）", async () => {
+    writeText.mockRejectedValueOnce(new Error("NotAllowedError"));
+    const unbind = bindCodeCopyDelegate();
+    document.body.innerHTML = `<div class="code-wrap"><button class="code-copy" data-code="${encodeURIComponent(
+      "写不进去",
+    )}"><span class="code-copy-hint">Copy</span></button></div>`;
+    const btn = document.querySelector(".code-copy") as HTMLElement;
+
+    clickOn(btn);
+    await flush();
+
+    expect(btn.className).toContain("code-copy-fail");
+    expect(btn.querySelector(".code-copy-hint")!.textContent).toBe("失败");
+    unbind();
+  });
+
+  it("clipboard 不存在时降级到 execCommand 兜底（不抛 TypeError）", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    document.execCommand = vi.fn(() => true) as unknown as typeof document.execCommand;
+    const unbind = bindCodeCopyDelegate();
+    document.body.innerHTML = `<div class="code-wrap"><button class="code-copy" data-code="${encodeURIComponent(
+      "兜底内容",
+    )}"><span class="code-copy-hint">Copy</span></button></div>`;
+    const btn = document.querySelector(".code-copy") as HTMLElement;
+
+    expect(() => clickOn(btn)).not.toThrow();
+    await flush();
+
+    // 兜底成功 → 显已复制（而不是抛错或静默）
+    expect(btn.className).toContain("code-copy-done");
+    unbind();
   });
 });

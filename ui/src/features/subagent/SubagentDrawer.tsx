@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Button, Drawer, Tag, Tooltip } from "antd";
+import { Button, Drawer, Tag, Tooltip, Typography } from "antd";
 import { CaretRightOutlined, CloseOutlined, LoadingOutlined, RobotOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { ApprovalMode } from "../../ipc/types";
@@ -10,8 +10,8 @@ import { renderCached, TimelineSegsView } from "../chat/segments";
 import { renderUserMarkdown } from "../../utils/markdown";
 import { captureOutputAnchor, restoreOutputAnchor, type OutputAnchor } from "../../utils/outputAnchor";
 
-/** 子代理过程抽屉（[docs/subagents](../../../../docs/subagents.md)）：右侧滑入、默认常显（首个子代理启动即弹出）。
- *  关闭只置 open=false 不销毁——流式数据留存于 subStreams，可经聊天卡 / Composer 指示器重进；
+/** 子代理过程抽屉（[docs/subagents](../../../../docs/subagents.md)）：仅由用户主动打开，从右侧滑入。
+ *  关闭只置 open=false 不销毁——流式数据留存于 subStreams，可经聊天卡或右栏重进；
  *  归档子代理（会话恢复 / 历史 run）由 run.openSubDrawer 按需拉取过程历史。 */
 export default function SubagentDrawer() {
   const { t } = useTranslation();
@@ -287,10 +287,10 @@ export default function SubagentDrawer() {
               // 归档分支（sub.report）保持不动：它本来就是后端剥离过的干净文本。
               stripReport
             />
-            {/* 等待指示（[docs/chat-and-interface]）：与聊天窗口同款（antd 加载图标 + 同一语义化类名），
-                位置仍在过程流的末尾，运行状态判定不变 */}
             {stream.status === "running" && (
-              <span className="ws-streaming-indicator">
+              outputDisplay === "compact" ? <Typography.Text type="secondary" className="ws-streaming-status" role="status">
+                {t("chat.activityProcessing")}
+              </Typography.Text> : <span className="ws-streaming-indicator">
                 <LoadingOutlined spin />
               </span>
             )}

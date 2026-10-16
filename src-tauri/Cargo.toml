@@ -1,6 +1,6 @@
 [package]
 name = "codewave"
-version = "0.12.1"
+version = "0.13.0"
 description = "CodeWave - desktop AI coding agent"
 license = "MIT"
 repository = "https://github.com/Yangshifu1024/CodeWave"
@@ -23,7 +23,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
-# tauri-plugin-clipboard-manager：仓内不使用（剪贴板走浏览器 Clipboard API / @tauri-apps/api 路径，无需 Rust 插件），声明不注册会导致虚警与无用 API 面。现不在此声明。
+# 剪贴板（[docs/chat-and-interface](../docs/chat-and-interface.md)）：打包版前端跑在 tauri://localhost 自定义协议下，
+# 浏览器 navigator.clipboard 在该来源不可靠（用户消息「复制」按钮点击无响应即由此而来）。
+# 原注释「剪贴板走浏览器 API，无需 Rust 插件」的前提已被证伪，故改为接入原生插件。
+# 权限按最小集显式授予：capabilities/default.json 只放 clipboard-manager:allow-write-text，
+# 不加 clipboard-manager:default（官方默认集为空，读/图片/html/secret 一律不开）。
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 # Custom title bar (docs/chat-and-interface): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay

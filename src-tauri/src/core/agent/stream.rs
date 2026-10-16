@@ -468,6 +468,44 @@ pub(super) fn flush_segments(
     }
 }
 
+/// 排空上一 step 后再重置缓冲并发布新 step 身份。take 与 emit 必须同锁，
+/// 只锁 reset 无法阻止 ticker 已取出的旧帧迟到。
+pub(super) fn start_stream_step(
+    sink: &Arc<dyn EventSink>,
+    rt: &SessionRuntime,
+    main_session: bool,
+) {
+    let _guard = super::guards::lock_ok(&rt.stream_emission_lock);
+    if let Some(buf) = rt.stream.take_final() {
+        flush_segments(sink, &rt.id, &buf);
+    }
+    rt.stream.reset();
+    if main_session {
+        sink.channel_frame(
+            &rt.id,
+            &Frame::StepStart {
+                generation: rt.stream.generation(),
+            },
+        );
+    }
+}
+
+/// ticker 与收尾复用同一临界区：None 强制冲刷，Some 保留节流间隔。
+pub(super) fn flush_stream(
+    sink: &Arc<dyn EventSink>,
+    rt: &SessionRuntime,
+    interval: Option<Duration>,
+) {
+    let _guard = super::guards::lock_ok(&rt.stream_emission_lock);
+    let buf = match interval {
+        Some(interval) => rt.stream.try_take(interval),
+        None => rt.stream.take_final(),
+    };
+    if let Some(buf) = buf {
+        flush_segments(sink, &rt.id, &buf);
+    }
+}
+
 /// 64ms 流式刷新 ticker（run 期间全程存活）。
 pub async fn stream_flush_loop(
     sink: Arc<dyn EventSink>,
@@ -479,9 +517,7 @@ pub async fn stream_flush_loop(
         tokio::select! {
             _ = stop.cancelled() => break,
             _ = tokio::time::sleep(interval) => {
-                if let Some(buf) = rt.stream.try_take(interval) {
-                    flush_segments(&sink, &rt.id, &buf);
-                }
+                flush_stream(&sink, &rt, Some(interval));
             }
         }
     }

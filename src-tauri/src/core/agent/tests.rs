@@ -932,6 +932,69 @@ impl EventSink for CaptureSink {
 }
 
 #[test]
+fn step_start_flushes_taken_ticker_frames_before_boundary() {
+    use super::stream::{flush_stream, start_stream_step};
+    use std::sync::{Barrier, Mutex, mpsc};
+    use std::time::Duration;
+    struct BlockingSink {
+        taken: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        frames: Mutex<Vec<Frame>>,
+    }
+    impl EventSink for BlockingSink {
+        fn channel_frame(&self, _session: &SessionId, frame: &Frame) {
+            if matches!(frame, Frame::DeltaText { text, .. } if text == "old") {
+                self.taken.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+            self.frames.lock().unwrap().push(frame.clone());
+        }
+        fn emit(&self, _: &SessionId, _: &str, _: serde_json::Value) {}
+    }
+    let (taken_tx, taken_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let sink = Arc::new(BlockingSink {
+        taken: taken_tx,
+        release: Mutex::new(release_rx),
+        frames: Mutex::new(vec![]),
+    });
+    let rt = SessionRuntime::new("step-race".into(), "/tmp".into(), "/tmp".into());
+    rt.stream.push_text("old");
+    let ticker_rt = rt.clone();
+    let ticker_sink = sink.clone() as Arc<dyn EventSink>;
+    let ticker =
+        std::thread::spawn(move || flush_stream(&ticker_sink, &ticker_rt, Some(Duration::ZERO)));
+    taken_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let boundary_rt = rt.clone();
+    let boundary_sink = sink.clone() as Arc<dyn EventSink>;
+    let ready = Arc::new(Barrier::new(2));
+    let ready_worker = ready.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let boundary = std::thread::spawn(move || {
+        ready_worker.wait();
+        start_stream_step(&boundary_sink, &boundary_rt, true);
+        done_tx.send(()).unwrap();
+    });
+    ready.wait();
+    let blocked = matches!(
+        done_rx.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    release_tx.send(()).unwrap();
+    ticker.join().unwrap();
+    boundary.join().unwrap();
+    assert!(blocked, "边界必须等待已取出且正在下发的 ticker 帧");
+    let frames = sink.frames.lock().unwrap();
+    assert!(
+        matches!(&frames[..], [Frame::DeltaText { generation: 0, text }, Frame::StepStart { generation: 1 }] if text == "old")
+    );
+    assert_eq!(
+        serde_json::to_value(&frames[1]).unwrap(),
+        serde_json::json!({"type":"step_start", "gen":1})
+    );
+}
+
+#[test]
 fn flush_segments_emits_frames_in_segment_order() {
     // 评审 T1：段顺序到帧顺序的直接契约（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）
     let sink = Arc::new(CaptureSink::default());
@@ -1457,6 +1520,183 @@ fn sse_body(chunks: &[&str]) -> Vec<u8> {
 
 const SSE_STOP: &str = r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
 
+/// 新边界测试专用：调用方持有 listener 到用例结束，读干请求头后优雅关闭写端。
+struct TestSseServer {
+    listener: Arc<tokio::net::TcpListener>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl TestSseServer {
+    fn port(&self) -> u16 {
+        self.listener.local_addr().unwrap().port()
+    }
+
+    async fn finish(&mut self) -> Result<(), String> {
+        self.finish_with_timeout(std::time::Duration::from_secs(5))
+            .await
+    }
+
+    async fn finish_with_timeout(&mut self, limit: std::time::Duration) -> Result<(), String> {
+        match tokio::time::timeout(limit, &mut self.task).await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => {
+                self.task.abort();
+                Err("SSE 测试服务未在限时内结束".to_owned())
+            }
+        }
+    }
+}
+
+impl Drop for TestSseServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn step_start_server(script: Vec<Vec<u8>>) -> TestSseServer {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let owned = listener.clone();
+    let handle = tokio::spawn(async move {
+        for response in script {
+            let (mut socket, _) = owned.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 8192];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buf[..n]);
+            }
+            socket.write_all(&response).await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+    });
+    TestSseServer {
+        listener,
+        task: handle,
+    }
+}
+
+#[tokio::test]
+async fn step_start_server_guard_aborts_pending_accept_on_timeout() {
+    let mut server = step_start_server(vec![text_only_sse_turn("unrequested")]).await;
+    let listener = server.listener.clone();
+    let abort = server.task.abort_handle();
+    assert!(
+        server
+            .finish_with_timeout(std::time::Duration::from_millis(10))
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !abort.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        listener.local_addr().is_ok(),
+        "服务结束后测试仍持有端口，避免被并发用例重用"
+    );
+}
+
+#[tokio::test]
+async fn step_start_root_flushes_previous_step_and_keeps_retries_inside_step() {
+    let bad =
+        b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+    let error =
+        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_vec();
+    let tool = serde_json::json!({"choices":[{"delta":{
+        "content":"过程正文",
+        "tool_calls":[{"index":0,"id":"step-read","type":"function","function":{
+            "name":"read","arguments":serde_json::json!({"files":[{"path":"sample.txt"}]}).to_string()
+        }}]
+    }}]}).to_string();
+    let mut server = step_start_server(vec![
+        bad,
+        error,
+        sse_body(&[&tool, SSE_STOP]),
+        text_only_sse_turn("<report>总结与建议</report>"),
+    ])
+    .await;
+    let (core, rt, sink, ws, _dd) = scripted_core_recording(server.port(), "step-root");
+    std::fs::write(ws.path().join("sample.txt"), "sample").unwrap();
+    let params = DriveParams {
+        main_session: true,
+        max_steps: 4,
+        ..DriveParams::default()
+    };
+    let (result, _, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::drive::drive_agent(&core, &rt, params, "step-root-run"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap(), "<report>总结与建议</report>");
+    server.finish().await.unwrap();
+    let frames = sink.1.lock().unwrap();
+    let starts: Vec<_> = frames
+        .iter()
+        .enumerate()
+        .filter_map(|(index, frame)| match frame {
+            Frame::StepStart { generation } => Some((index, *generation)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), 2, "sanitize/普通重试都不能冒充新 step");
+    assert_eq!(starts[0].1, 1);
+    assert_eq!(starts[1].1, 4, "两个重试分别递增 generation");
+    let progress = frames
+        .iter()
+        .position(|f| matches!(f, Frame::DeltaText { text, generation: 3 } if text == "过程正文"))
+        .unwrap();
+    let summary = frames.iter().position(|f| matches!(f, Frame::DeltaText { text, generation: 4 } if text == "<report>总结与建议</report>")).unwrap();
+    assert!(starts[0].0 < progress && progress < starts[1].0 && starts[1].0 < summary);
+    let retries = sink.events("run:retry");
+    assert_eq!(retries.len(), 2);
+    assert_eq!(retries[0]["delay_ms"], 0, "sanitize 立即重试，不伪造退避");
+    assert_eq!(retries[0]["gen"], 2);
+    assert_eq!(retries[1]["gen"], 3);
+    assert_eq!(retries[1]["attempt"], 1, "sanitize 不消耗普通重试预算");
+}
+
+#[tokio::test]
+async fn step_start_is_not_emitted_for_subagent_or_task_runtime() {
+    let mut server = step_start_server(vec![
+        text_only_sse_turn("<report>子代理完成</report>"),
+        text_only_sse_turn("<report>计划任务完成</report>"),
+    ])
+    .await;
+    let (core, root, sink, _ws, _dd) = scripted_core_recording(server.port(), "nonmain-step");
+    let sub = SessionRuntime::new_sub(&root, "step-sub".into());
+    let task = SessionRuntime::new_task(
+        "step-task".into(),
+        core.data_dir.clone(),
+        root.workspace.clone(),
+        core.data_dir.clone(),
+    );
+    for rt in [sub, task] {
+        let params = DriveParams {
+            finish_on_text: false,
+            max_steps: 2,
+            ..DriveParams::default()
+        };
+        let (result, _, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::drive::drive_agent(&core, &rt, params, "nonmain-step-run"),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_ok());
+    }
+    server.finish().await.unwrap();
+    let frames = sink.1.lock().unwrap();
+    assert!(frames.iter().any(|f| matches!(f, Frame::DeltaText { .. })));
+    assert!(!frames.iter().any(|f| matches!(f, Frame::StepStart { .. })));
+}
+
 /// 指向脚本化 mock 的 core + runtime（两个 tempdir 由调用方绑定保活）。
 #[allow(clippy::type_complexity)]
 fn scripted_core(
@@ -1496,6 +1736,87 @@ fn history_texts(rt: &Arc<SessionRuntime>) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+#[tokio::test]
+async fn run_display_real_run_matches_terminal_event_and_persisted_page() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let port = listener.local_addr().unwrap().port();
+    let server_listener = listener.clone();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = server_listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 8192];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut buffer).await.unwrap();
+            assert!(n > 0);
+            request.extend_from_slice(&buffer[..n]);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let response = sse_body(&[
+            r#"{"choices":[{"delta":{"content":"<report>总结：完成。"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"建议：检查结果。</report>"}}]}"#,
+            SSE_STOP,
+        ]);
+        socket.write_all(&response).await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let mut server = TestSseServer {
+        listener,
+        task: server,
+    };
+    let (core, rt, sink, _ws, _dd) = scripted_core_recording(port, "run-display-real");
+    struct CancelRunOnDrop(Arc<SessionRuntime>);
+    impl Drop for CancelRunOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel_active();
+        }
+    }
+    let _cancel_run = CancelRunOnDrop(rt.clone());
+    // 避免本例启动并行命名请求；该请求与任务汇报无关。
+    rt.history
+        .lock()
+        .unwrap()
+        .push(Message::user_text("历史提问").stamped());
+    let run_id = core
+        .start_chat(rt.clone(), "完成任务".into(), vec![])
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while sink.events("run:done").is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    server.finish().await.unwrap();
+    let terminal = serde_json::to_value(rt.run_snapshot().terminal.unwrap()).unwrap();
+    let done = sink.events("run:done");
+    assert_eq!(done.len(), 1);
+    assert_eq!(terminal["task_run"], done[0]["task_run"]);
+    assert_eq!(terminal["task_run"]["run_id"], run_id);
+    assert_eq!(terminal["task_run"]["status"], "done");
+    assert_eq!(
+        terminal["task_run"]["final_answer"],
+        "<report>总结：完成。建议：检查结果。</report>"
+    );
+    assert!(terminal["task_run"]["duration_ms"].as_u64().unwrap() >= 30);
+    let start = sink.events("run:start");
+    assert_eq!(
+        start[0]["user_created_at"],
+        terminal["task_run"]["user_created_at"]
+    );
+    let history = core.store.load_history_full(&rt.id).unwrap();
+    let restored = crate::core::sessions::run_display::load_for_messages(
+        &core.store,
+        &rt.id,
+        &history.display,
+    );
+    assert_eq!(restored.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&restored[0]).unwrap(),
+        terminal["task_run"]
+    );
 }
 
 /// 非主会话（子代理 / 任务运行）的纯文本回合不再结束 run：注入续跑提示继续，
@@ -1737,9 +2058,14 @@ async fn stale_pending_todos_do_not_gate_plain_qa() {
 /// 记录原始 `emit` 事件：`ask:opened` 这类工具事件不走 `channel_frame`，
 /// 既有 `CaptureSink` 只收 Frame，故另建一个记录型 sink。
 #[derive(Default)]
-struct EventRecorder(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+struct EventRecorder(
+    std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    std::sync::Mutex<Vec<Frame>>,
+);
 impl EventSink for EventRecorder {
-    fn channel_frame(&self, _s: &SessionId, _f: &Frame) {}
+    fn channel_frame(&self, _s: &SessionId, frame: &Frame) {
+        self.1.lock().unwrap().push(frame.clone());
+    }
     fn emit(&self, _s: &SessionId, e: &str, p: serde_json::Value) {
         self.0.lock().unwrap().push((e.to_string(), p));
     }

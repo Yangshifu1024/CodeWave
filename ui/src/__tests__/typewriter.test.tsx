@@ -6,7 +6,7 @@
 // 因此本文件以**纯函数单测为主**（无计时器、无 DOM、100% 确定），
 // 组件测只覆盖「三态接线」——这三态在首帧同步生效，不需要推进 rAF。
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, cleanup } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import "../i18n"; // 直接挂载的组件必须自行初始化 i18next（与 segments.filter.test.tsx 同）
 import {
@@ -22,9 +22,10 @@ import type { TimelineSeg, ToolView } from "../stores/run";
 const toolsMap: Record<string, ToolView> = {};
 
 afterEach(() => {
+  // Vitest globals:false 不会注册 RTL 自动 cleanup；先卸载以取消组件的 rAF。
+  cleanup();
   __resetReducedMotionCache();
   vi.restoreAllMocks();
-  document.body.innerHTML = "";
 });
 
 // ---------- 纯函数（主战场） ----------
@@ -137,6 +138,20 @@ function mds(): HTMLElement[] {
 }
 
 describe("TimelineSegsView 打字机三态接线", () => {
+  it("卸载流式组件时取消待执行的动画帧", () => {
+    const request = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(42);
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    render(
+      <AntApp>
+        <TimelineSegsView timeline={segs("用于验证卸载时取消动画帧的较长流式内容")} toolsMap={toolsMap} streaming />
+      </AntApp>,
+    );
+    expect(request).toHaveBeenCalled();
+    cleanup();
+    expect(cancel).toHaveBeenCalledWith(42);
+    expect(document.querySelector(".md")).toBeNull();
+  });
+
   it("非流式：不切片，两个段都整段直出（含尾段位置）", () => {
     render(
       <AntApp>

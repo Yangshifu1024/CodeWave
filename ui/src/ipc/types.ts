@@ -198,7 +198,20 @@ export interface SessionRunSnapshot {
     error?: string;
     error_kind?: string;
     history_save?: HistorySaveReport | null;
+    task_run?: RunDisplay;
   } | null;
+}
+
+/** 权威轮次展示记录：wall time 包含工具、重试与审批等待；只用于展示。 */
+export interface RunDisplay {
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  status: "done" | "error" | "cancelled";
+  user_created_at: string;
+  final_answer?: string | null;
+  final_answer_created_at?: string | null;
 }
 
 export interface ServiceInfo {
@@ -280,6 +293,7 @@ export interface SessionPaging {
  *  `messages` 一律 **display 口径**：只用于界面渲染，**绝不**回填模型上下文——wire（模型所见）由后端自己装载；
  *  拿 display 当上下文会让下一次检查点把整份历史改写成「只有最近一段」的基线段（时间线重置）。 */
 export interface LoadSessionPayload {
+  task_runs?: RunDisplay[];
   messages: Message[];
   paging: SessionPaging;
   /** 压缩边界（契约口径：与 `paging` 并列的**顶层**字段，只含本次覆盖段范围内的边界）。
@@ -290,6 +304,7 @@ export interface LoadSessionPayload {
 /** `load_session_earlier` 返回值：严格早于 `before_seq` 的**最近一段**消息。
  *  越界 / 已到最早 / 会话不存在 → `{ messages: [], from_seq: 0, has_more: false }`（**不报错**）。 */
 export interface EarlierPage {
+  task_runs?: RunDisplay[];
   messages: Message[];
   /** 本次实际返回的段序号（0 = 没有更早内容，此时 `has_more` 必为 false） */
   from_seq: number;
@@ -405,6 +420,7 @@ export interface LegacyCleanupOutcome {
 /** 流式帧契约（start_chat 的 Channel 下发）：gen 为代际阈值（run:retry 后低于该代际的半帧丢弃），
  *  帧到达顺序 = timeline 展示顺序；sub 信封借用父会话通道区分来源（零新增事件键）。 */
 export type Frame =
+  | { type: "step_start"; gen: number }
   | { type: "delta_text"; gen: number; text: string }
   | { type: "delta_thinking"; gen: number; text: string }
   | { type: "tool_progress"; batch: string; index: number; chunk: string; name?: string }

@@ -42,6 +42,11 @@ impl Drop for InjectionGuard<'_> {
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
+    /// 根会话新 LLM step 的边界；同一步的重试只使用 run:retry，不重复发送。
+    StepStart {
+        #[serde(rename = "gen")]
+        generation: u64,
+    },
     /// gen = 节流代数：run:retry 后前端按 generation 丢弃旧次尝试的半刷残帧（评审 C2）
     DeltaText {
         #[serde(rename = "gen")]
@@ -117,6 +122,8 @@ pub struct RunTerminal {
     pub error_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_save: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_run: Option<crate::core::sessions::run_display::RunDisplay>,
 }
 
 impl RunTerminal {
@@ -128,6 +135,7 @@ impl RunTerminal {
             error: None,
             error_kind: None,
             history_save: None,
+            task_run: None,
         }
     }
 }
@@ -138,6 +146,14 @@ pub struct RunSnapshot {
     pub running: bool,
     pub run_id: Option<String>,
     pub terminal: Option<RunTerminal>,
+    #[serde(skip)]
+    pub(super) clock: Option<RunClock>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RunClock {
+    pub started_at: String,
+    pub instant: std::time::Instant,
 }
 
 /// 会话运行时：一个会话的全部可变状态（历史/计划 todos/偏好/取消/互斥/流缓冲等），
@@ -188,6 +204,9 @@ pub struct SessionRuntime {
     pub text_ask_block: Mutex<Option<String>>,
     /// 流式节流缓冲（64ms 窗口聚合帧）
     pub stream: Arc<ThrottledStream>,
+    /// 同步串行化 take + 下发与 step 边界，避免 ticker 已取出的残帧越过边界。
+    /// 锁序 emission → stream 内部锁；不跨 await，collector 不获取此锁。
+    pub(super) stream_emission_lock: Mutex<()>,
     /// 当前 run 的取消 token（空闲为 None）
     pub active_cancel: Mutex<Option<CancellationToken>>,
     /// breakdown 结果缓存（30s）
@@ -286,6 +305,10 @@ impl SessionRuntime {
             running: true,
             run_id: Some(run_id.into()),
             terminal: None,
+            clock: Some(RunClock {
+                started_at: chrono::Utc::now().to_rfc3339(),
+                instant: std::time::Instant::now(),
+            }),
         };
         true
     }
@@ -396,6 +419,7 @@ impl SessionRuntime {
             asks: Mutex::new(HashMap::new()),
             text_ask_block: Mutex::new(None),
             stream: Arc::new(ThrottledStream::new()),
+            stream_emission_lock: Mutex::new(()),
             active_cancel: Mutex::new(None),
             breakdown_cache: Mutex::new(None),
             paths_cache: Mutex::new(None),
@@ -834,6 +858,7 @@ mod tests {
             error: None,
             error_kind: None,
             history_save: Some(serde_json::json!({"history_status":"warned"})),
+            task_run: None,
         });
         let ended = serde_json::to_value(h.rt.run_snapshot()).unwrap();
         assert_eq!(ended["running"], false);
@@ -1220,6 +1245,13 @@ mod tests {
     async fn activity_run_panic_before_drive_cleans_waiters_and_cancels_children() {
         let h = harness();
         activity_begin(&h, "panic-run");
+        h.rt.run_snapshot
+            .lock()
+            .unwrap()
+            .clock
+            .as_mut()
+            .unwrap()
+            .instant = std::time::Instant::now() - std::time::Duration::from_secs(120);
         activity_emit(
             &h,
             "sub:spawn",
@@ -1256,6 +1288,14 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(!h.rt.run_snapshot().running);
+        let terminal = h.rt.run_snapshot().terminal.unwrap();
+        let display = terminal.task_run.expect("panic 收尾也应保留真实时长");
+        assert!(display.duration_ms >= 120_000);
+        assert!(matches!(
+            display.status,
+            crate::core::sessions::run_display::RunDisplayStatus::Error
+        ));
+        assert!(display.final_answer.is_none());
         assert!(h.rt.asks.lock().unwrap().is_empty());
         assert!(cancel.is_cancelled());
         let snapshot = h.core.activity.snapshot();

@@ -14,17 +14,22 @@ export interface TranscriptEntry {
 // Immutable historical members keep the same projected item during live updates.
 const cache = new WeakMap<AssistantItem, TranscriptEntry>();
 
+/** 思考段恒可入组（docs/chat-and-interface 5.2.x：连续思考 + 工具折叠为一行）。
+ *  正文（非空白）、子代理卡等一律不可——它们是必须看见的分隔。 */
 function safeToolOnly(item: AssistantItem): boolean {
-  return !item.streaming && item.timeline.some(seg => seg.kind === "tool")
-    && item.timeline.every(seg => seg.kind === "text" ? !seg.text.trim()
-      : seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]));
+  return !item.streaming && item.timeline.some(seg => seg.kind === "tool" || seg.kind === "thinking")
+    && item.timeline.every(seg => seg.kind === "thinking"
+      ? true
+      : seg.kind === "text" ? seg.deferred || !seg.text.trim()
+        : seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]));
 }
 
+/** 尾部可被下一条消息延伸：最后一个可见段是工具（可分组）或思考。 */
 function safeTail(item: AssistantItem): boolean {
   for (let i = item.timeline.length - 1; i >= 0; i--) {
     const seg = item.timeline[i];
-    if (seg.kind === "text" && !seg.text.trim()) continue;
-    return seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]);
+    if (seg.kind === "text" && (seg.deferred || !seg.text.trim())) continue;
+    return seg.kind === "thinking" || (seg.kind === "tool" && canGroupTool(item.toolsMap[seg.callKey]));
   }
   return false;
 }
@@ -66,9 +71,17 @@ export function compactTranscript(items: readonly UiItem[], keys: readonly strin
       entry.item = { ...first, timeline: entry.members.flatMap(member => member.item.timeline),
         toolsMap: Object.assign({}, ...entry.members.map(member => member.item.toolsMap)) };
       entry.origins = {};
+      // 思考段也要记源消息：跨消息组里思考可能来自另一条消息，
+      // 漏了它会让组摘要的定位别名只覆盖工具那几条，滚动定位掉回上一条消息。
+      // 键与 data-output-key 同构（thinking:<摊平后的段下标>），下标按摊平顺序累加。
+      let segIndex = 0;
       for (const member of entry.members) {
         const origin = { key: member.key, sig: itemSig(member.item), createdAt: member.item.createdAt };
         for (const callKey of Object.keys(member.item.toolsMap)) entry.origins[callKey] = origin;
+        for (const seg of member.item.timeline) {
+          if (seg.kind === "thinking") entry.origins[`thinking:${segIndex}`] = origin;
+          segIndex++;
+        }
       }
       cache.set(first, { ...entry });
     }
