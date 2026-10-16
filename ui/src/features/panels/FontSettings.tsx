@@ -84,8 +84,9 @@ export function AppearanceSettings({ draft, patchDraft }: {
           </div>
         </SettingsFormItem>
       </SettingsSection>
-      {/* Each family is followed by its independent size and preview. */}
-      <SettingsSection title={t("settings.fontGroup")}>
+      {/* 三槽各占一行（界面 / 内容 / 代码），行内是「字体族输入 + 字号下拉」加该槽预览。
+          共性说明只在分段标题右侧说一次，见 fontHint。 */}
+      <SettingsSection title={t("settings.fontGroup")} extra={t("settings.fontHint")}>
         <FontSettings />
       </SettingsSection>
     </SettingsForm>
@@ -122,19 +123,144 @@ function persistFontPrefsToBackend(prefs: FontPreferences): Promise<"saved" | "f
   return attempt;
 }
 
-/** 单个字体槽输入项：回车 / 失焦 / 停手 / 卸载四处都提交，值有变化才落盘，附一键恢复默认按钮。
+/** Three independent groups: interface, content, and code. */
+function FontSettings() {
+  const { t } = useTranslation();
+  const applied = useFontPreferences();
+
+  return (
+    <>
+      <FontSlotRow
+        slot="sans"
+        label={t("settings.fontSlotSans")}
+        familyLabel={t("settings.uiFont")}
+        sizeLabel={t("settings.uiFontSize")}
+        appliedFont={applied.sans}
+        appliedLevel={applied.fontSizeSans}
+      />
+      <FontSlotRow
+        slot="content"
+        label={t("settings.fontSlotContent")}
+        familyLabel={t("settings.contentFont")}
+        sizeLabel={t("settings.contentFontSize")}
+        appliedFont={applied.content}
+        appliedLevel={applied.fontSizeContent}
+      />
+      <FontSlotRow
+        slot="mono"
+        label={t("settings.fontSlotMono")}
+        familyLabel={t("settings.monoFont")}
+        sizeLabel={t("settings.monoFontSize")}
+        appliedFont={applied.mono}
+        appliedLevel={applied.fontSizeMono}
+      />
+    </>
+  );
+}
+
+/** 单槽合并行：左侧短标签，右上行内「字体族 + 字号 + 行末重置」，下方一行预览。
  *
- * 为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
- * 「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
- * 界面看上去就是「字体没保存」。 */
-function FontField({ slot, label, hint, settingId, appliedFont, appliedLevel }: {
+ *  为什么一槽只占一行（而不是字体族、字号各一行）：同槽两者原本各带一个预览行，而两个预览样本
+ *  完全相同（同字体族 + 同字号），纯属重复；控件同属一槽，合并后预览与控件也归到同一行，行数 6 → 3。
+ *  两个控件各自保留独立的锚点（ui.font_<slot> / ui.font_size_<slot>），设置搜索仍能分别定位。
+ *
+ *  重置只有一个按钮（行末）：字体族与字号同属一槽，分开两个按钮反而让人猜哪个管哪个。
+ *  点击后本槽的字体族清空（回系统默认）、字号回默认档，一次提交写全六字段。 */
+function FontSlotRow({ slot, label, familyLabel, sizeLabel, appliedFont, appliedLevel }: {
+  slot: FontSlot;
+  /** 行标签：只说清是哪一槽（界面 / 内容 / 代码） */
+  label: string;
+  /** 字体项的无障碍名（「界面字体」）：与所在行的短标签区分 */
+  familyLabel: string;
+  /** 字号项的无障碍名（「界面字号」）：与所在行的短标签区分 */
+  sizeLabel: string;
+  appliedFont: string;
+  appliedLevel: FontSizeLevel;
+}) {
+  const { t } = useTranslation();
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const saveGeneration = useRef(0);
+  /** 行末重置按钮的无障碍名：说清它一次清两样（字体族 + 字号），避免与旧的单一重置混淆 */
+  const resetLabel = `${t("settings.fontReset")}・${familyLabel} + ${sizeLabel}`;
+
+  function commit(next: FontPreferences) {
+    const generation = ++saveGeneration.current;
+    setRetrying(true);
+    void persistFontPrefsToBackend(next).then((saved) => {
+      if (generation !== saveGeneration.current) return;
+      setSaveFailed(saved === "failed");
+      setRetrying(false);
+    });
+  }
+
+  /** 整槽重置：字体族清空 + 字号回默认档，只提交一次**。
+   *  commitFontSlot / commitFontSizeSlot 都基于 readStoredFonts() 叠加（各自返回全量六字段），
+   *  两者串行执行后只提交最终结果：既保留各自的净化与去重逻辑，也不会打两次请求。
+   *  注意不能写成提交两次——那会在同一个串行队列里连发两轮，界面无必要地闪两次保存态。 */
+  function resetSlot() {
+    commitFontSlot(slot, "");
+    commit(commitFontSizeSlot(slot, DEFAULT_FONT_SIZE_LEVEL[slot]));
+  }
+
+  return (
+    <SettingsFormItem className="settings-font-row" label={label}>
+      <div className="settings-font-pair">
+        <FontFamilyControl
+          slot={slot}
+          label={familyLabel}
+          settingId={`ui.font_${slot}`}
+          appliedFont={appliedFont}
+        />
+        <FontSizeControl
+          slot={slot}
+          label={sizeLabel}
+          settingId={`ui.font_size_${slot}`}
+          appliedLevel={appliedLevel}
+        />
+        <Button
+          className="settings-font-reset"
+          icon={<UndoOutlined />}
+          title={t("settings.fontReset")}
+          aria-label={resetLabel}
+          onClick={() => resetSlot()}
+        />
+        {saveFailed && (
+          <Button
+            size="small"
+            loading={retrying}
+            onClick={() => commit(readStoredFonts())}
+            aria-label={`${t("common.retry")}・${resetLabel}`}
+          >
+            {t("common.retry")}
+          </Button>
+        )}
+        {/* 该槽预览样本：字体族与字号都取本槽已生效值 */}
+        <div
+          className="font-preview-row"
+          style={{
+            fontFamily: previewFontFamily(appliedFont, slot),
+            fontSize: `${levelToPx(appliedLevel)}px`,
+          }}
+        >
+          {PREVIEW_SAMPLE}
+        </div>
+      </div>
+    </SettingsFormItem>
+  );
+}
+
+/** 单槽字体族输入控件：回车 / 失焦 / 停手 / 卸载四处都提交，值有变化才落盘，附一键恢复默认按钮。
+ *
+ *  为什么要四处提交（2026-09-19 修缺陷）：原来只有「回车或失焦」两个时机，而提交前有个
+ *  「没变化就 return」的短路——输入后没碰回车、也没点别处（直接关设置页/关窗口），就等于什么都没发生，
+ *  界面看上去就是「字体没保存」。 */
+function FontFamilyControl({ slot, label, settingId, appliedFont }: {
   slot: FontSlot;
   label: string;
-  hint: string;
   /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
   settingId: string;
   appliedFont: string;
-  appliedLevel: FontSizeLevel;
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(() => readStoredFonts()[slot]);
@@ -211,130 +337,52 @@ function FontField({ slot, label, hint, settingId, appliedFont, appliedLevel }: 
   }, [slot]);
 
   return (
-    <SettingsFormItem className="settings-font-row" label={label} settingDescription={hint}>
-      {/* 字体槽占用半行宽度（不参与宽度三档，见 WIDTH_EXEMPT_ITEM_IDS）。 */}
-      <div className="setting-anchor settings-font-control" data-setting-id={settingId}>
-        <Input
-          value={draft}
-          placeholder={DEFAULT_FONT_LEADS[slot]}
-          onChange={(e) => {
-            edited.current = true;
-            setDraft(e.target.value);
-            scheduleIdleCommit();
-          }}
-          onCompositionStart={() => {
-            composing.current = true;
-          }}
-          onCompositionEnd={() => {
-            composing.current = false;
-            scheduleIdleCommit();
-          }}
-          onPressEnter={() => commit(draft)}
-          onBlur={() => {
-            // 失焦时先把组合态强制结束：compositionend 漏发（某些输入法/粘贴场景）时
-            // 不能让 composing 永久为真——否则回车、停手、卸载三条提交路径全被挡住
-            composing.current = false;
-            commit(draft, false);
-            // 失焦回填：显示值与存储对齐（已存值 / 刚净化后的值），避免两者漂移
-            setDraft(readStoredFonts()[slot]);
-          }}
-          suffix={
-            <Button
-              type="text"  title={t("settings.fontReset")}
-              aria-label={`${t("settings.fontReset")}・${label}`}
-              icon={<UndoOutlined />}
-              onClick={() => { edited.current = true; setDraft(""); commit(""); }}
-            />
-          }
-        />
-        {saveFailed && <Button size="small" loading={retrying}
-          onClick={() => savePreferences(readStoredFonts())}
-          aria-label={`${t("common.retry")}・${label}`}>
-          {t("common.retry")}
-        </Button>}
-        <div className="font-preview-row" style={{
-          fontFamily: previewFontFamily(appliedFont, slot),
-          fontSize: `${levelToPx(appliedLevel)}px`,
-        }}>
-          {PREVIEW_SAMPLE}
-        </div>
-      </div>
-    </SettingsFormItem>
-  );
-}
-
-/** Three independent groups: interface, content, and code. */
-function FontSettings() {
-  const { t } = useTranslation();
-  const applied = useFontPreferences();
-
-  return (
-    <>
-      {/* 界面字体（sans）—— 字体族输入框 */}
-      <FontField
-        slot="sans"
-        label={t("settings.uiFont")}
-        hint={t("settings.fontHint")}
-        settingId="ui.font_sans"
-        appliedFont={applied.sans}
-        appliedLevel={applied.fontSizeSans}
+    /* 字体族与字号同占一行，锚点各挂各的容器；重置入口在行末（FontSlotRow），不在框内 */
+    <div className="setting-anchor settings-font-control" data-setting-id={settingId}>
+      <Input
+        value={draft}
+        placeholder={DEFAULT_FONT_LEADS[slot]}
+        onChange={(e) => {
+          edited.current = true;
+          setDraft(e.target.value);
+          scheduleIdleCommit();
+        }}
+        onCompositionStart={() => {
+          composing.current = true;
+        }}
+        onCompositionEnd={() => {
+          composing.current = false;
+          scheduleIdleCommit();
+        }}
+        onPressEnter={() => commit(draft)}
+        onBlur={() => {
+          // 失焦时先把组合态强制结束：compositionend 漏发（某些输入法/粘贴场景）时
+          // 不能让 composing 永久为真——否则回车、停手、卸载三条提交路径全被挡住
+          composing.current = false;
+          commit(draft, false);
+          // 失焦回填：显示值与存储对齐（已存值 / 刚净化后的值），避免两者漂移
+          setDraft(readStoredFonts()[slot]);
+        }}
       />
-      {/* 界面字号（sans）—— 紧贴界面字体下方的字号 Select，v2 布局 */}
-      <FontSizeField
-        slot="sans"
-        label={t("settings.uiFontSize")}
-        hint={t("settings.fontSizeHint")}
-        settingId="ui.font_size_sans"
-        appliedLevel={applied.fontSizeSans}
-        appliedFont={applied.sans}
-      />
-      <FontField
-        slot="content"
-        label={t("settings.contentFont")}
-        hint={t("settings.fontHint")}
-        settingId="ui.font_content"
-        appliedFont={applied.content}
-        appliedLevel={applied.fontSizeContent}
-      />
-      <FontSizeField
-        slot="content"
-        label={t("settings.contentFontSize")}
-        hint={t("settings.fontSizeHint")}
-        settingId="ui.font_size_content"
-        appliedLevel={applied.fontSizeContent}
-        appliedFont={applied.content}
-      />
-      {/* 代码字体（mono）—— 字体族输入框 */}
-      <FontField
-        slot="mono"
-        label={t("settings.monoFont")}
-        hint={t("settings.fontHint")}
-        settingId="ui.font_mono"
-        appliedFont={applied.mono}
-        appliedLevel={applied.fontSizeMono}
-      />
-      {/* 代码字号（mono）—— 紧贴代码字体下方的字号 Select */}
-      <FontSizeField
-        slot="mono"
-        label={t("settings.monoFontSize")}
-        hint={t("settings.fontSizeHint")}
-        settingId="ui.font_size_mono"
-        appliedLevel={applied.fontSizeMono}
-        appliedFont={applied.mono}
-      />
-    </>
+      {saveFailed && <Button size="small" loading={retrying}
+        onClick={() => savePreferences(readStoredFonts())}
+        aria-label={`${t("common.retry")}・${label}`}>
+        {t("common.retry")}
+      </Button>}
+    </div>
   );
 }
 
 /** Independent size slot: integer 12–20px choices, serialized with all families.
- *  改即提交：不需要“停手 / 回车 / 失焦”三处提交（控件本身是枚举选择、不存在部分输入态）。 */
-function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont }: {
+ *  改即提交：不需要“停手 / 回车 / 失焦”三处提交（控件本身是枚举选择、不存在部分输入态）。
+ *  重置入口在行末（FontSlotRow），因此这里不挂 size="small" 的折叠箭头按钮：
+ *  它会让 Select 比同行 Input 矮一截、两条下边线对不齐。 */
+function FontSizeControl({ slot, label, settingId, appliedLevel }: {
   slot: FontSlot;
   label: string;
-  hint: string;
+  /** 设置项锚点 id（= 注册表 SETTINGS_ITEMS.id）：搜索命中定位与临时高亮靠它查 */
   settingId: string;
   appliedLevel: FontSizeLevel;
-  appliedFont: string;
 }) {
   const { t } = useTranslation();
   const [saveFailed, setSaveFailed] = useState(false);
@@ -352,55 +400,29 @@ function FontSizeField({ slot, label, hint, settingId, appliedLevel, appliedFont
   }
 
   return (
-    <SettingsFormItem className="settings-font-row" label={label} settingDescription={hint}>
-      <div className="setting-anchor settings-font-size-control" data-setting-id={settingId}>
-        <Select<FontSizeLevel>
-          className="settings-font-size-select"
-          value={appliedLevel}
-          onChange={(v) => {
-            const next = commitFontSizeSlot(slot, v);
-            commit(next);
+    <div className="setting-anchor settings-font-size-control" data-setting-id={settingId}>
+      <Select<FontSizeLevel>
+        className="settings-font-size-select"
+        value={appliedLevel}
+        onChange={(v) => {
+          const next = commitFontSizeSlot(slot, v);
+          commit(next);
+        }}
+        options={FONT_SIZE_LEVELS.map((lvl) => ({ value: lvl, label: `${lvl}px` }))}
+      />
+      {saveFailed && (
+        <Button
+          size="small"
+          loading={retrying}
+          onClick={() => {
+            const stored = readStoredFonts();
+            commit(stored);
           }}
-          options={FONT_SIZE_LEVELS.map((lvl) => ({ value: lvl, label: `${lvl}px` }))}
-          suffixIcon={
-            <Button
-              type="text"
-              size="small"
-              title={t("settings.fontReset")}
-              aria-label={`${t("settings.fontReset")}・${label}`}
-              icon={<UndoOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                const next = commitFontSizeSlot(slot, DEFAULT_FONT_SIZE_LEVEL[slot]);
-                commit(next);
-              }}
-            />
-          }
-        />
-        {saveFailed && (
-          <Button
-            size="small"
-            loading={retrying}
-            onClick={() => {
-              const stored = readStoredFonts();
-              commit(stored);
-            }}
-            aria-label={`${t("common.retry")}・${label}`}
-          >
-            {t("common.retry")}
-          </Button>
-        )}
-        {/* 该槽预览样本：字号本档、字体族取已生效值 */}
-        <div
-          className="font-preview-row"
-          style={{
-            fontFamily: previewFontFamily(appliedFont, slot),
-            fontSize: `${levelToPx(appliedLevel)}px`,
-          }}
+          aria-label={`${t("common.retry")}・${label}`}
         >
-          {PREVIEW_SAMPLE}
-        </div>
-      </div>
-    </SettingsFormItem>
+          {t("common.retry")}
+        </Button>
+      )}
+    </div>
   );
 }

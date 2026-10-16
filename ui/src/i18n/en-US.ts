@@ -133,8 +133,12 @@ export default {
     // Batch ④: the placeholder used to borrow composer.effortDefault (cross-segment key); now its own key (same value)
     aiLanguagePlaceholder: "Default", compactThreshold: "Auto-compact threshold", compactTimeout: "Compact request timeout (seconds, 30–3600)",
     theme: "Theme", themeSystem: "Follow system", themeLight: "Light", themeDark: "Dark",
-    fontGroup: "Fonts", uiFont: "UI font", contentFont: "Content font", monoFont: "Code font", fontHint: "Font families installed on this machine, comma-separated; empty = default, applies on Enter",
-    uiFontSize: "UI font size", contentFontSize: "Content font size", monoFontSize: "Code font size", fontSizeHint: "12–20px, set independently; defaults: UI 14px, content 14px, code 12px. Applies immediately",
+    fontGroup: "Fonts", uiFont: "UI font", contentFont: "Content font", monoFont: "Code font",
+    // Short per-row labels (each row already holds both the family input and the size select);
+    // the six item display names stay for search, accessible names and registry labelKeys.
+    fontSlotSans: "UI", fontSlotContent: "Content", fontSlotMono: "Code",
+    fontHint: "Locally installed font names, comma-separated; empty uses the default. Changes apply immediately",
+    uiFontSize: "UI font size", contentFontSize: "Content font size", monoFontSize: "Code font size",
     fontReset: "Reset to default",
     approvalEnabled: "Start new sessions in Plan mode", approvalEnabledHint: "On: new sessions start in Plan mode. Off: new sessions start in Full Access mode. Existing sessions are unaffected.", confirmOutside: "Confirm writes creating paths outside workspace",
     confirmPush: "Confirm before git push", autoConfirm: "Auto-confirm recommended option after 5 minutes", autoConfirmHint: "Checked: approvals auto-approve after 5 minutes without response; unchecked: wait for your choice indefinitely",
