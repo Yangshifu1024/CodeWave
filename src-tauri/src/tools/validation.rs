@@ -235,6 +235,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -248,6 +249,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let json = roots.workspace.join("a.json");
@@ -290,6 +292,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -321,6 +324,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = run(

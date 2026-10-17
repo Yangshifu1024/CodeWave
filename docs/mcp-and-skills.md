@@ -25,9 +25,31 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 
 作用域先合并，再按 `enabled` 过滤连接项：项目同名配置即使 `enabled:false` 仍覆盖全局项，不会回落连接全局服务器。
 
+### 启动信任
+
+stdio 启动本机进程和 streamable-http 建立远端连接都需要用户先在服务器卡片审阅并选择「批准启动」（本次）或「记住此版本」。两者都绑定 `(scope, project_id, name, canonical_config_path, configuration_hash)`；记住许可另绑定全局数据 profile 和权威 revision，存于独立系统钥匙串。配置文件中的 enabled/read_only/always_allow 不授予启动权限，也不能自行声明 trusted。本次批准不新增持久记录，也不撤销已有记住许可；需要降为本次时先撤销原许可。确认框显示宿主返回的快照、来源、版本和启动摘要（command/args/cwd 或脱敏 URL）；env/header 仅展示键名，已识别的敏感参数和 URL 凭据隐藏。
+
+自动 warm、显式连接/重连、保存后的差量应用及直接 ensure 共用启动门；许可不存在时保留停止状态且不产生进程或连接。`mcp_prepare_launch` 发出五分钟有效、总量上限 64 的宿主票据，绑定用途、来源、完整配置及权威 revision；准备不启动进程。`mcp_confirm_launch` 消费票据，错误、过期或重复确认拒绝，配置/项目变化要求重新审阅。模型 ask、auto_confirm、FullAccess 和 probe 成功都不创建记住许可。旧 bool IPC 只能新增本次许可，撤销仍会撤销匹配版本的持久记录。
+
+持久许可在启动、Ready、工具捕获及最终 dispatch 读取当前权威，使用 guard→CONFIG/manager 短锁顺序，原生钥匙串等待不持 CONFIG/manager 锁。配置保存先撤销受影响版本并保留权威 barrier，再在 CONFIG 锁内二次校验文件版本后写入；冲突可以保守失去许可，但不覆盖较新配置。删除、禁用或修改条目均使旧许可失效，恢复旧文件也不会恢复已撤销许可；不变条目和其他来源保留授权。没有外部文件监控；持久许可在准入重验时检查当前文件，外部编辑的本次许可仍在后续重读/差量接纳时检查。
+
+「撤销启动授权」清除正式许可、待确认及活跃 probe，撤下工具并取消握手/服务；已消费但尚未最终接纳的旧批准票据同样失效。持久撤销写入 tombstone，最终提交点再次撤销期间新装入的本次许可。原生写入结果不明时显示「检查授权结果」，该入口不因同一资源的许可状态/revision 刷新而消失。`mcp_launch_operation` 读取原生回执，不重新写入批准；确认原撤销已提交时，只完成一次其本地清理，重复查询不会撤销用户之后新批准的本次许可。钥匙串不可用不自动降级成本次许可；用户仍可显式重新批准本次。「断开」只释放连接，不撤销许可。「始终允许」仅热更新相同目标的政策及对应权威版本，不将它当作新的启动批准。
+
+其它实例在新 admission 时直接检查权威；后台每两秒发起存活许可检查，实际回收延迟还包括钥匙串等待、候选数量与服务关闭，不能承诺固定两秒内停止。已接纳调用、在途握手和服务自主副作用无法追溯回滚；普通配置切换仍保留原 peer 最多五秒排空且不重放。独立管理器/真实 Node fixture 已覆盖恢复、最终调用拒绝和握手晚到；这不代替真实钥匙串、OS 多进程、Windows/Linux 和 GUI 验收。项目提示和技能使用下述独立的指令资源准入，不由 MCP 启动许可代替。
+
+### 持久权威事务与准入
+
+[core/trust.rs](../src-tauri/src/core/trust.rs) 提供版本绑定的权威存储和 admission guard；[host/trust.rs](../src-tauri/src/host/trust.rs) 使用独立 `codewave.yangshifu.xyz.trust.v1` 钥匙串 service，模型凭据账户不能跨 service 读取。桌面在 `lib.rs` 注入此 backend；[manager_authority.rs](../src-tauri/src/mcp/manager_authority.rs) 负责 MCP 准入，[review_service.rs](../src-tauri/src/mcp/review_service.rs) 负责宿主票据确认和回执，均不新增 core→host 依赖。
+
+账户摘要绑定 canonical 全局数据目录与资源类别、用途、canonical 来源、owner 和名字；不同 profile 不共用权威账户，同一 profile 的 canonical 别名共用记录与锁。版本统一接受裸 SHA-256 或来源审计的 `sha256:` 格式并归一。每资源小记录保存 schema、版本、decision、revision 和 operation id；撤销保留 tombstone，CAS 冲突要求重新审阅，同一操作仅在原前置版本与内容一致时重放回执。写入后回读核验，不将系统钥匙串调用返回成功等同于提交确认。
+
+事务在 blocking pool 中持有进程内锁与 `<data_dir>/trust/authority.lock` 的 [OS advisory lock](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock)。锁文件永不作为授权数据。总等待预算为 5 秒；原生调用超时或取消后，后台任务仍持锁直到结束，写入可能已发生时返回 `TrustOutcomeUnknown`，不能自动改用新操作再次授权。`AuthorityGuard` 供后续调用点在短锁内登记 admission 后释放，不得持有它等待用户、网络或长运行进程。NoEntry、不可用、损坏、拒绝、冲突、超时及结果不明分别处理，无 JSON 或明文回退。
+
+`compare_exchange_guard` 在提交后保留事务锁供短期准入登记；`revoke_batch` 在配置更新前撤销旧记录并保持 barrier，不能在撤销与文件 CAS 之间释放。相同 OS 用户绕过本应用直接调用钥匙串、替换锁文件或操纵外部进程不属于 OS 沙箱保证。真实钥匙串与三平台锁行为仍待分别验收。
+
 ## 2. 连接池、运行态与事件
 
-[manager.rs](../src-tauri/src/mcp/manager.rs) 的 pool key 是 `(scope, project_id, name, canonical_config_path)`（路径身份只在宿主内部使用）；会话持有其可见 server 集合。warm 先登记引用再并行连接，IPC 返回只表示接收请求，不表示所有 server 已 Ready。
+[manager.rs](../src-tauri/src/mcp/manager.rs) 的 pool key 是 `(scope, project_id, name, canonical_config_path)`；会话持有其可见 server 集合，设置页读取来源路径和启动许可版本用于确认。warm 先登记引用再为已获许可的配置并行连接，IPC 返回只表示接收请求，不表示所有 server 已 Ready。
 
 状态为 Starting / Ready / Stopped / Evicted / Error；错误序列化形态与前端类型保持一致。`mcp:status` 是增量通知，载荷含 scope/name、工具数量与详情、过滤数、pid/error/note；恢复或发现丢事件时用 snapshot 取权威快照，不能靠最后一个事件重建整个池。
 
@@ -37,13 +59,15 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 - [process.rs](../src-tauri/src/mcp/process.rs) 在 Unix 使用进程组，Windows 使用 Job Object/隐藏窗口与退出清理；不能只杀启动器而留下 server 子进程。
 - test 使用当前条目草稿的独立临时连接，不读磁盘同名配置，不改变正式池/工具/pid；详情见下节。
 
-当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
+当前 IPC 为 `mcp_list_config`、`mcp_save_config`、`mcp_set_launch_trust`、`mcp_prepare_launch`、`mcp_confirm_launch`、`mcp_launch_operation`、`mcp_discard_launch_review`、`mcp_connect`、`mcp_disconnect`、`mcp_reconnect`、`mcp_prepare_test`、`mcp_test`、`mcp_snapshot`，入口见[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。旧 get_mcp_config/save_mcp_config/connect_mcp/mcp_status 适配已移除，不再作为迁移接口维护。
 
 保存通过同一提交锁协调文件版本检查、原子写与完整会话可见集差量接纳。`mcp_list_config` 返回不含原文的 `version`；`mcp_save_config` 必须回传 `expected_version`，冲突时保留草稿并要求重新读取。格式化/键序变化不重启连接，项目修改只触及真正读取该配置路径的 runtime；同项目 id 不同路径保持独立。全局变更不会重建被项目同名项覆盖的连接，disabled 项目覆盖继续遮蔽全局项。
 
 保存回执的 `saved / issues / version / apply_revision / affected_servers` 表示文件已保存、差量计划已接纳，**不代表连接 Ready**。连接失败保留新配置并在目标条目显示 Error，其它 key 不受影响；UI 保存后只读取 snapshot，不再额外全量 connect。普通保存不调用 disconnect_all，该接口仅用于明确的全停。受影响 key 的已发出调用保留原 peer，最多排空 5 秒后取消；外部副作用可能已经发生，不自动重放，也不宣称取消能撤销远端操作。
 
 ### 当前草稿测试
+
+测试先经 `mcp_prepare_test` 取得绑定来源、项目和完整草稿版本的单次票据；准备不执行命令或网络操作。用户审阅启动摘要并确认后，`mcp_test` 才消费票据建立临时连接。票据五分钟过期，错误配置/项目消费也使其失效；待确认与正在运行的 probe 合计最多 64。测试不继承正式许可，也不授予正式许可。取消确认或编辑草稿后不发起测试；已确认开始的测试仍按下述预算回收。
 
 编辑器通过与保存共用的 `serializeMcpServer` 发送 `name + config`，包含 args（含空串/空格）、env/headers 多行原值、cwd、显式 transport、timeout、过滤、信任标记和未知字段。空名、重名、重复键、非法 timeout 在启动前阻断；不以静默丢字段使非法草稿看似有效。新建/重命名/disabled 条目无需保存即可测试；project 仅校验当前项目上下文，不读取合并后的同名 global 条目。
 
@@ -55,7 +79,7 @@ server 名允许较宽字符；模型函数名归一为合法字符，碰撞加 
 
 工具定义只来自当前会话可见、Ready、过滤后允许的条目。MCP schema 参与上下文估算，不能只算内置工具。server 的 tools/list_changed 通知仅标 dirty，随后取定义时刷新，不在通知回调里并发改正在消费的集合。
 
-每次 LLM step 通过 `tool_snapshot_for` 在同一管理器锁内取得模型工具定义及私有 `CallBinding`，票据含原始工具、PoolKey/来源、连接/config/policy/schema 代数；不发送给模型。上下文估算调用 `tool_defs_for` 不覆盖模型请求的票据。schema 可在不同 step 变化，run 级 system_frozen 仍只冻结系统提示。
+每次 LLM step 通过 `tool_snapshot_for` 逐 server 在权威 guard 与管理器短锁内同时捕获工具与私有 `CallBinding`，汇合后再校验会话、函数映射和连接/config/policy/schema 代数；票据不发送给模型。上下文估算调用 `tool_defs_for` 不覆盖模型请求的票据。schema 可在不同 step 变化，run 级 system_frozen 仍只冻结系统提示。
 
 审批与真正 dispatch 使用同一票据。dispatch 在锁内重验会话可见性、来源/连接/配置/政策/schema 与函数反向映射，再取得原 peer 并登记在途调用；已变更时明确要求重新发起，不能将旧批准重定向到新 endpoint。read_only/always_allow 无人工审批调用也同样检查。dirty 只被可见会话消费；刷新若晚于连接代数变化则丢弃，工具集合发生变化会推进 schema 代数。
 
@@ -81,15 +105,35 @@ MCP server 的 is_error 返回工具失败；文本和图片进入已有内容�
 
 `data_dir` 始终是全局目录；项目路径单独走 project_dir，不能再混为一谈。extra_roots 不自动扫描技能。列表展示顺序与覆盖优先级不同，不可按“列表排在前面”判断生效来源。内置 preview 也允许被同名自定义技能覆盖；同名时应核对实际来源。
 
-设置页可删除项目/全局托管技能，不删内置与 `.agents/.claude` 兼容目录。删除路径须在 canonical 后仍位于允许的托管根内；禁用与删除是两件事，不能因为技能已禁用就丢掉安全定位所需的信息。
+### 来源、版本与覆盖审计
 
-### 缓存的已知限制
+[catalog.rs](../src-tauri/src/skills/catalog.rs) 一次扫描同时生成最高优先项与管理候选目录。`list_skills/reload_skills` 在启用的最高项上再过滤指令许可；`get_skill` 是详情数据预览，不产生准入。`inspect_skills` 返回全部合法候选、按名禁用状态、缺失来源的禁用名和 IO/解析诊断。最高项排在候选首位并标 selected，禁用或最高项未许可均不回落低层技能；设置页可展开被覆盖来源，禁用后重开仍可管理。启用开关只控制发现，不代替下方指令资源许可。
 
-SkillIndex 的 get/list 缓存 TTL 为 10 秒，key 只有 workspace/project，未包含 disabled 列表。当前 toggle_skill 与 save_config 不主动 invalidate；因此禁用已加载技能可能在 TTL 内仍可被取得。reload/delete 会失效缓存。不能把“设置已禁用”写成即时撤销保证；[tools/skill.rs](../src-tauri/src/tools/skill.rs) 中 `disabled_after_load_should_invalidate_within_ttl` 仍是 ignored 探针，需修复缓存契约后启用。
+[resources.rs](../src-tauri/src/resources.rs) 的来源描述包含类别、canonical 身份和 `sha256:` 内容版本。文件版本来自实际读取的原始字节，CRLF 变化也产生新版本；不是 mtime。管理审计与详情预览可复用缓存；实际指令索引和 `skill` 正文使用新鲜同源快照，`ToolOutcome.data.resource` 标明本次真正加载的版本。来源类别描述发现位置，不证明作者可信，也不授予执行权限。
+
+同一 canonical 文件重复扫描时只保留最高优先级来源，即使无 frontmatter、别名目录会产生不同 fallback 名也只保留最高来源的名字。同层同名冲突按规范化路径、再按原始路径稳定排序，最后一项胜出并提供诊断；这取代原来未定义的 read_dir 顺序。无效 YAML、非 UTF-8、断链及读取错误可见，普通无 SKILL.md 子目录不算错误。
+
+设置页仅允许删除当前最高且可删的项目/全局托管来源，不删 builtin、兼容来源、链接条目或链接技能根。请求必须携带预览的来源身份和内容版本；后端在共享索引锁内重扫、核对当前最高项、重读字节，并复验 canonical 根、目标和链接状态。根级单文件 `skills/SKILL.md` 只删文件，目录技能则删除其目录及附属内容，不能删除整个 skills 根。成功后重新审计，显示真实下层回退；按名禁用状态保留。外部进程仍可能在最终路径检查后换链，这不是 OS 级原子删除或沙箱。
+
+### 缓存与禁用生效
+
+SkillIndex 的 get/list/audit 缓存 TTL 为 10 秒；结构化 key 包含 workspace、全局 data_dir、project_dir 和排序去重后的 disabled 集。配置禁用/重新启用发布后，下一次 get/list/audit 不能命中旧政策的缓存，不必等待 TTL 或依赖某个配置入口主动 invalidate；reload/delete 仍强制失效。不同全局数据目录和项目作用域不会串缓存。显式提供的已关闭会话返回错误，不回落全局来源。[tools/skill.rs](../src-tauri/src/tools/skill.rs) 的 `disabled_after_load_should_invalidate_within_ttl` 已启用，覆盖加载后禁用及重新启用。已进入运行历史/冻结系统提示的技能内容不会因此从模型记忆中撤回；这里保证后续获取拒绝，不承诺即时撤销在途步骤。
 
 ## 5. 技能加载、询问规范与输入触发
 
-模型通过 `skill(name, args)` 按需加载正文，返回 `<skill-loaded>` 和隔离的 caller-context；缺失/禁用返回 E_SKILL_NOT_FOUND 并给出可用名称。技能是提示知识，不能拓宽工具集合、批准范围或文件权限；当前没有随正文附送完整附属文件清单。
+### 指令资源准入
+
+[instruction_resources.rs](../src-tauri/src/core/instruction_resources.rs) 将项目四种指令文件（CODEWAVE.md、AGENTS.md、CLAUDE.md、claude.md）、CODEGRAPH、实际选中的 lessons、记忆索引和技能统一为 collect → authorize → render。指令入口只登记大写 AGENTS.md，不单独兼容 agents.md；大小写不敏感文件系统仍按原生路径规则解析，不额外强制区分大小写。来源快照同时保存 raw SHA-256 和实际投影；[prompt.rs](../src-tauri/src/core/prompt.rs) 只渲染调用方已准入的文本，不重读文件。技能确认展示同次解析的名称/description/whenToUse 索引和正文，记忆的版本与描述来自同一份原始字节。内置资源静态信任；项目/全局/兼容目录位置、文件写入成功、FullAccess、模型 ask 或 auto_confirm 都不授权外部内容。受保护设置中的 custom_prompt 继续按配置提交器管理。
+
+设置「技能」页中的「指令资源许可」展示来源、版本、当前许可和活动运行已使用版本。选择「本次会话允许」只在本进程当前根会话及其子代理生效，不串其他会话或计划任务，不新增/撤销持久记录；没有当前会话时不能设置临时许可。「记住此版本」绑定项目/工作区、来源、用途、内容版本和全局 profile，经独立权威存储 CAS；跨项目不继承。撤销阻止后续准入，旧未消费或待提交批准票据不能复活。确认只提交宿主五分钟单用票据，不提交任意 path/body/trusted 作为权威；变更内容、切会话、过期及重复确认拒绝。未知结果检查原操作，不重新写入批准；已确认撤销只清理一次本地许可。
+
+主会话、子代理和任务共用真实请求构建入口。首步冻结 system 文本及使用版本，本 run 内文件变化或撤销不重写已发送的前缀/历史；下一 run 重新准入。活动来源后来删除或禁用，仍显示其冻结使用版本，但不提供重新批准不存在来源的按钮。上下文计账在运行时直接估算同一冻结字符串，空闲时使用同一服务重新准入，不授权、不用旧的30秒账单掩盖政策变化。`skill` 每次正文获取重新检查最高项、禁用、来源、内容和当前许可；缺失名称提示也只列已准入技能，并传递取消信号。
+
+原始读取每文件限1 MiB，打开前后拒绝非普通文件；Unix 非阻塞打开后复验，静态FIFO不挂住自动收集。技能目录原始读取预算16 MiB，资源渲染快照16 MiB；项目指令仍截24,000字符，图谱/lessons仍截48,000字符。超限文件不生成截断版冒充全文件版本，诊断保留在设置检查结果。整份原生权威等待预算5秒，首次native错误后其余资源失败关闭，不逐项再等5秒；内置和有效本次许可可继续判断。运行/技能取消传给权威等待；后台尚未返回的原生调用仍持自己的协调锁，不强行释放。
+
+普通 read、@引用、技能详情和审计只是数据读取，不产生提示权限；已经发出的内容和外部进程行为无法追溯撤回。这里是受管资源准入，不是OS沙箱。真实钥匙串、OS多进程、Windows/Linux及GUI验证仍需单列，不以fake backend或本机请求构建回归代替。
+
+模型通过 `skill(name, args)` 按需加载正文，返回 `<skill-loaded>` 和隔离的 caller-context；缺失/禁用返回 E_SKILL_NOT_FOUND 并给出已准入名称，未许可返回 E_RESOURCE_UNTRUSTED，准入期间来源变化返回 E_RESOURCE_CHANGED。技能是提示知识，不能拓宽工具集合、批准范围或文件权限；当前没有随正文附送完整附属文件清单。
 
 宿主在加载结果尾部统一注入 ASK_INTERACTION_NORM，目的是让需要多轮收集信息的技能优先使用真实 ask：每次 1–5 个问题、每题最多 6 个选项、推荐项有明确标识，互斥题显式 single=true，开放问题不硬造选项；ask 不可用才退回文本问答。它是条件提示，不是根据关键词硬编码识别技能，也不要求新增 interaction frontmatter。生成/分析型技能不应被强制先问一轮。预览技能及批准后重问的约束见[计划与审批](./plan-and-approval.md)。
 
@@ -113,12 +157,16 @@ MCP 的重点是行为序列而非截图：两作用域同名覆盖、名称碰�
 
 R08/R11 新增回归覆盖：配置版本冲突/非法输入无写入、等价配置与其它项目/shared key 身份不变、同项目 id 异路径、会话释放与迟到 queued-connect、schema/来源变更票据失效、始终允许合并未知字段、已发出调用有界排空且不重放、probe 在初始化/tools-list 阶段取消后的进程回收、UI 精确草稿载荷/单飞/慢旧快新/关闭重开/保存版本及状态代数隔离。
 
-`v0.11.0` 对应提交的完整三平台 CI 已通过，包含真实 Node stdio/HTTP fixture 与宿主后端测试；各平台结果和跳过边界见[自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本地 Linux 云环境仍缺 GLib/GTK/WebKit/DBus 等系统依赖，不能写成本地完整门禁通过，也不能将 CI/headless 结果写成 GUI 已验收。会话释放进程树回收已有三平台自动证据；初始化/tools-list 期间 probe 取消回收为 Unix 专属测试，Windows 对应边界仍待补验。
+`v0.11.0` 对应提交的完整三平台 CI 已通过，包含真实 Node stdio/HTTP fixture 与宿主后端测试；各平台结果和跳过边界见[自动验证记录](./testing.md#可靠性修复自动验证记录2026-10-12)。本地 Linux 云环境仍缺 GLib/GTK/WebKit/DBus 等系统依赖，不能写成本地完整门禁通过，也不能将 CI 结果写成 GUI 已验收。会话释放进程树回收已有三平台自动证据；初始化/tools-list 期间 probe 取消回收为 Unix 专属测试，Windows 对应边界仍待补验。
 
 手工清单（尚未执行）：
+0. 从无记住记录开始，验证本次批准退出即失效；记住相同来源/版本后重启恢复。分别核对 stdio/HTTP 的宿主摘要与敏感值隐藏，取消确认零启动。撤销 Ready/正在握手的服务，工具消失且进程回收，重启不恢复；修改、禁用、删除以及恢复旧配置后均须重新批准，其他来源授权不变。刷新不覆盖未保存草稿。
 1. A/B 两项目与临时会话共用 global MCP，B 发起长 echo 时保存 A 私有配置；B/global pid 与工具保持不变。
 2. 同一 server 请求等待批准时修改 endpoint 或作用域；批准旧请求应得到“配置已变”，新 endpoint 收到零请求。
 3. 编辑已保存可用命令为不存在的命令，不保存直接测试应失败；取消后正式连接保持原 pid。新建/重命名草稿也能测试。
 4. 慢 probe 期间改字段、关闭重开或切换会话；旧成功不得出现。关闭后按预算检查临时进程归零。
 5. 两编辑器交错保存，以及设置保存与“始终允许”交错；冲突保留草稿，允许补丁不覆盖新 endpoint 或其它字段。
 6. 在应用内分别验 Windows Job Object 与 Unix 进程组回收，尤其是初始化/tools-list 期间取消 probe；三平台会话释放回归通过不等于 Windows 已覆盖 Unix 专属 probe 取消用例。
+7. 技能页展开同名覆盖，核对来源和版本；禁用保存、重开、重新启用及取消草稿，运行状态与草稿提示应分开。删除最高托管来源后看到正确下层，旧版本确认不得删除新来源；切项目的迟到读取/确认不影响新项目。检查长路径与版本在窄窗/缩放/暗色下可读。GUI 与 Windows 根链接/路径行为仍待人工或对应平台验证。
+8. 锁定/拒绝系统钥匙串时，持久许可失败关闭，记住操作显示失败或结果不明；未知结果只能检查原操作，不自动重发批准。本次许可须由用户重新明确批准。检查旧确认在切项目、改内容、关闭页面、重复提交后均不产生许可，撤销与本次批准交错时最终状态一致。
+9. 在测试项目放一个带独特标记的 AGENTS.md、CODEGRAPH.md、lessons、记忆及技能，打开设置「技能 → 指令资源许可」核对实际来源/版本与完整审阅文本。取消不准入；本次允许只影响当前根会话及子代理，另一会话/任务不能沿用；记住后重启相同作用域恢复，换项目不能沿用。运行中改内容或撤销，卡片继续准确显示活动使用的旧版本，下一 run 排除旧许可；来源删除/禁用仍显示活动版本但没有批准按钮。内容变化、切会话、关闭确认及重复提交不产生旧许可。窄窗、缩放、暗色和双语下路径、版本及长文本均可读，失败有可见反馈。

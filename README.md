@@ -109,7 +109,6 @@ pnpm prepr                 # 开 PR 或发版前的完整本地门禁
 | 理解会话与执行 | [会话与项目](./docs/sessions-and-projects.md)、[运行与调度](./docs/runtime-and-scheduling.md)、[子代理](./docs/subagents.md) |
 | 维护权限与工具 | [计划与审批](./docs/plan-and-approval.md)、[工具与安全](./docs/tools-and-safety.md)、[Office/PDF 文档工具](./docs/documents.md) |
 | 配置模型与扩展 | [供应商与网络](./docs/providers-and-network.md)、[MCP 与技能](./docs/mcp-and-skills.md) |
-| 设计 codeg 接入 | [ACP 接入方案](./docs/acp-integration.md)（待批准，未实施） |
 | 维护产品交互 | [设置指南](./docs/settings-guide.md)、[聊天与界面](./docs/chat-and-interface.md) |
 | 交付版本 | [发布、签名与自动更新](./docs/release.md) |
 | 参与协作 | [贡献指南](./CONTRIBUTING.md)、[AI 协作规约](./AGENTS.md)、[安全策略](./SECURITY.md) |

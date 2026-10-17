@@ -10,8 +10,10 @@ pub struct WriteRoots {
     pub workspace: PathBuf,
     /// 「始终允许本项目」放行的额外外部目录。
     pub extra: Vec<PathBuf>,
-    /// 本会话托管数据目录（`.codewave/`）。
+    /// 全局数据目录（恒为全局，不是项目 `.codewave/`）。
     pub data_dir: PathBuf,
+    /// 项目托管目录快照；临时会话为 None，不根据目录名猜测项目作用域。
+    pub project_dir: Option<PathBuf>,
 }
 
 impl WriteRoots {
@@ -21,6 +23,7 @@ impl WriteRoots {
             workspace,
             extra: Vec::new(),
             data_dir,
+            project_dir: None,
         }
     }
 
@@ -149,15 +152,18 @@ pub fn resolve_read(roots: &WriteRoots, raw: &str) -> Result<PathBuf, (String, S
     } else {
         let primary = safe_join(&roots.workspace, raw)?;
         if primary.exists() {
-            return Ok(primary);
-        }
-        for extra in &roots.extra {
-            let cand = safe_join(Path::new(extra), raw)?;
-            if cand.exists() {
-                return Ok(cand);
+            primary
+        } else {
+            let mut selected = primary;
+            for extra in &roots.extra {
+                let cand = safe_join(extra, raw)?;
+                if cand.exists() {
+                    selected = cand;
+                    break;
+                }
             }
+            selected
         }
-        primary
     };
     let canonical = canonical_best_effort(&cand);
     if !inside_any(&canonical, &roots.canonical_roots()) {
@@ -177,7 +183,25 @@ pub fn resolve_write(roots: &WriteRoots, raw: &str) -> Result<PathBuf, (String, 
     if !inside_any(&canonical, &roots.canonical_roots()) {
         return err("E_PATH_OUTSIDE", format!("路径超出可写边界：{raw}"));
     }
+    crate::core::protected_state::check_write(roots, &cand)?;
     Ok(cand)
+}
+
+/// Repeat the real write boundary under the target lock and before publishing.
+/// An alias changing to another allowed file still invalidates the original lock.
+pub(crate) fn revalidate_write(
+    roots: &WriteRoots,
+    requested: &Path,
+    expected: &Path,
+) -> Result<(), (String, String)> {
+    resolve_write(roots, &requested.to_string_lossy())?;
+    if canonical_best_effort(requested) != expected {
+        return Err((
+            "E_PATH_CHANGED".into(),
+            format!("写入目标路径已改变，请重新读取：{}", requested.display()),
+        ));
+    }
+    Ok(())
 }
 
 /// 危险删除守卫：拒绝文件系统根 / 任一工作区根 / 任一 `.git` / 家目录 / 系统目录。
@@ -242,6 +266,7 @@ mod tests {
             workspace: ws_canon,
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap_or_else(|_| dd.path().to_path_buf()),
+            project_dir: None,
         }
     }
 
@@ -327,5 +352,73 @@ mod tests {
                 "E_PATH_OUTSIDE"
             );
         }
+    }
+
+    #[test]
+    fn relative_read_preserves_root_order_and_missing_primary() {
+        let ws = tempfile::tempdir().unwrap();
+        let extra1 = tempfile::tempdir().unwrap();
+        let extra2 = tempfile::tempdir().unwrap();
+        let mut r = roots(&ws);
+        r.extra = vec![extra1.path().to_path_buf(), extra2.path().to_path_buf()];
+        std::fs::write(extra2.path().join("shared.txt"), b"second").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            extra2.path().join("shared.txt")
+        );
+        std::fs::write(extra1.path().join("shared.txt"), b"first").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            extra1.path().join("shared.txt")
+        );
+        std::fs::write(ws.path().join("shared.txt"), b"primary").unwrap();
+        assert_eq!(
+            resolve_read(&r, "shared.txt").unwrap(),
+            r.workspace.join("shared.txt")
+        );
+        assert_eq!(
+            resolve_read(&r, "missing.txt").unwrap(),
+            r.workspace.join("missing.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_read_checks_symlinks_in_primary_and_extra_roots() {
+        let ws = tempfile::tempdir().unwrap();
+        let extra = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(out.path().join("secret.txt"), b"secret").unwrap();
+        let mut r = roots(&ws);
+        r.extra.push(extra.path().to_path_buf());
+        for root in [&r.workspace, &r.extra[0]] {
+            std::os::unix::fs::symlink(out.path(), root.join("leak")).unwrap();
+            assert_eq!(
+                resolve_read(&r, "leak/secret.txt").unwrap_err().0,
+                "E_PATH_OUTSIDE"
+            );
+            if root == &r.workspace {
+                assert_eq!(
+                    resolve_read(&r, "leak/missing.txt").unwrap_err().0,
+                    "E_PATH_OUTSIDE"
+                );
+            }
+            std::fs::remove_file(root.join("leak")).unwrap();
+        }
+        // A link to another allowed root is readable; lexical paths remain unchanged.
+        std::fs::write(extra.path().join("allowed.txt"), b"allowed").unwrap();
+        std::os::unix::fs::symlink(extra.path(), r.workspace.join("allowed")).unwrap();
+        assert_eq!(
+            resolve_read(&r, "allowed/allowed.txt").unwrap(),
+            r.workspace.join("allowed/allowed.txt")
+        );
+        // An existing primary escape must fail, rather than fall through to a safe extra.
+        std::os::unix::fs::symlink(out.path(), r.workspace.join("leak")).unwrap();
+        std::fs::create_dir(extra.path().join("leak")).unwrap();
+        std::fs::write(extra.path().join("leak/secret.txt"), b"safe").unwrap();
+        assert_eq!(
+            resolve_read(&r, "leak/secret.txt").unwrap_err().0,
+            "E_PATH_OUTSIDE"
+        );
     }
 }

@@ -325,6 +325,10 @@ impl Tool for WriteDocumentTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
+        let _effect = match ctx.acquire_effect(std::slice::from_ref(&resolved), false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
         if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
@@ -466,6 +470,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
@@ -483,6 +488,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         }
     }

@@ -288,6 +288,10 @@ impl Tool for ServiceTool {
 
 /// start 动作实现：fence/审批 → 以 bash -lc 启动进程 → 双泵写环形日志 + ticker 节流推送 + 退出监听。
 async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
+    let effect = match ctx.acquire_effect(&[], true) {
+        Ok(guard) => guard,
+        Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+    };
     let Some(command) = args.command.filter(|c| !c.trim().is_empty()) else {
         return ToolOutcome::err("E_ARGS", "start 需要 command");
     };
@@ -340,6 +344,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
                         allow_always: false,
                         kind: crate::safety::approval::ApprovalKind::Once,
                         auto_confirm,
+                        call_key: Some(ctx.call_key.clone()),
                     },
                     &ctx.cancel,
                 )
@@ -354,6 +359,12 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     // 执行 shell 跟随配置 selection（与 command 工具同一拼接事实源；长驻任务不再硬编码 bash）
     let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
     let shell = crate::tools::command::resolve_shell(selection.as_deref());
+    // Recheck internal state after an interactive approval and shell discovery.
+    if let crate::safety::fence::Verdict::Block { code, message } =
+        crate::safety::fence::check_protected_command(&command, &cwd, &ctx.write_roots())
+    {
+        return ToolOutcome::err(&code, message);
+    }
     let (program, argv) = crate::tools::command::shell_invocation(&shell, &command, &cwd);
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(&argv)
@@ -452,6 +463,8 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
     // 拒绝路径 send(false) 只回收，不登记永远 Running 的等待目标。
     let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
+        // Keep ownership after start returns, through process/pump cleanup.
+        let effect_guard = effect;
         let registered = registered_rx.await.unwrap_or(false);
         loop {
             let result = tokio::select! {
@@ -489,6 +502,7 @@ async fn start_service(ctx: &ToolCtx, args: Args) -> ToolOutcome {
         }
         // 先发布权威状态再发事件，事件触发的 list_services 不能读到 running:true。
         // pumps/ticker 均已结束，stop_service 此时返回也能取得完整末段日志。
+        drop(effect_guard);
         done2.store(true, std::sync::atomic::Ordering::SeqCst);
         sink2.emit(
             &session2,
@@ -563,6 +577,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -606,11 +621,31 @@ mod tests {
                 batch_id: "b".into(),
                 call_index: 0,
                 call_key: "b:0".into(),
+                provider_call_id: String::new(),
                 cancel: tokio_util::sync::CancellationToken::new(),
             },
             ws,
             dd,
         )
+    }
+
+    #[tokio::test]
+    async fn internal_state_is_blocked_before_service_registration() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (ctx, _ws, _dd) = captured_ctx(seen.clone());
+        let target = ctx.rt.data_dir.join("config.json");
+        std::fs::write(&target, b"unchanged").unwrap();
+        let out = ServiceTool
+            .run(
+                &ctx,
+                json!({"action": "start", "command": format!("echo replaced > '{}'", target.display())}),
+            )
+            .await;
+        assert!(!out.ok, "{out:?}");
+        assert_eq!(out.error.as_ref().unwrap().code, "E_INTERNAL_STATE");
+        assert!(ctx.core.services.list().is_empty());
+        assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
     }
 
     /// 工具真实启动进程；退出和移除载荷都必须保留末段日志（不依赖 ticker 首拍）。
@@ -759,6 +794,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -778,6 +814,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let tool = ServiceTool;
@@ -819,6 +856,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -837,6 +875,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = ServiceTool
@@ -899,6 +938,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -932,6 +972,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = ServiceTool
@@ -976,6 +1017,105 @@ mod tests {
     }
 
     // ===== 目标档服务测试已整体移除 =====
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn background_service_holds_effect_until_real_stop_then_child_can_dispatch() {
+        use crate::core::workflow::dispatch;
+        use std::collections::BTreeMap;
+        let (ctx, _ws, _dd) = captured_ctx(Arc::new(std::sync::Mutex::new(vec![])));
+        let result = ServiceTool
+            .run(
+                &ctx,
+                json!({"action":"start","command":"sleep 30","name":"effect-owner"}),
+            )
+            .await;
+        assert!(result.ok, "{result:?}");
+        let owner = crate::core::delivery::RunIdentity::root("next-session", "next-run");
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+        let candidate = dispatch::spawn_unit("service-child", &["workspace:result.txt".into()]);
+        let admit = || {
+            dispatch::admission(
+                &owner,
+                &owner.root_run_id,
+                dispatch::current_generation(&owner.root_run_id),
+                &[(candidate.clone(), vec![])],
+                &roots,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+        };
+        let error = admit().unwrap_err();
+        assert!(
+            error.iter().any(|d| d.code == "parent_effect_in_flight"),
+            "{error:?}"
+        );
+        let listed = ServiceTool.run(&ctx, json!({"action":"list"})).await;
+        assert!(listed.ok);
+        let stopped = ServiceTool
+            .run(&ctx, json!({"action":"stop","id":result.data["id"]}))
+            .await;
+        assert!(stopped.ok, "{stopped:?}");
+        let lease = admit().unwrap().remove(0);
+        drop(dispatch::LeaseGuard(lease));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_command_holds_effect_while_running_and_releases_after_cancel() {
+        use crate::core::workflow::dispatch;
+        use std::collections::BTreeMap;
+        let (ctx, ws, _dd) = captured_ctx(Arc::new(std::sync::Mutex::new(vec![])));
+        let marker = ws.path().join("command.started");
+        let command_ctx = ToolCtx {
+            core: ctx.core.clone(),
+            rt: ctx.rt.clone(),
+            batch_id: "effect-command".into(),
+            call_index: 0,
+            call_key: "effect-command:0".into(),
+            provider_call_id: String::new(),
+            cancel: ctx.cancel.clone(),
+        };
+        let marker_arg = marker.clone();
+        let task = tokio::spawn(async move {
+            crate::tools::command::CommandTool.run(&command_ctx,
+                json!({"command":format!("touch '{}' && sleep 30", marker_arg.display()),"fullOutput":false})).await
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !marker.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("real command must reach its execution body");
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+        let owner = crate::core::delivery::RunIdentity::root("command-session", "command-next-run");
+        let candidate = dispatch::spawn_unit("command-child", &["workspace:result.txt".into()]);
+        let admit = || {
+            dispatch::admission(
+                &owner,
+                &owner.root_run_id,
+                dispatch::current_generation(&owner.root_run_id),
+                &[(candidate.clone(), vec![])],
+                &roots,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+        };
+        assert!(
+            admit()
+                .unwrap_err()
+                .iter()
+                .any(|d| d.code == "parent_effect_in_flight")
+        );
+        ctx.cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!result.ok);
+        drop(dispatch::LeaseGuard(admit().unwrap().remove(0)));
+    }
 
     #[test]
     fn ring_caps_size() {

@@ -44,6 +44,7 @@ jobs:
       # 逐条列出上一 tag 到本 tag 的全部提交。
       - name: Build release notes
         id: notes
+        shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
           prev=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
@@ -173,6 +174,7 @@ jobs:
       # 此处下载 dmg 补公证 + staple 后 --clobber 回传；未配置公证凭据时跳过
       - name: Notarize and staple dmg
         if: runner.os == 'macOS'
+        shell: bash
         run: |
           if [ -z "$APPLE_API_KEY" ]; then
             echo "未配置公证凭据，跳过 dmg 补公证"

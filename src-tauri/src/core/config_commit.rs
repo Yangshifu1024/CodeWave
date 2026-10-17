@@ -286,6 +286,15 @@ pub struct ConfigCoordinator {
     state: Mutex<CommitState>,
     credentials: Arc<dyn CredentialStore>,
     files: Arc<dyn ConfigFileStore>,
+    /// #36-C0 跨进程 owner（`config:<root>` 租约）。`None` = 未接入协调的宿主
+    /// （桌面单实例、旧测试）：行为与接入前完全一致。
+    coord: Option<crate::core::process_coordination::LeaseStore>,
+    /// 本进程**最后一次从磁盘读到**的配置摘要。提交前若磁盘摘要与它不同，
+    /// 说明另一个进程改过 config.json——此时继续写就是静默覆盖别人的设置。
+    ///
+    /// 比"直接比对内存与磁盘"更稳：记录来自真实磁盘读，首次提交时建立，
+    /// 每次成功写后刷新，因此不会出现"同一份内容序列化差异"造成的假阳性。
+    last_disk_digest: Mutex<Option<String>>,
 }
 
 pub enum ConfigPatch {
@@ -334,6 +343,69 @@ impl ConfigCoordinator {
             }),
             credentials,
             files,
+            coord: None,
+            last_disk_digest: Mutex::new(None),
+        }
+    }
+
+    /// 接入跨进程协调（#36-C0）：`data_root` 是全局数据根，协调根为 `<data_root>/coord`。
+    ///
+    /// 接入前后**语义不变**，只是多了两道：提交期间持 `config:<root>` 租约（不与
+    /// history 事务嵌套），以及提交前检查磁盘是否被别的进程改过。
+    pub fn with_coordination(mut self, data_root: &std::path::Path) -> Self {
+        *self.last_disk_digest.lock().unwrap() = self
+            .files
+            .read_config()
+            .ok()
+            .flatten()
+            .as_ref()
+            .map(Self::config_digest);
+        self.coord = Some(crate::core::process_coordination::LeaseStore::new(
+            &data_root.join("coord"),
+        ));
+        self
+    }
+
+    /// 配置域的租约键。与 history / 项目根各占一把，互不误判。
+    fn coord_resource() -> &'static str {
+        "config:root"
+    }
+
+    fn config_digest(cfg: &ConfigState) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(serde_json::to_vec(cfg).unwrap_or_default());
+        h.finalize()
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// Called only while the cross-process configuration transaction lock is held.
+    fn check_no_external_change(&self) -> Result<(), ConfigCommitError> {
+        if self.coord.is_none() {
+            return Ok(());
+        }
+        let disk = self.files.read_config()?;
+        let digest = disk.as_ref().map(Self::config_digest);
+        let recorded = self.last_disk_digest.lock().unwrap();
+        if *recorded != digest {
+            return Err(error(
+                "ConfigChangedExternally",
+                "Configuration was changed by another CodeWave instance. Reload the settings before saving again",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 成功写入后刷新"我见过什么"记录。
+    fn note_disk_digest(&self, written: &ConfigState) {
+        if self.coord.is_none() {
+            return;
+        }
+        if let Ok(mut g) = self.last_disk_digest.lock() {
+            *g = Some(Self::config_digest(written));
         }
     }
     /// ConfigState::load is tolerant for display, never authority to replace an unreadable file.
@@ -451,6 +523,16 @@ impl ConfigCoordinator {
     /// decoded, NOTHING is deleted. Only syntactically application-generated generation accounts
     /// registered before creation/retirement are eligible; accounts are never enumerated.
     pub fn recover(&self) -> Result<(), ConfigCommitError> {
+        let _disk = self
+            .coord
+            .as_ref()
+            .map(|store| {
+                crate::core::process_coordination::DiskLock::acquire(
+                    &store.coord_root().join("config-transaction.lock"),
+                )
+                .map_err(|e| error("ConfigBusy", &e.to_string()))
+            })
+            .transpose()?;
         let mut state = self.state.lock().unwrap();
         let cfg = self.readable_config(&mut state)?.unwrap_or_default();
         let referenced: HashSet<_> = cfg.providers.iter().filter_map(provider_account).collect();
@@ -483,6 +565,16 @@ impl ConfigCoordinator {
         self.files.write_journal(&journal)
     }
     pub fn mark_post_processed(&self, operation_id: &str) -> Result<(), ConfigCommitError> {
+        let _disk = self
+            .coord
+            .as_ref()
+            .map(|store| {
+                crate::core::process_coordination::DiskLock::acquire(
+                    &store.coord_root().join("config-transaction.lock"),
+                )
+                .map_err(|e| error("ConfigBusy", &e.to_string()))
+            })
+            .transpose()?;
         let _state = self.state.lock().unwrap();
         let mut journal = self.files.read_journal()?;
         if let Some(r) = journal
@@ -513,6 +605,25 @@ impl ConfigCoordinator {
             .map_err(|_| error("InvalidOperation", "An operation UUID is required"))?
             .to_string();
         let operation_id = normalized_operation.as_str();
+        // 磁盘事实检查在**取进程内锁之前**：别的进程改过配置时应当立刻拒绝，
+        // 而不是先把所有提交堵在 mutex 上再失败。
+        let _disk = self
+            .coord
+            .as_ref()
+            .map(|store| {
+                crate::core::process_coordination::DiskLock::try_acquire(
+                    &store.coord_root().join("config-transaction.lock"),
+                )
+                .map_err(|e| error("ConfigBusy", &format!("Configuration lock failed: {e}")))?
+                .ok_or_else(|| {
+                    error(
+                        "ConfigBusy",
+                        "Configuration is being changed by another CodeWave instance",
+                    )
+                })
+            })
+            .transpose()?;
+        self.check_no_external_change()?;
         let mut state = self.state.lock().unwrap();
         self.readable_config(&mut state)?;
         let current = cfg.read().unwrap().clone();
@@ -778,7 +889,10 @@ impl ConfigCoordinator {
         }
         updated.last_operation_id = Some(operation_id.into());
         match self.files.write_config(&updated) {
-            Ok(durability) => warnings.extend(durability),
+            Ok(durability) => {
+                warnings.extend(durability);
+                self.note_disk_digest(&updated);
+            }
             Err(e) => {
                 self.discard_candidates(&prepared);
                 return Err(e);
@@ -1125,7 +1239,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[derive(Default)]
-    struct FakeCredentials {
+    pub(super) struct FakeCredentials {
         pools: Mutex<HashMap<String, Vec<String>>>,
         reads: AtomicUsize,
         writes: AtomicUsize,
@@ -1135,6 +1249,23 @@ mod tests {
         fail_delete: AtomicBool,
         wrong_readback: AtomicBool,
     }
+
+    impl FakeCredentials {
+        /// 已发生的钥匙串写次数。跨模块夹具（`coordination_c0`）要断言「被拒的轮换
+        /// 根本没碰过钥匙串」，而计数器字段本身保持私有。
+        pub(super) fn write_count(&self) -> usize {
+            self.writes.load(Ordering::SeqCst)
+        }
+
+        /// 预置一个账户里已有的密钥（模拟系统钥匙串里本来就有东西）。
+        pub(super) fn seed(&self, account: &str, keys: &[&str]) {
+            self.pools
+                .lock()
+                .unwrap()
+                .insert(account.into(), keys.iter().map(|k| (*k).into()).collect());
+        }
+    }
+
     impl CredentialStore for FakeCredentials {
         fn read(&self, account: &str) -> Result<Vec<String>, ConfigCommitError> {
             self.reads.fetch_add(1, Ordering::SeqCst);
@@ -2678,5 +2809,174 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cfg.read().unwrap().ui.font_sans, "recovered");
+    }
+}
+
+/// #36-C0 夹具：配置提交必须挡住"另一个实例已经改过磁盘配置"的静默覆盖。
+///
+/// 回归背景：`CommitState` 里的 `page_version` / `role_versions` 都是**进程内**状态，
+/// 跨进程完全看不见。两个实例各改一项设置时，两边的 CAS 都会通过，后写的把前写的
+/// 静默抹掉——用户表现为"我刚改的设置又变回去了"。
+#[cfg(test)]
+mod coordination_c0 {
+    // 复用既有夹具：真实 `DiskConfigStore` 才能测出"另一个进程改了磁盘文件"这件事。
+    use super::tests::FakeCredentials;
+    use super::*;
+
+    fn creds() -> Arc<dyn CredentialStore> {
+        Arc::new(FakeCredentials::default())
+    }
+
+    fn patch_font(sans: &str) -> ConfigPatch {
+        ConfigPatch::Fonts {
+            sans: sans.into(),
+            content: "Content".into(),
+            mono: "Mono".into(),
+            font_size_sans: 16.0,
+            font_size_content: 16.0,
+            font_size_mono: 12.0,
+        }
+    }
+
+    #[test]
+    fn 未接入协调的宿主行为不变_首提交不会被自己的磁盘状态挡住() {
+        // 没有 `with_coordination` 的调用方（桌面旧路径、既有测试）不该被新检查误伤。
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RwLock::new(ConfigState::default());
+        let f = ConfigCoordinator::new(
+            creds(),
+            Arc::new(DiskConfigStore::new(dir.path().to_path_buf())),
+        );
+        let saved = f
+            .commit(&cfg, patch_font("Sans"), &uuid::Uuid::new_v4().to_string())
+            .expect("首提交");
+        assert_eq!(saved.snapshot.config.ui.font_sans, "Sans");
+        // 第二次提交同样不该被"自己写的磁盘内容"判成外部修改。
+        f.commit(
+            &cfg,
+            patch_font("Sans 2"),
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .expect("二次提交");
+    }
+
+    #[test]
+    fn 别的实例改过磁盘配置_提交必须被拒而不是覆盖() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = Arc::new(DiskConfigStore::new(dir.path().to_path_buf()));
+        let cfg = RwLock::new(ConfigState::default());
+        let f = ConfigCoordinator::new(creds(), files.clone()).with_coordination(dir.path());
+
+        // 第一次提交：建立"我见过什么"的记录。
+        f.commit(&cfg, patch_font("Mine"), &uuid::Uuid::new_v4().to_string())
+            .expect("首提交");
+
+        // 另一个实例直接改磁盘（绕过本进程）。
+        let mut theirs = files.read_config().unwrap().unwrap();
+        theirs.ui.font_sans = "Theirs".into();
+        files.write_config(&theirs).unwrap();
+
+        let e = f
+            .commit(
+                &cfg,
+                patch_font("Mine 2"),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .expect_err("磁盘已被他人改过，必须拒绝");
+        assert_eq!(e.code, "ConfigChangedExternally");
+
+        // 磁盘上必须还是别人的那份：拒绝意味着**没有**覆盖。
+        let on_disk = files.read_config().unwrap().unwrap();
+        assert_eq!(on_disk.ui.font_sans, "Theirs", "被拒的提交不得写盘");
+    }
+
+    #[test]
+    fn 配置域与_history_域各占一把_不互相误判() {
+        assert_eq!(ConfigCoordinator::coord_resource(), "config:root");
+        assert_ne!(
+            ConfigCoordinator::coord_resource(),
+            "history:s1",
+            "配置与历史不得共用一把租约"
+        );
+    }
+
+    /// #36-C0 回归：提交**不得**在盘上留下本进程的配置租约。
+    ///
+    /// `check_no_external_change` 曾写成 `let _lease = store.acquire(..)`——租约拿到了却
+    /// 连 `Result` 一起丢掉，于是每次提交都在 `<data>/coord/leases` 留下一个属于本进程的
+    /// `config:root` 文件且永不释放。本进程察觉不到（同持有者重复申请走幂等分支），
+    /// 只表现为「另一个实例从此再也配不动配置」，而且没有任何报错。
+    #[test]
+    fn 提交后不得留下配置租约_否则别的实例永远配不动() {
+        use crate::core::process_coordination::LeaseStore;
+        let dir = tempfile::tempdir().unwrap();
+        let files = Arc::new(DiskConfigStore::new(dir.path().to_path_buf()));
+        let cfg = RwLock::new(ConfigState::default());
+        let f = ConfigCoordinator::new(creds(), files).with_coordination(dir.path());
+
+        let leases = LeaseStore::new(&dir.path().join("coord"));
+        for i in 0..3 {
+            f.commit(
+                &cfg,
+                patch_font(&format!("Sans {i}")),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .expect("提交");
+            assert!(
+                leases.read(ConfigCoordinator::coord_resource()).is_none(),
+                "第 {i} 次提交后仍占着 config:root：别的实例将永远拿不到这把锁"
+            );
+        }
+    }
+
+    /// #36-C0：凭据轮换期间配置被**别的实例改过**时必须被拒，且不得已经动过钥匙串。
+    ///
+    /// 轮换不是普通配置写：它要同时改系统钥匙串与配置文件。真正的保护不是租约
+    /// （配置写刻意**不**因租约被占而阻断，见 `check_no_external_change`），
+    /// 而是提交前的磁盘事实比对——那一刻若发现磁盘内容不是「我上次见到的」就必须停手，
+    /// 否则会拿一份过期的密钥清单去覆盖别人刚改的配置。
+    #[test]
+    fn 轮换期间配置被别的实例改过_必须被拒且不动钥匙串() {
+        use crate::core::config::{KEYRING_PLACEHOLDER, ProviderConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let files = Arc::new(DiskConfigStore::new(dir.path().to_path_buf()));
+        let creds = Arc::new(FakeCredentials::default());
+        let cfg = RwLock::new(ConfigState::default());
+        let f = ConfigCoordinator::new(creds.clone(), files.clone()).with_coordination(dir.path());
+
+        // 首提交：建立「我见过什么」的基准。
+        f.commit(&cfg, patch_font("Mine"), &uuid::Uuid::new_v4().to_string())
+            .expect("首提交");
+        cfg.write().unwrap().providers.push(ProviderConfig {
+            id: "p1".into(),
+            keys: vec![KEYRING_PLACEHOLDER.into(), "plain-rotate-me".into()],
+            ..Default::default()
+        });
+
+        // 另一个实例绕过本进程直接改了磁盘。
+        let mut theirs = files.read_config().unwrap().unwrap();
+        theirs.ui.font_mono = "TheirMono".into();
+        files.write_config(&theirs).unwrap();
+
+        let e = f
+            .commit(
+                &cfg,
+                ConfigPatch::SecureExisting,
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .expect_err("配置已被他人改过时，轮换必须停手");
+        assert_eq!(e.code, "ConfigChangedExternally", "{}", e.code);
+        assert_eq!(creds.write_count(), 0, "被拒的轮换不得已经动过钥匙串");
+
+        // 重新加载到最新磁盘事实后，轮换照常进行——检查是拦冲突，不是永久封禁。
+        creds.seed("p1", &["already-in-keyring"]);
+        f.note_disk_digest(&theirs);
+        f.commit(
+            &cfg,
+            ConfigPatch::SecureExisting,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .expect("对齐磁盘后轮换应可进行");
+        assert!(creds.write_count() > 0, "轮换应真的写了钥匙串");
     }
 }

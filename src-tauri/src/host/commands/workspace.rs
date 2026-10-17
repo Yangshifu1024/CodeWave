@@ -45,6 +45,7 @@ pub(super) fn session_write_roots(
         .map(std::path::PathBuf::from)
         .collect();
     crate::tools::pathutil::WriteRoots {
+        project_dir: rt.project_dir.clone(),
         workspace: rt.workspace.clone(),
         extra,
         data_dir: rt.data_dir.clone(),
@@ -386,12 +387,22 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let extra = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
-        let rt = crate::core::agent::test_support::make_runtime(
+        let mut rt = crate::core::agent::test_support::make_runtime(
             std::fs::canonicalize(ws.path()).unwrap(),
             std::fs::canonicalize(dd.path()).unwrap(),
             vec![extra.path().to_string_lossy().into_owned()],
         );
+        let project_dir = ws.path().join(".codewave");
+        std::sync::Arc::get_mut(&mut rt).unwrap().project_dir = Some(project_dir.clone());
         let roots = session_write_roots(&rt);
+        assert_eq!(roots.project_dir, Some(project_dir.clone()));
+        let project_state = project_dir.join("project.json");
+        assert_eq!(
+            crate::tools::pathutil::resolve_write(&roots, &project_state.to_string_lossy())
+                .unwrap_err()
+                .0,
+            "E_INTERNAL_STATE",
+        );
         let extra_abs = extra.path().to_string_lossy().into_owned();
         assert_eq!(roots.extra, vec![extra_abs]);
         // Explorer 流程：绝对路径（虚拟顶层签发的 key）可读可写
@@ -421,6 +432,7 @@ mod tests {
         let extra = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![std::path::PathBuf::from(
                 extra.path().to_string_lossy().into_owned(),
@@ -569,6 +581,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),

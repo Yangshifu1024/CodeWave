@@ -1,8 +1,10 @@
 //! System credential adapter and resolver. New writes use immutable generation accounts via
 //! core::config_commit; unavailable keyrings never fall back to plaintext persistence.
 
-use crate::core::config::{KEYRING_PLACEHOLDER, ModelConfig, ProviderConfig};
-/// keyring service 名（本应用所有凭据共用）。
+#[cfg(test)]
+use crate::core::config::KEYRING_PLACEHOLDER;
+use crate::core::config::{ModelConfig, ProviderConfig};
+/// 模型/API 凭据的 service；信任权威记录使用 host::trust 的独立 service。
 pub const SERVICE: &str = "codewave.yangshifu.xyz";
 
 /// 构造 keyring 条目（service + account）；环境不可用时返回可读错误。
@@ -70,49 +72,15 @@ fn credential_error(code: &str, message: &str) -> crate::core::config_commit::Co
 pub fn resolve_keys(model: &ModelConfig) -> Vec<String> {
     resolve_keys_with(&SystemCredentialStore, model)
 }
-fn resolve_keys_with(
+/// 同 [`resolve_keys`]，但凭据来源可注入（评测来源注入与用例都用它）。
+///
+/// 保持 `pub(crate)`：它是**测试与评测注入**的接缝，不是给业务代码另开的一条
+/// 凭据通道——真实调用一律走 [`resolve_keys`]。
+pub(crate) fn resolve_keys_with(
     store: &dyn crate::core::config_commit::CredentialStore,
     model: &ModelConfig,
 ) -> Vec<String> {
-    if model.keys.is_empty() {
-        return Vec::new();
-    }
-    let has_placeholder = model.keys.iter().any(|k| k == KEYRING_PLACEHOLDER);
-    let mut resolved: Vec<String> = model
-        .keys
-        .iter()
-        .filter(|k| !k.is_empty() && k.as_str() != KEYRING_PLACEHOLDER)
-        .cloned()
-        .collect();
-    if !has_placeholder {
-        return resolved;
-    }
-    let mut accounts = model.keyring_accounts.clone();
-    if accounts.is_empty() {
-        accounts.push(model.id.clone());
-    }
-    let mut last_err = None;
-    for account in &accounts {
-        match store.read(account) {
-            Ok(keys) => {
-                for k in keys {
-                    if !resolved.contains(&k) {
-                        resolved.push(k);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::debug!("{e}（账户 {account}）");
-                last_err = Some(e);
-            }
-        }
-    }
-    if resolved.is_empty()
-        && let Some(e) = last_err
-    {
-        tracing::warn!("{e}（模型 {} 的 key 回退为空）", model.id);
-    }
-    resolved
+    crate::core::credentials::resolve_keys(store, model)
 }
 
 /// 为一次性调用（title / compact 等无池场景）取首个可用 key。

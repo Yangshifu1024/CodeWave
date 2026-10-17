@@ -38,6 +38,8 @@ async function baseInvoke(cmd: string, _args?: any) {
     case "save_config": savedConfigs.push(JSON.parse(JSON.stringify(_args?.config))); return configSaved(_args?.config);
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
+    case "inspect_instruction_resources": return { resources: [], issues: [] };
+    case "inspect_skills": return { entries: [], issues: [] };
     case "list_skills": return [];
     case "list_available_shells": return [];
     case "resolve_proxy": return "http://127.0.0.1:9999";

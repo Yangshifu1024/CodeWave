@@ -29,6 +29,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::core::coordinator::{AcquireRequest, Lease};
+use crate::core::process_coordination::LeaseStore;
+
 use super::error::McpError;
 
 /// 未配置 `timeout_ms` 时的调用超时（沿用现状 120s，不改变既有 server 行为预期）。
@@ -661,6 +664,135 @@ pub fn merge_scopes(global: &ScopeDoc, project: Option<&ScopeDoc>) -> Vec<Merged
 /// Serialized with full scope saves and approval policy patches.
 pub static CONFIG_COMMIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+// ---------------------------------------------------------------------------
+// #36-C0：MCP 配置的**跨进程**提交守卫
+// ---------------------------------------------------------------------------
+
+/// 争用时的重试次数与间隔。租约只在真正落盘的那几毫秒里被持有，
+/// 所以短暂等待远好于直接失败；但**必须有上限**——另一个实例崩溃后留下的保守 busy
+/// 租约（见 `process_coordination` 模块文档第 2 条：绝不按 PID 自动回收）
+/// 绝不能把本进程拖成一次看起来像卡死的长等待。
+const COMMIT_RETRY: u32 = 6;
+const COMMIT_RETRY_DELAY_MS: u64 = 40;
+
+/// 租约的 `session_id`：MCP 配置提交不是某次会话的事，用固定标识占位。
+const SCOPE_HOLDER: &str = "mcp-config";
+
+/// 跨进程提交守卫：进程内互斥 + 落盘租约。
+///
+/// [`CONFIG_COMMIT`] 是进程内互斥，它只挡得住**本实例**的并发。两个 CodeWave 实例
+/// 同时改同一份 `mcp.json` 时它完全不起作用：两边各自读一份快照，后写者会拿自己的
+/// 旧快照**整份覆盖**，另一端刚做的改动当场消失且不留痕迹。守卫在进程内互斥之外
+/// 再加一把落盘租约，由 `create_new`（O_CREAT|O_EXCL）在跨进程下唯一裁决。
+///
+/// ## 分域：按作用域各管各的
+///
+/// 协调根取 `mcp.json` **所在目录**下的 `coord/`，而不是全局数据目录：
+/// 全局配置的父目录就是全局数据目录（与 [`crate::core::coordinator`] 的数据根一致），
+/// 项目配置的父目录就是项目托管目录。写同一个文件的两边必然算出同一个协调根，
+/// 而**不同文件之间互不阻塞**——全局配置被占用不该卡住项目配置的保存。
+/// 代价是 [`crate::mcp::McpManager`] 这类自身不持有 data_dir 的组件无需为守卫穿线。
+///
+/// ## 为什么必须持有进程内互斥
+///
+/// 它顺带杜绝了重入事故：若租约可在同一进程内被两把守卫同时持有，
+/// 内层守卫 `Drop` 时会把外层仍在用的租约释放掉。临界区全程由同一把
+/// `CONFIG_COMMIT` 串行化，这个前提就成立。
+pub struct ScopeCommitGuard {
+    /// 进程内互斥。持有一它，上面的重入前提才成立。
+    _inproc: tokio::sync::MutexGuard<'static, ()>,
+    store: LeaseStore,
+    lease: Lease,
+}
+
+impl ScopeCommitGuard {
+    /// 取得进程内互斥**并**申请跨进程租约（全新临界区用这个入口）。
+    pub async fn acquire(sref: &ScopeRef) -> Result<Self, McpError> {
+        Self::extend(CONFIG_COMMIT.lock().await, sref).await
+    }
+
+    /// 已在 [`CONFIG_COMMIT`] 临界区内时，只补跨进程租约。
+    ///
+    /// 刻意单列这个入口：tokio 的互斥量**非重入**，在已持锁处再 `lock().await`
+    /// 就是当场自死锁。调用方传入它自己刚拿到的 guard，本函数绝不再加锁。
+    pub async fn extend(
+        _inproc: tokio::sync::MutexGuard<'static, ()>,
+        sref: &ScopeRef,
+    ) -> Result<Self, McpError> {
+        let store = LeaseStore::new(&coord_root_of(sref));
+        let req = AcquireRequest {
+            session_id: SCOPE_HOLDER.to_string(),
+            // 身份唯一来源是「本进程」：同进程重复申请靠这三个字段的相等走幂等分支，
+            // 别的进程则必然拿到 `resource_held`。
+            root_run_id: format!("pid-{}", std::process::id()),
+            resource: format!("mcp:{}", source_identity(&sref.path).to_string_lossy()),
+            attempt: 0,
+            expected_generation: None,
+        };
+        let mut lease = None;
+        for i in 0..COMMIT_RETRY {
+            match store.acquire(&req) {
+                Ok(l) => {
+                    lease = Some(l);
+                    break;
+                }
+                // 只有"别人正占着"才重试：其余失败（磁盘错误、代次失效）重试没有意义。
+                Err(e) if e.code == "resource_held" && i + 1 < COMMIT_RETRY => {
+                    tokio::time::sleep(Duration::from_millis(COMMIT_RETRY_DELAY_MS)).await;
+                }
+                Err(e) => {
+                    return Err(McpError::config(format!(
+                        "Another instance is modifying this MCP configuration; retry later ({}) : {e}",
+                        e.code
+                    )));
+                }
+            }
+        }
+        let Some(lease) = lease else {
+            return Err(McpError::config(format!(
+                "Another instance is modifying this MCP configuration; retry later (after {COMMIT_RETRY} attempts)"
+            )));
+        };
+        Ok(ScopeCommitGuard {
+            _inproc,
+            store,
+            lease,
+        })
+    }
+
+    pub fn lease(&self) -> &Lease {
+        &self.lease
+    }
+}
+
+impl Drop for ScopeCommitGuard {
+    fn drop(&mut self) {
+        // 尽力释放：失败不 panic（进程正在被杀、磁盘错误）。残留租约按保守规则继续占用，
+        // 由 guardian 显式回收——这正是「崩溃保守 busy」要的行为。
+        if let Err(e) = self.store.release(&self.lease)
+            && e.code != "no_lease"
+        {
+            tracing::warn!(
+                "MCP 配置租约释放失败（{}，generation {}）：{e}；按保守规则继续占用，由 guardian 处理",
+                self.lease.resource,
+                self.lease.generation
+            );
+        }
+    }
+}
+
+/// 协调根：`mcp.json` 所在目录下的 `coord/`。
+///
+/// 拿不到非空父目录时**不**退回 CWD 下的相对路径——那会让协调租约散落到
+/// 当前工作目录里，而它本该待在配置旁边。调用方据此把「无有效共享文件」显式判掉。
+fn coord_root_of(sref: &ScopeRef) -> PathBuf {
+    sref.path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("coord")
+}
+
 /// Opaque content token. No configuration or credential values are exposed in receipts.
 pub fn scope_version(raw: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -704,11 +836,16 @@ const ALWAYS_ALLOW_KEYS: [&str; 3] = ["always_allow", "alwaysAllow", "alwaysAllo
 ///
 /// 走「读原文 JSON → 只改该条目的该键 → 原子写」，**不整份重建**，
 /// 因此 `$schema`、自定义键、顶层其它键、条目内其它键一律不动。
+///
+/// **必须**传 [`ScopeCommitGuard`]：本函数是「读 → 改 → 写」的读改写，
+/// 漏了跨进程租约就等于把另一个实例刚写入的配置整份覆盖掉。
+/// 参数类型强制这一点——不靠注释提醒。
 pub(crate) fn set_always_allow(
     sref: &ScopeRef,
     name: &str,
     value: bool,
     expected: &McpServerConfig,
+    _guard: &ScopeCommitGuard,
 ) -> Result<(), McpError> {
     let raw = read_scope_text(sref)?;
     let mut doc: Value = serde_json::from_str(&raw).map_err(|e| {
@@ -913,6 +1050,8 @@ mod tests {
         assert_eq!(Scope::parse("global").unwrap(), Scope::Global);
         assert_eq!(Scope::parse("project").unwrap(), Scope::Project);
         assert!(Scope::parse("workspace").is_err());
+        assert!(Scope::parse("session").is_err());
+        assert!(serde_json::from_str::<Scope>(r#""session""#).is_err());
         assert_eq!(Scope::Global.as_str(), "global");
         assert_eq!(Scope::Project.as_str(), "project");
     }
@@ -937,8 +1076,8 @@ mod tests {
         assert!(issues[0].message.contains("http://"));
     }
 
-    #[test]
-    fn set_always_allow_preserves_other_keys_and_reuses_existing_spelling() {
+    #[tokio::test]
+    async fn set_always_allow_preserves_other_keys_and_reuses_existing_spelling() {
         let dd = tempfile::tempdir().unwrap();
         let sref = write(
             dd.path(),
@@ -952,7 +1091,8 @@ mod tests {
             .find(|(name, _)| name == "fs")
             .unwrap()
             .1;
-        set_always_allow(&sref, "fs", true, &expected).unwrap();
+        let guard = ScopeCommitGuard::acquire(&sref).await.unwrap();
+        set_always_allow(&sref, "fs", true, &expected, &guard).unwrap();
         let text = std::fs::read_to_string(&sref.path).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
         // 沿用文件里已有的 camelCase 拼写，不新增同义键
@@ -964,13 +1104,74 @@ mod tests {
         assert_eq!(v["mcpServers"]["other"]["url"], "https://h/mcp");
     }
 
-    #[test]
-    fn set_always_allow_errors_when_entry_missing() {
+    #[tokio::test]
+    async fn set_always_allow_errors_when_entry_missing() {
         let dd = tempfile::tempdir().unwrap();
         let sref = write(dd.path(), r#"{"mcpServers":{"fs":{"command":"npx"}}}"#);
-        let e =
-            set_always_allow(&sref, "nope", true, &cfg_of(json!({"command":"npx"}))).unwrap_err();
+        let guard = ScopeCommitGuard::acquire(&sref).await.unwrap();
+        let e = set_always_allow(
+            &sref,
+            "nope",
+            true,
+            &cfg_of(json!({"command": "npx"})),
+            &guard,
+        )
+        .unwrap_err();
         assert!(e.message.contains("nope"));
+    }
+
+    /// #36-C0：他人持有租约时**必须**取不到守卫——这正是「后写者覆盖前写者」的防线。
+    #[tokio::test]
+    async fn 他人持有配置租约时_提交守卫必须被拒() {
+        let dd = tempfile::tempdir().unwrap();
+        let sref = write(dd.path(), r#"{"mcpServers":{"fs":{"command":"npx"}}}"#);
+        // 以「另一个进程」的身份占住同一份配置的租约。
+        // root_run_id 用一个不可能是本进程 pid 的字面量，避免与幂等分支混淆。
+        let store = LeaseStore::new(&coord_root_of(&sref));
+        store
+            .acquire(&AcquireRequest {
+                session_id: SCOPE_HOLDER.to_string(),
+                root_run_id: "other-process".to_string(),
+                resource: format!("mcp:{}", source_identity(&sref.path).to_string_lossy()),
+                attempt: 0,
+                expected_generation: None,
+            })
+            .expect("模拟他人占用");
+
+        let result = ScopeCommitGuard::acquire(&sref).await;
+        let msg = match result {
+            Err(e) => e.message,
+            // 拿到就等于测试环境没起作用，不许当成通过。
+            Ok(_) => panic!("他人持有租约时不得取得提交守卫"),
+        };
+        assert!(
+            msg.contains("Another instance"),
+            "错误文案要说明是另一个实例在改：{msg}"
+        );
+    }
+
+    /// #36-C0：守卫在临界区内**真的占着租约**，离开临界区后**真的还掉了**。
+    #[tokio::test]
+    async fn 提交守卫在临界区内持有租约_离开后释放() {
+        let dd = tempfile::tempdir().unwrap();
+        let sref = write(dd.path(), r#"{"mcpServers":{"fs":{"command":"npx"}}}"#);
+        let store = LeaseStore::new(&coord_root_of(&sref));
+        let resource = format!("mcp:{}", source_identity(&sref.path).to_string_lossy());
+        assert!(
+            store.read(&resource).is_none(),
+            "进入临界区前不应有残留租约"
+        );
+        {
+            let _guard = ScopeCommitGuard::acquire(&sref).await.unwrap();
+            let rec = store.read(&resource).expect("临界区内必须占着租约");
+            assert_eq!(rec.lease.resource, resource);
+            assert_eq!(rec.pid, std::process::id());
+            // 临界区结束后（作用域结束）租约必须已释放
+        }
+        assert!(
+            store.read(&resource).is_none(),
+            "离开临界区后租约必须已释放，否则同一进程再也写不进去"
+        );
     }
 
     #[test]

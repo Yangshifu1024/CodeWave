@@ -17,6 +17,18 @@ pub enum ToolKind {
     Meta,
 }
 
+impl ToolKind {
+    pub fn policy_name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::FileWrite => "file_write",
+            Self::Network => "network",
+            Self::Interactive => "interactive",
+            Self::Meta => "meta",
+        }
+    }
+}
+
 /// 工具执行失败的结构化错误：`code` 是机器可读的稳定错误码（如 `E_FENCE_BLOCKED`），模型据此决策重试或放弃。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolError {
@@ -36,6 +48,27 @@ impl ToolError {
     }
 }
 
+/// 单个文件的写入前后事实，供工具结果与宿主展示使用。
+///
+/// `path` 是**绝对路径**，`old_text` 为 `None`
+/// 表示新建文件，`new_text` 是变更后的**整份**内容。两侧都是整份而不是片段：
+/// 片段拼出来的 diff 看着像 diff，实则是编的——客户端会把它当真实全文渲染。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileDiff {
+    /// 绝对路径。
+    pub path: String,
+    /// 变更前的整份内容；新建文件为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_text: Option<String>,
+    /// 变更后的整份内容。
+    pub new_text: String,
+}
+
+/// 单侧 diff 文本上限（字节）。这是**给人看**的显示投影，不是数据通道。
+pub const DIFF_SIDE_BUDGET_BYTES: usize = 64 * 1024;
+/// 单次工具调用可记录的 diff 总量上限（字节，两侧合计）。
+pub const DIFF_TOTAL_BUDGET_BYTES: usize = 128 * 1024;
+
 /// 双通道结果：前端收到完整 JSON（本结构），模型收到瘦身后的文本（tools/compact.rs 按工具裁剪）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutcome {
@@ -53,6 +86,15 @@ pub struct ToolOutcome {
     /// 仅注入给模型的多模态附加内容（如 read 注入的图片）；不进前端 outcome JSON。
     #[serde(skip)]
     pub extra_model_content: Vec<Content>,
+    /// 写入类工具的前后内容，供宿主投影成 diff（#36 AC03）。
+    ///
+    /// **刻意不进 `data`**：`compact_for_model` 只序列化 `data`，走 `data` 等于把整份
+    /// 文件正文塞进模型上下文。这里只走事件/outcome JSON（前端忽略未知字段），
+    /// 宿主可读取此元数据展示文件变更（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）。
+    ///
+    /// 体积由 `push_diff` 的双重预算兜住，超限**整条不记**——半截 diff 比没有 diff 更糟。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diffs: Vec<FileDiff>,
 }
 
 impl ToolOutcome {
@@ -64,6 +106,7 @@ impl ToolOutcome {
             error: None,
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+            diffs: Vec::new(),
         }
     }
     /// 构造失败结果。
@@ -74,12 +117,63 @@ impl ToolOutcome {
             error: Some(ToolError::new(code, message)),
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+            diffs: Vec::new(),
         }
     }
+    /// 失败 + 结构化 `data`。
+    ///
+    /// **写入后检查的结论必须落在 `data`**：`compact_for_model` 只序列化 `data`，
+    /// 写进 `warnings` 的内容模型一个字都收不到（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）。
+    pub fn error_with_data(message: impl Into<String>, data: Value) -> Self {
+        ToolOutcome {
+            ok: false,
+            data,
+            error: Some(ToolError::new("E_TOOL_FAILED", message)),
+            warnings: Vec::new(),
+            extra_model_content: Vec::new(),
+            diffs: Vec::new(),
+        }
+    }
+
     /// 附加告警（链式消费，追加到已有 warnings 之后）。
     pub fn with_warnings(mut self, w: Vec<String>) -> Self {
         self.warnings.extend(w);
         self
+    }
+
+    /// 记录一条文件前后事实（供宿主投影成 diff）。
+    ///
+    /// **超限整条不记**：截半截的 diff 会被客户端当成"文件就这么长"渲染，
+    /// 那比不显示 diff 更糟（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）。
+    /// 跳过时只留日志，不塞 `warnings`——`warnings` 是给模型的提示位，
+    /// 而这里的取舍对模型无意义（模型侧读 `data`，见上方注释）。
+    pub fn push_diff(
+        &mut self,
+        path: impl Into<String>,
+        old_text: Option<String>,
+        new_text: String,
+    ) {
+        let path = path.into();
+        let over_side = |t: &str| t.len() > DIFF_SIDE_BUDGET_BYTES;
+        if over_side(&new_text) || old_text.as_deref().is_some_and(over_side) {
+            tracing::debug!("diff 超过单侧预算，跳过记录：{path}");
+            return;
+        }
+        let cost = new_text.len() + old_text.as_ref().map_or(0, |s| s.len());
+        let used: usize = self
+            .diffs
+            .iter()
+            .map(|d| d.new_text.len() + d.old_text.as_ref().map_or(0, |s| s.len()))
+            .sum();
+        if used + cost > DIFF_TOTAL_BUDGET_BYTES {
+            tracing::debug!("diff 超过单次调用总预算，跳过记录：{path}");
+            return;
+        }
+        self.diffs.push(FileDiff {
+            path,
+            old_text,
+            new_text,
+        });
     }
 }
 
@@ -95,11 +189,47 @@ pub struct ToolCtx {
     pub call_index: usize,
     /// 本调用的稳定 key（用于审批流定位与前端工具卡关联）
     pub call_key: String,
+    /// **provider 侧 `tool_use.id`**：跨 run 持久稳定的调用标识。
+    ///
+    /// 与 `call_key` 刻意分开：`call_key` 是批内 `batch:index`，实时定位用但**不可持久**
+    /// （下一批同样的位置就是别的调用）；交付回执的幂等、恢复关联、sidecar 键都必须用这份
+    /// （[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md) 工具结果 sidecar 契约）。
+    /// 无 provider 上下文的进程内调用传调用方自带的稳定串。
+    pub provider_call_id: String,
     /// 取消令牌：run 被停止时置位，长任务工具应轮询以尽早退出
     pub cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ToolCtx {
+    /// Hold through actual writes/requests; background services transfer this to
+    /// their reaper. Same actor calls are reentrant and never block one another.
+    pub fn acquire_effect(
+        &self,
+        paths: &[std::path::PathBuf],
+        opaque: bool,
+    ) -> Result<crate::core::workflow::dispatch::EffectGuard, String> {
+        let owner = crate::core::delivery::DeliveryService::identity_of(&self.rt);
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&self.rt);
+        crate::core::workflow::dispatch::acquire_effect(
+            &owner.root_run_id,
+            &owner.actor_id,
+            paths,
+            opaque,
+            &roots,
+        )
+    }
+
+    pub fn check_write_path(&self, path: &std::path::Path) -> Result<(), (String, String)> {
+        let owner = crate::core::delivery::DeliveryService::identity_of(&self.rt);
+        crate::core::workflow::dispatch::check_write(&owner.root_run_id, &owner.actor_id, path)
+            .map_err(|e| ("E_WORKFLOW_OWNERSHIP".into(), e))
+    }
+
+    pub fn check_unattributed_effect(&self) -> Result<(), String> {
+        let owner = crate::core::delivery::DeliveryService::identity_of(&self.rt);
+        crate::core::workflow::dispatch::check_unattributed(&owner.root_run_id, &owner.actor_id)
+    }
+
     /// 工作区根目录：项目会话为项目主目录快照，临时会话为全局数据目录。
     pub fn workspace(&self) -> &std::path::Path {
         &self.rt.workspace
@@ -111,6 +241,7 @@ impl ToolCtx {
             self.rt.workspace.clone(),
             self.rt.data_dir.clone(),
         );
+        r.project_dir = self.rt.project_dir.clone();
         r.extra = self
             .rt
             .extra_roots

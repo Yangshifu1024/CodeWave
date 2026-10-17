@@ -57,6 +57,14 @@ impl Tool for CreateTool {
             Ok(p) => p,
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
+        let destination = super::pathutil::canonical_best_effort(&resolved);
+        let _effect = match ctx.acquire_effect(std::slice::from_ref(&resolved), false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
+        if let Err((code, message)) = ctx.check_write_path(&destination) {
+            return ToolOutcome::err(&code, message);
+        }
         // 严格文件隔离（[docs/subagents](../../../docs/subagents.md)）：
         // 非主 runtime 写前认领目标；兄弟任务已认领则拒绝并指引跳过上报
         if crate::tools::claims::requires_file_claim(&ctx.rt)
@@ -82,6 +90,9 @@ impl Tool for CreateTool {
                 return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
             }
         };
+        if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination) {
+            return ToolOutcome::err(&c, m);
+        }
         if resolved.exists() && !args.overwrite {
             return ToolOutcome::err(
                 "E_EXISTS",
@@ -99,11 +110,17 @@ impl Tool for CreateTool {
         let settings = ctx.core.cfg.read().unwrap().post_write_check.clone();
         let target = super::validation::WriteTarget::new(resolved.clone(), args.path.clone());
         // 持写锁读取本次写入前的内容；不可读或非 UTF-8 基线时省略统计，不阻止原有写入。
+        // `existed` 与 `before` 分开取：空文件是「存在的空文件」而不是「新文件」，
+        // 而 `FileDiff.old_text` 的 `None` 语义是**新文件**，两者不能混为一谈。
+        let existed = resolved.exists();
         let before = match std::fs::read(&resolved) {
             Ok(bytes) => String::from_utf8(bytes).ok(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
             Err(_) => None,
         };
+        if let Err((c, m)) = super::pathutil::revalidate_write(&roots, &resolved, &destination) {
+            return ToolOutcome::err(&c, m);
+        }
         match crate::util::atomic::atomic_write(&resolved, args.content.as_bytes()) {
             Ok(()) => {
                 // [docs/sessions-and-projects](../../../docs/sessions-and-projects.md)：产物登记（子代理归属主会话；路径规范化，
@@ -138,6 +155,16 @@ impl Tool for CreateTool {
                         &before,
                         &args.content
                     )]);
+                    // diff 映射（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
+                    // 与行数统计共用同一个 `before` 分支。基线读不出 / 非 UTF-8 时两件都不做——
+                    // diff 尤其不能拿「大概的旧内容」去凑，客户端会把它当真实全文渲染。
+                    out.push_diff(
+                        crate::tools::pathutil::canonical_best_effort(&resolved)
+                            .to_string_lossy()
+                            .into_owned(),
+                        existed.then_some(before),
+                        args.content.clone(),
+                    );
                 }
                 if let Some(first) = checks.into_iter().next() {
                     out.data["check"] =
@@ -185,6 +212,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
@@ -195,6 +223,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let tool = CreateTool;
@@ -240,6 +269,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         let rt =
@@ -250,6 +280,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         (ctx, ws, dd)
@@ -422,6 +453,7 @@ mod tests {
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+            project_dir: None,
         };
         let core = crate::core::agent::test_support::make_core(&roots);
         {
@@ -453,6 +485,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = CreateTool

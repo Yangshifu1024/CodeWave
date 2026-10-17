@@ -139,6 +139,8 @@ export default function RuntimeDashboard() {
         <Typography.Text type="secondary">{projectName(session.project_id)} · {elapsed(session.started_at_ms)} · {t("dashboard.subsCount", { n: session.subs.length })}</Typography.Text>
       </Space>
       <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, tooltip: session.activity }} style={{ margin: "4px 0" }}>{session.activity || t("dashboard.noActivity")}</Typography.Paragraph>
+      {session.workflow?.nodes && <Typography.Paragraph type="secondary">{session.workflow.nodes.map(node => node.id + ": " + node.state + " #" + node.attempt).join(" · ")}</Typography.Paragraph>}
+      {session.workflow?.blocked && <Typography.Paragraph type="warning">{session.workflow.blocked}</Typography.Paragraph>}
       {session.waiting.length > 0 && <Space orientation="vertical" style={{ width: "100%" }}>
         {session.waiting.map((item) => <Flex key={item.ask_id} align="center" gap="small" wrap>
           <Tag color="warning">{t(item.kind === "approval" ? "dashboard.approval" : "dashboard.answer")}</Tag>

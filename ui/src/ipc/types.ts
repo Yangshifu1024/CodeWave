@@ -535,6 +535,7 @@ export interface ActivitySub {
   report: string | null;
 }
 export interface ActivitySession {
+  workflow?: {task_id?:string;revision?:number;nodes?:{id:string;state:string;attempt:number;reason?:string}[];blocked?:string};
   session_id: string;
   run_id: string;
   title: string;
@@ -573,14 +574,33 @@ export interface GitDiffFile {
 /** 最近提交日志条目（git_recent_log 返回；git 集成只读） */
 export interface GitLogEntry { short_id: string; summary: string; author: string; time: number }
 
-/** 技能元数据（多目录扫描；origin 标记来源，deletable = 托管 .codewave/skills 来源可在设置页删除） */
-export interface SkillMeta { name: string; description: string; whenToUse: string; origin: string; deletable: boolean }
+/** 内容版本及规范身份；只记录来源，不授予资源运行权限。 */
+export interface ResourceOrigin {
+  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "workspace_file" | "global_managed" | "project_managed";
+  identity: string;
+  version: string;
+}
+/** origin 保留展示路径；deletable 由后端判定；删除还必须提交 resource 的身份和版本。 */
+export interface SkillMeta { name: string; description: string; whenToUse: string; origin: string; deletable: boolean; resource?: ResourceOrigin }
+export interface SkillAuditEntry { name: string; disabled: boolean; candidates: { meta: SkillMeta; selected: boolean }[] }
+export interface SkillInspection { entries: SkillAuditEntry[]; issues: { path: string; message: string }[] }
 
 /** 技能完整内容（get_skill 返回；body = SKILL.md 正文） */
 export interface SkillFull { meta: SkillMeta; body: string }
 
+export type InstructionReviewAction = "once" | "remember" | "revoke";
+export interface InstructionResource {
+  available: boolean;
+  id: string; name: string; kind: "instruction" | "context" | "skill" | "memory"; origin: ResourceOrigin;
+  status: { trusted: boolean; remembered: boolean; revision: number | null; error: string | null };
+  active_versions: { id: string; version: string }[];
+}
+export interface InstructionInspection { resources: InstructionResource[]; issues: string[] }
+export interface InstructionChallenge { id: string; resource_id: string; name: string; origin: ResourceOrigin; text: string; action: InstructionReviewAction }
+export interface InstructionReceipt { operation_id: string; confirmed: boolean; resolved: boolean; error: string | null }
+
 /** 内置子代理角色摘要（list_agents 返回；后端注册表剔除内部 title 角色，不含 body 正文） */
-export interface AgentMeta { name: string; description: string }
+export interface AgentMeta { name: string; description: string; resource?: ResourceOrigin }
 
 /** 计划 todo 条目（plan:update 事件下发） */
 export interface Todo { title: string; status: "pending" | "in_progress" | "completed" }
@@ -812,7 +832,18 @@ export interface McpServerView {
   source: McpScope;
   /** 被它覆盖掉的下层（无则 null） */
   overridden: McpScope | null;
+  source_path: string;
+  launch: McpLaunchStatus;
 }
+
+export interface McpLaunchStatus { version: string; trusted: boolean; remembered?: boolean; revision?: number | null; error?: string | null }
+export type McpReviewAction = "once" | "remember" | "revoke";
+export interface McpLaunchReview {
+  id: string; version: string; source: string; name: string; action: McpReviewAction;
+  config: Partial<Pick<McpServerView, "transport" | "command" | "args" | "cwd" | "url" | "env" | "headers">>;
+}
+export interface McpLaunchReviewReceipt { operation_id: string; confirmed: boolean; resolved: boolean; status: McpLaunchStatus | null; error: string | null }
+export interface McpProbeChallenge { id: string; version: string }
 
 /** 一条配置问题 */
 export interface McpConfigIssue {
@@ -858,4 +889,87 @@ export interface McpTestResult {
 export interface McpSnapshot {
   session: string;
   servers: McpStatusPayload[];
+}
+
+// ---------- 交付与验收（[docs/tools-and-safety](../../../docs/tools-and-safety.md) / #16）----------
+/**
+ * 运行终态**不是**验收结论：`run:done` 只说明模型停了，能不能算交付通过看这里。
+ * `allows_completion` 为真只有两种情况——验收器在已采纳证据上推出 `passed`，
+ * 或本会话根本没有交付契约（旧问答沿原收尾）。
+ */
+export type DeliveryDecision = "allow" | "repair" | "blocked" | "cancelled";
+export type AcceptanceStatusKind =
+  | "cancelled"
+  | "blocked"
+  | "failed"
+  | "stale"
+  | "pending"
+  | "passed";
+export type AcceptanceItemStatus =
+  | "pending"
+  | "passed"
+  | "failed"
+  | "blocked"
+  | "stale"
+  | "waived"
+  | "cancelled";
+
+/** 结构化原因：稳定原因码 + 可定位描述（不拿错误码文本当状态真值） */
+export interface AcceptanceReason {
+  code: string;
+  message: string;
+  target_id?: string | null;
+}
+
+export interface AcceptanceItem {
+  requirement_id: string;
+  status: AcceptanceItemStatus;
+  evidence_refs?: unknown[];
+  reasons?: AcceptanceReason[];
+  evaluated_version?: string | null;
+}
+
+export interface AcceptanceSnapshot {
+  task_id: string;
+  contract_revision: number;
+  revision: number;
+  items?: AcceptanceItem[];
+  overall: AcceptanceStatusKind;
+  waived_count: number;
+  evaluated_version?: string | null;
+  reasons?: AcceptanceReason[];
+}
+
+/** 一个待修复缺项（"还差什么"） */
+export interface DeliveryGap {
+  requirement_id: string;
+  check_id?: string | null;
+  reason_code: string;
+  message: string;
+}
+
+/** 会话的验收只读投影（无写接口，也没有任何 set_passed） */
+export interface DeliveryProjection {
+  task_id: string;
+  contract_revision: number;
+  /** 老会话 / 无契约时为 null：界面显示"未验证"，不补造结论 */
+  snapshot: AcceptanceSnapshot | null;
+  decision: DeliveryDecision;
+  allows_completion: boolean;
+  gaps: DeliveryGap[];
+  repair_rounds_used: number;
+  repair_rounds_max: number;
+}
+
+export interface WorkflowIssue { pointer: string; code: string; message: string }
+export interface WorkflowConfigView { text: string; revision: number; digest: string; approved: boolean; issues: WorkflowIssue[] }
+export interface WorkflowProjection {
+  task_id: string; contract_revision: number; root_run_id: string;
+  route: { kind: string; reasons: string[] };
+  units: { id: string; role_id: string | null; model_id: string | null; depends_on: string[]; write_scopes: {root_id:string;relative_path:string}[] }[];
+  nodes: {unit_id:string;state:string;attempt:number;reason:string|null}[];
+  checks: {id:string;required:boolean;platforms:string[];prerequisites:string[];cwd?:{root_id:string;relative_path:string};command?:unknown}[];
+  leases: {unit_id:string;held_paths:string[];exclusive:boolean}[];
+  frozen_revision:number; frozen_digest:string; source_digest?:string; candidate:WorkflowConfigView|null;
+  resume_allowed:boolean;recovery_error:string|null;design:{required:boolean;reasons:string[]};
 }

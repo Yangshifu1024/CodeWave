@@ -227,49 +227,8 @@ pub(super) async fn build_stream_request(
     let system_core = match cached {
         Some(core) => core,
         None => {
-            // shell 描述跟随配置 selection（与 command 工具执行 shell 同一事实源）
-            let shell = crate::tools::command::shell_description(cfg.shell.selection.as_deref());
-            let extra = rt.extra_roots.lock().unwrap().clone();
-            // 第 2/3 层：技能与记忆索引（字节稳定）
-            let skills = core.skills.list(
-                &rt.workspace,
-                &rt.data_dir,
-                &cfg.disabled_skills,
-                rt.project_dir.as_deref(),
-            );
-            let skills_listing = crate::skills::prompt_listing(&skills);
-            let memories = crate::memory::scan(&rt.data_dir, rt.project_dir.as_deref());
-            let memory_listing = crate::memory::prompt_listing(&memories);
-            // 项目段：项目名 + 项目目录 + temps 暂存区（数据目录在 <project>/.codewave，单目录语义）
-            let project_section = rt.project_id.as_ref().map(|pid| {
-                let project = crate::core::projects::find(&core.data_dir, pid);
-                let name = project
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| pid.clone());
-                let temps = project
-                    .as_ref()
-                    .map(|p| crate::core::projects::project_data_dir(&core.data_dir, p).join("temps"))
-                    .unwrap_or_else(|| {
-                        crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("temps")
-                    })
-                    .to_string_lossy()
-                    .into_owned();
-                format!(
-                    "\n<project>\n- Project: {name}\n- Project directory: {}\n- Scratch dir & command working directory: {temps}\n  Throwaway files go here; commands start here.\n</project>\n",
-                    rt.workspace.to_string_lossy()
-                )
-            });
-            let core = crate::core::prompt::assemble(
-                &rt.workspace,
-                &cfg,
-                &extra,
-                shell.as_str(),
-                &skills_listing,
-                &memory_listing,
-                project_section.as_deref(),
-                rt.project_dir.as_deref(),
-            );
+            let (core, usage) = crate::core::instruction_resources::system(core, rt, &cfg).await;
+            *rt.instruction_usage.lock().unwrap() = usage;
             *rt.system_frozen.lock().unwrap() = Some(core.clone());
             core
         }
@@ -280,7 +239,10 @@ pub(super) async fn build_stream_request(
         .tools
         .tool_defs()
         .into_iter()
-        .filter(|d| !params.exclude_tools.contains(&d.name))
+        .filter(|d| {
+            !params.exclude_tools.contains(&d.name)
+                && !core.host_excluded_tools.lock().unwrap().contains(&d.name)
+        })
         .collect();
     if !params.exclude_mcp {
         // 只注入**本会话可见集**内的 MCP 工具（会话隔离；按名排序在下面统一做）

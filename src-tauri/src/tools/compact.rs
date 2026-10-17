@@ -191,6 +191,7 @@ mod tests {
             error: Some(crate::tools::ToolError::new("E_EXIT_CODE", "命令退出码 3")),
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+            diffs: Vec::new(),
         };
         let s = compact_for_model(ToolKind::ReadOnly, "command", &err, true);
         assert!(s.contains("[error E_EXIT_CODE: 命令退出码 3]"));

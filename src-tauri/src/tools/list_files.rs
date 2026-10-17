@@ -347,6 +347,7 @@ mod tests {
         let data_dir = std::fs::canonicalize(dd.path()).unwrap();
         drop(dd); // 遍历不触碰 data_dir；canonicalize 之后释放无碍
         super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws_path).unwrap(),
             extra: vec![],
             data_dir,

@@ -60,7 +60,8 @@ it("概览和变更弹窗共用查询结果，手动刷新后汇总同步更新"
   const dialog = await screen.findByRole("dialog", { name: /工作区变更/ });
   expect(within(dialog).getByRole("menuitem", { name: /app.ts/ })).toBeTruthy();
   expect(invoke.mock.calls.filter(([cmd]) => cmd === "git_diff")).toHaveLength(1);
-  invoke.mockImplementation(async (cmd: string) => cmd === "git_diff" ? { files: [{ ...gitFile, additions: 10 }], truncated: false } : []);
+  const original = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (cmd: string, args?: unknown) => cmd === "git_diff" ? { files: [{ ...gitFile, additions: 10 }], truncated: false } : original(cmd, args));
   fireEvent.click(within(dialog).getByRole("button", { name: "刷新变更" }));
   await waitFor(() => expect(invoke.mock.calls.filter(([cmd]) => cmd === "git_diff")).toHaveLength(2));
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));

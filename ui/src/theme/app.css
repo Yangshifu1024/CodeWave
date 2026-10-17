@@ -1665,3 +1665,17 @@ html.ws-resizing * { -webkit-user-select: none !important; user-select: none !im
 
 /* 子代理过程流：max-width 收窄以适应抽屉（< 600px），不沿用 .assistant .md 的 860px */
 .sub-drawer-stream .md { max-width: 100%; }
+
+/* 交付验收只读投影（#16 完成门，[docs/plan-and-approval](../../../docs/plan-and-approval.md)）。
+   强调色沿用中性墨色；颜色只表达风险等级（无彩色 = 默认 / 橙 = 需注意 / 红 = 危险），
+   不在这里引入新的彩色 accent。 */
+.acceptance-panel { display: flex; flex-direction: column; gap: 6px; }
+.acceptance-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.acceptance-title { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-1); }
+.acceptance-note, .acceptance-hint { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-dim); }
+.acceptance-subtitle { font-size: calc(11px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); margin-top: 2px; }
+.acceptance-items, .acceptance-gaps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.acceptance-item { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.acceptance-req { font-size: calc(11px + var(--ws-font-size-mono-offset)); color: var(--ws-text-2); }
+.acceptance-reason { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-1); }
+.acceptance-gaps li { font-size: calc(12px + var(--ws-font-size-sans-offset)); color: var(--ws-text-2); }

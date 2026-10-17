@@ -1,12 +1,11 @@
 //! 订阅额度域（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
 //!
 //! **数据源 = CodeWave 自己的供应商配置**（`config.providers`）：逐家按 `base_url` 主机名
-//! 匹配适配器（`providers/`），密钥经 host 层 keyring 解析；不再读 opencode 的配置与
+//! 匹配适配器（`providers/`），密钥经宿主注入 CredentialStore 解析；不再读 opencode 的配置与
 //! auth.json（原凭证链与 opencode 运行目录解析已删除）。
 //!
 //! 分层：本层不依赖 tauri；host 命令只做校验与转调。数据模型 + 适配器注册表 + 行态分类
-//! 都在这里，各厂商协议差异在 `providers/`（与 `core::agent::drive` 调用
-//! `host::keyring::resolve_keys` 同一既有模式）。
+//! 都在这里，各厂商协议差异在 `providers/`（与 `core::agent::drive` 共用宿主注入的凭据存储）。
 //!
 //! 设计约束：
 //! - **按行态分类返回**（`ok` / `error` / `invalid` / `rejected` / `no_key` / `unsupported`），
@@ -229,6 +228,22 @@ pub async fn snapshots(
     active_provider_id: Option<&str>,
     data_dir: &Path,
 ) -> Vec<QuotaSnapshot> {
+    snapshots_with_credentials(
+        cfg,
+        active_provider_id,
+        data_dir,
+        &crate::host::keyring::SystemCredentialStore,
+    )
+    .await
+}
+
+/// Host-independent entry: the caller supplies the same credential store as agent execution.
+pub async fn snapshots_with_credentials(
+    cfg: &ConfigState,
+    active_provider_id: Option<&str>,
+    data_dir: &Path,
+    credentials: &dyn crate::core::config_commit::CredentialStore,
+) -> Vec<QuotaSnapshot> {
     let client = crate::provider::proxy::build_client(cfg);
     // 真实取数：client 移进闭包（reqwest::Client 内部 Arc，clone 廉价），
     // 使返回的 Future 不借用局部变量，可与其它请求统一 join_all。
@@ -236,7 +251,8 @@ pub async fn snapshots(
         let client = client.clone();
         Box::pin(async move { providers::fetch(kind, &key, &client).await })
     };
-    snapshots_with(cfg, active_provider_id, data_dir, &fetcher).await
+    snapshots_with_credentials_and_fetcher(cfg, active_provider_id, data_dir, credentials, &fetcher)
+        .await
 }
 
 /// 取数 Future（统一装箱：生产走 `providers::fetch`，单测注入假实现）。
@@ -271,10 +287,28 @@ fn key_source_of(provider: &ProviderConfig, used_key: &str) -> String {
 }
 
 /// 快照主流程的可注入形态（单测传假取数器与临时目录）。
+#[cfg(test)]
 pub(crate) async fn snapshots_with(
     cfg: &ConfigState,
     active_provider_id: Option<&str>,
     data_dir: &Path,
+    fetcher: Fetcher<'_>,
+) -> Vec<QuotaSnapshot> {
+    snapshots_with_credentials_and_fetcher(
+        cfg,
+        active_provider_id,
+        data_dir,
+        &crate::host::keyring::SystemCredentialStore,
+        fetcher,
+    )
+    .await
+}
+
+pub(crate) async fn snapshots_with_credentials_and_fetcher(
+    cfg: &ConfigState,
+    active_provider_id: Option<&str>,
+    data_dir: &Path,
+    credentials: &dyn crate::core::config_commit::CredentialStore,
     fetcher: Fetcher<'_>,
 ) -> Vec<QuotaSnapshot> {
     let fetched_at = now_rfc3339();
@@ -314,7 +348,7 @@ pub(crate) async fn snapshots_with(
         };
 
         // ② 密钥解析：回读失败 → invalid；解析为空 → no_key
-        match crate::host::keyring::resolve_provider_keys(provider) {
+        match crate::core::credentials::resolve_provider_keys(credentials, provider) {
             Err(reason) => {
                 rows[index] = Some(plain_snapshot(
                     provider,

@@ -139,6 +139,7 @@ fn ask_ctx_mode(mode: crate::core::prefs::ApprovalMode) -> ToolCtx {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -156,6 +157,7 @@ fn ask_ctx_mode(mode: crate::core::prefs::ApprovalMode) -> ToolCtx {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
@@ -267,6 +269,7 @@ fn args_deserialize_camel_case_skip_analysis() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -286,6 +289,7 @@ fn args_deserialize_camel_case_skip_analysis() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let path = save_plan_file(&ctx, "## 改动点\n1. 调整 A\n2. 验证 B").expect("落盘应成功");
@@ -310,6 +314,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
     let data_root = std::fs::canonicalize(dd.path()).unwrap();
     // 临时会话：工作区根就是全局数据目录（既有的 workspace == data_dir 场景）
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: data_root.clone(),
         extra: vec![],
         data_dir: data_root.clone(),
@@ -329,6 +334,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
 
@@ -789,6 +795,7 @@ async fn drive_ask_with_answer(ctx: &ToolCtx, args: Value, answer: Value) -> Too
         batch_id: ctx.batch_id.clone(),
         call_index: ctx.call_index,
         call_key: ctx.call_key.clone(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let handle = tokio::spawn(async move { AskTool.run(&tool_ctx, args).await });

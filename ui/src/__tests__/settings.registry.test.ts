@@ -502,6 +502,7 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
  * 豁免粒度是「文件 → 段」而不是「整文件」：在 TasksPage.tsx 里写 t("sessions.empty") 同样会被抓住。
  */
 const NON_SETTINGS_PANEL_SEGMENTS: Record<string, string[]> = {
+  "WorkflowSettings.tsx": ["workflow."], // Project-scoped workflow editor has its own commit service.
   "TasksPage.tsx": ["tasks."],
   "TokenStatsModal.tsx": ["stats."],
   "UpdateModal.tsx": ["updater."],
@@ -597,7 +598,8 @@ const SHARED_SEGMENTS = ["app.", "common."];
  */
 const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
   dashboard: ["dashboard."], // 运行总览页面与代理活动摘要
-  chat: ["chat.", "composer.", "notice.", "queue."], // 消息区 / 输入区 / 引导条 / 运行队列
+  // 消息区 / 输入区 / 引导条 / 运行队列 / 交付验收只读投影（#16 完成门）
+  chat: ["chat.", "composer.", "notice.", "queue.", "acceptance.", "workflow."],
   files: ["files."], // 会话产物与文件列表
   quota: [], // 额度与余额：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
   shell: ["closeTab.", "exitApp.", "git.", "nav.", "rightbar.", "sessions.", "skills.", "titlebar."], // 壳层：左导航 / 顶栏 / 右栏 / 拦截框 / git 身份条 / 技能详情
@@ -617,6 +619,8 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "dashboard/RuntimeDashboard.tsx": ["dashboard."], // 总览状态、层级、详情与回跳反馈
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings."], // composer.* 自有；settings.* 为跨段借用（见下）
+  "chat/WorkflowPanel.tsx": ["workflow."],
+  "chat/AcceptancePanel.tsx": ["acceptance."], // 交付验收只读投影（#16 完成门）：acceptance.* 由 chat 目录自有
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
   "chat/ExternalDirPrompt.tsx": ["composer."], // 项目外目录放行确认框（文案归 composer 段，与附件入口同一处）
   "chat/QueuePanel.tsx": ["common.", "queue."], // queue.* 自有；common.delete 通用删除动作
@@ -628,7 +632,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "shell/OpenInEditorSelect.tsx": ["rightbar."], // 右栏「在编辑器中打开」下拉
   "shell/ProjectNav.tsx": ["common.", "nav.", "sessions.", "tasks."], // 左导航 nav.*；common.* 通用动作；sessions.rename 会话重命名；tasks.* 见 CROSS_SEGMENT_BORROWINGS
   "shell/RightBar.tsx": ["common.", "rightbar."], // 目标段已随目标模式整体删除移除
-  "shell/RightBarInfo.tsx": ["common.", "rightbar.", "titlebar.", "files.", "subagent."],
+  "shell/RightBarInfo.tsx": ["common.", "rightbar.", "titlebar.", "files.", "subagent.", "acceptance."],
   "shell/SkillDetailModal.tsx": ["skills."], // 技能详情弹层
   "shell/TopBar.tsx": ["app.", "settings.", "tasks.", "dashboard.", "titlebar."], // 顶栏：app.* 折叠动作；titlebar.* 会话胶囊；覆盖页标题见 CROSS_SEGMENT_BORROWINGS
   "subagent/SubagentDrawer.tsx": ["chat.", "composer.", "subagent."], // 同主聊天的活动状态与同 Composer 的档位行（见下）
@@ -648,6 +652,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
  */
 const CROSS_SEGMENT_BORROWINGS: Record<string, Record<string, string>> = {
   "shell/RightBarInfo.tsx": {
+    "acceptance.": "右栏信息页挂载交付验收折叠段，段标题就是 acceptance.title，同一段自有文案",
     "titlebar.": "临时会话标题与标题栏显示同一会话类型，复用 titlebar.tempSession",
     "files.": "概览展示的就是文件页签的同一份会话产物及空态和已删除状态",
     "subagent.": "概览与过程抽屉共享当前会话子代理的运行和收尾状态文案",
@@ -696,6 +701,10 @@ const DYNAMIC_KEY_CALLS: Record<string, Record<string, string>> = {
     "t(activePage.labelKey)": "操作条里的当前页名由注册表页名键派生",
   },
   "chat/ChatMessages.tsx": { "t(hintKey)": "错误引导文案键随消息元数据派生（各 kind 的文案键由后端回喂）" },
+  "chat/AcceptancePanel.tsx": {
+    "t(DECISION_KEY[data.decision])": "完成门裁决文案由 DECISION_KEY 全枚举映射到 acceptance.decision.*",
+    "t(STATUS_KEY[item.status])": "单项验收状态文案由 STATUS_KEY 全枚举映射到 acceptance.status.*",
+  },
   "chat/Composer.tsx": {
     "t(modeDescKeys[mode])": "审批模式说明键由 mode 派生（modeDescKeys 表）",
   },

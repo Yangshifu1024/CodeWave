@@ -36,12 +36,19 @@ test("existing check names are always-run gates for both entire matrices", () =>
   const command = /^        run: (.+)$/m.exec(gate)?.[1];
   assert.equal(command, 'test "$BACKEND_RESULT" = success && test "$FRONTEND_RESULT" = success');
   assert.doesNotMatch(gate, /continue-on-error:/);
-  // The aggregation runner is Ubuntu. Test the actual shell predicate for all status pairs.
+  // The aggregation runner is Ubuntu. Every backend/frontend status pair must fail closed.
   if (process.platform !== "win32") {
+    assert.match(command, /&&/);
+    for (const key of ["BACKEND_RESULT", "FRONTEND_RESULT"]) {
+      assert.ok(command.includes(`test "$${key}" = success`), key);
+    }
     for (const backend of ["success", "failure", "cancelled", "skipped", ""]) {
       for (const frontend of ["success", "failure", "cancelled", "skipped", ""]) {
-        const result = spawnSync("sh", ["-c", command], { env: { ...process.env, BACKEND_RESULT: backend, FRONTEND_RESULT: frontend } });
-        assert.equal(result.status === 0, backend === "success" && frontend === "success", `${backend}/${frontend}`);
+        const result = spawnSync("sh", ["-c", command], {
+          env: { ...process.env, BACKEND_RESULT: backend, FRONTEND_RESULT: frontend },
+        });
+        const expected = backend === "success" && frontend === "success";
+        assert.equal(result.status === 0, expected, `${backend}/${frontend}`);
       }
     }
   }

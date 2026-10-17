@@ -79,15 +79,23 @@ pub struct McpServerView {
     extra_keys: Vec<String>,
     source: String,
     overridden: Option<String>,
+    source_path: String,
+    launch: crate::mcp::LaunchStatus,
 }
 
-fn view_of(m: &MergedServer) -> McpServerView {
+async fn view_of(
+    m: MergedServer,
+    core: &AgentCore,
+    session_id: Option<&str>,
+) -> Result<McpServerView, String> {
+    let source = scope_ref(core, session_id, m.source)?;
+    let key = crate::mcp::launch_key(core, &source, session_id, &m.name).map_err(err)?;
     let (transport, inferred) = match m.cfg.resolve_transport() {
         Ok(McpTransport::Stdio) => ("stdio", !m.cfg.transport_is_explicit()),
         Ok(McpTransport::StreamableHttp) => ("streamable_http", !m.cfg.transport_is_explicit()),
         Err(_) => ("unknown", false),
     };
-    McpServerView {
+    Ok(McpServerView {
         name: m.name.clone(),
         transport: transport.to_string(),
         transport_inferred: inferred,
@@ -105,7 +113,9 @@ fn view_of(m: &MergedServer) -> McpServerView {
         extra_keys: m.cfg.extra.keys().cloned().collect(),
         source: m.source.as_str().to_string(),
         overridden: m.overridden.map(|s| s.as_str().to_string()),
-    }
+        source_path: key.source.display().to_string(),
+        launch: core.mcp.current_launch_status(&key, &m.cfg).await,
+    })
 }
 
 /// 一层配置的视图载荷。
@@ -124,28 +134,45 @@ pub struct McpConfigDocPayload {
     issues: Vec<ConfigIssue>,
 }
 
-fn doc_payload(sref: &ScopeRef, doc: &ScopeDoc, effective: &[MergedServer]) -> McpConfigDocPayload {
-    McpConfigDocPayload {
+async fn doc_payload(
+    sref: &ScopeRef,
+    doc: &ScopeDoc,
+    effective: &[MergedServer],
+    core: &AgentCore,
+    session_id: Option<&str>,
+) -> Result<McpConfigDocPayload, String> {
+    Ok(McpConfigDocPayload {
         scope: sref.scope.as_str().to_string(),
         path: sref.path.display().to_string(),
         json: doc.raw.clone(),
         version: crate::mcp::scope_version(&doc.raw),
-        servers: doc
-            .servers
-            .iter()
-            .map(|(name, cfg)| {
-                view_of(&MergedServer {
+        servers: futures::future::join_all(doc.servers.iter().map(|(name, cfg)| {
+            view_of(
+                MergedServer {
                     name: name.clone(),
                     cfg: cfg.clone(),
                     source: sref.scope,
                     overridden: None,
                     issues: Vec::new(),
-                })
-            })
-            .collect(),
-        effective: effective.iter().map(view_of).collect(),
+                },
+                core,
+                session_id,
+            )
+        }))
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?,
+        effective: futures::future::join_all(
+            effective
+                .iter()
+                .cloned()
+                .map(|server| view_of(server, core, session_id)),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?,
         issues: doc.issues.clone(),
-    }
+    })
 }
 
 /// 合并后的生效条目（全局 ∪ 项目）。
@@ -170,7 +197,120 @@ pub async fn mcp_list_config(
     let sref = scope_ref(&core, session_id.as_deref(), scope)?;
     let doc = load_scope(&sref);
     let effective = effective_servers(&core, session_id.as_deref());
-    Ok(doc_payload(&sref, &doc, &effective))
+    doc_payload(&sref, &doc, &effective, &core, session_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn mcp_prepare_launch(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    expected_version: String,
+    action: crate::mcp::ReviewAction,
+) -> Result<crate::mcp::LaunchReview, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    crate::mcp::prepare_launch_review(
+        &core,
+        &source,
+        session_id.as_deref(),
+        &name,
+        &expected_version,
+        action,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mcp_confirm_launch(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    confirmation: String,
+) -> Result<crate::mcp::LaunchReviewReceipt, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    wire_sink(&core).await;
+    crate::mcp::confirm_launch_review(&core, &source, session_id.as_deref(), &name, &confirmation)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mcp_launch_operation(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    operation_id: String,
+) -> Result<crate::mcp::LaunchReviewReceipt, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    crate::mcp::launch_operation(&core, &source, session_id.as_deref(), &name, &operation_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn mcp_discard_launch_review(core: Core<'_>, confirmation: String) {
+    core.mcp.discard_launch_review(&confirmation);
+}
+
+#[tauri::command]
+pub async fn mcp_set_launch_trust(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    expected_version: String,
+    trusted: bool,
+) -> Result<crate::mcp::LaunchStatus, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    wire_sink(&core).await;
+    crate::mcp::set_launch_trust(
+        &core,
+        &source,
+        session_id.as_deref(),
+        &name,
+        &expected_version,
+        trusted,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mcp_prepare_test(
+    core: Core<'_>,
+    session_id: Option<String>,
+    scope: String,
+    name: String,
+    config: Value,
+) -> Result<crate::mcp::ProbeChallenge, String> {
+    let source = scope_ref(
+        &core,
+        session_id.as_deref(),
+        Scope::parse(&scope).map_err(err)?,
+    )?;
+    let key = crate::mcp::launch_key(&core, &source, session_id.as_deref(), &name).map_err(err)?;
+    let cfg = crate::mcp::validate_server(&name, config).map_err(err)?;
+    core.mcp.prepare_probe(&key, &cfg).map_err(err)
 }
 
 /// 保存某作用域的 MCP 配置。
@@ -269,14 +409,20 @@ pub async fn mcp_test(
     scope: String,
     name: String,
     config: Value,
+    confirmation: Option<String>,
 ) -> Result<Value, String> {
     let scope = Scope::parse(&scope).map_err(err)?;
     // Validate project context but never read any on-disk server or change pool membership.
-    let _ = scope_ref(&core, session_id.as_deref(), scope)?;
+    let source = scope_ref(&core, session_id.as_deref(), scope)?;
+    let key = crate::mcp::launch_key(&core, &source, session_id.as_deref(), &name).map_err(err)?;
     let cfg = crate::mcp::validate_server(&name, config).map_err(err)?;
     let http = core.client.read().unwrap().clone();
     Ok(
-        match crate::mcp::McpManager::test_connection(cfg, http).await {
+        match core
+            .mcp
+            .test_connection(&key, cfg, confirmation.as_deref().unwrap_or_default(), http)
+            .await
+        {
             Ok(n) => serde_json::json!({ "ok": true, "tools": n, "error": Value::Null }),
             Err(e) => serde_json::json!({ "ok": false, "tools": 0, "error": e }),
         },

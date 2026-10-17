@@ -1,10 +1,14 @@
-//! fence 判定核心：三级分析 L1 删除黑名单 → L2 AST 写目标 → L3 高危模式，外加 plan 档只读白名单（L0）。
+//! fence 判定核心：内部状态预扫描后，走 L1 删除黑名单 / L2 AST 写目标 / L3 高危模式与 plan 只读白名单（L0）。
 //! shell 可切换（cmd/fish/WSL）加固：cmd/fish 危险命令词表（名字级 + 清空写短语）与 wsl 内层命令串递归检查。
 //! 加固批次 [docs/testing](../../../../docs/testing.md)：命令名反混淆（`r"m"`、`${IFS}`）、
 //! `--force-with-lease` 不再误报、PowerShell AST 遍历。
 
 use crate::tools::pathutil::{self, WriteRoots};
 use std::path::{Path, PathBuf};
+
+#[path = "protected.rs"]
+mod protected;
+pub use protected::check_protected_command;
 
 /// Confirm 升级的理由：决定审批卡上的提示文案，也是 plan 档 G5 拦截时的「为什么」。
 #[derive(Debug, Clone, PartialEq)]
@@ -636,7 +640,7 @@ pub fn check_command_policy(
     check_command_depth(cmd, cwd, roots, policy, 0)
 }
 
-/// 带嵌套深度的判定主流程：先走 inner 判定，plan_readonly 下把一切 Confirm 统一转 Block（G5）。
+/// 带嵌套深度的主流程：内部状态先硬拒绝，再判定普通策略；Plan 下 Confirm 转 Block（G5）。
 fn check_command_depth(
     cmd: &str,
     cwd: &Path,
@@ -644,6 +648,10 @@ fn check_command_depth(
     policy: FencePolicy,
     depth: u8,
 ) -> Verdict {
+    let protected = check_protected_command(cmd, cwd, roots);
+    if matches!(protected, Verdict::Block { .. }) {
+        return protected;
+    }
     // G5（[docs/plan-and-approval](../../../../docs/plan-and-approval.md)）：plan_readonly 下任何 Confirm 一律转 Block（E_PLAN_READONLY）。
     // 理由：plan 档的只读承诺不能被一次误点确认绕过；重定向引导语 = 把命令写进方案、批准后执行。
     // 覆盖面：白名单外命令、灾难/高危命令、白名单命令带写重定向（InsideWrite）——一切本需确认的路径。

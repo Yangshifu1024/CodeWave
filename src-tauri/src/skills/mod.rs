@@ -8,8 +8,15 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+mod catalog;
+#[cfg(test)]
+mod catalog_tests;
+use catalog::SkillCatalogSnapshot;
+pub use catalog::{SkillAudit, SkillAuditEntry, SkillCandidate, SkillIssue};
 
 /// 技能元数据（列表/注入索引用的轻量视图）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -26,6 +33,8 @@ pub struct SkillMeta {
     /// 是否可删除（仅托管目录：data_dir/skills 与 project_dir/skills；内置/兼容目录不可删）
     #[serde(default)]
     pub deletable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<crate::resources::ResourceOrigin>,
 }
 
 /// 完整技能：元数据 + 正文（调用时才注入全文）。
@@ -71,6 +80,7 @@ pub fn parse_skill_md(text: &str, fallback_name: &str) -> Option<Skill> {
                 when_to_use: fm.when_to_use.unwrap_or_default(),
                 origin: String::new(),
                 deletable: false,
+                resource: None,
             },
             body: body.to_string(),
         }
@@ -82,6 +92,7 @@ pub fn parse_skill_md(text: &str, fallback_name: &str) -> Option<Skill> {
                 when_to_use: String::new(),
                 origin: String::new(),
                 deletable: false,
+                resource: None,
             },
             body: text.to_string(),
         }
@@ -115,7 +126,7 @@ whenToUse: Use when the user asks to index/summarize the repo structure, or befo
    # Code Graph: <仓库名>
    ## 功能 → 文件速查表
    | 想找什么 | 去哪里 |
-   5. 用 `create`/`edit` 写入，并提醒用户该文件会被注入后续会话的系统提示词。
+   5. 用 `create`/`edit` 写入，并提醒用户在设置中审阅并许可该版本后，文件才会进入后续运行的系统提示词。
 "#,
         ),
         (
@@ -392,26 +403,44 @@ PDF 里的文字是「用哪个字形画在哪里」，而不是「这段文字�
     ]
 }
 
-/// TTL 缓存槽位：(采集时刻, scope key, 以技能名为键的索引)。
-type SkillCache = Mutex<Option<(Instant, String, HashMap<String, Skill>)>>;
+/// TTL cache: timestamp, scope/policy key, and one execution/inspection snapshot.
+type SkillCache = Mutex<Option<(Instant, SkillCacheKey, Arc<SkillCatalogSnapshot>)>>;
 
 /// 技能索引：带 scope key 的 TTL 缓存，负责扫描/查询/列表。
 pub struct SkillIndex {
+    /// Immutable compatibility source root. Isolated evaluations inject a sandbox home
+    /// rather than changing process-wide HOME while other sessions are running.
+    home: Option<PathBuf>,
     /// 带 scope key 的 TTL 缓存（评审 M3：切换工作区/项目不得互串缓存）
     cache: SkillCache,
     /// 缓存有效期
     ttl: Duration,
 }
 
-/// 缓存 scope key：workspace + project_dir 唯一确定一份技能索引。
-fn cache_key(workspace: &Path, project_dir: Option<&Path>) -> String {
-    format!(
-        "{}|{}",
-        workspace.display(),
-        project_dir
-            .map(|p| p.display().to_string())
-            .unwrap_or_default()
-    )
+/// Scope and policy are part of cache identity; policy changes must take effect without TTL delay.
+#[derive(PartialEq, Eq)]
+struct SkillCacheKey {
+    workspace: PathBuf,
+    data_dir: PathBuf,
+    project_dir: Option<PathBuf>,
+    disabled: Vec<String>,
+}
+
+fn cache_key(
+    workspace: &Path,
+    data_dir: &Path,
+    project_dir: Option<&Path>,
+    disabled: &[String],
+) -> SkillCacheKey {
+    let mut disabled = disabled.to_vec();
+    disabled.sort_unstable();
+    disabled.dedup();
+    SkillCacheKey {
+        workspace: workspace.to_path_buf(),
+        data_dir: data_dir.to_path_buf(),
+        project_dir: project_dir.map(Path::to_path_buf),
+        disabled,
+    }
 }
 
 /// 路径归一为正斜杠形态（origin 与目录前缀比较时统一 Windows 反斜杠差异）。
@@ -428,30 +457,49 @@ impl Default for SkillIndex {
 impl SkillIndex {
     /// 构造默认索引（TTL 10s）。
     pub fn new() -> Self {
+        Self::with_home(dirs::home_dir())
+    }
+
+    pub fn with_home(home: Option<PathBuf>) -> Self {
         SkillIndex {
+            home,
             cache: Mutex::new(None),
             ttl: Duration::from_secs(10),
         }
     }
 
-    /// 清空 TTL 缓存（下次 get/list 重建索引）；「重新加载」与删除后同步均走此路径。
+    /// Clear the shared get/list/audit snapshot; the next consumer rebuilds it.
     pub fn invalidate(&self) {
         *self.cache.lock().unwrap() = None;
     }
 
     /// 删除托管技能（仅 data_dir/skills 与 project_dir/skills；内置与 .claude/.agents 兼容来源拒绝）。
     /// 全量索引查找、不施加 disabled 过滤（已禁用的托管技能同样可删，避免与「不存在」混淆）。
-    /// 双防线：索引 deletable 桶标记 + canonicalize 后前缀校验（防路径穿越/符号链接绕过）；成功后缓存失效。
+    /// Bind deletion to the reviewed source/version, re-read its bytes, and check the managed root.
+    /// Path checks do not provide atomic exclusion against unrelated filesystem writers.
     pub fn delete_skill(
         &self,
         workspace: &Path,
         data_dir: &Path,
         project_dir: Option<&Path>,
         name: &str,
+        expected_source: &str,
+        expected_version: &str,
     ) -> Result<(), String> {
-        let skill = Self::build(workspace, data_dir, &[], project_dir)
+        let mut cache = self.cache.lock().unwrap();
+        *cache = None;
+        let skill = self
+            .fresh(workspace, data_dir, &[], project_dir)
             .remove(name)
             .ok_or_else(|| format!("技能不存在：{name}"))?;
+        let resource = skill
+            .meta
+            .resource
+            .as_ref()
+            .ok_or("Skill has no source identity")?;
+        if resource.identity != expected_source || resource.version != expected_version {
+            return Err("Skill source or content changed; reload before deleting".into());
+        }
         if !skill.meta.deletable {
             return Err(format!(
                 "该技能来源不可删除（仅托管 .codewave/skills 可删）：{}",
@@ -461,31 +509,65 @@ impl SkillIndex {
         let canonical = PathBuf::from(&skill.meta.origin)
             .canonicalize()
             .map_err(|e| format!("来源路径已不存在：{e}"))?;
-        let in_managed = |base: &Path| {
-            base.join("skills")
-                .canonicalize()
-                .is_ok_and(|b| canonical.starts_with(b))
+        let base = match resource.source {
+            crate::resources::ResourceSource::GlobalManaged => data_dir.join("skills"),
+            crate::resources::ResourceSource::ProjectManaged => {
+                project_dir.ok_or("Project scope closed")?.join("skills")
+            }
+            _ => return Err("This skill source cannot be deleted".into()),
         };
-        let managed = in_managed(data_dir) || project_dir.is_some_and(in_managed);
-        if !managed {
+        let canonical_base = catalog::managed_root(&base)
+            .ok_or("Managed skill root is linked or outside its scope")?;
+        if !canonical.starts_with(&canonical_base) {
             return Err(format!("来源路径不在托管目录内：{}", skill.meta.origin));
         }
-        // 目录形态 origin 指向 <目录>/SKILL.md：删除目标取父目录；单文件形态（xxx.md）即文件本身
-        let target = if canonical.file_name().is_some_and(|n| n == "SKILL.md") {
-            canonical
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| canonical.clone())
-        } else {
-            canonical.clone()
+        let origin = PathBuf::from(&skill.meta.origin);
+        let relative = origin
+            .strip_prefix(&base)
+            .map_err(|_| "Skill source scope changed")?;
+        // A single-file skills/SKILL.md must never turn into deletion of the skills root.
+        let target = match relative.components().count() {
+            1 => origin.clone(),
+            2 if origin.file_name().is_some_and(|name| name == "SKILL.md") => {
+                origin.parent().unwrap().to_path_buf()
+            }
+            _ => return Err("Unsupported skill deletion target".into()),
         };
+        if target.canonicalize().map_err(|error| error.to_string())? == canonical_base
+            || std::fs::symlink_metadata(&target)
+                .map_err(|error| error.to_string())?
+                .file_type()
+                .is_symlink()
+        {
+            return Err("Skill deletion cannot remove a source root or linked entry".into());
+        }
+        let bytes = std::fs::read(&origin).map_err(|error| error.to_string())?;
+        let current = origin.canonicalize().map_err(|error| error.to_string())?;
+        if crate::resources::ResourceOrigin::file(resource.source, &current, &bytes) != *resource {
+            return Err("Skill source or content changed; reload before deleting".into());
+        }
+        let target_canonical = target.canonicalize().map_err(|error| error.to_string())?;
+        if catalog::managed_root(&base).as_ref() != Some(&canonical_base)
+            || !target_canonical.starts_with(&canonical_base)
+            || target_canonical == canonical_base
+            || std::fs::symlink_metadata(&origin)
+                .map_err(|error| error.to_string())?
+                .file_type()
+                .is_symlink()
+            || std::fs::symlink_metadata(&target)
+                .map_err(|error| error.to_string())?
+                .file_type()
+                .is_symlink()
+            || (target != origin && current.parent() != Some(target_canonical.as_path()))
+        {
+            return Err("Skill deletion source changed or became linked".into());
+        }
         let res = if target.is_dir() {
             std::fs::remove_dir_all(&target)
         } else {
             std::fs::remove_file(&target)
         };
         res.map_err(|e| format!("删除失败：{e}"))?;
-        self.invalidate();
         Ok(())
     }
 
@@ -517,45 +599,63 @@ impl SkillIndex {
         disabled: &[String],
         project_dir: Option<&Path>,
     ) -> HashMap<String, Skill> {
-        let mut map: HashMap<String, Skill> = HashMap::new();
-        // 按低 → 高优先级插入（后者覆盖）
-        for (name, body) in builtin_skills() {
-            if let Some(mut s) = parse_skill_md(body, name) {
-                s.meta.origin = "<builtin>".into();
-                map.insert(s.meta.name.clone(), s);
-            }
+        SkillCatalogSnapshot::build(home, workspace, data_dir, disabled, project_dir).effective
+    }
+
+    /// Uncached execution snapshot, using the same source roots as list/audit/delete.
+    pub fn fresh(
+        &self,
+        workspace: &Path,
+        data_dir: &Path,
+        disabled: &[String],
+        project_dir: Option<&Path>,
+    ) -> HashMap<String, Skill> {
+        Self::build_with_home(
+            self.home.as_deref(),
+            workspace,
+            data_dir,
+            disabled,
+            project_dir,
+        )
+    }
+
+    fn snapshot(
+        &self,
+        workspace: &Path,
+        data_dir: &Path,
+        disabled: &[String],
+        project_dir: Option<&Path>,
+    ) -> Arc<SkillCatalogSnapshot> {
+        let key = cache_key(workspace, data_dir, project_dir, disabled);
+        let mut cache = self.cache.lock().unwrap();
+        if let Some((at, cached_key, snapshot)) = cache.as_ref()
+            && *cached_key == key
+            && at.elapsed() < self.ttl
+        {
+            return snapshot.clone();
         }
-        if let Some(h) = home {
-            // 用户级兼容：~/.claude/skills < ~/.agents/skills（延续 .agents > .claude 相对顺序）
-            scan_dir_into(&h.join(".claude").join("skills"), &mut map);
-            scan_dir_into(&h.join(".agents").join("skills"), &mut map);
-        }
-        scan_dir_into(&workspace.join(".claude").join("skills"), &mut map);
-        scan_dir_into(&workspace.join(".agents").join("skills"), &mut map);
-        scan_dir_into(&data_dir.join("skills"), &mut map);
-        if let Some(pd) = project_dir {
-            scan_dir_into(&pd.join("skills"), &mut map);
-        }
-        for d in disabled {
-            map.remove(d);
-        }
-        // deletable 桶标记：仅托管目录（全局/项目 .codewave/skills）可删；
-        // 与删除第二道校验同源（<dir>/skills 前缀），尾部分隔符防字符串前缀混淆（C:/a/b 误匹配 C:/a/bc）
-        let mut managed: Vec<String> = vec![format!(
-            "{}/",
-            norm_slash(&data_dir.join("skills").display().to_string())
-        )];
-        if let Some(pd) = project_dir {
-            managed.push(format!(
-                "{}/",
-                norm_slash(&pd.join("skills").display().to_string())
-            ));
-        }
-        for s in map.values_mut() {
-            let o = norm_slash(&s.meta.origin);
-            s.meta.deletable = managed.iter().any(|p| o.starts_with(p.as_str()));
-        }
-        map
+        // Serialize rebuilds with invalidation so a late scan cannot restore a deleted catalog.
+        let snapshot = Arc::new(SkillCatalogSnapshot::build(
+            self.home.as_deref(),
+            workspace,
+            data_dir,
+            disabled,
+            project_dir,
+        ));
+        *cache = Some((Instant::now(), key, snapshot.clone()));
+        snapshot
+    }
+
+    pub fn audit(
+        &self,
+        workspace: &Path,
+        data_dir: &Path,
+        disabled: &[String],
+        project_dir: Option<&Path>,
+    ) -> SkillAudit {
+        self.snapshot(workspace, data_dir, disabled, project_dir)
+            .audit
+            .clone()
     }
 
     /// 按名取单个技能（命中 TTL 缓存则免扫描；未命中重建并回填缓存）。
@@ -567,20 +667,10 @@ impl SkillIndex {
         project_dir: Option<&Path>,
         name: &str,
     ) -> Option<Skill> {
-        let key = cache_key(workspace, project_dir);
-        {
-            let g = self.cache.lock().unwrap();
-            if let Some((at, cached_key, map)) = g.as_ref()
-                && *cached_key == key
-                && at.elapsed() < self.ttl
-            {
-                return map.get(name).cloned();
-            }
-        }
-        let map = Self::build(workspace, data_dir, disabled, project_dir);
-        let v = map.get(name).cloned();
-        *self.cache.lock().unwrap() = Some((Instant::now(), key, map));
-        v
+        self.snapshot(workspace, data_dir, disabled, project_dir)
+            .effective
+            .get(name)
+            .cloned()
     }
 
     /// 列出全部技能元数据（显示排序：内置 > 项目 .codewave/skills > 全局 ~/.codewave/skills > 其他，
@@ -592,7 +682,6 @@ impl SkillIndex {
         disabled: &[String],
         project_dir: Option<&Path>,
     ) -> Vec<SkillMeta> {
-        let key = cache_key(workspace, project_dir);
         // 路径统一正斜杠后做前缀归类（Windows 反斜杠与 origin 的 display 形态一致化）
         let norm = norm_slash;
         let proj_prefix = project_dir.map(|p| norm(&p.display().to_string()));
@@ -613,51 +702,13 @@ impl SkillIndex {
             v.sort_by(|a, b| (bucket(&a.origin), &a.name).cmp(&(bucket(&b.origin), &b.name)));
             v
         };
-        {
-            let g = self.cache.lock().unwrap();
-            if let Some((at, cached_key, map)) = g.as_ref()
-                && *cached_key == key
-                && at.elapsed() < self.ttl
-            {
-                return sorted(map.values().map(|s| s.meta.clone()).collect());
-            }
-        }
-        let map = Self::build(workspace, data_dir, disabled, project_dir);
-        let v = sorted(map.values().map(|s| s.meta.clone()).collect());
-        *self.cache.lock().unwrap() = Some((Instant::now(), key, map));
-        v
-    }
-}
-
-/// 扫描一个技能目录并入索引：目录形态 `<name>/SKILL.md`，单文件形态 `<name>.md` 兼容。
-fn scan_dir_into(base: &PathBuf, map: &mut HashMap<String, Skill>) {
-    let Ok(rd) = std::fs::read_dir(base) else {
-        return;
-    };
-    for entry in rd.flatten() {
-        let dir = entry.path().join("SKILL.md");
-        if !dir.is_file() {
-            // 单文件技能：name.md
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("md")
-                && p.is_file()
-                && let Ok(text) = std::fs::read_to_string(&p)
-            {
-                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-                if let Some(mut s) = parse_skill_md(&text, stem) {
-                    s.meta.origin = p.display().to_string();
-                    map.insert(s.meta.name.clone(), s);
-                }
-            }
-            continue;
-        }
-        if let Ok(text) = std::fs::read_to_string(&dir) {
-            let stem = entry.file_name().to_string_lossy().into_owned();
-            if let Some(mut s) = parse_skill_md(&text, &stem) {
-                s.meta.origin = dir.display().to_string();
-                map.insert(s.meta.name.clone(), s);
-            }
-        }
+        sorted(
+            self.snapshot(workspace, data_dir, disabled, project_dir)
+                .effective
+                .values()
+                .map(|s| s.meta.clone())
+                .collect(),
+        )
     }
 }
 
@@ -686,6 +737,25 @@ pub fn prompt_listing(metas: &[SkillMeta]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn delete_current(
+        index: &SkillIndex,
+        workspace: &Path,
+        data_dir: &Path,
+        project_dir: Option<&Path>,
+        name: &str,
+    ) -> Result<(), String> {
+        let resource = SkillIndex::build(workspace, data_dir, &[], project_dir)
+            .remove(name)
+            .and_then(|skill| skill.meta.resource);
+        let identity = resource
+            .as_ref()
+            .map_or("", |resource| resource.identity.as_str());
+        let version = resource
+            .as_ref()
+            .map_or("", |resource| resource.version.as_str());
+        index.delete_skill(workspace, data_dir, project_dir, name, identity, version)
+    }
 
     #[test]
     fn frontmatter_parsing() {
@@ -805,7 +875,7 @@ mod tests {
         )
         .unwrap();
         // 工作区 .agents/skills（agents 约定）；写成 CRLF 以延伸单测到真实读文件路径，
-        // 防止将来在 scan_dir_into 调用链上重新引入 LF 假设
+        // Guard the catalog scan against reintroducing LF-only frontmatter parsing.
         let a = ws.path().join(".agents/skills/agent-only");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::write(
@@ -985,20 +1055,13 @@ mod tests {
             "内置不可删"
         );
         // 删除成功：目录形态整目录移除 + 缓存自动失效（下次 list 立即不可见）
-        idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "global-skill")
-            .unwrap();
+        delete_current(&idx, ws.path(), dd.path(), Some(pd.path()), "global-skill").unwrap();
         assert!(!dd.path().join("skills/global-skill").exists());
         let metas2 = idx.list(ws.path(), dd.path(), &[], Some(pd.path()));
         assert!(!metas2.iter().any(|m| m.name == "global-skill"));
         // 拒绝：不可删来源 / 不存在
-        assert!(
-            idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "compat-a")
-                .is_err()
-        );
-        assert!(
-            idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "nope")
-                .is_err()
-        );
+        assert!(delete_current(&idx, ws.path(), dd.path(), Some(pd.path()), "compat-a").is_err());
+        assert!(delete_current(&idx, ws.path(), dd.path(), Some(pd.path()), "nope").is_err());
         // 前缀混淆负例：临时会话（workspace == data_dir）下，工作区 .agents compat 技能
         // origin 位于 data_dir 之下但不在 data_dir/skills 内 → 不可删（旧实现按 data_dir 整体前缀会误标）
         install(dd.path(), ".agents/skills/ddcompat", "ddcompat");
@@ -1013,12 +1076,10 @@ mod tests {
         );
         // 已禁用的托管技能同样可删（全量索引查找，不与「不存在」混淆）
         install(pd.path(), "skills/dis", "dis");
-        idx2.delete_skill(ws.path(), dd.path(), Some(pd.path()), "dis")
-            .unwrap();
+        delete_current(&idx2, ws.path(), dd.path(), Some(pd.path()), "dis").unwrap();
         assert!(!pd.path().join("skills/dis").exists());
         // 项目托管技能可删
-        idx.delete_skill(ws.path(), dd.path(), Some(pd.path()), "project-skill")
-            .unwrap();
+        delete_current(&idx, ws.path(), dd.path(), Some(pd.path()), "project-skill").unwrap();
         assert!(!pd.path().join("skills/project-skill").exists());
     }
 
@@ -1028,6 +1089,7 @@ mod tests {
         let dd = tempfile::tempdir().unwrap();
         // 长 TTL：测试期内缓存绝不自然过期，重载可见性只由 invalidate 决定
         let idx = SkillIndex {
+            home: None,
             cache: Mutex::new(None),
             ttl: Duration::from_secs(3600),
         };
@@ -1055,5 +1117,53 @@ mod tests {
                 .iter()
                 .any(|m| m.name == "later")
         );
+    }
+
+    #[test]
+    fn disabled_changes_apply_to_cached_get_and_list_in_both_directions() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let idx = SkillIndex {
+            home: None,
+            cache: Mutex::new(None),
+            ttl: Duration::from_secs(3600),
+        };
+        let name = "repo-index";
+        let disabled = vec![name.to_string()];
+        // Exercise both get->list and list->get cache population paths.
+        for populate_with_get in [true, false] {
+            idx.invalidate();
+            if populate_with_get {
+                assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+            } else {
+                assert!(
+                    idx.list(ws.path(), dd.path(), &[], None)
+                        .iter()
+                        .any(|s| s.name == name)
+                );
+            }
+            assert!(
+                idx.get(ws.path(), dd.path(), &disabled, None, name)
+                    .is_none()
+            );
+            assert!(
+                !idx.list(ws.path(), dd.path(), &disabled, None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+            assert!(
+                idx.list(ws.path(), dd.path(), &[], None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            // Also change policy with list as the first reader of the changed configuration.
+            assert!(
+                !idx.list(ws.path(), dd.path(), &disabled, None)
+                    .iter()
+                    .any(|s| s.name == name)
+            );
+            assert!(idx.get(ws.path(), dd.path(), &[], None, name).is_some());
+        }
     }
 }

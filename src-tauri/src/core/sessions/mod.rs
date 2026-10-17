@@ -18,7 +18,8 @@ pub(crate) mod segments;
 
 mod store;
 
-pub use cleanup::{CleanupOutcome, CleanupPreview, CleanupStatus};
+pub use cleanup::CleanupOutcome;
+pub use cleanup::{CleanupPreview, CleanupStatus};
 // `SaveReport` / `HistoryStatus` 是调用方契约（`core/agent/drive.rs` 的 checkpoint 返回值、
 // 前端 `SessionMeta.history_status` 的载荷）：定义在 store.rs、经本模块转出。
 // 转出是必要的（`mod store` 私有，外部只能走这里），而本 crate 的非测试代码尚未引用它们
@@ -28,4 +29,5 @@ pub use segments::{HistoryBoundary, HistoryFormat, SegmentInfo};
 #[allow(unused_imports)]
 pub use store::{
     ArtifactKind, ArtifactOp, HistoryLoad, HistoryStatus, SaveReport, SessionMeta, SessionStore,
+    ToolOccurrenceCursor, ToolOccurrenceRecord,
 };

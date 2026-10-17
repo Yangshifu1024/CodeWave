@@ -246,6 +246,22 @@ pub async fn delete_project(
         .filter(|m| m.project_id.as_deref() == Some(project_id.as_str()))
         .map(|m| m.id)
         .collect();
+    // #36-C0 前置检查：本进程正在跑的**不算冲突**，别的进程占着才是。
+    // 删掉别人正在写的历史是不可逆的，而"稍后再删"随时可以做。
+    let foreign: Vec<&String> = sessions
+        .iter()
+        .filter(|sid| core.store.session_held_by_other(sid))
+        .collect();
+    if !foreign.is_empty() {
+        return Err(format!(
+            "项目正被其它实例占用，无法删除（会话：{}）。请先关闭那边的 CodeWave 再试。",
+            foreign
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
     for sid in &sessions {
         match core.session(sid) {
             Some(rt) => {

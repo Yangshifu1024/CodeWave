@@ -303,6 +303,7 @@ impl Default for SessionIndex {
 /// 会话持久化存储：历史（gzip）+ 索引（JSON）+ 边车（todos / 产物 / 子代理历史）。
 /// 索引与产物是读-改-写全程持锁，并发检查点/删除/改名不得互相覆盖丢条目。
 pub struct SessionStore {
+    coordinator: std::sync::Arc<dyn crate::core::coordinator::Coordinator>,
     /// 数据根目录（~/.codewave 或测试临时目录）
     root: PathBuf,
     /// 历史保存互斥（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：
@@ -339,6 +340,13 @@ pub struct SessionStore {
     /// P4 历史体积的两条线（软告警 / 硬熔断）：生产恒为默认常量，测试用
     /// [`SessionStore::with_history_limits`] 注入小阈值。
     history_limits: HistoryLimits,
+    /// 本进程已认领的会话 owner（#36-C0）：session_id → 租约。
+    ///
+    /// **只在认领过时才做跨进程校验**：桌面单实例路径还没接 C0，若一律强制校验，
+    /// 会把"还没接协调"变成"历史根本存不下去"。认领之后校验则是硬门——
+    /// 别人的 run 抢走或代次变了，本进程宁可**不写**，也不能覆盖。
+    session_owners:
+        std::sync::Mutex<std::collections::HashMap<String, crate::core::coordinator::Lease>>,
     /// 测试用：索引写次数（会话清理「整批只写一次索引」回归断言的观察点）。
     /// 仅测试构建存在，不参与序列化也不影响生产路径。
     #[cfg(test)]
@@ -351,6 +359,7 @@ impl SessionStore {
     /// 以给定数据根构造存储（不立即建目录；写路径各自兜底）。
     pub fn new(data_root: PathBuf) -> Self {
         SessionStore {
+            coordinator: crate::core::process_coordination::FileCoordinator::new(&data_root),
             root: data_root,
             save_lock: std::sync::Mutex::new(()),
             watermarks: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -359,11 +368,199 @@ impl SessionStore {
             artifacts_lock: std::sync::Mutex::new(()),
             running: std::sync::Mutex::new(std::collections::HashSet::new()),
             history_limits: HistoryLimits::default(),
+            session_owners: std::sync::Mutex::new(std::collections::HashMap::new()),
             #[cfg(test)]
             index_writes: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             index_reads: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    pub fn with_coordinator(
+        mut self,
+        coordinator: std::sync::Arc<dyn crate::core::coordinator::Coordinator>,
+    ) -> Self {
+        self.coordinator = coordinator;
+        self
+    }
+
+    // ─────────────────── #36-C0 会话 owner ───────────────────
+
+    /// 协调根（`<data_root>/coord`）。
+    fn lease_store(&self) -> crate::core::process_coordination::LeaseStore {
+        crate::core::process_coordination::LeaseStore::new(&self.root.join("coord"))
+    }
+
+    /// 会话历史的租约键。
+    ///
+    /// 用 `history:<id>` 而不是裸 id：会话在别的域（项目根、MCP 进程）也可能有租约，
+    /// 共用一个键会让"占住会话"和"占住目录"互相误判。
+    fn session_resource(id: &str) -> String {
+        format!("history:{id}")
+    }
+
+    pub fn recover_session_owner_if_proven(&self, id: &str) -> anyhow::Result<bool> {
+        if let (Some(meta), Some(previous)) = (
+            self.get(id),
+            self.lease_store().read(&Self::session_resource(id)),
+        ) && crate::core::process_coordination::guardian::cleanup_proven(
+            Path::new(&meta.workspace),
+            id,
+            &previous.lease.root_run_id,
+            previous.pid,
+        ) {
+            self.lease_store().release(&previous.lease)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// 认领会话 owner（run 开始前调用）。
+    ///
+    /// 幂等：同 (root_run, attempt) 重复认领返回同一把租约。
+    pub fn claim_session_owner(
+        &self,
+        id: &str,
+        root_run_id: &str,
+        attempt: u32,
+    ) -> anyhow::Result<crate::core::coordinator::Lease> {
+        use crate::core::coordinator::AcquireRequest;
+        let request = AcquireRequest {
+            session_id: id.to_string(),
+            root_run_id: root_run_id.to_string(),
+            resource: Self::session_resource(id),
+            attempt,
+            expected_generation: None,
+        };
+        let lease = match self.coordinator.acquire(&request) {
+            Ok(lease) => lease,
+            Err(original) => {
+                let mut recovered = false;
+                if let (Some(meta), Some(previous)) =
+                    (self.get(id), self.lease_store().read(&request.resource))
+                    && crate::core::process_coordination::guardian::cleanup_proven(
+                        Path::new(&meta.workspace),
+                        id,
+                        &previous.lease.root_run_id,
+                        previous.pid,
+                    )
+                {
+                    self.lease_store().release(&previous.lease)?;
+                    recovered = true;
+                }
+                if !recovered {
+                    return Err(original.into());
+                }
+                self.coordinator.acquire(&request)?
+            }
+        };
+        if let Ok(mut m) = self.session_owners.lock() {
+            m.insert(id.to_string(), lease.clone());
+        }
+        Ok(lease)
+    }
+
+    /// 校验本进程认领的 owner 仍然有效。
+    ///
+    /// **没认领过就直接放行**（桌面单实例尚未接 C0）；认领过就必须逐字对上：
+    /// 租约被别人抢走、被 guardian 回收、代次变化，任何一种都意味着"现在写历史
+    /// 会覆盖别人的 run"，此时**宁可返回 Err**。
+    fn verify_session_owner(&self, id: &str) -> anyhow::Result<()> {
+        let claimed = match self.session_owners.lock() {
+            Ok(m) => m.get(id).cloned(),
+            Err(_) => anyhow::bail!("session ownership lock poisoned"),
+        };
+        let Some(claimed) = claimed else {
+            anyhow::ensure!(
+                !self.session_held_by_other(id),
+                "会话 {id} 由其它实例持有，拒绝写入"
+            );
+            return Ok(());
+        };
+        match self
+            .coordinator
+            .recover(id)?
+            .into_iter()
+            .find(|lease| lease.resource == claimed.resource)
+        {
+            Some(cur)
+                if cur.generation == claimed.generation
+                    && cur.root_run_id == claimed.root_run_id =>
+            {
+                Ok(())
+            }
+            Some(cur) => anyhow::bail!(
+                "会话 {id} 的 owner 租约已变（本地代次 {}，磁盘 {}）：拒绝写入以免覆盖他人 run",
+                claimed.generation,
+                cur.generation
+            ),
+            None => anyhow::bail!("会话 {id} 的 owner 租约已失效：拒绝写入以免覆盖他人 run"),
+        }
+    }
+
+    /// 释放本进程对该会话的 owner 认领（会话关闭 / 删除时调用）。
+    pub fn release_session_owner(&self, id: &str) {
+        let taken = match self.session_owners.lock() {
+            Ok(mut m) => m.remove(id),
+            Err(_) => None,
+        };
+        if let Some(l) = taken
+            && let Err(e) = self.coordinator.release(&l)
+            && e.code != "no_lease"
+        {
+            tracing::warn!("释放会话 {id} 的 owner 租约失败：{e}");
+        }
+    }
+
+    /// 该会话当前**被别的进程**占着吗（项目删除前的前置检查，#36-C0）。
+    ///
+    /// 判据用租约记录里的 **pid**：`root_run_id` 每个进程各不相同，拿它比自己
+    /// 没有意义。只看**别的进程**——本进程自己占着不算冲突，否则项目删除永远删不掉。
+    /// 租约读不出来（文件存在但损坏）时保守回答"被占"：放行的代价是删掉别人正在写的历史。
+    pub fn session_held_by_other(&self, id: &str) -> bool {
+        match self.coordinator.recover(id) {
+            Ok(leases) => {
+                let local = self.session_owners.lock().unwrap().get(id).cloned();
+                if leases
+                    .iter()
+                    .filter(|lease| lease.resource == Self::session_resource(id))
+                    .any(|lease| {
+                        local.as_ref().is_none_or(|local| {
+                            local.generation != lease.generation
+                                || local.root_run_id != lease.root_run_id
+                        })
+                    })
+                {
+                    return true;
+                }
+            }
+            Err(_) => return true,
+        }
+
+        let store = self.lease_store();
+        let resource = Self::session_resource(id);
+        match store.read(&resource) {
+            Some(rec) => rec.pid != std::process::id(),
+            None => store
+                .coord_root()
+                .join("leases")
+                .join(format!(
+                    "{}.json",
+                    crate::core::process_coordination::key_digest(&resource)
+                ))
+                .exists(),
+        }
+    }
+
+    /// 本进程认领过 owner 的会话（测试与 guardian 巡检用）。
+    pub fn claimed_sessions(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .session_owners
+            .lock()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        v.sort();
+        v
     }
 
     /// 覆盖历史体积的两条线（软告警 / 硬熔断）——**测试用**（生产恒用默认常量）：
@@ -518,11 +715,55 @@ impl SessionStore {
 
     /// M8：索引读-改-写全程持锁，并发检查点/删除不得互相覆盖。
     fn mutate_index<T>(&self, f: impl FnOnce(&mut SessionIndex) -> T) -> anyhow::Result<T> {
+        let _disk = crate::core::process_coordination::DiskLock::acquire(
+            &self.root.join("coord/session-index.lock"),
+        )?;
         let _guard = self.index_lock.lock().unwrap();
         let mut idx = self.load_index();
         let out = f(&mut idx);
         self.save_index(&idx)?;
         Ok(out)
+    }
+
+    /// 登记一条 **provisional** 会话元数据（此刻还没有任何消息）。
+    ///
+    /// ## 为什么在「还没说话」时就要落盘
+    ///
+    /// 索引条目原本只在 run 的检查点写入。于是「创建成功、还没发第一句话、
+    /// 进程就退出」的会话在磁盘上**根本不存在**：`session/load` 找不到它，
+    /// 会话列表里也没有它，用户拿到的那个 id 像是凭空给的。
+    ///
+    /// 规格把它写成硬要求：「新建会话先保存 provisional 元数据…最后提交 ready
+    /// 状态并返回 UUID，避免『创建成功但应用重启后 id 不存在』」。
+    ///
+    /// ## 幂等
+    ///
+    /// 重复调用是安全的：走同一条 [`Self::upsert_meta`]，`created_at` 保留首见值，
+    /// `message_count` 等内容字段在检查点到来之前一律不参与裁决。
+    pub fn save_provisional_meta(
+        &self,
+        id: &str,
+        workspace: &std::path::Path,
+        project_id: Option<&str>,
+        roots: &[String],
+    ) -> anyhow::Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.upsert_meta(SessionMeta {
+            id: id.to_string(),
+            // 空标题：自动命名在第一次检查点后才有依据，提前编一个反而要二次改写。
+            title: String::new(),
+            workspace: workspace.to_string_lossy().into_owned(),
+            model_id: None,
+            created_at: now.clone(),
+            updated_at: now,
+            message_count: 0,
+            project_id: project_id.map(str::to_string),
+            roots: roots.to_vec(),
+            running: false,
+            interrupted: None,
+            last_opened_at: None,
+            history_status: None,
+        })
     }
 
     /// 插入或更新一条会话元数据（持锁）。
@@ -587,7 +828,16 @@ impl SessionStore {
     /// run 开始（`true`）/ 收尾（`false`）时落盘 `running` 标志。
     /// 索引中尚无该会话（新建会话首次 run 尚未检查点）时只记内存集合，待其首次 upsert 时带上。
     /// 返回索引中是否已有该条目（调用方据此判断标记是否已落盘）。
+    /// 置/清 running 标记。**清**时顺带释放本进程对该会话的 owner 租约（#36-C0）。
+    ///
+    /// 这只是**兜底**：主释放点是 `SessionRuntime::finish_run`（唯一宿主无关的收尾信号）。
+    /// 挂在这里是防御性的——某些宿主在 run 没真正结束时就会清 running，提前放锁无害；
+    /// 释放失败只告警：残留租约按"崩溃保守 busy"处理，由另一个 guardian 显式回收，
+    /// 比在这里让整轮收尾失败要好。
     pub fn mark_running(&self, id: &str, running: bool) -> anyhow::Result<bool> {
+        if !running {
+            self.release_session_owner(id);
+        }
         {
             let mut set = self.running.lock().unwrap();
             if running {
@@ -603,6 +853,44 @@ impl SessionStore {
                 found = true;
             }
         })?;
+        Ok(found)
+    }
+
+    /// A terminal for an old run must not release a successor's owner.
+    pub fn mark_running_for_run(
+        &self,
+        id: &str,
+        expected_run: &str,
+        running: bool,
+    ) -> anyhow::Result<bool> {
+        let mut owners = self.session_owners.lock().unwrap();
+        let Some(lease) = owners.get(id).cloned() else {
+            return Ok(false);
+        };
+        if lease.root_run_id != expected_run {
+            return Ok(false);
+        }
+        if !self.coordinator.recover(id)?.iter().any(|current| {
+            current.resource == lease.resource
+                && current.generation == lease.generation
+                && current.root_run_id == expected_run
+        }) {
+            return Ok(false);
+        }
+        let mut found = false;
+        self.mutate_index(|index| {
+            if let Some(meta) = index.sessions.iter_mut().find(|meta| meta.id == id) {
+                meta.running = running;
+                found = true;
+            }
+        })?;
+        if !running {
+            self.running.lock().unwrap().remove(id);
+            self.coordinator.release(&lease)?;
+            owners.remove(id);
+        } else {
+            self.running.lock().unwrap().insert(id.to_string());
+        }
         Ok(found)
     }
 
@@ -901,6 +1189,10 @@ impl SessionStore {
         roots: &[String],
         msgs: &[Message],
     ) -> anyhow::Result<SaveReport> {
+        // 锁序恒为 **owner → save_lock → 磁盘事务 → index_lock**（[docs/technical-design](../../../../docs/technical-design.md)）。
+        // owner 校验必须在 save_lock **之前**：先拿到全局保存锁再发现别人占着，
+        // 等于让一个注定失败的写把所有保存都堵在后面。
+        self.verify_session_owner(id)?;
         // 保存串行化（见 `save_lock` 字段注释）：从「转换落盘形态（图片外置写 blob）」起就持锁。
         // 锁序恒为 save_lock → index_lock（临界区内的 upsert_meta / set_history_status 取后者）。
         let _guard = self.save_lock.lock().unwrap();
@@ -1094,6 +1386,20 @@ impl SessionStore {
     ///（历史越长、恢复运行上下文越慢），与本批要保住的「大会话秒开」直接冲突，故单开一个
     /// 只取 wire 的入口。`load_history_full` 仍保留（它要为展示侧给出**全量** `display`），
     /// 两者产出的 `wire` 由对拍用例钉死一致。
+    /// 这条会话**从来没有过历史文件**（新格式段目录与旧文件都不在）。
+    ///
+    /// 这与「历史损坏」是两回事，必须分开：
+    ///
+    /// - 没有任何文件 = 用户还没发过第一条消息。`session/load` 的正确行为是
+    ///   重播**空**转录并成功返回，而不是报「读取历史失败」。
+    /// - 有文件但读不出来 = 真的坏了，那种情况一律如实报错并提示，绝不静默当空。
+    ///
+    /// 之所以要单独一个判据而不是在读路径里把「文件不存在」也当成空：
+    /// 后者会让**任何**一条 `Err` 都变成「空历史」，把真正的损坏藏起来。
+    pub fn is_history_absent(&self, id: &str) -> bool {
+        !segments::dir_exists(&self.history_dir(id)) && !self.history_path(id).is_file()
+    }
+
     pub fn load_history(&self, id: &str) -> anyhow::Result<Vec<Message>> {
         self.load_history_wire(id)
     }
@@ -1799,3 +2105,16 @@ mod prefs_sidecar_tests {
         assert!(!store.prefs_path("sub_x").exists());
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolOccurrenceRecord {
+    pub observation_id: String,
+    pub actor_run: String,
+    pub batch: String,
+    pub index: usize,
+    pub provider_id: String,
+    pub name: String,
+}
+#[path = "store/occurrences.rs"]
+mod occurrences;
+pub use occurrences::ToolOccurrenceCursor;

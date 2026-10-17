@@ -76,6 +76,165 @@ impl SubEnded {
     }
 }
 
+/// 子代理终态：把 `submit_delivery` 收到的草稿落成不可变交付记录。
+///
+/// 返回 `(delivery_id, 摘要)`；未绑定契约或无草稿时返回 `None`——**不是**错误：
+/// 旧任务与问答 / 机械修改本来就没有结构化交付，强行落一份空记录只会制造噪音。
+/// 落盘失败同样返回 `None`，摘要里说明原因，让上层显示为未验证而非完成。
+fn finalize_delivery(
+    ctx: &ToolCtx,
+    sub_rt: &std::sync::Arc<crate::core::agent::SessionRuntime>,
+    sub_id: &str,
+    ended: SubEnded,
+) -> Option<(String, String, bool)> {
+    let task_id = sub_rt.delivery_task_id.lock().unwrap().clone()?;
+    let draft = sub_rt.delivery_draft.lock().unwrap().take()?;
+    let svc = ctx.core.delivery.clone();
+    let identity = crate::core::delivery::DeliveryService::identity_of(sub_rt);
+    let Some(mut contract) = svc.read_contract(&identity.session_id, &task_id) else {
+        return Some((
+            String::new(),
+            format!("legacy_unverified：契约 {task_id} 已不在索引内，结构化交付未落盘"),
+            false,
+        ));
+    };
+    let assigned = sub_rt.delivery_requirement_ids.lock().unwrap().clone();
+    if !assigned.is_empty() {
+        contract.requirements.retain(|r| assigned.contains(&r.id));
+        if let Some(checks) = sub_rt.delivery_check_ids.lock().unwrap().as_ref() {
+            for req in &mut contract.requirements {
+                req.check_ids.retain(|id| checks.contains(id));
+            }
+        }
+        let checks: std::collections::BTreeSet<_> = contract
+            .requirements
+            .iter()
+            .flat_map(|r| r.check_ids.iter().cloned())
+            .collect();
+        let artifacts: std::collections::BTreeSet<_> = contract
+            .requirements
+            .iter()
+            .flat_map(|r| r.artifact_ids.iter().cloned())
+            .collect();
+        contract.checks.retain(|c| checks.contains(&c.id));
+        contract.artifacts.retain(|a| artifacts.contains(&a.id));
+    }
+    // 草稿声明的修订必须仍是当前修订：期间修订升级过则旧草稿不适用。
+    if draft.contract_revision != contract.revision {
+        return Some((
+            String::new(),
+            format!(
+                "stale_draft：草稿基于修订 {}，当前修订 {}，请重新提交",
+                draft.contract_revision, contract.revision
+            ),
+            false,
+        ));
+    }
+    let ended_kind = match ended {
+        SubEnded::Report => crate::core::delivery::types::EndedKind::Report,
+        SubEnded::Partial => crate::core::delivery::types::EndedKind::Partial,
+        SubEnded::Budget => crate::core::delivery::types::EndedKind::Budget,
+        SubEnded::NoReport => crate::core::delivery::types::EndedKind::NoReport,
+    };
+    match svc.submit_delivery(
+        &identity,
+        &contract,
+        ended_kind,
+        draft.completed,
+        draft.incomplete,
+        draft.changes,
+        draft.evidence,
+        draft.blockers,
+        &format!("dlv_{sub_id}"),
+    ) {
+        Ok((result, _receipt, state)) => {
+            // [#18] 落盘后立刻跑一次宿主校验，把结论交给父任务。
+            // `SubEnded` 四象限与校验结论**并列**：partial 仍是 partial，只是额外说明
+            // "为什么它不能被当作完整交付"。
+            let ledger = svc.ledger(&identity.session_id);
+            let roots = crate::core::delivery::DeliveryService::roots_from_runtime(sub_rt);
+            let validation = crate::core::delivery::validation::validate_delivery(
+                &contract,
+                &result,
+                &ledger,
+                &roots,
+                &crate::core::delivery::version::CaptureOptions::default(),
+            );
+            let summary = format!(
+                "{state:?}/{ended_kind:?}/{}: completed {} 项, incomplete {} 项, blockers {} 项",
+                validation.verdict.as_str(),
+                result.completed.len(),
+                result.incomplete.len(),
+                result.blockers.len()
+            );
+            let scope = crate::core::delivery::VerificationScope {
+                inputs: contract
+                    .checks
+                    .iter()
+                    .flat_map(|c| {
+                        c.scope
+                            .inputs
+                            .iter()
+                            .chain(&c.scope.outputs)
+                            .chain(&c.scope.dependency_files)
+                    })
+                    .cloned()
+                    .chain(contract.artifacts.iter().map(|a| a.path.clone()))
+                    .collect(),
+                ..Default::default()
+            };
+            let target =
+                crate::core::delivery::version::capture_scope(&roots, &scope, &Default::default())
+                    .ok()
+                    .filter(|v| v.is_valid());
+            let accepted = validation.accepted()
+                && target.is_some()
+                && sub_rt.save_clean.load(Ordering::SeqCst);
+            let operation = format!("sub_validate_{sub_id}");
+            let marker = crate::core::delivery::BuiltinValidationRecord {
+                binding: Some(crate::core::delivery::types::ContractBinding::of(&contract)),
+                id: crate::core::delivery::store::host_id(&operation, "validation"),
+                owner: identity.clone(),
+                validator_id: "sub_delivery".into(),
+                validator_version: "1".into(),
+                check_id: None,
+                input_refs: vec![result.id.clone()],
+                scope_version: target.map(|v| v.digest),
+                started_at: result.submitted_at.clone(),
+                finished_at: crate::core::delivery::store::now_iso(),
+                outcome: if accepted {
+                    crate::core::delivery::ValidationOutcome::Passed
+                } else {
+                    crate::core::delivery::ValidationOutcome::Failed
+                },
+                findings: validation
+                    .reasons
+                    .iter()
+                    .map(|r| crate::core::delivery::ValidationFinding {
+                        severity: crate::core::delivery::types::FindingSeverity::Error,
+                        location: r.item_id.clone(),
+                        message: r.message.clone(),
+                    })
+                    .collect(),
+                output_ref: None,
+            };
+            if let Err(error) = svc.record_validation(&identity, marker, &operation) {
+                return Some((
+                    result.id,
+                    format!("{summary}；宿主校验记录未保存：{error}"),
+                    false,
+                ));
+            }
+            Some((result.id, summary, accepted))
+        }
+        Err(e) => Some((
+            String::new(),
+            format!("legacy_unverified：交付草稿未落盘（{}）", e.code()),
+            false,
+        )),
+    }
+}
+
 /// 子代理收尾形态判定（[docs/subagents](../../../docs/subagents.md)）。
 ///
 /// 抽成纯函数而非内联三元：四象限是**跨模块契约**（事件载荷 + 前端徽标 + 分析闸），
@@ -151,6 +310,36 @@ pub struct Args {
     /// alias 兼容 snake_case 键名笔误（clean_context）。
     #[serde(default, alias = "clean_context")]
     clean_context: Option<bool>,
+    /// 绑定已有交付契约的任务 id（[#17](../../../../docs/tools-and-safety.md)）。
+    ///
+    /// 模型只能**指名**，不能新建：宿主会核验该契约存在于本会话且属本 root_run，
+    /// 核验不过就当作未绑定（结构化交付降级为文本收尾，不报错打断委派）。
+    #[serde(default, alias = "contract_task_id")]
+    contract_task_id: Option<String>,
+    /// 已登记审查分派的 id（[#10](../../../../docs/tools-and-safety.md)）。
+    ///
+    /// **只是指名**：宿主从交付边车取真实分派，核验实现者集合与身份后才给审查职责。
+    /// 核验不过按普通子代理处理（不报错打断委派），并在日志里留痕——
+    /// 模型自称「我是审查者」不产生任何只读上限之外的额外权限。
+    #[serde(default, alias = "review_assignment_id")]
+    review_assignment_id: Option<String>,
+    /// 已登记契约 id（验证职责）：核验通过后本子任务按**干净上下文**构建
+    /// （[#11](../../../../docs/tools-and-safety.md)：锁 clean_context=true）。
+    #[serde(default, alias = "verification_task_id")]
+    verification_task_id: Option<String>,
+    /// 声明写范围（[#2](../../../../docs/plan-and-approval.md) 并行准入）：`["ws:src/a.rs"]`。
+    ///
+    /// 声明了就必须过宿主准入才允许 spawn；**声明本身不授予任何权限**，也不等于
+    /// 「只写这些」——写能力不可归因（shell / MCP）的单元一律被准入拒绝并串行。
+    /// 不声明则沿用既有行为（不占工作流租约）。
+    #[serde(default, alias = "write_scopes")]
+    write_scopes: Vec<String>,
+    #[serde(default)]
+    requirement_ids: Vec<String>,
+    #[serde(default)]
+    structured_writes_only: Option<bool>,
+    #[serde(default)]
+    unit_id: Option<String>,
 }
 
 /// subagent 工具：把自包含任务委派给带独立步数预算的子代理。
@@ -195,6 +384,7 @@ fn summarize_sub_tail(history: &[crate::core::types::Message]) -> (Option<String
 pub(crate) const SUB_BASE_EXCLUDES: &[&str] = &[
     "ask",
     "subagent",
+    "workflow",
     "plan",
     "skill",
     "scheduled_task",
@@ -249,6 +439,54 @@ pub(crate) fn build_system_extra(
     s
 }
 
+/// 由宿主核验子任务的职责（[#9](../../../../docs/subagents.md) / [#10](../../../../docs/tools-and-safety.md)）。
+///
+/// 三条纪律：
+/// - 模型给的 id 只是**指名**，真实分派从交付边车索引取；取不到或核验不过 → `Implement`
+///   （即"按普通子代理跑"），不静默给审查者只读上限之外的任何优待；
+/// - 审查职责要求审查者**不在**该分派的实现者集合内（自审不是独立审查）；
+/// - 验证职责要求契约存在且属本 root_run。
+pub(crate) fn resolve_duty(
+    ctx: &ToolCtx,
+    args: &Args,
+) -> crate::core::delivery::responsibility::DutyKind {
+    use crate::core::delivery::responsibility::DutyKind;
+    let owner = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+    let svc = ctx.core.delivery.clone();
+
+    // 审查与验证互斥：一次派发不能既是审查者又是验证者（分权的基本前提）。
+    let want_review = args.review_assignment_id.is_some();
+    let want_verify = args.verification_task_id.is_some();
+    if want_review && want_verify {
+        tracing::info!(
+            "subagent 同时声明 reviewAssignmentId 与 verificationTaskId，按普通子代理处理"
+        );
+        return DutyKind::Implement;
+    }
+    if want_review {
+        // **只有已登记的分派才算审查职责**。模型可以编任意 id；取不到就按普通子代理跑。
+        let id = args.review_assignment_id.as_deref().unwrap_or_default();
+        if svc.read_review_assignment(&owner.session_id, id).is_some() {
+            return DutyKind::Review;
+        }
+        tracing::info!(
+            "subagent 的 reviewAssignmentId `{id}` 不是宿主已登记的分派，按普通子代理处理"
+        );
+        return DutyKind::Implement;
+    }
+    if want_verify {
+        if let Some(task_id) = &args.verification_task_id
+            && svc
+                .read_contract(&owner.session_id, task_id)
+                .is_some_and(|c| c.owner.root_run_id == owner.root_run_id)
+        {
+            return DutyKind::Verify;
+        }
+        tracing::info!("subagent 的 verificationTaskId 未通过核验，按普通子代理处理");
+    }
+    DutyKind::Implement
+}
+
 /// 角色纪律块的按档重建（B1 重建路径消费）：档位只影响只读提示句（B3）。
 pub(crate) fn base_extra(role: &str, max_steps: usize, mode: ApprovalMode) -> String {
     build_system_extra(role, max_steps, crate::agents::find(role), mode)
@@ -261,15 +499,34 @@ pub(crate) fn sub_base(
     max_steps: usize,
     def: Option<&crate::agents::AgentDef>,
     spawn_mode: ApprovalMode,
+    duty: crate::core::delivery::responsibility::DutyKind,
 ) -> SubBase {
     SubBase {
         root_session_id: None,
         role: role.to_string(),
         max_steps,
         spawn_mode,
-        base_excludes: SUB_BASE_EXCLUDES.iter().map(|s| (*s).to_string()).collect(),
+        base_excludes: SUB_BASE_EXCLUDES
+            .iter()
+            .map(|s| (*s).to_string())
+            .chain(match duty {
+                crate::core::delivery::responsibility::DutyKind::Review => {
+                    vec![
+                        "command".into(),
+                        "service".into(),
+                        "http_request".into(),
+                        "mcp:*".into(),
+                    ]
+                }
+                crate::core::delivery::responsibility::DutyKind::Verify => {
+                    vec!["service".into(), "http_request".into(), "mcp:*".into()]
+                }
+                _ => vec![],
+            })
+            .collect(),
         base_system_extra: build_system_extra(role, max_steps, def, spawn_mode),
         idle_policy: idle_policy_for(role),
+        duty,
     }
 }
 
@@ -345,7 +602,14 @@ impl Tool for SubagentTool {
     "role": {"type": "string", "description": "规范角色：explore | backend-dev | frontend-dev | app-dev | reviewer | code-reviewer | product-manager | tester"},
     "maxSteps": {"type": "integer", "minimum": 1, "maximum": 1000},
     "description": {"type": "string", "description": "卡片短标签"},
-    "cleanContext": {"type": "boolean", "description": "默认 true"}
+    "cleanContext": {"type": "boolean", "description": "默认 true"},
+    "contractTaskId": {"type":"string"},
+    "reviewAssignmentId": {"type":"string"},
+    "verificationTaskId": {"type":"string"},
+    "writeScopes": {"type":"array","items":{"type":"string"},"description":"工作单元声明写范围，格式 workspace:relative/path；未声明写范围时按独占串行运行"},
+    "unitId":{"type":"string","description":"workflow plan_units 已冻结的工作单元id；宿主强制其依赖/需求/范围"},
+    "structuredWritesOnly": {"type":"boolean","description":"声明writeScopes时默认true，宿主实际禁用command/service/MCP以安全并行；false时独占串行"},
+    "requirementIds": {"type":"array","items":{"type":"string"},"description":"绑定契约内分配给此子任务的需求；缺省为全部"}
   }
 }"#
     }
@@ -356,7 +620,7 @@ impl Tool for SubagentTool {
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
         // 在等待并发槽位之前固化所属主 run，迟到轮询不能误归到下一轮同名子代理。
         let parent_run_id = ctx.rt.run_snapshot().run_id;
-        let args: Args = match serde_json::from_value(args) {
+        let mut args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
                 return ToolOutcome::err(
@@ -401,10 +665,522 @@ impl Tool for SubagentTool {
         let _guard = GuardGuard;
 
         let sub_id = format!("sub_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        // [#10/#11] 职责由**宿主核验过的分派**决定，不由模型自称；必须早于 clean 上下文
+        // 与基座构造（两者都消费它）。
+        let duty = resolve_duty(ctx, &args);
         let description = args
             .description
             .clone()
             .unwrap_or_else(|| args.role.clone());
+        // 独立 runtime（继承 workspace/data_dir/extra_roots）+ 注册（支持 StopSubagent）
+        let mut sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
+        let _workspace_guard = sub_rt.workspace_guard.lock().unwrap().clone();
+        if let Some(sub) = std::sync::Arc::get_mut(&mut sub_rt) {
+            // 工具入口已固化身份，等待并发槽位后也沿用同一轮。
+            sub.root_run_id = parent_run_id.clone();
+        }
+        sub_rt.prepare_actor_run(&format!("sub_{sub_id}"));
+        // [#17] 绑定交付契约：模型只能指名，宿主核验存在性与归属后才生效。
+        // 核验不过就当未绑定——结构化交付降级为文本收尾，不打断委派。
+        let candidate_task = args
+            .contract_task_id
+            .clone()
+            .or(args.verification_task_id.clone())
+            .or_else(|| ctx.rt.delivery_task_id.lock().unwrap().clone());
+        let bound_contract = candidate_task.as_ref().filter(|task_id| {
+            let owner = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+            match ctx.core.delivery.read_contract(&owner.session_id, task_id) {
+                Some(c) => c.owner.root_run_id == owner.root_run_id,
+                None => false,
+            }
+        });
+        if args.contract_task_id.is_some() && bound_contract.is_none() {
+            tracing::info!(
+                "subagent {} 的 contractTaskId 未通过核验（不存在或不属于本 root_run），按未绑定处理",
+                sub_id
+            );
+        }
+        *sub_rt.delivery_task_id.lock().unwrap() = bound_contract.cloned();
+
+        if candidate_task.is_some() && bound_contract.is_none() {
+            return ToolOutcome::err(
+                "E_CONTRACT_BINDING",
+                "contractTaskId 不存在或不属于当前运行，拒绝降级为无契约任务",
+            );
+        }
+        if args.review_assignment_id.is_some()
+            && duty != crate::core::delivery::responsibility::DutyKind::Review
+            || args.verification_task_id.is_some()
+                && duty != crate::core::delivery::responsibility::DutyKind::Verify
+        {
+            return ToolOutcome::err(
+                "E_DUTY_BINDING",
+                "审查/验证职责绑定无效，不允许降级为实现职责",
+            );
+        }
+        if let Some(task) = bound_contract {
+            let c = ctx
+                .core
+                .delivery
+                .read_contract(
+                    &crate::core::delivery::DeliveryService::identity_of(&ctx.rt).session_id,
+                    task,
+                )
+                .unwrap();
+            if args
+                .requirement_ids
+                .iter()
+                .any(|id| c.requirement(id).is_none())
+            {
+                return ToolOutcome::err(
+                    "E_REQUIREMENT_BINDING",
+                    "requirementIds 引用了契约外需求",
+                );
+            }
+        } else if !args.requirement_ids.is_empty() {
+            return ToolOutcome::err("E_REQUIREMENT_BINDING", "requirementIds 必须绑定契约");
+        }
+        let mut unit_dependencies = std::collections::BTreeMap::new();
+        let mut frozen_unit = None;
+        let mut node_policy = None;
+        let mut node_model_policy = None;
+        if let Some(unit_id) = &args.unit_id {
+            let Some(task) = bound_contract else {
+                return ToolOutcome::err("E_WORKFLOW_UNIT", "工作单元必须绑定契约");
+            };
+            if let Err(e) = crate::core::workflow::service::unit_design_ready(
+                &ctx.rt.data_dir,
+                &crate::core::delivery::DeliveryService::identity_of(&ctx.rt),
+                task,
+                unit_id,
+            ) {
+                return ToolOutcome::err("E_WORKFLOW_DESIGN", e);
+            }
+            let p = match crate::core::workflow::service::read(
+                &ctx.rt.data_dir,
+                &crate::core::delivery::DeliveryService::identity_of(&ctx.rt),
+                task,
+            ) {
+                Ok(p) => p,
+                Err(e) => return ToolOutcome::err("E_WORKFLOW_UNIT", e),
+            };
+            let Some(unit) = p.units.iter().find(|u| &u.id == unit_id).cloned() else {
+                return ToolOutcome::err("E_WORKFLOW_UNIT", "工作单元未在冻结计划内");
+            };
+            if let Err(error) = p.validate_models(&ctx.core.cfg.read().unwrap()) {
+                return ToolOutcome::err("E_WORKFLOW_MODEL", error);
+            }
+            if let Some(def) = &p.snapshot.definition {
+                node_policy = if def.id == "builtin" {
+                    None
+                } else {
+                    unit.stage_id
+                        .as_ref()
+                        .and_then(|id| def.stages.iter().find(|n| &n.id == id))
+                        .cloned()
+                };
+                node_model_policy = unit
+                    .stage_id
+                    .as_ref()
+                    .and_then(|id| def.model_policies.iter().find(|n| &n.node_id == id))
+                    .cloned();
+                if let Some(node) = &node_policy {
+                    use crate::core::workflow::definition::NodeKind;
+                    if matches!(node.kind, NodeKind::Complete | NodeKind::Design)
+                        || node.kind == NodeKind::Review
+                            && duty != crate::core::delivery::responsibility::DutyKind::Review
+                        || node.kind == NodeKind::Verify
+                            && duty != crate::core::delivery::responsibility::DutyKind::Verify
+                    {
+                        return ToolOutcome::err(
+                            "E_WORKFLOW_DUTY",
+                            "Node requires its exact host-bound duty/evidence",
+                        );
+                    }
+                }
+            }
+            if p.state.node(unit_id).is_none() {
+                return ToolOutcome::err(
+                    "E_WORKFLOW_UNIT",
+                    "先使用 workflow plan_units 冻结派发计划",
+                );
+            }
+            unit_dependencies = p
+                .state
+                .nodes
+                .iter()
+                .map(|(id, n)| {
+                    (
+                        id.clone(),
+                        n.state == crate::core::workflow::NodeState::Passed,
+                    )
+                })
+                .collect();
+            if unit.role_id.as_ref().is_some_and(|role| {
+                crate::agents::normalize_role(role) != crate::agents::normalize_role(&args.role)
+            }) {
+                return ToolOutcome::err("E_WORKFLOW_ROLE", "请求角色与冻结工作单元不符");
+            }
+            if unit
+                .model_id
+                .as_ref()
+                .is_some_and(|model| ctx.core.cfg.read().unwrap().find_model(model).is_none())
+            {
+                return ToolOutcome::err("E_WORKFLOW_MODEL", "工作单元冻结模型已删除");
+            }
+            let ledger = ctx
+                .core
+                .delivery
+                .ledger(&crate::core::delivery::DeliveryService::identity_of(&ctx.rt).session_id);
+            if let Some(contract) = ctx.core.delivery.read_contract(
+                &crate::core::delivery::DeliveryService::identity_of(&ctx.rt).session_id,
+                task,
+            ) {
+                let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+                for dep in &unit.depends_on {
+                    let valid = p.units.iter().find(|u| &u.id == dep).is_some_and(|u| {
+                        let mut c = contract.clone();
+                        c.requirements.retain(|r| u.requirement_ids.contains(&r.id));
+                        for req in &mut c.requirements {
+                            req.check_ids.retain(|id| u.checks.contains(id));
+                        }
+                        crate::core::delivery::acceptance::evaluate(
+                            &crate::core::delivery::acceptance::EvalContext {
+                                contract: &c,
+                                ledger: &ledger,
+                                roots: &roots,
+                                capture: Default::default(),
+                            },
+                        )
+                        .is_ok_and(|e| {
+                            e.overall == crate::core::delivery::AcceptanceStatusKind::Passed
+                        })
+                    });
+                    if !valid {
+                        unit_dependencies.insert(dep.clone(), false);
+                    }
+                }
+            }
+            args.write_scopes = unit
+                .write_scopes
+                .iter()
+                .map(|p| format!("{}:{}", p.root_id, p.relative_path))
+                .collect();
+            args.requirement_ids = unit.requirement_ids.clone();
+            *sub_rt.delivery_check_ids.lock().unwrap() = Some(unit.checks.clone());
+            frozen_unit = Some(unit);
+        }
+        *sub_rt.delivery_requirement_ids.lock().unwrap() = args.requirement_ids.clone();
+        *sub_rt.delivery_review_assignment_id.lock().unwrap() = args.review_assignment_id.clone();
+        *sub_rt.delivery_verification_task_id.lock().unwrap() =
+            if duty == crate::core::delivery::responsibility::DutyKind::Verify {
+                args.verification_task_id.clone()
+            } else {
+                None
+            };
+        let verification_message = if duty
+            == crate::core::delivery::responsibility::DutyKind::Verify
+        {
+            let Some(task) = bound_contract else {
+                return ToolOutcome::err("E_VERIFY_INPUT", "验证职责缺少契约绑定");
+            };
+            let c = ctx
+                .core
+                .delivery
+                .read_contract(
+                    &crate::core::delivery::DeliveryService::identity_of(&ctx.rt).session_id,
+                    task,
+                )
+                .unwrap();
+            let resolver = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+            let scope = crate::core::delivery::VerificationScope {
+                inputs: c
+                    .checks
+                    .iter()
+                    .flat_map(|c| {
+                        c.scope
+                            .inputs
+                            .iter()
+                            .chain(&c.scope.outputs)
+                            .chain(&c.scope.dependency_files)
+                    })
+                    .cloned()
+                    .chain(c.artifacts.iter().map(|a| a.path.clone()))
+                    .collect(),
+                ..Default::default()
+            };
+            let target = match crate::core::delivery::version::capture_scope(
+                &resolver,
+                &scope,
+                &Default::default(),
+            ) {
+                Ok(v) if v.is_valid() => v,
+                _ => {
+                    return ToolOutcome::err(
+                        "E_VERIFY_INPUT",
+                        "验证目标范围未完整采集，拒绝派发未知版本",
+                    );
+                }
+            };
+            let input = crate::core::delivery::responsibility::VerificationInput {
+                contract_revision: c.revision,
+                check_ids: c.checks.iter().map(|c| c.id.clone()).collect(),
+                artifact_refs: c.artifacts.iter().map(|a| a.path.clone()).collect(),
+                environment_facts: vec![],
+                target_version: Some(target.digest.clone()),
+                allowed_roots: resolver
+                    .iter()
+                    .map(|(id, path)| crate::core::delivery::types::RootIdentity {
+                        root_id: id.clone(),
+                        absolute: path.to_string_lossy().into_owned(),
+                        kind: match id.as_str() {
+                            "workspace" => crate::core::delivery::types::RootKind::Workspace,
+                            "data_dir" => crate::core::delivery::types::RootKind::DataDir,
+                            "project_dir" => crate::core::delivery::types::RootKind::ProjectDir,
+                            _ => crate::core::delivery::types::RootKind::Extra,
+                        },
+                    })
+                    .collect(),
+            };
+            let requirements: Vec<_> = c
+                .requirements
+                .iter()
+                .map(|r| (r.id.clone(), r.title.clone()))
+                .collect();
+            let specs: Vec<_> = c
+                .checks
+                .iter()
+                .map(|c| (c.id.clone(), serde_json::to_string(c).unwrap_or_default()))
+                .collect();
+            let notes = vec![
+                ("parent_explicit_task".into(), args.task.clone()),
+                ("host_target_version".into(), target.digest.clone()),
+            ];
+            let manifest = crate::core::delivery::responsibility::build_context_manifest(
+                &input,
+                &requirements,
+                &specs,
+                &notes,
+            );
+            let manifest_path = ctx
+                .rt
+                .data_dir
+                .join("sessions")
+                .join(format!("{}.workflow", c.owner.session_id))
+                .join(format!("{sub_id}.manifest.json"));
+            if let Err(e) = crate::core::process_coordination::atomic_write(
+                &manifest_path,
+                &serde_json::to_vec(&manifest).unwrap_or_default(),
+            ) {
+                return ToolOutcome::err("E_VERIFY_MANIFEST", format!("验证输入清单未保存: {e}"));
+            }
+            Some(json!({"verification_input":input,"requirements":requirements,"checks":c.checks,"explicit_notes":notes,"context_manifest":manifest}).to_string())
+        } else {
+            None
+        };
+        let workflow_policy = if let Some(task) = bound_contract {
+            match crate::core::workflow::service::read(
+                &ctx.rt.data_dir,
+                &crate::core::delivery::DeliveryService::identity_of(&ctx.rt),
+                task,
+            ) {
+                Ok(p) => p
+                    .snapshot
+                    .definition
+                    .as_ref()
+                    .and_then(|d| d.roles.get(&crate::agents::normalize_role(&args.role)))
+                    .cloned(),
+                Err(e) => return ToolOutcome::err("E_WORKFLOW_SNAPSHOT", e),
+            }
+        } else {
+            None
+        };
+        let mut workflow_excludes = Vec::<String>::new();
+        if let Some(policy) = &workflow_policy {
+            if let Some(model) = &policy.model_id
+                && ctx.core.cfg.read().unwrap().find_model(model).is_none()
+            {
+                return ToolOutcome::err("E_WORKFLOW_MODEL", "冻结模型已被删除，不能静默换人");
+            }
+            if !policy.tools.iter().any(|t| t == "*") {
+                workflow_excludes.extend(
+                    crate::tools::registry::ToolRegistry::all_tool_names()
+                        .into_iter()
+                        .filter(|t| !policy.tools.contains(t)),
+                );
+                workflow_excludes.push("mcp:*".into());
+            }
+        }
+        if let Some(node) = &node_policy {
+            workflow_excludes.extend(
+                crate::tools::registry::ToolRegistry::all_tool_names()
+                    .into_iter()
+                    .filter(|name| !node.tool_allowlist.contains(name)),
+            );
+            workflow_excludes.push("mcp:*".into());
+        }
+        if let Some(policy) = &workflow_policy
+            && !policy.max_tool_kinds.is_empty()
+        {
+            workflow_excludes.extend(
+                crate::tools::registry::ToolRegistry::all_tool_names()
+                    .into_iter()
+                    .filter(|name| {
+                        ctx.core.tools.get(name).is_some_and(|tool| {
+                            !policy
+                                .max_tool_kinds
+                                .iter()
+                                .any(|k| k == tool.kind().policy_name())
+                        })
+                    }),
+            );
+        }
+        if let Some(task) = bound_contract {
+            let owner = crate::core::delivery::DeliveryService::identity_of(&sub_rt);
+            let Some(contract) = ctx.core.delivery.read_contract(&owner.session_id, task) else {
+                return ToolOutcome::err("E_DELIVERY_BASELINE", "派发契约丢失");
+            };
+            let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&sub_rt);
+            let writes: Vec<_> = args
+                .write_scopes
+                .iter()
+                .filter_map(|raw| raw.split_once(':'))
+                .map(|(root, path)| crate::core::delivery::PathRef {
+                    root_id: if root == "ws" {
+                        "workspace".into()
+                    } else {
+                        root.into()
+                    },
+                    relative_path: path.into(),
+                })
+                .collect();
+            if let Err(error) = ctx
+                .core
+                .delivery
+                .capture_actor_baseline(&owner, &contract, &roots, &writes)
+            {
+                return ToolOutcome::err("E_DELIVERY_BASELINE", error.to_string());
+            }
+        }
+        // Derive admission from the effective child capability set, including MCP.
+        // Unknown capabilities use one exclusive lease; omission never bypasses admission.
+        let mut probe_base = sub_base(
+            &args.role,
+            max_steps,
+            agent_def,
+            parent_prefs.approval_mode,
+            duty,
+        );
+        let structured_only = args
+            .structured_writes_only
+            .unwrap_or(!args.write_scopes.is_empty());
+        probe_base.base_excludes.extend(workflow_excludes.clone());
+        if structured_only {
+            probe_base.base_excludes.extend([
+                "command".into(),
+                "service".into(),
+                "http_request".into(),
+                "mcp:*".into(),
+            ]);
+        }
+        let probe = crate::core::agent::subagent_drive_params(&probe_base, &parent_prefs);
+        let mut tools: Vec<String> = ctx
+            .core
+            .tools
+            .tool_defs()
+            .into_iter()
+            .filter(|t| !probe.exclude_tools.contains(&t.name))
+            .map(|t| t.name)
+            .collect();
+        if !probe.exclude_mcp {
+            tools.extend(
+                ctx.core
+                    .mcp
+                    .tool_snapshot_for(&ctx.rt.id)
+                    .await
+                    .into_iter()
+                    .map(|t| t.function_name),
+            );
+        }
+        let scopes: Vec<_> = args
+            .write_scopes
+            .iter()
+            .map(|s| {
+                s.strip_prefix("ws:")
+                    .map(|p| format!("workspace:{p}"))
+                    .unwrap_or_else(|| s.clone())
+            })
+            .collect();
+        let mut unit = crate::core::workflow::dispatch::spawn_unit(&sub_id, &scopes);
+        if args.write_scopes.is_empty() {
+            tools.push("command".into());
+        }
+        unit.requirement_ids = args.requirement_ids.clone();
+        let frozen_unit_model = frozen_unit.as_ref().and_then(|u| u.model_id.clone());
+        if frozen_unit.is_none() {
+            unit.mutable_resources
+                .push("host:serial_without_frozen_plan".into());
+        }
+        if let Some(frozen) = frozen_unit {
+            unit.depends_on = frozen.depends_on;
+            unit.mutable_resources = frozen.mutable_resources;
+        }
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+        let owner = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+        let run = parent_run_id
+            .clone()
+            .unwrap_or_else(|| owner.root_run_id.clone());
+        let expected = crate::core::workflow::dispatch::current_generation(&run);
+        let mut tool_map = std::collections::BTreeMap::new();
+        tool_map.insert(unit.id.clone(), tools);
+        let leases = match crate::core::workflow::dispatch::admission(
+            &owner,
+            &run,
+            expected,
+            &[(unit, Vec::new())],
+            &roots,
+            &unit_dependencies,
+            &tool_map,
+        ) {
+            Ok(v) => v,
+            Err(denials) => {
+                return ToolOutcome::error_with_data(
+                    "工作单元准入被拒，等待现有单元清理或调整范围",
+                    json!({"admission":"denied", "denials":denials.iter().map(|d|json!({"code":d.code,"message":d.message})).collect::<Vec<_>>()}),
+                );
+            }
+        };
+        let workflow_generation = leases.first().map(|l| l.generation).unwrap_or(0);
+        let _workflow_leases: Vec<_> = leases
+            .into_iter()
+            .map(crate::core::workflow::dispatch::LeaseGuard)
+            .collect();
+        let workflow_node =
+            if let (Some(task), Some(unit)) = (bound_contract, args.unit_id.as_ref()) {
+                let actor = crate::core::delivery::DeliveryService::identity_of(&sub_rt);
+                if let Err(e) = crate::core::workflow::service::unit_transition(
+                    &ctx.rt.data_dir,
+                    &actor,
+                    task,
+                    unit,
+                    crate::core::workflow::NodeState::Running,
+                    workflow_generation,
+                ) {
+                    return ToolOutcome::err("E_WORKFLOW_STATE", e);
+                }
+                Some(WorkflowNodeGuard {
+                    data_dir: ctx.rt.data_dir.clone(),
+                    owner: actor,
+                    task: task.clone(),
+                    unit: unit.clone(),
+                    generation: workflow_generation,
+                    finished: false,
+                })
+            } else {
+                None
+            };
+        let mut workflow_node = workflow_node;
+
         // task 全量下发：抽屉「分配的任务」要能看到完整任务。此前在此 trunc 2000 字符，实时面板只能
         // 显示「…(truncated)」，而落盘历史存的是全文——恢复会话后反而完整，实时与归档两路不一致。
         // 下方日志行仍按 300 字符截断（那是日志文件，不是 UI 载荷）。
@@ -428,12 +1204,6 @@ impl Tool for SubagentTool {
             ),
         );
 
-        // 独立 runtime（继承 workspace/data_dir/extra_roots）+ 注册（支持 StopSubagent）
-        let mut sub_rt = SessionRuntime::new_sub(&ctx.rt, sub_id.clone());
-        if let Some(sub) = std::sync::Arc::get_mut(&mut sub_rt) {
-            // 工具入口已固化身份，等待并发槽位后也沿用同一轮。
-            sub.root_run_id = parent_run_id.clone();
-        }
         ctx.core.subs.insert(sub_id.clone(), sub_rt.clone());
         ctx.core
             .activity
@@ -443,8 +1213,22 @@ impl Tool for SubagentTool {
         ctx.core
             .wait_targets
             .register(sub_id.clone(), TargetKind::Subagent, None);
+        // [#11] 验证职责下 clean_context **锁 true**：验证者拿到的必须是显式输入，
+        // 不是实现者推理全文。调用方传 false 一律忽略并留痕，不静默照办。
+        let clean_context = match duty {
+            crate::core::delivery::responsibility::DutyKind::Verify => {
+                if args.clean_context == Some(false) {
+                    tracing::info!(
+                        "subagent [{}] 处于验证职责，cleanContext=false 已被忽略（强制干净上下文）",
+                        sub_id
+                    );
+                }
+                true
+            }
+            _ => args.clean_context != Some(false),
+        };
         // clean_context=false 时携带主会话最后 6 条消息作背景
-        if args.clean_context == Some(false) {
+        if !clean_context {
             let tail: Vec<_> = ctx
                 .rt
                 .history
@@ -464,7 +1248,8 @@ impl Tool for SubagentTool {
             .unwrap()
             .push(crate::core::types::Message::user_text(format!(
                 "<subagent-task role=\"{}\">\n{}\n</subagent-task>",
-                args.role, args.task
+                args.role,
+                verification_message.as_deref().unwrap_or(&args.task)
             )));
         // 目标模式已删除：reviewer/code-reviewer 子代理不再读取目标合同；保留通用评审任务消息。
 
@@ -491,8 +1276,35 @@ impl Tool for SubagentTool {
         // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
         // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——
         // 子代理不再冻结在 spawn 时的档位上。
-        let mut base = sub_base(&args.role, max_steps, agent_def, parent_prefs.approval_mode);
+        if let Some(policy) = &node_model_policy {
+            sub_rt.prefs.lock().unwrap().reasoning_effort = policy
+                .reasoning_effort
+                .as_deref()
+                .and_then(crate::core::prefs::EffortLevel::parse);
+        }
+        let mut base = sub_base(
+            &args.role,
+            max_steps,
+            agent_def,
+            parent_prefs.approval_mode,
+            duty,
+        );
+        if let Some(model) = frozen_unit_model
+            .as_ref()
+            .or_else(|| workflow_policy.as_ref().and_then(|p| p.model_id.as_ref()))
+        {
+            sub_rt.prefs.lock().unwrap().model_id = Some(model.clone());
+        }
+        base.base_excludes.extend(workflow_excludes);
         base.root_session_id = sub_rt.root_session_id.clone();
+        if structured_only {
+            base.base_excludes.extend([
+                "command".into(),
+                "service".into(),
+                "http_request".into(),
+                "mcp:*".into(),
+            ]);
+        }
         // 权限继承（[docs/chat-and-interface](../../../docs/chat-and-interface.md) 收紧）：子代理权限 ⊆ 父会话权限。
         // 父 Plan 档的写排除 / MCP 排除 / plan 档提示由 subagent_drive_params 从基座合并进子参数，
         // 堵住「借子代理绕过 plan 档」的洞；只读角色的策略（含 FullAccess 下解锁写工具，B3）
@@ -557,6 +1369,13 @@ impl Tool for SubagentTool {
         };
 
         let run_id = format!("sub_{}", sub_id);
+        let actual_model_id = sub_rt.prefs().model_id.clone().unwrap_or_default();
+        let actual_format = core
+            .cfg
+            .read()
+            .unwrap()
+            .find_model(&actual_model_id)
+            .map(|m| m.api_format);
         let (result, usage, _) =
             crate::core::agent::drive_agent(&core, &sub_rt, params, &run_id).await;
 
@@ -568,6 +1387,8 @@ impl Tool for SubagentTool {
                 Ok(report) => {
                     // 子代理不是会话、没有 UI 载体：越限/失败只走日志，不写索引也不发事件
                     if !report.is_clean() {
+                        sub_rt.save_clean.store(false, Ordering::SeqCst);
+                        ctx.rt.save_clean.store(false, Ordering::SeqCst);
                         let line = format!(
                             "子代理 [{sub_id}] 过程历史有损保存：剥离图片 {} 张 / 丢弃轮次 {} 轮",
                             report.stripped_images, report.dropped_rounds
@@ -576,6 +1397,8 @@ impl Tool for SubagentTool {
                     }
                 }
                 Err(e) => {
+                    sub_rt.save_clean.store(false, Ordering::SeqCst);
+                    ctx.rt.save_clean.store(false, Ordering::SeqCst);
                     crate::core::session_log::warn(
                         &ctx.rt,
                         &format!("子代理 [{sub_id}] 过程历史落盘失败：{e}"),
@@ -584,15 +1407,9 @@ impl Tool for SubagentTool {
             }
         }
 
-        // L10：子代理 run 的 usage 计入统计（kind=sub，挂在父会话名下）
-        if usage.input + usage.output > 0 {
-            let model_id = core
-                .cfg
-                .read()
-                .unwrap()
-                .active_model_id
-                .clone()
-                .unwrap_or_default();
+        // L10: Attribute all consumed usage to the frozen child model, including failures.
+        if usage.input + usage.output + usage.cache_read + usage.cache_write > 0 {
+            let model_id = actual_model_id.clone();
             core.stats.record(crate::core::stats::UsageRecord {
                 session: ctx.rt.id.clone(),
                 model_id,
@@ -605,6 +1422,15 @@ impl Tool for SubagentTool {
                 kind: crate::core::stats::KIND_SUB.into(),
             });
         }
+        let input_total = actual_format
+            .as_ref()
+            .map(|format| usage.prompt_total(format));
+        let usage_owner = crate::core::delivery::DeliveryService::identity_of(&sub_rt);
+        ctx.core.sink.emit(&ctx.rt.id,"sub:usage",json!({"session":ctx.rt.id,"run_id":parent_run_id,"sub_id":sub_id,"actor_run_id":usage_owner.actor_run_id,"owner":usage_owner,
+            "model_id":actual_model_id,"input_total":input_total,"usage":{"input":usage.input,"output":usage.output,"cache_read":usage.cache_read,"cache_write":usage.cache_write,"input_total":input_total}}));
+        let actor_cancelled =
+            matches!(&result, Err(crate::provider::dto::ProviderError::Cancelled));
+        let mut structured_accepted = false;
         let outcome = match result {
             Ok(report) => {
                 // <report> 标记只用于收尾判定（drive 层 text_turn_action），不进入汇报正文
@@ -638,26 +1464,27 @@ impl Tool for SubagentTool {
                         .analysis_done
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
+                // [#17] 结构化交付落盘：`ended` 在**这一刻**由宿主按真实步数 / 报告标记判定
+                // （模型无权自称）。落盘失败如实降级为 `legacy_unverified`，不静默当完成。
+                let delivery = finalize_delivery(ctx, &sub_rt, &sub_id, ended);
+                structured_accepted = delivery.as_ref().is_some_and(|d| d.2);
                 // 最终汇报先进卡 → usage → done（前端在关闭进度条前展示汇报）
-                ctx.core.sink.emit(
-                    &ctx.rt.id,
-                    "sub:report",
-                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "report": clean_report.clone() }),
-                );
-                // sub:usage 先于 sub:done（前端卡先展示 token 数再完成）
-                ctx.core.sink.emit(
-                    &ctx.rt.id,
-                    "sub:usage",
-                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": {
-                        "input": usage.input, "output": usage.output,
-                    } }),
-                );
-                ctx.core.sink.emit(
-                    &ctx.rt.id,
-                    "sub:done",
-                    json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": usage,
-                            "steps_used": steps_used, "ended": ended_str }),
-                );
+                // 载荷只**增**可选字段：事件键名与既有字段一律不动（29 键契约）。
+                let mut report_payload = json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "report": clean_report.clone() });
+                if let Some(d) = delivery.as_ref() {
+                    report_payload["delivery_id"] = json!(d.0);
+                    report_payload["delivery_summary"] = json!(d.1);
+                }
+                ctx.core.sink.emit(&ctx.rt.id, "sub:report", report_payload);
+                let mut done_payload = json!({ "session": ctx.rt.id, "run_id": parent_run_id, "sub_id": sub_id, "usage": usage,
+                            "steps_used": steps_used, "ended": ended_str });
+                // `delivery_id` / `delivery_summary` 是**可选新增字段**：没绑定契约的旧任务
+                // 完全不带这两个键，前端据此继续走旧的纯文本展示。
+                if let Some(d) = delivery.as_ref() {
+                    done_payload["delivery_id"] = json!(d.0);
+                    done_payload["delivery_summary"] = json!(d.1);
+                }
+                ctx.core.sink.emit(&ctx.rt.id, "sub:done", done_payload);
                 // 部分汇报也取得成果，wait 成功与工具成功一致；完整分析批准仍由
                 // is_delivered 单独守护。Budget/NoReport 没交汇报，保持失败。
                 // report 全文按 2000 字符截断作终态摘要（避免大报告长期占内存）。
@@ -666,8 +1493,11 @@ impl Tool for SubagentTool {
                 ToolOutcome::ok(
                     // sub_id 放首位：它能在 tool_result 头部截断后幸存，
                     // 供会话恢复关联过程历史文件（[docs/subagents](../../../docs/subagents.md)）
-                    json!({ "sub_id": sub_id, "role": args.role, "steps_budget": max_steps,
+                    json!({ "sub_id": sub_id, "role": args.role, "role_resource": agent_def.map(|definition| definition.resource()), "steps_budget": max_steps,
                             "steps_used": steps_used, "ended": ended_str, "report": clean_report,
+                            // 结构化交付：delivery_id 与完整性状态（无契约则不带这两个键）
+                            "delivery_id": delivery.as_ref().map(|d| d.0.clone()),
+                            "delivery_summary": delivery.as_ref().map(|d| d.1.clone()),
                             // tokens 同层输出：恢复路径回填卡片 token 数的唯一来源
                             //（[docs/subagents](../../../docs/subagents.md)）
                             "tokens": usage.input + usage.output }),
@@ -709,8 +1539,70 @@ impl Tool for SubagentTool {
                 ToolOutcome::err("E_SUBAGENT", format!("子代理执行失败：{e}"))
             }
         };
+        if let Some(node) = workflow_node.as_mut() {
+            let mut passed = false;
+            if structured_accepted
+                && outcome.ok
+                && cleanup.final_state == TargetState::Succeeded
+                && let Some(task) = bound_contract
+            {
+                let owner = crate::core::delivery::DeliveryService::identity_of(&sub_rt);
+                if let Some(mut contract) = ctx.core.delivery.read_contract(&owner.session_id, task)
+                {
+                    contract
+                        .requirements
+                        .retain(|r| args.requirement_ids.contains(&r.id));
+                    if let Some(checks) = sub_rt.delivery_check_ids.lock().unwrap().as_ref() {
+                        for req in &mut contract.requirements {
+                            req.check_ids.retain(|id| checks.contains(id));
+                        }
+                    }
+                    let mut ledger = ctx.core.delivery.ledger(&owner.session_id);
+                    if duty == crate::core::delivery::responsibility::DutyKind::Review {
+                        ledger.reviews.retain(|_, review| {
+                            review.reviewer.actor_id == owner.actor_id
+                                && review.reviewer.actor_run_id == owner.actor_run_id
+                        });
+                    }
+                    if duty == crate::core::delivery::responsibility::DutyKind::Verify {
+                        ledger.receipts.retain(|_, receipt| {
+                            receipt.owner.actor_id == owner.actor_id
+                                && receipt.owner.actor_run_id == owner.actor_run_id
+                        });
+                        ledger.validations.retain(|_, validation| {
+                            validation.owner.actor_id == owner.actor_id
+                                && validation.owner.actor_run_id == owner.actor_run_id
+                        });
+                    }
+
+                    let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&sub_rt);
+                    passed = crate::core::delivery::acceptance::evaluate(
+                        &crate::core::delivery::acceptance::EvalContext {
+                            contract: &contract,
+                            ledger: &ledger,
+                            roots: &roots,
+                            capture: Default::default(),
+                        },
+                    )
+                    .is_ok_and(|r| {
+                        r.overall == crate::core::delivery::AcceptanceStatusKind::Passed
+                    });
+                }
+            }
+            if let Err(e) = node.finish(if passed {
+                crate::core::workflow::NodeState::Passed
+            } else {
+                crate::core::workflow::NodeState::Failed
+            }) {
+                cleanup.armed = false;
+                drop(cleanup);
+                sub_rt.finish_actor_run(&run_id, true, actor_cancelled);
+                return ToolOutcome::err("E_WORKFLOW_STATE", e);
+            }
+        }
         cleanup.armed = false;
         drop(cleanup); // 立即执行清理（中止已结束的轮询 / 注销均为幂等）
+        sub_rt.finish_actor_run(&run_id, !outcome.ok, actor_cancelled);
         outcome
     }
 }
@@ -781,6 +1673,9 @@ impl Drop for SubCleanupGuard {
                 }
             }
             drop(h);
+            if let Some(run_id) = self.sub_rt.run_snapshot().run_id {
+                self.sub_rt.finish_actor_run(&run_id, true, false);
+            }
         }
     }
 }
@@ -790,6 +1685,36 @@ struct GuardGuard;
 impl Drop for GuardGuard {
     fn drop(&mut self) {
         ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct WorkflowNodeGuard {
+    data_dir: std::path::PathBuf,
+    owner: crate::core::delivery::RunIdentity,
+    task: String,
+    unit: String,
+    generation: u64,
+    finished: bool,
+}
+impl WorkflowNodeGuard {
+    fn finish(&mut self, state: crate::core::workflow::NodeState) -> Result<(), String> {
+        crate::core::workflow::service::unit_transition(
+            &self.data_dir,
+            &self.owner,
+            &self.task,
+            &self.unit,
+            state,
+            self.generation,
+        )?;
+        self.finished = true;
+        Ok(())
+    }
+}
+impl Drop for WorkflowNodeGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.finish(crate::core::workflow::NodeState::Blocked);
+        }
     }
 }
 
@@ -889,6 +1814,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -913,6 +1839,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = tokio::time::timeout(
@@ -1413,6 +2340,7 @@ mod tests {
             25,
             crate::agents::find("explore"),
             ApprovalMode::Plan,
+            crate::core::delivery::responsibility::DutyKind::Implement,
         );
         assert_eq!(base.base_excludes.len(), SUB_BASE_EXCLUDES.len());
         for t in SUB_BASE_EXCLUDES {
@@ -1424,3 +2352,7 @@ mod tests {
         assert!(!base.base_system_extra.contains("<plan-mode>"));
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_workflow_tests.rs"]
+mod workflow_integration_tests;

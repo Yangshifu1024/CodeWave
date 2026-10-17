@@ -13,26 +13,29 @@
 //!
 //! # 会话隔离（本次重构的核心）
 //!
-//! 连接按 `(作用域, 项目 id, server 名, 配置路径身份)` 作键，每个会话登记自己的可见集，
-//! 工具注入与调用都先过可见集校验 —— 项目 A 的 MCP 工具不会再出现在项目 B 的请求里。
+//! 连接按 `(作用域, 项目 id, server 名, 配置路径身份)` 作键，每个会话登记
+//! 自己的可见集，工具注入与调用都先过可见集校验 —— 项目 A 的 MCP 工具不会再出现在
+//! 项目 B 的请求里。配置文件路径参与池键身份，不同来源的授权与连接不会混用。
 
 mod config;
 mod error;
 mod manager;
 mod process;
+mod review_service;
 mod service;
 mod tools;
+mod trust;
 
 pub use config::{
     CONFIG_COMMIT, ConfigIssue, DEFAULT_TIMEOUT_MS, IssueLevel, McpServerConfig, McpTransport,
-    MergedServer, Scope, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode, default_doc_text,
-    global_scope, load_scope, merge_scopes, parse_scope_text, project_scope, read_scope_text,
-    scope_version, source_identity, validate_server,
+    MergedServer, Scope, ScopeCommitGuard, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode,
+    default_doc_text, global_scope, load_scope, merge_scopes, parse_scope_text, project_scope,
+    read_scope_text, scope_version, source_identity, validate_server,
 };
 pub use error::{McpError, McpErrorKind};
 pub use manager::{
-    DEFAULT_MAX_SERVERS, INIT_TIMEOUT, McpCallOutput, McpManager, McpState, McpStatusPayload,
-    PoolKey, StatusSink,
+    DEFAULT_MAX_SERVERS, INIT_TIMEOUT, LaunchReview, LaunchReviewReceipt, McpCallOutput,
+    McpManager, McpState, McpStatusPayload, PoolKey, ReviewAction, StatusSink,
 };
 pub use tools::{
     McpTool, McpToolDef, normalize_schema, server_function_name, to_provider_tool_defs,
@@ -40,4 +43,6 @@ pub use tools::{
 
 pub(crate) use process::wrap_process_tree;
 
-pub use service::{SaveReceipt, save_configuration, visible_servers};
+pub use review_service::{confirm_launch_review, launch_operation, prepare_launch_review};
+pub use service::{SaveReceipt, launch_key, save_configuration, set_launch_trust, visible_servers};
+pub use trust::{LaunchStatus, ProbeChallenge, launch_version};

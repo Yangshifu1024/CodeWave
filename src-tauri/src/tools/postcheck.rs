@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// 单次命令捕获的输出字节上限（防长命令撑爆内存；模型只要尾部，故滚动保留尾部）。
-const MAX_CAPTURE_BYTES: usize = 1 << 20;
+const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024 + 1;
 
 /// 检查命令未执行 / 未完成的原因（wire 字符串固定：前端与模型都读）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -31,6 +31,8 @@ pub enum SkipReason {
     NoProject,
     /// 被安全围栏拦下
     BlockedByFence,
+    /// Host could not prove independent process-tree ownership.
+    GuardianUnavailable,
     /// 命令超时（已终止进程组）
     Timeout,
     /// 用户取消运行（已终止进程组）
@@ -50,6 +52,14 @@ pub struct CheckResult {
     pub output: String,
     /// 未执行 / 未完成的原因（`null` 表示有完整结论）
     pub skipped: Option<SkipReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_error: Option<String>,
+    #[serde(skip)]
+    raw_output: Option<Vec<u8>>,
 }
 
 impl CheckResult {
@@ -60,6 +70,10 @@ impl CheckResult {
         output: impl Into<String>,
     ) -> Self {
         CheckResult {
+            exit_code: None,
+            receipt_id: None,
+            receipt_error: None,
+            raw_output: None,
             ran: false,
             ok: false,
             command: command.into(),
@@ -71,6 +85,10 @@ impl CheckResult {
     /// 内置 JSON 解析的结论（`ran=true`；`ok` 即解析是否成功）。
     pub fn builtin_json(ok: bool, output: impl Into<String>) -> Self {
         CheckResult {
+            exit_code: None,
+            receipt_id: None,
+            receipt_error: None,
+            raw_output: None,
             ran: true,
             ok,
             command: "builtin:json-parse".into(),
@@ -121,6 +139,100 @@ pub async fn run_command(
     timeout_seconds: u64,
     tail_chars: usize,
 ) -> CheckResult {
+    use crate::core::delivery::{
+        CheckKind, CommandSpec, DeliveryService, ExecutionOutcome, ReceiptRecorder,
+    };
+    let identity = DeliveryService::identity_of(&ctx.rt);
+    let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
+    let shell = crate::tools::command::resolve_shell(selection.as_deref());
+    let concrete = file
+        .map(|file| substitute_file(command, file, &shell))
+        .unwrap_or_else(|| command.into());
+    let contract = ctx
+        .rt
+        .delivery_task_id
+        .lock()
+        .unwrap()
+        .as_deref()
+        .and_then(|id| ctx.core.delivery.read_contract(&identity.session_id, id));
+    let contract = contract.filter(|c| c.owner.root_run_id == identity.root_run_id);
+    let binding=contract.as_ref().and_then(|c|c.checks.iter().find(|check|check.kind==CheckKind::Command
+        && matches!(&check.command,Some(CommandSpec::Requested{command_text,..}) if command_text==&concrete)));
+    let mut recorder = ReceiptRecorder::new(
+        ctx.core.delivery.clone(),
+        identity,
+        &format!(
+            "{}:postcheck:{}",
+            ctx.provider_call_id,
+            file.unwrap_or("project")
+        ),
+        &concrete,
+        Some(ctx.rt.workspace.to_string_lossy().into_owned()),
+        Some(timeout_seconds.max(1) * 1000),
+        binding.as_ref().map(|c| c.id.clone()),
+    );
+    if let Some(check) = binding {
+        recorder.bind_contract(contract.as_ref().expect("binding has contract"));
+        recorder.observe(
+            DeliveryService::roots_from_runtime(&ctx.rt),
+            check.scope.clone(),
+        );
+    }
+    recorder.begin();
+    let mut result = run_command_inner(ctx, command, file, timeout_seconds, tail_chars).await;
+    let outcome = match result.skipped {
+        Some(SkipReason::BlockedByFence | SkipReason::GuardianUnavailable) => {
+            ExecutionOutcome::Denied
+        }
+        Some(SkipReason::Timeout) => ExecutionOutcome::TimedOut,
+        Some(SkipReason::Cancelled) => ExecutionOutcome::Cancelled,
+        _ if result.exit_code.is_some() => ExecutionOutcome::Exited,
+        _ if !result.ran => ExecutionOutcome::SpawnFailed,
+        _ => ExecutionOutcome::Interrupted,
+    };
+    let (program, argv) =
+        crate::tools::command::shell_invocation(&shell, &concrete, &ctx.rt.workspace);
+    let resolved = if result.ran {
+        Some(CommandSpec::Resolved {
+            program,
+            argv,
+            shell_family: Some(shell.describe()),
+            shell_command: Some(concrete),
+            timeout_ms: timeout_seconds.max(1) * 1000,
+            config_digest: None,
+        })
+    } else {
+        None
+    };
+    let receipt = recorder.complete(
+        resolved,
+        Some(crate::core::delivery::PathRef {
+            root_id: "workspace".into(),
+            relative_path: ".".into(),
+        }),
+        outcome,
+        result.exit_code,
+        None,
+        result.raw_output.take(),
+        None,
+        None,
+        None,
+    );
+    result.receipt_id = receipt.map(|r| r.id);
+    let warnings = recorder.take_warnings();
+    if !warnings.is_empty() {
+        result.receipt_error = Some(warnings.join("；"));
+    }
+    result
+}
+
+async fn run_command_inner(
+    ctx: &ToolCtx,
+    command: &str,
+    file: Option<&str>,
+    timeout_seconds: u64,
+    tail_chars: usize,
+) -> CheckResult {
     let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
     let shell = crate::tools::command::resolve_shell(selection.as_deref());
     let concrete = match file {
@@ -142,27 +254,53 @@ pub async fn run_command(
 
     let cwd = ctx.rt.workspace.clone();
     let (program, argv) = crate::tools::command::shell_invocation(&shell, command, &cwd);
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(&argv)
+    let guard = ctx.rt.workspace_guard.lock().unwrap().clone();
+    let invocation = if let Some(guard) = guard {
+        match guard.guarded_invocation(&program, &argv) {
+            Ok(value) => value,
+            Err(error) => {
+                return CheckResult::skipped(
+                    SkipReason::GuardianUnavailable,
+                    command,
+                    error.to_string(),
+                );
+            }
+        }
+    } else {
+        #[cfg(not(test))]
+        {
+            return CheckResult::skipped(
+                SkipReason::GuardianUnavailable,
+                command,
+                "Independent guardian is required before postcheck execution",
+            );
+        }
+        #[cfg(test)]
+        {
+            (
+                std::path::PathBuf::from(&program),
+                argv.iter().map(std::ffi::OsString::from).collect(),
+            )
+        }
+    };
+    let mut cmd = tokio::process::Command::new(invocation.0);
+    cmd.args(invocation.1)
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // 任务被 abort 时子进程随之回收；正常超时 / 取消路径仍走 terminate_tree 主动杀整树
         .kill_on_drop(true);
-    #[cfg(unix)]
-    {
-        cmd.process_group(0); // 独立进程组：可整树终止
-    }
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    let mut wrapped = crate::mcp::wrap_process_tree(cmd);
 
-    let mut child = match cmd.spawn() {
+    let mut child = match wrapped.spawn() {
         Ok(c) => c,
         Err(e) => {
             // 命令没真的跑起来：ran=false，输出如实带上原因（绝不让「没跑」读成「跑完有错」）
             return CheckResult {
+                exit_code: None,
+                receipt_id: None,
+                receipt_error: None,
+                raw_output: None,
                 ran: false,
                 ok: false,
                 command: command.to_string(),
@@ -173,6 +311,10 @@ pub async fn run_command(
     };
     let Some(pid) = child.id() else {
         return CheckResult {
+            exit_code: None,
+            receipt_id: None,
+            receipt_error: None,
+            raw_output: None,
             ran: true,
             ok: false,
             command: command.to_string(),
@@ -182,8 +324,8 @@ pub async fn run_command(
     };
 
     let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    let stdout = child.stdout().take();
+    let stderr = child.stderr().take();
     let t1 = stdout.map(|s| tokio::spawn(read_stream(s, buf.clone())));
     let t2 = stderr.map(|s| tokio::spawn(read_stream(s, buf.clone())));
 
@@ -192,8 +334,8 @@ pub async fn run_command(
         s = child.wait() => match s {
             Ok(st) => st,
             Err(e) => {
-                terminate_headless(ctx, pid, &mut child, t1, t2).await;
-                return CheckResult {
+                terminate_probe(ctx, pid, child.as_mut(), t1, t2).await;
+                return CheckResult { exit_code:None,receipt_id:None,receipt_error:None,raw_output:captured_output(&buf),
                     ran: true,
                     ok: false,
                     command: command.to_string(),
@@ -203,8 +345,8 @@ pub async fn run_command(
             }
         },
         _ = tokio::time::sleep(timeout) => {
-            terminate_headless(ctx, pid, &mut child, t1, t2).await;
-            return CheckResult {
+            terminate_probe(ctx, pid, child.as_mut(), t1, t2).await;
+            return CheckResult { exit_code:None,receipt_id:None,receipt_error:None,raw_output:captured_output(&buf),
                 ran: true,
                 ok: false,
                 command: command.to_string(),
@@ -213,8 +355,8 @@ pub async fn run_command(
             };
         }
         _ = ctx.cancel.cancelled() => {
-            terminate_headless(ctx, pid, &mut child, t1, t2).await;
-            return CheckResult {
+            terminate_probe(ctx, pid, child.as_mut(), t1, t2).await;
+            return CheckResult { exit_code:None,receipt_id:None,receipt_error:None,raw_output:captured_output(&buf),
                 ran: true,
                 ok: false,
                 command: command.to_string(),
@@ -225,10 +367,13 @@ pub async fn run_command(
     };
     let _ = wait_pump(t1).await;
     let _ = wait_pump(t2).await;
-    let code = status.code().unwrap_or(-1);
     CheckResult {
+        exit_code: status.code(),
+        receipt_id: None,
+        receipt_error: None,
+        raw_output: captured_output(&buf),
         ran: true,
-        ok: code == 0,
+        ok: status.success(),
         command: command.to_string(),
         output: tail_text(&buf, tail_chars),
         skipped: None,
@@ -236,10 +381,10 @@ pub async fn run_command(
 }
 
 /// 超时 / 取消路径：杀进程组 → 收尸 → 等输出泵结束。
-async fn terminate_headless(
+async fn terminate_probe(
     _ctx: &ToolCtx,
     pid: u32,
-    child: &mut tokio::process::Child,
+    child: &mut dyn process_wrap::tokio::ChildWrapper,
     t1: Option<tokio::task::JoinHandle<()>>,
     t2: Option<tokio::task::JoinHandle<()>>,
 ) {
@@ -274,6 +419,10 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(mut s: R, buf: Arc<Mutex<V
             }
         }
     }
+}
+
+fn captured_output(buf: &Arc<Mutex<Vec<u8>>>) -> Option<Vec<u8>> {
+    Some(buf.lock().unwrap().clone())
 }
 
 /// 取合并输出的尾部 `tail_chars` 个字符（UTF-8 宽松解码，不把多字节字符切出替换符）。
@@ -353,6 +502,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -379,6 +529,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         (ctx, ws, dd)
@@ -484,5 +635,41 @@ mod tests {
         assert!(!r.ran, "被围栏拦下的命令不得执行");
         assert_eq!(r.skipped, Some(SkipReason::BlockedByFence));
         assert!(!r.output.is_empty(), "围栏原因应如实带上");
+
+        // A configured check is authorized for ordinary writes, never host state.
+        ctx.rt.set_prefs(crate::core::prefs::SessionPrefs {
+            approval_mode: crate::core::prefs::ApprovalMode::FullAccess,
+            ..Default::default()
+        });
+        let target = ctx.rt.data_dir.join("config.json");
+        std::fs::write(&target, b"unchanged").unwrap();
+        let command = format!("echo replaced > '{}'", target.display());
+        let r = run_command(&ctx, &command, None, 10, 3000).await;
+        assert!(!r.ran);
+        assert_eq!(r.skipped, Some(SkipReason::BlockedByFence));
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn receipt_keeps_complete_output_even_when_model_only_receives_tail() {
+        let (mut ctx, _workspace, _profile) = project_ctx("pc-evidence");
+        ctx.provider_call_id = "postcheck-evidence".into();
+        let output = run_command(&ctx, "printf 'alpha-evidence\\nbeta-tail\\n'", None, 10, 5).await;
+        assert!(output.ok, "{output:?}");
+        assert!(!output.output.contains("alpha-evidence"));
+        let id = output
+            .receipt_id
+            .as_deref()
+            .expect("postcheck must issue a real receipt");
+        let bytes = ctx
+            .core
+            .delivery
+            .store()
+            .read_execution_output(&ctx.rt.id, id)
+            .expect("full output must be readable");
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("alpha-evidence"));
+        assert!(text.contains("beta-tail"));
     }
 }

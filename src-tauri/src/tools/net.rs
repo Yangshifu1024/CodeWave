@@ -6,9 +6,11 @@ use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+pub(super) mod request;
+
 /// 重定向跳数上限。
 pub const MAX_REDIRECTS: usize = 10;
-/// 响应体字节上限（50MB）。
+/// 解压后响应体字节上限（50 MiB）。
 pub const MAX_BODY_BYTES: u64 = 50 * 1024 * 1024;
 
 /// 内网/保留地址段判定（v4 + v6）。
@@ -81,6 +83,7 @@ impl HostThrottle {
 }
 
 /// 单跳失败的结构化错误。
+#[derive(Debug)]
 pub struct HopError {
     /// 稳定错误码（E_SSRF_BLOCKED / E_DNS / E_NETWORK / E_TOO_LARGE）。
     pub code: &'static str,
@@ -94,9 +97,7 @@ pub async fn read_body_limited(resp: reqwest::Response, max: u64) -> Result<Vec<
     let mut stream = resp.bytes_stream();
     use futures::StreamExt;
     loop {
-        let chunk = tokio::select! {
-            item = stream.next() => item,
-        };
+        let chunk = stream.next().await;
         let Some(item) = chunk else { break };
         let bytes = item.map_err(|e| HopError {
             code: "E_NETWORK",
@@ -111,48 +112,6 @@ pub async fn read_body_limited(resp: reqwest::Response, max: u64) -> Result<Vec<
         out.extend_from_slice(&bytes);
     }
     Ok(out)
-}
-
-/// 解析主机并做内网段检查（SSRF 守卫核心）。
-pub async fn guard_host(host: &str, port: u16, allow_private: bool) -> Result<(), HopError> {
-    if allow_private {
-        return Ok(());
-    }
-    // IP 字面量
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(ip) {
-            return Err(HopError {
-                code: "E_SSRF_BLOCKED",
-                message: format!(
-                    "目标 {host}:{port} 是内网/保留地址，已被 SSRF 守卫拒绝（如需访问本地服务，在设置中开启 allow_private_network）"
-                ),
-            });
-        }
-        return Ok(());
-    }
-    // 域名：解析 DNS 后逐个 IP 检查
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| HopError {
-            code: "E_DNS",
-            message: format!("域名解析失败 {host}：{e}"),
-        })?
-        .collect();
-    if addrs.is_empty() {
-        return Err(HopError {
-            code: "E_DNS",
-            message: format!("域名无解析结果：{host}"),
-        });
-    }
-    for a in &addrs {
-        if is_private_ip(a.ip()) {
-            return Err(HopError {
-                code: "E_SSRF_BLOCKED",
-                message: format!("{host} 解析到内网地址 {}，已被 SSRF 守卫拒绝", a.ip()),
-            });
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -240,61 +199,5 @@ mod tests {
         assert!(is_private_ip("::ffff:100.64.0.1".parse().unwrap()));
         assert!(!is_private_ip("::ffff:8.8.8.8".parse().unwrap()));
         assert!(!is_private_ip("::ffff:1.1.1.1".parse().unwrap()));
-    }
-
-    /// guard_host：IP 字面量主机按 is_private_ip 分类；allow_private 直接短路放行。
-    #[tokio::test]
-    async fn guard_host_blocks_private_literal_and_honors_allow() {
-        // 私网字面量且未开 allow_private → SSRF 拦截
-        let err = guard_host("10.0.0.1", 80, false).await.unwrap_err();
-        assert_eq!(err.code, "E_SSRF_BLOCKED");
-        // allow_private 在任何拨号前短路
-        assert!(guard_host("10.0.0.1", 80, true).await.is_ok());
-        assert!(guard_host("127.0.0.1", 80, true).await.is_ok());
-        // 公网字面量不拨号直接放行
-        assert!(guard_host("8.8.8.8", 443, false).await.is_ok());
-        // "localhost"（hosts 文件）解析到回环地址 → 拦截
-        let err = guard_host("localhost", 80, false).await.unwrap_err();
-        assert_eq!(err.code, "E_SSRF_BLOCKED");
-    }
-
-    /// read_body_limited：限额内完整流式读取；超限 → E_TOO_LARGE。
-    #[tokio::test]
-    async fn read_body_limited_enforces_cap() {
-        // 一次性本地 HTTP 服务：每次调用在新端口上回 `body`
-        async fn serve_once(body: String) -> std::net::SocketAddr {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = listener.local_addr().unwrap();
-            std::thread::spawn(move || {
-                use std::io::{Read, Write};
-                let (mut s, _) = listener.accept().unwrap();
-                let mut buf = [0u8; 8192];
-                let _ = s.read(&mut buf);
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = s.write_all(resp.as_bytes());
-            });
-            addr
-        }
-
-        let addr = serve_once("x".repeat(300)).await;
-        let client = reqwest::Client::new();
-        let resp = client.get(format!("http://{addr}/b")).send().await.unwrap();
-        let ok = match read_body_limited(resp, 1000).await {
-            Ok(b) => b,
-            Err(e) => panic!(
-                "within-limit read must succeed, got {}: {}",
-                e.code, e.message
-            ),
-        };
-        assert_eq!(ok.len(), 300);
-
-        let addr = serve_once("y".repeat(300)).await;
-        let resp = client.get(format!("http://{addr}/b")).send().await.unwrap();
-        let err = read_body_limited(resp, 50).await.unwrap_err();
-        assert_eq!(err.code, "E_TOO_LARGE");
     }
 }

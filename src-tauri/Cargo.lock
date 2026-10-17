@@ -767,6 +767,7 @@ dependencies = [
  "git2",
  "grep-regex",
  "grep-searcher",
+ "hyper-util",
  "ignore",
  "keyring",
  "libc",

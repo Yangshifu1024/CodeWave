@@ -67,6 +67,8 @@ pub struct ApprovalRequest {
     pub kind: ApprovalKind,
     /// [docs/chat-and-interface](../../../docs/chat-and-interface.md)：5 分钟未响应自动确认推荐选项（允许）；false 表示永不超时、无限等待
     pub auto_confirm: bool,
+    /// 本次审批所属工具调用的稳定身份；None 表示无工具调用上下文。
+    pub call_key: Option<String>,
 }
 
 /// 审批结果：approved = 允许；always = 用户选择「始终允许本项目」（仅在 allow_always 时可能为真）。
@@ -88,6 +90,23 @@ fn emit_session_of(rt: &SessionRuntime) -> (String, Option<String>) {
     }
 }
 
+/// 构造桌面审批门事件；审批选项由原有 AskPanel 渲染。
+fn ask_opened(
+    req: &ApprovalRequest,
+    ask_id: &str,
+    emit_session: &str,
+    run_id: Option<&str>,
+    sub_id: Option<&str>,
+) -> serde_json::Value {
+    json!({
+        "session": emit_session, "run_id": run_id, "ask_id": ask_id, "kind": "approval",
+        "title": req.title, "detail": req.detail,
+        "allow_always": req.allow_always,
+        "approval_kind": req.kind.wire(),
+        "sub_id": sub_id,
+    })
+}
+
 /// 弹出对话框并等待用户决定。关闭/拒绝 = 不允许；勾选 auto_confirm 时超时自动允许。
 pub async fn confirm(
     rt: &Arc<SessionRuntime>,
@@ -95,6 +114,14 @@ pub async fn confirm(
     req: ApprovalRequest,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> ConfirmOutcome {
+    if !rt.interactive.load(std::sync::atomic::Ordering::SeqCst) {
+        *rt.interaction_blocked.lock().unwrap() = Some("interaction_unavailable".into());
+        cancel.cancel();
+        return ConfirmOutcome {
+            approved: false,
+            always: false,
+        };
+    }
     let run_id = if rt.root_session_id.is_some() {
         rt.root_run_id.clone()
     } else {
@@ -126,13 +153,13 @@ pub async fn confirm(
     sink.emit(
         &emit_session,
         "ask:opened",
-        json!({
-            "session": emit_session, "run_id": run_id, "ask_id": ask_id, "kind": "approval",
-            "title": req.title, "detail": req.detail,
-            "allow_always": req.allow_always,
-            "approval_kind": req.kind.wire(),
-            "sub_id": from_sub,
-        }),
+        ask_opened(
+            &req,
+            &ask_id,
+            &emit_session,
+            run_id.as_deref(),
+            from_sub.as_deref(),
+        ),
     );
     // H2 修复：等待审批期间 run 取消可打断（取消 = 拒绝），不再永久挂起
     // [docs/chat-and-interface](../../../docs/chat-and-interface.md)：auto_confirm=false 永不超时；true 时超时自动确认推荐选项（允许，绝不做「始终允许」）
@@ -245,6 +272,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = crate::tools::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -292,6 +320,7 @@ mod tests {
                     allow_always,
                     kind: ApprovalKind::Once,
                     auto_confirm: false,
+                    call_key: None,
                 };
                 let (task, ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
                 rt.resolve_ask(&ask_id, payload);
@@ -320,6 +349,7 @@ mod tests {
             detail: "d".into(),
             allow_always: true,
             kind: ApprovalKind::Once,
+            call_key: None,
             auto_confirm: true,
         };
         let (task, _ask_id) = spawn_confirm(&core, &rt, req, cancel).await;
@@ -340,6 +370,7 @@ mod tests {
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
+            call_key: None,
             kind: ApprovalKind::Once,
             auto_confirm: false,
         };
@@ -364,6 +395,7 @@ mod tests {
         let req = ApprovalRequest {
             title: "t".into(),
             detail: "d".into(),
+            call_key: None,
             allow_always: true,
             kind: ApprovalKind::Once,
             auto_confirm: true,
@@ -385,6 +417,7 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let req = ApprovalRequest {
             title: "t".into(),
+            call_key: None,
             detail: "d".into(),
             allow_always: true,
             kind: ApprovalKind::Once,
@@ -405,6 +438,7 @@ mod tests {
         let (_ws, _dd, core, rt) = setup();
         let cancel = tokio_util::sync::CancellationToken::new();
         let req = ApprovalRequest {
+            call_key: None,
             title: "t".into(),
             detail: "d".into(),
             allow_always: true,
@@ -457,6 +491,7 @@ mod tests {
             allow_always: false,
             kind: ApprovalKind::Once,
             auto_confirm: false, // 主会话不勾 auto_confirm = 永不超时；子代理例外
+            call_key: None,
         };
         let (task, ask_id) = spawn_confirm(&core, &sub, req, cancel).await;
         // 虚拟时钟推进到超时点之后（600s < 601s）；无应答 → 自动拒绝
@@ -484,6 +519,7 @@ mod tests {
             allow_always: false,
             kind: ApprovalKind::Once,
             auto_confirm: false,
+            call_key: None,
         };
         let (task, ask_id) = spawn_confirm(&core, &sub, req, cancel).await;
         sub.resolve_ask(&ask_id, json!({ "approved": false }));

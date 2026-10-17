@@ -1,5 +1,6 @@
 use super::drive::budget_notice_step;
 use super::drive::main_drive_params;
+use super::guards::CompactingGuard;
 use super::runtime::{Frame, SessionRuntime};
 use super::stream::{build_assistant_message, build_stream_request, flush_segments};
 use super::*;
@@ -679,6 +680,7 @@ async fn stream_request_bytes_stable_across_calls() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -789,46 +791,13 @@ async fn dirty_history_messages_stay_byte_stable() {
 }
 
 #[tokio::test]
-async fn system_prompt_frozen_within_run() {
-    // [docs/providers-and-network]：run 内 system 稳定主块冻结——文件变更不穿透当前 run
-    //（保 provider 前缀缓存），新 run（drive_agent 起点清空冻结）才重新组装纳入新内容
-    let ws = tempfile::tempdir().unwrap();
-    let dd = tempfile::tempdir().unwrap();
-    let roots = crate::tools::pathutil::WriteRoots {
-        workspace: std::fs::canonicalize(ws.path()).unwrap(),
-        extra: vec![],
-        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
-    };
-    std::fs::write(ws.path().join("AGENTS.md"), "rule-v1").unwrap();
-    let core = test_support::make_core(&roots);
-    let rt = core.get_or_create_session(
-        "freeze-test",
-        roots.workspace.clone(),
-        None,
-        vec![],
-        None,
-        vec![],
-    );
-    let params = DriveParams::default();
-    let (_, r1) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert!(r1.system_core.contains("rule-v1"));
-    // run 中途改文件：冻结生效，system 主块字节不变
-    std::fs::write(ws.path().join("AGENTS.md"), "rule-v2").unwrap();
-    let (_, r2) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert_eq!(r1.system_core, r2.system_core, "run 内冻结：文件变更不穿透");
-    // 新 run：清空冻结（drive_agent 同款操作）→ 重新组装
-    *rt.system_frozen.lock().unwrap() = None;
-    let (_, r3) = build_stream_request(&core, &rt, &params).await.unwrap();
-    assert!(r3.system_core.contains("rule-v2"), "新 run 重新组装");
-}
-
-#[tokio::test]
 async fn cache_gen_anchor_hysteresis() {
     // [docs/providers-and-network]：代际断点锚点滞回——漂移未超 1/4 保持不动（命中刷新
     // TTL），超阈值才前移（触发一次段重写）；历史不足 16 条不启用
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -883,6 +852,7 @@ async fn running_flag_resets_after_run_ends() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1134,6 +1104,7 @@ async fn new_session_prefs_follow_global_switch() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1160,6 +1131,7 @@ async fn plan_mode_excludes_write_tools() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1197,6 +1169,7 @@ async fn compacting_guard_resets_flag_on_panic_unwind() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1229,6 +1202,7 @@ async fn session_model_override_and_dangling_fallback() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1363,6 +1337,7 @@ fn test_roots() -> crate::tools::pathutil::WriteRoots {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -1732,6 +1707,7 @@ fn scripted_core(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -2119,6 +2095,7 @@ fn scripted_core_recording(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3018,12 +2995,17 @@ fn usage_frame_timing_fields_are_optional() {
         cache_write: 4,
         duration_ms: Some(1200),
         ttft_ms: Some(300),
+        context_used: Some(120_000),
+        context_window: Some(200_000),
     })
     .unwrap();
     assert_eq!(v["type"], "usage", "事件/帧键名不变");
     assert_eq!(v["input"], 1);
     assert_eq!(v["duration_ms"], 1200);
     assert_eq!(v["ttft_ms"], 300);
+    // 上下文占用与窗口（#32 usage 投影的数据源）
+    assert_eq!(v["context_used"], 120_000);
+    assert_eq!(v["context_window"], 200_000);
 
     // 无数据：显式 null（前端按「无数据」处理，不累加不显示）
     let v = serde_json::to_value(Frame::Usage {
@@ -3033,9 +3015,29 @@ fn usage_frame_timing_fields_are_optional() {
         cache_write: 0,
         duration_ms: None,
         ttft_ms: None,
+        context_used: None,
+        context_window: None,
     })
     .unwrap();
     assert!(v["duration_ms"].is_null() && v["ttft_ms"].is_null());
+
+    // 向前兼容：**旧载荷**（没有这两个新字段）必须仍能解析。
+    // 这是 `serde(default)` 的意义所在——加可选字段不能让旧落盘数据变成坏数据。
+    let old = serde_json::json!({
+        "type": "usage", "input": 1, "output": 2,
+        "cache_read": 3, "cache_write": 4, "duration_ms": 1200, "ttft_ms": 300,
+    });
+    match serde_json::from_value::<Frame>(old) {
+        Ok(Frame::Usage {
+            context_used,
+            context_window,
+            ..
+        }) => {
+            assert_eq!(context_used, None, "缺失的新字段必须回落为 None 而不是报错");
+            assert_eq!(context_window, None);
+        }
+        other => panic!("旧 usage 载荷必须仍可反序列化，实际：{other:?}"),
+    }
 }
 
 /// Q2 口径：TTFT 取**首个任意类型**增量（thinking 也算），且不等到第二个增量。
@@ -3119,6 +3121,7 @@ fn scripted_core_capturing(
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3273,7 +3276,13 @@ fn test_sub_base(spawn_mode: crate::core::prefs::ApprovalMode) -> SubBase {
 
 /// 指定角色的测试基座（档位重算与角色策略交叉验证用）。
 fn test_sub_base_role(role: &str, spawn_mode: crate::core::prefs::ApprovalMode) -> SubBase {
-    crate::tools::subagent::sub_base(role, 25, crate::agents::find(role), spawn_mode)
+    crate::tools::subagent::sub_base(
+        role,
+        25,
+        crate::agents::find(role),
+        spawn_mode,
+        crate::core::delivery::responsibility::DutyKind::Implement,
+    )
 }
 
 /// 父档 Plan → AutoEdit 后子代理的排除集与提示块按父档重建；来回切不累积。
@@ -3349,6 +3358,7 @@ async fn subagent_prefs_follow_parent_mode_without_touching_model() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3433,6 +3443,7 @@ async fn subagent_mode_refresh_degrades_when_parent_missing() {
     let ws = tempfile::tempdir().unwrap();
     let dd = tempfile::tempdir().unwrap();
     let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
         workspace: std::fs::canonicalize(ws.path()).unwrap(),
         extra: vec![],
         data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -3606,6 +3617,7 @@ async fn drive_releases_document_claims_on_all_exits() {
             batch_id: "claim-drive".into(),
             call_index: 0,
             call_key: "claim-drive:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let written = crate::tools::document::write::WriteDocumentTool.run(&ctx, serde_json::json!({"path":path,"docx":{"blocks":[{"type":"paragraph","text":"original"}]}})).await;
@@ -3699,6 +3711,7 @@ async fn aborted_drive_does_not_detach_waiting_document_write() {
         batch_id: "seed".into(),
         call_index: 0,
         call_key: "seed:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let seeded = crate::tools::document::write::WriteDocumentTool
@@ -3781,4 +3794,251 @@ async fn aborted_drive_does_not_detach_waiting_document_write() {
         original,
         "no detached late edit after abort"
     );
+}
+
+/// #36-C0 回归：owner 租约的释放点必须是 `finish_run`，不是"宿主记得调
+/// `mark_running(false)`"。
+///
+/// 挂在后者上时，只要某个调用方（测试、未来的新宿主、异常收尾路径）忘了调，
+/// 这个会话就**永久 busy**，用户再也跑不了它——而当时所有测试都是绿的。
+/// 这个用例直接调 `finish_run`，不依赖退避重试的时序。
+#[test]
+fn finish_run_releases_the_session_owner() {
+    use crate::core::agent::runtime::{RunTerminal, RunTerminalKind};
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = crate::tools::pathutil::WriteRoots {
+        project_dir: None,
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+    };
+    let core = test_support::make_core(&roots);
+    let rt = core.get_or_create_session(
+        "owner-session",
+        std::fs::canonicalize(ws.path()).unwrap(),
+        None,
+        vec![],
+        None,
+        vec![],
+    );
+
+    // 模拟 start_chat 的「开跑 + 认领」两步（不真发请求，避免依赖网络）。
+    assert!(
+        rt.begin_run("run-x"),
+        "begin_run 应当成功：新 runtime 没有运行中的 run"
+    );
+    let lease = core
+        .store
+        .claim_session_owner("owner-session", "run-x", 0)
+        .expect("认领");
+    assert_eq!(
+        core.store.claimed_sessions(),
+        vec!["owner-session".to_string()]
+    );
+
+    // 另一个协调器能看到这把锁 —— 跨进程互斥的事实来源在磁盘上。
+    let other = crate::core::process_coordination::LeaseStore::new(&roots.data_dir.join("coord"));
+    assert!(other.read(&lease.resource).is_some(), "租约必须落盘");
+
+    rt.finish_run(RunTerminal::new("run-x", RunTerminalKind::Error));
+
+    assert!(
+        core.store.claimed_sessions().is_empty(),
+        "finish_run 之后必须放掉 owner"
+    );
+    assert!(
+        other.read(&lease.resource).is_none(),
+        "run 收尾后租约仍在盘上：会话会被永久占死"
+    );
+}
+
+/// Real provider requests must share finite-budget admission, including retries.
+#[tokio::test]
+async fn finite_token_budget_serializes_children_and_readmits_empty_retry() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for empty in [false, true] {
+        let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = hits.clone();
+        let serving = listener.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = serving.accept().await.unwrap();
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut request = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                        let len = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if request.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                // Leave fewer tokens than any next request can consume. This is
+                // below the budget, so the empty-response path must readmit retry.
+                let chunk = serde_json::json!({"choices":[{"delta":{"content":if empty {""} else {"done"}},"finish_reason":"stop"}],"usage":{"prompt_tokens":59980,"completion_tokens":10}}).to_string();
+                socket.write_all(&sse_body(&[&chunk])).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        let (core, root, _ws, _data) = scripted_core(port, "finite-budget");
+        root.token_budget.store(60000, Ordering::SeqCst);
+        let a = SessionRuntime::new_sub(&root, "budget-a".into());
+        let b = SessionRuntime::new_sub(&root, "budget-b".into());
+        for runtime in [&a, &b] {
+            runtime
+                .history
+                .lock()
+                .unwrap()
+                .push(Message::user_text("hello"));
+        }
+        let params = || DriveParams {
+            main_session: false,
+            emit_events: false,
+            max_steps: 1,
+            force_report: false,
+            ..Default::default()
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            if empty {
+                let _ = super::drive::drive_agent(&core, &a, params(), "budget-retry").await;
+            } else {
+                let _ = tokio::join!(
+                    super::drive::drive_agent(&core, &a, params(), "budget-a"),
+                    super::drive::drive_agent(&core, &b, params(), "budget-b")
+                );
+            }
+        })
+        .await
+        .expect("budget admission must terminate without a lock cycle");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "no second request may spend the same remaining budget; empty={empty}"
+        );
+        assert_eq!(root.token_spent.load(Ordering::SeqCst), 59990);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn finite_token_budget_missing_usage_or_disconnect_blocks_all_descendants() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for mode in [
+        "missing",
+        "empty",
+        "disconnect",
+        "missing_input",
+        "missing_output",
+    ] {
+        let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = hits.clone();
+        let serving = listener.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = serving.accept().await.unwrap();
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut request = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                        let len = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if request.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                if mode == "disconnect" {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 9999\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n").await.unwrap();
+                } else {
+                    let mut chunk = serde_json::json!({"choices":[{"delta":{"content":if mode == "empty" {""} else {"done"}},"finish_reason":"stop"}]});
+                    if mode == "empty" {
+                        chunk["usage"] =
+                            serde_json::json!({"prompt_tokens":0,"completion_tokens":0});
+                    }
+                    if mode == "missing_input" {
+                        chunk["usage"] = serde_json::json!({"completion_tokens":5});
+                    }
+                    if mode == "missing_output" {
+                        chunk["usage"] = serde_json::json!({"prompt_tokens":5});
+                    }
+                    socket
+                        .write_all(&sse_body(&[&chunk.to_string()]))
+                        .await
+                        .unwrap();
+                }
+                socket.shutdown().await.unwrap();
+            }
+        });
+        let (core, root, _ws, _data) = scripted_core(port, "unknown-budget");
+        root.token_budget.store(60000, Ordering::SeqCst);
+        let a = SessionRuntime::new_sub(&root, "unknown-a".into());
+        let b = SessionRuntime::new_sub(&root, "unknown-b".into());
+        for runtime in [&a, &b] {
+            runtime
+                .history
+                .lock()
+                .unwrap()
+                .push(Message::user_text("hello"));
+        }
+        let params = || DriveParams {
+            main_session: false,
+            emit_events: false,
+            max_steps: 2,
+            force_report: false,
+            ..Default::default()
+        };
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                super::drive::drive_agent(&core, &a, params(), "unknown-a"),
+                super::drive::drive_agent(&core, &b, params(), "unknown-b")
+            )
+        })
+        .await
+        .expect("unknown finite cost must terminate, not retry");
+        assert!(first.0.is_err() && second.0.is_err(), "{mode}");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "missing billing facts cannot authorize any second request: {mode}"
+        );
+        assert!(root.token_budget_uncertain.load(Ordering::SeqCst));
+        assert_eq!(
+            root.token_spent.load(Ordering::SeqCst),
+            if mode.starts_with("missing_") { 5 } else { 0 },
+            "never invent usage: {mode}"
+        );
+        for runtime in [&a, &b] {
+            assert_eq!(
+                runtime.interaction_blocked.lock().unwrap().as_deref(),
+                Some("token_budget_usage_unknown")
+            );
+        }
+        server.abort();
+    }
 }

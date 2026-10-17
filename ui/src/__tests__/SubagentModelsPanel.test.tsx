@@ -41,7 +41,7 @@ function ruleBody(selector: string): string {
 // 后端 agents::DELEGABLE_ROLES 顺序：剔除 title；任务约束「顺序 = 后端注册表」
 // 与「只读角色 = explore / reviewer / code-reviewer」（后端 readonly=true）。
 const fixtureAgents: AgentMeta[] = [
-  { name: "explore", description: "只读源码调研" },
+  { name: "explore", description: "只读源码调研", resource: { source: "builtin", identity: "builtin:agent:explore", version: "role-v1" } },
   { name: "backend-dev", description: "后端实现" },
   { name: "frontend-dev", description: "前端实现" },
   { name: "app-dev", description: "App 实现" },
@@ -192,6 +192,9 @@ describe("SubagentModelsPanel：8 行下拉与只读角色", () => {
       "explore", "backend-dev", "frontend-dev", "app-dev",
       "reviewer", "product-manager", "code-reviewer", "tester",
     ]);
+    expect(document.body.textContent).toContain("builtin:agent:explore");
+    expect(document.body.textContent).toContain("版本：role-v1");
+    expect(document.body.textContent).not.toContain("title");
   });
 
   it("每行首项「继承父会话」存在且 value=null", async () => {

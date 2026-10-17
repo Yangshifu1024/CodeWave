@@ -185,6 +185,7 @@ mod tests {
             error: Some(crate::tools::ToolError::new("E_EXIT_CODE", "命令退出码 1")),
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+            diffs: Vec::new(),
         };
         assert!(should_persist(
             "[error E_EXIT_CODE: 命令退出码 1]\n{\"exit_code\":1}",

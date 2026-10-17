@@ -61,7 +61,14 @@ pub fn recover_after_crash(store: &SessionStore, data_dir: &Path) -> usize {
         return 0;
     }
     let at = chrono::Utc::now().to_rfc3339();
-    let ids = store.running_ids();
+    // An existing owner is not proof of a crash. A second host may be starting
+    // while its peer is alive; orphan ownership requires explicit recovery.
+    let leases = crate::core::process_coordination::LeaseStore::new(&data_dir.join("coord"));
+    let ids: Vec<String> = store
+        .running_ids()
+        .into_iter()
+        .filter(|id| leases.leases_of(id).is_empty())
+        .collect();
     let n = store.mark_interrupted_batch(&ids, KIND_CRASH, &at);
     if n > 0 {
         tracing::warn!("检测到上次非正常退出（marker 残留）：{n} 个会话已标记为中断（crash）");
@@ -104,8 +111,17 @@ impl EventSink for InterruptWatchSink {
     /// run 收尾事件 → 清索引 `running`（子代理/任务运行不在索引中：mark_running 命中不到条目，
     /// 保持 no-op）；其余事件一律只在下方透传。
     fn emit(&self, session: &SessionId, event: &str, payload: serde_json::Value) {
-        if RUN_END_EVENTS.contains(&event) {
-            match self.store.mark_running(session, false) {
+        if RUN_END_EVENTS.contains(&event)
+            && payload
+                .get("cleanup_done")
+                .and_then(|value| value.as_bool())
+                != Some(false)
+        {
+            let marked = match payload.get("run_id").and_then(|v| v.as_str()) {
+                Some(run) => self.store.mark_running_for_run(session, run, false),
+                None => self.store.mark_running(session, false),
+            };
+            match marked {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("会话 [{session}] 收尾清 running 失败：{e}"),
             }

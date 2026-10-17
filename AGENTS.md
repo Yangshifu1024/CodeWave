@@ -5,7 +5,7 @@
 
 ## 必读文档
 
-[README](./README.md) 是产品与上手入口；[docs/0-README.md](./docs/0-README.md) 是完整文档索引。当前 `docs/` 共 **17 篇（14 篇长期主题指南 + 2 篇待批准或验收专项方案 + 索引）**，按本次任务选择必读主题：
+[README](./README.md) 是产品与上手入口；[docs/0-README.md](./docs/0-README.md) 是完整文档索引。当前 `docs/` 共 **16 篇（14 篇长期主题指南 + 1 篇待批准或验收专项方案 + 索引）**，按本次任务选择必读主题：
 
 | 任务 | 必读主题 |
 |---|---|
@@ -13,7 +13,6 @@
 | 会话、执行与委派 | [会话与项目](./docs/sessions-and-projects.md)、[运行与调度](./docs/runtime-and-scheduling.md)、[子代理](./docs/subagents.md) |
 | 计划、权限与工具 | [计划与审批](./docs/plan-and-approval.md)、[工具与安全](./docs/tools-and-safety.md)、[文档工具](./docs/documents.md) |
 | 模型、扩展与设置 | [供应商与网络](./docs/providers-and-network.md)、[MCP 与技能](./docs/mcp-and-skills.md)、[设置指南](./docs/settings-guide.md) |
-| ACP 与 codeg 接入设计 | [ACP 接入方案](./docs/acp-integration.md)（待批准，未实施；结合架构、会话、审批与 MCP 主题） |
 | 界面与交付 | [聊天与界面](./docs/chat-and-interface.md)、[发布、签名与自动更新](./docs/release.md) |
 
 本文件[契约锚点](#契约锚点改前必读)保留改动前必须关注的约束；详细行为、理由与回归入口以对应长期主题为主。
@@ -21,7 +20,7 @@
 ### 文档维护
 
 - `docs/` 保持平铺结构，主题指南使用不带编号的英文 slug，索引保留 `0-README.md`。**优先更新已有长期主题，不为每次修复新增报告**。
-- 本轮整理以含索引不超过 20 篇为规模目标，当前为 17 篇；篇数不是永久不变的架构约束。确需新增独立主题时说明已有指南为何容纳不了，并同步索引与阅读入口；调整规模目标时一并更新索引规则。
+- 本轮整理以含索引不超过 20 篇为规模目标，当前为 16 篇；篇数不是永久不变的架构约束。确需新增独立主题时说明已有指南为何容纳不了，并同步索引与阅读入口；调整规模目标时一并更新索引规则。
 - 当前目录保留有效契约、决策缘由、排障与未完成检查；完成计划、一次性验收和纯视觉微调留在 Git 历史，不另建归档副本。
 - 同一契约由一个主题主维护，其余文档保留摘要与链接。合并、改名或删除文档时，同步全仓 Markdown 链接、源码注释引用及读取文档的测试；不得为整理文档修改业务逻辑。
 - 引用文档使用 Markdown 链接，按当前文件解析相对路径并核对章节锚点。未验证事项继续明确标注，不能把历史全绿或文档整理写成本次验证结果。
@@ -69,12 +68,13 @@
 | 层 | 职责 | 约束 |
 |---|---|---|
 | `core/` | agent 编排主循环、config、context（token 统计/自动压缩）、prompt、projects（目录式项目注册表）、quota（订阅额度：数据源是 `config.providers`，不再读 opencode 配置与 auth.json；7 家适配器 OpenCodeGo / DeepSeek / MiniMaxIntl / MiniMaxCn / Kimi / Zhipu / Zai）、openers（文件管理器与编辑器探测/打开）、scheduler、sessions、stats | 不依赖 tauri |
-| `host/` | commands（全部 IPC 命令）、events（EventSink）、keyring | 除 `lib.rs` 外唯一允许 `use tauri::*`；命令只校验 + 转调 core |
+| `host/` | commands（全部 IPC 命令）、events（EventSink）、keyring、trust（系统钥匙串信任后端）、notify | 除 `lib.rs` 外唯一允许 `use tauri::*`；命令只校验 + 转调 core。`keyring` 与 `trust` 提供纯系统适配，`commands`/`events`/`notify` 提供桌面宿主集成 |
 | `provider/` | LLM 供应商层：anthropic / openai_chat / openai_responses 三协议 + dto / keys / proxy / retry / sse | 协议差异不出本层 |
 | `tools/` | 工具实现（ToolKind 五类：ReadOnly / FileWrite / Network / Interactive / Meta，`scheduled_task` 等操作 agent 自身状态的工具属 Meta）；`tools/document/` = Office 与 PDF 的读/生成/保真修改（[docs/documents](./docs/documents.md)） | 纯函数化 |
 | `agents/` | 内置子代理角色注册表（explore/backend-dev/frontend-dev/app-dev/reviewer/product-manager/code-reviewer/tester/title 定义 + 别名归一查找），被 `tools/subagent` 注入消费；title 例外——仅供 `core/title.rs` 自动命名消费（[docs/sessions-and-projects](./docs/sessions-and-projects.md)），不进 subagent 角色枚举 | 纯数据不依赖 tauri；编排角色已内置为标准工作流常驻提示（[docs/plan-and-approval](./docs/plan-and-approval.md)），不是本表角色 |
 | `core/agent/` | 编排主循环的现行机制：`runtime.rs` 的 **inject 通道**（运行中注入消息**不结束当前 run**，即 steer，[docs/runtime-and-scheduling](./docs/runtime-and-scheduling.md)）、`text_ask.rs`（模型把 ask 透传成正文 XML 时的文本兜底）、`supervise.rs`（错误信号监管：重复失败 / 空转看门狗的纠偏与终止） | 不依赖 tauri |
 | `safety/` | approval 审批门（默认无限等待用户应答；`auto_confirm` 勾选后 5 分钟自动确认推荐选项，[docs/sessions-and-projects](./docs/sessions-and-projects.md)）、fence 命令安全围栏（L1 黑名单 → L2 AST → L3 高危模式） | |
+| `core/process_coordination/` | #36-C0 跨进程共享协调：owner / transaction / workspace / process guardian（`FileCoordinator` 是真实现，`InProcessCoordinator` 仅隔离夹具）。租约带 generation 且**崩溃保守 busy**（不按 PID 自动回收，PID 复用会误杀）；跨文件事务「暂存 → 持久化意向日志 → rename → 删日志」，恢复**向前滚动**；锁序 `owner → save_lock → 磁盘事务 → index_lock`，不持锁等模型或网络 | 不依赖 tauri；协调根一律 `<data_dir>/coord`（`FileCoordinator::new` 收数据根、`from_coord_root` 收协调根，**不可混用**） |
 | `git/` | git2 只读集成（status / diff / log） | 只读，不提供写操作 |
 | `skills/` `mcp/` `memory.rs` | 技能扫描（项目 `<主目录>/.codewave/skills`[project_dir] > 全局 `~/.codewave/skills`[data_dir] > 工作区 `.agents/skills` `.claude/skills` > `~/.agents/skills` 与 `~/.claude/skills` 兼容 > 内置；托管目录技能可在设置页删除，兼容/内置来源不可删，[docs/mcp-and-skills](./docs/mcp-and-skills.md)；注意 rt.data_dir 恒为全局，项目数据目录走 rt.project_dir）、rmcp 客户端（stdio + streamable-http）、记忆系统 | |
 
@@ -106,6 +106,7 @@
 
 ## 踩坑清单（勿再踩）
 
+- **`BootstrapOptions.data_dir` 必须连配置一起管**：`ConfigState::load()` 永远读 `~/.codewave/config.json`，门面必须走 `ConfigState::load_from(&data_dir)`。否则自定义数据根只隔离了会话，供应商配置（连同凭据）仍来自真实全局配置
 - setup 同步上下文不能 `tokio::spawn` → 用 `tauri::async_runtime::spawn` 或惰性 `OnceLock`
 - tauri-plugin-updater 必须有 `plugins.updater` 配置节点（active: false 也行），否则启动 panic
 - **复制必须走 `ui/src/utils/clipboard.ts` 的 `copyText`，不得自写 `navigator.clipboard`**（`grep -rn "navigator\.clipboard" ui/src/ --exclude-dir=__tests__` 只应命中 `utils/clipboard.ts` 与 `ipc/clipboard.ts`；测试目录必须提到这个字符串来构造用例，故排除在外。有测试钉死）。原因：打包版跑在 `tauri://localhost` 下浏览器剪贴板不可靠；而旧写法 `navigator.clipboard?.writeText(t).then().catch(() => {})` 在 clipboard 缺失时 `?.` 短路得到 `undefined`，紧接的 `.then` **同步**抛 `TypeError` 而空 `catch` 吃掉它——失败与成功在界面上都是「点了没反应」。反模式：① `?.writeText()` 后直接 `return true`（`await undefined` 被当成功，把失败伪装成成功）；② 失败空 `catch` 静默（**失败必须有可见反馈**）。详见[聊天与界面](./docs/chat-and-interface.md)

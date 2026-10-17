@@ -361,10 +361,26 @@ impl Tool for EditTool {
         let mut resolved: Vec<PathBuf> = Vec::with_capacity(args.files.len());
         for f in &args.files {
             match pathutil::resolve_read(&roots, &f.path) {
-                Ok(p) => resolved.push(p),
+                Ok(p) => {
+                    if let Err((c, m)) = pathutil::resolve_write(&roots, &p.to_string_lossy()) {
+                        return ToolOutcome::err(&c, m);
+                    }
+                    if let Err((c, m)) = ctx.check_write_path(&p) {
+                        return ToolOutcome::err(&c, m);
+                    }
+                    resolved.push(p);
+                }
                 Err((c, m)) => return ToolOutcome::err(&c, m),
             }
         }
+        let _effect = match ctx.acquire_effect(&resolved, false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
+        let destinations: Vec<_> = resolved
+            .iter()
+            .map(|p| pathutil::canonical_best_effort(p))
+            .collect();
 
         // 严格文件隔离（[docs/subagents](../../../../docs/subagents.md)）：
         // 非主 runtime 编辑前认领全部目标；任一文件被兄弟任务认领则整体拒绝（多文件编辑不部分应用）
@@ -388,12 +404,20 @@ impl Tool for EditTool {
                 return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
             }
         };
+        for (path, destination) in resolved.iter().zip(&destinations) {
+            if let Err((c, m)) = pathutil::revalidate_write(&roots, path, destination) {
+                return ToolOutcome::err(&c, m);
+            }
+        }
 
         // 第一遍：读取并校验所有文件（version 预检 + EOL 归一 + 变更试运行）。
         // version 不匹配不再硬失败：记录 stale 后继续；若变更仍能在最新内容上唯一应用，
         // 则附警告放行；只有应用失败（真实内容冲突）才返回 E_VERSION_STALE 要求重新 read。
         let mut prepared: Vec<(PathBuf, Vec<u8>)> = Vec::new();
         let mut line_changes = Vec::with_capacity(args.files.len());
+        // diff 候选（绝对路径, 改前全文, 改后全文）；只有真正写成功的文件才挂进 outcome。
+        let mut diff_candidates: Vec<(String, String, String)> =
+            Vec::with_capacity(args.files.len());
         let mut stale_warnings: Vec<String> = Vec::new();
         let mut fuzzy_warnings: Vec<String> = Vec::new();
         for (f, resolved) in args.files.iter().zip(&resolved) {
@@ -454,6 +478,17 @@ impl Tool for EditTool {
                 ));
             }
             line_changes.push(crate::tools::line_changes::count(&f.path, &norm, &new_text));
+            // diff 映射（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：
+            // `norm` / `new_text` 就是该文件的改前 / 改后**整份**内容（LF 归一，
+            // 与 `FileDiff` 的正文同口径），此处顺手收下，写成功后才挂进 outcome。
+            // 绝对路径取 `destinations` 对应项，与产物登记同源。
+            diff_candidates.push((
+                crate::tools::pathutil::canonical_best_effort(resolved)
+                    .to_string_lossy()
+                    .into_owned(),
+                norm.clone(),
+                new_text.clone(),
+            ));
             let out_text = if eol == "\r\n" {
                 new_text.replace('\n', "\r\n")
             } else {
@@ -476,6 +511,11 @@ impl Tool for EditTool {
         let backup_dir = ctx.rt.data_dir.join("tmp").join("edit-backup");
         let token = uuid::Uuid::new_v4().to_string();
         let mut backups: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for (path, destination) in resolved.iter().zip(&destinations) {
+            if let Err((c, m)) = pathutil::revalidate_write(&roots, path, destination) {
+                return ToolOutcome::err(&c, m);
+            }
+        }
         for (p, _) in &prepared {
             if let Ok(orig) = std::fs::read(p) {
                 let b = backup_dir.join(format!("{token}_{}", uuid::Uuid::new_v4()));
@@ -486,20 +526,50 @@ impl Tool for EditTool {
             }
         }
         let mut written: Vec<PathBuf> = Vec::new();
-        for (p, new_bytes) in prepared.iter().rev() {
-            match crate::util::atomic::atomic_write(p, new_bytes) {
+        for ((p, new_bytes), destination) in prepared.iter().zip(&destinations).rev() {
+            let result = pathutil::revalidate_write(&roots, p, destination).and_then(|()| {
+                crate::util::atomic::atomic_write(p, new_bytes)
+                    .map_err(|e| ("E_IO".into(), e.to_string()))
+            });
+            match result {
                 Ok(()) => written.push(p.clone()),
-                Err(e) => {
+                Err((code, error)) => {
+                    let mut rollback_failed = Vec::new();
                     for w in &written {
-                        if let Some((_, b)) = backups.iter().find(|(orig, _)| orig == w)
-                            && let Ok(data) = std::fs::read(b)
-                        {
-                            let _ = std::fs::write(w, data);
+                        let destination = resolved
+                            .iter()
+                            .position(|p| p == w)
+                            .map(|i| &destinations[i]);
+                        let restored = destination.is_some_and(|destination| {
+                            if pathutil::revalidate_write(&roots, w, destination).is_err() {
+                                return false;
+                            }
+                            backups
+                                .iter()
+                                .find(|(orig, _)| orig == w)
+                                .and_then(|(_, backup)| std::fs::read(backup).ok())
+                                .is_some_and(|bytes| {
+                                    crate::util::atomic::atomic_write(w, &bytes).is_ok()
+                                })
+                        });
+                        if !restored {
+                            rollback_failed.push(w.display().to_string());
                         }
                     }
                     return ToolOutcome::err(
-                        "E_IO",
-                        format!("写入 {} 失败，已回滚：{e}", p.display()),
+                        &code,
+                        format!(
+                            "写入 {} 失败：{error}；{}",
+                            p.display(),
+                            if rollback_failed.is_empty() {
+                                "已写文件已回滚；原始备份保留".to_string()
+                            } else {
+                                format!(
+                                    "以下文件未能安全回滚，原始备份保留：{}",
+                                    rollback_failed.join("、")
+                                )
+                            }
+                        ),
                     );
                 }
             }
@@ -540,6 +610,11 @@ impl Tool for EditTool {
             "line_changes": line_changes,
             "checks": checks.iter().map(|c| c.to_json()).collect::<Vec<_>>(),
         }));
+        // 走到这里说明倒序写入**全部成功**（失败分支早已整体回滚并返回），
+        // 所以候选可以整批挂上；单条超预算的由 `push_diff` 自己跳过。
+        for (path, old_text, new_text) in diff_candidates {
+            out.push_diff(path, Some(old_text), new_text);
+        }
         for w in stale_warnings {
             out.warnings.push(w);
         }

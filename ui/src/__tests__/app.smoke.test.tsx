@@ -44,6 +44,9 @@ const fixtureMessages = [
   { role: "assistant", content: [{ type: "text", text: "你好！有什么可以帮你？" }] },
 ];
 
+const fixtureSkill = { name: "demo", description: "d", whenToUse: "w", origin: "x", deletable: false,
+  resource: { source: "workspace_agents" as const, identity: "x", version: "fixture-v1" } };
+
 // resolve_ask captor (read by the ask-submit regression case; avoids per-case overrides polluting the global mock)
 const resolveAskLog: any[] = [];
 
@@ -79,7 +82,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "get_mcp_config": return "{}";
       case "mcp_status": return [];
       case "list_scheduled_tasks": return []; // 任务列表：左栏任务区与任务页都从这里取（stores/tasks）
-      case "list_skills": return [{ name: "demo", description: "d", whenToUse: "w", origin: "x" }];
+      case "inspect_instruction_resources": return { resources: [], issues: [] };
+    case "inspect_skills": return { entries: [{ name: fixtureSkill.name, disabled: false,
+        candidates: [{ meta: fixtureSkill, selected: true }] }], issues: [] };
+      case "list_skills": return [fixtureSkill];
       case "list_agents": return [{ name: "backend-dev", description: "后端实现" }];
       case "search_workspace_paths": return [];
       case "list_workspace_dir": return { entries: [] };

@@ -243,6 +243,9 @@ pub async fn load_session(
     let path = std::path::PathBuf::from(&workspace);
     let extra: Vec<String> = roots.iter().skip(1).cloned().collect();
     let rt = core.get_or_create_session(&session_id, path, pid, roots, project_dir, extra);
+    if let Err(error) = crate::core::workflow::lifecycle::interrupt(&core, &rt) {
+        tracing::warn!("workflow recovery blocked: {error}");
+    }
     if rt.history.lock().unwrap().is_empty() {
         // 运行上下文（wire）口径与旧实现一致；**绝不把首屏那段 display 当上下文**——
         // 那会让下一次检查点把整份历史改写成「只有最近一段」的基线段（时间线重置）

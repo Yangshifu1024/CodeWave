@@ -256,7 +256,7 @@ impl WaitTool {
         };
         let (hit, mut last) = probe(&until, &target);
         if hit {
-            return finish_ok(started, reason, &until, last, "condition_met");
+            return finish_ok(ctx, started, reason, &until, last, "condition_met");
         }
         // 固定 1s 轮询；`Delay` 策略避免探测耗时累积导致的追帧突发。
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
@@ -285,12 +285,12 @@ impl WaitTool {
             };
             let (hit, obs) = probe(&until, &alive);
             if hit {
-                return finish_ok(started, reason, &until, obs, "condition_met");
+                return finish_ok(ctx, started, reason, &until, obs, "condition_met");
             }
             last = obs;
             if timed_out {
                 // 超时是正常结果（ok），不占用错误码。
-                return finish_ok(started, reason, &until, last, "timeout");
+                return finish_ok(ctx, started, reason, &until, last, "timeout");
             }
         }
     }
@@ -313,6 +313,7 @@ fn not_found(ctx: &ToolCtx, until: &Until) -> ToolOutcome {
 
 /// 条件 / 超时的统一出参构造：`ok` + `outcome` + 归一化 `until` 回显 + `observed`。
 fn finish_ok(
+    ctx: &ToolCtx,
     started: tokio::time::Instant,
     reason: String,
     until: &Until,
@@ -321,13 +322,55 @@ fn finish_ok(
 ) -> ToolOutcome {
     // 实测秒数向下取整（虚拟时钟下 elapsed 常是 0.xxx 秒）。
     let waited = started.elapsed().as_secs();
-    ToolOutcome::ok(json!({
+    let mut data = json!({
         "waited_seconds": waited,
         "reason": reason,
         "outcome": outcome,
         "until": until.echo(),
         "observed": observed.to_json(),
-    }))
+    });
+    // [#18] `wait` 的语义**不变**：它只表示"等待条件满足"，`ok` 绝不等于验收通过。
+    // 子代理目标的交付校验结果只作为**可选附加摘要**挂在 data 上，供父任务判断能否采信；
+    // 把它塞进 ok/err 会让"等到结束"被读成"交付合格"。
+    if let Some(sub_id) = until.target.strip_prefix("sub:")
+        && let Some(summary) = delivery_summary(ctx, sub_id)
+    {
+        data["delivery_validation"] = summary;
+    }
+    ToolOutcome::ok(data)
+}
+
+/// 取子代理最近一次交付校验摘要（只读投影；无契约 / 无提交时为 `None`）。
+///
+/// **可重算**：每次 wait 命中都按当前版本重新校验，所以同一目标第二次 wait 可能得到
+/// 不同结论（内容变了 → stale）。这不是"wait 结果漂移"，是证据真的过期了。
+fn delivery_summary(ctx: &ToolCtx, sub_id: &str) -> Option<serde_json::Value> {
+    let owner = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+    let svc = ctx.core.delivery.clone();
+    let ledger = svc.ledger(&owner.session_id);
+    // 找该子代理最近提交的那份交付结果。
+    let mut best: Option<&crate::core::delivery::types::DeliveryResult> = None;
+    for d in ledger.deliveries.values() {
+        if d.owner.sub_id.as_deref() != Some(sub_id) {
+            continue;
+        }
+        if best.is_none_or(|b| d.submitted_at >= b.submitted_at) {
+            best = Some(d);
+        }
+    }
+    let result = best?;
+    let contract = svc.read_contract(&owner.session_id, &result.task_id)?;
+    let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+    let validation = crate::core::delivery::validation::validate_delivery(
+        &contract,
+        result,
+        &ledger,
+        &roots,
+        &crate::core::delivery::version::CaptureOptions::default(),
+    );
+    let mut s = validation.summary();
+    s["delivery_id"] = json!(result.id);
+    Some(s)
 }
 
 /// `until` 入参的三态：未传（纯计时）/ 传了但非法（`E_ARGS`）/ 合法。
@@ -386,6 +429,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let roots = super::super::pathutil::WriteRoots {
+            project_dir: None,
             workspace: std::fs::canonicalize(ws.path()).unwrap(),
             extra: vec![],
             data_dir: std::fs::canonicalize(dd.path()).unwrap(),
@@ -405,6 +449,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         }
     }

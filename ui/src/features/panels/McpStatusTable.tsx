@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Card, Empty, Spin, Tag, Tooltip, Typography } from "antd";
 import { PlusOutlined, QuestionCircleOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import type { McpScope, McpStatusPayload } from "../../ipc/types";
+import type { McpScope, McpStatusPayload, McpServerView } from "../../ipc/types";
+import McpLaunchControl from "./McpLaunchControl";
 import { SettingsSection } from "./settings/SettingsTheme";
 
 export type McpStatusKind = "ready" | "starting" | "error" | "config_error" | "evicted" | "disconnected";
@@ -61,6 +62,10 @@ interface Props {
   hasSession: boolean;
   onDisconnect?: (name: string) => void;
   onReconnect?: (name: string) => void;
+  launchServers?: McpServerView[];
+  sessionId?: string | null;
+  launchDisabled?: boolean;
+  onLaunchChanged?: () => Promise<void>;
 }
 
 /** Show a question-mark tooltip only when the inline description is actually clipped. */
@@ -85,7 +90,7 @@ function ToolDescription({ name, description }: McpToolSummary) {
   </div>;
 }
 
-export default function McpStatusTable({ rows, refreshing, pendingAction, onRefresh, onCreate, rawConfig, onEdit, editableNames, hasSession, onDisconnect, onReconnect }: Props) {
+export default function McpStatusTable({ rows, refreshing, pendingAction, onRefresh, onCreate, rawConfig, onEdit, editableNames, hasSession, onDisconnect, onReconnect, launchServers, sessionId, launchDisabled, onLaunchChanged }: Props) {
   const { t } = useTranslation();
   const [expandedName, setExpandedName] = useState<string | null>(null);
   const stateText = (kind: McpStatusKind) => {
@@ -111,6 +116,7 @@ export default function McpStatusTable({ rows, refreshing, pendingAction, onRefr
           const expanded = failed && expandedName === row.name;
           const source = sourceText(row);
           const actionPending = pendingAction?.(row.name);
+          const configured = launchServers?.find((server) => server.name === row.name && server.source === row.source);
           return <Card key={row.name} size="small" variant="outlined" className="mcp-server-card" styles={{ header: { paddingBlock: 12 }, body: { padding: 16 } }}
             title={<div className="mcp-server-title">
               <span className="mcp-server-name" title={row.name}>{row.name}</span>
@@ -121,6 +127,7 @@ export default function McpStatusTable({ rows, refreshing, pendingAction, onRefr
                 <Tag color={row.kind === "ready" ? "success" : failed ? "error" : row.kind === "evicted" || row.kind === "starting" ? "warning" : "default"}>{stateText(row.kind)}</Tag></span>
             </div>}
             actions={[
+              ...(configured?.launch && onLaunchChanged ? [<McpLaunchControl key={`${sessionId ?? ""}:${configured.source_path}:${row.name}`} name={row.name} scope={configured.source} sessionId={sessionId ?? null} source={configured.source_path} launch={configured.launch} config={configured} disabled={launchDisabled || !!actionPending || (!configured.enabled && !configured.launch.trusted)} onChanged={onLaunchChanged} />] : []),
               ...(onEdit && editableNames?.has(row.name) ? [<Button key="edit" type="text" onClick={() => onEdit(row.name)}>{t("settings.mcpEdit")}</Button>] : []),
               <Button key="disconnect" type="text" loading={actionPending === "disconnect"} disabled={!!actionPending || !hasSession || row.actionable === false || row.kind === "disconnected"} onClick={() => onDisconnect?.(row.name)}>{t("settings.mcpActionDisconnect")}</Button>,
               <Button key="reconnect" type="text" loading={actionPending === "reconnect"} disabled={!!actionPending || !hasSession || row.actionable === false || row.kind === "ready" || row.kind === "starting"} onClick={() => onReconnect?.(row.name)}>{t("settings.mcpActionReconnect")}</Button>,

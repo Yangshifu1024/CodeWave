@@ -4,7 +4,7 @@
 
 ## 1. 流程与权限是两套机制
 
-工作流提示规定分析、方案、执行、审查的顺序；宿主只在确定的节点强制工具排除、计划存在、批准前置与范围确认。不能把完整阶段流程描述为一个已经实现的后端状态机。
+工作流提示规定分析、方案、执行、审查的顺序；计划存在、批准前置与范围确认仍由既有批准门负责。已采纳交付契约的任务另有持久工作流状态机，约束节点依赖、职责、修复与证据；它不意味着所有普通对话都进入阶段图，也不替代计划批准。状态与冻结契约见[运行与调度](./runtime-and-scheduling.md#状态机与冻结快照5--8)。
 
 [ApprovalMode](../src-tauri/src/core/prefs.rs) 有四档：
 
@@ -129,7 +129,64 @@ git 仓库方案须提出 `<type>/<slug>`（type 使用 Conventional Commits，s
 
 旧“拒绝消费本轮标记、同批后续写放行”已被当前实现替换，不得恢复。`approval_kind=scope` 与普通 `once` 的文案和后果分开：范围门不是项目级长期命令白名单。G3 基线是内存态，手动切到执行档也不会凭空生成基线；它不提供重启后的完整范围追踪保证。
 
-## 5. 普通询问、计划卡与预览
+## 5. 完成门与有界修复循环
+
+**运行终态不是验收结论。** `run:done` 只说明模型这一轮停了；能不能算交付通过，
+由 [core/delivery](../src-tauri/src/core/delivery/) 的验收器在**宿主已采纳的不可变证据**上判定。
+
+### 统一收尾入口
+
+drive 内**唯一**能判定"可以交付通过"的地方是
+[delivery_stop.rs](../src-tauri/src/core/agent/delivery_stop.rs) 的 `gate_delivery_stop`，
+它只被插在两个**正常收尾**分支前：
+
+| 分支 | 位置 | 收尾动因 |
+|---|---|---|
+| 纯文本收尾 | `TextTurnAction::Finish` | 模型说完了 |
+| 批次收尾 | `batch_done` | `suggest_items` 提前返回 / `force_report` 汇报轮 / 计划收口 |
+
+`batch_done` 同时覆盖 `suggest_items` 与 `force_report`——**建议项不是绕过完成门的旁路**。
+其余返回点（取消、provider 错误、监督终止、空响应、文本轮上限、panic）以
+`RunTerminalKind::Cancelled` / `Error` 结束，按原运行终态停止并**附上未完成验收**，
+不因完成门再发起模型调用。`max_steps` 耗尽时绝不另开修复 run。
+
+`CompletionDecision = allow | repair | blocked | cancelled`：
+
+- **allow**：验收器推出 `passed`（含合法 waived），或**确实没有交付状态的普通问答**（不为每条回答加门；交付目录或索引损坏不属于无契约）。
+- **repair**：缺可修复项且预算允许 → 缺项写回 `history`（`data`，**不是 warnings**）再跑一轮。
+- **blocked**：预算耗尽 / 需用户或环境资源 / **快照求不出** / **落盘失败**。
+- **cancelled**：用户取消优先于修复与检查，已发生的副作用如实保留。
+
+### 修复预算
+
+首版每 task 最多 2 轮、同一稳定失败指纹最多 1 次重复修复、额外 LLM step 最多 12；
+总调用 / 耗时仍受原 run 上限。指纹 = `check_id + reason_code + 规范化失败位置 + 目标范围类别`，
+**不含时刻与随机输出**（耗时、时间戳、临时目录、free prose 一律不参与），所以
+"换个说法描述同一处失败"改不动预算。预算**持久化**在 `<会话>.delivery` 边车（`repair_budget` 记录），
+重启不归零；预算记录**不是证据**，不参与验收账本。工作流 `repair_rules` 与完成门复用同一持久预算，另受每规则 `max_rounds` 和 `fingerprint_budget` 收窄；重复操作按操作身份对账，不通过换节点或新尝试重置总预算。
+
+逐包设计输入由 `WorkUnit.design_input` 绑定，设计结果按工作包与契约 revision 保存；明确文档任务或已有有效设计、且没有新取舍时可以省略额外设计。新增数据/API/并发/权限等取舍仍需设计，执行中扩范围沿用 G3。跳设计不跳批准，查看预览不冻结基线，模型不能通过填 `required=false` 撤销宿主设计要求。
+
+桌面「新尝试」是独立确认操作：校验旧冻结定义、真实根身份及当前角色/模型，创建关联旧任务的新 root run，重新求证已有证据并保留修复预算。权限重置到 Plan，不恢复旧 FullAccess、旧 responder 或历史工具；损坏或缺失快照不会被当前项目配置替代。
+
+### 不可绕过的三条
+
+1. **只有验收器能写 passed**。`DeliveryService` 不提供 `set_passed`，通过只能由求值推导；模型同形 JSON 无效。
+2. **落盘失败不得 allow**。`evaluate` 返回 `save_ok`，为假即 `blocked`——把保存失败伪装成事实，就是"退出 0 就当完成"的另一种写法。
+3. **快照求不出 = 未知，不是"没有要求"**。有契约却拿不到快照时按 `blocked` 处理；索引损坏、契约文件缺失和证据读取失败同样不能走无契约放行。
+
+契约创建通过 `delivery_contract` 生产工具，先通过真实询问采纳精确草稿，再冻结宿主路由与验证政策并发布契约索引；FullAccess 不能自动批准契约。人工检查与明确豁免/取消走绑定真实 responder 的询问，不授予执行权限。完成门按当前 root run 选择契约，旧 run 的契约和回执不会静默复用；同 run 新任务或新修订也必须取得对应版本的证据。完成门根终态还要将同修订验收快照写入冻结工作流，缺少工作流、旧修订或保存失败都会阻断通过。各动作与回执绑定规则见[工具与安全 · 生产契约与真实证据入口](./tools-and-safety.md#生产契约与真实证据入口)。
+
+界面只有只读投影（`get_delivery_projection` / `AcceptancePanel`）：没有"标记完成"类写入口；
+快照缺失显示**未验证**，绝不显示"已通过"或"已完成"。面板在会话及运行边界变化、窗口回焦时重新读取当前文件证据，可见时每 10 秒刷新以覆盖外部修改与同轮契约更新；同一刷新周期内单请求执行，离开后忽略迟到响应。刷新中或读取失败时不保留旧的通过结论，隐藏时停止查询。
+
+回归入口：[completion.rs](../src-tauri/src/core/delivery/completion.rs)、
+[delivery_stop.rs](../src-tauri/src/core/agent/delivery_stop.rs)、
+[completion_tests.rs](../src-tauri/src/core/delivery/completion_tests.rs)、
+[delivery_stop_tests.rs](../src-tauri/src/core/agent/delivery_stop_tests.rs)。
+测试必须**逐个驱动生产收尾分支**，只测 `text_turn_action` 不足以验收本任务。
+
+## 6. 普通询问、计划卡与预览
 
 ask schema 为 1–5 问，每题最多 6 选项，支持开放题。ask/wait 必须独占批次。询问卡的「跳过」发送独立 `{action:"skip"}`，表示用户明确停止当前任务：关闭整组询问、返回中性 `E_ASK_SKIPPED`；主循环先保存工具结果配对，再直接走取消终态，不再请求模型或自动运行下一条队列项。无论单题、多题哪一页，都不提交已选项、推荐默认值或补充说明；不批准、不切档、不冻结基线。在子代理询问中跳过还会停止其所属根 run，按出生时的 root run 身份校验，迟到子代理不得取消新 run。已有进度与历史保留，等待用户新指示。
 
@@ -147,13 +204,13 @@ preview 技能只用于已有成型对象，界面示意须标“示意稿 · �
 
 文本 ask 兜底只救回主会话末尾、独占起始行、结构完整的 ask 块；必须本步无真实工具、ask 未被排除、每 run 最多一次。救回后仍走真实 AskTool 与全部批准门；不能扩展为把正文 command/edit 等当工具执行。显示剥离和晚到分片规则见[聊天与界面](./chat-and-interface.md)。
 
-## 6. 等待与同步
+## 7. 等待与同步
 
 安全审批与普通 ask 共用 `ask:opened`/`ask:closed`，但等待语义不同：主会话安全审批默认无限等；显式开启 auto_confirm 后 300 秒自动允许当次，不自动写“始终允许”。灾难级永不自动允许。子代理安全审批事件挂根会话并附 sub_id，回答仍找真实 responder；无论 auto_confirm 设置如何，600 秒无回答按拒绝收口，不能挂死。
 
-根会话切档在每个 LLM step 边界传播到在跑子代理：工具集、`<plan-mode>` 系统块、子 rt.prefs 都从 `SubBase` **重新构造**，禁止增量追加导致旧 Plan 块残留。只传播 approval_mode，模型/力度维持 spawn 快照；根会话缺失保留当前档，不 panic。FullAccess 下只读角色写工具可解锁，但行为/文件认领仍受角色与调用契约约束。计划任务 runtime 独立且显式 FullAccess；steer 文本只注入主会话，不等于传给子代理或改变档位。
+根会话切档在每个 LLM step 边界传播到在跑子代理：工具集、`<plan-mode>` 系统块、子 rt.prefs 都从 `SubBase` **重新构造**，禁止增量追加导致旧 Plan 块残留。只传播 approval_mode，模型/力度维持 spawn 快照；根会话缺失保留当前档，不 panic。FullAccess 下普通只读角色写工具可解锁；宿主绑定的独立审查/验证职责是额外上限，不随档位解除。行为、实际写入路径与文件认领仍受调用契约约束。计划任务 runtime 独立且显式 FullAccess；steer 文本只注入主会话，不等于传给子代理或改变档位。
 
-## 7. 回归与仍待核验的接缝
+## 8. 回归与仍待核验的接缝
 
 后端重点入口：[ask/tests.rs](../src-tauri/src/tools/ask/tests.rs)、[batch.rs 测试](../src-tauri/src/tools/batch.rs)、[plan.rs](../src-tauri/src/tools/plan.rs)、[approval.rs](../src-tauri/src/safety/approval.rs)。前端入口：[askpanel.test.tsx](../ui/src/__tests__/askpanel.test.tsx)、[runWidgetAutoOpen.test.ts](../ui/src/__tests__/runWidgetAutoOpen.test.ts)、[events.contract.test.ts](../ui/src/__tests__/events.contract.test.ts)。载荷只增可选字段时不改事件键名。
 

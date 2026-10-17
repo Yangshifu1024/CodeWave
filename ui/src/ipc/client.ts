@@ -4,16 +4,33 @@
  * 入参对象键名即 Tauri invoke 参数名；返回类型与 ipc/types.ts 的 serde 结构一一对应。
  * 组件不得直接 import @tauri-apps/api，新增命令一律收敛在此处。
  */
+import type { WorkflowConfigView, WorkflowIssue, WorkflowProjection } from "./types";
 import { invoke } from "@tauri-apps/api/core";
-import type { ActivitySnapshot, AskOpenedEvent, SessionRunSnapshot } from "./types";
+import type { ActivitySnapshot, AskOpenedEvent, DeliveryProjection, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
-import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillMeta } from "./types";
+import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillInspection, SkillMeta } from "./types";
 
 export const ipc = {
+  inspectInstructionResources: (sessionId: string | null) => invoke<import("./types").InstructionInspection>("inspect_instruction_resources", { sessionId }),
+  prepareInstructionReview: (sessionId: string | null, resourceId: string, expectedVersion: string, action: import("./types").InstructionReviewAction) => invoke<import("./types").InstructionChallenge>("prepare_instruction_review", { sessionId, resourceId, expectedVersion, action }),
+  confirmInstructionReview: (sessionId: string | null, confirmation: string) => invoke<import("./types").InstructionReceipt>("confirm_instruction_review", { sessionId, confirmation }),
+  instructionReviewOperation: (sessionId: string | null, operationId: string) => invoke<import("./types").InstructionReceipt>("instruction_review_operation", { sessionId, operationId }),
+  discardInstructionReview: (confirmation: string) => invoke<void>("discard_instruction_review", { confirmation }),
   ping: () => invoke<string>("ping"),
   getActivitySnapshot: () => invoke<ActivitySnapshot>("get_activity_snapshot"),
   getActivityAsk: (sessionId: string, runId: string, askId: string) =>
     invoke<AskOpenedEvent | null>("get_activity_ask", { sessionId, runId, askId }),
+
+  // 交付验收**只读**投影：没有写接口，也没有 set_passed（通过只能由求值推导）。
+  getDeliveryProjection: (sessionId: string) =>
+    invoke<DeliveryProjection>("get_delivery_projection", { sessionId }),
+
+  readProjectWorkflow: (sessionId: string) => invoke<WorkflowConfigView>("read_project_workflow", {sessionId}),
+  validateProjectWorkflow: (sessionId: string, text: string) => invoke<WorkflowIssue[]>("validate_project_workflow", {sessionId, text}),
+  saveProjectWorkflow: (sessionId: string, text: string, expectedRevision: number, expectedDigest: string, operationId: string) => invoke<WorkflowConfigView>("save_project_workflow", {sessionId, text, expectedRevision, expectedDigest, operationId}),
+  getWorkflowProjection: (sessionId: string) => invoke<WorkflowProjection | null>("get_workflow_projection", {sessionId}),
+  continueWorkflow: (sessionId: string, taskId: string, expectedRevision: number) => invoke<string>("continue_workflow", {sessionId, taskId, expectedRevision}),
+  overrideWorkflowRoute: (sessionId: string, taskId: string, expectedRevision: number, kind: string, reason: string) => invoke<unknown>("override_workflow_route", {sessionId,taskId,expectedRevision,kind,reason}),
 
   listProjects: () => invoke<ProjectEntry[]>("list_projects"),
   saveProject: (entry: ProjectEntry) => invoke<void>("save_project", { entry }),
@@ -179,9 +196,21 @@ export const ipc = {
   /** 重连单个 server（含被淘汰条目，绕过防抖立即重拉） */
   mcpReconnect: (sessionId: string, name: string) =>
     invoke<void>("mcp_reconnect", { sessionId, name }),
-  /** 临时测试连接：起 → tools/list → 立即回收，**不并入连接池、不改正式状态** */
-  mcpTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
-    invoke<McpTestResult>("mcp_test", { scope, name, config, sessionId: sessionId ?? null }),
+  mcpSetLaunchTrust: (scope: McpScope, name: string, expectedVersion: string, trusted: boolean, sessionId?: string) =>
+    invoke<import("./types").McpLaunchStatus>("mcp_set_launch_trust", { scope, name, expectedVersion, trusted, sessionId: sessionId ?? null }),
+  mcpPrepareLaunch: (scope: McpScope, name: string, expectedVersion: string, action: import("./types").McpReviewAction, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReview>("mcp_prepare_launch", { scope, name, expectedVersion, action, sessionId: sessionId ?? null }),
+  mcpConfirmLaunch: (scope: McpScope, name: string, confirmation: string, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReviewReceipt>("mcp_confirm_launch", { scope, name, confirmation, sessionId: sessionId ?? null }),
+  mcpLaunchOperation: (scope: McpScope, name: string, operationId: string, sessionId?: string) =>
+    invoke<import("./types").McpLaunchReviewReceipt>("mcp_launch_operation", { scope, name, operationId, sessionId: sessionId ?? null }),
+  mcpDiscardLaunchReview: (confirmation: string) => invoke<void>("mcp_discard_launch_review", { confirmation }),
+  /** Prepare a single-use confirmation for the exact draft; this never connects. */
+  mcpPrepareTest: (scope: McpScope, name: string, config: Record<string, unknown>, sessionId?: string) =>
+    invoke<import("./types").McpProbeChallenge>("mcp_prepare_test", { scope, name, config, sessionId: sessionId ?? null }),
+  /** Confirmed temporary probe; never joins or authorizes the persistent pool. */
+  mcpTest: (scope: McpScope, name: string, config: Record<string, unknown>, confirmation: string, sessionId?: string) =>
+    invoke<McpTestResult>("mcp_test", { scope, name, config, confirmation, sessionId: sessionId ?? null }),
   /** 某会话的状态快照（断开 / 淘汰 / 批量停止后拉全量） */
   mcpSnapshot: (sessionId: string) => invoke<McpSnapshot>("mcp_snapshot", { sessionId }),
 
@@ -192,8 +221,10 @@ export const ipc = {
   toggleSkill: (sessionId: string | null, name: string, disabled: boolean) =>
     invoke<void>("toggle_skill", { sessionId, name, disabled }),
   reloadSkills: (sessionId: string | null) => invoke<SkillMeta[]>("reload_skills", { sessionId }),
-  deleteSkill: (sessionId: string | null, name: string) =>
-    invoke<void>("delete_skill", { sessionId, name }),
+  inspectSkills: (sessionId: string | null, reload = false) =>
+    invoke<SkillInspection>("inspect_skills", { sessionId, reload }),
+  deleteSkill: (sessionId: string | null, name: string, expectedSource: string, expectedVersion: string) =>
+    invoke<void>("delete_skill", { sessionId, name, expectedSource, expectedVersion }),
 
   // 内置子代理角色（composer $ 菜单数据源；后端 agents 注册表剔除内部 title 角色）
   listAgents: () => invoke<AgentMeta[]>("list_agents"),

@@ -15,5 +15,11 @@ pub async fn quota_snapshots(
     active_provider_id: Option<String>,
 ) -> Result<Vec<QuotaSnapshot>, String> {
     let cfg = core.cfg.read().map_err(err)?.clone();
-    Ok(quota::snapshots(&cfg, active_provider_id.as_deref(), &core.data_dir).await)
+    Ok(quota::snapshots_with_credentials(
+        &cfg,
+        active_provider_id.as_deref(),
+        &core.data_dir,
+        core.credentials.as_ref(),
+    )
+    .await)
 }

@@ -112,6 +112,7 @@ export type SettingWidth = "narrow" | "mid" | "wide";
 
 /** 全部设置项（登记制：改动设置项归属时必须同步本表与 PAGE_FIELDS） */
 export const SETTINGS_ITEMS: SettingItem[] = [
+  { id: "app.project_workflow", labelKey: "workflow.edit", page: "agent", keywords: ["workflow", "工作流"] },
   // ---------- 界面 ----------
   { id: "ui.theme", labelKey: "settings.theme", page: "appearance", width: "narrow", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
   { id: "ui.output_display", labelKey: "settings.outputDisplay", page: "appearance", width: "narrow", keywords: ["output", "display", "compact", "detailed", "输出", "展示", "简洁", "详细"] },
@@ -208,6 +209,7 @@ export const WIDTH_TIERS: SettingWidth[] = ["narrow", "mid", "wide"];
  * 分类：整行 / 多行文本、整行开关、Slider、行内网格控件、整行列表与复合容器 / 动作项。
  */
 export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
+  "app.project_workflow", // Dedicated full-width project JSON editor
   // —— 整行 / 多行文本：内容长度不可预知，占满整行（宽度由容器决定） ——
   "ui.font_sans", // 界面字体名（可含多个 family，逗号分隔）+ 行内「恢复默认」按钮
   "ui.font_content", // 内容字体名，同上
@@ -489,6 +491,26 @@ export const SHELL_SETTING_KEYS: string[] = [
   "postWriteHint", // → 写入后检查组说明（在项目根目录执行 / 输出交给模型）
   "postWriteCommandHint", // → post_write_check.command 的说明（{file} 占位符含义 + 各技术栈示例）
   "postWriteCommandPh", // → post_write_check.command 输入框占位
+  // 来源审计、覆盖及草稿状态：disabled_skills / subagentModels 的只读说明。
+  "resourceSource_builtin",
+  "resourceSource_user_claude",
+  "resourceSource_user_agents",
+  "resourceSource_workspace_claude",
+  "resourceSource_workspace_agents",
+  "resourceSource_global_managed",
+  "resourceSource_project_managed",
+  "resourceVersion",
+  "resourceSource_workspace_file",
+  "resourceTitle", "resourceRefresh", "resourceReview", "resourceOnce", "resourceRemember", "resourceRevoke", "resourceInspect",
+  "resourceRemembered", "resourceAllowed", "resourceUntrusted", "resourceUnknown", "resourceHint", "resourceReviewHint", "resourceActive",
+  "resourceReadFailed",
+  "skillRunningDisabled",
+  "skillRunningEnabled",
+  "skillDraftDisabled",
+  "skillDraftEnabled",
+  "skillShadowSources",
+  "skillMissing",
+  "deleteSkillDirectory",
   "skillsInstalled", // → disabled_skills 的列表分组标题
   "skillWhen", // → disabled_skills 条目的适用场景前缀
   "skillToggle", // → disabled_skills 条目的开关 aria-label
@@ -541,6 +563,13 @@ export const SHELL_SETTING_KEYS: string[] = [
   "mcpConfigPath", // → mcp 页：当前作用域 mcp.json 路径回显
   "mcpSavedApplying",
   "mcpProbeWarning",
+  // Launch approval actions and confirmation details belong to app.mcp_status.
+  "mcpApproveLaunch", "mcpRevokeLaunch", "mcpRunProbe",
+  "mcpConfirmLaunch", "mcpConfirmProbe", "mcpConfirmRevoke",
+  "mcpLaunchLifetime", "mcpProbeLaunchHint", "mcpLaunchRevokeHint",
+  "mcpLaunchVersion", "mcpLaunchDefaultCwd",
+  "mcpRememberLaunch", "mcpConfirmRemember", "mcpRememberHint", "mcpRemembered",
+  "mcpInspectTrust", "mcpTrustUnknown", "mcpTrustStatusHint",
   "mcpTest", // → 动作：单 server 临时测试连接
   "mcpTestOk", // → mcp 页：测试成功结果
   "mcpTestFail", // → mcp 页：测试失败结果
