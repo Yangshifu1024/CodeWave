@@ -719,6 +719,14 @@ impl SessionRuntime {
         }
     }
 
+    /// A stale child decision must never stop a newer run on the owning session.
+    pub(super) fn cancel_run_if_matches(&self, run_id: &str) {
+        let snapshot = super::guards::lock_ok(&self.run_snapshot);
+        if snapshot.running && snapshot.run_id.as_deref() == Some(run_id) {
+            self.cancel_active();
+        }
+    }
+
     /// 整体写 prefs（仅内存态；持久化由 `AgentCore::transition_prefs` 负责）。
     pub fn transition_prefs(&self, new: crate::core::prefs::SessionPrefs) -> bool {
         *self.prefs.lock().unwrap() = new;
@@ -1256,6 +1264,18 @@ mod tests {
         assert_eq!(snapshot["terminal"]["run_id"], "cancel");
         assert_eq!(snapshot["terminal"]["kind"], "cancelled");
         assert!(h.rt.begin_run("next"));
+    }
+
+    #[test]
+    fn skip_cancellation_matches_the_owning_run_identity() {
+        let h = harness();
+        assert!(h.rt.begin_run("new-run"));
+        let cancel = CancellationToken::new();
+        *h.rt.active_cancel.lock().unwrap() = Some(cancel.clone());
+        h.rt.cancel_run_if_matches("old-run");
+        assert!(!cancel.is_cancelled());
+        h.rt.cancel_run_if_matches("new-run");
+        assert!(cancel.is_cancelled());
     }
 
     /// 记录事件的测试 sink（不关心具体事件名，仅作 runtime 装配）。

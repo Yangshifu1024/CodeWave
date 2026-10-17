@@ -392,9 +392,9 @@ export const SHELL_SETTING_KEYS: string[] = [
   "themeLight", // → ui.theme 选项
   "themeDark", // → ui.theme 选项
   "outputDisplayHint", // → ui.output_display 展示说明
-  "fontHint", // → ui.font_sans / ui.font_mono 的输入说明
+  "fontHint", // → 字体分组标题旁的共性说明（三槽合并成一行后只说一次）
+  "fontSlotSans", "fontSlotContent", "fontSlotMono", // → 字体行短标签（界面 / 内容 / 代码）
   "fontReset", // → 字体槽的「恢复默认」按钮
-  "fontSizeHint", // → 字号 Select 说明（v2）；选项只显 px 数字，不再用 i18n 档位文案
 
   // —— 模型与供应商页的从属文案（项已登记：ui.ai_language） ——
   "providerGeneral", // 模型与供应商页的通用分组标题

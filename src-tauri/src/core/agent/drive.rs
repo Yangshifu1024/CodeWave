@@ -1320,7 +1320,7 @@ pub async fn drive_agent(
                     rt.id
                 );
                 if params.emit_events {
-                    emit_retry(&sink, rt, run_id, attempt);
+                    emit_retry(&sink, rt, run_id, attempt, "empty_response");
                 }
                 if !sleep_backoff(attempt, &run_token).await {
                     outcome = Err(ProviderError::Cancelled);
@@ -1521,6 +1521,21 @@ pub async fn drive_agent(
             claims.clone(),
         )
         .await;
+        // A user skip is terminal. The batch result is already in history, preserving tool pairing.
+        if call_sigs
+            .iter()
+            .any(|sig| sig.name == "ask" && sig.error.as_deref() == Some("E_ASK_SKIPPED"))
+        {
+            session_log::info(rt, "用户跳过询问，停止当前运行并等待新指示");
+            run_token.cancel();
+            if let (Some(root_id), Some(root_run_id)) = (&rt.root_session_id, &rt.root_run_id)
+                && let Some(root) = core.session(root_id)
+            {
+                root.cancel_run_if_matches(root_run_id);
+            }
+            outcome = Err(ProviderError::Cancelled);
+            break 'steps;
+        }
         if let Some(items) = batch_suggest {
             suggest_out = Some(items);
         }
@@ -1863,7 +1878,7 @@ async fn run_llm_turn(
                 ),
             );
             if params.emit_events {
-                emit_retry(sink, rt, run_id, *attempt);
+                emit_retry(sink, rt, run_id, *attempt, "stream_stalled");
             }
             if !sleep_backoff(*attempt, run_token).await {
                 return Err(ProviderError::Cancelled);
@@ -1893,7 +1908,10 @@ async fn run_llm_turn(
                     .store(usage.prompt_total(&model.api_format), Ordering::SeqCst);
                 // 收干流（= 本次生成结束）后才计耗时：duration 是「请求发出 → 流失结束」的
                 // **成功尝试**窗口（退避与失败尝试不进此窗口）
-                let (asm, ttft_ms) = collector.await.unwrap_or_default();
+                let (asm, ttft_ms) = collector.await.map_err(|error| {
+                    session_log::error(rt, &format!("step {step} 响应收集任务异常：{error}"));
+                    ProviderError::Protocol(format!("响应收集任务异常：{error}"))
+                })?;
                 let duration_ms = attempt_started.elapsed().as_millis() as u64;
                 rt.run_timing
                     .lock()
@@ -1932,6 +1950,17 @@ async fn run_llm_turn(
                     return Err(ProviderError::Cancelled);
                 }
                 // 空响应按可重试处理
+                if asm.is_empty() {
+                    let diagnostic = serde_json::json!({
+                        "run_id": run_id, "step": step, "attempt": *attempt + 1,
+                        "model": model.name, "api_format": model.api_format,
+                        "duration_ms": duration_ms, "usage": usage,
+                        "evidence": asm.diagnostics.as_ref().map(|d| d.empty_evidence()).unwrap_or("diagnostics_missing"),
+                        "stream": asm.diagnostics,
+                        "assembled": {"blocks": asm.blocks.len(), "tool_calls": asm.tool_calls.len()},
+                    });
+                    session_log::warn(rt, &format!("空响应诊断 {diagnostic}"));
+                }
                 if asm.is_empty()
                     && retry::should_retry(&ProviderError::Server("空响应".into()), *attempt)
                 {
@@ -1940,7 +1969,7 @@ async fn run_llm_turn(
                     session_log::warn(rt, &format!("step {step} 空响应，第 {} 次重试", *attempt));
                     tracing::warn!("session {} step {step} 空响应，重试 #{}", rt.id, *attempt);
                     if params.emit_events {
-                        emit_retry(sink, rt, run_id, *attempt);
+                        emit_retry(sink, rt, run_id, *attempt, "empty_response");
                     }
                     if !sleep_backoff(*attempt, run_token).await {
                         return Err(ProviderError::Cancelled);
@@ -2053,6 +2082,7 @@ async fn run_llm_turn(
                             serde_json::json!({
                                 "session": rt.id, "run_id": run_id,
                                 "attempt": attempt.saturating_add(1),
+                                "reason": "request_repaired",
                                 "gen": rt.stream.generation(), "delay_ms": 0,
                             }),
                         );
@@ -2089,7 +2119,7 @@ async fn run_llm_turn(
                         *attempt
                     );
                     if params.emit_events {
-                        emit_retry(sink, rt, run_id, *attempt);
+                        emit_retry(sink, rt, run_id, *attempt, e.kind_tag());
                     }
                     if !sleep_backoff(*attempt, run_token).await {
                         return Err(ProviderError::Cancelled);
@@ -3063,12 +3093,14 @@ pub(super) fn emit_retry(
     rt: &SessionRuntime,
     run_id: &str,
     attempt: u32,
+    reason: &str,
 ) {
     sink.emit(
         &rt.id,
         "run:retry",
         serde_json::json!({
             "session": rt.id, "run_id": run_id, "attempt": attempt,
+            "reason": reason,
             "gen": rt.stream.generation(),
             "delay_ms": retry::delay_for_attempt(attempt.saturating_sub(1)).as_millis() as u64,
         }),

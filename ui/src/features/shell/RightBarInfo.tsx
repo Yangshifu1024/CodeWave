@@ -13,6 +13,7 @@ import { readCollapsedSections, writeCollapsedSections, type CollapsibleSection 
 import QuotaSection from "../quota/QuotaSection";
 import WorkflowPanel from "../chat/WorkflowPanel";
 import AcceptancePanel from "../chat/AcceptancePanel";
+import SessionFileIcon from "../files/SessionFileIcon";
 import type { WorkspaceChanges } from "../workspace/useWorkspaceChanges";
 import OpenInEditorSelect from "./OpenInEditorSelect";
 import SkillDetailModal from "./SkillDetailModal";
@@ -122,23 +123,10 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
           </>}
         </section>
 
-        <section className="rb-section" aria-label={t("rightbar.sessionFiles")}>
-          <div className="rb-section-heading"><span>{t("rightbar.sessionFiles")}</span><Typography.Text type="secondary">{t("rightbar.fileCount", { n: files.length })}</Typography.Text></div>
-          {!sessionId ? <Typography.Text type="secondary">{t("files.noActiveSession")}</Typography.Text> : recentFiles.length === 0 ? <div className="rb-empty"><FileOutlined /><Typography.Text type="secondary">{t("files.emptySession")}</Typography.Text></div>
-            : recentFiles.map(file => {
-              const name = file.path.split(/[\\/]/).pop() || file.path;
-              return <Tooltip key={file.path} title={file.path}>
-                <Button type="text" block className="rb-overview-row" disabled={!file.exists} aria-label={t("rightbar.viewFile", { name })} onClick={() => onView(file.path)}>
-                  <FileOutlined /><span className="rb-overview-name">{name}</span>{!file.exists && <Typography.Text type="secondary">{t("files.deleted")}</Typography.Text>}
-                </Button>
-              </Tooltip>;
-            })}
-          {sessionId && files.length > 0 && <Button type="text" size="small" className="rb-view-all" icon={<RightOutlined />} aria-label={t("rightbar.viewAll")} onClick={() => setRbTab("files")}>{t("rightbar.viewAll")}</Button>}
-        </section>
-
         <QuotaSection visible={visible && openSections.includes("quota")} headerVisible={visible}>
           {(quotaActions, quotaContent) => (
             <Collapse ghost className="rb-collapse" expandIconPlacement="start" activeKey={openSections}
+              styles={{ body: { padding: "0 0 14px" } }}
               onChange={keys => {
                 const open = new Set(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
                 const next = new Set(collapsed);
@@ -147,6 +135,25 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
                 writeCollapsedSections(next);
               }}
               items={[
+                { key: "files", label: t("rightbar.sessionFiles"), extra: (
+                  <Button type="text" size="small" disabled={!sessionId} title={t("rightbar.tabFiles")}
+                    aria-label={t("rightbar.tabFilesWithCount", { n: files.length })}
+                    onKeyDown={event => event.stopPropagation()}
+                    onClick={event => { event.stopPropagation(); setRbTab("files"); }}>
+                    <Typography.Text type="secondary">{t("rightbar.fileCount", { n: files.length })}</Typography.Text>
+                  </Button>
+                ), children: (
+                  !sessionId ? <Typography.Text type="secondary">{t("files.noActiveSession")}</Typography.Text>
+                    : recentFiles.length === 0 ? <div className="rb-empty"><FileOutlined /><Typography.Text type="secondary">{t("files.emptySession")}</Typography.Text></div>
+                      : recentFiles.map(file => {
+                        const name = file.path.split(/[\\/]/).pop() || file.path;
+                        return <Tooltip key={file.path} title={file.path}>
+                          <Button type="text" block className="rb-overview-row" disabled={!file.exists} aria-label={t("rightbar.viewFile", { name })} onClick={() => onView(file.path)}>
+                            <SessionFileIcon path={file.path} /><span className="rb-overview-name">{name}</span>{!file.exists && <Typography.Text type="secondary">{t("files.deleted")}</Typography.Text>}
+                          </Button>
+                        </Tooltip>;
+                      })
+                ) },
                 ...(todos.length ? [{
                   key: "plan", label: t("rightbar.currentPlan"), extra: <Typography.Text type="secondary">{t("rightbar.planProgress", { done: todos.filter(todo => todo.status === "completed").length, total: todos.length })}</Typography.Text>,
                   children: todos.map((todo, i) => <div className="rb-todo" key={i}><span className={`rb-todo-dot ${todo.status}`}>{todo.status === "completed" ? <CheckOutlined /> : todo.status === "in_progress" ? "●" : "○"}</span><span className={todo.status === "completed" ? "rb-todo-done" : ""}>{todo.title}</span></div>),
@@ -160,11 +167,11 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
                 { key: "quota", label: t("rightbar.quota"), extra: quotaActions, forceRender: true, children: quotaContent },
                 { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>
                   {skills.length === 0 && <div className="rb-dim">{t("rightbar.noSkills")}</div>}
-                  {skills.map(skill => <Tooltip key={skill.name} title={[skill.name, skill.description, skill.origin === "<builtin>" ? "" : skill.origin].filter(Boolean).join("\n")}>
-                    <Button type="text" block className="rb-skill-line rb-skill-clickable" onClick={() => setDetail({ sessionId, skill })}>
+                  {skills.map(skill => (
+                    <Button key={skill.name} type="text" block className="rb-skill-line rb-skill-clickable" onClick={() => setDetail({ sessionId, skill })}>
                       <span className="rb-skill-name">{skill.name}</span><span className="rb-skill-origin">{skill.origin === "<builtin>" ? t("common.builtin") : originLabel(skill.origin)}</span>
                     </Button>
-                  </Tooltip>)}
+                  ))}
                 </> },
               ]}
             />

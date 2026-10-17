@@ -127,16 +127,25 @@ it("切换会话或隐藏右栏关闭变更弹窗，返回时不会复活", asyn
   expect(useUi.getState().rbTab).toBe("info");
 });
 
-it("文件摘要复用查看器，删除项禁用，查看全部进入原文件页签", async () => {
+it("文件摘要可折叠，复用查看器，删除项禁用，数量进入原文件页签且不切换折叠状态", async () => {
   seed(); renderBar();
   const report = await screen.findByRole("button", { name: "查看 report.md" });
+  const header = () => screen.getByText("会话文件").closest(".ant-collapse-header")!;
+  expect(header().getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByRole("button", { name: "查看全部" })).toBeNull();
+  fireEvent.click(header());
+  expect(header().getAttribute("aria-expanded")).toBe("false");
+  expect(useUi.getState().rbTab).toBe("info");
+  fireEvent.click(header());
   expect((screen.getByRole("button", { name: "查看 gone.md" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(report);
   expect(screen.getByRole("dialog").textContent).toBe("/ws/report.md");
   act(() => useSessions.setState({ activeKey: "s2" }));
   expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(await screen.findByRole("button", { name: "查看全部" }));
+  fireEvent.click(await screen.findByRole("button", { name: "文件 2" }));
   expect((screen.getByRole("radio", { name: "文件 2" }) as HTMLInputElement).checked).toBe(true);
+  act(() => useUi.setState({ rbTab: "info" }));
+  expect(header().getAttribute("aria-expanded")).toBe("true");
 });
 
 it("只汇总当前会话子代理，partial/budget 不能算成正常完成，并复用真实过程抽屉", async () => {

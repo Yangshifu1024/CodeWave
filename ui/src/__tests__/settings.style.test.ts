@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const theme = readFileSync(join(here, "../features/panels/settings/SettingsTheme.tsx"), "utf8");
 const css = readFileSync(join(here, "../features/panels/settings/settings-theme.css"), "utf8");
+const fontSettings = readFileSync(join(here, "../features/panels/FontSettings.tsx"), "utf8");
 
 describe("设置页共享视觉契约（settings-ui-unification）", () => {
   it("所有面板共享一个 antd 主题层与左右式 Form", () => {
@@ -30,12 +31,30 @@ describe("设置页共享视觉契约（settings-ui-unification）", () => {
     expect(css).toMatch(/@container settings-content \(max-width: 680px\)[\s\S]*?\.settings-provider-model-form\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 
-  it("主题预览铺满卡片，字体输入与各自预览占同一半宽设置行", () => {
+  it("主题预览铺满卡片，字体行左列为定宽窄列、行内双控件占满右侧", () => {
     expect(css).toMatch(/\.settings-theme-root \.settings-theme-picker\s*\{\s*width:\s*100%/);
     expect(css).toMatch(/\.settings-row\.settings-row-full \.ant-form-item-control\s*\{[^}]*flex:\s*0 0 100%/);
-    expect(css).toMatch(/\.settings-row\.settings-font-row \.ant-form-item-control\s*\{[^}]*flex:\s*0 0 50%/);
-    expect(css).toMatch(/\.settings-row\.settings-font-row \.ant-form-item-label\s*\{[^}]*margin-inline-end:\s*var\(--settings-row-gap\)/);
+    // 三槽合并成三行后左列只剩「界面 / 内容 / 代码」两字标签：定宽窄列，右侧控件吃掉余量
+    expect(css).toMatch(/\.settings-row\.settings-font-row \.ant-form-item-label\s*\{[^}]*flex:\s*0 0 var\(--settings-font-slot-width\)/);
+    expect(css).toMatch(/\.settings-row\.settings-font-row \.ant-form-item-control\s*\{[^}]*flex:\s*1 1 auto/);
+    expect(css).toMatch(/\.settings-row\.settings-font-row \.ant-form-item-label\s*\{[^}]*align-items:\s*center/);
+    // 三个尺寸都进 SETTINGS_VISUAL，页体不写字面量
+    expect(theme).toMatch(/fontSlotLabelWidth:\s*72/);
+    expect(theme).toMatch(/fontSizeSelectWidth:\s*88/);
+    expect(theme).toMatch(/fontResetWidth:\s*32/);
     expect(css).toMatch(/\.settings-theme-root \.settings-font-control\s*\{[^}]*flex-direction:\s*column/);
+  });
+
+  it("字体行三个控件等高居中，行末重置按钮独立成列", () => {
+    // Select 不能靠 size="small" 缩高（会比同行 Input 矮一截、下边线对不齐），
+    // 重置也不能再藏在 suffixIcon 里——两者都已移到行末的整槽重置按钮
+    const sizeSelect = fontSettings.match(/<Select<FontSizeLevel>[\s\S]*?\/>/)?.[0] ?? "";
+    expect(sizeSelect).not.toBe("");
+    expect(sizeSelect).not.toMatch(/size="small"/);
+    expect(sizeSelect).not.toMatch(/suffixIcon/);
+    expect(css).toMatch(/\.settings-font-pair\s*\{[^}]*grid-template-columns:[^}]*var\(--settings-font-size-select-width\)[^}]*var\(--settings-font-reset-width\)/);
+    expect(css).toMatch(/\.settings-font-pair\s*\{[^}]*align-items:\s*center/);
+    expect(css).toMatch(/\.settings-theme-root \.settings-font-reset\s*\{[^}]*align-items:\s*center/);
   });
 
   it("内容宽度、行卡片、控制宽度和窄屏堆叠由公共常量与样式管理", () => {

@@ -84,6 +84,10 @@ impl StreamRequest {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamDelta {
+    /// Attempt-local diagnostic metadata; never forwarded to UI or model history.
+    Diagnostics {
+        summary: Box<super::diagnostics::StreamDiagnostics>,
+    },
     /// 正文文本增量
     Text {
         /// 本段增量文本
@@ -283,6 +287,7 @@ pub enum AsmBlock {
 /// 把 SSE 流式 delta 重新装配为一条 assistant Message（主循环消费）。
 #[derive(Debug, Default)]
 pub struct Assembled {
+    pub diagnostics: Option<Box<super::diagnostics::StreamDiagnostics>>,
     /// 按到达顺序排列的装配块（text/thinking 穿插 + 工具调用占位）
     pub blocks: Vec<AsmBlock>,
     /// 本回合的工具调用（含拼接完成的原始入参 JSON）

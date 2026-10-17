@@ -16,6 +16,8 @@
 
 前端 [runHandlers.ts](../ui/src/stores/runHandlers.ts) 的共享 `settleRun` 清理运行标志、流式正文、运行/等待工具卡、残留子代理及 AskPanel。只有清工具卡而不清 ask，会留下输入区被询问永久覆盖的假卡死。
 
+明确跳过后仍可在同一会话重新发消息：历史、已写文件与 todos 保留，新 run 重新建立取消令牌和运行态；旧询问 responder 不复用。带 `run_id` 的实时 `ask:opened` 必须排除已收尾轮次及与当前轮不符的事件，避免跳过后的迟到询问重新覆盖输入区。start_chat 回执在途时允许新身份的询问先到达；缺 run_id 的旧载荷保持兼容。取消事件与询问关闭事件丢失时仍走下述快照对账收敛，取消本身不自动续队列。
+
 ### 丢事件后的自愈
 
 [run.ts](../ui/src/stores/run.ts) 的 `reconcileRun` 通过 `session_run_snapshot` 双向对账：

@@ -58,6 +58,46 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("运行队列", () => {
+  it.each([true, false])("跳过后可手动续跑，旧询问不会复活（收到 close=%s）", async (deliverClose) => {
+    seed();
+    useRun.setState((s) => {
+      s.tabs.s1.runId = "skipped-run";
+      s.tabs.s1.todos = [{ title: "已有步骤", status: "completed" }, { title: "继续步骤", status: "in_progress" }];
+    });
+    const h = handlers();
+    const oldAsk = { session: "s1", run_id: "skipped-run", ask_id: "skipped-ask", kind: "ask",
+      questions: [{ id: "q", question: "继续？" }] };
+    h["ask:opened"](oldAsk);
+    h["tool:start"]({ session: "s1", run_id: "skipped-run", call_key: "skip:0", tool: "ask", phase: "waiting" });
+    await useRun.getState().send("仍暂停的队列项");
+    await useRun.getState().resolveAsk("skipped-ask", { action: "skip" }, "s1");
+    h["tool:result"]({ session: "s1", run_id: "skipped-run", call_key: "skip:0", tool: "ask",
+      outcome: { ok: false, error: { code: "E_ASK_SKIPPED", message: "用户明确跳过" } } });
+    if (deliverClose) h["ask:closed"]({ session: "s1", ask_id: "skipped-ask" });
+    h["run:cancelled"]({ session: "s1", run_id: "skipped-run" });
+    const stopped = useRun.getState().tabs.s1;
+    expect(stopped.running).toBe(false);
+    expect(stopped.ask).toBeNull();
+    expect(stopped.startPending).toBe(false);
+    expect(stopped.todos.map((todo) => todo.status)).toEqual(["completed", "in_progress"]);
+    expect(stopped.items.filter((item) => item.kind === "assistant").every((item) => !item.streaming)).toBe(true);
+    expect(calls.filter((call) => call.cmd === "start_chat")).toHaveLength(0);
+    h["ask:opened"](oldAsk); // A delayed old event must not cover the input again.
+    expect(useRun.getState().tabs.s1.ask).toBeNull();
+    startReply = async () => "resumed-run";
+    expect(await useRun.getState().send("从已有进度继续", [], "s1")).toBe(true);
+    expect(calls.filter((call) => call.cmd === "start_chat")).toHaveLength(1);
+    expect(useRun.getState().tabs.s1.runId).toBe("resumed-run");
+    expect(useRun.getState().tabs.s1.queue.map((item) => item.text)).toEqual(["仍暂停的队列项"]);
+    h["ask:opened"](oldAsk);
+    h["run:cancelled"]({ session: "s1", run_id: "skipped-run" });
+    expect(useRun.getState().tabs.s1.running).toBe(true);
+    expect(useRun.getState().tabs.s1.ask).toBeNull();
+    h["ask:opened"]({ ...oldAsk, run_id: "resumed-run", ask_id: "new-ask" });
+    h["ask:closed"]({ session: "s1", ask_id: "skipped-ask" });
+    expect(useRun.getState().tabs.s1.ask?.askId).toBe("new-ask");
+  });
+
   it("新 run 启动失败后，旧 done 的迟到确认不得恢复其队列", async () => {
     seed();
     let resolve!: () => void;

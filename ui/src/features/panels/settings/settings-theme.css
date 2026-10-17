@@ -288,14 +288,41 @@
 }
 .settings-theme-root .settings-theme-picker { width: 100%; }
 .settings-theme-root .settings-theme-picker-row .ant-form-item-control-input-content { justify-content: flex-start; }
+/* 字体行左列：槽名只有两个字（界面 / 内容 / 代码），给定宽窄列。
+   原来是 50% —— 那是字体族 / 字号各占一行、说明文案较长时的布局；合并成三行后左列只剩
+   两字标签，半行宽就成大片留白，故改为定宽（SETTINGS_VISUAL.fontSlotLabelWidth）并把余量让给控件。 */
 .settings-theme-root .settings-form .settings-row.settings-font-row .ant-form-item-label {
-  flex: 0 0 calc(50% - var(--settings-row-gap));
-  max-width: calc(50% - var(--settings-row-gap));
+  flex: 0 0 var(--settings-font-slot-width);
+  max-width: var(--settings-font-slot-width);
   margin-inline-end: var(--settings-row-gap);
+  /* 行标签与右侧双控件（输入框 + 字号下拉）垂直居中；否则短标签会偏在预览行上方 */
+  display: flex;
+  align-items: center;
 }
 .settings-theme-root .settings-form .settings-row.settings-font-row .ant-form-item-control {
-  flex: 0 0 50%;
-  max-width: 50%;
+  flex: 1 1 auto;
+  max-width: 100%;
+}
+/* 字体行右侧容器：上行「字体族 + 字号 + 行末重置」并排，下行预览占满整行。
+   字体族吃掉剩余宽度，字号与重置按钮定宽——两者分别是枚举输入与图标动作，不靠百分比互相挤。
+   用 grid 而非嵌套 flex：预览只需 grid-column: 1 / -1 就能自动换行到第二个格子行。
+   align-items: center：字号 Select 必须与 Input 等高——antd 的 Select 默认带自身上下内边距，
+   配 size="small" 会比同行的 Input 矮一截，两条下边线对不齐。 */
+.settings-theme-root .settings-font-pair {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns:
+    minmax(0, 1fr)
+    var(--settings-font-size-select-width)
+    var(--settings-font-reset-width);
+  align-items: center;
+  column-gap: var(--settings-row-gap);
+  row-gap: 8px;
+}
+.settings-theme-root .settings-font-pair > .font-preview-row {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
 }
 .settings-theme-root .settings-font-control {
   display: flex;
@@ -306,8 +333,14 @@
 }
 .settings-theme-root .settings-font-control .ant-input-affix-wrapper { width: 100%; }
 .settings-theme-root .settings-font-control .font-preview-row { overflow-wrap: anywhere; }
-/* 字号行（ui.font_size_sans / ui.font_size_content / ui.font_size_mono）：与上方字体族行同构。
-   antd Select 默认 inline-block 按内容撑宽，缺 width:100% 会与上方满宽输入框右侧错位。 */
+/* 整槽重置按钮：与同行两个控件等高的方形图标动作，一键清掉本槽的字体族与字号。 */
+.settings-theme-root .settings-font-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+}
 .settings-theme-root .settings-font-size-control {
   display: flex;
   width: 100%;
@@ -757,6 +790,10 @@
   .settings-theme-root .settings-form .settings-row.settings-font-row .ant-form-item-label,
   .settings-theme-root .settings-form .settings-row.settings-font-row .ant-form-item-control { flex: 0 0 100%; max-width: 100%; }
   .settings-theme-root .settings-form .settings-row.settings-font-row .ant-form-item-label { margin-inline-end: 0; }
+  /* 堆叠后字号列不再是右侧窄格，按可用宽度均分（否则定宽在窄容器里显得突兀） */
+  .settings-theme-root .settings-font-pair {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--settings-font-reset-width);
+  }
   .settings-theme-root .settings-form .settings-row.settings-row-wide-control .ant-form-item-label,
   .settings-theme-root .settings-form .settings-row.settings-row-wide-control .ant-form-item-control { flex: 0 0 100%; max-width: 100%; }
   .settings-theme-root .settings-form .settings-row.settings-row-wide-control .ant-form-item-label { margin-inline-end: 0; }

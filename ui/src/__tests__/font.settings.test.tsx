@@ -9,6 +9,7 @@ import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 import { configSnapshot, configSaved } from "./configFixtures";
 import { AppearanceSettings } from "../features/panels/FontSettings";
+import type { FontSlot } from "../utils/fonts";
 
 const calls: Array<[string, any]> = [];
 
@@ -64,12 +65,17 @@ function mount() {
   );
 }
 
-/** 按 Form.Item 的 label 文本找字体输入框 */
+/** 按字体槽定位输入框：走设置项锚点（ui.font_<slot>），不依赖行标签文字。
+ *  字体与字号已合并成三行、行标签简化为「界面 / 内容 / 代码」，按 Form.Item label 找已不成立。 */
+const FAMILY_SLOT_BY_LABEL: Record<string, FontSlot> = {
+  界面字体: "sans", 内容字体: "content", 代码字体: "mono",
+};
+
 function fontInput(label: string): HTMLInputElement {
-  const item = Array.from(document.querySelectorAll(".ant-form-item")).find((el) =>
-    (el.querySelector(".ant-form-item-label")?.textContent ?? "").includes(label),
-  );
-  const el = item?.querySelector("input") as HTMLInputElement | null;
+  const slot = FAMILY_SLOT_BY_LABEL[label];
+  const el = (slot
+    ? document.querySelector<HTMLInputElement>(`[data-setting-id="ui.font_${slot}"] input`)
+    : null) as HTMLInputElement | null;
   if (!el) throw new Error(`找不到字体输入框：${label}`);
   return el;
 }
@@ -159,14 +165,18 @@ describe("界面字体：提交不丢与后端落盘", () => {
     expect(fontPrefCalls()).toHaveLength(0);
   });
 
-  it("「恢复默认」清空该槽并把空值同步到后端", async () => {
+  it("行末「恢复默认」一次清掉本槽字体族与字号，且只提交一次", async () => {
     localStorage.setItem("ws_font_sans", "Inter");
+    localStorage.setItem("ws_font_size_sans", "17");
     mount();
     expect(fontInput("界面字体").value).toBe("Inter");
 
-    fireEvent.click(screen.getByLabelText(/恢复默认・界面字体/));
+    fireEvent.click(screen.getByLabelText("恢复默认・界面字体 + 界面字号"));
     await waitFor(() => expect(localStorage.getItem("ws_font_sans")).toBeNull());
-    await waitFor(() => expect(fontPrefCalls().some((a) => a?.sans === "")).toBe(true));
+    // 一次点击 = 一次落盘（两个 commitFont* 串行后只提交最终结果）
+    await waitFor(() => expect(fontPrefCalls()).toHaveLength(1));
+    expect(fontPrefCalls()[0]).toMatchObject({ sans: "", fontSizeSans: 14 });
+    await waitFor(() => expect(useSettings.getState().config?.ui.font_sans).toBe(""));
   });
   it("authoritative font receipt updates saved state", async () => {
     mount();
@@ -226,17 +236,18 @@ describe("界面字体：提交不丢与后端落盘", () => {
     await waitFor(() => expect(useSettings.getState().config?.ui.font_content).toBe("Source Han Serif"));
     expect(fontInput("界面字体").value).toBe("Inter");
     expect(fontInput("代码字体").value).toBe("Menlo");
-    const preview = input.closest(".settings-font-control")!.querySelector<HTMLElement>(".font-preview-row")!;
+    const preview = input.closest(".settings-font-pair")!.querySelector<HTMLElement>(".font-preview-row")!;
     expect(preview.style.fontFamily).toBe('"Source Han Serif", var(--ws-font-content-fallback)');
     expect(preview.style.fontSize).toBe("18px");
   });
 
-  it("restoring the content family preserves interface/code families and all sizes", async () => {
+  it("restoring the content slot preserves interface/code families", async () => {
     localStorage.setItem("ws_font_sans", "Inter");
     localStorage.setItem("ws_font_content", "Georgia");
     localStorage.setItem("ws_font_mono", "Menlo");
     mount();
-    fireEvent.click(screen.getByLabelText("恢复默认・内容字体"));
+    // 行末重置一次清内容槽的字体族与字号；另外两槽不动
+    fireEvent.click(screen.getByLabelText("恢复默认・内容字体 + 内容字号"));
     await waitFor(() => expect(fontPrefCalls()).toHaveLength(1));
     expect(fontPrefCalls()[0]).toMatchObject({
       sans: "Inter", content: "", mono: "Menlo",

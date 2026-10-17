@@ -18,6 +18,11 @@ export const SETTINGS_VISUAL = {
   rowGap: 24,
   rowPaddingBlock: 10,
   rowPaddingInline: 20,
+  // 字体行左列（槽名「界面 / 内容 / 代码」）定宽：三槽合并成三行后标签只有两个字，
+  // 旧的半行宽会空出大片留白，余量让给右侧控件。
+  fontSlotLabelWidth: 72,
+  fontSizeSelectWidth: 88,
+  fontResetWidth: 32,
   controlWidth: { narrow: 180, mid: 240, wide: 360 },
 } as const;
 
@@ -40,6 +45,9 @@ const SETTINGS_STYLE = {
   "--settings-control-width-narrow": `${SETTINGS_VISUAL.controlWidth.narrow}px`,
   "--settings-control-width-mid": `${SETTINGS_VISUAL.controlWidth.mid}px`,
   "--settings-control-width-wide": `${SETTINGS_VISUAL.controlWidth.wide}px`,
+  "--settings-font-slot-width": `${SETTINGS_VISUAL.fontSlotLabelWidth}px`,
+  "--settings-font-size-select-width": `${SETTINGS_VISUAL.fontSizeSelectWidth}px`,
+  "--settings-font-reset-width": `${SETTINGS_VISUAL.fontResetWidth}px`,
 } as CSSProperties;
 
 /** Locally themes settings and all antd overlays while preserving the application's light/dark algorithm. */

@@ -86,6 +86,12 @@ KeyPool 以供应商 id 分组，同供应商模型共享健康状态：优先�
 
 Auth、Billing、Cancelled 不进入通用重试；网络、限流、服务端和协议错误最多重试 6 次，退避封顶 10 秒。BadRequest 另有每 run 一次 sanitize/repair 修复重试，不占通用重试计数。流内错误的分类由各适配器解析器决定，不应把 HTTP 状态分类套到 HTTP 200 的 error 帧上。
 
+`run:retry` 增加可选 `reason`（事件键不变）：`empty_response` / `stream_stalled` / provider 错误分类 / `request_repaired`。界面按原因提示；缺失或未知原因显示通用重试提示，不再一律声称“请求失败、丢弃半截回复”。清理旧代际候选帧的行为不变。
+
+三协议每次**空响应**在常开会话日志写入“空响应诊断” JSON，不要求打开 verbose：包含 run/step/尝试序号（首次为 1）、模型、协议、当次耗时与 usage、HTTP 状态、有限长度 request ID、收到的 chunk/字节数、SSE 事件和内容块类型计数、内容字节数、工具块数、结束原因、正常完成标记及装配结果。摘要仅保留固定类型词表和计数，不保留正文、思考、参数原文或任意未知字段值；未知类型归为 `other`。诊断元数据不进入模型历史、界面帧、首 token 计时或流活跃度。
+
+取证标签：`no_content_observed` 表示未观察到已知内容；`content_not_assembled` 表示原始 JSON 中有内容或工具块但最终装配为空；`unrecognized_shape` 表示存在未知结构/被忽略的非 JSON 事件；`diagnostics_missing` 表示摘要缺失。这些是排查线索，不把未知格式断言为上游空回复。内容字节数及工具结构出现次数包含事件中的重复快照，不能当作去重输出长度、独立调用数或计费依据。响应收集任务异常单独报告协议错误，不再静默降成空响应。
+
 源码：[dto.rs](../src-tauri/src/provider/dto.rs)、[retry.rs](../src-tauri/src/provider/retry.rs)、[drive.rs](../src-tauri/src/core/agent/drive.rs)（`run_llm_turn`）、[runHandlers.ts](../ui/src/stores/runHandlers.ts)、[ChatMessages.tsx](../ui/src/features/chat/ChatMessages.tsx)。
 
 ### 输出上限与截断

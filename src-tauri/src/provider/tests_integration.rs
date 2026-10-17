@@ -12,6 +12,113 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn empty_stream_diagnostics_distinguish_upstream_content_for_all_protocols() {
+    use crate::core::config::ApiFormat;
+    let cases = [
+        (
+            ApiFormat::AnthropicMessages,
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "no_content_observed",
+        ),
+        // Some compatible endpoints send text in the initial block, which our delta parser ignores.
+        (
+            ApiFormat::AnthropicMessages,
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"private body\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "content_not_assembled",
+        ),
+        (
+            ApiFormat::OpenAiChat,
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "no_content_observed",
+        ),
+        (
+            ApiFormat::OpenAiChat,
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read\"}}]},\"finish_reason\":\"stop\"}]}\n\n",
+            "content_not_assembled",
+        ),
+        (
+            ApiFormat::OpenAiResponses,
+            "event: response.completed\ndata: {\"response\":{\"usage\":{}}}\n\n",
+            "no_content_observed",
+        ),
+        (
+            ApiFormat::OpenAiResponses,
+            "event: response.unknown\ndata: {\"payload\":\"private body\"}\n\nevent: response.completed\ndata: {\"response\":{\"usage\":{}}}\n\n",
+            "unrecognized_shape",
+        ),
+    ];
+    for (format, body, evidence) in cases {
+        let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        let server_listener = listener.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = server_listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            while !request.windows(4).any(|s| s == b"\r\n\r\n") {
+                let n = socket.read(&mut buffer).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buffer[..n]);
+                assert!(request.len() < 65536);
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Request-Id: trace-123\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+            socket // Keep the connection alive through the client read.
+        });
+        let mut model = test_model(port);
+        model.api_format = format;
+        let (tx, mut rx) = mpsc::channel(32);
+        let request = StreamRequest {
+            model: model.clone(),
+            system_core: "sys".into(),
+            system_extra: String::new(),
+            messages: vec![Message::user_text("hi")],
+            tools: vec![],
+            cache_key: None,
+            cache_gen_index: None,
+            reasoning_effort: None,
+            session_id: None,
+        };
+        super::stream_model(
+            &reqwest::Client::new(),
+            &model,
+            None,
+            request,
+            tx,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let mut diagnostic = None;
+        while let Some(delta) = rx.recv().await {
+            match delta {
+                StreamDelta::Diagnostics { summary } => diagnostic = Some(summary),
+                other => panic!("Unexpected content for empty fixture: {other:?}"),
+            }
+        }
+        let diagnostic = diagnostic.unwrap();
+        assert_eq!(diagnostic.http_status, 200);
+        assert_eq!(diagnostic.request_id.as_deref(), Some("trace-123"));
+        assert!(diagnostic.completed);
+        assert!(diagnostic.chunks > 0);
+        assert_eq!(diagnostic.bytes, body.len() as u64);
+        assert_eq!(diagnostic.empty_evidence(), evidence);
+        assert!(
+            !serde_json::to_string(&diagnostic)
+                .unwrap()
+                .contains("private body")
+        );
+        drop(server.await.unwrap());
+        drop(listener);
+    }
+}
+
 /// 捕获首个请求的原始头部（含请求行 + 头部，直至 body 起始前）并回一个既定响应。
 async fn spawn_capturing_sse_server(captured: Arc<Mutex<String>>, resp: Vec<u8>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

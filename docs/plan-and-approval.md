@@ -64,6 +64,8 @@ git 仓库方案须提出 `<type>/<slug>`（type 使用 Conventional Commits，s
 
 [Option2](../src-tauri/src/tools/ask/tool.rs) 的 `mode: Option<ApprovalMode>` 用 serde default 与 `skip_serializing_if`：缺省时 wire 不出现该键，不能输出 `mode:null`。结构化批准类判定为 `mode.is_some()`；目标取用户选中项的 mode，旧批准形态才回落 AutoEdit。旧 `id="approve"`、`switchToAutoEdit` 与宽松 id/label 匹配保留兼容，不要随意删掉。
 
+例外：ask 缺失关联 id 的确定性补齐见[工具参数容错](./tools-and-safety.md#1-工具接线与结果通道)。宿主对补齐过 id 的询问标记 `explicit_mode_only=true`（前端 `explicitModeOnly`），该询问只接受选中项明确声明的 mode；关闭旧 id/label 批准匹配和有效应答轻量切档，不因补齐 id 推断审批意图，也不生成 `approve` 锚点。普通回答、修订与预览保持原档；原本完整的旧载荷兼容语义不变。
+
 必须区分：
 
 - `approval_shape` 是宽松的单题批准形**渲染标记，无安全语义**。
@@ -186,9 +188,11 @@ drive 内**唯一**能判定"可以交付通过"的地方是
 
 ## 6. 普通询问、计划卡与预览
 
-ask schema 为 1–5 问，每题最多 6 选项，支持开放题。ask/wait 必须独占批次。全空 selections 且 note trim 后为空时，在 `ask:closed` 后返回 `E_ASK_NOT_ANSWERED`，明确要求停下等待，不把忽略当成功/默许，也不原样重问；run 取消/通道关闭为 `E_ASK_CANCELLED`。部分回答保留未回答题尾注，不把整组当忽略。
+ask schema 为 1–5 问，每题最多 6 选项，支持开放题。ask/wait 必须独占批次。询问卡的「跳过」发送独立 `{action:"skip"}`，表示用户明确停止当前任务：关闭整组询问、返回中性 `E_ASK_SKIPPED`；主循环先保存工具结果配对，再直接走取消终态，不再请求模型或自动运行下一条队列项。无论单题、多题哪一页，都不提交已选项、推荐默认值或补充说明；不批准、不切档、不冻结基线。在子代理询问中跳过还会停止其所属根 run，按出生时的 root run 身份校验，迟到子代理不得取消新 run。已有进度与历史保留，等待用户新指示。
 
-- AskPanel 覆盖输入区；回答或忽略后恢复草稿。多题按页回答，非末页忽略只清当前题并翻页，末页清当前题后提交整组。
+跳过动作与 answers/权限字段混合时失败关闭，不回落批准通道。旧全空 selections 且 note trim 后为空的载荷仍返回 `E_ASK_NOT_ANSWERED`（未作答，不是明确跳过）；run 取消/通道关闭为 `E_ASK_CANCELLED`。部分回答保留未回答题尾注。
+
+- AskPanel 覆盖输入区；回答或跳过后恢复草稿。多题按页回答；「跳过」在任意页都停止整轮，不再清当前题后翻页。
 - 批准形渲染优先；其余由[同一 `inferSingle`](../ui/src/features/tools/askShape.ts) 控制单选展示与 toggle，不能“显示 radio、实际多选”。显式 true/false 优先于启发式。当前 Rust `Question.single` 是 default bool，标准事件会把缺省序列化为 false，因此不要承诺模型省略该字段就一定触发前端启发式；强互斥题应显式 true。
 - 键盘环包含选项与补充说明位；输入位 Enter/Space 只聚焦，不提交。完全访问风险提示由界面追加，不得被模型 description 抵消。
 
@@ -210,7 +214,7 @@ preview 技能只用于已有成型对象，界面示意须标“示意稿 · �
 
 后端重点入口：[ask/tests.rs](../src-tauri/src/tools/ask/tests.rs)、[batch.rs 测试](../src-tauri/src/tools/batch.rs)、[plan.rs](../src-tauri/src/tools/plan.rs)、[approval.rs](../src-tauri/src/safety/approval.rs)。前端入口：[askpanel.test.tsx](../ui/src/__tests__/askpanel.test.tsx)、[runWidgetAutoOpen.test.ts](../ui/src/__tests__/runWidgetAutoOpen.test.ts)、[events.contract.test.ts](../ui/src/__tests__/events.contract.test.ts)。载荷只增可选字段时不改事件键名。
 
-必须覆盖：无模型预览选项仍有固定入口、旧选项去重、计划保存失败仍可预览、重复/键盘点击与跨会话竞态、第四次手动预览；四档起点按所选 mode 同步；preview/preview+备注/自拟 approve 子串 id 均不切；revise 不冻结基线；G2 豁免仍拒空 todos；同批 plan 失败仍豁免的既有取舍；并发范围门只弹一次且拒绝持续拦；忽略不继续；自动预览只开一次且恢复不重开。
+必须覆盖：无模型预览选项仍有固定入口、旧选项去重、计划保存失败仍可预览、重复/键盘点击与跨会话竞态、第四次手动预览；四档起点按所选 mode 同步；preview/preview+备注/自拟 approve 子串 id 均不切；revise 不冻结基线；G2 豁免仍拒空 todos；同批 plan 失败仍豁免的既有取舍；并发范围门只弹一次且拒绝持续拦；任意页跳过直接停止且最后一步也不报成功；自动预览只开一次且恢复不重开。
 
 还需补齐文本 ask 的双向契约测试：`text_ask.rs` 的 `MAX_QUESTIONS/MAX_OPTIONS` 与 AskTool schema 的 `maxItems` 目前双写 5/6；当前四档 `ApprovalMode` 的 serde 名与 schema enum 也须成套比对。现有单一 `full_access` 解析用例不能替代这两类等价断言。
 

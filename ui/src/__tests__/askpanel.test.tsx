@@ -24,6 +24,73 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const prefs = { approval_mode: "plan" as const, model_id: null, reasoning_effort: null };
 
+describe("host repaired ask IDs", () => {
+  it("a reused option ID in another question cannot supply its mode", async () => {
+    seedAsk({
+      askId: "repaired-multi", kind: "ask", explicitModeOnly: true,
+      questions: [
+        { id: "q1", question: "First", options: [{ id: "shared", label: "Ordinary choice" }] },
+        { id: "q2", question: "Second", options: [{ id: "shared", label: "Full access", mode: "full_access" }] },
+      ],
+    }, "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("Ordinary choice"));
+    expect(calls.some((call) => call.cmd === "resolve_ask")).toBe(false);
+    fireEvent.click(btnByText("下一题"));
+    fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "resolve_ask")).toBe(true));
+    expect(calls.some((call) => call.cmd === "set_session_prefs")).toBe(false);
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("confirm_each");
+  });
+
+  it.each(["plan", "confirm_each", "auto_edit", "full_access"] as ApprovalMode[])(
+    "legacy-looking label/id cannot switch %s after ID repair", async (mode) => {
+      seedAsk({
+        askId: "repaired-plain", kind: "ask", explicitModeOnly: true,
+        switchToAutoEdit: true, approval: true, approveId: "approve",
+        questions: [{ id: "__cw_q_1", question: "Choose", options: [{ id: "approve", label: "Approve plan" }] }],
+      }, mode);
+      render(<AskPanel />);
+      expect(screen.queryByText(i18n.t("ask.switchHint"), { exact: false })).toBeNull();
+      fireEvent.click(screen.getByText("Approve plan"));
+      expect(calls.some((call) => call.cmd === "resolve_ask")).toBe(false);
+      fireEvent.click(btnByText("提交回答"));
+      await waitFor(() => expect(calls.some((call) => call.cmd === "resolve_ask")).toBe(true));
+      expect(calls.some((call) => call.cmd === "set_session_prefs")).toBe(false);
+      expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe(mode);
+    },
+  );
+
+  it.each(["补充意见", "先看预览"])("%s cannot switch after ID repair", async (label) => {
+    seedAsk({
+      askId: "repaired-gate", kind: "ask", explicitModeOnly: true,
+      questions: [{ id: "__cw_q_1", question: "Choose", options: [
+        { id: "__cw_q1_option_1", label: "Full access", mode: "full_access" },
+        { id: "__cw_q1_option_2", label: "补充意见" },
+        { id: "__cw_q1_option_3", label: "先看预览" },
+      ] }],
+    }, "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText(label));
+    if (label === "补充意见") fireEvent.click(btnByText("提交回答"));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "resolve_ask")).toBe(true));
+    expect(calls.some((call) => call.cmd === "set_session_prefs")).toBe(false);
+  });
+
+  it("explicitly declared mode remains selectable after ID repair", async () => {
+    seedAsk({
+      askId: "repaired-mode", kind: "ask", explicitModeOnly: true,
+      questions: [{ id: "__cw_q_1", question: "Choose", options: [
+        { id: "__cw_q1_option_1", label: "Full access", mode: "full_access" },
+      ] }],
+    }, "confirm_each");
+    render(<AskPanel />);
+    fireEvent.click(screen.getByText("Full access"));
+    await waitFor(() => expect(calls.some((call) => call.cmd === "set_session_prefs")).toBe(true));
+    expect(useSessions.getState().tabs[0].prefs.approval_mode).toBe("full_access");
+  });
+});
+
 function seed(mode: ApprovalMode = "plan") {
   useSessions.setState({
     tabs: [{ key: "s1", sessionId: "s1", workspace: "/tmp/ws", title: "s1", projectId: null, createdAt: "2026-09-01T00:00:00Z", prefs: { ...prefs, approval_mode: mode } }],
@@ -309,7 +376,7 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
     expect(payload.answers.q1.selections).toContain("revise");
   });
-  it("忽略缺陷回归（单题/末页）：点击「忽略」清空后直提，载荷 selections 为空", async () => {
+  it("单题跳过发送独立动作，不提交选项", async () => {
     seedAsk({
       askId: "a6", kind: "ask",
       questions: [{
@@ -318,13 +385,13 @@ describe("AskPanel（docs/plan-and-approval）", () => {
       }],
     });
     render(<AskPanel />);
-    fireEvent.click(btnByText("忽略"));
+    fireEvent.click(btnByText("跳过"));
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
-    expect(payload.answers.q1.selections).toEqual([]);
+    expect(payload).toEqual({ action: "skip" });
   });
 
-  it("忽略多题·非末页：清空当前题并翻页不提交，提交载荷验证已清空", async () => {
+  it("多题非末页跳过立即终止整组询问，不翻页或提交已有答案", async () => {
     seedAsk({
       askId: "a7", kind: "ask",
       questions: [
@@ -334,16 +401,15 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     });
     render(<AskPanel />);
     fireEvent.click(screen.getByText(/^甲/)); // select option A on question 1 (text carries a ✓ suffix, hence prefix match)
-    fireEvent.click(btnByText("忽略")); // not the last page: clears q1 and moves to page 2, no resolve
-    expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(false);
-    expect(screen.getByText("第二题")).toBeTruthy(); // page turned
-    fireEvent.click(btnByText("提交回答"));
+    fireEvent.click(btnByText("跳过"));
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
-    expect(payload.answers.q1.selections).toEqual([]); // ignore cleared question 1's answer
+    expect(payload).toEqual({ action: "skip" });
+    expect(screen.getByText("第一题")).toBeTruthy();
+    expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false);
   });
 
-  it("忽略多题·末页：直提且其余题作答保留、当前题清空", async () => {
+  it("多题末页跳过也不提交前面已选答案", async () => {
     seedAsk({
       askId: "a8", kind: "ask",
       questions: [
@@ -357,10 +423,10 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     const pagerBtns = document.querySelectorAll(".ask-pager .pager-btn");
     fireEvent.click(pagerBtns[pagerBtns.length - 1]);
     expect(screen.getByText("第二题")).toBeTruthy();
-    fireEvent.click(btnByText("忽略")); // last page: clears q2 then submits directly
+    fireEvent.click(btnByText("跳过")); // last page: clears q2 then submits directly
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
-    expect(payload.answers.q1.selections).toContain("a"); // other question's answer kept
+    expect(payload).toEqual({ action: "skip" });
   });
 
   it("docs/chat-and-interface：多题 ask（planFile 落盘）渲染计划卡片（planBody 驱动） + page 1 题干仍可见", async () => {
@@ -472,7 +538,7 @@ describe("AskPanel（docs/plan-and-approval）", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(true));
   });
 
-  it("空载荷缺陷回归：忽略路径不受 recommended 兑底影响（保持未回答语义）", async () => {
+  it("跳过不提交推荐批准项，也不切档", async () => {
     seedAsk({
       askId: "a16", kind: "ask",
       questions: [{
@@ -484,10 +550,10 @@ describe("AskPanel（docs/plan-and-approval）", () => {
       }],
     });
     render(<AskPanel />);
-    fireEvent.click(btnByText("忽略")); // last-page direct submit: does not clear recommended, sends an empty payload
+    fireEvent.click(btnByText("跳过")); // last-page direct submit: does not clear recommended, sends an empty payload
     await waitFor(() => expect(calls.some((c) => c.cmd === "resolve_ask")).toBe(true));
     const payload = calls.find((c) => c.cmd === "resolve_ask")?.args?.value;
-    expect(payload.answers.q1.selections).toEqual([]);
+    expect(payload).toEqual({ action: "skip" });
     expect(calls.some((c) => c.cmd === "set_session_prefs")).toBe(false); // empty payload does not switch mode
   });
 });
@@ -1868,7 +1934,7 @@ describe("AskPanel fixed plan preview", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     fireEvent.click(screen.getByText("执行方案"));
-    fireEvent.click(btnByText("忽略"));
+    fireEvent.click(btnByText("跳过"));
     fireEvent.click(btnByText("提交回答"));
     fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "Enter" });
     fireEvent.keyDown(document.querySelector(".ask-card")!, { key: "1" });
@@ -1883,14 +1949,14 @@ describe("AskPanel fixed plan preview", () => {
     expect(calls.some((c) => c.cmd.includes("prefs"))).toBe(false);
   });
 
-  it.each(["执行方案", "提交回答", "忽略"])("blocks preview during an already pending %s answer", async (action) => {
+  it.each(["执行方案", "提交回答", "跳过"])("blocks preview during an already pending %s answer", async (action) => {
     seedAsk(previewAsk());
     const pending = deferredResolve();
     render(<AskPanel />);
     fireEvent.click(action === "执行方案" ? screen.getByText(action) : btnByText(action));
     fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
     expect(calls.filter((c) => c.cmd === "resolve_ask")).toHaveLength(1);
-    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value.action).toBeUndefined();
+    expect(calls.find((c) => c.cmd === "resolve_ask")?.args.value.action).toBe(action === "跳过" ? "skip" : undefined);
     await act(async () => { pending.resolve(); await pending.promise; });
   });
 
