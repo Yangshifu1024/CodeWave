@@ -139,6 +139,7 @@ fn an_ancestor_path_conflicts() {
     assert!(err.iter().any(|d| d.code == "path_claimed"));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlink_alias_resolves_to_the_same_lease() {
     // 符号链接别名必须落到同一条目，否则两个名字就能绕过认领各写一次。
@@ -146,7 +147,6 @@ fn a_symlink_alias_resolves_to_the_same_lease() {
     let real = f.roots["ws"].join("real.txt");
     std::fs::write(&real, b"x").unwrap();
     let alias = f.roots["ws"].join("alias.txt");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&real, &alias).unwrap();
 
     admit(
@@ -168,6 +168,52 @@ fn a_symlink_alias_resolves_to_the_same_lease() {
     assert!(
         err.iter().any(|d| d.code == "path_claimed"),
         "symlink 别名必须同租约"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_alias_resolves_to_the_same_lease() {
+    let f = fx();
+    let real = f.roots["ws"].join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("file.txt"), b"x").unwrap();
+    let alias = f.roots["ws"].join("alias");
+    // Directory junctions exercise real Windows alias resolution without
+    // requiring the symlink privilege or Developer Mode on the test machine.
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&alias)
+        .arg(&real)
+        .output()
+        .expect("mklink /J");
+    assert!(
+        output.status.success(),
+        "junction creation failed: {output:?}"
+    );
+    assert_eq!(
+        alias.join("file.txt").canonicalize().unwrap(),
+        real.join("file.txt").canonicalize().unwrap()
+    );
+    admit(
+        &f,
+        "r_a_junction_alias_resolves_to_the_same_lease",
+        vec![unit("a", &["real/file.txt"])],
+        BTreeMap::new(),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let err = admit(
+        &f,
+        "r2_a_junction_alias_resolves_to_the_same_lease",
+        vec![unit("b", &["alias/file.txt"])],
+        BTreeMap::new(),
+        BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert!(
+        err.iter().any(|d| d.code == "path_claimed"),
+        "junction aliases must share the same lease"
     );
 }
 

@@ -60,7 +60,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
   const project = tab?.projectId ? projects.find(p => p.id === tab.projectId) : null;
   const hasProject = !!tab?.projectId;
   const directory = hasProject ? project?.directory ?? tab?.workspace ?? "" : "";
-  const sections: CollapsibleSection[] = [...(todos.length ? ["plan" as const] : []), ...(tab ? ["acceptance" as const] : []), "quota", "skills"];
+  const sections: CollapsibleSection[] = ["files", ...(todos.length ? ["plan" as const] : []), ...(tab ? ["acceptance" as const] : []), "quota", "skills"];
   const openSections = sections.filter(id => !collapsed.has(id));
   const statuses = { running: 0, done: 0, attention: 0, error: 0 };
   for (const sub of subs) statuses[subStatus(sub)]++;

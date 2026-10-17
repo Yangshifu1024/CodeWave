@@ -149,6 +149,9 @@ pub fn collect_project(scope: &ResourceScope) -> ResourceSnapshot {
     let mut add_file =
         |path: PathBuf, label: &str, kind: InstructionKind, limit: usize| match read_file(&path) {
             Ok((canonical, bytes)) => {
+                if !physical.insert(canonical.clone()) {
+                    return;
+                }
                 if !canonical.starts_with(crate::tools::pathutil::canonical_best_effort(
                     &scope.workspace,
                 )) && !scope.project_dir.as_ref().is_some_and(|dir| {
@@ -158,9 +161,6 @@ pub fn collect_project(scope: &ResourceScope) -> ResourceSnapshot {
                         "{}: linked instruction source is outside its project roots",
                         path.display()
                     ));
-                    return;
-                }
-                if !physical.insert(canonical.clone()) {
                     return;
                 }
                 let text: String = String::from_utf8_lossy(&bytes)
@@ -188,17 +188,18 @@ pub fn collect_project(scope: &ResourceScope) -> ResourceSnapshot {
                 ));
             }
             Err(error) if path.exists() || std::fs::symlink_metadata(&path).is_ok() => {
+                // Rejected sources still have a physical identity. Case-insensitive
+                // filesystems and links can expose the same oversized/non-regular
+                // source under multiple instruction names; report it only once.
+                let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if !physical.insert(identity) {
+                    return;
+                }
                 snapshot.issues.push(format!("{}: {error}", path.display()))
             }
             Err(_) => {}
         };
-    for name in [
-        "CODEWAVE.md",
-        "AGENTS.md",
-        "agents.md",
-        "CLAUDE.md",
-        "claude.md",
-    ] {
+    for name in ["CODEWAVE.md", "AGENTS.md", "CLAUDE.md", "claude.md"] {
         add_file(
             scope.workspace.join(name),
             name,

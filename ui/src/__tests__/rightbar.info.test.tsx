@@ -165,8 +165,8 @@ describe("右栏偏好读盘容错", () => {
     localStorage.setItem(COLLAPSED_SECTIONS_KEY, "not-json");
     expect([...readCollapsedSections()]).toEqual([]);
     // 合法元素保留、非法元素剔除
-    localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify(["skills", 42, null, "plan", "files"]));
-    expect([...readCollapsedSections()].sort()).toEqual(["files", "plan", "skills"]);
+    localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify(["skills", 42, null, "plan", "files", "acceptance", "unknown"]));
+    expect([...readCollapsedSections()].sort()).toEqual(["acceptance", "files", "plan", "skills"]);
     // 非数组 / 非字符串都不得让额度家展开态崩掉
     localStorage.setItem(EXPANDED_QUOTA_KEY, JSON.stringify("nope"));
     expect([...readExpandedQuotaProviders()]).toEqual([]);

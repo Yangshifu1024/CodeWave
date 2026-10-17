@@ -342,7 +342,9 @@ fn equal_precedence_conflicts_are_stable_and_invalid_candidates_are_diagnosed() 
                     .audit
                     .issues
                     .iter()
-                    .any(|issue| issue.path == path.display().to_string()
+                    // read_dir uses native separators; fixture paths may contain
+                    // '/' on Windows. Compare paths rather than their spelling.
+                    .any(|issue| Path::new(&issue.path) == path.as_path()
                         && !issue.message.is_empty()),
                 "missing diagnostic for {}",
                 path.display()

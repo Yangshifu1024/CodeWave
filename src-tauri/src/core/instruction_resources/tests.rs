@@ -436,6 +436,36 @@ async fn unknown_native_commit_is_inspected_without_rewriting_and_unavailable_ne
 }
 
 #[test]
+fn agents_discovery_uses_only_the_uppercase_candidate() {
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(ws.path().join("agents.md"), "lowercase instructions").unwrap();
+    let uppercase = ws.path().join("AGENTS.md");
+    let scope = ResourceScope {
+        workspace: ws.path().into(),
+        data_dir: ws.path().into(),
+        project_dir: None,
+        project_id: None,
+        owner: "scope".into(),
+    };
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.issues.is_empty());
+    // Native case-insensitive lookup may resolve AGENTS.md to the lowercase
+    // file. On case-sensitive filesystems it must not be discovered separately.
+    if uppercase.exists() {
+        assert_eq!(snapshot.resources.len(), 1);
+        assert_eq!(snapshot.resources[0].name, "AGENTS.md");
+    } else {
+        assert!(snapshot.resources.is_empty());
+    }
+    std::fs::write(&uppercase, "uppercase instructions").unwrap();
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.issues.is_empty());
+    assert_eq!(snapshot.resources.len(), 1);
+    assert_eq!(snapshot.resources[0].name, "AGENTS.md");
+    assert_eq!(snapshot.resources[0].text, "uppercase instructions");
+}
+
+#[test]
 fn project_projection_has_character_limits_and_rejects_oversized_sources_without_a_fake_hash() {
     let ws = tempfile::tempdir().unwrap();
     std::fs::write(ws.path().join("AGENTS.md"), "汉".repeat(25_000)).unwrap();
@@ -456,6 +486,90 @@ fn project_projection_has_character_limits_and_rejects_oversized_sources_without
     let snapshot = collect_project(&scope);
     assert!(snapshot.resources.is_empty());
     assert_eq!(snapshot.issues.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn instruction_aliases_share_resources_and_rejection_diagnostics() {
+    let ws = tempfile::tempdir().unwrap();
+    let source = ws.path().join("source.md");
+    std::fs::write(&source, "shared instruction").unwrap();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        std::os::unix::fs::symlink(&source, ws.path().join(name)).unwrap();
+    }
+    let scope = ResourceScope {
+        workspace: ws.path().into(),
+        data_dir: ws.path().into(),
+        project_dir: None,
+        project_id: None,
+        owner: "scope".into(),
+    };
+    let snapshot = collect_project(&scope);
+    assert_eq!(snapshot.resources.len(), 1);
+    assert!(snapshot.issues.is_empty());
+
+    std::fs::write(&source, vec![b'x'; 1024 * 1024 + 1]).unwrap();
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.resources.is_empty());
+    assert_eq!(snapshot.issues.len(), 1);
+    assert!(snapshot.issues[0].contains("exceeds 1 MiB"));
+
+    std::fs::remove_file(&source).unwrap();
+    std::fs::create_dir(&source).unwrap();
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.resources.is_empty());
+    assert_eq!(snapshot.issues.len(), 1);
+    assert!(snapshot.issues[0].contains("not a regular file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn escaping_instruction_aliases_share_one_rejection() {
+    let ws = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let source = outside.path().join("source.md");
+    std::fs::write(&source, "outside instruction").unwrap();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        std::os::unix::fs::symlink(&source, ws.path().join(name)).unwrap();
+    }
+    let scope = ResourceScope {
+        workspace: ws.path().into(),
+        data_dir: ws.path().into(),
+        project_dir: None,
+        project_id: None,
+        owner: "scope".into(),
+    };
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.resources.is_empty());
+    assert_eq!(snapshot.issues.len(), 1);
+    assert!(snapshot.issues[0].contains("outside its project roots"));
+}
+
+#[test]
+fn distinct_rejected_instruction_sources_each_remain_diagnosed() {
+    let ws = tempfile::tempdir().unwrap();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        std::fs::write(ws.path().join(name), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+    }
+    let scope = ResourceScope {
+        workspace: ws.path().into(),
+        data_dir: ws.path().into(),
+        project_dir: None,
+        project_id: None,
+        owner: "scope".into(),
+    };
+    let snapshot = collect_project(&scope);
+    assert!(snapshot.resources.is_empty());
+    assert_eq!(snapshot.issues.len(), 2);
+    assert!(
+        snapshot
+            .issues
+            .iter()
+            .all(|issue| issue.contains("exceeds 1 MiB"))
+    );
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        assert!(snapshot.issues.iter().any(|issue| issue.contains(name)));
+    }
 }
 
 #[cfg(unix)]

@@ -123,7 +123,7 @@ SkillIndex 的 get/list/audit 缓存 TTL 为 10 秒；结构化 key 包含 works
 
 ### 指令资源准入
 
-[instruction_resources.rs](../src-tauri/src/core/instruction_resources.rs) 将项目五种指令文件、CODEGRAPH、实际选中的 lessons、记忆索引和技能统一为 collect → authorize → render。来源快照同时保存 raw SHA-256 和实际投影；[prompt.rs](../src-tauri/src/core/prompt.rs) 只渲染调用方已准入的文本，不重读文件。技能确认展示同次解析的名称/description/whenToUse 索引和正文，记忆的版本与描述来自同一份原始字节。内置资源静态信任；项目/全局/兼容目录位置、文件写入成功、FullAccess、模型 ask 或 auto_confirm 都不授权外部内容。受保护设置中的 custom_prompt 继续按配置提交器管理。
+[instruction_resources.rs](../src-tauri/src/core/instruction_resources.rs) 将项目四种指令文件（CODEWAVE.md、AGENTS.md、CLAUDE.md、claude.md）、CODEGRAPH、实际选中的 lessons、记忆索引和技能统一为 collect → authorize → render。指令入口只登记大写 AGENTS.md，不单独兼容 agents.md；大小写不敏感文件系统仍按原生路径规则解析，不额外强制区分大小写。来源快照同时保存 raw SHA-256 和实际投影；[prompt.rs](../src-tauri/src/core/prompt.rs) 只渲染调用方已准入的文本，不重读文件。技能确认展示同次解析的名称/description/whenToUse 索引和正文，记忆的版本与描述来自同一份原始字节。内置资源静态信任；项目/全局/兼容目录位置、文件写入成功、FullAccess、模型 ask 或 auto_confirm 都不授权外部内容。受保护设置中的 custom_prompt 继续按配置提交器管理。
 
 设置「技能」页中的「指令资源许可」展示来源、版本、当前许可和活动运行已使用版本。选择「本次会话允许」只在本进程当前根会话及其子代理生效，不串其他会话或计划任务，不新增/撤销持久记录；没有当前会话时不能设置临时许可。「记住此版本」绑定项目/工作区、来源、用途、内容版本和全局 profile，经独立权威存储 CAS；跨项目不继承。撤销阻止后续准入，旧未消费或待提交批准票据不能复活。确认只提交宿主五分钟单用票据，不提交任意 path/body/trusted 作为权威；变更内容、切会话、过期及重复确认拒绝。未知结果检查原操作，不重新写入批准；已确认撤销只清理一次本地许可。
 
