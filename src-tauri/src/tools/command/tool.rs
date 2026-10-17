@@ -1,3 +1,4 @@
+use crate::core::delivery::types::{CommandSpec, ExecutionOutcome, PathRef};
 use crate::tools::{Tool, ToolCtx, ToolKind, ToolOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,6 +25,9 @@ pub const FULL_TAIL_CHARS: usize = 16_000;
 pub struct Args {
     /// 要执行的完整命令文本（交由选定/探测的 shell 解释）。
     command: String,
+    /// Pre-registered check; identity and exact requested command are verified by host.
+    #[serde(default)]
+    check_id: Option<String>,
     /// 工作区相对的执行目录；缺省为项目 temps/ 目录（临时会话为工作区根）。
     #[serde(default)]
     cwd: Option<String>,
@@ -659,6 +663,7 @@ impl Tool for CommandTool {
   "required": ["command", "fullOutput"],
   "properties": {
     "command": {"type": "string"},
+    "checkId": {"type": "string", "description": "已登记契约中的command检查ID，命令必须与规格一致"},
     "cwd": {"type": "string", "description": "相对工作区，默认根目录"},
     "timeoutSeconds": {"type": "integer", "description": "默认 120，上限 600"},
     "fullOutput": {"type": "boolean", "description": "true = 保留完整输出尾部 16000 字符；false = 尾部 2000 字符 + 信号行（退出码、总行数、落盘文件路径）。运行前先判断：输出本身是不是答案？"}
@@ -670,14 +675,128 @@ impl Tool for CommandTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        let _effect = match ctx.acquire_effect(&[], true) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
+        if let Err(message) = ctx.check_unattributed_effect() {
+            return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message);
+        }
         let mut persistence_warning = None;
-        let args: Args = match serde_json::from_value(args) {
+        let mut args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolOutcome::err("E_ARGS", format!("参数解析失败：{e}")),
         };
+        if ctx
+            .rt
+            .delivery_review_assignment_id
+            .lock()
+            .unwrap()
+            .is_some()
+        {
+            return ToolOutcome::err("E_REVIEW_READ_ONLY", "独立审查职责禁止执行 shell 命令");
+        }
+        if let Some(task) = ctx.rt.delivery_verification_task_id.lock().unwrap().clone() {
+            let identity = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+            let valid = ctx
+                .core
+                .delivery
+                .read_contract(&identity.session_id, &task)
+                .is_some_and(|contract| {
+                    contract.owner.root_run_id == identity.root_run_id
+                        && args.check_id.as_deref().is_some_and(|id| {
+                            contract.check(id).is_some_and(|c| {
+                                c.kind == crate::core::delivery::CheckKind::Command
+                            })
+                        })
+                });
+            if !valid {
+                return ToolOutcome::err(
+                    "E_VERIFY_CHECK_REQUIRED",
+                    "独立验证只能执行 verificationTaskId 契约中登记的 command 检查，必须传 checkId",
+                );
+            }
+        }
         if args.command.trim().is_empty() {
             return ToolOutcome::err("E_ARGS", "命令为空");
         }
+        // [#14] 请求可识别后立刻建执行意向：后面每一处准入早返回都要留下"从未启动"的记录，
+        // 而不是让调用方看到一个没有回执的裸错误码。键用 provider 侧 tool_use.id（可持久）。
+        let identity = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+        let binding = if let Some(check_id) = args.check_id.as_deref() {
+            let task = ctx.rt.delivery_task_id.lock().unwrap().clone();
+            let contract = task
+                .as_deref()
+                .and_then(|id| ctx.core.delivery.read_contract(&identity.session_id, id))
+                .filter(|contract| contract.owner.root_run_id == identity.root_run_id)
+                .or_else(|| {
+                    ctx.core
+                        .delivery
+                        .active_contract_for_run(&identity.session_id, &identity.root_run_id)
+                });
+            let Some((contract, check)) =
+                contract.and_then(|c| c.check(check_id).cloned().map(|check| (c, check)))
+            else {
+                return ToolOutcome::err("E_CHECK_NOT_FOUND", "检查未登记于当前契约");
+            };
+            let matches = match check.command.as_ref() {
+                Some(crate::core::delivery::CommandSpec::Requested { command_text, .. }) => {
+                    command_text == &args.command
+                }
+                Some(crate::core::delivery::CommandSpec::Resolved { shell_command, .. }) => {
+                    shell_command.as_deref() == Some(args.command.as_str())
+                }
+                None => false,
+            };
+            if !matches {
+                return ToolOutcome::err("E_CHECK_COMMAND_MISMATCH", "命令与已登记检查规格不同");
+            }
+            let cwd_ref = check.cwd.clone().unwrap_or(crate::core::delivery::PathRef {
+                root_id: "workspace".into(),
+                relative_path: ".".into(),
+            });
+            let root_map = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+            let Some(root) = root_map.get(&cwd_ref.root_id) else {
+                return ToolOutcome::err("E_CHECK_CWD", "检查cwd根不在会话快照内");
+            };
+            let expected = match crate::tools::pathutil::safe_join(root, &cwd_ref.relative_path) {
+                Ok(path) => path,
+                Err((code, message)) => return ToolOutcome::err(&code, message),
+            };
+            if let Some(requested) = args.cwd.as_deref() {
+                let requested =
+                    match crate::tools::pathutil::resolve_read(&ctx.write_roots(), requested) {
+                        Ok(path) => path,
+                        Err((code, message)) => return ToolOutcome::err(&code, message),
+                    };
+                if crate::tools::pathutil::canonical_best_effort(&requested)
+                    != crate::tools::pathutil::canonical_best_effort(&expected)
+                {
+                    return ToolOutcome::err("E_CHECK_CWD_MISMATCH", "实际cwd与预登记检查目录不同");
+                }
+            }
+            args.cwd = Some(expected.to_string_lossy().into_owned());
+            Some((contract, check.scope))
+        } else {
+            None
+        };
+        let mut recorder = crate::core::delivery::ReceiptRecorder::new(
+            ctx.core.delivery.clone(),
+            crate::core::delivery::DeliveryService::identity_of(&ctx.rt),
+            &ctx.provider_call_id,
+            &args.command,
+            args.cwd.clone(),
+            args.timeout_seconds.map(|s| s * 1000),
+            args.check_id.clone(),
+        );
+        if let Some((contract, scope)) = binding {
+            recorder.bind_contract(&contract);
+            recorder.observe(
+                crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt),
+                scope,
+            );
+        }
+        recorder.begin();
         let roots = ctx.write_roots();
         // 项目会话：默认 cwd = 项目托管目录（中立区；代码目录一律用绝对路径到达）；临时会话 = 工作区根
         let default_cwd = ctx
@@ -688,7 +807,13 @@ impl Tool for CommandTool {
         let cwd = match &args.cwd {
             Some(c) => match crate::tools::pathutil::resolve_read(&roots, c) {
                 Ok(p) => p,
-                Err((code, m)) => return ToolOutcome::err(&code, m),
+                Err((code, m)) => {
+                    // invalid_cwd：从没解析出工作目录，`cwd` 留 None，不用默认目录补值。
+                    recorder.deny(&format!("invalid_cwd:{code}"));
+                    let mut out = ToolOutcome::err(&code, m);
+                    out.warnings.extend(recorder.take_warnings());
+                    return out;
+                }
             },
             None => default_cwd,
         };
@@ -699,7 +824,10 @@ impl Tool for CommandTool {
         match crate::safety::fence::check_command_policy(&args.command, &cwd, &roots, policy) {
             crate::safety::fence::Verdict::Allow => {}
             crate::safety::fence::Verdict::Block { code, message } => {
-                return ToolOutcome::err(&code, message);
+                recorder.deny(&format!("fence_block:{code}"));
+                let mut out = ToolOutcome::err(&code, message);
+                out.warnings.extend(recorder.take_warnings());
+                return out;
             }
             crate::safety::fence::Verdict::Confirm(reason) => {
                 use crate::safety::fence::ConfirmReason;
@@ -764,12 +892,17 @@ impl Tool for CommandTool {
                                 allow_always: !is_disaster,
                                 kind: crate::safety::approval::ApprovalKind::Once,
                                 auto_confirm,
+                                call_key: Some(ctx.call_key.clone()),
                             },
                             &ctx.cancel,
                         )
                         .await;
                         if !outcome.approved {
-                            return ToolOutcome::err("E_APPROVAL_DENIED", "用户拒绝或未响应该命令");
+                            recorder.deny("approval_denied");
+                            let mut out =
+                                ToolOutcome::err("E_APPROVAL_DENIED", "用户拒绝或未响应该命令");
+                            out.warnings.extend(recorder.take_warnings());
+                            return out;
                         }
                         // 「始终允许本项目」：把 cwd+命令写入白名单并持久化（去重；失败不阻塞已批准的执行）
                         if outcome.always {
@@ -806,11 +939,20 @@ impl Tool for CommandTool {
         // 执行 shell = 配置 selection 经 resolve_shell（进程内缓存）；与 system prompt 环境段同一选择
         let selection = ctx.core.cfg.read().unwrap().shell.selection.clone();
         let shell = resolve_shell(selection.as_deref());
-        let mut outcome =
-            run_process(&args.command, &cwd, timeout, args.full_output, &shell, ctx).await;
+        let mut outcome = run_process(
+            &args.command,
+            &cwd,
+            timeout,
+            args.full_output,
+            &shell,
+            ctx,
+            &mut recorder,
+        )
+        .await;
         if let Some(warning) = persistence_warning {
             outcome.warnings.push(warning);
         }
+        outcome.warnings.extend(recorder.take_warnings());
         outcome
     }
 }
@@ -824,16 +966,52 @@ async fn run_process(
     full_output: bool,
     shell: &Shell,
     ctx: &ToolCtx,
+    recorder: &mut crate::core::delivery::ReceiptRecorder,
 ) -> ToolOutcome {
     // Approval may have waited while an external writer changed a path or symlink.
     if let crate::safety::fence::Verdict::Block { code, message } =
         crate::safety::fence::check_protected_command(command, cwd, &ctx.write_roots())
     {
-        return ToolOutcome::err(&code, message);
+        recorder.deny(&format!("protected_state:{code}"));
+        let mut out = ToolOutcome::err(&code, message);
+        out.warnings.extend(recorder.take_warnings());
+        return out;
     }
     let (program, argv) = shell_invocation(shell, command, cwd);
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(&argv);
+    // 已解析形态：真实 program/argv（含解释器与 `-c` 脚本），不从脚本文本反推子命令。
+    let resolved = CommandSpec::Resolved {
+        program: program.to_string(),
+        argv: argv.clone(),
+        shell_family: shell_family_name(shell),
+        shell_command: Some(command.to_string()),
+        timeout_ms: timeout.as_millis() as u64,
+        config_digest: None,
+    };
+    let guard = ctx.rt.workspace_guard.lock().unwrap().clone();
+    let invocation = if let Some(guard) = guard {
+        match guard.guarded_invocation(&program, &argv) {
+            Ok(value) => value,
+            Err(e) => {
+                recorder.deny(&format!("guardian:{e}"));
+                return ToolOutcome::err("E_GUARDIAN_REQUIRED", e.to_string());
+            }
+        }
+    } else {
+        #[cfg(not(test))]
+        {
+            recorder.deny("guardian_missing");
+            return ToolOutcome::err("E_GUARDIAN_REQUIRED", "命令启动前缺少工作根guardian");
+        }
+        #[cfg(test)]
+        {
+            (
+                std::path::PathBuf::from(program),
+                argv.iter().map(std::ffi::OsString::from).collect(),
+            )
+        }
+    };
+    let mut cmd = tokio::process::Command::new(invocation.0);
+    cmd.args(invocation.1);
     cmd.current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -844,7 +1022,23 @@ async fn run_process(
     let mut wrapped = crate::mcp::wrap_process_tree(cmd);
     let mut child = match wrapped.spawn() {
         Ok(c) => c,
-        Err(e) => return ToolOutcome::err("E_IO", format!("进程启动失败：{e}")),
+        Err(e) => {
+            // 进程**从未启动**：没有退出码可报，记 spawn_failed 而不是编一个 exit_code。
+            recorder.complete(
+                Some(resolved),
+                path_ref(ctx, cwd),
+                ExecutionOutcome::SpawnFailed,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(format!("spawn_failed: {e}")),
+            );
+            let mut out = ToolOutcome::err("E_IO", format!("进程启动失败：{e}"));
+            out.warnings.extend(recorder.take_warnings());
+            return out;
+        }
     };
     // 输出收集：stdout/stderr 合流，节流推送进度 + 体积上限
     let collector = std::sync::Arc::new(std::sync::Mutex::new(Collector {
@@ -970,7 +1164,21 @@ async fn run_process(
             Ok(st) => st,
             Err(e) => {
                 stop_command_tree(child.as_mut()).await;
-                return ToolOutcome::err("E_IO", format!("等待进程失败：{e}"));
+                // 进程启动了但退出状态未知：中断，不是"失败退出"。
+                recorder.complete(
+                    Some(resolved),
+                    path_ref(ctx, cwd),
+                    ExecutionOutcome::Interrupted,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(format!("wait_failed: {e}")),
+                );
+                let mut out = ToolOutcome::err("E_IO", format!("等待进程失败：{e}"));
+                out.warnings.extend(recorder.take_warnings());
+                return out;
             }
         },
         _ = tokio::time::sleep(timeout) => {
@@ -979,12 +1187,39 @@ async fn run_process(
             // 若 pump 持锁时 panic 会中毒锁：用 lock_ok 清理，避免二次 panic（[docs/tools-and-safety](../../../../docs/tools-and-safety.md) 评审修复）
             let mut c = crate::core::agent::lock_ok(&collector);
             let tail = model_tail(&mut c, full_output, "timeout");
-            return ToolOutcome::err("E_TIMEOUT", format!("命令超时（{}s）已终止进程树。\n部分输出（尾部）：\n{tail}", timeout.as_secs()));
+            // 超时是**被终止**：没有退出码可报，不能记 exited。
+            recorder.complete(
+                Some(resolved),
+                path_ref(ctx, cwd),
+                ExecutionOutcome::TimedOut,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(format!("timeout after {}ms", timeout.as_millis())),
+            );
+            let mut out = ToolOutcome::err("E_TIMEOUT", format!("命令超时（{}s）已终止进程树。\n部分输出（尾部）：\n{tail}", timeout.as_secs()));
+            out.warnings.extend(recorder.take_warnings());
+            return out;
         }
         _ = ctx.cancel.cancelled() => {
             stop_command_tree(child.as_mut()).await;
             let _ = pump.await;
-            return ToolOutcome::err("E_CANCELLED", "命令被用户取消");
+            recorder.complete(
+                Some(resolved),
+                path_ref(ctx, cwd),
+                ExecutionOutcome::Cancelled,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("cancelled by user".into()),
+            );
+            let mut out = ToolOutcome::err("E_CANCELLED", "命令被用户取消");
+            out.warnings.extend(recorder.take_warnings());
+            return out;
         }
     };
     let _ = pump.await;
@@ -1001,20 +1236,152 @@ async fn run_process(
         data["output_file_path"] = json!(p.display().to_string());
         data["output_truncated"] = json!(true);
     }
-    if exit_code == 0 {
+    // 真实退出：退出码按进程事实报。Unix 上被信号终止的 `status.code()` 为 None，
+    // 那不是退出码 -1，更不是"成功"——记 signal 并按非零呈现。
+    let signal = status_signal(&status);
+    let receipt = recorder.complete(
+        Some(resolved),
+        path_ref(ctx, cwd),
+        ExecutionOutcome::Exited,
+        Some(exit_code),
+        signal.clone(),
+        Some(collected_output(&c)),
+        None,
+        None,
+        signal.as_ref().map(|sig| format!("terminated by {sig}")),
+    );
+    if let Some(r) = receipt.as_ref()
+        && ctx
+            .rt
+            .delivery_verification_task_id
+            .lock()
+            .unwrap()
+            .is_some()
+        && let Some(check) = r.check_id.as_ref()
+    {
+        let marker = crate::core::delivery::BuiltinValidationRecord {
+            binding: r.binding.clone(),
+            id: crate::core::delivery::store::host_id(&format!("verify_{}", r.id), "validation"),
+            owner: r.owner.clone(),
+            validator_id: "independent_verification".into(),
+            validator_version: "1".into(),
+            check_id: Some(check.clone()),
+            input_refs: vec![r.id.clone()],
+            scope_version: r.after.as_ref().map(|v| v.digest.clone()),
+            started_at: r.started_at.clone(),
+            finished_at: r.finished_at.clone(),
+            outcome: if r.exit_code == Some(0) && r.signal.is_none() {
+                crate::core::delivery::ValidationOutcome::Passed
+            } else {
+                crate::core::delivery::ValidationOutcome::Failed
+            },
+            findings: vec![],
+            output_ref: r.output_ref.clone(),
+        };
+        if let Err(error) =
+            ctx.core
+                .delivery
+                .record_validation(&r.owner, marker, &format!("verify_{}", r.id))
+        {
+            data["verification_evidence_error"] = json!(error.to_string());
+        }
+    }
+    if let Some(r) = receipt.as_ref() {
+        // 工具卡可查回执（cwd / 时间 / 退出码 / 输出摘要），模型侧也能看到 receipt id。
+        data["receipt_id"] = json!(r.id);
+        data["outcome"] = json!(r.outcome.as_str());
+    }
+    let mut result = if exit_code == 0 && signal.is_none() {
         ToolOutcome::ok(data)
     } else {
+        let why = match signal.as_deref() {
+            Some(sig) => format!("命令被信号 {sig} 终止"),
+            None => format!("命令退出码 {exit_code}"),
+        };
         ToolOutcome {
             ok: false,
             data,
-            error: Some(crate::tools::ToolError::new(
-                "E_EXIT_CODE",
-                format!("命令退出码 {exit_code}"),
-            )),
+            error: Some(crate::tools::ToolError::new("E_EXIT_CODE", why)),
             warnings: Vec::new(),
             extra_model_content: Vec::new(),
+            diffs: Vec::new(),
+        }
+    };
+    result.warnings.extend(recorder.take_warnings());
+    result
+}
+
+/// 已收集到的原始输出（用于交付边车的完整输出记录）。
+///
+/// 取 `Collector.buf`（内存缓冲）而非给模型的裁剪尾巴——完整输出是验收依据，
+/// 裁剪过的 `model_tail` 不能当证据。
+fn collected_output(c: &Collector) -> Vec<u8> {
+    if let Some(path) = &c.spill_path {
+        // Read at most the receipt budget plus one byte so truncation remains observable.
+        use std::io::Read;
+        if let Ok(file) = std::fs::File::open(path) {
+            let mut bytes = Vec::new();
+            if file
+                .take(8 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .is_ok()
+            {
+                return bytes;
+            }
         }
     }
+    c.buf.as_bytes().to_vec()
+}
+
+/// Unix 上被信号终止时取信号名；其他平台 / 正常退出返回 None。
+#[cfg(unix)]
+fn status_signal(status: &std::process::ExitStatus) -> Option<String> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal().map(|s| s.to_string())
+}
+
+#[cfg(not(unix))]
+fn status_signal(_status: &std::process::ExitStatus) -> Option<String> {
+    None
+}
+
+/// 把真实工作目录转成 `PathRef{root_id, relative_path}`。
+///
+/// 命中写入根之一就用该根 + 相对路径；一个都不命中则 `None`——回执里的 cwd
+/// 只表示"确实解析到的工作目录"，不能塞一个无效句柄糊弄过去。
+fn path_ref(ctx: &ToolCtx, cwd: &std::path::Path) -> Option<PathRef> {
+    let roots = ctx.write_roots();
+    let mut all: Vec<(String, std::path::PathBuf)> = vec![
+        ("workspace".to_string(), roots.workspace.clone()),
+        ("data_dir".to_string(), roots.data_dir.clone()),
+    ];
+    if let Some(pd) = roots.project_dir.clone() {
+        all.push(("project_dir".to_string(), pd));
+    }
+    for (i, e) in roots.extra.iter().enumerate() {
+        all.push((format!("extra{i}"), e.clone()));
+    }
+    let target = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    for (id, root) in all {
+        let canon = std::fs::canonicalize(&root).unwrap_or(root);
+        if let Ok(rel) = target.strip_prefix(&canon) {
+            return Some(PathRef {
+                root_id: id,
+                relative_path: if rel.as_os_str().is_empty() {
+                    ".".into()
+                } else {
+                    rel.to_string_lossy().replace('\\', "/")
+                },
+            });
+        }
+    }
+    None
+}
+
+/// shell 家族名（`bash` / `powershell` / `cmd` / 无）。
+fn shell_family_name(shell: &Shell) -> Option<String> {
+    let d = shell.describe();
+    if d.is_empty() { None } else { Some(d) }
 }
 
 /// A cancellation result is emitted only after the owned process tree confirms exit.

@@ -1,8 +1,8 @@
 //! Configuration transaction boundary shared by IPC saves and approval policy patches.
 use super::{
-    CONFIG_COMMIT, ConfigIssue, IssueLevel, McpError, McpServerConfig, PoolKey, Scope, ScopeRef,
-    global_scope, load_scope, merge_scopes, parse_scope_text, project_scope, read_scope_text,
-    scope_version, source_identity,
+    CONFIG_COMMIT, ConfigIssue, IssueLevel, McpError, McpServerConfig, PoolKey, Scope,
+    ScopeCommitGuard, ScopeRef, global_scope, load_scope, merge_scopes, parse_scope_text,
+    project_scope, read_scope_text, scope_version, source_identity,
 };
 use crate::core::agent::{AgentCore, SessionRuntime};
 use serde::Serialize;
@@ -228,7 +228,10 @@ pub async fn save_configuration(
         .collect();
     drop(_commit);
     let authority = core.mcp.invalidate_persistent(&keys).await?;
-    let _commit = CONFIG_COMMIT.lock().await;
+    // 重入校验通过后、真正落盘前补上跨进程租约。上面的「读回比对」只是乐观检查：
+    // 它与随后的 atomic_write 之间仍有一道窗口，别的实例可以正好写进去。
+    // 租约把这段窗口关掉，两者叠在一起才算「改了但没被别人改掉」。
+    let _guard = ScopeCommitGuard::extend(CONFIG_COMMIT.lock().await, source).await?;
     if source_identity(&source.path) != identity_before || read_scope_text(source)? != old {
         return Err(McpError::config(
             "MCP configuration changed during trust invalidation; reload before saving",
@@ -254,7 +257,7 @@ pub async fn save_configuration(
     })?;
     core.mcp
         .invalidate_launch_source(&source_identity(&source.path), &parsed.servers);
-    drop(_commit);
+    drop(_guard);
     drop(authority);
     // Only runtimes actually reading this file are affected. The canonical path distinguishes relocated projects.
     let identity = source_identity(&source.path);

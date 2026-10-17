@@ -12,6 +12,8 @@
 
 [drive.rs](../src-tauri/src/core/agent/drive.rs) 正常/失败/取消路径统一收尾；`RunCleanupGuard` 负责 panic 或任务异常退出时取消子任务、关闭 inject 接纳、清询问 responder、发布错误终态。旧 run 的结束不能覆写新 run。
 
+运行停止与清理完成分别记录。根 run 收尾先等待同一根 run 的子任务，超时取消后继续等待实际引用释放；子 runtime 只释放自己的 guard 引用。根 runtime 保留尚未确认的工作区 guard，只有同代 guardian 清理证明通过后才释放工作区与对应 run 的会话 owner。迟到子任务或 helper 完成后，启动、关闭和删除入口调用 `try_settle_cleanup` 只读对账并重试结算；清理未知时保守拒绝新 run，不能覆盖旧 guard、重置共享预算或释放新 owner。终态载荷的 `cleanup_done=false` 也不能触发观察层提前释放 owner。
+
 前端 [runHandlers.ts](../ui/src/stores/runHandlers.ts) 的共享 `settleRun` 清理运行标志、流式正文、运行/等待工具卡、残留子代理及 AskPanel。只有清工具卡而不清 ask，会留下输入区被询问永久覆盖的假卡死。
 
 ### 丢事件后的自愈
@@ -72,6 +74,7 @@ AppShell 的 5 秒看门狗只查询有未收敛状态的 Tab：判据包括 run
 
 低预算提醒按已启动步数计算：`budget_notice_step(max_steps) = max_steps - max_steps/5`，即剩余约 20%，不是消耗 20%。预算少于 5 步时不触发；5–9 步可能与最后一步强制汇报同轮。子代理/任务最后一步注入 `<final-report>`；主会话没有该强制汇报预算策略。
 
+
 [supervise.rs](../src-tauri/src/core/agent/supervise.rs) 是主/子/任务共用的分层监督：
 
 | 信号 | 纠偏 / 终止 |
@@ -115,7 +118,81 @@ AppShell 的 5 秒看门狗只查询有未收敛状态的 Tab：判据包括 run
 5. 详情宽为窗口一半，缩放跟随；外点只关闭不透传，关闭不停止代理。
 6. 报告、partial、budget、no_report、失败和用户停止有准确文字；窄窗/暗色/长标题与同步失败状态可读，恢复焦点及时刷新。
 
-## 6. 后台服务：存活与日志必须分开
+## 6. 任务编排域（workflow）
+
+[core/workflow](../src-tauri/src/core/workflow/) 回答「**这件事该怎么拆、谁来做、按什么顺序**」。
+它**不判定验收**（那是交付域，见[工具与安全](./tools-and-safety.md#7-交付与验收域)），
+也不自己产生 todo；输出是 `TaskProfile` / `WorkUnit`，作为契约的**派发输入**。
+
+### 路由：模型建议、宿主核验
+
+`TaskKind = conversation | mechanical | single_surface | serial_surfaces | parallel_surfaces`。
+三条不可让步的规则：
+
+1. **模型建议、宿主核验**。模型自称并行不能让其并行。
+2. **无法证明独立 → 默认串行**。路径不相交**不等于**语义独立：同一顶层组件内两个文件
+   可以互相引用类型、共享私有 helper。只有落在**不同顶层组件**（`src-tauri/` 与 `ui/`）
+   才谈得上证明得了独立。`public_path` 判据把锁文件 / manifest / 公共导出入口拉回串行。
+3. **规模不是升级理由**。仓库大、文件多、一次失败本身都**不构成**升级完整流程的条件。
+
+用户覆盖必须带真实 actor、契约修订与理由（过期修订、缺 actor、缺理由一律拒绝）。
+覆盖**只改分类，不解除冲突判定**——否则"改个分类就能并发写同一文件"成了后门。
+
+### 并行准入（#2）
+
+`admission` 单锁内**全查后全插**：任一候选不满足即整体拒绝，不产生部分准入
+（半准入会让"看起来并行、实际半串行"更难排查）。判据：依赖已 accepted、路径 / 祖先 /
+symlink 别名不冲突、共享可变资源不争用、公共文件单 owner、并发额度。
+路径归一化**复用** claims 的 `canonical_best_effort` + 组件级祖先判定，不复制第二套。
+
+- **能归因才谈并行**：只有结构化写工具能归因到文件；声明 shell / MCP 任意写的单元
+  `side_effect_scope=unknown`，一律串行。**模型承诺"shell 只写某文件"不予采信**。
+- 租约带 `generation`，释放必须校验：迟到完成不得释放后继 attempt 的租约。
+- 代次**按 root run 计**（不是进程全局）：全局计数器会让不相关的 run 互相把请求判成过期。
+- 并发额度按本 root run 计：它是单个工作流同时能跑几个单元的预算，不是进程级总量。
+- 接线点在 subagent spawn **之前**（[subagent.rs](../src-tauri/src/tools/subagent.rs)）：
+  拿不到租约就不占并发槽、不注册 runtime；拒绝原因进 `ToolOutcome.data`。
+
+### 验证策略（#3）
+
+改动面 → 建议检查：后端 `cargo test --workspace`（cwd `src-tauri`）、前端
+`pnpm --dir ui test` / `build` / `lint` + 人工 GUI 走查、跨层取并集、文档 `git diff --check`、
+纯机械复用精确断言。**模板只来自宿主内置表**，不从 README 任意命令直接执行。
+跑不了（缺工具链 / 平台 / 权限）→ `blocked` + `unverified`，既不新增顶层状态，
+也不把无关检查补成通过；**没有 Windows 机器就不能标 Windows 检查通过**。
+lint 与 build 是两条独立必跑检查：lint 绿顶不掉 build。
+
+### 选择性设计（#4）
+
+判据全落在变更形状上：单写范围且零读依赖 = 机械改动免设计；触及存储格式 / 公共 API /
+并发 / 权限密钥 / 删除路径 = 需要设计，且**不可由模型自行豁免**。
+**跳设计不等于跳批准**：设计可以省，验收门照走。预览不冻结基线；范围未扩不重启设计；
+范围一扩旧决定**保留为版本**且不继承冻结。
+
+### 状态机与冻结快照（#5 / #8）
+
+`NodeState = pending | ready | running | passed | failed | blocked | cancelled`。
+
+- 依赖未通过不能 running；**一次失败不使依赖自动 ready**（partial / failed 都不算通过）。
+- 重复终态幂等（不进位）；旧 attempt 迟到拒绝；`passed` / `cancelled` 是真终态，永不复活；
+  `failed` 只能沿 repair 边在预算内复活。
+- 修复预算只拦**重新进入 running**：上报失败永远不受预算影响，否则用尽预算的单元
+  连"如实报告失败"都做不到。
+- 快照**内嵌**定义内容而非只存 id：只存 id 再回查当前配置，运行中改配置就会改掉旧 run 的规则。
+- 快照**不携带权限**：恢复按既有 step 语义重新解析，撤销的授权不会被快照偷偷带回来。
+- 快照缺失**不拿当前定义补齐**（旧 run 跑的是旧规则）；跨项目 / 跨会话恢复一律拒绝；
+  模型或角色被删 → 阻塞而非静默换人。
+
+### 项目工作流配置（#6）
+
+`<主目录>/.codewave/workflows.json`，是工作流定义的**唯一 schema 来源**。
+未知字段 / 角色 / 模型 / 工具 / 检查引用一律拒绝；**只有含 repair 边的环才允许**
+（要求整环皆 repair 会让任何修复环都无法成立）；跨项目路径拒绝。
+**保存配置不绕执行审批**：危险命令可以存进配置，真正执行时仍走既有审批门。
+CAS 提交以**磁盘上的定义为准**，不信调用方转述的 current——外部修改因此表现为 revision 冲突
+而非静默覆盖；冲突与写失败都**保留草稿**，原有效版本逐字节不变。
+
+## 7. 后台服务：存活与日志必须分开
 
 [service.rs](../src-tauri/src/tools/service.rs) 的 `service_info()` 是工具 list 与 `list_services` IPC 的共用投影。`running` 表示进程存活，`tail` 只表示日志内容；start 成功声明 `running:true`，不能补空 tail 伪造状态。工具调用已完成不代表其启动的进程已停止。
 
@@ -125,7 +202,7 @@ AppShell 的 5 秒看门狗只查询有未收敛状态的 Tab：判据包括 run
 
 服务表是进程内状态。不要将 owner/purpose 字段、旧日志或历史 start 回执解释成已实现的跨重启清理/恢复承诺。停止应回收进程树；容量失败同样要回收已经创建的进程且不登记永远运行的 wait 目标。
 
-## 7. 计划任务
+## 8. 计划任务
 
 实现：[scheduler.rs](../src-tauri/src/core/scheduler.rs)、[scheduled_task.rs](../src-tauri/src/tools/scheduled_task.rs)、[任务 store](../ui/src/stores/tasks.ts)。
 
@@ -178,7 +255,7 @@ once 消费调度机会时只清 next_run，保留实体和 enabled 偏好；不
 3. 暂时移走测试项目托管目录，刷新项目与任务页，确认可见诊断、其它项目可用，移回并重启后仍可发现。
 4. 模拟认领后退出，重开显示未确认结果且不自动重跑；模拟写失败，核对未保存提示与恢复写入后历史只有一条。
 
-## 8. 条件等待
+## 9. 条件等待
 
 [wait.rs](../src-tauri/src/tools/wait.rs) 支持 `seconds/reason/until?`，依然是必须独占批次的 Interactive 工具，不启动任务。目标使用已得到的 service/subagent/scheduled_task 回执 id。
 
@@ -193,7 +270,7 @@ once 消费调度机会时只清 next_run，保留实体和 enabled 偏好；不
 
 service ticker 更新活日志；service 退出当前按 Succeeded 表示进程已结束，不解释退出码成功与否。子代理 report/partial 都是 Succeeded，budget/no_report 是 Failed，分析批准门另用更严格判据。终态单生命周期只前进；lookup 惰性清理超过 1 小时的终态，活跃目标永不淘汰。重启不保留这些等待目标。
 
-## 9. 排查与回归
+## 10. 排查与回归
 
 | 症状 | 判别顺序 |
 |---|---|

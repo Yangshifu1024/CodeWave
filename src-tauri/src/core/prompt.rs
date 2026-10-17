@@ -1,10 +1,12 @@
 //! 六层 system prompt 组装（[docs/technical-design](../../../docs/technical-design.md)）。全部文案为 CodeWave 原创撰写；
 //! 层序与分隔符固定 → 前缀字节稳定（缓存优先）。
 
-use crate::core::config::{ConfigState, MANAGED_DIR_NAME};
+use crate::core::config::ConfigState;
 use std::path::Path;
 
-const CORE_PROMPT: &str = r#"你是 CodeWave，一个运行在用户本机、为用户项目工作的严谨编程 Agent。项目由一个或多个目录组成；所有目录都是同一项目工作空间的平等组成部分——绝不要把其中任何目录当作「额外的」或「次要的」。当问题涉及项目整体（仓库、结构、文档、测试）时，检查每一个目录，而不是只看第一个。
+const CORE_PROMPT: &str = r#"交付与编排：对有可验收产物的实现任务，先用 delivery_contract 创建需求、产物与检查契约，用 workflow 读取冻结路由与阶段，再实施。普通问答无需契约。命令验证引用预登记 checkId，禁止自签回执或以口头完成代替证据。需要独立审查时用契约分派审查，再通过 subagent 的 reviewAssignmentId/contractTaskId/requirementIds 绑定真实执行身份；验证者使用独立 verificationTaskId。修复必须提供同检查的 RED/GREEN；全部合并后执行整体检查。人工确认/豁免只能通过 delivery_contract 的真实用户询问。
+
+你是 CodeWave，一个运行在用户本机、为用户项目工作的严谨编程 Agent。项目由一个或多个目录组成；所有目录都是同一项目工作空间的平等组成部分——绝不要把其中任何目录当作「额外的」或「次要的」。当问题涉及项目整体（仓库、结构、文档、测试）时，检查每一个目录，而不是只看第一个。
 
 <priority-order>
 指令冲突时严格按以下顺序执行：
@@ -99,7 +101,7 @@ pub fn assemble(
     skills_listing: &str,
     memory_listing: &str,
     project_section: Option<&str>,
-    project_dir: Option<&Path>,
+    resource_tail: &str,
 ) -> String {
     let mut out = String::with_capacity(16 * 1024);
 
@@ -138,59 +140,8 @@ pub fn assemble(
     }
     out.push_str("\n</system-prompt>\n");
 
-    // 第 2 层：技能元数据（P1）
-    // 第 3 层：记忆索引（P1）
-
-    // 第 4 层：项目指令
-    let project_files = [
-        "CODEWAVE.md",
-        "AGENTS.md",
-        "agents.md",
-        "CLAUDE.md",
-        "claude.md",
-    ];
-    let mut loaded = String::new();
-    for f in project_files {
-        let p = workspace.join(f);
-        if let Ok(content) = std::fs::read(&p) {
-            let content = String::from_utf8_lossy(&content);
-            let clipped: String = content.chars().take(24_000).collect();
-            loaded.push_str(&format!("<!-- From: {} -->\n{clipped}\n\n", p.display()));
-        }
-    }
-    if !loaded.is_empty() {
-        out.push_str("<project-instructions priority=\"lower-than-core\">\n");
-        out.push_str(loaded.trim_end());
-        out.push_str("\n</project-instructions>\n");
-    }
-
-    // 第 5 层：项目图谱与经验教训
-    let mut ctx = String::new();
-    for (label, path) in [
-        ("code-graph", workspace.join("CODEGRAPH.md")),
-        // lessons：项目托管位置优先（projects/<id>/lessons.md），仓库本地 .codewave/ 作兼容
-        (
-            "lessons",
-            project_dir
-                .map(|pd| pd.join("lessons.md"))
-                .filter(|p| p.exists())
-                .unwrap_or_else(|| workspace.join(MANAGED_DIR_NAME).join("lessons.md")),
-        ),
-    ] {
-        if let Ok(content) = std::fs::read(&path) {
-            let content = String::from_utf8_lossy(&content);
-            let clipped: String = content.chars().take(48_000).collect();
-            ctx.push_str(&format!(
-                "<!-- {label}: {} -->\n{clipped}\n\n",
-                path.display()
-            ));
-        }
-    }
-    if !ctx.is_empty() {
-        out.push_str("<project-context>\n");
-        out.push_str(ctx.trim_end());
-        out.push_str("\n</project-context>\n");
-    }
+    // Project instructions/context were collected and authorized by the caller.
+    out.push_str(resource_tail);
 
     // 第 6 层：自定义 prompt
     if let Some(cp) = cfg
@@ -231,6 +182,43 @@ fn platform_section(workspace: &Path, shell_desc: &str, extra_roots: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These renderer tests explicitly provide a collected projection. Runtime
+    // authorization is exercised through the actual stream/context/skill paths.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        workspace: &Path,
+        cfg: &ConfigState,
+        extra: &[String],
+        shell: &str,
+        skills: &str,
+        memories: &str,
+        project: Option<&str>,
+        project_dir: Option<&Path>,
+    ) -> String {
+        let scope = crate::core::instruction_resources::ResourceScope {
+            workspace: workspace.into(),
+            data_dir: workspace.into(),
+            project_dir: project_dir.map(Path::to_path_buf),
+            project_id: None,
+            owner: "renderer-test".into(),
+        };
+        let snapshot = crate::core::instruction_resources::collect_project(&scope);
+        let admitted = crate::core::instruction_resources::AdmittedResources {
+            resources: snapshot.resources,
+            issues: snapshot.issues,
+        };
+        super::assemble(
+            workspace,
+            cfg,
+            extra,
+            shell,
+            skills,
+            memories,
+            project,
+            &admitted.listings().2,
+        )
+    }
 
     /// platform_section 把 shell_desc 原文注入 `- Shell:` 行。
     #[test]
@@ -360,9 +348,11 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let pd = tempfile::tempdir().unwrap();
         // 两个来源同时存在 → 项目托管的 lessons.md 胜出
-        std::fs::create_dir_all(ws.path().join(MANAGED_DIR_NAME)).unwrap();
+        std::fs::create_dir_all(ws.path().join(crate::core::config::MANAGED_DIR_NAME)).unwrap();
         std::fs::write(
-            ws.path().join(MANAGED_DIR_NAME).join("lessons.md"),
+            ws.path()
+                .join(crate::core::config::MANAGED_DIR_NAME)
+                .join("lessons.md"),
             "repo lessons",
         )
         .unwrap();

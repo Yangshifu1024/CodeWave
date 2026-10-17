@@ -108,7 +108,8 @@ pub async fn generate_and_apply(
     // key 解析必须走钥匙串占位符解析器（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：钥匙串用户的
     // 配置 keys 原样是 ["__keyring__"]，朴素的 filter 挑选会得到 None，
     // 发出未鉴权请求（静默 401 失败）
-    let Some(key) = crate::host::keyring::pick_resolved_key(&model) else {
+    let Some(key) = crate::core::credentials::pick_resolved_key(core.credentials.as_ref(), &model)
+    else {
         crate::core::session_log::warn(
             &rt,
             "自动命名跳过：模型 key 在钥匙串中解析为空（keys 含占位符但回读失败）",

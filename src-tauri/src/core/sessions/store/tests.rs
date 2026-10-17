@@ -2962,3 +2962,278 @@ fn bounded_wire_keeps_leading_non_user_message_on_two_round_timeline() {
         "两轮时间线 + 开头非 User：只能读到底，不得按最老的 User 截断"
     );
 }
+
+// ─────────────────── #36-C0 会话 owner 接入 ───────────────────
+
+mod session_owner_c0 {
+    use super::*;
+    use crate::core::coordinator::AcquireRequest;
+    use crate::core::process_coordination::LeaseStore;
+
+    fn msg(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![Content::Text {
+                text: text.to_string(),
+            }],
+            created_at: None,
+        }
+    }
+
+    fn save(store: &SessionStore, id: &str) -> anyhow::Result<SaveReport> {
+        store.save_history(id, "t", "/ws", None, None, &[], &[msg("hi")])
+    }
+
+    #[test]
+    fn 没认领过_owner_的保存照常_不因为协调还没接而写不下去() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        assert!(store.claimed_sessions().is_empty());
+        // 桌面单实例路径尚未接 C0：强制校验会把"还没接协调"变成"历史根本存不下去"。
+        save(&store, "s1").expect("未认领也应保存成功");
+    }
+
+    #[test]
+    fn 认领后_租约被别人抢走_保存必须失败而不是覆盖() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        store.claim_session_owner("s1", "run-a", 0).expect("认领");
+        save(&store, "s1").expect("持有者本人可写");
+        assert_eq!(store.claimed_sessions(), vec!["s1".to_string()]);
+
+        // 模拟另一个进程把租约抢走（guardian 强制回收 + 重新认领）。
+        let leases = LeaseStore::new(&d.path().join("coord"));
+        leases
+            .force_release("history:s1", "夹具：模拟他人回收")
+            .expect("回收");
+        let other = leases
+            .acquire(&AcquireRequest {
+                session_id: "s1".into(),
+                root_run_id: "run-b".into(),
+                resource: "history:s1".into(),
+                attempt: 0,
+                expected_generation: None,
+            })
+            .expect("他人认领");
+
+        // 此刻保存必须失败：继续写就是覆盖别人正在写的历史。
+        let e = save(&store, "s1").expect_err("owner 已失效时必须拒绝保存");
+        let msg = e.to_string();
+        assert!(msg.contains("owner"), "{msg}");
+
+        // 放掉他人的租约后，本进程**仍然**不能悄悄恢复：租约已被别人占着。
+        leases.release(&other).expect("他人释放");
+        assert!(
+            save(&store, "s1").is_err(),
+            "本地记录仍在但租约已消失：必须继续拒绝，不能当无事发生"
+        );
+    }
+
+    #[test]
+    fn 释放_owner_后恢复可写() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        store.claim_session_owner("s1", "run-a", 0).expect("认领");
+        store.release_session_owner("s1");
+        assert!(store.claimed_sessions().is_empty());
+        save(&store, "s1").expect("释放后回到未认领状态，应可写");
+    }
+
+    #[test]
+    fn 同持有者重复认领幂等_不换掉自己的代次() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        let a = store.claim_session_owner("s1", "run-a", 0).expect("首次");
+        let b = store.claim_session_owner("s1", "run-a", 0).expect("重试");
+        assert_eq!(a.generation, b.generation, "重试不该换掉自己的代次");
+    }
+
+    #[test]
+    fn 会话资源键与项目根_等其它域不共用() {
+        // 共用一个键会让"占住会话"与"占住目录"互相误判。
+        assert_ne!(
+            SessionStore::session_resource("s1"),
+            crate::core::process_coordination::workspace::resource_key(std::path::Path::new("/ws"))
+        );
+    }
+
+    #[test]
+    fn 本进程占着不算冲突_别的进程占着才算() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        store.claim_session_owner("s1", "run-a", 0).expect("认领");
+        assert!(
+            !store.session_held_by_other("s1"),
+            "自己占着自己不算冲突：否则项目删除永远删不掉"
+        );
+
+        // 伪造一条别的 pid 的租约。
+        let path = d.path().join("coord").join("leases").join(format!(
+            "{}.json",
+            crate::core::process_coordination::key_digest("history:s2")
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "session_id": "s2",
+                "root_run_id": "run-x",
+                "resource": "history:s2",
+                "attempt": 0,
+                "generation": 9,
+                "pid": u32::MAX,
+                "acquired_at_ms": 0,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(store.session_held_by_other("s2"), "别的进程占着必须算冲突");
+    }
+
+    /// 双进程夹具的**子进程端**。
+    ///
+    /// 平时（无环境变量）必须原样返回，否则普通 `cargo test` 会凭空多跑一遍。
+    /// 注意父进程**不靠退出码**判成败：`--exact` 没匹配上时 libtest 照样退出 0，
+    /// 只看退出码就会在一个什么都没验证的夹具上**假通过**。真正的信号是结果文件。
+    #[test]
+    fn 双进程子进程_认领会话owner() {
+        let Ok(data) = std::env::var("CW_STORE_DATA") else {
+            return;
+        };
+        let sid = std::env::var("CW_STORE_SESSION").expect("CW_STORE_SESSION");
+        let out = std::env::var("CW_STORE_OUT").expect("CW_STORE_OUT");
+        let store = SessionStore::new(std::path::PathBuf::from(&data));
+        store
+            .claim_session_owner(&sid, "child-run", 0)
+            .expect("子进程认领");
+        std::fs::write(&out, format!("ok pid={}", std::process::id())).expect("写结果");
+    }
+
+    /// #36-C0：删项目守卫在**真第二个进程**占着会话时必须判为冲突。
+    ///
+    /// 同进程内那条 `本进程占着不算冲突_别的进程占着才算` 用的是伪造 pid（`u32::MAX`），
+    /// 证明不了「租约真的跨进程落盘、pid 真的会被另一个人读到」。本条补上这一半：
+    /// 子进程自己建 `SessionStore`、自己认领、自己退出，全程不与父进程共享内存。
+    #[test]
+    fn 真另一个进程占着会话时_删项目守卫判为冲突() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        // 父进程自己也占着一个：自己占的不算冲突，删自己的项目必须照常能删。
+        store
+            .claim_session_owner("s1", "parent-run", 0)
+            .expect("父认领");
+        assert!(!store.session_held_by_other("s1"));
+
+        let out = d.path().join("child.out");
+        let status = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+            .arg("--exact")
+            .arg("core::sessions::store::tests::session_owner_c0::双进程子进程_认领会话owner")
+            .arg("--nocapture")
+            .env("CW_STORE_DATA", d.path())
+            .env("CW_STORE_SESSION", "s2")
+            .env("CW_STORE_OUT", &out)
+            .status()
+            .expect("拉起子进程");
+        assert!(status.success(), "子进程异常退出：{status:?}");
+        let result = std::fs::read_to_string(&out).unwrap_or_else(|e| {
+            panic!("子进程没有产出结果文件（很可能 `--exact` 没匹配上，用例根本没跑）：{e}")
+        });
+        assert!(result.starts_with("ok"), "子进程未完成认领：{result}");
+        let child_pid: u32 = result
+            .trim_start_matches("ok pid=")
+            .parse()
+            .unwrap_or_else(|_| panic!("子进程结果不可解析：{result}"));
+        assert_ne!(child_pid, std::process::id(), "子进程必须是另一个 pid");
+
+        // 真跨进程：父进程读到的是子进程写的租约，于是删项目必须被拒。
+        assert!(
+            store.session_held_by_other("s2"),
+            "另一个进程正占着 s2，级联删掉它正在写的历史不可逆"
+        );
+        // 子进程已退出，但按「崩溃保守 busy」仍算占用——不按 PID 自动回收。
+        assert!(
+            store.session_held_by_other("s2"),
+            "子进程退出后不得自动回收：PID 复用会把别人的租约当成陈旧的"
+        );
+        // 没人占的会话不构成冲突，否则项目永远删不掉。
+        assert!(!store.session_held_by_other("s3"), "没人占的不该拦住删除");
+    }
+
+    #[test]
+    fn 租约文件损坏时按占用处理_不当作空闲() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        let path = d.path().join("coord").join("leases").join(format!(
+            "{}.json",
+            crate::core::process_coordination::key_digest("history:s3")
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ broken").unwrap();
+        assert!(
+            store.session_held_by_other("s3"),
+            "读不出租约时放行，代价是删掉别人正在写的历史"
+        );
+    }
+
+    #[test]
+    fn provisional元数据让还没说话的会话也能被找回来() {
+        // 回归：`session/new` 返回了 id，但索引条目只在 run 的检查点写，
+        // 于是「创建成功、一条消息都没发」的会话在磁盘上根本不存在——
+        // `session/load` 找不到，用户手上的 id 像是凭空给的（AC08 的反面）。
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        assert!(store.get("s-new").is_none(), "前置：还没登记");
+        let roots = vec!["/tmp/ws".to_string()];
+        store
+            .save_provisional_meta("s-new", std::path::Path::new("/tmp/ws"), None, &roots)
+            .unwrap();
+        let meta = store.get("s-new").expect("登记后必须能被查到");
+        assert_eq!(meta.message_count, 0);
+        assert_eq!(
+            meta.roots, roots,
+            "根快照要跟着一起落盘，否则 load 的 cwd 校验无从谈起"
+        );
+        assert!(meta.title.is_empty(), "没消息就没有可命名的内容");
+    }
+
+    #[test]
+    fn provisional重复登记保留首见时间() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        let roots = vec!["/tmp/ws".to_string()];
+        store
+            .save_provisional_meta("s1", std::path::Path::new("/tmp/ws"), None, &roots)
+            .unwrap();
+        let first = store.get("s1").unwrap().created_at;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        store
+            .save_provisional_meta("s1", std::path::Path::new("/tmp/ws"), None, &roots)
+            .unwrap();
+        assert_eq!(
+            store.get("s1").unwrap().created_at,
+            first,
+            "重复登记不得把创建时间重置掉（M7 同一条规矩）"
+        );
+    }
+
+    #[test]
+    fn 历史不存在与历史损坏是两回事() {
+        let d = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(d.path().to_path_buf());
+        assert!(
+            store.is_history_absent("s-empty"),
+            "没有任何历史文件 = 还没发过消息，应读成空转录而不是失败"
+        );
+        assert!(
+            store.load_history("s-empty").is_err(),
+            "读路径本身仍如实报错；判空是调用点按 `is_history_absent` 显式决定的"
+        );
+        let dir = store.history_dir("s-bad");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("0001.jsonl"), b"{ broken").unwrap();
+        assert!(
+            !store.is_history_absent("s-bad"),
+            "有文件就绝不判空——否则真损坏会被静默当成「用户还没说话」"
+        );
+    }
+}

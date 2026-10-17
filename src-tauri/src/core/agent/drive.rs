@@ -1,3 +1,4 @@
+use super::delivery_stop;
 use super::guards::{CompactingGuard, DriveUnwindGuard, lock_ok};
 use super::runtime::{
     AgentCore, CHECKPOINT_EVERY_STEPS, EventSink, Frame, MAX_STEPS, RunTerminal, RunTerminalKind,
@@ -229,7 +230,9 @@ pub async fn run_chat(
 
     // 自动命名（[docs/sessions-and-projects](../../../../docs/sessions-and-projects.md)）：首条含文本消息 → 并行生成精炼标题，
     // 不阻塞本 run；失败静默保留 10 字符兜底
-    if let Some(text) = first_user_text.filter(|t| !t.trim().is_empty()) {
+    if let Some(text) = first_user_text
+        .filter(|t| !t.trim().is_empty() && rt.token_budget.load(Ordering::SeqCst) == 0)
+    {
         let fallback = lock_ok(&rt.title).clone();
         let core_t = core.clone();
         let rt_t = rt.clone();
@@ -260,6 +263,7 @@ pub async fn run_chat(
             )
         }
     };
+    settle_descendants(&core, &rt, &run_id, result.is_err()).await;
     match &result {
         Ok(final_text) => {
             // 保存结果接入 run:done：不干净（拒存 / 剥图 / 丢轮 / P4 的体积告警与熔断）时带 JSON 载荷告知前端
@@ -286,6 +290,13 @@ pub async fn run_chat(
             if let Some(items) = suggest_out {
                 payload["suggestions"] = serde_json::json!(items);
             }
+            // 完成门摘要（#16）：`Done` **不等于**验收通过。事件只**增可选载荷字段**，
+            // 键名 `run:done` 不变；前端据此显示"未通过 / 还差什么"而不是"全部完成"。
+            if let Some(decision) = lock_ok(&rt.last_completion).as_ref() {
+                let summary = decision.summary();
+                payload["acceptance"] = summary.clone();
+                terminal.acceptance = Some(summary);
+            }
             // 保存不干净才带上（干净路径零打扰，前端据此 push 会话内提示）。
             // P4：体积状态（`warned` / `fused`）同样由 `is_clean()` 纳入——`SaveReport.history_status`
             // 随 `to_value` 一起上 wire（形状与索引侧 `SessionMeta.history_status` 同源，前端共用一套文案）
@@ -294,6 +305,7 @@ pub async fn run_chat(
             }
             terminal.history_save = payload.get("history_save").cloned();
             rt.finish_run(terminal);
+            payload["cleanup_done"] = serde_json::json!(rt.cleanup_done.load(Ordering::SeqCst));
             sink.emit(&rt.id, "run:done", payload);
         }
         Err(ProviderError::Cancelled) => {
@@ -324,6 +336,7 @@ pub async fn run_chat(
                     "error": e.to_string(),
                     // [docs/providers-and-network](../../../../docs/providers-and-network.md)：结构化类别（前端据 kind 把鉴权/计费问题引导到供应商设置）
                     "kind": e.kind_tag(),
+                    "cleanup_done": rt.cleanup_done.load(Ordering::SeqCst),
                     "task_run": task_run,
                 }),
             );
@@ -353,6 +366,45 @@ pub async fn run_chat(
             // 本 run 的耗时/TTFT 观测（仅主会话步计入：压缩/命名/子代理/任务走 record，计时全 0）
             *rt.run_timing.lock().unwrap(),
         );
+    }
+}
+
+/// A root may not advertise settled cleanup while its delegated effects are still running.
+async fn settle_descendants(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+    run_id: &str,
+    cancel_now: bool,
+) {
+    let children = || {
+        core.subs
+            .iter()
+            .filter(|entry| {
+                entry.root_session_id.as_deref() == Some(rt.id.as_str())
+                    && entry.root_run_id.as_deref() == Some(run_id)
+            })
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>()
+    };
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(if cancel_now { 0 } else { 10 });
+    while !children().is_empty() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    for child in children() {
+        child.cancel_active();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (!children().is_empty()
+        || rt
+            .workspace_guard
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|guard| Arc::strong_count(guard) > 1))
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
 
@@ -476,6 +528,12 @@ pub fn main_drive_params(prefs: &crate::core::prefs::SessionPrefs) -> DriveParam
         main_session: true,
         ..DriveParams::default()
     };
+    // [#17] `submit_delivery` 只对子 runtime 有意义（向自己的 root_run 交草稿）。
+    // 主会话**不暴露**它：它没有 root_run 可归属，暴露只会让模型对着一个必然被拒的
+    // 工具反复尝试。工具自身也保留拒绝逻辑——排除集是可见性，这里是安全边界。
+    params
+        .exclude_tools
+        .push(crate::tools::submit_delivery::SUBMIT_DELIVERY_TOOL.to_string());
     apply_plan_mode(&mut params, prefs);
     params
 }
@@ -519,6 +577,11 @@ pub struct SubBase {
     pub base_system_extra: String,
     /// 基座 idle_policy（只读角色 = NudgeOnly；与档位解耦，不随档位变化）
     pub idle_policy: IdlePolicy,
+    /// 本子任务承担的职责（[#9](../../../../docs/subagents.md)）。
+    ///
+    /// **与档位正交**：实施按会话档位授权；审查 / 验证是**职责级只读上限**，
+    /// 父会话切 FullAccess 也不解锁——审查者改完代码，这次审查当场失去独立性。
+    pub duty: crate::core::delivery::responsibility::DutyKind,
 }
 
 /// 按**当前父档**从基座重建子代理参数——spawn 与每步重算共用这一条装配路径
@@ -546,11 +609,15 @@ pub fn subagent_drive_params(
     };
     let parent = main_drive_params(parent_prefs);
     params.exclude_tools.extend(parent.exclude_tools);
-    params.exclude_mcp = params.exclude_mcp || parent.exclude_mcp;
+    params.exclude_mcp = params.exclude_mcp
+        || parent.exclude_mcp
+        || base.base_excludes.iter().any(|name| name == "mcp:*");
     if !parent.system_extra.is_empty() {
         params.system_extra.push_str(&parent.system_extra);
     }
     crate::tools::subagent::apply_role_policy(&mut params, &base.role, parent_prefs.approval_mode);
+    // 职责上限**最后**追加且无条件生效：它不是档位派生项，任何档位都不解锁。
+    params.exclude_tools.extend(base.duty.excludes());
     dedup_excludes(&mut params.exclude_tools);
     params
 }
@@ -891,11 +958,19 @@ pub async fn drive_agent(
     crate::provider::RunUsage,
     Option<Vec<String>>,
 ) {
+    if !params.main_session && !rt.prepare_actor_run(run_id) {
+        return (
+            Err(ProviderError::Protocol("actor already running".into())),
+            Default::default(),
+            None,
+        );
+    }
     let sink = core.sink.clone();
     let _injections = params.main_session.then(|| rt.begin_injections());
     // 每 run 重置：system 冻结与历史代际断点锚点只在单个 run 内有效
     //（新 run 重新组装 system / 重定位锚点；run 中途的文件变更在下一条用户消息生效）
     *rt.system_frozen.lock().unwrap() = None;
+    rt.instruction_usage.lock().unwrap().clear();
     *rt.cache_gen_anchor.lock().unwrap() = None;
     // 文本形态 ask 的待剥标注同样只在一个 run 内有效（[docs/chat-and-interface]）：
     // 正常路径由 AskTool 打开卡片时 take 走；但若兜底命中后该调用没走到工具（例如用户在
@@ -947,6 +1022,9 @@ pub async fn drive_agent(
     // suggest 路径产出的跟进建议：经返回值交给 run_chat 并入 run:done
     // （复位 running 后发唯一一次）
     let mut suggest_out: Option<Vec<String>> = None;
+    // 完成门裁决（#16）：**只有这里能产出"可以交付通过"**。
+    // 缺产物 / 缺检查 / 预算耗尽 / 保存失败 / 取消 → 都不是 passed，界面不得显示"全部完成"。
+    let mut completion_out: Option<crate::core::delivery::CompletionDecision> = None;
     // 自动压缩失败冷却：连续失败 ≥2 次后本次 run 内不再尝试，
     // 阈值持续超限时每步不再各堵一个完整超时。
     let mut compact_fail_streak: u32 = 0;
@@ -1308,6 +1386,25 @@ pub async fn drive_agent(
                         attempt = 0;
                         continue 'steps;
                     }
+                    // 完成门（#16）：模型说完了 ≠ 可以交付通过。缺项且预算允许时
+                    // **不收尾**，把缺项写回历史再跑一轮有界修复。
+                    let (stop, decision, budget) = delivery_stop::gate_delivery_stop(
+                        core,
+                        rt,
+                        run_id,
+                        &params,
+                        step + 1,
+                        delivery_stop::StopReason::Text,
+                        run_token.is_cancelled(),
+                    );
+                    if stop == delivery_stop::StopAction::Repair {
+                        delivery_stop::inject_repair_feedback(rt, &decision, &budget);
+                        completion_out = Some(decision);
+                        force_continue = true;
+                        attempt = 0;
+                        continue 'steps;
+                    }
+                    completion_out = Some(decision);
                     break 'steps;
                 }
                 TextTurnAction::Continue => {
@@ -1492,9 +1589,41 @@ pub async fn drive_agent(
                 }
                 continue 'steps;
             }
+            // 完成门（#16）：`suggest_items` 提前返回与 `force_report` 收口都汇到
+            // 这里，故**建议项不是绕过完成门的旁路**——缺产物时同样不得 passed。
+            let stop_reason = if suggest_out.is_some() {
+                delivery_stop::StopReason::SuggestItems
+            } else {
+                delivery_stop::StopReason::BatchDone
+            };
+            let (stop, decision, budget) = delivery_stop::gate_delivery_stop(
+                core,
+                rt,
+                run_id,
+                &params,
+                step + 1,
+                stop_reason,
+                run_token.is_cancelled(),
+            );
+            if stop == delivery_stop::StopAction::Repair {
+                delivery_stop::inject_repair_feedback(rt, &decision, &budget);
+                completion_out = Some(decision);
+                force_continue = true;
+                attempt = 0;
+                // 修复轮不携带建议项：建议是给用户的，不是给修复的。
+                suggest_out = None;
+                if params.emit_events {
+                    sink.emit(
+                        &rt.id,
+                        "run:suggestions",
+                        serde_json::json!({"session": rt.id, "items": []}),
+                    );
+                }
+                continue 'steps;
+            }
+            completion_out = Some(decision);
             break 'steps;
         }
-
         if step % CHECKPOINT_EVERY_STEPS == CHECKPOINT_EVERY_STEPS - 1 {
             let _ = checkpoint(core, rt).await;
         }
@@ -1513,6 +1642,24 @@ pub async fn drive_agent(
         Ok(()) => Ok(final_text),
         Err(e) => Err(e),
     };
+    // 异常 / 取消 / panic 路径按**原运行终态**停止，但**附上未完成验收**：
+    // 完成门不因这些路径再发起模型调用（[docs/plan-and-approval]）。
+    // 这里用 `max_steps` 作为 next_step，必然走到"不再开修复 run"的分支。
+    if completion_out.is_none() {
+        completion_out = Some(
+            delivery_stop::gate_delivery_stop(
+                core,
+                rt,
+                run_id,
+                &params,
+                params.max_steps,
+                delivery_stop::StopReason::MaxSteps,
+                run_token.is_cancelled(),
+            )
+            .1,
+        );
+    }
+    *rt.last_completion.lock().unwrap() = completion_out.clone();
     (result, run_usage, suggest_out)
 }
 
@@ -1591,6 +1738,21 @@ async fn run_llm_turn(
     attempt: &mut u32,
     run_usage: &mut crate::provider::RunUsage,
 ) -> Result<crate::provider::dto::Assembled, ProviderError> {
+    // A finite budget authorizes one provider request at a time across the tree.
+    // This guard ends before any tool runs, including subagent spawn/wait.
+    let _budget_guard = if rt.token_budget.load(Ordering::SeqCst) > 0 {
+        Some(tokio::select! {
+            _ = run_token.cancelled() => return Err(ProviderError::Cancelled),
+            guard = rt.token_budget_gate.lock() => guard,
+        })
+    } else {
+        None
+    };
+    let block_unknown_budget = || {
+        rt.token_budget_uncertain.store(true, Ordering::SeqCst);
+        *rt.interaction_blocked.lock().unwrap() = Some("token_budget_usage_unknown".into());
+    };
+    let configured_max_tokens = req.model.max_tokens;
     // 流停滞阈值（serde default 300s；本地大上下文模型预首 token 慢可调大）
     let stall_timeout = Duration::from_secs(
         core.cfg
@@ -1600,6 +1762,35 @@ async fn run_llm_turn(
             .clamp(5, 3600),
     );
     loop {
+        // Retry attempts consume the same budget and must be readmitted after
+        // every completed response, including a billable empty response.
+        if run_token.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        let token_limit = rt.token_budget.load(Ordering::SeqCst);
+        if token_limit > 0 {
+            if rt.token_budget_uncertain.load(Ordering::SeqCst) {
+                block_unknown_budget();
+                return Err(ProviderError::Cancelled);
+            }
+            let used = rt.token_spent.load(Ordering::SeqCst);
+            let estimated_input = crate::util::token_est::est_tokens_text(&req.system_core)
+                .saturating_add(crate::util::token_est::est_tokens_text(&req.system_extra))
+                .saturating_add(crate::util::token_est::est_tokens_text(
+                    &serde_json::to_string(&req.tools).unwrap_or_default(),
+                ))
+                .saturating_add(crate::util::token_est::est_tokens_text(
+                    &serde_json::to_string(&req.messages).unwrap_or_default(),
+                ));
+            let remaining = token_limit
+                .saturating_sub(used)
+                .saturating_sub(estimated_input);
+            if remaining == 0 {
+                *rt.interaction_blocked.lock().unwrap() = Some("token_budget".into());
+                return Err(ProviderError::Cancelled);
+            }
+            req.model.max_tokens = configured_max_tokens.min(remaining.min(u32::MAX as u64) as u32);
+        }
         // 本**尝试**的计时起点（[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）：
         // 必须在环内——环外的 `step_started` 含上一步的退避等待，拿它当 duration 会把重试等待算进去。
         let attempt_started = std::time::Instant::now();
@@ -1607,7 +1798,8 @@ async fn run_llm_turn(
         let collector = tokio::spawn(collect_deltas(rx, rt.stream.clone(), attempt_started));
         // 多 key 池：每次尝试挑一把 key（鉴权/瞬时失败冷却并 failover）；
         // 冷却按 provider 粒度共享（[docs/providers-and-network](../../../../docs/providers-and-network.md)）
-        let resolved_keys = crate::host::keyring::resolve_keys(model);
+        let resolved_keys =
+            crate::core::credentials::resolve_keys(core.credentials.as_ref(), model);
         let (key_idx, key) = core
             .key_pool
             .pick(&model.provider_id, &resolved_keys)
@@ -1642,11 +1834,18 @@ async fn run_llm_turn(
         if stalled {
             if run_token.is_cancelled() {
                 // 用户停止与停滞同帧就绪：按用户取消收尾，不误报停滞
+                if rt.token_budget.load(Ordering::SeqCst) > 0 {
+                    rt.token_budget_uncertain.store(true, Ordering::SeqCst);
+                }
                 let _ = collector.await;
                 return Err(ProviderError::Cancelled);
             }
             attempt_token.cancel();
             let _ = collector.await;
+            if rt.token_budget.load(Ordering::SeqCst) > 0 {
+                block_unknown_budget();
+                return Err(ProviderError::Cancelled);
+            }
             *attempt += 1;
             rt.stream.reset(); // M4：重试前丢弃半刷残帧
             if !retry::should_retry(&ProviderError::Server("流停滞".into()), *attempt) {
@@ -1676,6 +1875,18 @@ async fn run_llm_turn(
                 core.key_pool
                     .report(&model.provider_id, &resolved_keys, key_idx, None);
                 *run_usage = *run_usage + usage;
+                let limit = rt.token_budget.load(Ordering::SeqCst);
+                let spent = rt
+                    .token_spent
+                    .fetch_add(
+                        usage
+                            .prompt_total(&model.api_format)
+                            .saturating_add(usage.output),
+                        Ordering::SeqCst,
+                    )
+                    .saturating_add(usage.prompt_total(&model.api_format))
+                    .saturating_add(usage.output);
+                let token_budget_exceeded = limit > 0 && spent > limit;
                 // 上游回报的真实输入量（口径按协议分叉，见 RunUsage::prompt_total）：自动压缩
                 // 触发同时看它——本地估算对图片 base64 少算 2.3 倍
                 rt.last_input_tokens
@@ -1689,6 +1900,10 @@ async fn run_llm_turn(
                     .unwrap()
                     .add_step(Some(duration_ms), ttft_ms);
                 if params.emit_events {
+                    // 上下文窗口取压缩判定的**同一个**事实源（`context::breakdown`，
+                    // 内部按 30s 缓存），不另算一遍：两处各算一次必然漂移，
+                    // 而漂移的表现是「客户端的进度条说还有 30%，其实早就该压缩了」。
+                    let context_window = context::breakdown(core, rt).await.context_window;
                     sink.channel_frame(
                         &rt.id,
                         &Frame::Usage {
@@ -1698,8 +1913,23 @@ async fn run_llm_turn(
                             cache_write: usage.cache_write,
                             duration_ms: Some(duration_ms),
                             ttft_ms,
+                            context_used: Some(usage.prompt_total(&model.api_format)),
+                            context_window: Some(context_window),
                         },
                     );
+                }
+                if limit > 0
+                    && (usage.prompt_total(&model.api_format) == 0
+                        || (usage.output == 0 && !asm.is_empty()))
+                {
+                    // Preserve only reported usage. Missing cost facts never imply
+                    // a free request or authorize another paid attempt.
+                    block_unknown_budget();
+                    return Err(ProviderError::Cancelled);
+                }
+                if token_budget_exceeded {
+                    *rt.interaction_blocked.lock().unwrap() = Some("token_budget".into());
+                    return Err(ProviderError::Cancelled);
                 }
                 // 空响应按可重试处理
                 if asm.is_empty()
@@ -1746,10 +1976,20 @@ async fn run_llm_turn(
             }
             Err(ProviderError::Cancelled) => {
                 let _ = collector.await;
+                if rt.token_budget.load(Ordering::SeqCst) > 0 {
+                    rt.token_budget_uncertain.store(true, Ordering::SeqCst);
+                    if !run_token.is_cancelled() {
+                        block_unknown_budget();
+                    }
+                }
                 return Err(ProviderError::Cancelled);
             }
             Err(e) => {
                 let _ = collector.await;
+                if rt.token_budget.load(Ordering::SeqCst) > 0 {
+                    block_unknown_budget();
+                    return Err(ProviderError::Cancelled);
+                }
                 if e.is_bad_request() && !*sanitized_once {
                     *sanitized_once = true;
                     // 400 语义分类（每次请求都能自愈的关键，[docs/providers-and-network](../../../../docs/providers-and-network.md)）：
@@ -1886,7 +2126,7 @@ async fn step_auto_compact(
 ) {
     // 只覆盖主会话（子代理 / 任务运行的 emit_events=false 在此早退，历史上就不跑自动压缩）：
     // 子代理读大图仍可能直接顶到上游上限，其上下文安全依赖调用方控制步数/范围。
-    if !params.emit_events {
+    if !params.emit_events || rt.token_budget.load(Ordering::SeqCst) > 0 {
         return;
     }
     let bd = context::breakdown(core, rt).await;
@@ -2902,7 +3142,7 @@ fn finish_cancelled(
     core.sink.emit(
         &rt.id,
         "run:cancelled",
-        serde_json::json!({ "session": rt.id, "run_id": run_id, "task_run": task_run }),
+        serde_json::json!({ "session": rt.id, "run_id": run_id, "task_run": task_run, "cleanup_done": rt.cleanup_done.load(Ordering::SeqCst) }),
     );
 }
 
@@ -2943,10 +3183,14 @@ pub(super) async fn checkpoint(
         &rt.roots,
         &history,
     ) {
-        Ok(report) => Some(report),
+        Ok(report) => {
+            rt.save_clean.store(report.is_clean(), Ordering::SeqCst);
+            Some(report)
+        }
         Err(e) => {
             // 会话日志（不受全局日志级别过滤，恒开启）留痕，便于用户事后排查
             session_log::warn(rt, &format!("检查点保存失败：{e}"));
+            rt.save_clean.store(false, Ordering::SeqCst);
             Some(SaveReport::rejected())
         }
     }

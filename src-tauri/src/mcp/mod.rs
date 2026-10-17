@@ -13,8 +13,9 @@
 //!
 //! # 会话隔离（本次重构的核心）
 //!
-//! 连接按 `(作用域, 项目 id, server 名, 配置路径身份)` 作键，每个会话登记自己的可见集，
-//! 工具注入与调用都先过可见集校验 —— 项目 A 的 MCP 工具不会再出现在项目 B 的请求里。
+//! 连接按 `(作用域, 项目 id, server 名, 配置路径身份)` 作键，每个会话登记
+//! 自己的可见集，工具注入与调用都先过可见集校验 —— 项目 A 的 MCP 工具不会再出现在
+//! 项目 B 的请求里。配置文件路径参与池键身份，不同来源的授权与连接不会混用。
 
 mod config;
 mod error;
@@ -27,9 +28,9 @@ mod trust;
 
 pub use config::{
     CONFIG_COMMIT, ConfigIssue, DEFAULT_TIMEOUT_MS, IssueLevel, McpServerConfig, McpTransport,
-    MergedServer, Scope, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode, default_doc_text,
-    global_scope, load_scope, merge_scopes, parse_scope_text, project_scope, read_scope_text,
-    scope_version, source_identity, validate_server,
+    MergedServer, Scope, ScopeCommitGuard, ScopeDoc, ScopeRef, ToolFilter, ToolFilterMode,
+    default_doc_text, global_scope, load_scope, merge_scopes, parse_scope_text, project_scope,
+    read_scope_text, scope_version, source_identity, validate_server,
 };
 pub use error::{McpError, McpErrorKind};
 pub use manager::{

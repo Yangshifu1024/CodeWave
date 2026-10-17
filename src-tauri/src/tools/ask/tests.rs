@@ -24,6 +24,7 @@ fn ask_ctx_mode(mode: crate::core::prefs::ApprovalMode) -> ToolCtx {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
@@ -155,6 +156,7 @@ fn args_deserialize_camel_case_skip_analysis() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let path = save_plan_file(&ctx, "## 改动点\n1. 调整 A\n2. 验证 B").expect("落盘应成功");
@@ -199,6 +201,7 @@ fn plan_file_registered_as_plan_artifact_with_double_layer_path() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
 
@@ -659,6 +662,7 @@ async fn drive_ask_with_answer(ctx: &ToolCtx, args: Value, answer: Value) -> Too
         batch_id: ctx.batch_id.clone(),
         call_index: ctx.call_index,
         call_key: ctx.call_key.clone(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let handle = tokio::spawn(async move { AskTool.run(&tool_ctx, args).await });

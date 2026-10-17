@@ -457,7 +457,7 @@ async fn stale_retirement_preserves_a_new_configuration_approved_before_reconcil
         approve(&core, ReviewAction::Remember).await;
         let key = launch_key(&core, &global_scope(dir.path()), None, "fixture").unwrap();
         let permit = core.mcp.launch.connection(&key, &cfg).unwrap();
-        let ready = McpManager::spawn_connect(&key, &cfg, reqwest::Client::new(), &permit)
+        let ready = McpManager::spawn_connect(&key, &cfg, reqwest::Client::new(), &permit, None)
             .await
             .unwrap();
         {

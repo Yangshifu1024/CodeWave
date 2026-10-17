@@ -343,6 +343,14 @@ export default {
     resourceSource_workspace_claude: "工作区 Claude 兼容目录", resourceSource_workspace_agents: "工作区 Agents 兼容目录",
     resourceSource_global_managed: "全局托管目录", resourceSource_project_managed: "项目托管目录",
     resourceVersion: "版本：{{version}}", resourceReadFailed: "读取资源来源失败",
+    resourceTitle: "指令资源许可", resourceRefresh: "刷新资源许可", resourceReview: "审阅指令版本",
+    resourceSource_workspace_file: "工作区文件",
+    resourceOnce: "本次会话允许", resourceRemember: "记住此版本", resourceRevoke: "撤销指令许可", resourceInspect: "检查指令许可结果",
+    resourceRemembered: "已记住版本", resourceAllowed: "本次会话已允许", resourceUntrusted: "尚未许可",
+    resourceUnknown: "许可结果不明，请检查原操作，勿重复批准。",
+    resourceHint: "项目指令、图谱、经验、记忆与外部技能需要单独许可。普通读取不授予指令权限；内置资源已信任。本次许可只属于当前会话及其子代理，退出后失效。",
+    resourceReviewHint: "确认将允许此来源的精确版本作为模型指令。本次会话许可不新增或撤销持久记录；已有记住许可须先撤销。许可不会扩大文件、命令或网络权限。",
+    resourceActive: "活动运行已使用下列版本；撤销不清除历史或改变已冻结提示。停止后下一轮重新准入。",
     skillRunningDisabled: "当前运行：禁用", skillRunningEnabled: "当前运行：启用",
     skillDraftDisabled: "待保存：禁用", skillDraftEnabled: "待保存：启用",
     skillShadowSources: "被覆盖的来源（{{n}}）", skillMissing: "来源文件不存在，保留禁用配置供检查或重新启用。",
@@ -583,6 +591,19 @@ export default {
   stats: { title: "Token 用量（近 30 天）", empty: "暂无数据", total: "合计", topModel: "最常用模型", cacheHit: "缓存命中 {{read}} tokens（命中率 {{rate}}）· 缓存写入 {{write}} tokens", kindMain: "主会话", kindSub: "子代理", kindTask: "计划任务", kindCompact: "上下文压缩", kindTitle: "自动命名", sources: "来源（输出 tokens）：{{list}}", avgRate: "平均生成速率", avgStepMs: "均步耗时", avgTtft: "平均 TTFT" },
   skills: {
     detailUse: "使用", detailClose: "关闭", detailWhen: "触发时机", detailOrigin: "来源", detailLoading: "加载正文中…",
+  },
+
+  // 交付验收（#16 完成门）：运行终态 ≠ 验收结论，这块只读投影专门消除这个误解。
+  acceptance: {
+    title: "交付验收", loading: "读取验收状态…", failed: "读取验收状态失败：{{error}}",
+    unverified: "未验证：本会话没有可用的验收记录",
+    passed: "已通过验收", repairBudget: "已用修复轮 {{used}} / {{max}}",
+    waived: "含 {{n}} 项用户豁免", gaps: "还差这些", hint: "运行结束不等于验收通过；以这里的状态为准。",
+    decision: { allow: "已通过", repair: "修复中", blocked: "未完成", cancelled: "已取消" },
+    status: {
+      pending: "待检查", passed: "通过", failed: "未通过", blocked: "阻塞",
+      stale: "证据失效", waived: "已豁免", cancelled: "已取消",
+    },
   },
   rightbar: {
     views: "右侧栏视图",

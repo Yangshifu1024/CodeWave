@@ -578,7 +578,17 @@ impl ConfigState {
 
     /// 从磁盘加载配置；解析失败回退默认。
     pub fn load() -> Self {
-        let path = Self::config_path();
+        Self::load_from(&data_dir())
+    }
+
+    /// 从**指定数据根**加载配置；解析失败回退默认。
+    ///
+    /// #31 的 `--profile-dir` / #55 的隔离评测根需要这条：不带根的 [`Self::load`]
+    /// 永远读 `~/.codewave/config.json`，于是「隔离 profile」里会话是隔离的、
+    /// 供应商配置却仍来自真实全局配置——凭据跟着走了，隔离等于没做。
+    /// 门面（[`crate::core::host_services::bootstrap`]）一律走这条。
+    pub fn load_from(dir: &std::path::Path) -> Self {
+        let path = dir.join("config.json");
         let mut cfg = match fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<ConfigState>(&bytes) {
                 Ok(cfg) => cfg,

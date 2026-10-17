@@ -17,8 +17,14 @@ pub mod skills;
 mod tools;
 mod util;
 
+// Desktop subprocess helpers must dispatch before Tauri initializes.
+pub use crate::core::process_coordination::guardian::guardian_entry;
+
+#[allow(unused_imports)]
 use core::agent::AgentCore;
+#[allow(unused_imports)]
 use core::config::ConfigState;
+#[allow(unused_imports)]
 use core::sessions::SessionStore;
 use host::events::{ChannelRegistry, TauriSink};
 use std::sync::Arc;
@@ -105,7 +111,6 @@ pub fn run() {
             // 日志级别跟随 config（RUST_LOG 环境变量在场时优先）+ 过期滚动日志清理（[docs/sessions-and-projects](../../docs/sessions-and-projects.md)）
             core::logging::apply_config_level(&cfg.log.level);
             core::logging::prune_expired_logs();
-            let client = provider::proxy::build_client(&cfg);
             let data_dir = crate::core::config::data_dir();
             // quota.json 启动期自愈（[docs/providers-and-network](../../docs/providers-and-network.md)）：
             // 与登录清理 / 幽灵会话清扫同类的一次性维护，同步跑即可（单文件、个位数条目、微秒级，
@@ -118,14 +123,19 @@ pub fn run() {
                 tracing::warn!("quota.json 启动自愈：{healed:?}");
             }
             let store = Arc::new(SessionStore::new(data_dir.clone()));
+            // 跨进程共享协调（#36-C0）：启动时**向前滚动**未完成的共享事务。
+            // 崩在 rename 中途的写必须被补完，而不是留一半让本次启动读到一个自相矛盾的共享状态。
+            match core::process_coordination::recover_shared_transactions(&data_dir) {
+                Ok(rolled) if !rolled.is_empty() => {
+                    tracing::info!("启动共享事务恢复：向前滚动 {} 笔", rolled.len());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!("共享事务恢复失败，为避免继续写入不一致状态而停止启动：{e}").into());
+                }
+            }
             // 存量修复：checkpoint 曾把 sub_*/task_* 运行写进主索引（untitled 幽灵会话）——启动时清扫
             store.purge_non_session_entries();
-            // 崩溃恢复（批1）：先按上次退出遗留的运行标记，把仍在 running 的会话标为中断，再建本次标记
-            // （顺序不可颠倒：先建 marker 会把本次启动误判为崩溃）
-            core::sessions::interrupt::recover_after_crash(&store, &data_dir);
-            if let Err(e) = core::sessions::interrupt::create_marker(&data_dir) {
-                tracing::warn!("运行标记写入失败（本次崩溃检测退化）：{e}");
-            }
             // 会话保留期清理（[docs/sessions-and-projects](../../docs/sessions-and-projects.md)）：保留期为「不清理」时什么都不做。
             // 先**同步**挑候选（只读索引——避免前端恢复 Tab 先刷新「最近打开时间」导致结果随机），
             // 再用 tauri::async_runtime 异步执行删除：绝不阻塞启动，失败只记告警。
@@ -160,18 +170,17 @@ pub fn run() {
                     .await;
                 });
             }
-            // 事件汇：TauriSink 外包一层中断观察——run 收尾（成功/失败/取消）把索引 running 落回 false
-            let tauri_sink: Arc<dyn core::agent::EventSink> =
+            // Desktop core composition retains injected credentials, trust and coordination.
+            let sink: Arc<dyn core::agent::EventSink> =
                 Arc::new(TauriSink::new(handle, channels.clone()));
-            let sink: Arc<dyn core::agent::EventSink> = Arc::new(
-                core::sessions::interrupt::InterruptWatchSink::new(tauri_sink, store.clone()),
-            );
-            let mut agent = AgentCore::new(cfg, sink, store, client, data_dir.clone());
-            agent.mcp = Arc::new(mcp::McpManager::with_authority(
-                mcp::DEFAULT_MAX_SERVERS,
-                Arc::new(core::trust::TrustStore::new(data_dir.clone(), Arc::new(host::trust::SystemTrustBackend))),
-            ));
-            let core = Arc::new(agent);
+            let mut services = core::host_services::HostServices::desktop_like(
+                sink, Arc::new(host::trust::SystemTrustBackend));
+            services.coordinator = core::process_coordination::FileCoordinator::new(&data_dir);
+            let boot = core::host_services::bootstrap(
+                &core::host_services::BootstrapOptions::new(data_dir.clone()),
+                services,
+            ).map_err(|e| anyhow::anyhow!("核心装配失败：{e}"))?;
+            let core = boot.core;
             let authority_watch = Arc::downgrade(&core.mcp);
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -441,6 +450,11 @@ pub fn run() {
             host::commands::list_agents,
             host::commands::list_skills,
             host::commands::inspect_skills,
+            host::commands::inspect_instruction_resources,
+            host::commands::prepare_instruction_review,
+            host::commands::confirm_instruction_review,
+            host::commands::instruction_review_operation,
+            host::commands::discard_instruction_review,
             host::commands::get_skill,
             host::commands::toggle_skill,
             host::commands::reload_skills,
@@ -470,6 +484,7 @@ pub fn run() {
             host::commands::set_ui_state,
             host::commands::list_running_sessions,
             host::commands::get_activity_snapshot,
+            host::commands::get_delivery_projection,
             host::commands::get_activity_ask,
             host::commands::resolve_exit_request,
             host::commands::clear_session_interrupt,

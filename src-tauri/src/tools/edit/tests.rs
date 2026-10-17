@@ -1,5 +1,30 @@
 use super::*;
 use crate::tools::{Tool, ToolCtx};
+use serde_json::json;
+
+/// 新建干净的 core/runtime（返回 TempDir 以保活）。diff 映射用例复用。
+fn setup(id: &str) -> (ToolCtx, tempfile::TempDir, tempfile::TempDir) {
+    let ws = tempfile::tempdir().unwrap();
+    let dd = tempfile::tempdir().unwrap();
+    let roots = super::super::pathutil::WriteRoots {
+        workspace: std::fs::canonicalize(ws.path()).unwrap(),
+        extra: vec![],
+        data_dir: std::fs::canonicalize(dd.path()).unwrap(),
+        project_dir: None,
+    };
+    let core = crate::core::agent::test_support::make_core(&roots);
+    let rt = core.get_or_create_session(id, roots.workspace.clone(), None, vec![], None, vec![]);
+    let ctx = ToolCtx {
+        core,
+        rt,
+        batch_id: "b".into(),
+        call_index: 0,
+        call_key: "b:0".into(),
+        provider_call_id: String::new(),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    };
+    (ctx, ws, dd)
+}
 
 /// [docs/testing](../../../../docs/testing.md)#9：min_indent 必须按字符计数（与 strip_indent 的 chars().skip(n) 口径一致）——
 /// 按字节统计会把 U+00A0 等多字节空白过度剥除伤及内容。
@@ -32,6 +57,7 @@ async fn edit_registers_artifact_with_root_owner() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let f = ws.path().join("doc.md");
@@ -84,6 +110,7 @@ async fn task_runtime_skips_artifact_registration() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let f = ws.path().join("doc.md");
@@ -160,6 +187,7 @@ async fn full_edit_flow_with_rollback() {
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     };
     let tool = EditTool;
@@ -204,6 +232,7 @@ fn test_ctx(
         batch_id: "b".into(),
         call_index: 0,
         call_key: "b:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
@@ -691,4 +720,142 @@ async fn edit_puts_post_write_check_into_data_per_file() {
         "检查结论不得再走 warnings：{:?}",
         out.warnings
     );
+}
+
+// ── diff 映射（#36 AC03）───────────────────────────────────────────
+
+/// edit 必须把**改前/改后整份内容**与绝对路径记进 outcome，供宿主展示 diff。
+///
+/// 断言落在「客户端拿到的那份事实」上：路径绝对、`old_text` 是改前全文、
+/// `new_text` 与落盘内容一致——返回非空但内容错（只记片段、路径相对化）在
+/// 真实客户端上一样是错的 diff。
+#[tokio::test]
+async fn edit_记录改前改后整份内容与绝对路径() {
+    let (ctx, ws, _dd) = setup("diff-basic");
+    std::fs::write(ws.path().join("a.txt"), "第一行\n第二行\n第三行\n").unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            json!({"files":[{"path":"a.txt","changes":[{"oldText":"第二行\n","newText":"改过的第二行\n"}]}]}),
+        )
+        .await;
+    assert!(out.ok, "{out:?}");
+    assert_eq!(out.diffs.len(), 1, "改一个文件只记一条：{:?}", out.diffs);
+    let d = &out.diffs[0];
+    assert_eq!(
+        d.old_text.as_deref(),
+        Some("第一行\n第二行\n第三行\n"),
+        "旧侧必须是改前全文"
+    );
+    assert_eq!(d.new_text, "第一行\n改过的第二行\n第三行\n");
+    // 路径必须是绝对路径（文件 diff 元数据约定），且真实指向被改的文件
+    let p = std::path::PathBuf::from(&d.path);
+    assert!(p.is_absolute(), "路径必须绝对：{}", d.path);
+    assert_eq!(p.file_name().unwrap(), "a.txt");
+    // 与落盘内容一致——diff 和真实文件必须说同一件事
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), d.new_text);
+}
+
+/// 多文件编辑：一条 diff 对应一个文件，顺序与入参一致，**不合并**。
+#[tokio::test]
+async fn edit_多文件_一条文件一块_diff() {
+    let (ctx, ws, _dd) = setup("diff-multi");
+    std::fs::write(ws.path().join("a.txt"), "a0\n").unwrap();
+    std::fs::write(ws.path().join("b.txt"), "b0\n").unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            json!({"files":[
+                {"path":"a.txt","changes":[{"oldText":"a0\n","newText":"a1\n"}]},
+                {"path":"b.txt","changes":[{"oldText":"b0\n","newText":"b1\n"}]}
+            ]}),
+        )
+        .await;
+    assert!(out.ok, "{out:?}");
+    assert_eq!(out.diffs.len(), 2, "两个文件必须是两条：{:?}", out.diffs);
+    assert!(
+        out.diffs[0].path.ends_with("a.txt"),
+        "{}",
+        out.diffs[0].path
+    );
+    assert!(
+        out.diffs[1].path.ends_with("b.txt"),
+        "{}",
+        out.diffs[1].path
+    );
+    assert_eq!(out.diffs[1].new_text, "b1\n");
+    assert_eq!(out.diffs[1].old_text.as_deref(), Some("b0\n"));
+}
+
+/// 失败的编辑**不留 diff**：整体回滚了就没有任何文件被改过，
+/// 记下 diff 等于凭空报告一次修改。
+#[tokio::test]
+async fn edit_失败时不留_diff() {
+    let (ctx, ws, _dd) = setup("diff-fail");
+    std::fs::write(ws.path().join("a.txt"), "a0\n").unwrap();
+    // oldText 命中不到 → E_EDIT_FAILED
+    let out = EditTool
+        .run(
+            &ctx,
+            json!({"files":[{"path":"a.txt","changes":[{"oldText":"不存在的行\n","newText":"x\n"}]}]}),
+        )
+        .await;
+    assert!(!out.ok, "该失败");
+    assert!(out.diffs.is_empty(), "失败调用不得记 diff：{:?}", out.diffs);
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("a.txt")).unwrap(),
+        "a0\n"
+    );
+}
+
+/// 多文件里有一个失败 → 整体回滚，两条 diff 都不记。
+#[tokio::test]
+async fn edit_多文件中一项失败时整体不留_diff() {
+    let (ctx, ws, _dd) = setup("diff-multi-fail");
+    std::fs::write(ws.path().join("a.txt"), "a0\n").unwrap();
+    std::fs::write(ws.path().join("b.txt"), "b0\n").unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            json!({"files":[
+                {"path":"a.txt","changes":[{"oldText":"a0\n","newText":"a1\n"}]},
+                {"path":"b.txt","changes":[{"oldText":"对不上\n","newText":"b1\n"}]}
+            ]}),
+        )
+        .await;
+    assert!(!out.ok, "该失败");
+    assert!(
+        out.diffs.is_empty(),
+        "回滚后不得留下任何 diff：{:?}",
+        out.diffs
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("a.txt")).unwrap(),
+        "a0\n",
+        "a 必须已回滚"
+    );
+}
+
+/// 超预算的大文件**不记 diff**，但编辑本身照常成功——不得因为记不下 diff 就改行为。
+#[tokio::test]
+async fn edit_超预算文件不记_diff_但编辑照常成功() {
+    let (ctx, ws, _dd) = setup("diff-budget");
+    let big = format!(
+        "x\n{}",
+        "z".repeat(crate::tools::DIFF_SIDE_BUDGET_BYTES + 10)
+    );
+    std::fs::write(ws.path().join("big.txt"), &big).unwrap();
+    let out = EditTool
+        .run(
+            &ctx,
+            json!({"files":[{"path":"big.txt","changes":[{"oldText":"x\n","newText":"y\n"}]}]}),
+        )
+        .await;
+    assert!(out.ok, "编辑本身不该失败：{out:?}");
+    assert!(
+        out.diffs.is_empty(),
+        "超预算必须整条不记：{:?}",
+        out.diffs.len()
+    );
+    assert!(out.data["line_changes"].is_array(), "行数统计照常产出");
 }

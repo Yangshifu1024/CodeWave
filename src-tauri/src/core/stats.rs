@@ -1,10 +1,12 @@
 //! token 统计（[docs/technical-design](../../../docs/technical-design.md)）：异步有界队列（2048；满则丢弃并计数）→ 按天落盘
 //! stats/YYYY-MM-DD.json；保留 90 天；查询侧读时聚合。
 
+use crate::core::coordinator::{AcquireRequest, Lease};
+use crate::core::process_coordination::LeaseStore;
 use crate::util::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -251,12 +253,33 @@ impl StatsCollector {
 }
 
 /// 冲刷 pending 各日数据：与磁盘同日旧文件逐桶合并后原子写；随后清理 90 天前过期文件。
-fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>) {
+///
+/// # #36-C0：跨进程读改写必须持租约
+///
+/// 「读当日旧文件 → 合并本次增量 → 整份写回」是典型的读改写。两个实例各攒各的用量、
+/// 同时冲刷同一天时，后写者读到的是**对方还没写**的旧文件，于是双方各自那份增量里
+/// 有对方那一份被整份覆盖——用量统计静默少算，且没有任何报错可查。
+/// `atomic_write` 只保证「写的那一下不撕裂」，**不**保证「读到的不是别人的旧值」。
+///
+/// 取不到租约时**保留 pending 而不是清空**：宁可下一轮重试，也不能把还没落盘的用量丢掉。
+/// 落盘失败同理——旧实现对两种失败一视同仁地 `pending.clear()`，
+/// 那等于把一次 IO 抖动变成一段永久的统计缺口。
+fn flush(stats_dir: &Path, pending: &mut HashMap<String, DailyStats>) {
     if pending.is_empty() {
         return;
     }
+    let store = LeaseStore::new(&coord_root_of(stats_dir));
+    let mut committed: Vec<String> = Vec::new();
     for (date, day) in pending.iter() {
-        // 读旧数据合并（多次启动 / 未冲刷的遗留）
+        let lease = match acquire_day(&store, stats_dir, date) {
+            Ok(l) => l,
+            Err(e) => {
+                // 不重试：对方那把租约只持有毫秒级，下一次冲刷自然重来，
+                // 不必在这条后台任务的线程上阻塞等待。
+                tracing::warn!("统计冲刷跳过（{date}）：{e}；保留待写数据下轮重试");
+                continue;
+            }
+        };
         let path = stats_dir.join(format!("{date}.json"));
         let mut merged = day.clone();
         if let Ok(text) = std::fs::read_to_string(&path)
@@ -278,11 +301,28 @@ fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>)
         if let Ok(bytes) = serde_json::to_vec_pretty(&merged)
             && let Err(e) = atomic_write(&path, &bytes)
         {
-            tracing::warn!("统计落盘失败（{date}）：{e}");
+            // 写失败就把这一天的 pending 留着：磁盘没变，下轮重读重并不会重复计数。
+            tracing::warn!("统计落盘失败（{date}）：{e}；保留待写数据下轮重试");
+        } else {
+            committed.push(date.clone());
+        }
+        if let Err(e) = store.release(&lease)
+            && e.code != "no_lease"
+        {
+            tracing::warn!(
+                "统计租约释放失败（{date}，generation {}）：{e}",
+                lease.generation
+            );
         }
     }
-    pending.clear();
-    // 90 天保留期清理
+    for date in committed {
+        pending.remove(&date);
+    }
+    // 90 天保留期清理。
+    //
+    // **刻意不加租约**：它只删 90 天前的文件，而写入侧永远只写「今天」，
+    // 两者在数据集上不相交；查询侧读到 ENOENT 也是正常返回。
+    // 给它套一把锁只会让长间隔的清理去和真实的读改写争用，没有收益。
     if let Ok(rd) = std::fs::read_dir(stats_dir) {
         let cutoff = chrono::Local::now() - chrono::Duration::days(RETAIN_DAYS);
         for e in rd.flatten() {
@@ -298,6 +338,32 @@ fn flush(stats_dir: &std::path::Path, pending: &mut HashMap<String, DailyStats>)
             }
         }
     }
+}
+
+/// 协调根：`stats/` 的父目录下的 `coord/`——与 [`crate::core::coordinator`] 的数据根一致。
+fn coord_root_of(stats_dir: &Path) -> PathBuf {
+    stats_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("coord")
+}
+
+/// 申请某一天的统计写租约。键按**目录 + 日期**分域，两个实例对同一天必然算出同一个键。
+fn acquire_day(
+    store: &LeaseStore,
+    stats_dir: &Path,
+    date: &str,
+) -> Result<Lease, crate::core::coordinator::CoordinateError> {
+    store.acquire(&AcquireRequest {
+        session_id: "stats".to_string(),
+        root_run_id: format!("pid-{}", std::process::id()),
+        resource: format!(
+            "stats:{}:{date}",
+            crate::core::process_coordination::workspace::resource_key(stats_dir)
+        ),
+        attempt: 0,
+        expected_generation: None,
+    })
 }
 
 /// 查询最近 n 天（服务端聚合，直接读文件）。
@@ -510,6 +576,95 @@ mod tests {
         assert_eq!(days[0].total.ttft_count, 2);
         assert_eq!(days[0].total.steps, 2);
         assert_eq!(days[0].by_model["m1"].gen_ms, 200);
+    }
+
+    /// #36-C0：他人占着当天租约时，冲刷必须**保留 pending 且不落盘**。
+    ///
+    /// 旧实现无条件 `pending.clear()`，跨进程下等于把一次争用变成一段永久的统计缺口——
+    /// 而且没有任何报错。这条用例同时钉住「不写」与「不丢」两半。
+    #[test]
+    fn 他人占用当天租约时_冲刷保留待写数据且不落盘() {
+        let dir = tempfile::tempdir().unwrap();
+        let stats_dir = dir.path().join("stats");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        std::fs::create_dir_all(&stats_dir).unwrap();
+
+        // 以「另一个进程」的身份占住今天的写租约
+        let store = LeaseStore::new(&coord_root_of(&stats_dir));
+        store
+            .acquire(&AcquireRequest {
+                session_id: "stats".to_string(),
+                root_run_id: "other-process".to_string(),
+                resource: format!(
+                    "stats:{}:{today}",
+                    crate::core::process_coordination::workspace::resource_key(&stats_dir)
+                ),
+                attempt: 0,
+                expected_generation: None,
+            })
+            .expect("模拟他人占用");
+
+        let mut pending = HashMap::new();
+        pending.insert(today.clone(), day(&today, "m1", 100, 1, KIND_MAIN));
+        flush(&stats_dir, &mut pending);
+
+        assert!(
+            !stats_dir.join(format!("{today}.json")).exists(),
+            "没拿到租约就不许写盘，否则正是这次要防的「后写者覆盖前写者」"
+        );
+        assert!(
+            pending.contains_key(&today),
+            "没落盘就必须把数据留在 pending 里等下一轮，丢掉即永久缺口"
+        );
+    }
+
+    /// #36-C0：写盘失败后重试**不得重复计数**。
+    ///
+    /// 磁盘没变 → 下一轮重读到的还是旧文件 → 同一份增量再合并一次，结果仍是一份。
+    #[test]
+    fn 写盘失败后重试不重复计数() {
+        let dir = tempfile::tempdir().unwrap();
+        let stats_dir = dir.path().join("stats");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let old = day(&today, "m1", 10, 1, KIND_MAIN);
+        std::fs::create_dir_all(&stats_dir).unwrap();
+        std::fs::write(
+            stats_dir.join(format!("{today}.json")),
+            serde_json::to_vec_pretty(&old).unwrap(),
+        )
+        .unwrap();
+
+        let mut pending = HashMap::new();
+        let mut delta = day(&today, "m1", 100, 1, KIND_MAIN);
+        if let Some(w) = delta.by_workspace.get_mut("/w") {
+            w.cache_read = 0;
+            w.cache_write = 0;
+        }
+        pending.insert(today.clone(), delta);
+
+        // 把目标路径变成目录，让 atomic_write 必然失败
+        std::fs::remove_file(stats_dir.join(format!("{today}.json"))).unwrap();
+        std::fs::create_dir(stats_dir.join(format!("{today}.json"))).unwrap();
+        flush(&stats_dir, &mut pending);
+        assert!(
+            pending.contains_key(&today),
+            "写失败必须保留 pending，不能悄悄清空"
+        );
+
+        // 恢复正常后重试：结果必须是 10 + 100 一份，不是两份
+        std::fs::remove_dir(stats_dir.join(format!("{today}.json"))).unwrap();
+        std::fs::write(
+            stats_dir.join(format!("{today}.json")),
+            serde_json::to_vec_pretty(&old).unwrap(),
+        )
+        .unwrap();
+        flush(&stats_dir, &mut pending);
+        assert!(pending.is_empty(), "重试成功后 pending 应被清空");
+
+        let days = query(dir.path(), 1);
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].total.input, 110, "重试不得把增量算两遍");
+        assert_eq!(days[0].total.runs, 2);
     }
 
     /// [docs/testing](../../../docs/testing.md)#2：by_workspace 合并必须像 by_model/by_kind 一样带齐五个字段

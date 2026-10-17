@@ -69,6 +69,7 @@ async function baseInvoke(cmd: string, args?: any) {
     case "get_token_stats": return [];
     case "get_mcp_config": return "{}";
     case "mcp_status": return [];
+    case "inspect_instruction_resources": return { resources: [], issues: [] };
     case "inspect_skills": return { entries: [], issues: [] };
     case "list_skills": return [];
     case "list_agents": return [];

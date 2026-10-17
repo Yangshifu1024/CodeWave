@@ -1,4 +1,4 @@
-//! 上下文管理（G10，[docs/technical-design](../../../docs/technical-design.md)）：分节 token 计账（30s 缓存）+ 自动压缩。
+//! 上下文管理（G10，[docs/technical-design](../../../docs/technical-design.md)）：同源分节 token 计账 + 自动压缩。
 //! 摘要请求走同一 Provider 层；摘要 prompt 结构为 CodeWave 原创五段式。
 
 use crate::core::agent::{AgentCore, SessionRuntime};
@@ -63,16 +63,8 @@ fn summary_timeout(cfg: &crate::core::config::ConfigState) -> std::time::Duratio
     std::time::Duration::from_secs(cfg.compact_timeout_seconds.clamp(30, 3600))
 }
 
-/// 分节计账（结果在 runtime 缓存 30s，避免每步重复估算）。
+/// 分节计账；动态资源许可不使用有时间窗的旧估算结果。
 pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdown {
-    {
-        let cache = rt.breakdown_cache.lock().unwrap();
-        if let Some((at, bd)) = cache.as_ref()
-            && at.elapsed() < std::time::Duration::from_secs(30)
-        {
-            return bd.clone();
-        }
-    }
     let cfg = core.cfg.read().unwrap().clone();
     // 上下文窗口跟随会话生效模型（覆盖优先，[docs/chat-and-interface](../../../docs/chat-and-interface.md)）
     let window = crate::core::prefs::effective_model(&cfg, &rt.prefs())
@@ -80,45 +72,21 @@ pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdow
         .unwrap_or(128_000)
         .max(1);
 
-    // shell 描述跟随配置 selection（与 command 工具执行 shell 同一事实源）
-    let shell = crate::tools::command::shell_description(cfg.shell.selection.as_deref());
-    let extra: Vec<String> = rt.extra_roots.lock().unwrap().clone();
-    let skills = core.skills.list(
-        &rt.workspace,
-        &rt.data_dir,
-        &cfg.disabled_skills,
-        rt.project_dir.as_deref(),
-    );
-    let skills_listing = crate::skills::prompt_listing(&skills);
-    let memories = crate::memory::scan(&rt.data_dir, rt.project_dir.as_deref());
-    let memory_listing = crate::memory::prompt_listing(&memories);
-    let project_section = rt.project_id.as_ref().map(|pid| {
-        let project = crate::core::projects::find(&core.data_dir, pid);
-        let name = project
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| pid.clone());
-        let temps = project
-            .as_ref()
-            .map(|p| crate::core::projects::project_data_dir(&core.data_dir, p).join("temps"))
-            .unwrap_or_else(|| crate::core::projects::data_dir_by_id(&core.data_dir, pid).join("temps"))
-            .to_string_lossy()
-            .into_owned();
-        format!(
-            "\n<project>\n- Project: {name}\n- Project directory: {}\n- Scratch dir & command working directory: {temps}\n  Throwaway files go here; commands start here.\n</project>\n",
-            rt.workspace.to_string_lossy()
-        )
-    });
-    let system = crate::core::prompt::assemble(
-        &rt.workspace,
-        &cfg,
-        &extra,
-        shell.as_str(),
-        &skills_listing,
-        &memory_listing,
-        project_section.as_deref(),
-        rt.project_dir.as_deref(),
-    );
+    // A running estimate uses the exact frozen wire prefix. Idle estimates
+    // reauthorize a fresh snapshot without changing permissions or run state.
+    let frozen = if rt.running.load(std::sync::atomic::Ordering::SeqCst) {
+        rt.system_frozen.lock().unwrap().clone()
+    } else {
+        None
+    };
+    let system = match frozen {
+        Some(text) => text,
+        None => {
+            crate::core::instruction_resources::system(core, rt, &cfg)
+                .await
+                .0
+        }
+    };
     let system_tokens = crate::util::token_est::est_tokens_text(&system);
     // MCP 工具的 schema 同样计入：一个 20 工具 server 的 schema 可达数千 token，
     // 漏算会让「上下文占用」系统性偏低、自动压缩时机偏晚（只算内置注册表是旧口径）。
@@ -142,7 +110,7 @@ pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdow
         }
     }
     let total = system_tokens + history_tokens + tool_schema_tokens;
-    let bd = ContextBreakdown {
+    ContextBreakdown {
         system_tokens,
         history_tokens,
         tool_results_tokens,
@@ -150,9 +118,7 @@ pub async fn breakdown(core: &AgentCore, rt: &SessionRuntime) -> ContextBreakdow
         total_tokens: total,
         context_window: window,
         ratio: total as f64 / window as f64,
-    };
-    *rt.breakdown_cache.lock().unwrap() = Some((std::time::Instant::now(), bd.clone()));
-    bd
+    }
 }
 
 const SUMMARY_SYSTEM: &str = r#"你把一段编程智能体的对话压缩成交接摘要，供全新会话无缝接续工作。输出纯文本，必须恰好包含以下五个小节，顺序固定，每节以自己的标题行开头：
@@ -256,7 +222,8 @@ pub async fn compact_history(
     // key 解析必须走钥匙串占位符解析器（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）：否则钥匙串
     // 用户（keys 含占位符）会拿到 None 并发出未鉴权请求（401）；
     // 解析为空则短路进既有的压缩失败路径
-    let Some(key) = crate::host::keyring::pick_resolved_key(&model) else {
+    let Some(key) = crate::core::credentials::pick_resolved_key(core.credentials.as_ref(), &model)
+    else {
         return Err("上下文压缩跳过：模型 key 在钥匙串中解析为空".into());
     };
     // 读锁 clone（std 锁不能跨 await）；save_config 热替换后此处取到新代理的 client
@@ -304,8 +271,7 @@ pub async fn compact_history(
     if cancel.is_cancelled() {
         return Err("压缩已取消（历史替换前复查）".into());
     }
-    *rt.history.lock().unwrap() = new_history;
-    rt.breakdown_cache.lock().unwrap().take();
+    replace_history_preserving_transcript(core, rt, &history_snapshot, new_history, cancel)?;
     // 真实输入量随历史一起作废：不复位会让「按上游回报触发」在压缩后立刻重复触发
     //（下一次请求回来前，那个值仍是被压缩掉的那份历史的规模）
     rt.last_input_tokens
@@ -324,6 +290,63 @@ pub async fn compact_history(
         kind: crate::core::stats::KIND_COMPACT.into(),
     });
     Ok(usage)
+}
+
+/// Persist the complete transcript before dropping it from the model context.
+/// Holding history through the synchronous save prevents a concurrent append from
+/// being hidden by the summary. The next checkpoint appends a compaction boundary;
+/// SessionStore keeps all original display messages in the earlier segments.
+fn replace_history_preserving_transcript(
+    core: &AgentCore,
+    rt: &SessionRuntime,
+    snapshot: &[Message],
+    replacement: Vec<Message>,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let mut history = rt.history.lock().unwrap();
+    if cancel.is_cancelled() || rt.zombie.load(Ordering::SeqCst) {
+        return Err("压缩已取消或会话已删除，保留完整历史".into());
+    }
+    if history.as_slice() != snapshot {
+        return Err("摘要期间历史已变化，保留新消息并放弃本次压缩".into());
+    }
+    let saved = if rt.is_main_session {
+        let model_id = crate::core::prefs::effective_model(&core.cfg.read().unwrap(), &rt.prefs())
+            .map(|model| model.id.clone());
+        core.store.save_history(
+            &rt.id,
+            &rt.title.lock().unwrap(),
+            &rt.workspace.to_string_lossy(),
+            model_id.as_deref(),
+            rt.project_id.as_deref(),
+            &rt.roots,
+            snapshot,
+        )
+    } else if let Some(parent) = rt.root_session_id.as_deref() {
+        core.store.save_sub_history(parent, &rt.id, snapshot)
+    } else {
+        // Scheduled task runtimes intentionally have no persistent transcript.
+        *history = replacement;
+        return Ok(());
+    };
+    match saved {
+        Ok(report) if report.is_clean() => rt.save_clean.store(true, Ordering::SeqCst),
+        Ok(_) => {
+            rt.save_clean.store(false, Ordering::SeqCst);
+            return Err("压缩前完整转录未能无损保存，保留原历史".into());
+        }
+        Err(error) => {
+            rt.save_clean.store(false, Ordering::SeqCst);
+            return Err(format!("压缩前完整转录保存失败，保留原历史：{error}"));
+        }
+    }
+    // Cancellation can arrive during disk I/O; the saved original remains valid.
+    if cancel.is_cancelled() {
+        return Err("压缩保存后已取消，保留原历史".into());
+    }
+    *history = replacement;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,9 +388,9 @@ mod tests {
     }
 
     /// 走真实计账路径的集成验证：分节求和、工具结果是历史子集、窗口取生效模型、
-    /// 结果缓存 30s。
+    /// Fresh resource/history accounting without stale permission estimates.
     #[tokio::test]
-    async fn breakdown_fields_and_cache() {
+    async fn breakdown_fields_and_fresh_history() {
         use crate::core::types::{Content, Message};
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
@@ -414,13 +437,163 @@ mod tests {
         assert!((bd.ratio - bd.total_tokens as f64 / bd.context_window as f64).abs() < 1e-9);
         assert!(bd.total_tokens < bd.context_window as u64);
 
-        // 30s 缓存：改动历史不影响本次上报的 breakdown
-        rt.history
-            .lock()
-            .unwrap()
-            .push(Message::user_text("this new message must not show up yet"));
+        // Resource and history changes must be reflected without a stale TTL.
+        rt.history.lock().unwrap().push(Message::user_text(
+            "this new message must be included immediately",
+        ));
         let cached = breakdown(&core, &rt).await;
-        assert_eq!(cached.history_tokens, bd.history_tokens);
-        assert_eq!(cached.total_tokens, bd.total_tokens);
+        assert!(cached.history_tokens > bd.history_tokens);
+        assert!(cached.total_tokens > bd.total_tokens);
+    }
+
+    fn compact_fixture() -> (
+        tempfile::TempDir,
+        std::sync::Arc<AgentCore>,
+        std::sync::Arc<SessionRuntime>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let data = dir.path().join("profile");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let roots = crate::tools::pathutil::WriteRoots {
+            workspace: workspace.clone(),
+            data_dir: data,
+            project_dir: None,
+            extra: vec![],
+        };
+        let core = crate::core::agent::test_support::make_core(&roots);
+        let rt =
+            core.get_or_create_session("compact-preserve", workspace, None, vec![], None, vec![]);
+        (dir, core, rt)
+    }
+    fn large_read_transcript() -> Vec<Message> {
+        vec![
+            Message::user_text("read the complete file"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolUse {
+                    id: "large-read".into(),
+                    name: "read".into(),
+                    args: serde_json::json!({"path":"large.txt"}),
+                }],
+                created_at: None,
+            },
+            Message::tool_results(vec![Content::ToolResult {
+                tool_use_id: "large-read".into(),
+                content: "x".repeat(891 * 1024),
+                is_error: false,
+            }]),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text {
+                    text: "read complete".into(),
+                }],
+                created_at: None,
+            },
+        ]
+    }
+    #[test]
+    fn compaction_preserves_uncheckpointed_large_read_in_display_and_appends_wire_boundary() {
+        let (_dir, core, rt) = compact_fixture();
+        let original = large_read_transcript();
+        // Only the initial user message had reached the periodic checkpoint.
+        assert!(
+            core.store
+                .save_history(
+                    &rt.id,
+                    "",
+                    &rt.workspace.to_string_lossy(),
+                    None,
+                    None,
+                    &[],
+                    &original[..1]
+                )
+                .unwrap()
+                .is_clean()
+        );
+        *rt.history.lock().unwrap() = original.clone();
+        let summary = vec![Message::user_text(
+            "<handoff-summary>read complete</handoff-summary>",
+        )];
+        replace_history_preserving_transcript(
+            &core,
+            &rt,
+            &original,
+            summary.clone(),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        // The official store, not the best-effort tmp archive, already contains
+        // the exact original tool pair before any later summary checkpoint.
+        assert_eq!(
+            core.store.load_history_full(&rt.id).unwrap().display,
+            original
+        );
+        assert!(
+            core.store
+                .save_history(
+                    &rt.id,
+                    "",
+                    &rt.workspace.to_string_lossy(),
+                    None,
+                    None,
+                    &[],
+                    &summary
+                )
+                .unwrap()
+                .is_clean()
+        );
+        let restored = core.store.load_history_full(&rt.id).unwrap();
+        assert!(restored.display.starts_with(&original));
+        assert!(!restored.boundaries.is_empty());
+        assert_eq!(restored.wire, summary);
+    }
+    #[test]
+    fn compaction_save_failure_keeps_original_transcript_and_marks_save_unclean() {
+        let (_dir, core, rt) = compact_fixture();
+        let original = large_read_transcript();
+        *rt.history.lock().unwrap() = original.clone();
+        rt.last_input_tokens
+            .store(100000, std::sync::atomic::Ordering::SeqCst);
+        let histories = rt.data_dir.join("histories");
+        std::fs::create_dir_all(&histories).unwrap();
+        // A real filesystem failure, not an injected success/failure boolean.
+        std::fs::write(histories.join(&rt.id), b"cannot create segment directory").unwrap();
+        let error = replace_history_preserving_transcript(
+            &core,
+            &rt,
+            &original,
+            vec![Message::user_text("summary")],
+            &CancellationToken::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("保存失败"), "{error}");
+        assert_eq!(*rt.history.lock().unwrap(), original);
+        assert!(!rt.save_clean.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(
+            rt.last_input_tokens
+                .load(std::sync::atomic::Ordering::SeqCst),
+            100000
+        );
+    }
+    #[test]
+    fn compaction_does_not_replace_history_changed_while_summary_was_running() {
+        let (_dir, core, rt) = compact_fixture();
+        let original = large_read_transcript();
+        let mut current = original.clone();
+        current.push(Message::user_text("new steering instruction"));
+        *rt.history.lock().unwrap() = current.clone();
+        assert!(
+            replace_history_preserving_transcript(
+                &core,
+                &rt,
+                &original,
+                vec![Message::user_text("summary")],
+                &CancellationToken::new()
+            )
+            .is_err()
+        );
+        assert_eq!(*rt.history.lock().unwrap(), current);
     }
 }

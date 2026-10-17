@@ -126,7 +126,7 @@ whenToUse: Use when the user asks to index/summarize the repo structure, or befo
    # Code Graph: <仓库名>
    ## 功能 → 文件速查表
    | 想找什么 | 去哪里 |
-   5. 用 `create`/`edit` 写入，并提醒用户该文件会被注入后续会话的系统提示词。
+   5. 用 `create`/`edit` 写入，并提醒用户在设置中审阅并许可该版本后，文件才会进入后续运行的系统提示词。
 "#,
         ),
         (
@@ -408,6 +408,9 @@ type SkillCache = Mutex<Option<(Instant, SkillCacheKey, Arc<SkillCatalogSnapshot
 
 /// 技能索引：带 scope key 的 TTL 缓存，负责扫描/查询/列表。
 pub struct SkillIndex {
+    /// Immutable compatibility source root. Isolated evaluations inject a sandbox home
+    /// rather than changing process-wide HOME while other sessions are running.
+    home: Option<PathBuf>,
     /// 带 scope key 的 TTL 缓存（评审 M3：切换工作区/项目不得互串缓存）
     cache: SkillCache,
     /// 缓存有效期
@@ -454,7 +457,12 @@ impl Default for SkillIndex {
 impl SkillIndex {
     /// 构造默认索引（TTL 10s）。
     pub fn new() -> Self {
+        Self::with_home(dirs::home_dir())
+    }
+
+    pub fn with_home(home: Option<PathBuf>) -> Self {
         SkillIndex {
+            home,
             cache: Mutex::new(None),
             ttl: Duration::from_secs(10),
         }
@@ -480,7 +488,8 @@ impl SkillIndex {
     ) -> Result<(), String> {
         let mut cache = self.cache.lock().unwrap();
         *cache = None;
-        let skill = Self::build(workspace, data_dir, &[], project_dir)
+        let skill = self
+            .fresh(workspace, data_dir, &[], project_dir)
             .remove(name)
             .ok_or_else(|| format!("技能不存在：{name}"))?;
         let resource = skill
@@ -593,6 +602,23 @@ impl SkillIndex {
         SkillCatalogSnapshot::build(home, workspace, data_dir, disabled, project_dir).effective
     }
 
+    /// Uncached execution snapshot, using the same source roots as list/audit/delete.
+    pub fn fresh(
+        &self,
+        workspace: &Path,
+        data_dir: &Path,
+        disabled: &[String],
+        project_dir: Option<&Path>,
+    ) -> HashMap<String, Skill> {
+        Self::build_with_home(
+            self.home.as_deref(),
+            workspace,
+            data_dir,
+            disabled,
+            project_dir,
+        )
+    }
+
     fn snapshot(
         &self,
         workspace: &Path,
@@ -610,7 +636,7 @@ impl SkillIndex {
         }
         // Serialize rebuilds with invalidation so a late scan cannot restore a deleted catalog.
         let snapshot = Arc::new(SkillCatalogSnapshot::build(
-            dirs::home_dir().as_deref(),
+            self.home.as_deref(),
             workspace,
             data_dir,
             disabled,
@@ -1063,6 +1089,7 @@ mod tests {
         let dd = tempfile::tempdir().unwrap();
         // 长 TTL：测试期内缓存绝不自然过期，重载可见性只由 invalidate 决定
         let idx = SkillIndex {
+            home: None,
             cache: Mutex::new(None),
             ttl: Duration::from_secs(3600),
         };
@@ -1097,6 +1124,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let idx = SkillIndex {
+            home: None,
             cache: Mutex::new(None),
             ttl: Duration::from_secs(3600),
         };

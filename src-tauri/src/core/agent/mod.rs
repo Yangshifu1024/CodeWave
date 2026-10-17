@@ -6,13 +6,16 @@
 //! stream.rs = 流组装与刷新循环，guards.rs = panic/压缩守卫，测试模块各自独立成文件。
 //! 下方 re-export 保证所有外部路径（`crate::core::agent::Xxx`）逐字节不变。
 
-mod drive;
+mod delivery_stop;
+pub(crate) mod drive;
 mod guards;
 mod runtime;
 mod stream;
 mod supervise;
 mod text_ask;
 
+#[cfg(test)]
+mod evaluation_fixtures;
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]
@@ -25,7 +28,8 @@ pub use drive::{
     DriveParams, NormalizedCall, SubBase, WRITE_TOOLS, drive_agent, run_task_agent,
     subagent_drive_params,
 };
-pub(crate) use guards::{CompactingGuard, lock_ok};
+pub(crate) use guards::CompactingGuard;
+pub(crate) use guards::lock_ok;
 pub(crate) use runtime::RunTerminalKind;
 pub use runtime::{AgentCore, EventSink, Frame, RunSnapshot, SessionRuntime};
 pub use supervise::{CallSig, IdlePolicy};

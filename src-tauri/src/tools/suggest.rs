@@ -212,6 +212,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let out = SuggestTool
@@ -247,6 +248,7 @@ mod tests {
                 batch_id: "b".into(),
                 call_index: 0,
                 call_key: "b:0".into(),
+                provider_call_id: String::new(),
                 cancel: tokio_util::sync::CancellationToken::new(),
             };
             let out = SuggestTool.run(&ctx, json!({"items": ["再看看"]})).await;
@@ -263,6 +265,7 @@ mod tests {
                 batch_id: "b".into(),
                 call_index: 0,
                 call_key: "b:0".into(),
+                provider_call_id: String::new(),
                 cancel: tokio_util::sync::CancellationToken::new(),
             };
             let out = SuggestTool.run(&ctx, json!({"items": ["再看看"]})).await;
@@ -278,6 +281,7 @@ mod tests {
                 batch_id: "b".into(),
                 call_index: 0,
                 call_key: "b:0".into(),
+                provider_call_id: String::new(),
                 cancel: tokio_util::sync::CancellationToken::new(),
             };
             let out = SuggestTool.run(&ctx, json!({"items": ["再看看"]})).await;
@@ -298,6 +302,7 @@ mod tests {
                 batch_id: "b".into(),
                 call_index: 0,
                 call_key: "b:0".into(),
+                provider_call_id: String::new(),
                 cancel: tokio_util::sync::CancellationToken::new(),
             };
             let out = SuggestTool.run(&ctx, json!({"items": ["再看看"]})).await;

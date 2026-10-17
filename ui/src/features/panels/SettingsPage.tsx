@@ -58,6 +58,7 @@ import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import SubagentModelsPanel from "./SubagentModelsPanel";
 import SkillsPanel from "./SkillsPanel";
+import InstructionResourcesPanel from "./InstructionResourcesPanel";
 import {
   INSTANT_APPLY_FIELD_IDS,
   MCP_FIELD_ID,
@@ -2042,6 +2043,7 @@ function SettingsPageController() {
         <>
           <SkillsPanel sessionId={sessionId} disabled={draft?.disabled_skills ?? []}
             savedDisabled={baseline?.disabled_skills ?? []} onToggle={toggleSkill} />
+          <InstructionResourcesPanel sessionId={sessionId} />
         </>
       ),
     },

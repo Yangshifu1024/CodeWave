@@ -32,13 +32,37 @@ pnpm prepr
 ### CI 并行与耗时观测
 
 - [test.yml](../.github/workflows/test.yml) 的前端 Vitest/Node 脚本矩阵与 Rust 矩阵独立并行，均保留 macOS、Ubuntu、Windows。Rust job 保留 Node、pnpm workspace 与前端 build，满足真实 MCP server fixture 和 Tauri `frontendDist`；没有用占位资源替代构建，也没有减少 Rust 单测、集成测试、doctest 或改变 ignored 语义。
-- 原有 `Test (macos-14)`、`Test (ubuntu-24.04)`、`Test (windows-2022)` 名称由 `always()` 汇总 job 保留。每个汇总都要求**两个完整矩阵**成功，任一平台失败、取消、跳过都不通过；其名称不再表示仅检查该平台。Rust/UI lint 门槛不变。分支保护配置仍需仓库管理员核对，名称保留不是配置已核实的证明。
+- 原有 `Test (macos-14)`、`Test (ubuntu-24.04)`、`Test (windows-2022)` 名称由 `always()` 汇总 job 保留。每个汇总都要求**两个完整矩阵**（backend / frontend）成功，任一平台失败、取消、跳过都不通过；其名称不再表示仅检查该平台。Rust/UI lint 门槛不变。分支保护配置仍需仓库管理员核对，名称保留不是配置已核实的证明。
 - Rust job ID 仍为 `test`，保留 rust-cache 默认 job 隔离；不与 clippy/release 共享 target key，不改 stable、Cargo profile 或缓存权限。缓存摘要只报告 exact hit；`false` 不能区分部分恢复与完全 miss，具体 key、恢复/保存大小与耗时以 action 日志为准。PR merge-ref 的缓存作用域与 main 不同，详见 [GitHub 缓存规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) 与 [rust-cache](https://github.com/Swatinem/rust-cache)。
 - [metrics.mjs](../scripts/ci/metrics.mjs) 流式运行原命令一次，保留退出码；安装、前端测试/build 与 Rust 测试有 wall time。Rust 从 Cargo 原始输出读取 test-profile 编译时长及各测试套件时长/通过/失败/ignored 数，不二次运行测试。套件时长之和不含 Cargo 开销、doctest 编译；缺少指标显示为缺失，不能算作 0 秒。失败时也尽力写摘要，runner 强制终止可能无最终摘要。
 - job summary 记录 runner/image、CPU/RAM、工具版本与缓存 exact hit，不输出整个环境或 secrets。前端 job 的 Rust/CMake 版本只是镜像探测值，不代表该 job 执行过后端检查。
 - [CI 回归测试](../scripts/ci/workflow.test.mjs) 守护矩阵覆盖、汇总失败语义与依赖分组；[CMake 行为测试](../scripts/ci/ensure-cmake.test.mjs) 在有 PowerShell 时执行，Windows 缺 PowerShell 为失败，其他平台无 PowerShell 明确跳过。Linux 成功不能替代 Windows 实际探测/安装链路验证。
 
 比较优化效果时，先记录同一依赖树、工具链和 runner image 的 main 基线，再在获准发布的 PR 上记录第一次与后续热缓存运行。首次运行可能已恢复 main 缓存，必须按日志标注 exact/partial/miss，不能把“首次”直接写成“冷缓存”。若必须做严格冷缓存 A/B，应另获授权后使用隔离缓存 key，不清空共享缓存。两次都记录排队、整个 workflow 关键路径、各 job/步骤、Rust 编译/套件、缓存传输和总 runner 分钟，并核对通过/ignored/doctest 数。拆分增加 checkout/install 和 runner 启动开销，账户并发不足可能变成排队；只有真实数据能判断 wall-clock 收益，不能只报单步骤节省。
+
+## 固定失败语料与评测隔离基线
+
+[runtime_failures.json](../src-tauri/tests/fixtures/runtime_failures.json) 定义固定输入和场景，[evaluation_fixtures.rs](../src-tauri/src/core/agent/evaluation_fixtures.rs) 将它们装入临时 workspace、data 和兼容 home，调用真实请求构建、read/create/skill、报告解析、子代理收尾及空转监督。入口是在 `src-tauri/` 执行：
+
+```bash
+cargo test --workspace evaluation_ -- --nocapture
+```
+
+每例输出场景、输入指纹和 `blocked` / `detected` / `known_gap`，并明确标注组件/工具覆盖。报告/预算判定直接调用生产分类器，空转用实际读取结果驱动监督器，均未驱动完整父/子 run。这里的 blocked 只表示指定入口拒绝了该操作，**不等于端到端运行阻断或整个任务具备交付验收**。假完成场景读取并确认产物缺失，再创建带产物要求的冻结契约并调用生产完成门；即使正文带 report，仍必须得到非通过判定。该场景已由历史 known_gap 更新为 blocked；纯文本收尾本身仍只是请求停止，不能单独作为交付证据。
+
+基线保存完整配置和各输入域的内容哈希，使用逻辑相对路径排序，另绑定语料版本；workspace、记忆、lessons、兼容技能或配置变化会拒绝沿用基线。每个案例重新物化输入，不复用上例写入。技能索引的不可变 home 注入同时用于 fresh、缓存查询/审计和删除；不通过修改进程 HOME 隔离，不加载真实用户目录、配置、凭据或持久信任。配置提交器注入禁止访问的凭据 fake，误触访问直接使测试失败；本组不调用 provider、压缩等仍需宿主凭据适配的路径。对照作用域的输入保持不变，评测写入只落临时目录。
+
+这只是开发回归基线，不是无界面评测产品、模型效果测量或可续跑评测调度器。没有调用真实模型，没有自主学习任务；冻结的记忆与 lessons 是学习输入基线。网络、MCP 和凭据边界仍由各自真实协议/事务夹具覆盖，不能从这里的测试推导其平台或系统钥匙串验收。未来评测入口复用这些基线时，还需冻结模型参数、工具链与预算，并验证 checkpoint、成本去重和真实环境。
+
+原生信任存储由 [host/trust.rs](../src-tauri/src/host/trust.rs) 的 `native_trust_roundtrip` 显式验证：在 `src-tauri/` 执行 `cargo test --workspace native_trust_roundtrip -- --ignored --nocapture`。该用例默认忽略，因为会实际创建并清理系统钥匙串合成账户及启动子测试进程；独立临时 profile 和 UUID owner 避免接触现有授权。它覆盖首次读取、记住、重开存储准入、内容变化拒绝、父持锁时子进程按期限Busy、释放后另一子进程读取并撤销、父重开确认revision及旧CAS冲突，最后删除并回读确认缺失。子进程通过phase/owner回执证明实际执行，不以零用例退出0冒充通过；超时先终止并回收子进程，再进入父清理。不可用或清理未确认会失败，不自动转跳过。单平台通过不证明完整应用重启/跨实例MCP回收、钥匙串锁定/拒绝、GUI 或其他平台通过。
+
+[native_tests.rs](../src-tauri/src/mcp/native_tests.rs) 的 `native_mcp_cross_process_revoke` 是Unix测试构建下默认ignored的原生纵向验收，显式运行 `cargo test --lib mcp::manager::native_tests::native_mcp_cross_process_revoke -- --exact --ignored --nocapture`。父进程经正式prepare/confirm服务记住唯一临时profile的MCP许可，新OS进程从真实钥匙串恢复并启动仓库Node fixture，实际list/echo；父进程经同一服务撤销后，子进程检查旧binding拒绝、工具清空、Stopped、真实Node退出及重warm不启动。账户仅由父持有清理责任，删除后回读NoEntry；不读取已有模型配置或用户凭据。
+
+子进程通过nonce/phase回执证明实际执行，正常和异常均先请求协作abort并确认回收子测试进程，再最终检查Node和清理账户。异常兜底只在live命令的唯一nonce、完整fixture脚本和独立进程组身份匹配时回收Node；无法确认子测试进程已回收时保留profile/合成账户及诊断，禁止自动删除账户造成竞态。真实钥匙串需要宿主可访问环境，沙箱拒绝记为失败，不能偷偷改用内存backend。该用例不覆盖桌面App重启、定时watcher投递、GUI、真实锁定/拒绝交互或Windows；Linux Secret Service必须在该平台另验。
+
+[request_tests.rs](../src-tauri/src/tools/net/request_tests.rs) 的 `native_https_routes` 是默认ignored的外部环境探针，显式运行 `cargo test --workspace native_https_routes -- --ignored --nocapture`。独立默认配置关闭内网，不加载应用配置或模型凭据，对固定公开HTTPS目标分别采用直连、自动发现和显式系统代理；不改系统设置。代理诊断5秒、TCP可达性3秒、实际请求15秒各有期限。日志只含协议/布尔状态、响应状态及错误类别，不输出代理地址、认证、环境或原始错误。
+
+该探针将正常TLS响应与按既有SSRF政策阻断分开：`policy_blocked=true`仍是`tls_verified=false`，不证明代理连通；如预期阻断却得到响应，探针失败。其他网络失败保持失败，不能为过门禁自动直连或关闭TLS校验。诊断与请求分别获取代理快照，运行时应保持环境稳定；日志快照不构成物理路由的严格证明。外部服务/系统代理不可用是未验收，不是通过或自动skip；默认门禁不执行此探针，其结果与普通回归分别记录。
 
 ## 可靠性修复自动验证记录（2026-10-12）
 
@@ -149,3 +173,28 @@ Rust ignored 的完整名称：
 记录命令、工作目录、平台、退出码与失败/跳过原因；使用当前输出中的测试数量，不复制历史数字。对未跑项目明确说明阻塞；环境失败与产品缺陷分开，但都不能报作通过。
 
 界面变更交付人工验证清单，不做 GUI 自动点验。清单应写前置状态、操作、可观察结果与失败分支；优先覆盖本次改动的跨 Tab、并发、重启、取消和持久化路径。发布专用清单集中在 [release](./release.md)。
+
+## 交付与工作流联合回归
+
+`pnpm prepr` 覆盖桌面 Rust 编译检查与测试、前端 lint/test/build 及 Node 脚本；所有步骤完成前不能写“门禁通过”。交付契约、证据绑定、冻结工作流、作用域隔离、独立审查及历史保存分别通过 Rust/前端回归验证，不使用模型自然语言报告替代真实验收。
+
+人工 GUI 验收仍由用户执行：
+
+1. 在隔离项目发起含两个产物的任务，批准确切契约，观察仅完成一个产物时另一项仍 pending；修改已验证文件后重新读取验收面板应为 stale。
+2. 审查/人工验收选择“尚未通过”、取消或关闭询问，不应生成通过或豁免；确认工作流配置、设计方案不应悄悄切换权限档位。
+3. 同一路径派发两个子任务，第二个应在执行前被拒；不同文件且能力可归因时可并行，父任务同时修改子任务持有路径应被拒。
+4. 运行中取消、关会话并重开，不能重复执行历史工具或采纳旧轮迟到回执；保存/交付失败应可见并保留已有产物。
+5. Windows/Linux 锁/管道/子树与桌面发布签名另行验收。任何单平台自动结果均不替代这些手动或平台项目。
+
+
+### 桌面 guardian 原生回归
+
+桌面可执行文件在 Tauri 初始化前处理私有 guardian 入口。移除独立命令行宿主后，命令与 MCP 的进程回收仍走这条路径。以下 Unix 原生用例默认 ignored，须使用本次构建的桌面程序显式执行，不会打开 GUI：
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --locked --bin codewave
+CODEWAVE_GUARDIAN_BIN="$PWD/src-tauri/target/debug/codewave" cargo test --manifest-path src-tauri/Cargo.toml --locked --lib core::process_coordination::guardian::native_tests -- --ignored --nocapture
+CODEWAVE_GUARDIAN_BIN="$PWD/src-tauri/target/debug/codewave" cargo test --manifest-path src-tauri/Cargo.toml --locked --lib mcp::manager::native_tests::guardian_reaps_mcp_subtree_after_host_sigkill -- --exact --ignored --nocapture
+```
+
+两项命令子树用例分别验证宿主被强杀后的回收与根租约释放，以及 guardian 被强杀后 anchor 回收子树、根租约因缺证明而保持占用。MCP 用例验证真实 Node 服务及其后代在宿主退出后回收。测试仅操作隔离目录和自身创建的进程；Windows Job Object 行为仍需 Windows 环境验证，不能由 Unix 结果代替。

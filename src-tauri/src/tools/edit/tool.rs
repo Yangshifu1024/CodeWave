@@ -365,11 +365,18 @@ impl Tool for EditTool {
                     if let Err((c, m)) = pathutil::resolve_write(&roots, &p.to_string_lossy()) {
                         return ToolOutcome::err(&c, m);
                     }
+                    if let Err((c, m)) = ctx.check_write_path(&p) {
+                        return ToolOutcome::err(&c, m);
+                    }
                     resolved.push(p);
                 }
                 Err((c, m)) => return ToolOutcome::err(&c, m),
             }
         }
+        let _effect = match ctx.acquire_effect(&resolved, false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
         let destinations: Vec<_> = resolved
             .iter()
             .map(|p| pathutil::canonical_best_effort(p))
@@ -408,6 +415,9 @@ impl Tool for EditTool {
         // 则附警告放行；只有应用失败（真实内容冲突）才返回 E_VERSION_STALE 要求重新 read。
         let mut prepared: Vec<(PathBuf, Vec<u8>)> = Vec::new();
         let mut line_changes = Vec::with_capacity(args.files.len());
+        // diff 候选（绝对路径, 改前全文, 改后全文）；只有真正写成功的文件才挂进 outcome。
+        let mut diff_candidates: Vec<(String, String, String)> =
+            Vec::with_capacity(args.files.len());
         let mut stale_warnings: Vec<String> = Vec::new();
         let mut fuzzy_warnings: Vec<String> = Vec::new();
         for (f, resolved) in args.files.iter().zip(&resolved) {
@@ -468,6 +478,17 @@ impl Tool for EditTool {
                 ));
             }
             line_changes.push(crate::tools::line_changes::count(&f.path, &norm, &new_text));
+            // diff 映射（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：
+            // `norm` / `new_text` 就是该文件的改前 / 改后**整份**内容（LF 归一，
+            // 与 `FileDiff` 的正文同口径），此处顺手收下，写成功后才挂进 outcome。
+            // 绝对路径取 `destinations` 对应项，与产物登记同源。
+            diff_candidates.push((
+                crate::tools::pathutil::canonical_best_effort(resolved)
+                    .to_string_lossy()
+                    .into_owned(),
+                norm.clone(),
+                new_text.clone(),
+            ));
             let out_text = if eol == "\r\n" {
                 new_text.replace('\n', "\r\n")
             } else {
@@ -589,6 +610,11 @@ impl Tool for EditTool {
             "line_changes": line_changes,
             "checks": checks.iter().map(|c| c.to_json()).collect::<Vec<_>>(),
         }));
+        // 走到这里说明倒序写入**全部成功**（失败分支早已整体回滚并返回），
+        // 所以候选可以整批挂上；单条超预算的由 `push_diff` 自己跳过。
+        for (path, old_text, new_text) in diff_candidates {
+            out.push_diff(path, Some(old_text), new_text);
+        }
         for w in stale_warnings {
             out.warnings.push(w);
         }

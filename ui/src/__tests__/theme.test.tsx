@@ -49,7 +49,8 @@ vi.mock("@tauri-apps/api/core", () => ({
         return { system_tokens: 1, history_tokens: 2, tool_results_tokens: 0, tool_schema_tokens: 3, total_tokens: 6, context_window: 128000, ratio: 0.01 };
       case "get_mcp_config": return "{}";
       case "mcp_status": return [];
-      case "inspect_skills": return { entries: [], issues: [] };
+      case "inspect_instruction_resources": return { resources: [], issues: [] };
+    case "inspect_skills": return { entries: [], issues: [] };
       case "list_skills": return [];
       case "list_agents": return [];
       case "search_workspace_paths": return [];

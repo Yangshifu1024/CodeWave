@@ -20,7 +20,7 @@
 
 `AgentMeta.resource` 从实际注册定义的名称、描述、readonly 和正文计算来源版本，身份为 `builtin:agent:<name>`；设置中的角色模型面板展示该身份和版本，子代理成功结果的 `ToolOutcome.data.role_resource` 引用同一模板。这里描述角色基座，不代表运行时权限或最终 prompt 的完整指纹；未知通用角色没有虚构内置来源。当前未加载项目/扩展角色，title 仍不在可委派列表。共用来源字段见 [资源来源](./mcp-and-skills.md#来源版本与覆盖审计)。
 
-工具入参为自包含 `task`、`role`、`maxSteps`，另有短标签 description 与 cleanContext。schema 要求预算，执行层对缺失仍有默认 25 步并夹取 1–1000；兼容 `max_steps/clean_context` 键名。任务/角色为空拒绝，不悄悄执行空任务。
+工具入参为自包含 `task`、`role`、`maxSteps`，另有短标签 description 与 cleanContext，以及 contractTaskId / reviewAssignmentId / verificationTaskId / requirementIds / writeScopes / structuredWritesOnly / unitId。schema 要求预算，执行层对缺失仍有默认 25 步并夹取 1–1000；兼容 `max_steps/clean_context` 键名。任务/角色为空拒绝，不悄悄执行空任务。
 
 - cleanContext 默认 true；false 仅带父历史最后 6 条作背景，不等于复制全部会话。
 - 开发任务按域/层拆包，混合栈可同批混派；文件范围互斥，共用配置/锁文件/公共类型由主代理处理。
@@ -38,7 +38,7 @@
 
 ## 2. 权限继承与边界
 
-[tools/subagent.rs](../src-tauri/src/tools/subagent.rs) 的基座排除集固定包含 `ask/subagent/plan/skill/scheduled_task/suggest/wait`。子代理不能直接向用户提问、再派生代理或新增定时任务；需要决策时报告给主代理。根身份支持传播，但当前工具限制不开放嵌套派发。
+[tools/subagent.rs](../src-tauri/src/tools/subagent.rs) 的基座排除集固定包含 `ask/subagent/workflow/plan/skill/scheduled_task/suggest/wait`。子代理不能直接向用户提问、再派生代理或新增定时任务；需要决策时报告给主代理。根身份支持传播，但当前工具限制不开放嵌套派发。
 
 `SubBase` 保存角色、预算、根会话、spawn 模式、基础工具排除、纪律块和 idle 策略。每个 LLM step 边界通过 `subagent_drive_params` 从基座重新构建：
 
@@ -60,6 +60,16 @@
 ## 3. 并发、写认领与取消
 
 全局并发上限 4，`acquire_slot` 用 CAS 检查并占位，满员时最多等待 30 秒、每 500ms 检查且可取消；不能用 load/check/fetch_add 造成瞬时超限。`GuardGuard` 在所有退出路径释放计数。`E_ARGS` 修正参数后重发，`E_SUBAGENT_BUSY` 可稍后重试；运行失败不机械重跑整个任务，避免重复写入，先读已有结果。
+
+### 工作流派发准入
+
+每次 subagent 派发都通过 [workflow/dispatch.rs](../src-tauri/src/core/workflow/dispatch.rs)；不声明范围也不能绕过准入。声明 `writeScopes` 时默认 `structuredWritesOnly=true`，宿主在实际工具基座禁用 command/service/http_request/MCP，并在每步重建时保持限制；只有冻结工作包已证明独立、且可归因的结构化写可以并行；未绑定 unitId 的自由任务保守串行。显式设 false 或未声明范围时，按真实 command/http_request/MCP 能力申请物理根独占租约，等待其他任务清理后串行执行。
+
+准入在同一锁内检查依赖、canonical 路径/祖先、共享可变资源、公共文件和额度，同一 root run 的兄弟任务也不能互相覆盖。写工具执行边界另检查实际路径；父会话同样不能写入活跃子任务持有范围，command/service/HTTP 写请求/MCP 不得与其他活跃单元并发。租约由 RAII 持有到工具、历史保存、登记表与通道清理结束，旧 generation 不能释放后继租约；子代理还持有共享的工作根 guard，父 run 提前结束不会放开仍在写的物理根。
+
+根会话用 `workflow plan_units` 展示工作包并取得真实用户确认后冻结图。包记录需求、读写范围、角色/模型、共享资源、依赖和 `stage_id`；`subagent unitId` 从快照取范围和身份，不采信调用方改写。无法证明独立的包增加串行依赖；依赖必须宿主验收通过且证据仍新鲜，partial/错误不会解锁下游。自定义阶段按正常边约束启动，工作包验收后推进所属阶段，未完成阶段不能报整体通过。重启只恢复事实和中断显示，不重跑工具或恢复旧权限。
+
+审查、验证是宿主绑定的职责，与可自由填写的 role 不同。Review 永久禁用 command/service/http_request/MCP 与结构化写；Verify 禁用写工具、service/http_request/MCP，只能执行绑定检查的 command。`delivery_contract submit_review` 保留为审查结果入口。无效绑定失败关闭，不能降级为普通实现者。验证上下文白名单包含需求、检查、产物和显式任务说明，其摘要写入会话 workflow 边车；不会复制父推理历史。
 
 ### 文件认领
 
@@ -171,3 +181,16 @@ spawn 固化所属根 run 身份，创建独立 runtime 并注册 core.subs、�
 - NudgeOnly 不豁免失败重复、MAX_TEXT_TURNS、步数预算；“只读永不终止”是错误承诺。grep 命中新文件尚不算独立进展，调用名驱动的摘要也不能可靠证明实际副作用。
 - 没有运行中动态扩预算、extend 续跑或从暂停点恢复子 run 的协议。失败、预算不足和 partial 应按已完成/未完成范围决定下一步。
 - 中断或监督失败时没有统一生成部分报告的额外收尾轮，已有过程历史不等于已返回结构化成果。子过程通常在结束保存，不能保证每个在途帧耐久保存。
+
+工作流恢复按已发布的交付契约修订选择冻结快照；准备成功但契约发布失败的更高修订不会参与运行。自定义阶段的每个必检项必须绑定到该阶段的工作单元，缺少阶段单元或漏绑必检项时拒绝计划。用户通过 `workflow override_route` 确认机械路径后，宿主仅对单一范围、无读写依赖和共享副作用且不含高风险触发的任务省略设计；独立审查和既有契约检查仍保持有效。
+
+
+### 本轮工作流实现范围
+
+当前项目定义使用 `<主目录>/.codewave/workflows.json`，由 `workflow save_config` 展示完整内容并请求真实用户确认后提交，运行采用冻结的 `stages / edges / roles / checks` 定义。工具保存不授予命令执行权限。尚未提供独立设置页配置编辑器或 read/validate/save IPC；原 S2 #6 方案中的 `workflow.json`、节点 kind、独立 repair/model policy schema 尚未按原文实现，不应把现有阶段配置声称为原方案全部验收完成。
+
+父会话与子任务的副作用采用同一锁原子登记。文件写按 canonical 路径持有执行期 guard；command/MCP/HTTP 写请求按真实允许根保守占用，子任务准入不能在父工具检查之后插入。同一 root run 的相同 actor 可重入，互不相交的结构化写和纯读取仍可并行；不同 run 的同名 root 不视作同一持有者。后台 service 的 guard 由进程回收任务持有，直到进程、输出泵及事件 ticker 清理完成才释放；跨轮次在同一物理工作区派发也不能绕过。前轮仍活跃的服务会保守阻止后轮同范围写入与子任务，须先停止服务；service 的 read/list/stop 始终保留回收入口，服务功能本身仍可用。
+
+通用 `http_request` 支持修改远程状态，因此它的存在属于不可归因写能力：结构化并行、Review/Verify 工具集不开放该工具，网页只读仍可使用 `web_fetch`。根会话 GET/HEAD/OPTIONS 不占写租约；POST/PUT/PATCH/DELETE 在真实请求全程持有 opaque guard，已有子任务时拒绝写请求，不能以 API 绕过共享状态串行要求。
+
+已有根会话之间的结构化文件编辑继续由共享 canonical 文件锁排队；effect 表记录所有排队写入而不将它们误判为工作单元冲突，因此任一排队编辑未结束时，重叠子单元仍不能准入。该兼容例外不适用于跨 run 的 opaque 命令、HTTP 写请求或后台服务。

@@ -54,6 +54,13 @@ impl Tool for DeleteTool {
             Err((c, m)) => return ToolOutcome::err(&c, m),
         };
         let destination = super::pathutil::canonical_best_effort(&resolved);
+        let _effect = match ctx.acquire_effect(std::slice::from_ref(&resolved), false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
+        if let Err((code, message)) = ctx.check_write_path(&destination) {
+            return ToolOutcome::err(&code, message);
+        }
         // H2：所有写根本身（含 extra）与各写根下的 .git 都在保护名单内
         let all_roots: Vec<&std::path::Path> = std::iter::once(roots.workspace.as_path())
             .chain(roots.extra.iter().map(|p| p.as_path()))
@@ -149,6 +156,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         (ctx, ws, dd)

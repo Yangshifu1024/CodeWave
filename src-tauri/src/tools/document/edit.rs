@@ -702,6 +702,10 @@ impl Tool for EditDocumentTool {
         if let Err((c, m)) = pathutil::resolve_write(&roots, &resolved.to_string_lossy()) {
             return ToolOutcome::err(&c, m);
         }
+        let _effect = match ctx.acquire_effect(std::slice::from_ref(&resolved), false) {
+            Ok(guard) => guard,
+            Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+        };
         if crate::tools::claims::requires_file_claim(&ctx.rt)
             && let Err(conflicts) =
                 crate::tools::claims::claim(&ctx.rt.id, std::slice::from_ref(&resolved))
@@ -848,6 +852,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         }
     }

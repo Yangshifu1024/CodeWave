@@ -31,16 +31,31 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 | 工具与安全 | [tools/](../src-tauri/src/tools/)、[safety/](../src-tauri/src/safety/) | 工具注册/执行、批次调度、路径/命令约束与审批 |
 | 扩展 | [mcp/](../src-tauri/src/mcp/)、[skills/](../src-tauri/src/skills/)、[agents/](../src-tauri/src/agents/) | 外部工具、技能索引与内置子代理角色 |
 | 存储与辅助 | [core/sessions/](../src-tauri/src/core/sessions/)、[git/](../src-tauri/src/git/)、[memory.rs](../src-tauri/src/memory.rs)、[util/](../src-tauri/src/util/) | 转录与元数据、只读 Git、记忆、原子写与公共算法 |
+| 交付与编排 | [core/delivery/](../src-tauri/src/core/delivery/)、[core/workflow/](../src-tauri/src/core/workflow/) | 验收证据与边车、任务分类 / 并行准入 / 状态机 |
 | 界面 | [ui/src/](../ui/src/) | IPC 封装、运行状态投影、聊天/工具卡、导航/设置与文件预览 |
 
 ### 分层约束
 
 - Rust 的 Tauri API 边界限定在 `lib.rs` 和 `host/`；core/provider/tools/safety 不引入 Tauri 类型。`EventSink` 隔离事件投递，不把 `AppHandle` 传进算法或工具。
-- **存在 core → host 的凭据依赖例外**：主循环、压缩、标题与额度模块仍调用 `host::keyring`；不引入 Tauri 类型不等于完全没有宿主层依赖。
+- **凭据由宿主统一注入**：`HostServices.credentials: Arc<dyn CredentialStore>` 经 `AgentCore::new_with_credentials` 进入主循环、压缩、标题、额度与配置提交器；解析逻辑在 [core/credentials.rs](../src-tauri/src/core/credentials.rs)，系统钥匙串实现留在 `host/keyring.rs`。core 不再为这些消费者直接调用系统钥匙串，测试与嵌入宿主使用同一 trait 注入。
 - IPC 保持薄校验/转调，业务判断留在核心和工具层；前端 invoke 唯一入口是 [ipc/client.ts](../ui/src/ipc/client.ts)，类型在 [ipc/types.ts](../ui/src/ipc/types.ts)。
 - 手写协议适配与 IPC 类型降低生成器耦合，但兼容性靠双端同步和契约测试保证；Provider wire 差异不能外泄成工具/UI 对某一家协议的依赖。
 - 主会话、子代理、计划任务共用参数化驱动器，不能复制主循环分别修复；测试与重构纪律见 [development](./development.md)、[testing](./testing.md)。
+- **交付域与编排域分工是硬的**：`core/delivery` 判定"凭什么算完成"，`core/workflow` 决定"怎么拆、谁来做、按什么顺序"；前者不调度单元，后者不判定验收。
+- **工作流只有一个生产组合入口**：[workflow/service.rs](../src-tauri/src/core/workflow/service.rs) 在任务契约发布前组合 route、设计裁决、验证模板及冻结定义，追加必需检查与需求映射；非机械写任务由宿主强制独立审查，模型不能自称豁免。模板 cwd 记录为显式 PathRef，shell_hint 只表示解释器；文档链接/锚点与 GUI 保留人工未验证项，不以 diffcheck/lint 冒充。
+- **工作流确认不切权限档**：[tools/workflow.rs](../src-tauri/src/tools/workflow.rs) 的配置、分类覆盖、设计选择和工作包采用走独立普通询问，应答只确认展示内容，不触碰 G2/G3 或 SessionPrefs。项目配置保存持跨进程租约完成读/CAS/原子替换，只对用户确认的确切序列化内容签发全局 workflow_trust 摘要；外部修改后必须重新审核，保存不是执行许可。
+- **规则快照与运行状态分开**：`sessions/<session>.workflow/<task>.r<revision>.json` 保留定义全文、定义摘要、项目资源摘要、范围版本和契约修订；工作包计划、设计与节点状态按同一契约修订分侧文件，旧版不覆盖。状态写入持事务租约；节点校验 root run、执行 actor、attempt、generation、依赖和合法转换，pending 不能直接 passed。模型/角色被删阻塞，权限不在冻结快照内，恢复仍按当前授权。
+- **工作包与阶段图均参与执行**：`workflow plan_units` 创建受控工作包，`subagent unitId` 读取冻结包后准入；阶段正常边形成依赖，只有显式 repair 边允许预算内重试。节点通过来自宿主真实验收，整体完成仍由 delivery gate 判定，不能反向以自然语言报告覆盖证据。范围变更后创建新修订设计和快照，旧结论不自动继承。
 
+- `Coordinator` trait 定义跨进程协调契约。**C0 已有真跨进程实现**：[core/process_coordination/](../src-tauri/src/core/process_coordination/) 用 `create_new`（O_CREAT|O_EXCL，跨平台原子）落租约、代次由 test-and-set 锁串行分配（`read → +1 → write` 有窗口，会让两个持有者拿到同一 generation，"释放校验代次"当场失效），跨文件事务走「暂存 → 持久化意向日志 → rename → 删日志」并在恢复时**向前滚动**。崩溃 / PID 复用 / 删除中断一律**保守 busy**：按 PID 判活自动回收会在 PID 复用时抢走别人的租约，回收只能由 guardian 在确认持有者退出后显式发起。`InProcessCoordinator` 退为**隔离夹具专用**，不得用于真实共享目录。锁序固定为 `短锁 → owner try`，保存路径 `owner → save_lock → 磁盘事务 → index_lock`，不持锁等模型 / 用户 / 网络。
+- **会话 owner 和物理根互斥**（#36-C0）：唯一入口 `AgentCore::start_chat_expected` 在同锁检查期望 run 与占位后认领 `history:<id>`，再认领 canonical 主目录下 `.codewave/coord` 的根租约；配置 profile 不同也不能同时操作同一根。历史保存先校验 owner，再取 `save_lock`；索引 RMW 另持 OS 文件短锁与 `index_lock`。`close`/`delete` 必须确认运行结束和 `cleanup_done`，未知清理保留 owner，迟到终态只可释放同 run/同代次租约。未认领的空闲历史可加载，但发现其他 owner 时拒绝写入；项目删除继续保留用户代码目录。
+- **config / MCP / stats 三个域各自接了跨进程事务**（#36-C0），但**机制不同，别混用**：
+  - **config** 走 [`ConfigCoordinator`](../src-tauri/src/core/config_commit.rs)：`config-transaction.lock` OS 文件锁覆盖磁盘摘要比对、凭据准备与原子提交的完整事务；忙或锁失败明确拒绝，绝不吞成尽力而为。摘要基线包含文件不存在的状态，外部修改必须刷新后重试。锁由 RAII/进程退出释放，恢复与 post-process 标记使用同一锁，避免 CAS 检查后提前释放的窗口；不持配置内存锁等待钥匙串或磁盘。
+  - **MCP** 走 [`ScopeCommitGuard`](../src-tauri/src/mcp/config.rs)：进程内 `CONFIG_COMMIT` **之外**再加一把落盘租约。`CONFIG_COMMIT` 只挡得住本实例并发——两个实例各自读一份快照，后写者会把另一端刚做的改动整份覆盖且不留痕迹。守卫由**参数类型**强制传入写原语（`set_always_allow` 少一个参数就编译不过），不靠注释提醒。已有租约时的重试**必须有上限**：崩溃后的保守 busy 租约不能把本进程拖成长等待。协调根取 `mcp.json` **所在目录**的 `coord/` 而非全局数据目录，于是全局配置落在全局数据目录、项目配置落在项目托管目录——写同一份文件的两边必然算出同一个根，不同文件互不阻塞，`McpManager` 也无需为守卫穿线 data_dir。原有的「读回比对」乐观检查**保留**，它与 `atomic_write` 之间仍有一道窗口，租约把这段窗口关掉，两者叠加才算数。**只有真正写盘的 2 处**加租约：`manager.rs` 另外几处 `CONFIG_COMMIT` 锁的是内存连接池，加租约不仅无益，还会持锁等网络。
+  - **stats** 按天分键（`stats:<canonical 目录>:<日期>`）持租约，因为「读当日旧文件 → 合并增量 → 整份写回」是典型读改写，`atomic_write` 只保证写那一下不撕裂，**不**保证读到的不是别人的旧值。取不到租约或写失败时**保留 pending** 而非清空——旧实现无条件 `pending.clear()`，一次 IO 抖动就变成永久统计缺口。重试安全的前提是写失败时磁盘没变，重读重并不会重复计数。90 天保留期清理**刻意不持锁**：它只删 90 天前的文件，与写入侧「只写今天」不相交。
+  - 三者**不与 history 事务嵌套**，各自独立取锁。
+- **桌面启动前恢复共享事务**（#36-C0）：`process_coordination::recover_shared_transactions(data_dir)` 接收数据根并在内部定位 `coord/`，启动前持事务短锁向前滚动已决定的写。恢复失败时桌面停止装配并报告错误；不能带着未恢复的共享状态继续启动。独立 guardian 在注册命令执行前记录 PID 与启动身份，宿主被 SIGKILL 后回收注册子树；只有同 session/run/generation 的清理证明允许恢复，不凭 PID 缺失抢锁。私有控制 token 位于 OS 临时目录随机 0700 子目录和 0600 文件，工作区只保留无 token 的租约/证明；helper 缺失时阻塞执行。
+- **工具观察 ID 采用 batch append 日志和有界游标**：`sessions/<id>.toolres/_observations/ledger.jsonl` 每批追加一行，直接 batch 索引提供重试幂等；小型 pending 意向使半写只恢复本批未提交尾部，已提交前缀不重写。批记录读取上限 4MiB，读取方按历史分段和文件游标消费，不载入全量 occurrence 集合；已完成调用的配对状态及时释放。旧的无观察日志历史使用稳定的 replay fallback ID，不为这项未发布格式新增迁移。
 ## 2. 运行真值、事件与投影
 
 [core/agent/runtime.rs](../src-tauri/src/core/agent/runtime.rs) 持有运行身份、状态与最近终态；[drive.rs](../src-tauri/src/core/agent/drive.rs) 负责请求、工具、压缩、监督和收尾；[stream.rs](../src-tauri/src/core/agent/stream.rs) 负责请求组装与流式处理。
@@ -93,7 +108,7 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - 项目删除取消相关运行并级联会话和托管目录，不删除用户代码主目录；迟到检查点不得复活已删除数据。
 - providers 嵌套 models 是配置形态，`ModelConfig` 是运行时摊平形态；前后端摊平逻辑同步维护，新增字段使用 serde default。
 - API key 通过 `core/config_commit.rs` 统一提交：先写/核验不可变 keyring generation，再一次性替换占位与引用配置；不降级明文。配置写者共用提交锁、字段域版本与操作回执，详情和历史明文/真平台限制见 [供应商与网络](./providers-and-network.md#2-api-key-与-key-池)。
-- 资源持久信任使用宿主注入的 backend、专用钥匙串 service 和受保护 OS 协调锁；MCP 已接入票据确认、版本撤销和各 admission 重验，项目提示/技能正文尚未接入，平台验收边界见 [MCP 与技能](./mcp-and-skills.md#持久权威事务与准入)。
+- 资源持久信任使用宿主注入的 backend、专用钥匙串 service 和受保护 OS 协调锁；MCP 启动和指令资源共用底层权威服务、分别绑定用途。项目提示/记忆/技能按同份快照准入渲染，正文读取再验；本次许可按根会话隔离。冻结/估算及平台验收边界见 [MCP 与技能](./mcp-and-skills.md#指令资源准入)。
 
 ### 保存、展示与 wire 必须分离
 
@@ -116,7 +131,6 @@ D3 的 Vue/Naive UI/Pinia 与 D7 的私有分发设想是历史决策，当前�
 - 构建环境与代码组织：[development](./development.md)
 - 门禁、回归策略与已知验证边界：[testing](./testing.md)
 - 安装包、签名、公证与更新：[release](./release.md)
-- 外部 Agent 协议与 codeg 接入设计：[acp-integration](./acp-integration.md)（待批准，未实施；现行桌面架构不因此获得 ACP 能力）
 - 全部主题导航：[0-README](./0-README.md)
 
 维护本文时逐字保留 D1–D8，只更新跨层事实和必要摘要；具体状态机、问题排查和边界放在对应主题。不要重新加入完成计划、一次性验收数字、旧目录全表或“全部交付/全绿”快照。

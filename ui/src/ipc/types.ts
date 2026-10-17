@@ -572,7 +572,7 @@ export interface GitLogEntry { short_id: string; summary: string; author: string
 
 /** 内容版本及规范身份；只记录来源，不授予资源运行权限。 */
 export interface ResourceOrigin {
-  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "global_managed" | "project_managed";
+  source: "builtin" | "user_claude" | "user_agents" | "workspace_claude" | "workspace_agents" | "workspace_file" | "global_managed" | "project_managed";
   identity: string;
   version: string;
 }
@@ -583,6 +583,17 @@ export interface SkillInspection { entries: SkillAuditEntry[]; issues: { path: s
 
 /** 技能完整内容（get_skill 返回；body = SKILL.md 正文） */
 export interface SkillFull { meta: SkillMeta; body: string }
+
+export type InstructionReviewAction = "once" | "remember" | "revoke";
+export interface InstructionResource {
+  available: boolean;
+  id: string; name: string; kind: "instruction" | "context" | "skill" | "memory"; origin: ResourceOrigin;
+  status: { trusted: boolean; remembered: boolean; revision: number | null; error: string | null };
+  active_versions: { id: string; version: string }[];
+}
+export interface InstructionInspection { resources: InstructionResource[]; issues: string[] }
+export interface InstructionChallenge { id: string; resource_id: string; name: string; origin: ResourceOrigin; text: string; action: InstructionReviewAction }
+export interface InstructionReceipt { operation_id: string; confirmed: boolean; resolved: boolean; error: string | null }
 
 /** 内置子代理角色摘要（list_agents 返回；后端注册表剔除内部 title 角色，不含 body 正文） */
 export interface AgentMeta { name: string; description: string; resource?: ResourceOrigin }
@@ -874,4 +885,74 @@ export interface McpTestResult {
 export interface McpSnapshot {
   session: string;
   servers: McpStatusPayload[];
+}
+
+// ---------- 交付与验收（[docs/tools-and-safety](../../../docs/tools-and-safety.md) / #16）----------
+/**
+ * 运行终态**不是**验收结论：`run:done` 只说明模型停了，能不能算交付通过看这里。
+ * `allows_completion` 为真只有两种情况——验收器在已采纳证据上推出 `passed`，
+ * 或本会话根本没有交付契约（旧问答沿原收尾）。
+ */
+export type DeliveryDecision = "allow" | "repair" | "blocked" | "cancelled";
+export type AcceptanceStatusKind =
+  | "cancelled"
+  | "blocked"
+  | "failed"
+  | "stale"
+  | "pending"
+  | "passed";
+export type AcceptanceItemStatus =
+  | "pending"
+  | "passed"
+  | "failed"
+  | "blocked"
+  | "stale"
+  | "waived"
+  | "cancelled";
+
+/** 结构化原因：稳定原因码 + 可定位描述（不拿错误码文本当状态真值） */
+export interface AcceptanceReason {
+  code: string;
+  message: string;
+  target_id?: string | null;
+}
+
+export interface AcceptanceItem {
+  requirement_id: string;
+  status: AcceptanceItemStatus;
+  evidence_refs?: unknown[];
+  reasons?: AcceptanceReason[];
+  evaluated_version?: string | null;
+}
+
+export interface AcceptanceSnapshot {
+  task_id: string;
+  contract_revision: number;
+  revision: number;
+  items?: AcceptanceItem[];
+  overall: AcceptanceStatusKind;
+  waived_count: number;
+  evaluated_version?: string | null;
+  reasons?: AcceptanceReason[];
+}
+
+/** 一个待修复缺项（"还差什么"） */
+export interface DeliveryGap {
+  requirement_id: string;
+  check_id?: string | null;
+  reason_code: string;
+  message: string;
+}
+
+/** 会话的验收只读投影（无写接口，也没有任何 set_passed） */
+export interface DeliveryProjection {
+  task_id: string;
+  contract_revision: number;
+  /** 老会话 / 无契约时为 null：界面显示"未验证"，不补造结论 */
+  snapshot: AcceptanceSnapshot | null;
+  decision: DeliveryDecision;
+  allows_completion: boolean;
+  gaps: DeliveryGap[];
+  repair_rounds_used: number;
+  repair_rounds_max: number;
 }

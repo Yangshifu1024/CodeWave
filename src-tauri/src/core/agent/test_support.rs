@@ -7,6 +7,17 @@ use std::sync::Arc;
 
 /// 测试用空事件汇：吞掉所有帧与事件，供各测试模块构造 AgentCore 复用。
 pub struct NoopSink;
+
+/// Exercise the production request builder without issuing a paid model call.
+pub async fn request(
+    core: &Arc<AgentCore>,
+    rt: &Arc<SessionRuntime>,
+) -> crate::provider::dto::StreamRequest {
+    super::stream::build_stream_request(core, rt, &super::DriveParams::default())
+        .await
+        .unwrap()
+        .1
+}
 impl EventSink for NoopSink {
     fn channel_frame(&self, _s: &SessionId, _f: &Frame) {}
     fn emit(&self, _s: &SessionId, _e: &str, _p: serde_json::Value) {}

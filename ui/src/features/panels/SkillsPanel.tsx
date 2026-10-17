@@ -15,6 +15,7 @@ export function ResourceDetails({ resource }: { resource: ResourceOrigin }) {
     user_agents: t("settings.resourceSource_user_agents"),
     workspace_claude: t("settings.resourceSource_workspace_claude"),
     workspace_agents: t("settings.resourceSource_workspace_agents"),
+    workspace_file: t("settings.resourceSource_workspace_file"),
     global_managed: t("settings.resourceSource_global_managed"),
     project_managed: t("settings.resourceSource_project_managed"),
   };

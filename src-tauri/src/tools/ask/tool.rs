@@ -178,6 +178,14 @@ impl Tool for AskTool {
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> ToolOutcome {
+        if !ctx.rt.interactive.load(std::sync::atomic::Ordering::SeqCst) {
+            *ctx.rt.interaction_blocked.lock().unwrap() = Some("interaction_unavailable".into());
+            ctx.cancel.cancel();
+            return ToolOutcome::err(
+                "E_INTERACTION_UNAVAILABLE",
+                "当前宿主不能接收用户应答；任务受阻，未批准任何操作",
+            );
+        }
         let run_id = ctx.rt.run_snapshot().run_id;
         let args: Args = match serde_json::from_value(args) {
             Ok(a) => a,
@@ -223,6 +231,7 @@ impl Tool for AskTool {
             "approval": approval_shape(&args.questions),
             "approve_id": approve_option_id(&args.questions),
             "can_preview_plan": can_preview_plan,
+
         });
         // [docs/plan-and-approval](../../../../docs/plan-and-approval.md)：
         // 真实方案正文（与 `plan_file` 同源）——前端用它渲染计划卡正文与「复制计划全文」。

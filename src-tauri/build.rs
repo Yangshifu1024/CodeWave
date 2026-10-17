@@ -1,6 +1,6 @@
 fn main() {
     inject_commit_sha();
-    tauri_build::build()
+    tauri_build::build();
 }
 
 /// 编译期注入 HEAD commit short-sha（「关于」弹框版本号括号段用）。

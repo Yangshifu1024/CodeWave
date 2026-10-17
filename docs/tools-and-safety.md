@@ -4,7 +4,7 @@
 
 ## 1. 工具接线与结果通道
 
-[注册表](../src-tauri/src/tools/registry.rs) 静态注册 23 个内置工具，按名字稳定排序输出 schema。新增工具须登记注册表、严格 schema 与对应契约测试；schema 的对象层使用 `additionalProperties:false`，运行时宽松解码发现未知顶层字段则附 warnings。不要把旧优化方案里未实现的字段当作 API。
+[注册表](../src-tauri/src/tools/registry.rs) 静态注册内置工具，按名字稳定排序输出 schema。新增工具须登记注册表、严格 schema 与对应契约测试；schema 的对象层使用 `additionalProperties:false`，运行时宽松解码发现未知顶层字段则附 warnings。不要把旧优化方案里未实现的字段当作 API。
 
 | 领域 | 工具 | 当前要点 |
 |---|---|---|
@@ -146,6 +146,8 @@ POSIX shell 的 `-c`（含 `-lc` 等组合）只扫描首个脚本，后续 argv
 
 两个工具仅允许 HTTP(S)，拒绝 URL 内嵌凭据，关闭自动重定向，最多跟随 10 跳；要求本地解析的路由每跳重新解析并校验全部目标地址，以该地址集合构造本跳客户端，保持原域名用于 Host/TLS 校验，不能二次解析成其它连接目标。允许内网时，远端 DNS 代理保持代理解析，不先要求本地 DNS 成功。每 host 最少 1 秒节流。两工具的 `timeoutSeconds` 默认 60、范围 1–120，统一总预算覆盖代理探测、DNS、节流、全部跳转和正文读取；取消优先，取消返回 `E_CANCELLED`，超时返回 `E_NETWORK`。macOS 显式系统代理探测为可取消子进程；默认原生系统探测及其它平台探测在阻塞工作线程执行，请求取消后原生查询可能继续结束。这不等于批次层已有任意工具的统一总时限，也不包括正文 Readability 的同步 CPU 处理。
 
+本地 DNS SOCKS4/5 的连接器只使用首个解析地址，因此执行器按已校验顺序逐个尝试候选；仅连接阶段错误（包括TLS握手失败）才推进下一地址。每次仍用同一代理快照和原URL/域名，不重新解析、不改IPv4优先、不静默直连。所有候选共享上述总预算/取消并逐次节流。HTTP请求已发出后的断流、状态码失败或正文读取错误均不触发地址重放，避免重复POST副作用。真实SOCKS协议、TLS握手及不重放回归见[socks_tests.rs](../src-tauri/src/tools/net/socks_tests.rs)；这不是对任意请求失败的通用重试。
+
 两工具均使用 `read_body_limited` 对**解压后的流式正文**实施 50 MiB 硬上限，无 Content-Length/分块响应同样受限；声明长度超限则提前拒绝。web_fetch 的 HTML 用 Readability，失败退化剥标签，默认 maxChars=60,000、范围 1,000–500,000，目前不支持 markdown 格式参数或图片内容通道；新增 `final_url` 标明实际取回地址，原 `url` 保留用户输入。
 
 http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS；JSON 预览 24 Ki 字符、文本 96 Ki 字符，二进制只报体积和 MIME；响应头只对 set-cookie/www-authenticate 做脱敏。body 是 JSON 值，字符串也按 JSON 字符串发送；query 的名称和值均编码。Host、Content-Length、Transfer-Encoding 和 Proxy-Authorization 不允许由 caller 头覆盖。
@@ -187,7 +189,75 @@ http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS；JSON
 
 回归入口：[postcheck.rs](../src-tauri/src/tools/postcheck.rs)、[validation.rs](../src-tauri/src/tools/validation.rs)、[create.rs](../src-tauri/src/tools/create.rs)、[edit/tests.rs](../src-tauri/src/tools/edit/tests.rs)。必须断言最终 compact_for_model 文本含检查结论，不只断言 warnings。人工可用一次性项目的 `echo checked:{file}` 与 `echo check-failed; exit 1` 验证；实际 lint/typecheck 命令须先在目标工程根测试，不提供未经验证的万能命令。
 
-## 7. 后续工作如何取舍
+## 7. 交付与验收域
+
+[core/delivery](../src-tauri/src/core/delivery/) 回答「**任务做完了吗凭什么说了算**」。
+答案不是运行终态、不是 `<report>`、不是退出 0、也不是 wait 命中，而是逐条需求在
+**宿主已采纳的不可变证据**上成立与否。完成门与修复预算见[计划与审批](./plan-and-approval.md)。
+
+### 证据身份的唯一来源
+
+身份只能由宿主从真实 runtime 补齐（`RunIdentity`）。**模型不能自称签发者、不能自称证据 id、
+不能自称审查分派 id**：审查分派由宿主签发，模型给的 `reviewAssignmentId` 只是指名，
+取不到即拒绝派发，不允许降级为无职责任务。
+
+### 边车存储
+
+`<data_dir>/sessions/<会话>.delivery/`：`contracts/<task>.<revision>.json`、`baselines/`、`records/`、`outputs/`、
+`index.json`（CAS 索引，**唯一采纳来源**）、`journal/`。四条不可让步的规则：
+未入索引的孤儿记录**永不**被验收器采纳；文件名全部由宿主生成（owner / record id 不当路径用）；
+事务顺序固定（校验身份 → 写 journal → 原子写不可变 record → CAS 提交索引 → 发快照）；
+保存失败返回 `E_DELIVERY_SAVE` 并**保留工具已发生的真实结果**。
+
+幂等摘要**剔除时刻字段**：时刻是导出元数据不是操作身份，把它算进去会让"重复请求幂等"永远失效。
+记录 id 由 `host_id(operation_id, kind)` 对完整操作身份计算 SHA-256，避免字符过滤或截断造成碰撞；同一记录、契约修订及输出不允许覆盖。多任务不共用一个契约文件，未提交修订不会破坏旧索引所指向的版本。交付目录或已提交索引/记录损坏不能当作没有契约：完成门按 blocked 处理。
+
+### 版本与新鲜度
+
+[version.rs](../src-tauri/src/core/delivery/version.rs) 按**内容 SHA-256** 取范围摘要，
+产出 `Freshness::{Fresh, Stale, Unknown}`。禁用 mtime-only 与 HEAD-only；
+条目排序固定（枚举顺序不得改变摘要）；**越界 symlink 判 incomplete 而不是跟随**。
+一侧不可读**永不**算 fresh；未知就是未知，不降级成通过。显式目录范围递归记录成员内容和增删，限制条目数、单文件大小及目录深度；工具链事实也参与新鲜度比较。读取权限失败不能标成文件缺失。检查执行前后输入、依赖与工具链必须完整且相同；声明的 outputs 可在验证时生成，但完成后的完整范围仍须与当前内容一致。之后变化派生 stale，原记录保持不变。递归目录输入排除真实全局/项目宿主的受保护控制状态和日志，避免 guardian 租约等自写事实污染测试版本；普通 `.codewave/tasks` 输入继续参与摘要。
+
+### 生产契约与真实证据入口
+
+`delivery_contract create` 接受需求、产物、检查草稿，先将精确草稿展示给用户并通过真实询问采纳；FullAccess 不能代替契约批准，无交互宿主无法从模型入口启用契约。可信宿主直接提供的待采纳契约按宿主入口处理。身份、任务 id、修订、真实根路径、变更前基线由宿主补齐；发布契约前先准备并保存冻结工作流。`read/evaluate` 提供查询和重算，不能写 passed。`revise` 通过 expectedRevision 检查；取消和豁免必须引用同会话、同 root run、明确覆盖目标的真实用户决定。创建草稿不能自带取消/豁免冒充授权。
+
+普通 `command` 可记录执行事实，但只有 `checkId` 命中已登记检查、命令逐字匹配且实际 cwd 与声明一致时，才绑定该检查和精确 task/revision；签发器在准入前后捕获范围、保存真实开始/结束时间与输出。spill 输出从完整文件读取，超预算标截断；写后配置命令也签发实际退出码回执并独立捕获最多 8MiB 原始合并输出供脱敏后落盘；模型侧仍只返回尾部，超预算必须标截断，不能将裁剪尾部标成完整。命令、参数及输出中的常见 `API_KEY/token/password/secret` 标签和 Bearer 凭据会脱敏；仍应避免输出没有标签的密钥。
+
+`verify_regression` 从已采纳回执构造 RED/GREEN：RED 必须实际按宿主预定义失败码失败并具有完整断言失败输出，GREEN 必须成功退出；实际解析命令、检查身份和被测版本须一致可对账，GREEN 要仍然新鲜。测试/断言文件必须事先在非空 `dependency_files` 中声明；这些文件变化时不能将删断言后的通过认作修复。间歇问题使用 `regression_intermittent`：从当前同一契约/检查、RED 之后的真实回执统计至少 10 次当前 GREEN 版本观察，存在失败、命令/解析形态或 cwd 变化即不满足策略。该工具签发结构化校验记录，模型不能自行提交通过布尔。
+
+`confirm` 发出真实 `ask:opened` 并等待 responder，保存 prompt id 与应答版本；不经过计划批准或权限切档。忽略、拒绝及无交互宿主均不产生确认；明确取消使用独立 cancelled 决定，不能拿 confirmed 代替取消授权。修订范围必须核对决定所绑定的当前契约、目标和版本。执行回执、人工确认与结构化校验均携带精确 task/revision，缺失绑定或来自同一 run 其他任务/修订的同名检查都不能通过。人工确认、结构化校验和审查还必须绑定当前完整范围，内容变更后需要重新验证。完成门只消费当前 run 绑定契约，历史合同继续只读保留。
+
+产物的 `StructuredCheck` 由账本求值：先验证存在性、类型和大小等物理约束，再查同 task/revision/run 的真实 `Passed` 校验记录，校验器版本和当前完整 scope 必须匹配，且 scope 实际涵盖该产物。没有记录、版本不符或范围已变化均不能通过；不能把“尚待结构化校验”误当成永久失败，也不能忽略约束直接放行。`CheckKind::Artifact` 必须引用至少一个本契约产物，空引用及悬空引用在契约校验时拒绝。需求只有产物引用、没有显式检查时仍保守保持 pending：产物存在本身不证明需求已验证。
+
+### 职责分离与独立审查
+
+`DutyKind` 进 `SubBase`，其排除集在 `subagent_drive_params` **最后无条件追加**——
+既有 `readonly_extra_excludes` 会随 FullAccess 解锁，那是"用户授权我写"，
+与"审查者不该改被审代码"是不同性质的约束。验证职责锁 `clean_context=true`；
+调用方传 false 一律忽略并留痕，不静默照办。`ContextManifest` 只存引用与摘要，不复制正文。审查职责禁止 command/service/MCP，即使 FullAccess 也不能解除；独立验证命令必须携带其 verificationTaskId 契约内合法 checkId。
+
+根任务用 `assign_review` 签发分派，审查子代理凭宿主绑定用 `submit_review` 提交；实际 actor 不能属于实现者集合，目标范围与契约修订必须仍匹配。每维明确 `checked/not_applicable/unverified`，不适用须写理由，发现保留 stable_id 与证据；缺维度、未验证或阻断发现均不能通过。
+
+`ReviewPolicy.dimensions` 明确声明的维度与单项检查声明取并集；未声明策略维度时沿用单项检查维度，二者均未声明则要求默认七维。`blocking_severities` 按冻结契约生效，缺省只有 `error`；审查提交、验收重算和子交付统一消费，旧 `findings` 与有稳定 id 的 `review_findings` 均参与。审查结果由宿主绑定精确 `check_id`，旧记录缺少该绑定时不能满足检查。不同检查与 scope 的审查各自选择当前内容对应的记录；同检查、同 scope 的新复审结论替代旧结论参与求值，旧记录继续保留。维度缺失或未验证不能靠零 finding 获得批准。
+
+### 结构化交付两段式
+
+`submit_delivery` 工具**只记草稿**到子 runtime，宿主在**终态**按真实 `ended` 落盘：
+四象限（report / partial / blocked / cancelled）只有收尾那一刻才可知，模型无权自称。
+主会话排除该工具。宿主对子代理只核验派发绑定的 requirementIds 及关联检查/产物；变更前摘要必须匹配宿主不可变基线，模型自己填写 beforeHash 不能证明它曾改过文件。宿主子交付校验走固定七步顺序，输出稳定 reason code 与 `item_id`。
+
+同一任务多个子交付合流后，根任务必须在最后一份子交付之后，对实际整体重新运行所有必需 command 检查；子级回执不能替代。partial、缺项、阻塞或检查后漂移都阻止整体通过；重复求值只读取回执，不重跑副作用。
+
+### 与验收相关的两处易错点
+
+- **父范围必须覆盖必跑检查的输入**：前后对比只覆盖 `parent_scope`；必跑检查若读到窗口外的路径，
+  "检查期间没被写入"就无从证明（一个无关文件没变，不构成被检查区域没变的证明）。
+- **共享资源版本事实写作 `resource:<名>@<版本>`**：裸 `resource:postgres-main` 不构成登记——
+  知道资源存在与知道它是哪个版本是两回事。
+
+## 8. 后续工作如何取舍
 
 已落地的低风险编辑容错、锁、diff 预览、二进制拒绝、command spill 与清洗应继续守护。仍未交付的旧方案集中保留为候选：read 局部错误/超长单行保护、通用模型截断全文可取回、list_files glob、动态工具描述/workdir 别名、web_fetch markdown/图像、技能附属文件清单、独立 web_search、后台子代理续接、按模型裁剪工具。只有获得新需求与验收标准后再做，不能把整张旧排期表当现有承诺。
 

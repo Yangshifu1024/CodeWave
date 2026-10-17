@@ -11,6 +11,7 @@ import { useUi } from "../../stores/ui";
 import { originLabel } from "../../utils/skills";
 import { readCollapsedSections, writeCollapsedSections, type CollapsibleSection } from "../../utils/rightbarPrefs";
 import QuotaSection from "../quota/QuotaSection";
+import AcceptancePanel from "../chat/AcceptancePanel";
 import type { WorkspaceChanges } from "../workspace/useWorkspaceChanges";
 import OpenInEditorSelect from "./OpenInEditorSelect";
 import SkillDetailModal from "./SkillDetailModal";
@@ -57,7 +58,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
   const project = tab?.projectId ? projects.find(p => p.id === tab.projectId) : null;
   const hasProject = !!tab?.projectId;
   const directory = hasProject ? project?.directory ?? tab?.workspace ?? "" : "";
-  const sections: CollapsibleSection[] = [...(todos.length ? ["plan" as const] : []), "quota", "skills"];
+  const sections: CollapsibleSection[] = [...(todos.length ? ["plan" as const] : []), ...(tab ? ["acceptance" as const] : []), "quota", "skills"];
   const openSections = sections.filter(id => !collapsed.has(id));
   const statuses = { running: 0, done: 0, attention: 0, error: 0 };
   for (const sub of subs) statuses[subStatus(sub)]++;
@@ -148,6 +149,12 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
                 ...(todos.length ? [{
                   key: "plan", label: t("rightbar.currentPlan"), extra: <Typography.Text type="secondary">{t("rightbar.planProgress", { done: todos.filter(todo => todo.status === "completed").length, total: todos.length })}</Typography.Text>,
                   children: todos.map((todo, i) => <div className="rb-todo" key={i}><span className={`rb-todo-dot ${todo.status}`}>{todo.status === "completed" ? <CheckOutlined /> : todo.status === "in_progress" ? "●" : "○"}</span><span className={todo.status === "completed" ? "rb-todo-done" : ""}>{todo.title}</span></div>),
+                }] : []),
+                // 交付验收（#16）：只读投影，无任何写入入口。它回答的是
+                // 「能不能算交付通过」，与「运行是否结束」是两件事。
+                ...(tab ? [{
+                  key: "acceptance", label: t("acceptance.title"), forceRender: true,
+                  children: <AcceptancePanel sessionId={sessionId} visible={visible} />,
                 }] : []),
                 { key: "quota", label: t("rightbar.quota"), extra: quotaActions, forceRender: true, children: quotaContent },
                 { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>

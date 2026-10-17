@@ -32,6 +32,7 @@ fn context(
         batch_id: "document-test".into(),
         call_index: 0,
         call_key: "document-test:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }

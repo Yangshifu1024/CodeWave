@@ -80,6 +80,33 @@ impl Tool for HttpRequestTool {
             return ToolOutcome::err("E_ARGS", format!("不允许的方法 {method}"));
         }
 
+        if ctx
+            .rt
+            .delivery_review_assignment_id
+            .lock()
+            .unwrap()
+            .is_some()
+            || ctx
+                .rt
+                .delivery_verification_task_id
+                .lock()
+                .unwrap()
+                .is_some()
+        {
+            return ToolOutcome::err(
+                "E_DUTY_READONLY",
+                "独立审查/验证职责不开放通用 HTTP API 工具，请使用 web_fetch 读取",
+            );
+        }
+        let _effect = if matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+            None
+        } else {
+            match ctx.acquire_effect(&[], true) {
+                Ok(guard) => Some(guard),
+                Err(message) => return ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message),
+            }
+        };
+
         let mut url = match reqwest::Url::parse(&args.url) {
             Ok(url) => url,
             Err(_) => return ToolOutcome::err("E_URL", "URL 无效"),
@@ -338,6 +365,7 @@ mod tests {
             batch_id: "b".into(),
             call_index: 0,
             call_key: "b:0".into(),
+            provider_call_id: String::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
@@ -361,6 +389,74 @@ mod tests {
             });
         }
         core
+    }
+
+    #[tokio::test]
+    async fn workflow_http_write_is_owned_but_get_remains_readonly() {
+        use crate::core::workflow::dispatch;
+        use std::collections::BTreeMap;
+        let ctx = make_ctx(core_with(true));
+        let (addr, requests, server) =
+            start_server(|_| vec![response("HTTP/1.1 200 OK", &[], b"written")]);
+        let out = HttpRequestTool
+            .run(
+                &ctx,
+                json!({"url":format!("http://{addr}/"),"method":"POST"}),
+            )
+            .await;
+        server.join().unwrap();
+        assert!(out.ok, "ordinary root POST remains available: {out:?}");
+        assert!(requests.lock().unwrap()[0].starts_with("POST "));
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
+        let owner = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+        let unit = dispatch::spawn_unit("http-child", &["workspace:child.txt".into()]);
+        let leases = dispatch::admission(
+            &owner,
+            &owner.root_run_id,
+            dispatch::current_generation(&owner.root_run_id),
+            &[(unit, vec![])],
+            &roots,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let _lease = dispatch::LeaseGuard(leases.into_iter().next().unwrap());
+        // No server is needed: the write must be refused before opening a socket.
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            let out = HttpRequestTool
+                .run(&ctx, json!({"url":"http://127.0.0.1:1/","method":method}))
+                .await;
+            assert_eq!(
+                out.error.as_ref().unwrap().code,
+                "E_WORKFLOW_OWNERSHIP",
+                "{out:?}"
+            );
+        }
+        let (addr, _, server) = start_server(|_| vec![response("HTTP/1.1 200 OK", &[], b"read")]);
+        let out = HttpRequestTool
+            .run(
+                &ctx,
+                json!({"url":format!("http://{addr}/"),"method":"GET"}),
+            )
+            .await;
+        server.join().unwrap();
+        assert!(out.ok, "GET remains available beside a child: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn review_and_verification_do_not_gain_generic_http_capability() {
+        let ctx = make_ctx(core_with(true));
+        *ctx.rt.delivery_review_assignment_id.lock().unwrap() = Some("assignment".into());
+        let out = HttpRequestTool
+            .run(&ctx, json!({"url":"http://127.0.0.1:1/","method":"GET"}))
+            .await;
+        assert_eq!(out.error.as_ref().unwrap().code, "E_DUTY_READONLY");
+        *ctx.rt.delivery_review_assignment_id.lock().unwrap() = None;
+        *ctx.rt.delivery_verification_task_id.lock().unwrap() = Some("task".into());
+        let out = HttpRequestTool
+            .run(&ctx, json!({"url":"http://127.0.0.1:1/","method":"POST"}))
+            .await;
+        assert_eq!(out.error.as_ref().unwrap().code, "E_DUTY_READONLY");
     }
 
     #[test]

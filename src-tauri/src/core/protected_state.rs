@@ -24,9 +24,11 @@ const GLOBAL_TREES: &[&str] = &[
     "instances",
     "trust",
     "credential-leases",
+    "workflow_trust",
+    "coord",
 ];
 const PROJECT_FILES: &[&str] = &["project.json", "mcp.json"];
-const PROJECT_TREES: &[&str] = &["locks", "instances", "trust", "credential-leases"];
+const PROJECT_TREES: &[&str] = &["locks", "instances", "trust", "credential-leases", "coord"];
 
 /// Reject the target itself, descendants and ancestors that could replace/delete
 /// protected state. This checks both named entries and their current symlink

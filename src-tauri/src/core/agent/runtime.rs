@@ -1,6 +1,5 @@
 use super::drive::run_chat;
 use crate::core::config::ConfigState;
-use crate::core::context::ContextBreakdown;
 use crate::core::sessions::SessionStore;
 use crate::core::types::{Content, Message, Role, SessionId};
 use crate::tools::registry::ToolRegistry;
@@ -79,6 +78,18 @@ pub enum Frame {
         /// 该 step 成功尝试：请求发出 → 首个任意类型 delta（含 thinking）
         #[serde(default)]
         ttft_ms: Option<u64>,
+        /// 当前上下文占用（上游回报的真实输入量口径，[docs/chat-and-interface](../../../../docs/chat-and-interface.md)）。
+        ///
+        /// 与 `input` 的区别必须写清：`input` 是**这一步请求带了多少**，会随历史增长；
+        /// 这里是「上下文里现在有多少」，也就是自动压缩与客户端进度条要的那个数。
+        #[serde(default)]
+        context_used: Option<u64>,
+        /// 生效模型的上下文窗口（与压缩判定同一事实源，不另算）。
+        ///
+        /// 没有它，宿主只能得到没有分母的 `used`，无法展示上下文占比，
+        /// 「上下文还剩多少」就退化成一个猜的数。
+        #[serde(default)]
+        context_window: Option<u32>,
     },
     /// 子代理帧信封：子代理的流式帧借父会话通道下发；前端按 sub_id 路由进该子代理自己的
     /// 消息流（[docs/subagents](../../../../docs/subagents.md)）。
@@ -124,6 +135,10 @@ pub struct RunTerminal {
     pub history_save: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_run: Option<crate::core::sessions::run_display::RunDisplay>,
+    /// 完成门摘要（#16）：`Done` **不等于**验收通过，界面据此显示"未通过 / 还差什么"。
+    /// 只增可选字段——旧会话缺它时按"未验证"显示，不补造结论。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<serde_json::Value>,
 }
 
 impl RunTerminal {
@@ -136,6 +151,7 @@ impl RunTerminal {
             error_kind: None,
             history_save: None,
             task_run: None,
+            acceptance: None,
         }
     }
 }
@@ -176,6 +192,41 @@ pub struct SessionRuntime {
     pub extra_roots: Mutex<Vec<String>>,
     /// plan 工具的 todo 状态机（内存 + 边车持久化）
     pub todos: Mutex<Vec<crate::tools::plan::Todo>>,
+    /// 本 run 绑定的交付契约任务 id（[#17](../../../../docs/subagents.md)）。
+    ///
+    /// 由**宿主**在派发子代理时从已登记契约解析写入，**不是**模型每次调用现填的——
+    /// `submit_delivery` 的 `task_id` / `owner` / `contract_revision` 都据此确定，
+    /// 模型只能在契约内部声明完成项与未完成项。`None` 表示本次派发没有绑定契约
+    /// （旧任务 / 问答 / 机械修改），此时结构化提交不可用，文本 `<report>` 仍是唯一收尾。
+    pub delivery_task_id: Mutex<Option<String>>,
+    pub delivery_requirement_ids: Mutex<Vec<String>>,
+    pub delivery_review_assignment_id: Mutex<Option<String>>,
+    pub delivery_verification_task_id: Mutex<Option<String>>,
+    pub delivery_check_ids: Mutex<Option<Vec<String>>>,
+    pub pending_contract: Mutex<Option<crate::core::delivery::types::ContractDraft>>,
+    /// 本次派发收到的结构化交付草稿（[#17](../../../../docs/subagents.md)）。
+    ///
+    /// `submit_delivery` 写入、宿主在**终态**取走并按真实 `ended` 落成不可变记录。
+    /// 分两段是因为 `ended`（[四象限](../../../../docs/subagents.md)）只有在子代理收尾那一刻
+    /// 才知道；子代理自己无权声明自己是 report 还是 partial。
+    pub delivery_draft: Mutex<Option<crate::tools::submit_delivery::DeliveryDraft>>,
+    /// 最近一次收尾的完成门裁决（[#16](../../../../docs/plan-and-approval.md)）。
+    ///
+    /// **运行终态不是验收结论**：`RunTerminalKind::Done` 只说明模型停了，能不能算交付
+    /// 通过看这里。恢复会话时按显示用途读取，**不据此重跑任何工具**。
+    pub last_completion: Mutex<Option<crate::core::delivery::CompletionDecision>>,
+    /// Host ability, independent from approval mode. No UI never means approval.
+    pub interactive: AtomicBool,
+    pub interaction_blocked: Mutex<Option<String>>,
+    /// Actual persistence and settlement facts for the current run.
+    pub save_clean: AtomicBool,
+    pub token_budget: Arc<std::sync::atomic::AtomicU64>,
+    pub token_spent: Arc<std::sync::atomic::AtomicU64>,
+    /// Serializes finite-budget provider attempts across the root and its descendants.
+    pub token_budget_gate: Arc<tokio::sync::Mutex<()>>,
+    pub token_budget_uncertain: Arc<AtomicBool>,
+    pub cleanup_done: AtomicBool,
+    pub workspace_guard: Mutex<Option<Arc<crate::core::process_coordination::WorkspaceGuard>>>,
     /// 运行中注入通道的发送端（run.ts 队列消息入此）
     inject_tx: mpsc::Sender<InjectMessage>,
     /// 注入通道接收端（run 期间被 drive_agent 取走消化）
@@ -189,6 +240,12 @@ pub struct SessionRuntime {
     run_snapshot: Mutex<RunSnapshot>,
     /// 纯观察摘要的弱引用；终态发布后清理，不参与运行互斥或审批决策。
     activity: std::sync::Weak<crate::core::activity::ActivityState>,
+    /// 会话 store 的弱引用：**只**用于在 `finish_run` 里释放 #36-C0 的 owner 租约。
+    ///
+    /// 为什么必须是弱引用、且必须挂在 runtime 上：owner 的释放点是「run 收尾」，
+    /// 而 `finish_run` 是**唯一宿主无关**的收尾信号。挂在 `mark_running(false)`
+    /// 上会漏——宿主忘了调，那个会话就永久 busy，用户再也跑不了它。
+    owner_store: std::sync::Weak<crate::core::sessions::SessionStore>,
     /// 压缩互斥（TOCTOU 修复）：手动/自动压缩期间置位；期间 start_chat 与二次压缩被拒
     pub compacting: AtomicBool,
     /// 文件操作互斥（edit 工具的进程级文件写互斥）
@@ -209,8 +266,6 @@ pub struct SessionRuntime {
     pub(super) stream_emission_lock: Mutex<()>,
     /// 当前 run 的取消 token（空闲为 None）
     pub active_cancel: Mutex<Option<CancellationToken>>,
-    /// breakdown 结果缓存（30s）
-    pub breakdown_cache: Mutex<Option<(std::time::Instant, ContextBreakdown)>>,
     /// 路径清单缓存（30s）
     pub paths_cache: Mutex<Option<(std::time::Instant, Vec<String>)>>,
     /// 本 run 是否已注入计划瞬态快照（每 run 复位）
@@ -278,6 +333,7 @@ pub struct SessionRuntime {
     /// 防 run 中途文件变更（如 agent 自己编辑 AGENTS.md）打穿 provider 前缀缓存，同时省每步 10+ 文件重读；
     /// drive_agent 每个 run 清空——文件变更从「下一步生效」变「下一条用户消息生效」（与子代理 spawn 冻结一致）
     pub system_frozen: Mutex<Option<String>>,
+    pub instruction_usage: Mutex<Vec<crate::core::instruction_resources::ResourceUse>>,
     /// Anthropic 历史代际断点锚点（req.messages 下标；滞回前移，见 prompt-caching-hardening 批次），
     /// drive_agent 每个 run 清空
     pub cache_gen_anchor: Mutex<Option<usize>>,
@@ -289,6 +345,18 @@ pub struct SessionRuntime {
 
 impl SessionRuntime {
     /// 读取运行标志与最近终态的同一时刻快照；不访问历史或磁盘。
+    pub fn observation_store_owner(&self) -> String {
+        self.root_session_id
+            .as_ref()
+            .map(|root| format!("{root}__{}", self.id))
+            .unwrap_or_else(|| self.id.clone())
+    }
+    pub fn tool_observation_id(&self, batch: &str, index: usize) -> Option<String> {
+        self.owner_store.upgrade().and_then(|store| {
+            store.tool_observation_id(&self.observation_store_owner(), batch, index)
+        })
+    }
+
     pub fn run_snapshot(&self) -> RunSnapshot {
         let state = super::guards::lock_ok(&self.run_snapshot);
         let mut snapshot = state.clone();
@@ -296,11 +364,33 @@ impl SessionRuntime {
         snapshot
     }
 
-    fn begin_run(&self, run_id: &str) -> bool {
+    /// 开一轮：`pub(super)` 让 `core::agent::tests` 能构造"已开跑"的状态
+    /// （否则测不到 run 收尾路径，只能靠真起跑等退避，时序不稳）。
+    pub(super) fn begin_run(&self, run_id: &str) -> bool {
+        self.begin_run_expected(run_id, None)
+    }
+
+    fn begin_run_expected(&self, run_id: &str, expected: Option<&str>) -> bool {
         let mut snapshot = super::guards::lock_ok(&self.run_snapshot);
+        if expected.is_some_and(|id| snapshot.run_id.as_deref() != Some(id)) {
+            return false;
+        }
         if self.running.swap(true, Ordering::SeqCst) {
             return false;
         }
+        *self.last_completion.lock().unwrap() = None;
+        *self.interaction_blocked.lock().unwrap() = None;
+        self.save_clean.store(false, Ordering::SeqCst);
+        if self.is_main_session {
+            self.token_spent.store(0, Ordering::SeqCst);
+            self.token_budget_uncertain.store(false, Ordering::SeqCst);
+            *self.delivery_task_id.lock().unwrap() = None;
+            self.delivery_requirement_ids.lock().unwrap().clear();
+            *self.delivery_check_ids.lock().unwrap() = None;
+            *self.delivery_review_assignment_id.lock().unwrap() = None;
+            *self.delivery_verification_task_id.lock().unwrap() = None;
+        }
+        self.cleanup_done.store(false, Ordering::SeqCst);
         *snapshot = RunSnapshot {
             running: true,
             run_id: Some(run_id.into()),
@@ -311,6 +401,25 @@ impl SessionRuntime {
             }),
         };
         true
+    }
+
+    pub(crate) fn prepare_actor_run(&self, run_id: &str) -> bool {
+        let snapshot = self.run_snapshot();
+        if snapshot.running {
+            return snapshot.run_id.as_deref() == Some(run_id);
+        }
+        self.begin_run(run_id)
+    }
+
+    pub(crate) fn finish_actor_run(&self, run_id: &str, failed: bool, cancelled: bool) {
+        let kind = if cancelled {
+            RunTerminalKind::Cancelled
+        } else if failed {
+            RunTerminalKind::Error
+        } else {
+            RunTerminalKind::Done
+        };
+        self.finish_run(RunTerminal::new(run_id, kind));
     }
 
     /// 旧轮迟到收尾不得覆盖新轮；终态完成保存后才允许下一轮启动。
@@ -332,7 +441,56 @@ impl SessionRuntime {
         if let Some(activity) = self.activity.upgrade() {
             activity.finish(&self.id, &run_id, status);
         }
+        self.try_settle_cleanup_for_run(&run_id);
         self.running.store(false, Ordering::SeqCst);
+    }
+
+    fn try_settle_cleanup_for_run(&self, expected_run: &str) -> bool {
+        let mut slot = self.workspace_guard.lock().unwrap();
+        if self.root_session_id.is_some() {
+            // Child cleanup releases only its reference; the root owns the lease.
+            slot.take();
+            self.cleanup_done.store(true, Ordering::SeqCst);
+            return true;
+        }
+        if let Some(guard) = slot.as_ref() {
+            if Arc::strong_count(guard) > 1 {
+                self.cleanup_done.store(false, Ordering::SeqCst);
+                return false;
+            }
+            if let Err(error) = guard.settle() {
+                tracing::error!("工作根清理未能确认：{error}");
+                self.cleanup_done.store(false, Ordering::SeqCst);
+                return false;
+            }
+        }
+        slot.take();
+        if self.is_main_session
+            && let Some(store) = self.owner_store.upgrade()
+            && let Err(error) = store.mark_running_for_run(&self.id, expected_run, false)
+        {
+            self.save_clean.store(false, Ordering::SeqCst);
+            self.cleanup_done.store(false, Ordering::SeqCst);
+            tracing::warn!("运行状态落盘失败：{error}");
+            return false;
+        }
+        self.cleanup_done.store(true, Ordering::SeqCst);
+        true
+    }
+
+    /// Reconcile delayed cleanup without replaying a run or releasing a newer owner.
+    pub fn try_settle_cleanup(&self) -> bool {
+        let snapshot = super::guards::lock_ok(&self.run_snapshot);
+        if self.running.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.cleanup_done.load(Ordering::SeqCst) {
+            return true;
+        }
+        match snapshot.run_id.as_deref() {
+            Some(run_id) => self.try_settle_cleanup_for_run(run_id),
+            None => false,
+        }
     }
 
     /// 开启当前 run 的接纳窗口。与发送/收尾使用同一锁，避免检查标志后发送的 TOCTOU。
@@ -406,6 +564,23 @@ impl SessionRuntime {
             history: Mutex::new(Vec::new()),
             extra_roots: Mutex::new(Vec::new()),
             todos: Mutex::new(Vec::new()),
+            delivery_task_id: Mutex::new(None),
+            delivery_requirement_ids: Mutex::new(Vec::new()),
+            delivery_review_assignment_id: Mutex::new(None),
+            delivery_verification_task_id: Mutex::new(None),
+            delivery_check_ids: Mutex::new(None),
+            pending_contract: Mutex::new(None),
+            delivery_draft: Mutex::new(None),
+            last_completion: Mutex::new(None),
+            interactive: AtomicBool::new(true),
+            interaction_blocked: Mutex::new(None),
+            save_clean: AtomicBool::new(true),
+            token_budget: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            token_spent: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            token_budget_gate: Arc::new(tokio::sync::Mutex::new(())),
+            token_budget_uncertain: Arc::new(AtomicBool::new(false)),
+            cleanup_done: AtomicBool::new(true),
+            workspace_guard: Mutex::new(None),
             inject_tx: tx,
             inject_rx: Mutex::new(rx),
             inject_accepting: AtomicBool::new(false),
@@ -413,6 +588,7 @@ impl SessionRuntime {
             running: Arc::new(AtomicBool::new(false)),
             run_snapshot: Mutex::new(RunSnapshot::default()),
             activity: std::sync::Weak::new(),
+            owner_store: std::sync::Weak::new(),
             compacting: AtomicBool::new(false),
             file_ops: Arc::new(tokio::sync::Mutex::new(())),
             sem_tools: Arc::new(Semaphore::new(4)),
@@ -421,7 +597,6 @@ impl SessionRuntime {
             stream: Arc::new(ThrottledStream::new()),
             stream_emission_lock: Mutex::new(()),
             active_cancel: Mutex::new(None),
-            breakdown_cache: Mutex::new(None),
             paths_cache: Mutex::new(None),
             injected_plan_snapshot_for_run: std::sync::atomic::AtomicBool::new(false),
             reasoning_rejected: AtomicBool::new(false),
@@ -444,6 +619,7 @@ impl SessionRuntime {
             step_count: std::sync::atomic::AtomicUsize::new(0),
             last_input_tokens: std::sync::atomic::AtomicU64::new(0),
             system_frozen: Mutex::new(None),
+            instruction_usage: Mutex::new(Vec::new()),
             cache_gen_anchor: Mutex::new(None),
             run_timing: Mutex::new(crate::core::stats::UsageTiming::default()),
         })
@@ -479,6 +655,14 @@ impl SessionRuntime {
     pub fn new_sub(parent: &SessionRuntime, sub_id: String) -> Arc<Self> {
         let mut rt = Self::new(sub_id, parent.workspace.clone(), parent.data_dir.clone());
         if let Some(r) = Arc::get_mut(&mut rt) {
+            r.interactive
+                .store(parent.interactive.load(Ordering::SeqCst), Ordering::SeqCst);
+            *r.workspace_guard.lock().unwrap() = parent.workspace_guard.lock().unwrap().clone();
+            r.owner_store = parent.owner_store.clone();
+            r.token_budget = parent.token_budget.clone();
+            r.token_spent = parent.token_spent.clone();
+            r.token_budget_gate = parent.token_budget_gate.clone();
+            r.token_budget_uncertain = parent.token_budget_uncertain.clone();
             r.project_id = parent.project_id.clone();
             r.roots = parent.roots.clone();
             r.project_dir = parent.project_dir.clone();
@@ -546,6 +730,7 @@ pub struct AgentCore {
     pub activity: Arc<crate::core::activity::ActivityState>,
     /// 全局配置（RwLock；save_config 热更新写、各处读）
     pub cfg: std::sync::RwLock<ConfigState>,
+    pub credentials: Arc<dyn crate::core::config_commit::CredentialStore>,
     pub config_commits: crate::core::config_commit::ConfigCoordinator,
     /// 活跃会话运行时表：session id → runtime
     pub sessions: DashMap<SessionId, Arc<SessionRuntime>>,
@@ -564,6 +749,7 @@ pub struct AgentCore {
     pub services: crate::tools::service::ServiceTable,
     /// 技能索引（TTL 缓存）
     pub skills: crate::skills::SkillIndex,
+    pub instructions: crate::core::instruction_resources::InstructionTrust,
     /// 多 key 池（健康表按 provider 隔离）
     pub key_pool: crate::provider::keys::KeyPool,
     /// MCP 客户端管理器
@@ -576,6 +762,12 @@ pub struct AgentCore {
     pub subs: DashMap<String, Arc<SessionRuntime>>,
     /// Serialize start checks across sessions sharing a working directory.
     pub start_gate: Mutex<()>,
+    pub interactive: AtomicBool,
+    pub host_excluded_tools: Mutex<Vec<String>>,
+    /// 交付与验收服务（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：
+    /// 工具与 host 命令共用同一实例，内部按会话串行化索引写入。
+    /// 与 `store` 同生命周期（都锚在 `data_dir` 上），不另开数据根。
+    pub delivery: Arc<crate::core::delivery::DeliveryService>,
     /// 可等待目标登记表（`wait` 工具 `until` 条件等待的数据面）。
     /// 独立于 services/subs/tasks 三张表：子代理完成即从 subs 移除、service 自然退出不移除、
     /// 计划任务无 running 中间态——反查既有表都分不清「已完成」与「不存在」。
@@ -592,6 +784,24 @@ impl AgentCore {
         client: reqwest::Client,
         data_dir: PathBuf,
     ) -> Self {
+        Self::new_with_credentials(
+            cfg,
+            sink,
+            store,
+            client,
+            data_dir,
+            Arc::new(crate::core::credentials::UnavailableCredentialStore),
+        )
+    }
+
+    pub fn new_with_credentials(
+        cfg: ConfigState,
+        sink: Arc<dyn EventSink>,
+        store: Arc<SessionStore>,
+        client: reqwest::Client,
+        data_dir: PathBuf,
+        credentials: Arc<dyn crate::core::config_commit::CredentialStore>,
+    ) -> Self {
         let activity = Arc::new(crate::core::activity::ActivityState::default());
         let sink = Arc::new(crate::core::activity::ActivitySink {
             activity: activity.clone(),
@@ -600,12 +810,16 @@ impl AgentCore {
         AgentCore {
             activity,
             cfg: std::sync::RwLock::new(cfg),
+            credentials: credentials.clone(),
+            // 接入 #36-C0 跨进程协调：配置提交持 `config:root` 租约，
+            // 并在提交前检查磁盘是否已被别的实例改过（否则静默覆盖别人的设置）。
             config_commits: crate::core::config_commit::ConfigCoordinator::new(
-                Arc::new(crate::host::keyring::SystemCredentialStore),
+                credentials,
                 Arc::new(crate::core::config_commit::DiskConfigStore::new(
                     data_dir.clone(),
                 )),
-            ),
+            )
+            .with_coordination(data_dir.as_path()),
             sessions: DashMap::new(),
             sink,
             tools: Arc::new(ToolRegistry::default_tools()),
@@ -614,12 +828,18 @@ impl AgentCore {
             data_dir: data_dir.clone(),
             services: crate::tools::service::ServiceTable::default(),
             skills: crate::skills::SkillIndex::new(),
+            instructions: crate::core::instruction_resources::InstructionTrust::default(),
             key_pool: crate::provider::keys::KeyPool::default(),
             mcp: std::sync::Arc::new(crate::mcp::McpManager::default()),
             stats: std::sync::Arc::new(crate::core::stats::StatsCollector::new(data_dir.clone())),
             tasks: std::sync::Arc::new(crate::core::scheduler::TaskTable::new(data_dir.clone())),
             subs: DashMap::new(),
             start_gate: Mutex::new(()),
+            interactive: AtomicBool::new(true),
+            host_excluded_tools: Mutex::new(Vec::new()),
+            delivery: Arc::new(crate::core::delivery::DeliveryService::new(
+                data_dir.join("sessions"),
+            )),
             wait_targets: crate::core::wait_targets::WaitTargets::default(),
         }
     }
@@ -683,7 +903,11 @@ impl AgentCore {
             r.roots = roots;
             r.project_dir = project_dir;
             r.is_main_session = true;
+            r.interactive
+                .store(self.interactive.load(Ordering::SeqCst), Ordering::SeqCst);
             r.activity = Arc::downgrade(&self.activity);
+            // 让 `finish_run` 能在 run 收尾时释放 owner 租约（#36-C0）。
+            r.owner_store = Arc::downgrade(&self.store);
             *r.extra_roots.lock().unwrap() = extra_roots;
             *r.prefs.lock().unwrap() = initial_prefs;
         }
@@ -709,10 +933,44 @@ impl AgentCore {
         text: String,
         images: Vec<crate::core::prefs::ImageIn>,
     ) -> anyhow::Result<String> {
+        self.start_chat_expected(rt, text, images, None)
+    }
+
+    pub fn start_chat_expected(
+        self: &Arc<Self>,
+        rt: Arc<SessionRuntime>,
+        text: String,
+        images: Vec<crate::core::prefs::ImageIn>,
+        expected: Option<&str>,
+    ) -> anyhow::Result<String> {
         let _start_guard = self.start_gate.lock().unwrap();
+        if !rt.running.load(Ordering::SeqCst) && !rt.try_settle_cleanup() {
+            anyhow::bail!("上一轮的工作根清理尚未确认，请稍后重试");
+        }
         let run_id = uuid::Uuid::new_v4().to_string();
-        if !rt.begin_run(&run_id) {
+        if !rt.begin_run_expected(&run_id, expected) {
             anyhow::bail!("该会话已有运行中的任务");
+        }
+        // #36-C0：认领会话 owner（`history:<id>` 租约）。
+        //
+        // 放在唯一执行入口，保证所有桌面调用遵循同一写入互斥。
+        // 位置必须在 `begin_run` 之后、任何写入之前：
+        // 起完跑再抢锁，等于第二个 writer 已经写下去了。
+        if let Err(e) = self.store.claim_session_owner(&rt.id, &run_id, 0) {
+            rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
+            anyhow::bail!("会话 {} 已被其它 CodeWave 实例占用：{e}", rt.id);
+        }
+        match crate::core::process_coordination::WorkspaceGuard::acquire_global(
+            &rt.id,
+            &run_id,
+            0,
+            &rt.workspace,
+        ) {
+            Ok(guard) => *rt.workspace_guard.lock().unwrap() = Some(Arc::new(guard)),
+            Err(e) => {
+                rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
+                anyhow::bail!("工作根已被其它运行占用：{e}");
+            }
         }
         // 压缩互斥：压缩占位期间拒绝新 run（TOCTOU 守卫——running 检查通过后压缩
         // 仍可能整体替换历史）
@@ -727,6 +985,48 @@ impl AgentCore {
                 rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
                 anyhow::bail!("请先在设置中配置并选择模型");
             }
+        }
+        if let Some(draft) = rt.pending_contract.lock().unwrap().take() {
+            let owner = crate::core::delivery::DeliveryService::identity_of(&rt);
+            let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&rt);
+            let models = self
+                .cfg
+                .read()
+                .unwrap()
+                .providers
+                .iter()
+                .flat_map(|p| p.models.iter().map(|m| m.id.clone()))
+                .collect();
+            match self.delivery.create_contract_with(
+                &owner,
+                &draft,
+                &roots,
+                &format!("host-{run_id}"),
+                |contract| {
+                    crate::core::workflow::service::prepare(
+                        contract,
+                        &roots,
+                        &rt.data_dir,
+                        rt.project_id.as_deref().unwrap_or("temporary"),
+                        rt.project_id.as_ref().map(|_| rt.workspace.as_path()),
+                        &models,
+                    )
+                    .and_then(|prepared| {
+                        crate::core::workflow::service::persist(&rt.data_dir, &prepared)
+                    })
+                    .map_err(|message| crate::core::delivery::DeliveryError::Save { message })
+                },
+            ) {
+                Ok((contract, _)) => *rt.delivery_task_id.lock().unwrap() = Some(contract.task_id),
+                Err(e) => {
+                    rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
+                    anyhow::bail!("交付契约无效，运行未开始：{e}");
+                }
+            }
+        }
+        if let Err(e) = self.store.mark_running(&rt.id, true) {
+            rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
+            anyhow::bail!("无法保存运行状态，未启动模型：{e}");
         }
         // 兜底标题（需求 2.2：至多 10 字符——按字符数截断，中英文一视同仁）
         {
@@ -852,6 +1152,7 @@ mod tests {
         assert!(!h.rt.begin_run("duplicate"));
         assert!(h.rt.run_snapshot().running);
         h.rt.finish_run(RunTerminal {
+            acceptance: None,
             run_id: "first".into(),
             kind: RunTerminalKind::Done,
             suggestions: Some(vec!["继续".into()]),
@@ -1356,6 +1657,7 @@ mod tests {
                         allow_always: false,
                         kind: ApprovalKind::Once,
                         auto_confirm: false,
+                        call_key: None,
                     },
                     &cancel,
                 )
@@ -1731,5 +2033,36 @@ mod tests {
             h.core.config_commits.snapshot(&h.core.cfg).version.sequence,
             0
         );
+    }
+    #[test]
+    fn delayed_child_reference_keeps_owner_until_retry_proves_cleanup() {
+        let h = harness();
+        assert!(h.rt.begin_run("delayed-cleanup"));
+        h.core
+            .store
+            .claim_session_owner(&h.rt.id, "delayed-cleanup", 0)
+            .unwrap();
+        let guard = Arc::new(
+            crate::core::process_coordination::WorkspaceGuard::acquire_global(
+                &h.rt.id,
+                "delayed-cleanup",
+                0,
+                &h.rt.workspace,
+            )
+            .unwrap(),
+        );
+        let child_reference = guard.clone();
+        *h.rt.workspace_guard.lock().unwrap() = Some(guard);
+        h.rt.finish_run(RunTerminal::new("delayed-cleanup", RunTerminalKind::Done));
+        assert!(!h.rt.cleanup_done.load(Ordering::SeqCst));
+        assert!(h.rt.workspace_guard.lock().unwrap().is_some());
+        assert!(!h.core.store.claimed_sessions().is_empty());
+        assert!(!h.rt.try_settle_cleanup());
+        drop(child_reference);
+        assert!(h.rt.try_settle_cleanup());
+        assert!(h.rt.try_settle_cleanup());
+        assert!(h.rt.cleanup_done.load(Ordering::SeqCst));
+        assert!(h.rt.workspace_guard.lock().unwrap().is_none());
+        assert!(h.core.store.claimed_sessions().is_empty());
     }
 }

@@ -24,6 +24,8 @@ impl ToolRegistry {
         reg!(crate::tools::edit::EditTool);
         reg!(crate::tools::create::CreateTool);
         reg!(crate::tools::delete::DeleteTool);
+        reg!(crate::tools::delivery_contract::DeliveryContractTool);
+        reg!(crate::tools::workflow::WorkflowTool);
         reg!(crate::tools::list_files::ListFilesTool);
         reg!(crate::tools::command::CommandTool);
         reg!(crate::tools::grep::GrepTool);
@@ -41,11 +43,24 @@ impl ToolRegistry {
         reg!(crate::tools::skill::SkillTool);
         reg!(crate::tools::subagent::SubagentTool);
         reg!(crate::tools::scheduled_task::ScheduledTaskTool);
+        // [#17] 结构化交付草稿（仅子代理可用，根会话调用被工具自身拒绝）
+        reg!(crate::tools::submit_delivery::SubmitDeliveryTool);
         // 文档批次（docs/documents）
         reg!(crate::tools::document::read::ReadDocumentTool);
         reg!(crate::tools::document::write::WriteDocumentTool);
         reg!(crate::tools::document::edit::EditDocumentTool);
         ToolRegistry { tools }
+    }
+
+    /// 全部内置工具名（稳定顺序按名字排序）。工作流配置的 `tools` 引用闭包查这张表。
+    pub fn all_tool_names() -> Vec<String> {
+        let mut v: Vec<String> = Self::default_tools()
+            .tools
+            .keys()
+            .map(|s| s.to_string())
+            .collect();
+        v.sort();
+        v
     }
 
     /// 仅测试用：空注册表。
@@ -106,6 +121,7 @@ mod tests {
                 "command",
                 "create",
                 "delete",
+                "delivery_contract",
                 "edit",
                 "edit_document",
                 "grep",
@@ -119,9 +135,13 @@ mod tests {
                 "service",
                 "skill",
                 "subagent",
+                // [#17] 结构化交付草稿：注册在全局，但**主会话排除**（见
+                // `main_drive_params`），只有子 runtime 能用——它向自己的 root_run 交付。
+                "submit_delivery",
                 "suggest",
                 "wait",
                 "web_fetch",
+                "workflow",
                 "write_document"
             ]
         );

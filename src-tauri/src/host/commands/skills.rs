@@ -29,11 +29,14 @@ pub async fn list_skills(
     core: Core<'_>,
     session_id: Option<String>,
 ) -> Result<Vec<crate::skills::SkillMeta>, String> {
-    let (workspace, data_dir, project_dir) = skill_scope(&core, session_id.as_deref())?;
-    let disabled = core.cfg.read().unwrap().disabled_skills.clone();
-    Ok(core
-        .skills
-        .list(&workspace, &data_dir, &disabled, project_dir.as_deref()))
+    let scope =
+        crate::core::instruction_resources::ResourceScope::host(&core, session_id.as_deref())?;
+    Ok(crate::core::instruction_resources::admit(&core, &scope)
+        .await
+        .resources
+        .into_iter()
+        .filter_map(|resource| resource.skill.map(|skill| skill.meta))
+        .collect())
 }
 
 /// Management view retains disabled and shadowed candidates; it never expands executable skills.
@@ -77,12 +80,8 @@ pub async fn reload_skills(
     core: Core<'_>,
     session_id: Option<String>,
 ) -> Result<Vec<crate::skills::SkillMeta>, String> {
-    let (workspace, data_dir, project_dir) = skill_scope(&core, session_id.as_deref())?;
-    let disabled = core.cfg.read().unwrap().disabled_skills.clone();
     core.skills.invalidate();
-    Ok(core
-        .skills
-        .list(&workspace, &data_dir, &disabled, project_dir.as_deref()))
+    list_skills(core, session_id).await
 }
 
 /// 删除托管技能（仅全局/项目 .codewave/skills；内置与 .claude/.agents 兼容目录拒绝），成功后缓存自动失效。

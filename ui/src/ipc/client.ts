@@ -5,15 +5,24 @@
  * 组件不得直接 import @tauri-apps/api，新增命令一律收敛在此处。
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { ActivitySnapshot, AskOpenedEvent, SessionRunSnapshot } from "./types";
+import type { ActivitySnapshot, AskOpenedEvent, DeliveryProjection, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
 import type { AgentMeta, ConfigSaveOptions, ConfigSaveResult, ConfigSnapshot, ConfigVersion, CleanupOutcome, CleanupPreview, CleanupStatus, ConfigState, DailyStats, DocumentBackupEntry, EarlierPage, EditorInfo, GitDiffFile, GitLogEntry, LegacyCleanupOutcome, LegacyCleanupPreview, LoadSessionPayload, LogFileContent, LogFileEntry, McpConfigDoc, McpSaveResult, McpScope, McpSnapshot, McpTestResult, Message, ProjectEntry, QuotaSnapshot, ScheduledTask, ServiceInfo, SessionFileEntry, SessionMeta, SessionPrefs, ShellInfo, SkillFull, SkillInspection, SkillMeta } from "./types";
 
 export const ipc = {
+  inspectInstructionResources: (sessionId: string | null) => invoke<import("./types").InstructionInspection>("inspect_instruction_resources", { sessionId }),
+  prepareInstructionReview: (sessionId: string | null, resourceId: string, expectedVersion: string, action: import("./types").InstructionReviewAction) => invoke<import("./types").InstructionChallenge>("prepare_instruction_review", { sessionId, resourceId, expectedVersion, action }),
+  confirmInstructionReview: (sessionId: string | null, confirmation: string) => invoke<import("./types").InstructionReceipt>("confirm_instruction_review", { sessionId, confirmation }),
+  instructionReviewOperation: (sessionId: string | null, operationId: string) => invoke<import("./types").InstructionReceipt>("instruction_review_operation", { sessionId, operationId }),
+  discardInstructionReview: (confirmation: string) => invoke<void>("discard_instruction_review", { confirmation }),
   ping: () => invoke<string>("ping"),
   getActivitySnapshot: () => invoke<ActivitySnapshot>("get_activity_snapshot"),
   getActivityAsk: (sessionId: string, runId: string, askId: string) =>
     invoke<AskOpenedEvent | null>("get_activity_ask", { sessionId, runId, askId }),
+
+  // 交付验收**只读**投影：没有写接口，也没有 set_passed（通过只能由求值推导）。
+  getDeliveryProjection: (sessionId: string) =>
+    invoke<DeliveryProjection>("get_delivery_projection", { sessionId }),
 
   listProjects: () => invoke<ProjectEntry[]>("list_projects"),
   saveProject: (entry: ProjectEntry) => invoke<void>("save_project", { entry }),

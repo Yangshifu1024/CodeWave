@@ -2250,3 +2250,52 @@ fn probe_provider() -> ProviderConfig {
         .find(|p| kind_for_base_url(&p.base_url) == Some(ProviderKind::OpenCodeGo))
         .expect("本机未找到 opencode.ai 供应商（可设 OPENCODE_API_KEY 后重跑）")
 }
+
+#[tokio::test]
+async fn injected_credential_store_is_used_without_system_keyring() {
+    struct Credentials(AtomicUsize);
+    impl crate::core::config_commit::CredentialStore for Credentials {
+        fn read(
+            &self,
+            account: &str,
+        ) -> Result<Vec<String>, crate::core::config_commit::ConfigCommitError> {
+            assert_eq!(account, "injected-provider");
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(vec!["injected-key".into()])
+        }
+        fn write(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+            panic!("quota must not write credentials")
+        }
+        fn delete(&self, _: &str) -> Result<(), crate::core::config_commit::ConfigCommitError> {
+            panic!("quota must not delete credentials")
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let cfg = config(vec![provider(
+        "injected-provider",
+        "injected",
+        "https://api.deepseek.com",
+        &[KEYRING_PLACEHOLDER],
+    )]);
+    let store = Credentials(AtomicUsize::new(0));
+    let fetcher = FakeFetcher::new(vec![(
+        "injected-key",
+        Ok(vec![percent_entry("quota", 25.0)]),
+    )]);
+    let rows = super::snapshots_with_credentials_and_fetcher(
+        &cfg,
+        None,
+        directory.path(),
+        &store,
+        &fetcher.fetcher(),
+    )
+    .await;
+    assert_eq!(rows[0].status, QuotaStatus::Ok);
+    assert_eq!(rows[0].key_source.as_deref(), Some("keyring"));
+    assert_eq!(store.0.load(Ordering::SeqCst), 1);
+    assert_eq!(fetcher.calls(), 1);
+}

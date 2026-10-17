@@ -109,6 +109,7 @@ async function baseInvoke(cmd: string, args?: any) {
     case "mcp_test": return testReply;
     case "mcp_snapshot":
       return { session: "s1", servers: JSON.parse(JSON.stringify(statusReply.map((s) => ({ scope: "global", ...s })))) };
+    case "inspect_instruction_resources": return { resources: [], issues: [] };
     case "inspect_skills": return { entries: [], issues: [] };
     case "list_skills": return [];
     default: throw new Error(`unmocked command: ${cmd}`);

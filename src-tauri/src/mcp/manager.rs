@@ -39,6 +39,9 @@ use super::process::build_stdio_wrap;
 use super::tools::{McpTool, McpToolDef, build_tool_defs, filter_tools, normalize_schema};
 use super::trust::{LaunchPermit, LaunchRegistry, LaunchStatus, ProbeChallenge, untrusted};
 
+#[cfg(all(test, unix))]
+#[path = "native_tests.rs"]
+mod native_tests;
 #[cfg(test)]
 #[path = "persistent_tests.rs"]
 mod persistent_tests;
@@ -316,6 +319,7 @@ pub struct McpManager {
     inner: Mutex<Inner>,
     launch: LaunchRegistry,
     authority: Option<Arc<crate::core::trust::TrustStore>>,
+    process_guardian: Option<Arc<crate::core::process_coordination::guardian::GuardianClient>>,
     reviews: std::sync::Mutex<HashMap<String, PendingReview>>,
     max_servers: usize,
     tick: AtomicU64,
@@ -422,6 +426,7 @@ impl McpManager {
         McpManager {
             launch: LaunchRegistry::default(),
             authority: None,
+            process_guardian: None,
             reviews: std::sync::Mutex::new(HashMap::new()),
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
@@ -432,6 +437,14 @@ impl McpManager {
             tick: AtomicU64::new(0),
             sink: RwLock::new(None),
         }
+    }
+
+    pub(crate) fn with_process_guardian(
+        mut self,
+        guardian: Arc<crate::core::process_coordination::guardian::GuardianClient>,
+    ) -> Self {
+        self.process_guardian = Some(guardian);
+        self
     }
 
     /// 装配状态事件回调（host 层接 `EventSink`）。
@@ -1001,7 +1014,7 @@ impl McpManager {
         let connected = tokio::select! {
             biased;
             _ = handshake_cancel.cancelled() => Err(changed_error()),
-            result = Self::spawn_connect(key, &cfg, http, &permit) => result,
+            result = Self::spawn_connect(key, &cfg, http, &permit, self.process_guardian.clone()) => result,
         };
         match connected {
             Ok(ready) => {
@@ -1168,6 +1181,7 @@ impl McpManager {
         cfg: &McpServerConfig,
         http: reqwest::Client,
         permit: &LaunchPermit,
+        guardian: Option<Arc<crate::core::process_coordination::guardian::GuardianClient>>,
     ) -> Result<Ready, McpError> {
         let admission = permit.admit(key, cfg).await?;
         // Admission is ordered before revoke. Already-admitted external effects
@@ -1176,7 +1190,7 @@ impl McpManager {
         tokio::select! {
             biased;
             _ = permit.cancel.cancelled() => Err(untrusted()),
-            ready = Self::connect_transport(key, cfg, http) => ready,
+            ready = Self::connect_transport(key, cfg, http, guardian) => ready,
         }
     }
 
@@ -1184,6 +1198,7 @@ impl McpManager {
         key: &PoolKey,
         cfg: &McpServerConfig,
         http: reqwest::Client,
+        guardian: Option<Arc<crate::core::process_coordination::guardian::GuardianClient>>,
     ) -> Result<Ready, McpError> {
         let transport = cfg.resolve_transport()?;
         let name = key.name.clone();
@@ -1192,7 +1207,38 @@ impl McpManager {
         let connect = async {
             match transport {
                 McpTransport::Stdio => {
-                    let wrap = build_stdio_wrap(cfg)?;
+                    let guarded;
+                    let effective = if let Some(guardian) = guardian.as_ref() {
+                        let (program, args) = guardian
+                            .invocation(cfg.command.as_deref().unwrap_or(""), &cfg.args)
+                            .map_err(|e| {
+                                McpError::spawn(format!("Guardian rejected MCP launch: {e}"))
+                            })?;
+                        guarded = {
+                            let mut c = cfg.clone();
+                            c.command = Some(
+                                program
+                                    .to_str()
+                                    .ok_or_else(|| {
+                                        McpError::spawn("Guardian executable path is not UTF-8")
+                                    })?
+                                    .to_owned(),
+                            );
+                            c.args = args
+                                .into_iter()
+                                .map(|s| {
+                                    s.into_string().map_err(|_| {
+                                        McpError::spawn("Guardian argument is not UTF-8")
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            c
+                        };
+                        &guarded
+                    } else {
+                        cfg
+                    };
+                    let wrap = build_stdio_wrap(effective)?;
                     let child = rmcp::transport::child_process::TokioChildProcess::new(wrap)
                         .map_err(|_| {
                             McpError::spawn("进程启动失败；请检查 command、cwd 与 env")
@@ -1403,6 +1449,7 @@ impl McpManager {
         };
         let admission = permit.admit(&binding.key, &binding.cfg).await?;
         drop(admission);
+
         let mut next = binding.cfg.clone();
         next.always_allow = true;
         let authority = if let Some(proof) = &permit.authority {
@@ -1423,16 +1470,27 @@ impl McpManager {
         } else {
             None
         };
-        let _commit = super::config::CONFIG_COMMIT.lock().await;
+        let sref = super::config::ScopeRef {
+            scope: binding.key.scope,
+            path: binding.key.source.clone(),
+        };
+        // 空 source 没有有效父目录，协调根会退化成 CWD 下的相对 `coord/`；这种路径
+        // 本就不是任何真实共享文件，与下面的 `changed_error` 是同一判据，先判掉，
+        // 绝不让它去申请一个落错位置的租约。
+        if binding
+            .key
+            .source
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty())
+        {
+            return Err(changed_error());
+        }
+        let _guard = super::config::ScopeCommitGuard::acquire(&sref).await?;
         let mut inner = self.inner.lock().await;
         validate_binding(&inner, session, binding)?;
         if binding.key.source.as_os_str().is_empty() {
             return Err(changed_error());
         }
-        let sref = super::config::ScopeRef {
-            scope: binding.key.scope,
-            path: binding.key.source.clone(),
-        };
         let raw = super::config::read_scope_text(&sref)?;
         let doc = super::config::parse_scope_text(&sref, &raw);
         let current = doc
@@ -1443,7 +1501,7 @@ impl McpManager {
         if current != Some(&binding.cfg) {
             return Err(changed_error());
         }
-        super::config::set_always_allow(&sref, &binding.key.name, true, &binding.cfg)?;
+        super::config::set_always_allow(&sref, &binding.key.name, true, &binding.cfg, &_guard)?;
         let entry = inner
             .entries
             .get_mut(&binding.key)
@@ -1650,7 +1708,13 @@ impl McpManager {
         let lease = self.launch.confirm_probe(confirmation, key, &cfg)?;
         let ready = tokio::time::timeout(
             PROBE_TIMEOUT,
-            Self::spawn_connect(key, &cfg, http, &lease.permit),
+            Self::spawn_connect(
+                key,
+                &cfg,
+                http,
+                &lease.permit,
+                self.process_guardian.clone(),
+            ),
         )
         .await
         .map_err(|_| McpError::handshake("Draft probe timed out (60s total budget)"))??;
@@ -1828,7 +1892,7 @@ mod tests {
         let registry = LaunchRegistry::default();
         registry.grant(key, cfg, &super::super::launch_version(cfg))?;
         let permit = registry.connection(key, cfg)?;
-        McpManager::spawn_connect(key, cfg, http, &permit).await
+        McpManager::spawn_connect(key, cfg, http, &permit, None).await
     }
 
     /// 收集状态事件的 sink。

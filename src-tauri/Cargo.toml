@@ -7,9 +7,12 @@ repository = "https://github.com/Yangshifu1024/CodeWave"
 authors = ["Yangzhenbiao"]
 edition = "2024"
 rust-version = "1.98"
-# 多 bin 目标历史上用于承载假 LSP server；LSP 机制已随 post-write-check 删除（[docs/tools-and-safety](../docs/tools-and-safety.md)），
-# 现仅剩主程序，保留 default-run 以免未来新增 bin 时 `cargo run` 歧义。
 default-run = "codewave"
+autobins = false
+
+[[bin]]
+name = "codewave"
+path = "src/main.rs"
 
 [lib]
 name = "codewave_lib"
@@ -21,18 +24,18 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # desktop framework
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-dialog = "2"
-tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = { version = "2" }
+tauri-plugin-single-instance = { version = "2" }
 # 剪贴板（[docs/chat-and-interface](../docs/chat-and-interface.md)）：打包版前端跑在 tauri://localhost 自定义协议下，
 # 浏览器 navigator.clipboard 在该来源不可靠（用户消息「复制」按钮点击无响应即由此而来）。
 # 原注释「剪贴板走浏览器 API，无需 Rust 插件」的前提已被证伪，故改为接入原生插件。
 # 权限按最小集显式授予：capabilities/default.json 只放 clipboard-manager:allow-write-text，
 # 不加 clipboard-manager:default（官方默认集为空，读/图片/html/secret 一律不开）。
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-clipboard-manager = { version = "2" }
+tauri-plugin-notification = { version = "2" }
+tauri-plugin-updater = { version = "2" }
 # Custom title bar (docs/chat-and-interface): Windows/Linux HTML control buttons + Win11 Snap Layout; macOS native traffic-light overlay
-tauri-plugin-decoration = "3"
+tauri-plugin-decoration = { version = "3" }
 
 # async / serialization
 tokio = { version = "1", features = ["full"] }
@@ -116,14 +119,14 @@ libc = "0.2"
 # both crates are the same underlying desktop libraries that plugin uses, already present in Cargo.lock as
 # transitive deps, zero new packages
 [target.'cfg(windows)'.dependencies]
-tauri-winrt-notification = "0.8"
+tauri-winrt-notification = { version = "0.8" }
 # AUMID 注册表只读检测（Windows 通知缺陷修复，安装时由 NSIS 钩子写入键值——见
 # windows/installer-hooks.nsh）：键存在 = 通知用自家 identifier（图标/标题归属与
 # 点击激活都归本应用）；不存在（dev/便携）回退 POWERSHELL_APP_ID 只保显示
 winreg = "0.56"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-mac-notification-sys = "0.6"
+mac-notification-sys = { version = "0.6" }
 
 [profile.dev.package."*"]
 opt-level = 1

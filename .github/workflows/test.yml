@@ -128,4 +128,6 @@ jobs:
         env:
           BACKEND_RESULT: ${{ needs.test.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
+        # 单行 && 串联：多行 `run: |` 下各条 test 的退出码**只取最后一条**，
+        # frontend 成功不能掩盖 backend 失败。
         run: test "$BACKEND_RESULT" = success && test "$FRONTEND_RESULT" = success

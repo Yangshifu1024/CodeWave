@@ -46,6 +46,7 @@ impl SkillCatalogSnapshot {
     ) -> Self {
         let mut skills = Vec::new();
         let mut issues = Vec::new();
+        let mut remaining = 16 * 1024 * 1024;
         for (name, text) in builtin_skills() {
             if let Some(mut skill) = parse_skill_md(text, name) {
                 skill.meta.origin = "<builtin>".into();
@@ -73,7 +74,7 @@ impl SkillCatalogSnapshot {
             roots.push((project.join("skills"), ResourceSource::ProjectManaged));
         }
         for (root, source) in roots {
-            scan(&root, source, &mut skills, &mut issues);
+            scan(&root, source, &mut skills, &mut issues, &mut remaining);
         }
         // Stable tie-breaking replaces the filesystem's unspecified read_dir order.
         skills.sort_by_cached_key(|skill| {
@@ -157,6 +158,7 @@ fn scan(
     source: ResourceSource,
     skills: &mut Vec<Skill>,
     issues: &mut Vec<SkillIssue>,
+    remaining: &mut usize,
 ) {
     let issue = |path: &Path, message: String| SkillIssue {
         path: path.display().to_string(),
@@ -183,6 +185,10 @@ fn scan(
         ));
     }
     for entry in entries {
+        if *remaining == 0 {
+            issues.push(issue(root, "Skill catalog content budget exhausted".into()));
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -224,7 +230,12 @@ fn scan(
             continue;
         };
         let result = (|| -> Result<Skill, String> {
-            let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
+            let bytes = crate::resources::read_bytes(&file).map_err(|error| error.to_string())?;
+            if bytes.len() > *remaining {
+                *remaining = 0;
+                return Err("Skill catalog exceeds 16 MiB".into());
+            }
+            *remaining -= bytes.len();
             let text =
                 std::str::from_utf8(&bytes).map_err(|_| "Skill is not valid UTF-8".to_string())?;
             let fallback = if file != path {

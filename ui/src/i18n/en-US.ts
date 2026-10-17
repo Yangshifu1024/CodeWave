@@ -345,6 +345,14 @@ export default {
     resourceSource_workspace_claude: "Workspace Claude compatibility directory", resourceSource_workspace_agents: "Workspace Agents compatibility directory",
     resourceSource_global_managed: "Global managed directory", resourceSource_project_managed: "Project managed directory",
     resourceVersion: "Version: {{version}}", resourceReadFailed: "Could not read resource provenance",
+    resourceTitle: "Instruction resource permissions", resourceRefresh: "Refresh resource permissions", resourceReview: "Review instruction version",
+    resourceSource_workspace_file: "Workspace file",
+    resourceOnce: "Allow for this session", resourceRemember: "Remember this version", resourceRevoke: "Revoke instruction permission", resourceInspect: "Inspect instruction permission result",
+    resourceRemembered: "Remembered version", resourceAllowed: "Allowed for this session", resourceUntrusted: "Not approved",
+    resourceUnknown: "Permission result is unknown. Inspect the original operation before approving again.",
+    resourceHint: "Project instructions, maps, lessons, memories and external skills require permission. Reading a file does not grant instruction authority. Built-ins are trusted. Temporary permission belongs to this session and its children until exit.",
+    resourceReviewHint: "Confirmation permits this exact source version as model instructions. Session permission neither creates nor revokes persistent records; revoke an existing remembered permission first. File, command and network boundaries remain in effect.",
+    resourceActive: "An active run already used these versions. Revocation does not remove history or change its frozen prompt. Stop it to recheck admission on the next run.",
     skillRunningDisabled: "Runtime: disabled", skillRunningEnabled: "Runtime: enabled",
     skillDraftDisabled: "Unsaved: disabled", skillDraftEnabled: "Unsaved: enabled",
     skillShadowSources: "Overridden sources ({{n}})", skillMissing: "The source file is missing. Its disabled setting remains available to inspect or enable.",
@@ -590,6 +598,20 @@ export default {
   stats: { title: "Token usage (30 days)", empty: "No data", total: "Total", topModel: "Top model", cacheHit: "Cache hit {{read}} tokens ({{rate}}) · cache write {{write}} tokens", kindMain: "Main session", kindSub: "Subagent", kindTask: "Scheduled task", kindCompact: "Compaction", kindTitle: "Auto title", sources: "Sources (output tokens): {{list}}", avgRate: "Avg generation rate", avgStepMs: "Avg step time", avgTtft: "Avg TTFT" },
   skills: {
     detailUse: "Use", detailClose: "Close", detailWhen: "When to use", detailOrigin: "Source", detailLoading: "Loading body…",
+  },
+
+  // Delivery acceptance (#16 completion gate): a finished run is not an accepted
+  // delivery; this read-only projection exists to remove exactly that misreading.
+  acceptance: {
+    title: "Acceptance", loading: "Loading acceptance…", failed: "Failed to load acceptance: {{error}}",
+    unverified: "Unverified: this session has no acceptance record",
+    passed: "Accepted", repairBudget: "Repair rounds {{used}} / {{max}}",
+    waived: "Includes {{n}} user waiver(s)", gaps: "Still missing", hint: "A finished run is not an accepted delivery — go by the status here.",
+    decision: { allow: "Accepted", repair: "Repairing", blocked: "Incomplete", cancelled: "Cancelled" },
+    status: {
+      pending: "Pending", passed: "Passed", failed: "Failed", blocked: "Blocked",
+      stale: "Stale", waived: "Waived", cancelled: "Cancelled",
+    },
   },
   rightbar: {
     views: "Right sidebar views",

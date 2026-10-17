@@ -44,14 +44,16 @@ fn scan_dir(dir: &Path) -> Vec<MemoryMeta> {
     let mut out: Vec<MemoryMeta> = rd
         .flatten()
         .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+        .take(MEMORY_LIMIT)
         .filter_map(|e| {
-            let text = std::fs::read_to_string(e.path()).ok()?;
+            let bytes = crate::resources::read_bytes(&e.path()).ok()?;
+            let text = std::str::from_utf8(&bytes).ok()?;
             let stem = e
                 .file_name()
                 .to_string_lossy()
                 .trim_end_matches(".md")
                 .to_string();
-            let s = parse_skill_md(&text, &stem)?;
+            let s = parse_skill_md(text, &stem)?;
             Some(MemoryMeta {
                 name: s.meta.name,
                 description: if s.meta.description.is_empty() {

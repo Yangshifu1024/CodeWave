@@ -31,6 +31,7 @@ fn context(roots: &WriteRoots) -> ToolCtx {
         batch_id: "protected".into(),
         call_index: 0,
         call_key: "protected:0".into(),
+        provider_call_id: String::new(),
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }

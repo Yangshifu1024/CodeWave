@@ -84,6 +84,34 @@ pub(crate) async fn execute_batch_with_claim_lease(
         c.index = i;
     }
 
+    let owner = crate::core::delivery::DeliveryService::identity_of(rt);
+    let occurrence_calls = calls
+        .iter()
+        .map(|c| (c.id.clone(), c.name.clone()))
+        .collect::<Vec<_>>();
+    if let Err(e) = core.store.register_tool_occurrences(
+        &rt.observation_store_owner(),
+        &owner.actor_run_id,
+        &batch_id,
+        &occurrence_calls,
+    ) {
+        return BatchOutcome {
+            results: calls
+                .iter()
+                .map(|call| Content::ToolResult {
+                    tool_use_id: call.id.clone(),
+                    content: format!(
+                        "[error E_OBSERVATION_SAVE] 工具身份保存失败，未执行工具：{e}"
+                    ),
+                    is_error: true,
+                })
+                .collect(),
+            suggest_items: None,
+            plan_approved: false,
+            call_summary: vec![],
+        };
+    }
+
     // (1) Interactive 工具独占批次——按工具名分级（[docs/tools-and-safety](../../../docs/tools-and-safety.md)）：
     //   - ask / wait：阻塞用户/阻塞 sleep，与并发工具语义冲突，整批 reject 并 return；
     //   - suggest：emit chip + 装入 suggest_items 即结束 run，无副作用——与非 Interactive
@@ -178,7 +206,13 @@ pub(crate) async fn execute_batch_with_claim_lease(
         // 「请重新 read」式错误并按提示重试，形成死循环。现于 spawn 前按本 run 生效的
         // 排除集拒绝（与模型工具列表同源；ask 批准切档后下一 step 重算）；
         // 错误为终结性提示，明示重试 / 重读无法解除。
-        if effective_excludes.contains(&call.name) {
+        if effective_excludes.contains(&call.name)
+            || core
+                .host_excluded_tools
+                .lock()
+                .unwrap()
+                .contains(&call.name)
+        {
             let out = ToolOutcome::err(
                 "E_TOOL_BLOCKED",
                 format!(
@@ -489,6 +523,102 @@ async fn run_tool(
     cancel: CancellationToken,
     main_session: bool,
 ) -> (ToolOutcome, Vec<Content>, u128) {
+    let owner = crate::core::delivery::DeliveryService::identity_of(rt);
+    let http_write = call.name == "http_request"
+        && !matches!(
+            call.args["method"]
+                .as_str()
+                .unwrap_or("GET")
+                .to_ascii_uppercase()
+                .as_str(),
+            "GET" | "HEAD" | "OPTIONS"
+        );
+    let opaque_effect = http_write
+        || call.name.starts_with("mcp__")
+        || call.name == "command"
+        || call.name == "service" && call.args["action"].as_str() == Some("start");
+    let file_effect = core
+        .tools
+        .get(&call.name)
+        .is_some_and(|t| t.kind() == ToolKind::FileWrite);
+    let reviewing = rt.delivery_review_assignment_id.lock().unwrap().is_some();
+    let verifying = rt.delivery_verification_task_id.lock().unwrap().is_some();
+    if reviewing && (opaque_effect || call.name == "http_request")
+        || verifying
+            && (call.name.starts_with("mcp__")
+                || call.name == "service"
+                || call.name == "http_request")
+    {
+        return (
+            ToolOutcome::err(
+                "E_DUTY_READONLY",
+                "独立审查/验证职责不能使用无法约束副作用的工具",
+            ),
+            vec![],
+            0,
+        );
+    }
+    if !reviewing
+        && !verifying
+        && (opaque_effect || file_effect)
+        && let Some(task) = rt.delivery_task_id.lock().unwrap().clone()
+        && let Err(e) = crate::core::workflow::service::design_ready(&rt.data_dir, &owner, &task)
+    {
+        return (ToolOutcome::err("E_DESIGN_REQUIRED", e), vec![], 0);
+    }
+    let check = if http_write
+        || call.name.starts_with("mcp__")
+        || call.name == "command"
+        || call.name == "service" && call.args["action"].as_str() == Some("start")
+    {
+        crate::core::workflow::dispatch::check_unattributed(&owner.root_run_id, &owner.actor_id)
+    } else if core
+        .tools
+        .get(&call.name)
+        .is_some_and(|t| t.kind() == ToolKind::FileWrite)
+    {
+        canonical_arg_paths(&rt.workspace, &call.args)
+            .iter()
+            .try_for_each(|path| {
+                crate::core::workflow::dispatch::check_write(
+                    &owner.root_run_id,
+                    &owner.actor_id,
+                    std::path::Path::new(path),
+                )
+            })
+    } else {
+        Ok(())
+    };
+    if let Err(message) = check {
+        return (ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message), vec![], 0);
+    }
+    let effect_paths = canonical_arg_paths(&rt.workspace, &call.args)
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    // command/service own their guards directly, including direct tool callers.
+    let _effect = if call.name.starts_with("mcp__") || file_effect {
+        let roots = crate::core::delivery::DeliveryService::roots_from_runtime(rt);
+        match crate::core::workflow::dispatch::acquire_effect(
+            &owner.root_run_id,
+            &owner.actor_id,
+            &effect_paths,
+            call.name.starts_with("mcp__"),
+            &roots,
+        ) {
+            Ok(guard) => Some(guard),
+            Err(message) => return (ToolOutcome::err("E_WORKFLOW_OWNERSHIP", message), vec![], 0),
+        }
+    } else {
+        None
+    };
+    if cancel.is_cancelled() {
+        return (
+            ToolOutcome::err("E_CANCELLED", "运行已取消，未执行此工具"),
+            vec![],
+            0,
+        );
+    }
     // MCP 工具分发：mcp__<server>__<tool>
     if call.name.starts_with("mcp__") {
         emit_tool_start(core, rt, call, batch_id, index, "running");
@@ -522,6 +652,7 @@ async fn run_tool(
                     allow_always: true,
                     kind: crate::safety::approval::ApprovalKind::Once,
                     auto_confirm,
+                    call_key: Some(format!("{batch_id}:{index}")),
                 },
                 &cancel,
             )
@@ -603,6 +734,9 @@ async fn run_tool(
         batch_id: batch_id.to_string(),
         call_index: index,
         call_key: format!("{batch_id}:{index}"),
+        // 交付回执 / sidecar 的持久关联键必须是 provider 侧 tool_use.id，
+        // 不能用上面的批内位置（下批同位置就是别的调用）。
+        provider_call_id: call.id.clone(),
         cancel,
     };
     // ConfirmEach（先确认后变更）：FileWrite 工具执行前必经审批（[docs/chat-and-interface](../../../docs/chat-and-interface.md)）。
@@ -690,6 +824,7 @@ async fn run_tool(
                 allow_always: false,
                 kind: crate::safety::approval::ApprovalKind::Once,
                 auto_confirm,
+                call_key: Some(ctx.call_key.clone()),
             },
             &ctx.cancel,
         )
@@ -784,6 +919,7 @@ async fn run_tool(
                         allow_always: true,
                         kind: crate::safety::approval::ApprovalKind::Scope,
                         auto_confirm,
+                        call_key: Some(ctx.call_key.clone()),
                     },
                     &ctx.cancel,
                 )
@@ -929,6 +1065,9 @@ fn emit_tool_start(
             "session": rt.id,
             "batch_id": batch_id,
             "call_index": index,
+            "provider_tool_id": call.id,
+            "actor_run_id": crate::core::delivery::DeliveryService::identity_of(rt).actor_run_id,
+            "observation_id": rt.tool_observation_id(batch_id, index),
             "call_key": format!("{batch_id}:{index}"),
             "tool": call.name,
             "args_preview": args_preview_json(&call.args),
@@ -983,7 +1122,9 @@ fn emit_result(
         event,
         serde_json::json!({
             "session": rt.id, "run_id": run_id,
-            "batch_id": batch_id, "call_index": call.index,
+            "batch_id": batch_id, "call_index": call.index, "provider_tool_id": call.id,
+            "actor_run_id": crate::core::delivery::DeliveryService::identity_of(rt).actor_run_id,
+            "observation_id": rt.tool_observation_id(batch_id, call.index),
             "call_key": format!("{batch_id}:{}", call.index),
             "tool": call.name,
             "args_preview": args_preview,
