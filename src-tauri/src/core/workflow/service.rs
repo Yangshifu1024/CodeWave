@@ -9,20 +9,54 @@ use std::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreparedWorkflow {
+    #[serde(default)]
+    pub resumed_from: Option<(String, String)>,
+    #[serde(default)]
+    pub resume_budget: Option<crate::core::delivery::completion::RepairBudget>,
     pub task_id: String,
     pub profile: TaskProfile,
     pub units: Vec<WorkUnit>,
     pub design: design::DesignDecision,
+    #[serde(default)]
+    pub unit_designs: BTreeMap<String, design::DesignDecision>,
     pub snapshot: snapshot::FrozenSnapshot,
     pub state: WorkflowRunSnapshot,
 }
 impl PreparedWorkflow {
+    pub fn validate_models(&self, cfg: &crate::core::config::ConfigState) -> Result<(), String> {
+        let def = self
+            .snapshot
+            .definition
+            .as_ref()
+            .ok_or("Frozen definition missing")?;
+        for policy in &def.model_policies {
+            if !cfg.providers.iter().any(|p| {
+                p.id == policy.provider_id && p.models.iter().any(|m| m.id == policy.model_entry_id)
+            }) {
+                return Err("Frozen provider/model policy is unavailable".into());
+            }
+        }
+        Ok(())
+    }
+
     pub fn rebind(&self, contract: &TaskContract) -> Self {
         let mut next = self.clone();
         next.task_id = contract.task_id.clone();
         next.snapshot.owner = contract.owner.clone();
         next.snapshot.contract_revision = contract.revision;
         next.state.owner = contract.owner.clone();
+        for node in next.state.nodes.values_mut() {
+            node.state = NodeState::Pending;
+            node.attempt += 1;
+            node.actor_id = None;
+            node.lease_generation = 0;
+            node.reason = None;
+        }
+        next.state.revision += 1;
+        if let Some(root) = next.state.nodes.get_mut("implementation") {
+            root.state = NodeState::Running;
+            root.actor_id = Some(contract.owner.actor_id.clone());
+        }
         next
     }
 }
@@ -120,6 +154,7 @@ pub fn read(data_dir: &Path, owner: &RunIdentity, task: &str) -> Result<Prepared
         }
         p.state = state;
     }
+    super::lifecycle::replay(data_dir, task, contract.revision, &mut p.state)?;
     let mut overrides = Vec::<ProfileOverride>::new();
     if let Ok(entries) =
         std::fs::read_dir(file(data_dir, &owner.session_id, task)?.parent().unwrap())
@@ -154,6 +189,13 @@ pub fn read(data_dir: &Path, owner: &RunIdentity, task: &str) -> Result<Prepared
     if design_path.exists() {
         p.design = serde_json::from_slice(&std::fs::read(design_path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
+    }
+    for (unit, decision) in &mut p.unit_designs {
+        let path = base.with_extension(format!("design-{unit}-r{}.json", contract.revision));
+        if path.exists() {
+            *decision = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        }
     }
     // A real user may choose the mechanical path, but host facts still retain
     // design gates for shared effects, multiple units, and risky paths.
@@ -210,6 +252,7 @@ pub fn prepare(
     };
     let decision = route(&input);
     let mut unit = WorkUnit {
+        design_input: Default::default(),
         id: "implementation".into(),
         requirement_ids: contract.requirements.iter().map(|r| r.id.clone()).collect(),
         read_scopes: vec![],
@@ -221,8 +264,10 @@ pub fn prepare(
         checks: vec![],
         stage_id: None,
     };
-    if !writes.is_empty() {
-        for mut check in super::verification_policy::suggest_checks(&unit) {
+    if !writes.is_empty() || contract.delivery_goal != DeliveryGoal::Development {
+        for mut check in
+            super::verification_policy::suggest_checks_for_goal(&unit, contract.delivery_goal)
+        {
             if contract
                 .check(&check.id)
                 .is_some_and(|existing| existing != &check)
@@ -250,6 +295,8 @@ pub fn prepare(
         contract.review_policy.required = true;
         contract.review_policy.independent = true;
         let check = CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
             id: "host_independent_review".into(),
             cwd: None,
             independent_verifier: false,
@@ -285,17 +332,25 @@ pub fn prepare(
             title: "实施与验收".into(),
             next: vec![],
             required_checks: unit.checks.clone(),
+
+            ..Default::default()
         }],
         edges: vec![],
         roles: BTreeMap::new(),
         checks: vec![],
         author: None,
+
+        ..Default::default()
     };
     let mut definition = builtin;
     let mut resource_hashes = BTreeMap::new();
     if let Some(project) = _project_dir {
-        let path = project.join(".codewave/workflows.json");
+        super::project::recover(_data_dir, project)?;
+        let path = super::project::managed_path(project)?;
         if path.exists() {
+            if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 256 * 1024 {
+                return Err("Project workflow exceeds 256 KiB".into());
+            }
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
             let digest = version::digest_of_bytes(&bytes);
             let approved =
@@ -312,11 +367,65 @@ pub fn prepare(
             resource_hashes.insert("project_workflow".into(), digest);
         }
     }
+    if definition.roles.values().any(|p| p.independent_review)
+        || definition.stages.iter().any(|n| {
+            n.kind == NodeKind::Review
+                || n.required_checks
+                    .iter()
+                    .any(|id| id == "host_independent_review")
+        })
+    {
+        contract.review_policy.required = true;
+        contract.review_policy.independent = true;
+        let review = CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
+            id: "host_independent_review".into(),
+            cwd: None,
+            independent_verifier: false,
+            kind: CheckKind::Review,
+            command: None,
+            scope: VerificationScope {
+                inputs: writes.clone(),
+                ..Default::default()
+            },
+            required: true,
+            expectation: CheckExpectation::Review { dimensions: None },
+        };
+        if contract.check(&review.id).is_none() {
+            contract.checks.push(review.clone());
+        } else if contract.check(&review.id) != Some(&review) {
+            return Err("Reserved independent review check differs".into());
+        }
+        for req in &mut contract.requirements {
+            if !req.check_ids.contains(&review.id) {
+                req.check_ids.push(review.id.clone());
+            }
+        }
+        if !unit.checks.contains(&review.id) {
+            unit.checks.push(review.id);
+        }
+    }
+    for rule in definition.repair_rules.clone() {
+        if !definition
+            .edges
+            .iter()
+            .any(|e| e.from == rule.from && e.to == rule.to && e.kind == EdgeKind::Repair)
+        {
+            definition.edges.push(Edge {
+                from: rule.from,
+                to: rule.to,
+                kind: EdgeKind::Repair,
+            });
+        }
+    }
     // Approved project templates contribute real contract checks; approval never runs them.
     for template in &definition.checks {
         let id = format!("project_{}", template.id);
         let text = template.command_text.clone();
         let check = CheckSpec {
+            platforms: template.platforms.clone(),
+            prerequisites: template.prerequisites.clone(),
             id: id.clone(),
             cwd: Some(PathRef {
                 root_id: "workspace".into(),
@@ -351,6 +460,8 @@ pub fn prepare(
         }
         unit.checks.push(id);
     }
+    super::definition::validate_bound_definition(&definition, contract)
+        .map_err(|issues| format!("{issues:?}"))?;
     let bindings = BTreeMap::from([(
         "implementation".into(),
         snapshot::UnitBinding {
@@ -368,6 +479,17 @@ pub fn prepare(
     );
     snap.contract_revision = contract.revision;
     snap.resource_hashes = resource_hashes;
+    snap.root_locations = roots
+        .iter()
+        .map(|(id, path)| {
+            (
+                id.clone(),
+                crate::tools::pathutil::canonical_best_effort(path)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        })
+        .collect();
     let scope = VerificationScope {
         inputs: writes.clone(),
         ..Default::default()
@@ -414,6 +536,9 @@ pub fn prepare(
     )
     .map_err(|e| e.message)?;
     Ok(PreparedWorkflow {
+        resumed_from: None,
+        resume_budget: None,
+        unit_designs: BTreeMap::new(),
         task_id: contract.task_id.clone(),
         profile: decision.profile.clone(),
         units: vec![unit],
@@ -470,7 +595,11 @@ pub fn settle(
     owner: &RunIdentity,
     snapshot: &AcceptanceSnapshot,
 ) -> Result<(), String> {
-    let prepared = read(data_dir, owner, &snapshot.task_id)?;
+    let mut prepared = read(data_dir, owner, &snapshot.task_id)?;
+    if snapshot.overall == AcceptanceStatusKind::Passed {
+        advance_automatic_nodes(data_dir, owner, &snapshot.task_id, true)?;
+        prepared = read(data_dir, owner, &snapshot.task_id)?;
+    }
     if prepared.snapshot.contract_revision != snapshot.contract_revision {
         return Err("完成状态基于旧契约修订".into());
     }
@@ -543,7 +672,6 @@ pub fn plan_units(
     mut units: Vec<WorkUnit>,
     roots: &BTreeMap<String, PathBuf>,
 ) -> Result<PreparedWorkflow, String> {
-    design_ready(data_dir, owner, &contract.task_id)?;
     let mut p = read(data_dir, owner, &contract.task_id)?;
     if p.snapshot.contract_revision != contract.revision || units.is_empty() || units.len() > 100 {
         return Err("计划修订无效或单元数量超限".into());
@@ -680,8 +808,53 @@ pub fn plan_units(
             return Err("工作单元引用未知阶段".into());
         }
     }
+    for u in &mut units {
+        let node = definition
+            .stages
+            .iter()
+            .find(|n| Some(&n.id) == u.stage_id.as_ref())
+            .ok_or("Unknown node")?;
+        if matches!(node.kind, NodeKind::Design | NodeKind::Complete) {
+            return Err(
+                "Automatic design/complete nodes cannot own dispatched work packages".into(),
+            );
+        }
+        if let Some(role) = &node.role_id {
+            if u.role_id.as_ref().is_some_and(|r| r != role) {
+                return Err("Node role differs from work unit".into());
+            }
+            u.role_id = Some(role.clone());
+        }
+        if let Some(policy) = definition
+            .model_policies
+            .iter()
+            .find(|p| Some(&p.node_id) == u.stage_id.as_ref())
+        {
+            if u.model_id
+                .as_ref()
+                .is_some_and(|id| id != &policy.model_entry_id)
+            {
+                return Err("Node model differs from work unit".into());
+            }
+            u.model_id = Some(policy.model_entry_id.clone());
+        }
+        if !node.requirement_ids.is_empty() {
+            let required: Vec<_> = if node.requirement_ids.iter().any(|r| r == "*") {
+                contract.requirements.iter().map(|r| r.id.clone()).collect()
+            } else {
+                node.requirement_ids.clone()
+            };
+            if u.requirement_ids.iter().any(|r| !required.contains(r)) {
+                return Err("Work unit exceeds node requirements".into());
+            }
+        }
+    }
     if definition.id != "builtin" {
-        for stage in &definition.stages {
+        for stage in definition
+            .stages
+            .iter()
+            .filter(|n| n.kind != NodeKind::Complete && n.kind != NodeKind::Design)
+        {
             let stage_units: Vec<_> = units
                 .iter()
                 .filter(|u| u.stage_id.as_ref() == Some(&stage.id))
@@ -755,6 +928,75 @@ pub fn plan_units(
         owner,
     )
     .map_err(|e| e.message)?;
+    for u in &units {
+        let profile = route(&RouteInput {
+            planned_writes: u.write_scopes.clone(),
+            ..Default::default()
+        })
+        .profile;
+        let mut decision = design::decide(&profile, &u.write_scopes, u.design_input.user_requested);
+        if u.design_input.documentation_only {
+            if u.write_scopes.iter().any(|p| {
+                !["md", "txt", "rst"]
+                    .iter()
+                    .any(|ext| p.relative_path.ends_with(&format!(".{ext}")))
+            }) {
+                return Err("Documentation-only intent requires documentation paths".into());
+            }
+            decision.triggers.retain(|t| {
+                !matches!(
+                    t,
+                    design::DesignTrigger::PublicApi | design::DesignTrigger::Mechanical
+                )
+            });
+            if decision.triggers.is_empty() && !u.design_input.user_requested {
+                decision.required = false;
+                decision.reasons = vec![
+                    "User-confirmed documentation-only package without semantic tradeoffs".into(),
+                ];
+            }
+        }
+        for trigger in &u.design_input.new_tradeoffs {
+            if !decision.triggers.contains(trigger) {
+                decision.triggers.push(*trigger);
+            }
+        }
+        if !u.design_input.new_tradeoffs.is_empty() {
+            decision.required = true;
+            decision
+                .reasons
+                .push("Explicit semantic tradeoffs require design".into());
+        }
+        if let (Some(task), Some(revision)) =
+            (&u.design_input.reuse_task, u.design_input.reuse_revision)
+        {
+            let prior_contract =
+                crate::core::delivery::DeliveryService::from_data_root(data_dir.to_path_buf())
+                    .read_contract(&owner.session_id, task)
+                    .ok_or("Referenced design contract missing")?;
+            let prior = read(data_dir, &prior_contract.owner, task)?;
+            if prior.snapshot.contract_revision != revision
+                || prior.snapshot.project_id != p.snapshot.project_id
+                || prior
+                    .design
+                    .selected
+                    .as_ref()
+                    .is_none_or(|s| !prior.design.alternatives.contains(s))
+            {
+                return Err("Referenced design was not approved for this project/revision".into());
+            }
+            if u.design_input.new_tradeoffs.is_empty()
+                && !u.design_input.user_requested
+                && decision.triggers.is_empty()
+            {
+                decision.required = false;
+                decision
+                    .reasons
+                    .push(format!("Reuses approved design {task}@{revision}"));
+            }
+        }
+        p.unit_designs.insert(u.id.clone(), decision);
+    }
     p.profile = decision.profile;
     p.units = units;
     p.state = state;
@@ -792,6 +1034,7 @@ pub fn plan_units(
     f.write_all(&serde_json::to_vec(&p).map_err(|e| e.to_string())?)
         .and_then(|_| f.sync_all())
         .map_err(|e| e.to_string())?;
+    advance_automatic_nodes(data_dir, owner, &contract.task_id, false)?;
     Ok(p)
 }
 
@@ -845,32 +1088,160 @@ pub fn unit_transition(
         }
     }
     let def = &effective_def;
+    let existing = p.state.node(unit).ok_or("Unknown work package")?.clone();
+    let retry = to == NodeState::Running
+        && matches!(
+            existing.state,
+            NodeState::Failed | NodeState::Blocked | NodeState::Interrupted | NodeState::Passed
+        );
+    if retry {
+        let target = p
+            .units
+            .iter()
+            .find(|u| u.id == unit)
+            .and_then(|u| u.stage_id.as_deref())
+            .unwrap_or(unit);
+        let rule = def
+            .repair_rules
+            .iter()
+            .find(|r| r.to == target)
+            .ok_or("No explicit repair rule")?;
+        let source = format!("stage:{}", rule.from);
+        if existing.state == NodeState::Passed
+            && p.state
+                .node(&source)
+                .is_none_or(|n| n.state != NodeState::Failed)
+        {
+            return Err(
+                "A passed attempt is immutable until its declared review/verify failure".into(),
+            );
+        }
+        let mut descendants = std::collections::BTreeSet::from([target.to_string()]);
+        loop {
+            let before = descendants.len();
+            for edge in def.edges.iter().filter(|e| e.kind == EdgeKind::Advance) {
+                if descendants.contains(&edge.from) {
+                    descendants.insert(edge.to.clone());
+                }
+            }
+            if descendants.len() == before {
+                break;
+            }
+        }
+        let affected: Vec<_> = p
+            .units
+            .iter()
+            .filter(|u| {
+                u.stage_id
+                    .as_ref()
+                    .is_some_and(|stage| descendants.contains(stage))
+            })
+            .map(|u| u.id.clone())
+            .collect();
+        let affected_actors: std::collections::BTreeSet<_> = affected
+            .iter()
+            .filter_map(|id| p.state.node(id).and_then(|n| n.actor_id.as_ref()))
+            .collect();
+        if super::dispatch::active_leases().iter().any(|lease| {
+            lease.root_run_id == owner.root_run_id
+                && lease.unit_id != owner.actor_id
+                && (affected_actors.contains(&lease.unit_id) || affected.contains(&lease.unit_id))
+        }) {
+            return Err("Repair waits for affected actor cleanup".into());
+        }
+        let check_ids = def
+            .stages
+            .iter()
+            .find(|node| node.id == rule.from)
+            .map(|node| node.required_checks.join(","))
+            .unwrap_or_default();
+        let locations = p
+            .units
+            .iter()
+            .filter(|u| affected.contains(&u.id))
+            .flat_map(|u| u.write_scopes.iter())
+            .map(|path| format!("{}/{}", path.root_id, path.relative_path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let gap = crate::core::delivery::completion::Gap {
+            requirement_id: unit.into(),
+            check_id: (!check_ids.is_empty()).then_some(check_ids.clone()),
+            reason_code: "node_failed".into(),
+            message: existing.reason.clone().unwrap_or_default(),
+            fingerprint: crate::core::delivery::completion::fingerprint(
+                Some(&check_ids),
+                "node_failed",
+                &locations,
+                target,
+            ),
+            needs_user_or_env: false,
+        };
+        crate::core::delivery::DeliveryService::from_data_root(data_dir.to_path_buf())
+            .reserve_repair(
+                owner,
+                task,
+                &format!("workflow_{}_{}_{}", rule.id, unit, existing.attempt + 1),
+                &[gap],
+                Some((&rule.id, rule.max_rounds, rule.fingerprint_budget)),
+            )
+            .map_err(|e| e.to_string())?;
+        for (id, node) in &mut p.state.nodes {
+            if (id == unit
+                || affected.contains(id)
+                || id
+                    .strip_prefix("stage:")
+                    .is_some_and(|stage| descendants.contains(stage)))
+                && node.state != NodeState::Pending
+            {
+                node.state = NodeState::Pending;
+                node.attempt += 1;
+                node.actor_id = None;
+                node.lease_generation = 0;
+                node.revision += 1;
+                if id == unit {
+                    node.repair_rounds += 1;
+                }
+            }
+        }
+        p.state.revision += 1;
+    }
     if to == NodeState::Running
         && let Some(phase) = &phase
     {
-        let state = p.state.node(phase).ok_or("阶段节点缺失")?;
-        if state.state == NodeState::Pending || state.state == NodeState::Failed {
-            let phase_attempt = state.attempt + u32::from(state.state == NodeState::Failed);
+        let state = p.state.node(phase).ok_or("Stage node missing")?.clone();
+        if state.state == NodeState::Pending {
             transition(
                 &mut p.state,
                 def,
                 phase,
                 NodeState::Running,
-                phase_attempt,
+                state.attempt,
                 0,
-                2,
+                0,
                 &p.snapshot.owner,
             )
             .map_err(|e| e.message)?;
         } else if state.state != NodeState::Running {
-            return Err("阶段已终止，不再派发工作单元".into());
+            return Err("Stage is terminal".into());
         }
     }
-    let node = p.state.node(unit).ok_or("未知工作单元")?;
-    let attempt =
-        node.attempt + u32::from(to == NodeState::Running && node.state == NodeState::Failed);
-    transition(&mut p.state, def, unit, to, attempt, generation, 2, owner)
-        .map_err(|e| e.message)?;
+    let attempt = p.state.node(unit).ok_or("Unknown work package")?.attempt;
+    transition(
+        &mut p.state,
+        def,
+        unit,
+        to,
+        attempt,
+        generation,
+        def.repair_rules
+            .iter()
+            .filter(|r| r.to == unit || phase.as_deref() == Some(&format!("stage:{}", r.to)))
+            .map(|r| r.max_rounds)
+            .max()
+            .unwrap_or(0),
+        owner,
+    )
+    .map_err(|e| e.message)?;
     if to == NodeState::Passed
         && let Some(phase) = &phase
     {
@@ -918,13 +1289,13 @@ pub fn unit_transition(
             .map_err(|e| e.message)?;
         }
     }
-    let path = file(data_dir, &owner.session_id, task)?
-        .with_extension(format!("state-r{}.json", p.snapshot.contract_revision));
-    crate::core::process_coordination::atomic_write(
-        &path,
-        &serde_json::to_vec(&p.state).map_err(|e| e.to_string())?,
+    super::lifecycle::save_state(
+        data_dir,
+        task,
+        p.snapshot.contract_revision,
+        &p.state,
+        "host_transition",
     )
-    .map_err(|e| e.to_string())
 }
 
 pub fn record_design(
@@ -959,10 +1330,22 @@ pub fn record_design(
         .map_err(|e| e.to_string())?;
     f.write_all(&serde_json::to_vec(&decision).map_err(|e| e.to_string())?)
         .and_then(|_| f.sync_all())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    advance_automatic_nodes(data_dir, owner, task, false)
 }
 pub fn design_ready(data_dir: &Path, owner: &RunIdentity, task: &str) -> Result<(), String> {
     let p = read(data_dir, owner, task)?;
+    if !p.unit_designs.is_empty() {
+        if p.unit_designs.values().any(|d| {
+            d.required
+                && d.selected
+                    .as_ref()
+                    .is_none_or(|s| !d.alternatives.contains(s))
+        }) {
+            return Err("Work packages still need approved design decisions".into());
+        }
+        return Ok(());
+    }
     if p.design.required
         && p.design
             .selected
@@ -980,3 +1363,113 @@ pub fn design_ready(data_dir: &Path, owner: &RunIdentity, task: &str) -> Result<
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod tests;
+
+/// Freeze one work package's design without forcing unrelated packages to design.
+pub fn record_unit_design(
+    data: &Path,
+    owner: &RunIdentity,
+    task: &str,
+    revision: u64,
+    unit: &str,
+    mut decision: design::DesignDecision,
+) -> Result<(), String> {
+    let p = read(data, owner, task)?;
+    if p.snapshot.contract_revision != revision {
+        return Err("Contract revision changed".into());
+    }
+    let required = p.unit_designs.get(unit).ok_or("Unknown work package")?;
+    if required.required
+        && (!decision.required
+            || decision.reasons.is_empty()
+            || decision
+                .selected
+                .as_ref()
+                .is_none_or(|s| !decision.alternatives.contains(s)))
+    {
+        return Err("Design alternatives, selection and reasons are required".into());
+    }
+    decision.triggers = required.triggers.clone();
+    let path = file(data, &owner.session_id, task)?
+        .with_extension(format!("design-{unit}-r{revision}.json"));
+    use std::io::Write;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    out.write_all(&serde_json::to_vec(&decision).map_err(|e| e.to_string())?)
+        .and_then(|_| out.sync_all())
+        .map_err(|e| e.to_string())?;
+    advance_automatic_nodes(data, owner, task, false)
+}
+
+pub fn advance_automatic_nodes(
+    data: &Path,
+    owner: &RunIdentity,
+    task: &str,
+    accepted: bool,
+) -> Result<(), String> {
+    let initial = read(data, owner, task)?;
+    let def = initial
+        .snapshot
+        .definition
+        .as_ref()
+        .ok_or("Frozen definition missing")?;
+    for _ in 0..def.stages.len() {
+        let mut changed = false;
+        for node in &def.stages {
+            if !matches!(node.kind, NodeKind::Complete | NodeKind::Design) {
+                continue;
+            }
+            if node.kind == NodeKind::Complete && !accepted {
+                continue;
+            }
+            if node.kind == NodeKind::Design && design_ready(data, owner, task).is_err() {
+                continue;
+            }
+            let p = read(data, owner, task)?;
+            let id = format!("stage:{}", node.id);
+            let Some(state) = p.state.node(&id) else {
+                continue;
+            };
+            if state.state == NodeState::Pending
+                && super::state_machine::deps_satisfied(
+                    &p.state,
+                    p.state
+                        .depends_on
+                        .get(&id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                )
+            {
+                unit_transition(data, owner, task, &id, NodeState::Running, 0)?;
+                unit_transition(data, owner, task, &id, NodeState::Passed, 0)?;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
+}
+
+pub fn unit_design_ready(
+    data: &Path,
+    owner: &RunIdentity,
+    task: &str,
+    unit: &str,
+) -> Result<(), String> {
+    let p = read(data, owner, task)?;
+    if let Some(d) = p.unit_designs.get(unit) {
+        if d.required
+            && d.selected
+                .as_ref()
+                .is_none_or(|s| !d.alternatives.contains(s))
+        {
+            return Err("This work package requires an approved design".into());
+        }
+        return Ok(());
+    }
+    design_ready(data, owner, task)
+}

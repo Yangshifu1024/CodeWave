@@ -532,6 +532,7 @@ export interface ActivitySub {
   report: string | null;
 }
 export interface ActivitySession {
+  workflow?: {task_id?:string;revision?:number;nodes?:{id:string;state:string;attempt:number;reason?:string}[];blocked?:string};
   session_id: string;
   run_id: string;
   title: string;
@@ -955,4 +956,17 @@ export interface DeliveryProjection {
   gaps: DeliveryGap[];
   repair_rounds_used: number;
   repair_rounds_max: number;
+}
+
+export interface WorkflowIssue { pointer: string; code: string; message: string }
+export interface WorkflowConfigView { text: string; revision: number; digest: string; approved: boolean; issues: WorkflowIssue[] }
+export interface WorkflowProjection {
+  task_id: string; contract_revision: number; root_run_id: string;
+  route: { kind: string; reasons: string[] };
+  units: { id: string; role_id: string | null; model_id: string | null; depends_on: string[]; write_scopes: {root_id:string;relative_path:string}[] }[];
+  nodes: {unit_id:string;state:string;attempt:number;reason:string|null}[];
+  checks: {id:string;required:boolean;platforms:string[];prerequisites:string[];cwd?:{root_id:string;relative_path:string};command?:unknown}[];
+  leases: {unit_id:string;held_paths:string[];exclusive:boolean}[];
+  frozen_revision:number; frozen_digest:string; source_digest?:string; candidate:WorkflowConfigView|null;
+  resume_allowed:boolean;recovery_error:string|null;design:{required:boolean;reasons:string[]};
 }

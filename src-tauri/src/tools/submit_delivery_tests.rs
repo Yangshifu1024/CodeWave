@@ -29,6 +29,7 @@ fn sub(sub_id: &str) -> RunIdentity {
 
 fn contract() -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision: 1,

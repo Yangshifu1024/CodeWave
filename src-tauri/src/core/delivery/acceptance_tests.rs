@@ -42,6 +42,8 @@ fn p(rel: &str) -> PathRef {
 
 fn command_check(id: &str, rel: &str) -> CheckSpec {
     CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -69,6 +71,7 @@ fn command_check(id: &str, rel: &str) -> CheckSpec {
 
 fn receipt_of(check_id: &str, exit_code: i32, owner: &RunIdentity) -> ExecutionReceipt {
     ExecutionReceipt {
+        platform: Some(std::env::consts::OS.into()),
         binding: Some(crate::core::delivery::types::ContractBinding {
             task_id: "task1".into(),
             revision: 1,
@@ -106,6 +109,7 @@ fn receipt_of(check_id: &str, exit_code: i32, owner: &RunIdentity) -> ExecutionR
 
 fn contract_with(req: Requirement, checks: Vec<CheckSpec>) -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision: 1,
@@ -493,6 +497,8 @@ fn real_user_waiver_is_counted_and_visible() {
 fn manual_check_without_user_decision_is_blocked_not_passed() {
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -515,6 +521,8 @@ fn manual_check_without_user_decision_is_blocked_not_passed() {
 fn manual_check_with_real_confirmation_passes() {
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -599,6 +607,8 @@ fn review_of(reviewer: &RunIdentity, revision: u64, approved: bool) -> ReviewRes
 fn review_by_same_actor_is_not_accepted_as_independent() {
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -631,6 +641,8 @@ fn review_by_same_actor_is_not_accepted_as_independent() {
 fn review_by_independent_actor_with_all_dimensions_passes() {
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -657,6 +669,8 @@ fn review_against_old_contract_revision_is_not_accepted() {
     // 契约修订升级后旧审查不再适用。
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -683,6 +697,8 @@ fn review_against_old_contract_revision_is_not_accepted() {
 fn review_missing_a_dimension_fails_and_names_it() {
     let dir = tempfile::tempdir().unwrap();
     let spec = CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -1130,5 +1146,25 @@ fn review_checks_with_identical_scope_keep_distinct_check_bindings() {
         eval(&c, &ledger, &roots(dir.path())).unwrap().overall,
         AcceptanceStatusKind::Passed,
         "legacy unbound review cannot satisfy a check"
+    );
+}
+
+#[test]
+fn platform_requirement_is_blocked_even_with_an_exit_zero_receipt() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.txt"), "a").unwrap();
+    let mut check = command_check("platform", "a.txt");
+    check.platforms = vec!["unavailable-platform".into()];
+    let contract = contract_with(req("r1", vec!["platform"]), vec![check]);
+    let mut ledger = Ledger::new();
+    let receipt = receipt_of("platform", 0, &ws());
+    ledger.receipts.insert("rcpt".into(), receipt);
+    let out = eval(&contract, &ledger, &roots(d.path())).unwrap();
+    assert_eq!(out.items[0].status, AcceptanceStatus::Blocked);
+    assert!(
+        out.items[0]
+            .reasons
+            .iter()
+            .any(|r| r.code == "check_blocked")
     );
 }

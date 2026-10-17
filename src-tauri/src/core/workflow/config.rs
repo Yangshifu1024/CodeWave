@@ -1,6 +1,6 @@
 //! #6 项目工作流配置：**唯一 schema 来源**。
 //!
-//! 写在 `<主目录>/.codewave/workflows.json`，由 workflow 工具向真实用户确认后保存；尚无独立设置页编辑器。
+//! 写在 `<主目录>/.codewave/workflows.json`，由设置页或 workflow 工具向真实用户确认后，经同一事务服务保存。
 //! 它定义**可用的阶段与边**，不是某个 run 的状态（那是 #5 / #8）。
 //!
 //! 安全纪律（[docs/tools-and-safety](../../../../docs/tools-and-safety.md)）：
@@ -12,6 +12,7 @@
 //! - **跨项目路径拒绝**。配置里的路径必须落在本项目主目录内。
 //! - **CAS 冲突保留草稿**，**磁盘失败不丢原有效版本**，**外部文件修改不自动应用**。
 
+pub use super::definition::{ModelPolicy, NodeKind, RepairRule};
 use crate::core::delivery::types::RunIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const WORKFLOW_SCHEMA: u32 = 1;
 
 /// 工作流定义（项目级）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowDefinition {
     /// schema 版本。
@@ -31,12 +32,18 @@ pub struct WorkflowDefinition {
     #[serde(default)]
     pub revision: u64,
     /// 支持的阶段。
+    #[serde(rename = "nodes")]
     pub stages: Vec<Stage>,
+    #[serde(default)]
+    pub repair_rules: Vec<RepairRule>,
+    #[serde(default)]
+    pub model_policies: Vec<ModelPolicy>,
     /// 支持的边。
     #[serde(default)]
     pub edges: Vec<Edge>,
     /// 角色政策（角色 id → 允许的工具 / 模型）。
     #[serde(default)]
+    #[serde(rename = "role_policies")]
     pub roles: BTreeMap<String, RolePolicy>,
     /// 检查命令模板（**只允许覆盖允许字段**，见 [`validate`]）。
     #[serde(default)]
@@ -47,13 +54,22 @@ pub struct WorkflowDefinition {
 }
 
 /// 一个阶段。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Stage {
     /// 阶段 id。
     pub id: String,
     /// 展示名。
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub kind: NodeKind,
+    #[serde(default)]
+    pub requirement_ids: Vec<String>,
+    #[serde(default)]
+    pub role_id: Option<String>,
+    #[serde(default)]
+    pub tool_allowlist: Vec<String>,
     /// 允许的下一阶段（为空表示终点）。
     #[serde(default)]
     pub next: Vec<String>,
@@ -83,7 +99,7 @@ pub enum EdgeKind {
 }
 
 /// 角色政策。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RolePolicy {
     /// 允许使用的工具（`*` 表示不限）。
@@ -95,12 +111,18 @@ pub struct RolePolicy {
     /// 是否强制独立审查身份（#9 / #10）。
     #[serde(default)]
     pub independent_review: bool,
+    #[serde(default)]
+    pub max_tool_kinds: Vec<String>,
 }
 
 /// 项目自定义检查命令。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckCommand {
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
     pub id: String,
     pub command_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,12 +133,13 @@ pub struct CheckCommand {
 }
 
 /// 校验问题。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Issue {
     /// 稳定码。
     pub code: &'static str,
     /// 说明。
     pub message: String,
+    pub pointer: String,
 }
 
 /// 已知角色（首版固定表；配置引用未知角色即拒绝）。
@@ -150,12 +173,13 @@ pub fn validate(
     known_model_ids: &BTreeSet<String>,
 ) -> Result<(), Vec<Issue>> {
     let mut issues = Vec::new();
-    if def.stages.len() > 100
-        || def.edges.len() > 400
+    if def.stages.len() > 32
+        || def.edges.len() > 128
         || def.checks.len() > 100
         || def.roles.len() > 50
     {
         issues.push(Issue {
+            pointer: String::new(),
             code: "definition_too_large",
             message: "工作流定义超过阶段/边/检查/角色上限".into(),
         });
@@ -163,32 +187,37 @@ pub fn validate(
     }
     if def.stages.is_empty() {
         issues.push(Issue {
+            pointer: "/nodes".into(),
             code: "empty_stages",
             message: "工作流至少需要一个阶段".into(),
         });
     }
     if def.schema != WORKFLOW_SCHEMA {
         issues.push(Issue {
+            pointer: "/schema".into(),
             code: "unknown_schema",
             message: format!("schema {} 不是 {WORKFLOW_SCHEMA}", def.schema),
         });
     }
     if def.id.trim().is_empty() {
         issues.push(Issue {
+            pointer: "/id".into(),
             code: "empty_id",
             message: "定义 id 不能为空".into(),
         });
     }
     let mut stage_ids: Vec<&str> = Vec::new();
-    for s in &def.stages {
+    for (node_index, s) in def.stages.iter().enumerate() {
         if stage_ids.contains(&s.id.as_str()) {
             issues.push(Issue {
+                pointer: format!("/nodes/{node_index}/id"),
                 code: "duplicate_stage",
                 message: format!("阶段 id 重复：`{}`", s.id),
             });
         }
         if s.id.trim().is_empty() {
             issues.push(Issue {
+                pointer: format!("/nodes/{node_index}/id"),
                 code: "empty_stage_id",
                 message: "阶段id不能为空".into(),
             });
@@ -196,15 +225,17 @@ pub fn validate(
         stage_ids.push(&s.id);
     }
     // 边引用闭包
-    for e in &def.edges {
+    for (edge_index, e) in def.edges.iter().enumerate() {
         if !stage_ids.contains(&e.from.as_str()) {
             issues.push(Issue {
+                pointer: format!("/edges/{edge_index}/from"),
                 code: "edge_unknown_from",
                 message: format!("边引用未知阶段 `{}`", e.from),
             });
         }
         if !stage_ids.contains(&e.to.as_str()) {
             issues.push(Issue {
+                pointer: format!("/edges/{edge_index}/to"),
                 code: "edge_unknown_to",
                 message: format!("边引用未知阶段 `{}`", e.to),
             });
@@ -246,12 +277,13 @@ pub fn validate(
     }
     if visited != stage_ids.len() {
         issues.push(Issue {
+            pointer: "/edges".into(),
             code: "ordinary_cycle_rejected",
             message: "普通推进边成环，只有显式有界 repair 回边允许重试".into(),
         });
     }
-    for stage in &def.stages {
-        for next in &stage.next {
+    for (node_index, stage) in def.stages.iter().enumerate() {
+        for (next_index, next) in stage.next.iter().enumerate() {
             if !stage_ids.contains(&next.as_str())
                 || !def
                     .edges
@@ -259,6 +291,7 @@ pub fn validate(
                     .any(|e| e.from == stage.id && &e.to == next)
             {
                 issues.push(Issue {
+                    pointer: format!("/nodes/{node_index}/next/{next_index}"),
                     code: "stage_next_mismatch",
                     message: format!("阶段 {} 的next必须对应一条已声明边", stage.id),
                 });
@@ -267,15 +300,21 @@ pub fn validate(
     }
     // 角色 / 工具 / 模型引用闭包
     for (role, policy) in &def.roles {
+        let role_pointer = format!(
+            "/role_policies/{}",
+            role.replace('~', "~0").replace('/', "~1")
+        );
         if !KNOWN_ROLES.contains(&role.as_str()) {
             issues.push(Issue {
+                pointer: role_pointer.clone(),
                 code: "unknown_role",
                 message: format!("未知角色 `{role}`"),
             });
         }
-        for t in &policy.tools {
+        for (tool_index, t) in policy.tools.iter().enumerate() {
             if !known_tool(t) {
                 issues.push(Issue {
+                    pointer: format!("{role_pointer}/tools/{tool_index}"),
                     code: "unknown_tool",
                     message: format!("角色 `{role}` 引用未知工具 `{t}`"),
                 });
@@ -287,6 +326,7 @@ pub fn validate(
             .filter(|m| !known_model_ids.contains(*m))
         {
             issues.push(Issue {
+                pointer: format!("{role_pointer}/model_id"),
                 code: "unknown_model",
                 message: format!("角色 `{role}` 引用未知模型 `{m}`"),
             });
@@ -294,30 +334,89 @@ pub fn validate(
     }
     // 检查引用闭包 + 跨项目路径
     let check_ids: Vec<&str> = def.checks.iter().map(|c| c.id.as_str()).collect();
-    for s in &def.stages {
-        for c in &s.required_checks {
-            if !check_ids.contains(&c.as_str()) {
+    for (node_index, s) in def.stages.iter().enumerate() {
+        for (check_index, c) in s.required_checks.iter().enumerate() {
+            if !check_ids.contains(&c.as_str())
+                && c != "host_independent_review"
+                && !super::verification_policy::builtin_templates()
+                    .iter()
+                    .any(|t| &t.id == c)
+            {
                 issues.push(Issue {
+                    pointer: format!("/nodes/{node_index}/required_checks/{check_index}"),
                     code: "unknown_check",
                     message: format!("阶段 `{}` 引用未知检查 `{c}`", s.id),
                 });
             }
         }
     }
-    for c in &def.checks {
+    for (check_index, c) in def.checks.iter().enumerate() {
+        if c.platforms
+            .iter()
+            .any(|p| !["macos", "linux", "windows"].contains(&p.as_str()))
+            || c.prerequisites
+                .iter()
+                .any(|p| p.is_empty() || p.contains(['/', '\\', ':']))
+        {
+            issues.push(Issue {
+                pointer: if let Some(index) = c
+                    .platforms
+                    .iter()
+                    .position(|p| !["macos", "linux", "windows"].contains(&p.as_str()))
+                {
+                    format!("/checks/{check_index}/platforms/{index}")
+                } else {
+                    let index = c
+                        .prerequisites
+                        .iter()
+                        .position(|p| p.is_empty() || p.contains(['/', '\\', ':']))
+                        .unwrap_or(0);
+                    format!("/checks/{check_index}/prerequisites/{index}")
+                },
+                code: "invalid_environment",
+                message: "Unknown platform or invalid executable prerequisite".into(),
+            });
+        }
+        let cwd = c
+            .cwd
+            .as_ref()
+            .map(|d| project_dir.join(d))
+            .unwrap_or_else(|| project_dir.to_path_buf());
+        if matches!(
+            crate::safety::fence::check_command(
+                &c.command_text,
+                &cwd,
+                &crate::tools::pathutil::WriteRoots::new(
+                    project_dir.to_path_buf(),
+                    project_dir.join(".codewave")
+                ),
+                true,
+                false
+            ),
+            crate::safety::fence::Verdict::Block { .. }
+        ) {
+            issues.push(Issue {
+                pointer: format!("/checks/{check_index}/command_text"),
+                code: "command_blocked",
+                message: "Known blocked command; saving cannot authorize it".into(),
+            });
+        }
         if c.command_text.trim().is_empty() {
             issues.push(Issue {
+                pointer: format!("/checks/{check_index}/command_text"),
                 code: "empty_command",
                 message: format!("检查 `{}` 命令为空", c.id),
             });
         }
         if let Some(cwd) = c.cwd.as_ref().filter(|d| !inside_project(project_dir, d)) {
             issues.push(Issue {
+                pointer: format!("/checks/{check_index}/cwd"),
                 code: "cross_project_path",
                 message: format!("检查 `{}` 的 cwd 越出项目主目录：`{cwd}`", c.id),
             });
         }
     }
+    issues.extend(super::definition::issues(def, known_model_ids));
     if issues.is_empty() {
         Ok(())
     } else {
@@ -368,36 +467,15 @@ pub fn commit(
             message: "工作流配置只能保存到本项目 .codewave/workflows.json".into(),
         };
     }
-    // Hold the cross-process lease across read, CAS and atomic replacement.
-    let coordinator =
-        crate::core::process_coordination::LeaseStore::new(&project_dir.join(".codewave/coord"));
-    let lease = match coordinator.acquire(&crate::core::coordinator::AcquireRequest {
-        session_id: author.session_id.clone(),
-        root_run_id: author.root_run_id.clone(),
-        resource: format!(
-            "workflow:{}",
-            crate::tools::pathutil::canonical_best_effort(path).display()
-        ),
-        attempt: 0,
-        expected_generation: None,
-    }) {
-        Ok(v) => v,
-        Err(e) => {
+    let lock_path = project_dir.join(".codewave/coord/workflow-config.lock");
+    let _guard = match crate::core::process_coordination::DiskLock::acquire(&lock_path) {
+        Ok(lock) => lock,
+        Err(error) => {
             return SaveOutcome::Failed {
-                message: e.to_string(),
+                message: error.to_string(),
             };
         }
     };
-    struct Release<'a>(
-        &'a crate::core::process_coordination::LeaseStore,
-        crate::core::coordinator::Lease,
-    );
-    impl Drop for Release<'_> {
-        fn drop(&mut self) {
-            let _ = self.0.release(&self.1);
-        }
-    }
-    let _guard = Release(&coordinator, lease);
     // **以磁盘上的为准**，不信调用方转述的 current：文件可能已被外部改过。
     // 读不出来（有内容但解析失败）同样按冲突处理，绝不静默覆盖。
     let on_disk: Option<WorkflowDefinition> = std::fs::read(path)
@@ -453,3 +531,12 @@ pub fn requires_execution_approval(def: &WorkflowDefinition, check_id: &str) -> 
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+/// Templates can contain requirement placeholders; the runtime binder cannot.
+pub fn validate_template(
+    def: &WorkflowDefinition,
+    project: &std::path::Path,
+    models: &BTreeSet<String>,
+) -> Result<(), Vec<Issue>> {
+    validate(def, project, models)
+}

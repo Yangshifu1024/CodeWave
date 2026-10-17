@@ -365,6 +365,7 @@ fn session_dir_removal_is_idempotent() {
 
 fn sample_contract(revision: u64) -> crate::core::delivery::types::TaskContract {
     crate::core::delivery::types::TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision,

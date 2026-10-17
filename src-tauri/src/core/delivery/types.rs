@@ -270,6 +270,8 @@ impl ContractBinding {
 /// 宿主签发的不可伪造执行回执（[#14](../../../../docs/tools-and-safety.md)）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionReceipt {
+    #[serde(default)]
+    pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<ContractBinding>,
     /// schema 版本。
@@ -571,6 +573,10 @@ pub struct VerificationScope {
 /// 单条检查。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckSpec {
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
     /// Actual command directory; omitted means the session workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathRef>,
@@ -784,6 +790,8 @@ pub enum ScopeChangeKind {
 /// 任务契约。创建后 `revision = 1`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskContract {
+    #[serde(default)]
+    pub delivery_goal: DeliveryGoal,
     /// schema 版本。
     pub schema: u32,
     /// 任务 id（宿主生成）。
@@ -922,6 +930,8 @@ pub struct ReviewVerdict {
 /// 这四项宿主赋值，模型填不了也填不进来（填了也不作数）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContractDraft {
+    #[serde(default)]
+    pub delivery_goal: DeliveryGoal,
     /// 需求。
     #[serde(default)]
     pub requirements: Vec<Requirement>,
@@ -950,6 +960,7 @@ impl ContractDraft {
     /// 由草稿 + 宿主身份构造正式契约（`revision = 1`）。
     pub fn into_contract(self, task_id: String, owner: RunIdentity) -> TaskContract {
         TaskContract {
+            delivery_goal: self.delivery_goal,
             schema: SCHEMA,
             task_id,
             revision: 1,
@@ -1202,3 +1213,13 @@ pub enum SubmissionState {
 #[cfg(test)]
 #[path = "types_tests.rs"]
 mod tests;
+
+/// Full delivery gates are selected explicitly, rather than attached to every code edit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryGoal {
+    #[default]
+    Development,
+    PullRequest,
+    Release,
+}

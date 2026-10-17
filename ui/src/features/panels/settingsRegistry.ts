@@ -112,6 +112,7 @@ export type SettingWidth = "narrow" | "mid" | "wide";
 
 /** 全部设置项（登记制：改动设置项归属时必须同步本表与 PAGE_FIELDS） */
 export const SETTINGS_ITEMS: SettingItem[] = [
+  { id: "app.project_workflow", labelKey: "workflow.edit", page: "agent", keywords: ["workflow", "工作流"] },
   // ---------- 界面 ----------
   { id: "ui.theme", labelKey: "settings.theme", page: "appearance", width: "narrow", keywords: ["theme", "dark", "light", "主题", "暗色", "亮色"] },
   { id: "ui.output_display", labelKey: "settings.outputDisplay", page: "appearance", width: "narrow", keywords: ["output", "display", "compact", "detailed", "输出", "展示", "简洁", "详细"] },
@@ -208,6 +209,7 @@ export const WIDTH_TIERS: SettingWidth[] = ["narrow", "mid", "wide"];
  * 分类：整行 / 多行文本、整行开关、Slider、行内网格控件、整行列表与复合容器 / 动作项。
  */
 export const WIDTH_EXEMPT_ITEM_IDS: string[] = [
+  "app.project_workflow", // Dedicated full-width project JSON editor
   // —— 整行 / 多行文本：内容长度不可预知，占满整行（宽度由容器决定） ——
   "ui.font_sans", // 界面字体名（可含多个 family，逗号分隔）+ 行内「恢复默认」按钮
   "ui.font_content", // 内容字体名，同上

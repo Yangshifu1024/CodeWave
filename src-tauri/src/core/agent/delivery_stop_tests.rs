@@ -37,6 +37,7 @@ fn fx_with_gap() -> Fx {
         .map(|(k, v)| (k.clone(), v.to_string_lossy().to_string()))
         .expect("会话快照应有根");
     let draft = ContractDraft {
+        delivery_goal: Default::default(),
         requirements: vec![Requirement {
             id: "r1".into(),
             title: "报告已产出".into(),

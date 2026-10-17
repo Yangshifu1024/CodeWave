@@ -48,6 +48,8 @@ fn p(rel: &str) -> PathRef {
 
 fn check(id: &str, rel: &str) -> CheckSpec {
     CheckSpec {
+        platforms: vec![],
+        prerequisites: vec![],
         cwd: Some(PathRef {
             root_id: "ws".into(),
             relative_path: ".".into(),
@@ -76,6 +78,7 @@ fn check(id: &str, rel: &str) -> CheckSpec {
 /// 只有一条必需需求、绑定命令检查的最小契约。
 fn contract(req_ids: &[&str], checks: Vec<CheckSpec>) -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision: 1,
@@ -253,6 +256,7 @@ fn adopted_receipt_id_is_accepted_as_evidence() {
     l.receipts.insert(
         "execution_op1".into(),
         ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding: Some(crate::core::delivery::types::ContractBinding {
                 task_id: "task1".into(),
                 revision: 1,
@@ -324,6 +328,7 @@ fn exit_zero_alone_does_not_satisfy_a_missing_artifact() {
     l.receipts.insert(
         "execution_c1".into(),
         ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding: Some(crate::core::delivery::types::ContractBinding {
                 task_id: "task1".into(),
                 revision: 1,
@@ -409,6 +414,7 @@ fn stale_receipt_blocks_delivery() {
     l.receipts.insert(
         "execution_c1".into(),
         ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding: Some(crate::core::delivery::types::ContractBinding {
                 task_id: "task1".into(),
                 revision: 1,
@@ -568,6 +574,7 @@ fn report_with_full_evidence_is_accepted() {
     l.receipts.insert(
         "execution_c1".into(),
         ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding: Some(crate::core::delivery::types::ContractBinding {
                 task_id: "task1".into(),
                 revision: 1,

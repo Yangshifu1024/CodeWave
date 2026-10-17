@@ -435,6 +435,7 @@ pub fn spawn_unit(unit_id: &str, raw_scopes: &[String]) -> WorkUnit {
         })
         .collect();
     WorkUnit {
+        design_input: Default::default(),
         id: unit_id.to_string(),
         requirement_ids: Vec::new(),
         read_scopes: Vec::new(),

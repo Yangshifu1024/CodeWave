@@ -594,6 +594,7 @@ export default {
   },
 
   // 交付验收（#16 完成门）：运行终态 ≠ 验收结论，这块只读投影专门消除这个误解。
+  workflow: {title:"工作流",edit:"项目工作流配置",hint:"保存前请审核完整 JSON。保存不授予执行权限，运行中的任务继续使用冻结版本。",load:"重新读取",validate:"校验",save:"审核并保存",confirm:"采用以下工作流定义？",empty:"没有已冻结工作流",version:"采用版本 {{revision}}",candidate:"当前项目版本 {{revision}}",changed:"项目配置与本次运行不同，仅后续任务采用",resume:"以新尝试继续",resumeConfirm:"创建新尝试并重新确认权限？旧工具不会自动重放，权限回到计划档。",route:"路由",reason:"原因",owner:"所有者",dependencies:"依赖",scope:"写范围",checks:"验收检查",attempt:"尝试",leases:"在途租约",override:"纠正分类",overrideReason:"请说明纠正分类的依据",noSession:"请选择项目会话",approved:"已审核",pending:"待审核",draft:"工作流 JSON",failed:"工作流操作失败：{{error}}",loading:"正在读取工作流…"},
   acceptance: {
     title: "交付验收", loading: "读取验收状态…", failed: "读取验收状态失败：{{error}}",
     unverified: "未验证：本会话没有可用的验收记录",

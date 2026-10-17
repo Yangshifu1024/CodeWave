@@ -7,6 +7,7 @@ use crate::core::workflow::routing::{TaskKind, TaskProfile, to_work_units};
 
 fn unit(rel: &str) -> WorkUnit {
     WorkUnit {
+        design_input: Default::default(),
         id: "u1".into(),
         requirement_ids: vec!["r1".into()],
         read_scopes: vec![],
@@ -30,7 +31,7 @@ fn ids(checks: &[CheckSpec]) -> Vec<&str> {
 #[test]
 fn backend_only_change_suggests_backend_gate() {
     let c = suggest_checks(&unit("src-tauri/src/core/x.rs"));
-    assert_eq!(ids(&c), vec!["backend_test", "prepr_full_gate"]);
+    assert_eq!(ids(&c), vec!["backend_test"]);
     // 后端检查的 cwd 指向 src-tauri。
     let t = c.iter().find(|c| c.id == "backend_test").unwrap();
     assert_eq!(t.cwd.as_ref().unwrap().relative_path, "src-tauri");
@@ -72,7 +73,6 @@ fn cross_layer_change_takes_the_union() {
     let got = ids(&c);
     for want in [
         "backend_test",
-        "prepr_full_gate",
         "frontend_test",
         "frontend_build",
         "frontend_lint",
@@ -197,7 +197,12 @@ fn command_templates_come_only_from_the_builtin_table() {
 #[test]
 fn pr_gate_is_a_separate_check_not_a_replacement_for_the_suite() {
     let c = suggest_checks(&unit("src-tauri/src/core/x.rs"));
-    assert!(ids(&c).contains(&"prepr_full_gate"));
+    assert!(!ids(&c).contains(&"prepr_full_gate"));
+    assert!(
+        builtin_templates()
+            .iter()
+            .any(|t| t.id == "prepr_full_gate")
+    );
     assert!(ids(&c).contains(&"backend_test"));
 }
 

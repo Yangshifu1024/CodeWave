@@ -182,21 +182,15 @@ fn gate_delivery_stop_inner(
     let action = stop_action(&decision, next_step, params.max_steps);
     if action == StopAction::Repair {
         // 先落盘再继续：预算写丢了就等于悄悄放开上限。
-        let mut next = budget.clone();
-        if let CompletionDecision::Repair { gaps, .. } = &decision {
-            next.consume(gaps);
-        }
-        next.consume_steps(1);
-        if svc
-            .save_budget(
-                owner_id,
-                &owner,
-                &contract.task_id,
-                &next,
-                &format!("budget_{run_id}_{next_step}"),
-            )
-            .is_ok()
-        {
+        let gaps = decision.gaps();
+        let reserved = svc.reserve_repair(
+            &owner,
+            &contract.task_id,
+            &format!("budget_{run_id}_{next_step}"),
+            gaps,
+            None,
+        );
+        if let Ok(next) = &reserved {
             crate::core::session_log::info(
                 rt,
                 &format!(
@@ -219,7 +213,7 @@ fn gate_delivery_stop_inner(
                 budget,
             );
         }
-        return (action, decision, next);
+        return (action, decision, reserved.unwrap());
     }
     crate::core::session_log::info(
         rt,

@@ -37,6 +37,8 @@ pub struct ActivitySnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ActivitySession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<serde_json::Value>,
     pub session_id: String,
     pub run_id: String,
     pub title: String,
@@ -206,6 +208,7 @@ impl ActivityState {
             rt.id.clone(),
             ObservedRun {
                 view: ActivitySession {
+                    workflow: None,
                     session_id: rt.id.clone(),
                     run_id: run_id.into(),
                     title,

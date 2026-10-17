@@ -666,6 +666,14 @@ fn evaluate_check(
             )),
         );
     }
+    if let Some(message) = crate::core::workflow::environment::unavailable(spec) {
+        return (
+            AcceptanceStatus::Blocked,
+            vec![],
+            None,
+            Some(reason("check_blocked", message, Some(&spec.id))),
+        );
+    }
     match spec.kind {
         CheckKind::Command => {
             let Some((receipt_id, receipt)) = ledger
@@ -682,6 +690,23 @@ fn evaluate_check(
             else {
                 return pending();
             };
+            if !spec.platforms.is_empty()
+                && receipt
+                    .platform
+                    .as_ref()
+                    .is_none_or(|platform| !spec.platforms.contains(platform))
+            {
+                return (
+                    AcceptanceStatus::Blocked,
+                    vec![],
+                    None,
+                    Some(reason(
+                        "check_blocked",
+                        "unverified: execution receipt does not prove the required platform",
+                        Some(&spec.id),
+                    )),
+                );
+            }
             let refs = vec![EvidenceRef {
                 kind: EvidenceKind::Execution,
                 record_id: receipt_id.clone(),

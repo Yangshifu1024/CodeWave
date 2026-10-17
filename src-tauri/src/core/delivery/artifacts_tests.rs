@@ -288,6 +288,7 @@ fn cancelled_requirements_are_skipped_not_failed() {
     let dir = tempfile::tempdir().unwrap();
     let r = roots_a(dir.path());
     let c = TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "t".into(),
         revision: 1,

@@ -43,6 +43,8 @@ pub struct FrozenSnapshot {
     pub scope_version: Option<crate::core::delivery::version::ScopeVersion>,
     #[serde(default)]
     pub resource_hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub root_locations: BTreeMap<String, String>,
 }
 
 /// 单元绑定。
@@ -79,6 +81,7 @@ pub fn freeze(
         ),
         scope_version: None,
         resource_hashes: BTreeMap::new(),
+        root_locations: BTreeMap::new(),
     }
 }
 

@@ -145,6 +145,8 @@ fn shape_of(token: &str, head: &str) -> String {
 /// 修复预算（**持久化**，重启不归零）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RepairBudget {
+    #[serde(default)]
+    pub operations: BTreeMap<String, String>,
     /// 已用修复轮数。
     #[serde(default)]
     pub rounds_used: u32,

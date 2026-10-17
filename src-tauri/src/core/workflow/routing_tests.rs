@@ -253,6 +253,7 @@ fn work_units_carry_requirement_and_shared_resource_context() {
 #[test]
 fn unattributable_write_capability_is_detected() {
     let mut u = WorkUnit {
+        design_input: Default::default(),
         id: "u".into(),
         requirement_ids: vec![],
         read_scopes: vec![],
@@ -275,6 +276,7 @@ fn unattributable_write_capability_is_detected() {
 
 fn contract_at_rev(rev: u64) -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: crate::core::delivery::types::SCHEMA,
         task_id: "t1".into(),
         revision: rev,

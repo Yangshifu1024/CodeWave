@@ -162,35 +162,39 @@ symlink 别名不冲突、共享可变资源不争用、公共文件单 owner、
 也不把无关检查补成通过；**没有 Windows 机器就不能标 Windows 检查通过**。
 lint 与 build 是两条独立必跑检查：lint 绿顶不掉 build。
 
+`CheckSpec.platforms` 与 `prerequisites` 随契约冻结，执行入口和验收器检查当前平台、所需可执行程序；缺失返回未验证原因，不能签发跨平台通过。`delivery_goal` 区分 `development`、`pull_request`、`release`：普通开发保留匹配改动面的检查，后两者另加入完整 `pnpm prepr`，不把局部运行当作完整门禁。平台集合表达可运行条件，本机通过不能证明所有平台均通过。
+
 ### 选择性设计（#4）
 
-判据全落在变更形状上：单写范围且零读依赖 = 机械改动免设计；触及存储格式 / 公共 API /
-并发 / 权限密钥 / 删除路径 = 需要设计，且**不可由模型自行豁免**。
+设计按工作单元记录，语义输入随真实用户确认的工作包冻结：包括文档任务、复用设计的 task/revision、新取舍及用户要求。已有有效方案且无新取舍可以复用；纯文档和明确机械任务可走轻量。触及存储格式 / 公共 API / 并发 / 权限密钥 / 删除路径时保守要求设计，且**不可由模型自行豁免**。路径规则只提供保守触发，不能靠改文件名解除已确认的新取舍。
 **跳设计不等于跳批准**：设计可以省，验收门照走。预览不冻结基线；范围未扩不重启设计；
 范围一扩旧决定**保留为版本**且不继承冻结。
 
 ### 状态机与冻结快照（#5 / #8）
 
-`NodeState = pending | ready | running | passed | failed | blocked | cancelled`。
+`NodeState = pending | ready | running | passed | failed | blocked | cancelled | interrupted`。
 
 - 依赖未通过不能 running；**一次失败不使依赖自动 ready**（partial / failed 都不算通过）。
-- 重复终态幂等（不进位）；旧 attempt 迟到拒绝；`passed` / `cancelled` 是真终态，永不复活；
-  `failed` 只能沿 repair 边在预算内复活。
+- 重复终态幂等（不进位）；旧 attempt 迟到拒绝；已提交终态作为历史事实保留。
+  修复创建新 attempt，必须有显式 repair rule 并消费同一持久交付预算；不把旧失败或成功事实改写为新结果。
 - 修复预算只拦**重新进入 running**：上报失败永远不受预算影响，否则用尽预算的单元
   连"如实报告失败"都做不到。
 - 快照**内嵌**定义内容而非只存 id：只存 id 再回查当前配置，运行中改配置就会改掉旧 run 的规则。
 - 快照**不携带权限**：恢复按既有 step 语义重新解析，撤销的授权不会被快照偷偷带回来。
 - 快照缺失**不拿当前定义补齐**（旧 run 跑的是旧规则）；跨项目 / 跨会话恢复一律拒绝；
   模型或角色被删 → 阻塞而非静默换人。
+- 状态转移由短期 OS 文件锁串行化，先写不可变 transition record 再更新可替换状态投影；读取重放同 owner 的已提交记录，不执行工具。
+- 会话恢复确认旧 owner/清理已停止后，将 ready/running 节点标为 interrupted。右栏「新尝试」经明确确认创建新 root run，关联旧任务并携带冻结定义与剩余预算；旧 run/attempt 的迟到结果不能覆盖新状态。继续时切回 Plan，旧审批与 responder 不恢复。
 
 ### 项目工作流配置（#6）
 
-`<主目录>/.codewave/workflows.json`，是工作流定义的**唯一 schema 来源**。
-未知字段 / 角色 / 模型 / 工具 / 检查引用一律拒绝；**只有含 repair 边的环才允许**
-（要求整环皆 repair 会让任何修复环都无法成立）；跨项目路径拒绝。
-**保存配置不绕执行审批**：危险命令可以存进配置，真正执行时仍走既有审批门。
-CAS 提交以**磁盘上的定义为准**，不信调用方转述的 current——外部修改因此表现为 revision 冲突
-而非静默覆盖；冲突与写失败都**保留草稿**，原有效版本逐字节不变。
+`<主目录>/.codewave/workflows.json` 是项目定义的唯一落点；[config.rs](../src-tauri/src/core/workflow/config.rs) 与 [definition.rs](../src-tauri/src/core/workflow/definition.rs) 维护统一 schema。外部 JSON 使用 `nodes / edges / role_policies / model_policies / repair_rules / checks`；内部复用现有阶段调度器。节点支持 design/implement/review/verify/integrate/complete，最多 32 节点、128 边；普通依赖图是 DAG，修复规则单独限额。review/verify 必须声明对应证据，complete 是无工具的验收合流。
+
+`validate_template` 校验项目模板的形状、角色/模型/工具、命令结构及跨项目 cwd；冻结时 `validate_bound_definition` 再核对本契约真实需求与检查、节点职责和完成合流。错误携带 JSON pointer、code、message。未知字段/schema 拒绝应用并保留原文，不新增旧格式迁移。模型政策验证 provider 与模型条目的归属；权限仍只收窄，空工具集不推断全部允许。
+
+[project.rs](../src-tauri/src/core/workflow/project.rs) 是工具与桌面 IPC 共用的提交服务：短期 OS 锁内检查 `expectedRevision + expectedDigest`（磁盘原始字节 SHA-256），校验后临时写入并原子替换，再签发确切字节的批准摘要和 operation 回执。外部编辑不自动激活；内容即使 revision 相同也会发生冲突。替换前先写恢复日志保留原字节：批准摘要尚未提交时恢复旧版本，批准已提交但回执未完成时补齐回执；读取、下一次保存及冻结前均会对账。若发现外部新内容则不覆盖它，保留恢复日志并显式报错。日志只存受限 operation ID，回执路径由宿主重新推导；回执不确定时要求重读对账，不能盲目重试。
+
+桌面通过 `read_project_workflow / validate_project_workflow / save_project_workflow`，工具通过真实用户询问确认精确配置。设置编辑器独立于顶部主配置保存，冲突/失败保留当前草稿；运行中保存只影响下一次冻结，当前 run 的命令、角色和模型政策不变。**保存配置不绕执行审批**：已知 Block 命令在模板预检拒绝，其余命令真正执行仍完整经过 fence 和现有审批门，保存期检查不能证明任意 shell 安全。
 
 ## 7. 后台服务：存活与日志必须分开
 

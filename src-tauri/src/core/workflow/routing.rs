@@ -99,6 +99,8 @@ fn segments(p: &str) -> Vec<&str> {
 /// 工作单元：派发的最小粒度。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkUnit {
+    #[serde(default)]
+    pub design_input: super::design::DesignInput,
     /// 稳定 id。
     pub id: String,
     /// 覆盖的需求（→ #54 契约）。
@@ -542,6 +544,7 @@ pub fn to_work_units(
         .surfaces
         .iter()
         .map(|s| WorkUnit {
+            design_input: Default::default(),
             id: format!("unit_{}", s.id),
             requirement_ids: requirement_ids.to_vec(),
             read_scopes: s.read_scopes.clone(),

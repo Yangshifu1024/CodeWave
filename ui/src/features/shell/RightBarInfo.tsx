@@ -11,6 +11,7 @@ import { useUi } from "../../stores/ui";
 import { originLabel } from "../../utils/skills";
 import { readCollapsedSections, writeCollapsedSections, type CollapsibleSection } from "../../utils/rightbarPrefs";
 import QuotaSection from "../quota/QuotaSection";
+import WorkflowPanel from "../chat/WorkflowPanel";
 import AcceptancePanel from "../chat/AcceptancePanel";
 import type { WorkspaceChanges } from "../workspace/useWorkspaceChanges";
 import OpenInEditorSelect from "./OpenInEditorSelect";
@@ -154,7 +155,7 @@ export default function RightBarInfo({ visible, files, changes, onView }: {
                 // 「能不能算交付通过」，与「运行是否结束」是两件事。
                 ...(tab ? [{
                   key: "acceptance", label: t("acceptance.title"), forceRender: true,
-                  children: <AcceptancePanel sessionId={sessionId} visible={visible} />,
+                  children: <><AcceptancePanel sessionId={sessionId} visible={visible} /><WorkflowPanel key={sessionId} sessionId={sessionId} visible={visible} /></>,
                 }] : []),
                 { key: "quota", label: t("rightbar.quota"), extra: quotaActions, forceRender: true, children: quotaContent },
                 { key: "skills", label: t("rightbar.skills"), extra: <Typography.Text type="secondary">{t("rightbar.skillCount", { n: skills.length })}</Typography.Text>, children: <>

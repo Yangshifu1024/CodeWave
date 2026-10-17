@@ -20,6 +20,7 @@ mod stats;
 mod system;
 mod ui_state;
 mod util;
+mod workflow;
 mod workspace;
 
 pub use activity::*;
@@ -39,4 +40,5 @@ pub use skills::*;
 pub use stats::*;
 pub use system::*;
 pub use ui_state::*;
+pub use workflow::*;
 pub use workspace::*;

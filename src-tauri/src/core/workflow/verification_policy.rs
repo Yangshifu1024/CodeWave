@@ -184,9 +184,8 @@ pub fn builtin_templates() -> Vec<CheckTemplate> {
 fn union_for(surfaces: &BTreeSet<ChangeSurface>) -> Vec<CheckTemplate> {
     // 顺序由 `builtin_templates()` 的声明顺序决定（稳定、可预期）；
     // 面 → 模板 id 的映射是固定的宿主表，不是模型给的。
-    let order: [(&str, ChangeSurface); 7] = [
+    let order: [(&str, ChangeSurface); 6] = [
         ("backend_test", ChangeSurface::Backend),
-        ("prepr_full_gate", ChangeSurface::Backend),
         ("frontend_test", ChangeSurface::Frontend),
         ("frontend_build", ChangeSurface::Frontend),
         ("frontend_lint", ChangeSurface::Frontend),
@@ -207,6 +206,8 @@ pub fn suggest_checks(unit: &WorkUnit) -> Vec<CheckSpec> {
     // 纯机械改动复用精确断言：不为一次改名跑整套后端测试。
     if surfaces.len() == 1 && surfaces.contains(&ChangeSurface::Mechanical) {
         return vec![CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
             id: "mechanical_exact".into(),
             cwd: None,
             independent_verifier: false,
@@ -228,6 +229,16 @@ pub fn suggest_checks(unit: &WorkUnit) -> Vec<CheckSpec> {
     union_for(&surfaces)
         .into_iter()
         .map(|t| CheckSpec {
+            platforms: t.platforms.clone(),
+            prerequisites: if t.manual {
+                vec![]
+            } else if t.command_text.starts_with("cargo ") {
+                vec!["cargo".into()]
+            } else if t.command_text.starts_with("pnpm ") {
+                vec!["pnpm".into()]
+            } else {
+                vec![]
+            },
             id: t.id.clone(),
             cwd: if t.manual {
                 None
@@ -367,3 +378,40 @@ pub fn suggestion_summary(checks: &[CheckSpec]) -> serde_json::Value {
 #[cfg(test)]
 #[path = "verification_policy_tests.rs"]
 mod tests;
+
+pub fn suggest_checks_for_goal(
+    unit: &WorkUnit,
+    goal: crate::core::delivery::types::DeliveryGoal,
+) -> Vec<CheckSpec> {
+    let mut checks = suggest_checks(unit);
+    if goal != crate::core::delivery::types::DeliveryGoal::Development {
+        let template = builtin_templates()
+            .into_iter()
+            .find(|t| t.id == "prepr_full_gate")
+            .unwrap();
+        checks.push(CheckSpec {
+            platforms: template.platforms,
+            prerequisites: vec!["pnpm".into(), "cargo".into()],
+            cwd: Some(PathRef {
+                root_id: "workspace".into(),
+                relative_path: ".".into(),
+            }),
+            independent_verifier: true,
+            id: template.id,
+            kind: CheckKind::Command,
+            command: Some(CommandSpec::Requested {
+                command_text: template.command_text,
+                shell_hint: None,
+            }),
+            scope: VerificationScope {
+                inputs: unit.write_scopes.clone(),
+                ..Default::default()
+            },
+            required: true,
+            expectation: CheckExpectation::Command {
+                allowed_exit_codes: vec![0],
+            },
+        });
+    }
+    checks
+}

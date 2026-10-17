@@ -8,6 +8,7 @@ use crate::core::delivery::types::{
 
 fn contract() -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision: 1,
@@ -21,6 +22,8 @@ fn contract() -> TaskContract {
         }],
         artifacts: Vec::new(),
         checks: vec![CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
             cwd: Some(PathRef {
                 root_id: "ws".into(),
                 relative_path: ".".into(),

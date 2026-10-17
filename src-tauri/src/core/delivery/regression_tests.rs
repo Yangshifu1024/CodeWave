@@ -19,6 +19,7 @@ fn receipt(
     finished: &str,
 ) -> ExecutionReceipt {
     ExecutionReceipt {
+        platform: Some(std::env::consts::OS.into()),
         binding: Some(crate::core::delivery::types::ContractBinding {
             task_id: "task1".into(),
             revision: 1,

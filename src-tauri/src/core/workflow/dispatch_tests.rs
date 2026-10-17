@@ -21,6 +21,7 @@ fn fx() -> Fx {
 
 fn unit(id: &str, rels: &[&str]) -> WorkUnit {
     WorkUnit {
+        design_input: Default::default(),
         id: id.into(),
         requirement_ids: vec![],
         read_scopes: vec![],

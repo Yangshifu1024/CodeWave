@@ -602,6 +602,7 @@ export default {
 
   // Delivery acceptance (#16 completion gate): a finished run is not an accepted
   // delivery; this read-only projection exists to remove exactly that misreading.
+  workflow: {title:"Workflow",edit:"Project workflow configuration",hint:"Review the complete JSON before saving. Saving does not authorize execution. Active tasks keep their frozen definition.",load:"Reload",validate:"Validate",save:"Review and save",confirm:"Adopt this workflow definition?",empty:"No frozen workflow",version:"Adopted revision {{revision}}",candidate:"Current project revision {{revision}}",changed:"Project configuration differs; only later tasks adopt it",resume:"Continue as a new attempt",resumeConfirm:"Create a new attempt and confirm current permissions? Historical tools are not replayed. Permissions return to Plan.",route:"Route",reason:"Reason",owner:"Owner",dependencies:"Dependencies",scope:"Write scope",checks:"Acceptance checks",attempt:"Attempt",leases:"Active leases",override:"Correct classification",overrideReason:"Explain the classification correction",noSession:"Select a project session",approved:"Reviewed",pending:"Pending review",draft:"Workflow JSON",failed:"Workflow operation failed: {{error}}",loading:"Loading workflow…"},
   acceptance: {
     title: "Acceptance", loading: "Loading acceptance…", failed: "Failed to load acceptance: {{error}}",
     unverified: "Unverified: this session has no acceptance record",

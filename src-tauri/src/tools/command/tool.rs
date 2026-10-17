@@ -723,6 +723,17 @@ impl Tool for CommandTool {
         // [#14] 请求可识别后立刻建执行意向：后面每一处准入早返回都要留下"从未启动"的记录，
         // 而不是让调用方看到一个没有回执的裸错误码。键用 provider 侧 tool_use.id（可持久）。
         let identity = crate::core::delivery::DeliveryService::identity_of(&ctx.rt);
+        if let Some(id) = args.check_id.as_deref()
+            && let Some(task) = ctx.rt.delivery_task_id.lock().unwrap().clone()
+            && let Some(contract) = ctx.core.delivery.read_contract(
+                &crate::core::delivery::DeliveryService::identity_of(&ctx.rt).session_id,
+                &task,
+            )
+            && let Some(spec) = contract.check(id)
+            && let Some(message) = crate::core::workflow::environment::unavailable(spec)
+        {
+            return ToolOutcome::err("E_CHECK_UNVERIFIED", message);
+        }
         let binding = if let Some(check_id) = args.check_id.as_deref() {
             let task = ctx.rt.delivery_task_id.lock().unwrap().clone();
             let contract = task

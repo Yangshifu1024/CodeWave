@@ -71,6 +71,7 @@ async function baseInvoke(cmd: string, args?: any) {
     case "mcp_status": return [];
     case "inspect_instruction_resources": return { resources: [], issues: [] };
     case "inspect_skills": return { entries: [], issues: [] };
+    case "read_project_workflow": return { text: "", revision: 0, digest: "", approved: false, issues: [] };
     case "list_skills": return [];
     case "list_agents": return [];
     case "search_workspace_paths": return [];
@@ -225,7 +226,7 @@ function controlByLabel(label: string): HTMLElement {
 }
 
 function promptArea(): HTMLTextAreaElement {
-  const ta = document.querySelector('[data-testid="settings-page"] .settings-pane-body textarea') as HTMLTextAreaElement | null;
+  const ta = document.querySelector('[data-testid="settings-page"] [data-setting-id="custom_prompt"] textarea') as HTMLTextAreaElement | null;
   if (!ta) throw new Error("custom prompt textarea not found");
   return ta;
 }

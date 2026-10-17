@@ -4,7 +4,7 @@ use crate::core::activity::ActivitySnapshot;
 /// 总览只取有界进程内摘要；不加载历史，也不依赖前端打开的 Tab。
 #[tauri::command]
 pub fn get_activity_snapshot(core: Core<'_>) -> ActivitySnapshot {
-    core.activity.snapshot()
+    crate::core::workflow::projection::activity_snapshot(&core)
 }
 
 /// 原询问只在对应 run 及 responder 仍有效时返回；应答仍走既有 resolve_ask。

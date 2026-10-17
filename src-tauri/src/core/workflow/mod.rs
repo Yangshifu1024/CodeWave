@@ -17,8 +17,13 @@
 //! 模型只能**建议**分类与计划，宿主按结构化图与真实范围核验后生效。
 
 pub mod config;
+pub mod definition;
 pub mod design;
 pub mod dispatch;
+pub mod environment;
+pub mod lifecycle;
+pub mod project;
+pub mod projection;
 pub mod routing;
 pub mod service;
 pub mod snapshot;

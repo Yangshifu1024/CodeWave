@@ -502,6 +502,7 @@ describe("设置项注册表：搜索 matchSettings（批③）", () => {
  * 豁免粒度是「文件 → 段」而不是「整文件」：在 TasksPage.tsx 里写 t("sessions.empty") 同样会被抓住。
  */
 const NON_SETTINGS_PANEL_SEGMENTS: Record<string, string[]> = {
+  "WorkflowSettings.tsx": ["workflow."], // Project-scoped workflow editor has its own commit service.
   "TasksPage.tsx": ["tasks."],
   "TokenStatsModal.tsx": ["stats."],
   "UpdateModal.tsx": ["updater."],
@@ -598,7 +599,7 @@ const SHARED_SEGMENTS = ["app.", "common."];
 const DIR_OWNED_SEGMENTS: Record<string, string[]> = {
   dashboard: ["dashboard."], // 运行总览页面与代理活动摘要
   // 消息区 / 输入区 / 引导条 / 运行队列 / 交付验收只读投影（#16 完成门）
-  chat: ["chat.", "composer.", "notice.", "queue.", "acceptance."],
+  chat: ["chat.", "composer.", "notice.", "queue.", "acceptance.", "workflow."],
   files: ["files."], // 会话产物与文件列表
   quota: [], // 额度与余额：全部文案挂在右栏 `rightbar.*`，见 CROSS_SEGMENT_BORROWINGS
   shell: ["closeTab.", "exitApp.", "git.", "nav.", "rightbar.", "sessions.", "skills.", "titlebar."], // 壳层：左导航 / 顶栏 / 右栏 / 拦截框 / git 身份条 / 技能详情
@@ -618,6 +619,7 @@ const FEATURE_FILE_SEGMENTS: Record<string, string[]> = {
   "dashboard/RuntimeDashboard.tsx": ["dashboard."], // 总览状态、层级、详情与回跳反馈
   "chat/ChatMessages.tsx": ["app.", "chat.", "notice."], // chat.* 消息区；app.* 空态；notice.* 模型设置引导
   "chat/Composer.tsx": ["app.", "composer.", "settings."], // composer.* 自有；settings.* 为跨段借用（见下）
+  "chat/WorkflowPanel.tsx": ["workflow."],
   "chat/AcceptancePanel.tsx": ["acceptance."], // 交付验收只读投影（#16 完成门）：acceptance.* 由 chat 目录自有
   "chat/ContextInfoBar.tsx": ["app."], // 仅 app.compact（信息条）
   "chat/ExternalDirPrompt.tsx": ["composer."], // 项目外目录放行确认框（文案归 composer 段，与附件入口同一处）

@@ -18,6 +18,8 @@ fn def(rev: u64) -> WorkflowDefinition {
             title: "a".into(),
             next: vec![],
             required_checks: vec![],
+
+            ..Default::default()
         }],
         edges: vec![Edge {
             from: "a".into(),
@@ -27,6 +29,8 @@ fn def(rev: u64) -> WorkflowDefinition {
         roles: BTreeMap::new(),
         checks: vec![],
         author: Some("user-1".into()),
+
+        ..Default::default()
     }
 }
 

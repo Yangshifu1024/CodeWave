@@ -4,6 +4,7 @@
  * 入参对象键名即 Tauri invoke 参数名；返回类型与 ipc/types.ts 的 serde 结构一一对应。
  * 组件不得直接 import @tauri-apps/api，新增命令一律收敛在此处。
  */
+import type { WorkflowConfigView, WorkflowIssue, WorkflowProjection } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import type { ActivitySnapshot, AskOpenedEvent, DeliveryProjection, SessionRunSnapshot } from "./types";
 import type { Channel } from "@tauri-apps/api/core";
@@ -23,6 +24,13 @@ export const ipc = {
   // 交付验收**只读**投影：没有写接口，也没有 set_passed（通过只能由求值推导）。
   getDeliveryProjection: (sessionId: string) =>
     invoke<DeliveryProjection>("get_delivery_projection", { sessionId }),
+
+  readProjectWorkflow: (sessionId: string) => invoke<WorkflowConfigView>("read_project_workflow", {sessionId}),
+  validateProjectWorkflow: (sessionId: string, text: string) => invoke<WorkflowIssue[]>("validate_project_workflow", {sessionId, text}),
+  saveProjectWorkflow: (sessionId: string, text: string, expectedRevision: number, expectedDigest: string, operationId: string) => invoke<WorkflowConfigView>("save_project_workflow", {sessionId, text, expectedRevision, expectedDigest, operationId}),
+  getWorkflowProjection: (sessionId: string) => invoke<WorkflowProjection | null>("get_workflow_projection", {sessionId}),
+  continueWorkflow: (sessionId: string, taskId: string, expectedRevision: number) => invoke<string>("continue_workflow", {sessionId, taskId, expectedRevision}),
+  overrideWorkflowRoute: (sessionId: string, taskId: string, expectedRevision: number, kind: string, reason: string) => invoke<unknown>("override_workflow_route", {sessionId,taskId,expectedRevision,kind,reason}),
 
   listProjects: () => invoke<ProjectEntry[]>("list_projects"),
   saveProject: (entry: ProjectEntry) => invoke<void>("save_project", { entry }),

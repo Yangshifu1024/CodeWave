@@ -742,14 +742,17 @@ impl Tool for SubagentTool {
         }
         let mut unit_dependencies = std::collections::BTreeMap::new();
         let mut frozen_unit = None;
+        let mut node_policy = None;
+        let mut node_model_policy = None;
         if let Some(unit_id) = &args.unit_id {
             let Some(task) = bound_contract else {
                 return ToolOutcome::err("E_WORKFLOW_UNIT", "工作单元必须绑定契约");
             };
-            if let Err(e) = crate::core::workflow::service::design_ready(
+            if let Err(e) = crate::core::workflow::service::unit_design_ready(
                 &ctx.rt.data_dir,
                 &crate::core::delivery::DeliveryService::identity_of(&ctx.rt),
                 task,
+                unit_id,
             ) {
                 return ToolOutcome::err("E_WORKFLOW_DESIGN", e);
             }
@@ -764,6 +767,38 @@ impl Tool for SubagentTool {
             let Some(unit) = p.units.iter().find(|u| &u.id == unit_id).cloned() else {
                 return ToolOutcome::err("E_WORKFLOW_UNIT", "工作单元未在冻结计划内");
             };
+            if let Err(error) = p.validate_models(&ctx.core.cfg.read().unwrap()) {
+                return ToolOutcome::err("E_WORKFLOW_MODEL", error);
+            }
+            if let Some(def) = &p.snapshot.definition {
+                node_policy = if def.id == "builtin" {
+                    None
+                } else {
+                    unit.stage_id
+                        .as_ref()
+                        .and_then(|id| def.stages.iter().find(|n| &n.id == id))
+                        .cloned()
+                };
+                node_model_policy = unit
+                    .stage_id
+                    .as_ref()
+                    .and_then(|id| def.model_policies.iter().find(|n| &n.node_id == id))
+                    .cloned();
+                if let Some(node) = &node_policy {
+                    use crate::core::workflow::definition::NodeKind;
+                    if matches!(node.kind, NodeKind::Complete | NodeKind::Design)
+                        || node.kind == NodeKind::Review
+                            && duty != crate::core::delivery::responsibility::DutyKind::Review
+                        || node.kind == NodeKind::Verify
+                            && duty != crate::core::delivery::responsibility::DutyKind::Verify
+                    {
+                        return ToolOutcome::err(
+                            "E_WORKFLOW_DUTY",
+                            "Node requires its exact host-bound duty/evidence",
+                        );
+                    }
+                }
+            }
             if p.state.node(unit_id).is_none() {
                 return ToolOutcome::err(
                     "E_WORKFLOW_UNIT",
@@ -975,6 +1010,30 @@ impl Tool for SubagentTool {
                 );
                 workflow_excludes.push("mcp:*".into());
             }
+        }
+        if let Some(node) = &node_policy {
+            workflow_excludes.extend(
+                crate::tools::registry::ToolRegistry::all_tool_names()
+                    .into_iter()
+                    .filter(|name| !node.tool_allowlist.contains(name)),
+            );
+            workflow_excludes.push("mcp:*".into());
+        }
+        if let Some(policy) = &workflow_policy
+            && !policy.max_tool_kinds.is_empty()
+        {
+            workflow_excludes.extend(
+                crate::tools::registry::ToolRegistry::all_tool_names()
+                    .into_iter()
+                    .filter(|name| {
+                        ctx.core.tools.get(name).is_some_and(|tool| {
+                            !policy
+                                .max_tool_kinds
+                                .iter()
+                                .any(|k| k == tool.kind().policy_name())
+                        })
+                    }),
+            );
         }
         if let Some(task) = bound_contract {
             let owner = crate::core::delivery::DeliveryService::identity_of(&sub_rt);
@@ -1217,6 +1276,12 @@ impl Tool for SubagentTool {
         // 档位基座（B1）：内部排除集 + 角色纪律块 + idle 策略在 spawn 冻结一次；
         // 此后每步由 drive 层按父会话**实时**档位从基座重建（`subagent_drive_params`）——
         // 子代理不再冻结在 spawn 时的档位上。
+        if let Some(policy) = &node_model_policy {
+            sub_rt.prefs.lock().unwrap().reasoning_effort = policy
+                .reasoning_effort
+                .as_deref()
+                .and_then(crate::core::prefs::EffortLevel::parse);
+        }
         let mut base = sub_base(
             &args.role,
             max_steps,
@@ -1492,7 +1557,24 @@ impl Tool for SubagentTool {
                             req.check_ids.retain(|id| checks.contains(id));
                         }
                     }
-                    let ledger = ctx.core.delivery.ledger(&owner.session_id);
+                    let mut ledger = ctx.core.delivery.ledger(&owner.session_id);
+                    if duty == crate::core::delivery::responsibility::DutyKind::Review {
+                        ledger.reviews.retain(|_, review| {
+                            review.reviewer.actor_id == owner.actor_id
+                                && review.reviewer.actor_run_id == owner.actor_run_id
+                        });
+                    }
+                    if duty == crate::core::delivery::responsibility::DutyKind::Verify {
+                        ledger.receipts.retain(|_, receipt| {
+                            receipt.owner.actor_id == owner.actor_id
+                                && receipt.owner.actor_run_id == owner.actor_run_id
+                        });
+                        ledger.validations.retain(|_, validation| {
+                            validation.owner.actor_id == owner.actor_id
+                                && validation.owner.actor_run_id == owner.actor_run_id
+                        });
+                    }
+
                     let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&sub_rt);
                     passed = crate::core::delivery::acceptance::evaluate(
                         &crate::core::delivery::acceptance::EvalContext {
@@ -2270,3 +2352,7 @@ mod tests {
         assert!(!base.base_system_extra.contains("<plan-mode>"));
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_workflow_tests.rs"]
+mod workflow_integration_tests;

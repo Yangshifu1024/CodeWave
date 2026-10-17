@@ -106,6 +106,7 @@ impl Tool for DeliveryContractTool {
                         &models,
                     )
                     .and_then(|prepared| {
+                        prepared.validate_models(&ctx.core.cfg.read().unwrap())?;
                         crate::core::workflow::service::persist(&ctx.rt.data_dir, &prepared)
                     })
                     .map_err(|message| crate::core::delivery::DeliveryError::Save { message })?;
@@ -196,6 +197,7 @@ impl Tool for DeliveryContractTool {
                         &models,
                     )
                     .and_then(|prepared| {
+                        prepared.validate_models(&ctx.core.cfg.read().unwrap())?;
                         crate::core::workflow::service::persist(&ctx.rt.data_dir, &prepared)
                     })
                     .map_err(|message| crate::core::delivery::DeliveryError::Save { message })

@@ -209,3 +209,19 @@ fn scope_eq(a: &[PathRef], b: &[PathRef]) -> bool {
 #[cfg(test)]
 #[path = "design_tests.rs"]
 mod tests;
+
+/// User-confirmed semantic inputs are part of the frozen work package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesignInput {
+    #[serde(default)]
+    pub documentation_only: bool,
+    #[serde(default)]
+    pub reuse_task: Option<String>,
+    #[serde(default)]
+    pub reuse_revision: Option<u64>,
+    #[serde(default)]
+    pub new_tradeoffs: Vec<DesignTrigger>,
+    #[serde(default)]
+    pub user_requested: bool,
+}

@@ -14,6 +14,8 @@ fn stage(id: &str, next: &[&str]) -> Stage {
         title: id.into(),
         next: next.iter().map(|s| s.to_string()).collect(),
         required_checks: vec![],
+
+        ..Default::default()
     }
 }
 
@@ -45,17 +47,23 @@ fn def() -> WorkflowDefinition {
                 tools: vec!["read".into(), "edit".into()],
                 model_id: Some("m-a".into()),
                 independent_review: true,
+
+                ..Default::default()
             },
         )]
         .into_iter()
         .collect(),
         checks: vec![CheckCommand {
+            platforms: vec![],
+            prerequisites: vec![],
             id: "cargo".into(),
             command_text: "cargo test --workspace".into(),
             cwd: Some("src-tauri".into()),
             dangerous: false,
         }],
         author: Some("user-1".into()),
+
+        ..Default::default()
     }
 }
 
@@ -75,6 +83,8 @@ fn unknown_role_is_rejected() {
             tools: vec![],
             model_id: None,
             independent_review: false,
+
+            ..Default::default()
         },
     );
     let issues = validate(&x, d.path(), &models()).unwrap_err();
@@ -132,6 +142,13 @@ fn an_ordinary_cycle_is_rejected_but_a_repair_edge_is_accepted() {
     // 修复环：同一条边标成 Repair —— 唯一允许成环的类别。
     let mut repair = ordinary.clone();
     repair.edges.last_mut().unwrap().kind = EdgeKind::Repair;
+    repair.repair_rules = vec![RepairRule {
+        id: "retry".into(),
+        from: "verify".into(),
+        to: "build".into(),
+        max_rounds: 2,
+        fingerprint_budget: 2,
+    }];
     assert!(validate(&repair, d.path(), &models()).is_ok());
 }
 
@@ -139,14 +156,20 @@ fn an_ordinary_cycle_is_rejected_but_a_repair_edge_is_accepted() {
 fn a_dangerous_command_may_be_stored_but_still_needs_execution_approval() {
     let mut x = def();
     x.checks.push(CheckCommand {
+        platforms: vec![],
+        prerequisites: vec![],
         id: "cleanup".into(),
-        command_text: "rm -rf target".into(),
+        command_text: "git push --force origin main".into(),
         cwd: None,
         dangerous: true,
     });
     let d = tempfile::tempdir().unwrap();
     // 存得下：保存配置**不绕**执行审批，也**不**因为危险就拒绝保存。
-    assert!(validate(&x, d.path(), &models()).is_ok());
+    assert!(
+        validate(&x, d.path(), &models()).is_ok(),
+        "{:?}",
+        validate(&x, d.path(), &models())
+    );
     // 但它被标记为需要审批 —— 真正执行时仍要过一次既有审批门。
     assert!(requires_execution_approval(&x, "cleanup"));
     assert!(!requires_execution_approval(&x, "cargo"));
@@ -262,4 +285,190 @@ fn an_invalid_draft_is_rejected_before_touching_the_disk() {
     );
     // 原有效版本逐字节不变。
     assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+fn minimal_text() -> String {
+    r#"{"schema":1,"id":"project","nodes":[{"id":"build","kind":"implement","tool_allowlist":[]}]}"#
+        .into()
+}
+#[test]
+fn same_holder_concurrent_project_commits_have_one_winner() {
+    let project = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let data = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let digest = super::super::project::read(
+        data.path(),
+        project.path(),
+        &crate::core::config::ConfigState::default(),
+    )
+    .unwrap()
+    .digest;
+    let handles: Vec<_> = (0..2)
+        .map(|i| {
+            let project = project.clone();
+            let data = data.clone();
+            let barrier = barrier.clone();
+            let digest = digest.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                super::super::project::save(
+                    data.path(),
+                    project.path(),
+                    &crate::core::config::ConfigState::default(),
+                    &minimal_text(),
+                    0,
+                    &digest,
+                    &format!("op{i}"),
+                    &RunIdentity::root("same-session", "same-run"),
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    let view = super::super::project::read(
+        data.path(),
+        project.path(),
+        &crate::core::config::ConfigState::default(),
+    )
+    .unwrap();
+    assert_eq!(view.revision, 1);
+    assert!(view.approved);
+}
+#[test]
+fn same_revision_external_edit_conflicts_and_never_gets_approved() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cfg = crate::core::config::ConfigState::default();
+    let owner = RunIdentity::root("s", "r");
+    let old = super::super::project::read(data.path(), project.path(), &cfg).unwrap();
+    let saved = super::super::project::save(
+        data.path(),
+        project.path(),
+        &cfg,
+        &minimal_text(),
+        0,
+        &old.digest,
+        "first",
+        &owner,
+    )
+    .unwrap();
+    let bytes = saved.text.replace("project", "external");
+    std::fs::write(project.path().join(".codewave/workflows.json"), bytes).unwrap();
+    assert!(
+        super::super::project::save(
+            data.path(),
+            project.path(),
+            &cfg,
+            &minimal_text(),
+            1,
+            &saved.digest,
+            "next",
+            &owner
+        )
+        .is_err()
+    );
+    assert!(
+        !super::super::project::read(data.path(), project.path(), &cfg)
+            .unwrap()
+            .approved
+    );
+}
+#[test]
+fn approval_write_failure_does_not_activate_config() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cfg = crate::core::config::ConfigState::default();
+    let owner = RunIdentity::root("s", "r");
+    let view = super::super::project::read(data.path(), project.path(), &cfg).unwrap();
+    std::fs::write(
+        data.path().join("workflow_trust"),
+        b"block directory creation",
+    )
+    .unwrap();
+    assert!(
+        super::super::project::save(
+            data.path(),
+            project.path(),
+            &cfg,
+            &minimal_text(),
+            0,
+            &view.digest,
+            "failure",
+            &owner
+        )
+        .is_err()
+    );
+    assert!(
+        !super::super::project::read(data.path(), project.path(), &cfg)
+            .unwrap()
+            .approved
+    );
+    assert!(!project.path().join(".codewave/workflows.json").exists());
+}
+#[test]
+fn schema_rejects_unknown_kind_limits_and_precise_model_reference() {
+    let project = tempfile::tempdir().unwrap();
+    assert!(
+        serde_json::from_str::<WorkflowDefinition>(&minimal_text().replace("implement", "plugin"))
+            .is_err()
+    );
+    let mut d: WorkflowDefinition = serde_json::from_str(&minimal_text()).unwrap();
+    d.stages = vec![
+        Stage {
+            id: "node".into(),
+            ..Default::default()
+        };
+        33
+    ];
+    assert!(
+        validate(&d, project.path(), &BTreeSet::new())
+            .unwrap_err()
+            .iter()
+            .any(|e| e.code == "definition_too_large")
+    );
+}
+
+#[test]
+fn validation_errors_point_to_external_json_fields() {
+    let project = tempfile::tempdir().unwrap();
+    let mut d = def();
+    d.stages[0].next = vec!["missing".into()];
+    d.stages[1].required_checks = vec!["missing".into()];
+    d.edges[0].from = "missing".into();
+    d.edges[1].to = "missing".into();
+    d.roles.insert(
+        "unknown/role~name".into(),
+        RolePolicy {
+            tools: vec!["unknown_tool".into()],
+            model_id: Some("missing".into()),
+            ..Default::default()
+        },
+    );
+    d.checks[0].command_text.clear();
+    d.checks[0].cwd = Some("../outside".into());
+    d.checks[0].platforms = vec!["unknown".into()];
+    let errors = validate(&d, project.path(), &models()).unwrap_err();
+    for (code, pointer) in [
+        ("stage_next_mismatch", "/nodes/0/next/0"),
+        ("unknown_check", "/nodes/1/required_checks/0"),
+        ("edge_unknown_from", "/edges/0/from"),
+        ("edge_unknown_to", "/edges/1/to"),
+        ("unknown_role", "/role_policies/unknown~1role~0name"),
+        ("unknown_tool", "/role_policies/unknown~1role~0name/tools/0"),
+        (
+            "unknown_model",
+            "/role_policies/unknown~1role~0name/model_id",
+        ),
+        ("empty_command", "/checks/0/command_text"),
+        ("cross_project_path", "/checks/0/cwd"),
+        ("invalid_environment", "/checks/0/platforms/0"),
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.code == code && e.pointer == pointer),
+            "Missing {code} at {pointer}: {errors:?}"
+        );
+    }
 }

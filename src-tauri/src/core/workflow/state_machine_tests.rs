@@ -22,12 +22,16 @@ fn def() -> WorkflowDefinition {
                 title: "a".into(),
                 next: vec!["b".into()],
                 required_checks: vec![],
+
+                ..Default::default()
             },
             Stage {
                 id: "b".into(),
                 title: "b".into(),
                 next: vec![],
                 required_checks: vec![],
+
+                ..Default::default()
             },
         ],
         edges: vec![
@@ -43,8 +47,17 @@ fn def() -> WorkflowDefinition {
             },
         ],
         roles: BTreeMap::new(),
+        repair_rules: vec![super::super::definition::RepairRule {
+            id: "retry".into(),
+            from: "b".into(),
+            to: "a".into(),
+            max_rounds: 2,
+            fingerprint_budget: 2,
+        }],
         checks: vec![],
         author: None,
+
+        ..Default::default()
     }
 }
 

@@ -17,6 +17,18 @@ pub enum ToolKind {
     Meta,
 }
 
+impl ToolKind {
+    pub fn policy_name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::FileWrite => "file_write",
+            Self::Network => "network",
+            Self::Interactive => "interactive",
+            Self::Meta => "meta",
+        }
+    }
+}
+
 /// 工具执行失败的结构化错误：`code` 是机器可读的稳定错误码（如 `E_FENCE_BLOCKED`），模型据此决策重试或放弃。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolError {

@@ -339,6 +339,24 @@
               },
               "independent_verifier": {
                 "type": "boolean"
+              },
+              "platforms": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "macos",
+                    "linux",
+                    "windows"
+                  ]
+                }
+              },
+              "prerequisites": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Executable names required on PATH; missing prerequisites remain unverified."
               }
             },
             "required": [
@@ -440,6 +458,15 @@
               "at"
             ]
           }
+        },
+        "delivery_goal": {
+          "type": "string",
+          "enum": [
+            "development",
+            "pull_request",
+            "release"
+          ],
+          "description": "Explicit delivery target; PR/release requires the full prepr gate."
         }
       }
     },

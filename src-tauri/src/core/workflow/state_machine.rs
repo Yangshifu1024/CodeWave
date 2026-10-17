@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 pub enum NodeState {
     /// 待派发。
     Pending,
+    Interrupted,
     /// 已准入并占用写范围租约（#2）。
     Ready,
     /// 运行中。
@@ -39,6 +40,7 @@ impl NodeState {
     pub fn as_str(self) -> &'static str {
         match self {
             NodeState::Pending => "pending",
+            NodeState::Interrupted => "interrupted",
             NodeState::Ready => "ready",
             NodeState::Running => "running",
             NodeState::Passed => "passed",
@@ -324,7 +326,7 @@ pub fn transition(
     // 修复预算：repair 次数用尽即阻塞，不再回边。
     // 预算只拦**重新进入 running**：上报失败 / 通过 / 取消永远不受预算影响，
     // 否则一个已用尽预算的单元连"如实报告失败"都做不到。
-    let repair = repair_targets_me && to == NodeState::Running;
+    let repair = is_revival;
     if repair && node.repair_rounds >= max_repair_rounds {
         return Err(Rejection::new(
             "repair_budget_exhausted",

@@ -13,7 +13,7 @@
 | 安全与能力 | `mcp` / MCP | 用户级/项目级配置、服务器状态卡片、编辑与连接操作 |
 | 安全与能力 | `skills` / 技能 | 启停、重新扫描、托管技能删除 |
 | 安全与能力 | `tools` / 写入后检查与校验 | 写入后检查的开关、命令、超时、输出尾字符数 |
-| 安全与能力 | `agent` / 工作区与智能体 | Shell、自定义提示词、上下文压缩、会话保留期与清理、旧格式历史清理 |
+| 安全与能力 | `agent` / 工作区与智能体 | Shell、自定义提示词、项目工作流 JSON、上下文压缩、会话保留期与清理、旧格式历史清理 |
 | 诊断与其他 | `logs` / 日志 | 日志级别、会话详细日志 |
 | 诊断与其他 | `about` / 关于 | 版本与更新、数据/日志目录、仓库与许可证 |
 
@@ -45,6 +45,7 @@
 | 即时偏好 | 界面语言、主题、输出展示、三组字体与字号与自动检查更新独立生效，不参与脏点；取消主配置草稿不回滚它们 |
 | 子代理模型覆盖 | `set_subagent_model` 只 patch 单角色，携带角色版本；同角色在途禁用，错误保留重试选择，顶部保存/取消均不覆盖已提交角色值 |
 | MCP 配置 | 独立 `mcp.json`，通过编辑弹框的“保存并重连”调用 `mcpSaveConfig`；顶部主配置保存不覆盖它 |
+| 项目工作流 | 独立 `workflows.json`，通过「工作区与智能体」页的 JSON 编辑器校验并确认保存；revision 和原始字节摘要检查冲突，顶部主配置保存不提交它 |
 | 操作与只读信息 | 技能重扫/删除、清理、连接操作、打开目录与检查更新走各自 IPC；`app.*` 注册项没有落盘字段 |
 
 - 普通脏点由 `PAGE_FIELDS` → `fieldSlice` / `pageSlice` 对比草稿与已保存配置；即时项和 MCP 从主配置比较中排除。MCP 另比当前序列化文本与基线，脏点只挂在 `mcp` 页。
@@ -105,6 +106,12 @@
 - **测试当前草稿**：保存和测试共用条目序列化；IPC 发送完整 name/config，新建或重命名无需先保存。测试只临时启动命令/连接地址并 initialize/tools-list，不读取磁盘同名项、不改变正式池；未保存不代表没有启动副作用。单份草稿单飞，改字段、关闭重开或切上下文会丢弃旧结果。关闭编辑器不立即取消进程；测试总预算60秒，另加最多5秒回收。保存使用文件版本检查，冲突保留草稿；saved表示已写文件并接纳差量应用，Ready/Error仍由状态事件与快照确认。详见[MCP 与技能](./mcp-and-skills.md)。
 
 源码：[SettingsPage.tsx](../ui/src/features/panels/SettingsPage.tsx) 的 `saveMcp/deleteMcpEntry/runMcpAction/testMcpServer/readMcpStatus`、[McpKvTable.tsx](../ui/src/features/panels/McpKvTable.tsx)、[McpStatusTable.tsx](../ui/src/features/panels/McpStatusTable.tsx)、[host/commands/mcp.rs](../src-tauri/src/host/commands/mcp.rs)。
+
+## 项目工作流配置
+
+[WorkflowSettings.tsx](../ui/src/features/panels/WorkflowSettings.tsx) 挂在「工作区与智能体」页，注册项 `app.project_workflow` 支持设置搜索。仅项目会话可读写其主目录的定义；临时会话不创建项目配置。JSON 草稿可先校验，错误显示 pointer/code/message；保存前弹框展示确切文本，用户确认后才提交。批准标记只表示当前字节可供下次冻结，不是命令执行授权。
+
+该编辑器使用独立的 read/validate/save IPC，不属于主配置页级草稿；顶部保存/取消不能当作已经保存或回滚工作流。保存携带已读 revision、digest 和操作 UUID；冲突与失败保留输入，需明确重读当前版本并人工合并，不能自动重放旧草稿。运行中修改配置只影响后续 run；当前版本与候选差异在右栏工作流面板对账。schema、冻结和恢复由[运行与调度](./runtime-and-scheduling.md#项目工作流配置6)主维护。
 
 ## 技能来源与覆盖
 

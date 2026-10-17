@@ -439,7 +439,7 @@ impl DeliveryService {
     /// 绝不补造"已用过多少轮"的假事实。
     pub fn load_budget(&self, session_id: &str, task_id: &str) -> super::completion::RepairBudget {
         // 取**最新**一条：记录 id 由 operation_id 派生，字典序不等于时间序，
-        // 所以按写入时刻（ISO 8601，可字典序比较）挑，而不是取末条。
+        // 预算只增不减，优先按消耗水位选择，时刻只作平局排序，避免系统时钟回拨恢复旧额度。
         let index = self.store.load_index(session_id);
         index
             .records
@@ -450,7 +450,20 @@ impl DeliveryService {
                 _ => None,
             })
             .filter(|(_, b)| b.task_id == task_id)
-            .max_by(|a, b| a.0.cmp(&b.0))
+            .max_by(|a, b| {
+                (
+                    a.1.budget.rounds_used,
+                    a.1.budget.extra_steps_used,
+                    a.1.budget.operations.len(),
+                    &a.0,
+                )
+                    .cmp(&(
+                        b.1.budget.rounds_used,
+                        b.1.budget.extra_steps_used,
+                        b.1.budget.operations.len(),
+                        &b.0,
+                    ))
+            })
             .map(|(_, b)| b.budget)
             .unwrap_or_default()
     }
@@ -475,6 +488,71 @@ impl DeliveryService {
             super::store::RecordBody::RepairBudget(Box::new(state)),
             None,
         )
+    }
+
+    /// Atomic shared budget consumption for completion repair and workflow retry.
+    pub fn reserve_repair(
+        &self,
+        owner: &RunIdentity,
+        task: &str,
+        operation: &str,
+        gaps: &[super::completion::Gap],
+        rule_limit: Option<(&str, u32, u32)>,
+    ) -> Result<super::completion::RepairBudget, DeliveryError> {
+        let lock_id =
+            super::version::digest_of_bytes(format!("{}:{task}", owner.session_id).as_bytes());
+        let session_path = self.store.delivery_dir(&owner.session_id);
+        let data = session_path
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(std::path::Path::new("."));
+        let _lock = crate::core::process_coordination::DiskLock::acquire(
+            &data.join("coord/budgets").join(format!("{lock_id}.lock")),
+        )
+        .map_err(|e| DeliveryError::Save {
+            message: e.to_string(),
+        })?;
+        let mut budget = self.load_budget(&owner.session_id, task);
+        let shape = super::version::digest_of_bytes(&serde_json::to_vec(gaps).unwrap_or_default());
+        if let Some(old) = budget.operations.get(operation) {
+            return if old == &shape {
+                Ok(budget)
+            } else {
+                Err(DeliveryError::Save {
+                    message: "Repair operation changed".into(),
+                })
+            };
+        }
+        if !budget.can_repair(gaps) {
+            return Err(DeliveryError::Save {
+                message: "Shared repair budget exhausted".into(),
+            });
+        }
+        if let Some((rule, rounds, repeats)) = rule_limit
+            && (budget
+                .operations
+                .keys()
+                .filter(|k| k.starts_with(&format!("workflow_{rule}_")))
+                .count()
+                >= rounds as usize
+                || gaps.iter().any(|g| {
+                    budget
+                        .fingerprints
+                        .get(&g.fingerprint)
+                        .copied()
+                        .unwrap_or(0)
+                        >= repeats
+                }))
+        {
+            return Err(DeliveryError::Save {
+                message: "Repair rule/fingerprint budget exhausted".into(),
+            });
+        }
+        budget.consume(gaps);
+        budget.consume_steps(1);
+        budget.operations.insert(operation.into(), shape);
+        self.save_budget(&owner.session_id, owner, task, &budget, operation)?;
+        Ok(budget)
     }
 
     // ---------- #14 执行回执 ----------
@@ -647,6 +725,7 @@ impl DeliveryService {
             other => other,
         });
         let receipt = ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding,
             schema: SCHEMA,
             id: id.clone(),

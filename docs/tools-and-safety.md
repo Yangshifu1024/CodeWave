@@ -221,7 +221,7 @@ http_request 的方法白名单为 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS；JSON
 
 ### 生产契约与真实证据入口
 
-`delivery_contract create` 接受需求、产物、检查草稿，先将精确草稿展示给用户并通过真实询问采纳；FullAccess 不能代替契约批准，无交互宿主无法从模型入口启用契约。可信宿主直接提供的待采纳契约按宿主入口处理。身份、任务 id、修订、真实根路径、变更前基线由宿主补齐；发布契约前先准备并保存冻结工作流。`read/evaluate` 提供查询和重算，不能写 passed。`revise` 通过 expectedRevision 检查；取消和豁免必须引用同会话、同 root run、明确覆盖目标的真实用户决定。创建草稿不能自带取消/豁免冒充授权。
+`delivery_contract create` 接受需求、产物、检查草稿，先将精确草稿展示给用户并通过真实询问采纳；FullAccess 不能代替契约批准，无交互宿主无法从模型入口启用契约。可信宿主直接提供的待采纳契约按宿主入口处理。身份、任务 id、修订、真实根路径、变更前基线由宿主补齐；发布契约前先准备并保存冻结工作流。`read/evaluate` 提供查询和重算，不能写 passed。`revise` 通过 expectedRevision 检查；取消和豁免必须引用同会话、同 root run、明确覆盖目标的真实用户决定。创建草稿不能自带取消/豁免冒充授权。草稿的 `delivery_goal` 决定开发检查与 PR/发版完整门禁是否合并；检查的 `platforms` 与可执行程序 `prerequisites` 保留到冻结契约。命令执行前和验收重算均检查当前运行条件，条件不满足保持 blocked/unverified，不能用另一平台回执或 lint 替代指定检查。
 
 普通 `command` 可记录执行事实，但只有 `checkId` 命中已登记检查、命令逐字匹配且实际 cwd 与声明一致时，才绑定该检查和精确 task/revision；签发器在准入前后捕获范围、保存真实开始/结束时间与输出。spill 输出从完整文件读取，超预算标截断；写后配置命令也签发实际退出码回执并独立捕获最多 8MiB 原始合并输出供脱敏后落盘；模型侧仍只返回尾部，超预算必须标截断，不能将裁剪尾部标成完整。命令、参数及输出中的常见 `API_KEY/token/password/secret` 标签和 Bearer 凭据会脱敏；仍应避免输出没有标签的密钥。
 

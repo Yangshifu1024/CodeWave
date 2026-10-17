@@ -203,6 +203,7 @@ pub struct SessionRuntime {
     pub delivery_review_assignment_id: Mutex<Option<String>>,
     pub delivery_verification_task_id: Mutex<Option<String>>,
     pub delivery_check_ids: Mutex<Option<Vec<String>>>,
+    pub pending_workflow: Mutex<Option<crate::core::workflow::service::PreparedWorkflow>>,
     pub pending_contract: Mutex<Option<crate::core::delivery::types::ContractDraft>>,
     /// 本次派发收到的结构化交付草稿（[#17](../../../../docs/subagents.md)）。
     ///
@@ -570,6 +571,7 @@ impl SessionRuntime {
             delivery_verification_task_id: Mutex::new(None),
             delivery_check_ids: Mutex::new(None),
             pending_contract: Mutex::new(None),
+            pending_workflow: Mutex::new(None),
             delivery_draft: Mutex::new(None),
             last_completion: Mutex::new(None),
             interactive: AtomicBool::new(true),
@@ -943,7 +945,18 @@ impl AgentCore {
         images: Vec<crate::core::prefs::ImageIn>,
         expected: Option<&str>,
     ) -> anyhow::Result<String> {
-        let _start_guard = self.start_gate.lock().unwrap();
+        let start_guard = self.start_gate.lock().unwrap();
+        self.start_chat_locked(rt, text, images, expected, &start_guard)
+    }
+
+    pub(crate) fn start_chat_locked(
+        self: &Arc<Self>,
+        rt: Arc<SessionRuntime>,
+        text: String,
+        images: Vec<crate::core::prefs::ImageIn>,
+        expected: Option<&str>,
+        _guard: &std::sync::MutexGuard<'_, ()>,
+    ) -> anyhow::Result<String> {
         if !rt.running.load(Ordering::SeqCst) && !rt.try_settle_cleanup() {
             anyhow::bail!("上一轮的工作根清理尚未确认，请稍后重试");
         }
@@ -997,12 +1010,35 @@ impl AgentCore {
                 .iter()
                 .flat_map(|p| p.models.iter().map(|m| m.id.clone()))
                 .collect();
+            let frozen = rt.pending_workflow.lock().unwrap().take();
             match self.delivery.create_contract_with(
                 &owner,
                 &draft,
                 &roots,
                 &format!("host-{run_id}"),
                 |contract| {
+                    if let Some(frozen) = frozen {
+                        crate::core::workflow::lifecycle::record_resume_provenance(
+                            &frozen, contract,
+                        )
+                        .map_err(|message| {
+                            crate::core::delivery::DeliveryError::Save { message }
+                        })?;
+                        let rebound = frozen.rebind(contract);
+                        crate::core::workflow::service::persist(&rt.data_dir, &rebound).map_err(
+                            |message| crate::core::delivery::DeliveryError::Save { message },
+                        )?;
+                        if let Some(budget) = &frozen.resume_budget {
+                            self.delivery.save_budget(
+                                &owner.session_id,
+                                &owner,
+                                &contract.task_id,
+                                budget,
+                                &format!("resume_budget_{run_id}"),
+                            )?;
+                        }
+                        return Ok(());
+                    }
                     crate::core::workflow::service::prepare(
                         contract,
                         &roots,
@@ -1012,12 +1048,24 @@ impl AgentCore {
                         &models,
                     )
                     .and_then(|prepared| {
+                        prepared.validate_models(&self.cfg.read().unwrap())?;
                         crate::core::workflow::service::persist(&rt.data_dir, &prepared)
                     })
                     .map_err(|message| crate::core::delivery::DeliveryError::Save { message })
                 },
             ) {
-                Ok((contract, _)) => *rt.delivery_task_id.lock().unwrap() = Some(contract.task_id),
+                Ok((contract, _)) => {
+                    *rt.delivery_task_id.lock().unwrap() = Some(contract.task_id.clone());
+                    if let Err(error) = crate::core::workflow::service::advance_automatic_nodes(
+                        &rt.data_dir,
+                        &owner,
+                        &contract.task_id,
+                        false,
+                    ) {
+                        rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
+                        anyhow::bail!("工作流自动节点恢复失败，未启动模型：{error}");
+                    }
+                }
                 Err(e) => {
                     rt.finish_run(RunTerminal::new(&run_id, RunTerminalKind::Error));
                     anyhow::bail!("交付契约无效，运行未开始：{e}");

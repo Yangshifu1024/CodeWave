@@ -58,6 +58,7 @@ import { AppearanceSettings } from "./FontSettings";
 import ProvidersPanel, { validateProvider } from "./ProvidersPanel";
 import SubagentModelsPanel from "./SubagentModelsPanel";
 import SkillsPanel from "./SkillsPanel";
+import WorkflowSettings from "./WorkflowSettings";
 import InstructionResourcesPanel from "./InstructionResourcesPanel";
 import {
   INSTANT_APPLY_FIELD_IDS,
@@ -2052,6 +2053,7 @@ function SettingsPageController() {
       labelKey: PAGE_LABEL_KEY.agent,
       body: draft && (
         <SettingsForm className="settings-agent-form">
+          <section className="setting-anchor" data-setting-id="app.project_workflow"><WorkflowSettings key={sessionId} sessionId={sessionId} /></section>
           {/* 「Shell 与提示词」组：shell 选择器 + 自定义提示词合成一张 section 卡片
               （[docs/settings-guide](../../../../docs/settings-guide.md)） */}
           <SettingsSection title={t("settings.agentShellSection")}>

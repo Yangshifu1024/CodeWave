@@ -45,6 +45,7 @@ fn scope(rel: &str) -> VerificationScope {
 
 fn contract(check_rel: &str) -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "task1".into(),
         revision: 1,
@@ -58,6 +59,8 @@ fn contract(check_rel: &str) -> TaskContract {
         }],
         artifacts: Vec::new(),
         checks: vec![CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
             cwd: Some(PathRef {
                 root_id: "ws".into(),
                 relative_path: ".".into(),
@@ -104,6 +107,7 @@ fn receipt_for(
     o.actor_id = owner_actor.into();
     o.actor_run_id = format!("{owner_actor}-run");
     ExecutionReceipt {
+        platform: Some(std::env::consts::OS.into()),
         binding: Some(crate::core::delivery::types::ContractBinding {
             task_id: "task1".into(),
             revision: 1,

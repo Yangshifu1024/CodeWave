@@ -54,7 +54,7 @@ async fn workflow_confirmation_preserves_all_permission_modes() {
                 json!({"answers":{"workflow_change":{"selections":["apply_workflow"]}}})
             ));
         };
-        let args = json!({"action":"save_config","expectedRevision":0,"definition":{"schema":1,"id":"main","stages":[{"id":"build","title":"build"}]}});
+        let args = json!({"action":"save_config","expectedRevision":0,"definition":{"schema":1,"id":"main","nodes":[{"id":"build","title":"build"}]}});
         let (result, ()) = tokio::join!(WorkflowTool.run(&ctx, args), answer);
         assert!(result.ok, "{result:?}");
         assert_eq!(rt.prefs().approval_mode, mode);

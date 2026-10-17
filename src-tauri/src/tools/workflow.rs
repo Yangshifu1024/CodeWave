@@ -31,12 +31,13 @@ impl Tool for WorkflowTool {
         "record_design"
       ]
     },
+    "unitId": {"type":"string"},
     "taskId": {
       "type": "string"
     },
     "definition": {
       "type": "object",
-      "description": "WorkflowDefinition：schema=1、id、stages[{id,title,next?,required_checks?}]、edges[{from,to,kind:advance|repair}]、roles{角色:{tools,model_id?,independent_review?}}、checks[{id,command_text,cwd?,dangerous?}]"
+      "description": "WorkflowDefinition：schema=1、id、nodes[{id,kind,title?,requirement_ids?,role_id?,tool_allowlist,required_checks?}]、edges[{from,to,kind:advance|repair}]、role_policies{角色:{tools,model_id?,independent_review?}}、checks[{id,command_text,cwd?,dangerous?,platforms?,prerequisites?}]、repair_rules[{id,from,to,max_rounds,fingerprint_budget}]、model_policies[{node_id,provider_id,model_entry_id,reasoning_effort?}]"
     },
     "design": {
       "type": "object",
@@ -170,6 +171,7 @@ impl Tool for WorkflowTool {
               "type": "string"
             }
           },
+          "design_input": {"type":"object","properties":{"documentation_only":{"type":"boolean"},"reuse_task":{"type":"string"},"reuse_revision":{"type":"integer"},"new_tradeoffs":{"type":"array","items":{"type":"string"}},"user_requested":{"type":"boolean"}}},
           "stage_id": {
             "type": [
               "string",
@@ -224,6 +226,18 @@ impl Tool for WorkflowTool {
         {
             return ToolOutcome::err("E_ARGS", "未知 workflow action");
         }
+        let original_config = if action == "save_config" {
+            match crate::core::workflow::project::read(
+                &ctx.rt.data_dir,
+                &ctx.rt.workspace,
+                &ctx.core.cfg.read().unwrap(),
+            ) {
+                Ok(v) => Some(v),
+                Err(e) => return ToolOutcome::err("E_WORKFLOW_CONFIG", e),
+            }
+        } else {
+            None
+        };
         let preview = serde_json::to_string_pretty(&args).unwrap_or_default();
         if !ctx
             .rt
@@ -261,6 +275,19 @@ impl Tool for WorkflowTool {
                 Ok(v) => v,
                 Err(e) => return ToolOutcome::err("E_WORKFLOW_DESIGN", e.to_string()),
             };
+            if let Some(unit) = args["unitId"].as_str() {
+                return match service::record_unit_design(
+                    &ctx.rt.data_dir,
+                    &owner,
+                    args["taskId"].as_str().unwrap_or(""),
+                    args["expectedRevision"].as_u64().unwrap_or(0),
+                    unit,
+                    decision,
+                ) {
+                    Ok(()) => ToolOutcome::ok(json!({"saved":true,"execution_authorized":false})),
+                    Err(e) => ToolOutcome::err("E_WORKFLOW_DESIGN", e),
+                };
+            }
             return match service::record_design(
                 &ctx.rt.data_dir,
                 &owner,
@@ -280,10 +307,64 @@ impl Tool for WorkflowTool {
             if contract.revision != args["expectedRevision"].as_u64().unwrap_or(0) {
                 return ToolOutcome::err("E_WORKFLOW_REVISION", "契约修订已变更");
             }
-            let units = match serde_json::from_value(args["units"].clone()) {
-                Ok(v) => v,
-                Err(e) => return ToolOutcome::err("E_WORKFLOW_UNITS", e.to_string()),
+            let mut units: Vec<crate::core::workflow::routing::WorkUnit> =
+                match serde_json::from_value(args["units"].clone()) {
+                    Ok(v) => v,
+                    Err(e) => return ToolOutcome::err("E_WORKFLOW_UNITS", e.to_string()),
+                };
+            let cfg = ctx.core.cfg.read().unwrap().clone();
+            let frozen = match service::read(&ctx.rt.data_dir, &owner, task) {
+                Ok(p) => p,
+                Err(e) => return ToolOutcome::err("E_WORKFLOW_MODEL", e),
             };
+            for unit in &mut units {
+                if let Some(def) = &frozen.snapshot.definition {
+                    let node = unit
+                        .stage_id
+                        .as_ref()
+                        .and_then(|id| def.stages.iter().find(|n| &n.id == id))
+                        .or_else(|| def.stages.first());
+                    if unit.role_id.is_none() {
+                        unit.role_id = node.and_then(|n| n.role_id.clone());
+                    }
+                }
+                if unit.model_id.is_none() {
+                    unit.model_id = frozen.snapshot.definition.as_ref().and_then(|d| {
+                        let node = unit
+                            .stage_id
+                            .as_ref()
+                            .or_else(|| d.stages.first().map(|n| &n.id));
+                        d.model_policies
+                            .iter()
+                            .find(|policy| Some(&policy.node_id) == node)
+                            .map(|p| p.model_entry_id.clone())
+                            .or_else(|| {
+                                unit.role_id
+                                    .as_ref()
+                                    .and_then(|role| d.roles.get(role))
+                                    .and_then(|p| p.model_id.clone())
+                            })
+                    });
+                }
+                if unit.model_id.is_none() {
+                    unit.model_id = crate::core::prefs::effective_subagent_model(
+                        &cfg,
+                        unit.role_id.as_deref().unwrap_or("backend-dev"),
+                        &ctx.rt.prefs(),
+                    )
+                    .map(|m| m.id.clone());
+                }
+                if unit
+                    .model_id
+                    .as_ref()
+                    .is_some_and(|id| cfg.find_model(id).is_none())
+                {
+                    return ToolOutcome::err(
+                        "E_WORKFLOW_MODEL",
+                        "Work package model is unavailable",
+                    );
+                }
+            }
             let roots = crate::core::delivery::DeliveryService::roots_from_runtime(&ctx.rt);
             return match service::plan_units(&ctx.rt.data_dir, &owner, &contract, units, &roots) {
                 Ok(p) => ToolOutcome::ok(json!(p)),
@@ -299,47 +380,29 @@ impl Tool for WorkflowTool {
                     Ok(v) => v,
                     Err(e) => return ToolOutcome::err("E_WORKFLOW_CONFIG", e.to_string()),
                 };
-            let models = ctx
-                .core
-                .cfg
-                .read()
-                .unwrap()
-                .providers
-                .iter()
-                .flat_map(|p| p.models.iter().map(|m| m.id.clone()))
-                .collect();
+            let cfg = ctx.core.cfg.read().unwrap().clone();
+            let view = original_config.unwrap();
             let mut user = owner.clone();
             user.actor_id = "user".into();
-            let path = ctx.rt.workspace.join(".codewave/workflows.json");
-            let expected = args["expectedRevision"].as_u64().unwrap_or(0);
-            match config::commit(&path, &def, expected, &ctx.rt.workspace, &models, &user) {
-                config::SaveOutcome::Committed { revision } => {
-                    let mut committed = def.clone();
-                    committed.revision = revision;
-                    committed.author = Some(user.actor_id.clone());
-                    let bytes = serde_json::to_vec_pretty(&committed).unwrap_or_default();
-                    if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
-                        return ToolOutcome::err(
-                            "E_WORKFLOW_SAVE",
-                            "配置提交后发生外部修改，未签发信任摘要",
-                        );
-                    }
-                    // Pin the exact user-approved bytes. External edits are not implicitly trusted.
-                    let pin = crate::core::delivery::version::digest_of_bytes(&bytes);
-                    if let Err(e) = crate::core::process_coordination::atomic_write(
-                        &service::approval_pin(&ctx.rt.data_dir, &ctx.rt.workspace),
-                        pin.as_bytes(),
-                    ) {
-                        return ToolOutcome::err("E_WORKFLOW_SAVE", e.to_string());
-                    }
-                    ToolOutcome::ok(
-                        json!({"revision":revision,"approved_digest":pin,"execution_authorized":false}),
+            match crate::core::workflow::project::save(
+                &ctx.rt.data_dir,
+                &ctx.rt.workspace,
+                &cfg,
+                &serde_json::to_string(&def).unwrap_or_default(),
+                args["expectedRevision"].as_u64().unwrap_or(0),
+                &view.digest,
+                &format!(
+                    "workflow_{}",
+                    crate::core::delivery::version::digest_of_bytes(
+                        ctx.provider_call_id.as_bytes()
                     )
-                }
-                other => ToolOutcome::error_with_data(
-                    "工作流配置未保存",
-                    json!({"result":format!("{other:?}")}),
                 ),
+                &user,
+            ) {
+                Ok(v) => ToolOutcome::ok(
+                    json!({"revision":v.revision,"approved_digest":v.digest,"execution_authorized":false}),
+                ),
+                Err(e) => ToolOutcome::err("E_WORKFLOW_SAVE", e),
             }
         } else {
             let task = args["taskId"].as_str().unwrap_or("");

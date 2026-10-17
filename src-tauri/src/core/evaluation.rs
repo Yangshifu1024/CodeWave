@@ -67,6 +67,7 @@ fn p(rel: &str) -> PathRef {
 
 fn contract() -> TaskContract {
     TaskContract {
+        delivery_goal: Default::default(),
         schema: SCHEMA,
         task_id: "eval-task".into(),
         revision: 1,
@@ -86,6 +87,8 @@ fn contract() -> TaskContract {
             required: true,
         }],
         checks: vec![CheckSpec {
+            platforms: vec![],
+            prerequisites: vec![],
             cwd: Some(PathRef {
                 root_id: "ws".into(),
                 relative_path: ".".into(),
@@ -126,6 +129,7 @@ fn satisfied_ledger(c: &TaskContract, after: ScopeVersion) -> Ledger {
     l.receipts.insert(
         "execution_ci".into(),
         ExecutionReceipt {
+            platform: Some(std::env::consts::OS.into()),
             binding: Some(crate::core::delivery::types::ContractBinding {
                 task_id: "eval-task".into(),
                 revision: 1,
